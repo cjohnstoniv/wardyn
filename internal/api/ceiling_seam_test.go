@@ -85,7 +85,7 @@ func TestCeilingIsResolvedOncePerRequest(t *testing.T) {
 	// The memo rides the REQUEST context, so this drives the real middleware
 	// chain rather than calling the resolver directly — the point is that every
 	// site inside one HTTP request shares it.
-	member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member,
 		`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]}}`)
 
@@ -111,7 +111,7 @@ func TestCeilingMemoIsPerRequestNotProcessWide(t *testing.T) {
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
 	srv := New(cfg)
-	member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleUser)
 	body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]}}`
 
 	doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member, body)
@@ -144,7 +144,7 @@ func TestCeilingRefusalCarriesItsRemedy(t *testing.T) {
 	}
 	// The canonical mapping, unchanged.
 	w := httptest.NewRecorder()
-	writeCeilingError(w, errGroupsSnapshotStale)
+	writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), errGroupsSnapshotStale)
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), remedy) {
 		t.Errorf("writeCeilingError = %d %s, want 403 naming the remedy", w.Code, w.Body.String())
 	}
@@ -157,7 +157,7 @@ func TestCeilingRefusalCarriesItsRemedy(t *testing.T) {
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	srv := New(cfg)
-	sess := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleMember)
+	sess := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleUser)
 	// A nil group snapshot is the unanswerable shape; ssoSession carries none.
 	got := doSSO(t, srv, http.MethodGet, "/api/v1/secrets", sess, "")
 	if got.Code != http.StatusForbidden {

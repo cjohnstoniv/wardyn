@@ -27,7 +27,7 @@ field-report strings · the two drives states) — open any in a browser; they s
 Frozen strings: §7 below. No TS copy module exists yet. The implementation stage creates
 `ui/src/app/lib/workspace-providers-copy.ts` **from §7 verbatim**; it does not retype copy from this
 document, and every product string in the mock matches §7 byte-for-byte. Its test,
-`workspace-providers-copy.test.ts`, clones `user-drives-copy.test.ts`'s `parseFrozenTables()` (now shared: `ui/src/test/canon-doc-parser.ts`) over
+`workspace-providers-copy.test.ts`, clones `user-drives-copy.test.ts`'s `parseFrozenTables()` (now shared: `ui/src/app/lib/copy-doc-parity.ts`) over
 §7.2–§7.7 of this file — which is why every table from §7.2 on is exactly two columns, `Key` and
 `String`, and why §7.1 is not: it holds the reused canon AND every admin-facing / run-time string
 the server composes this round, unparsed and checked against the Go source instead (the drives
@@ -617,8 +617,8 @@ door, so they are keyed (§7.4, `PROVIDER_MEMBER`) the way `DRIVE_MEMBER`'s refu
 | `LEGACY_OPEN_TITLE` | No git provider rows |
 | `LEGACY_OPEN_BODY` | Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name. |
 | `LEGACY_OPEN_OTHER_HOSTS` | A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page. |
-| `SAVED_ELSEWHERE_TITLE` | Someone else saved providers since you loaded this page |
-| `SAVED_ELSEWHERE_BODY` | Your changes are still here and still unsaved. Copy them first — reloading replaces them with the saved version. |
+| `SAVED_ELSEWHERE_TITLE` | Someone else saved this first |
+| `SAVED_ELSEWHERE_BODY` | Your copy is out of date, so saving it would overwrite their change. Copy your edits somewhere safe, then reload and redo them. |
 | `SAVED_TOAST` | Providers saved. |
 | `SAVED_NARROWED(n)` | {n} onboarded source is now outside every enabled provider — runs can't clone it until an admin widens the addresses or turns its host on. / {n} onboarded sources are now outside every enabled provider — runs can't clone them until an admin widens the addresses or turns their host on. |
 | `SAVE_CTA` | Save providers |

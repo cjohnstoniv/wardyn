@@ -20,24 +20,23 @@ import {
 } from "./governance-copy";
 import { PEOPLE } from "./people-access-copy";
 import { AUTONOMY_RUBRIC_ROW_KEYS, type AutonomyRubricRowKey } from "./api/governance";
-import { parseFrozenTables } from "../../test/canon-doc-parser";
+import { parseFrozenTables } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
-// governance-prompt.md §7.2-§7.9 back out of the doc (canon-doc-parser.ts's
-// parseFrozenTables(), T-66) and compares all 87 keys. A swapped hyphen, a
-// dropped ellipsis, a reworded clause, a new doc row or a deleted one all
-// fail here rather than shipping.
+// governance-prompt.md §7.2-§7.9 back out of the doc and compares all 87 keys.
+// A swapped hyphen, a dropped ellipsis, a reworded clause, a new doc row or a
+// deleted one all fail here rather than shipping.
 //
-// BACKTICKS ARE STRIPPED from the doc cell. §7's header note makes mono a
-// DISPLAY concern applied by the consuming component (people-access-
-// copy.ts's own backtick-mono rule); the frozen string itself is plain
-// text. Nothing in §7.2-§7.9 contains a backtick as content.
-//
-// A PARAMETERIZED key is called with its own placeholder text, so
-// EDITOR_TITLE_EDIT("{name}") must reproduce the doc's `Edit "{name}"`
-// character for character. The two inline-pluralised keys can't be
-// checked that way and get their own test below.
+// Two normalisations, both of them documented rules rather than fudges:
+//   - BACKTICKS ARE STRIPPED from the doc cell. §7's header note makes mono a
+//     DISPLAY concern applied by the consuming component (people-access-
+//     copy.ts's own backtick-mono rule); the frozen string itself is plain
+//     text. Nothing in §7.2-§7.9 contains a backtick as content.
+//   - A PARAMETERIZED key is called with its own placeholder text, so
+//     EDITOR_TITLE_EDIT("{name}") must reproduce the doc's `Edit "{name}"`
+//     character for character. The two inline-pluralised keys can't be
+//     checked that way and get their own test below.
 
 // process.cwd() is the vitest root — ui/ — for every entry point that runs
 // this suite (`pnpm vitest run`, `pnpm test`, make ci). import.meta.url is not
@@ -46,9 +45,9 @@ const DOC = resolve(process.cwd(), "../docs/design/governance-prompt.md");
 
 // §7.2 onward only: §7.1 is the reused-canon table (strings that live in
 // permissions-copy.ts / people-access-copy.ts / the server), not keys this
-// module freezes. §7.8 is a three-column table (Key | Today | Frozen) — the
-// FROZEN column is the canon (parseFrozenTables() always takes the last
-// cell); "Today" is the string being replaced.
+// module freezes. §7.8 is a three-column table (Key | Today | Frozen) —
+// parseFrozenTables() takes the LAST cell, so it reads the FROZEN column
+// (the canon) rather than "Today" (the string being replaced).
 const doc = parseFrozenTables(DOC, /^### 7\.[2-9]\b/);
 
 // The two keys whose doc cell carries an "A / B" pluralisation alternation
@@ -148,6 +147,7 @@ const rendered: Record<string, string> = {
   "WARN_STORED_CLAMPED(policy, name)": MEMBER.WARN_STORED_CLAMPED("{policy}", "{name}"),
   "WARN_WORKSPACE_DENIED(host, name)": MEMBER.WARN_WORKSPACE_DENIED("{host}", "{name}"),
   "WARN_GRANT_DROPPED(name, kind, reason)": MEMBER.WARN_GRANT_DROPPED("{name}", "{kind}", "{reason}"),
+  "WARN_PUSH_RULES_DROPPED(name)": MEMBER.WARN_PUSH_RULES_DROPPED("{name}"),
   DENIED_STALE_GROUPS: MEMBER.DENIED_STALE_GROUPS,
   "DENIED_SEEDED_IMAGE(image)": MEMBER.DENIED_SEEDED_IMAGE("{image}"),
   DENIED_WORKSPACE_LLM_CRED: MEMBER.DENIED_WORKSPACE_LLM_CRED,
@@ -168,8 +168,8 @@ const rendered: Record<string, string> = {
 };
 
 describe("governance-copy — §7.2-§7.9 parsed out of the prompt doc", () => {
-  it("finds all 96 frozen keys in the doc", () => {
-    expect(doc.size).toBe(96);
+  it("finds all 97 frozen keys in the doc", () => {
+    expect(doc.size).toBe(97);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
@@ -234,7 +234,7 @@ describe("governance-copy — the §7.3 {matched} vocabulary (ADDITION)", () => 
 
 describe("governance-copy — the reuse rules §7 spells out", () => {
   // §7.9: one string for the picker option, the table chip and the mapped-role
-  // label, homed next to PEOPLE.ROLE_ADMIN / ROLE_MEMBER. Two homes for one
+  // label, homed next to PEOPLE.ROLE_ADMIN / ROLE_USER. Two homes for one
   // frozen label is how they drift — this pins the reference, not a copy.
   it("DIRECTORY.ROLE_SECURITY_ADMIN IS PEOPLE.ROLE_SECURITY_ADMIN", () => {
     expect(DIRECTORY.ROLE_SECURITY_ADMIN).toBe(PEOPLE.ROLE_SECURITY_ADMIN);

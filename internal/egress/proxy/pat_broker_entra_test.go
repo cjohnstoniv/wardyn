@@ -103,7 +103,7 @@ func newADOGitHarnessWith(t *testing.T, setup func(p *Proxy, token string), caps
 		Dial:            redirectDial(upstreamAddr(front)),
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
-		ADOGrants:       adoGrantMap{"dev.azure.com": grant, "acme.visualstudio.com": grant},
+		ADOGrants:       adoGrantsByHost{"dev.azure.com": grant, "acme.visualstudio.com": grant},
 	})
 	if setup != nil {
 		setup(p, token)
@@ -333,7 +333,7 @@ func TestADOGitBroker_UpstreamUnauthorizedIsNotACredentialPrompt(t *testing.T) {
 func TestADOGitBroker_StoredPATLaneUnchanged(t *testing.T) {
 	up := newPATBrokerUpstream(t, "T", "oauth2")
 	p, _ := newPATBrokerProxy(t, map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
-	p.adoGrants = adoGrantMap{"dev.azure.com": {Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}}}
+	p.adoGrants = adoGrantsByHost{"dev.azure.com": {Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}}}
 
 	rec := httptest.NewRecorder()
 	req := mustLocalReq(t, http.MethodGet, "/wardyn/git/gitlab.com/org/repo.git/info/refs?service=git-upload-pack", nil)

@@ -7,10 +7,10 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SIGNIN } from "./sign-in-copy";
 import { STATES } from "../components/wardyn/states";
-import { parseFrozenTables } from "../../test/canon-doc-parser";
+import { parseFrozenTables } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE (the ado-entra
-// precedent, canon-doc-parser.ts's parseFrozenTables(), T-66): this suite
+// precedent, copy-doc-parity.ts's parseFrozenTables(), T-66): this suite
 // does not hand-retype a sample of the canon — it PARSES
 // docs/design/signin-first-contact-canon.md's "Frozen strings" table back out
 // of the doc and compares every key. A swapped hyphen, a dropped ellipsis, a

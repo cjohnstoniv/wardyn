@@ -10,28 +10,27 @@ import * as GovernanceCopy from "./governance-copy";
 import { MEMBER } from "./governance-copy";
 import * as UserDrivesCopy from "./user-drives-copy";
 import { DRIVE_MEMBER, DRIVE_RUN, DRIVES } from "./user-drives-copy";
-import { parseFrozenTables } from "../../test/canon-doc-parser";
+import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
-// user-drives-prompt.md §7.2-§7.8 back out of the doc (canon-doc-parser.ts's
-// parseFrozenTables(), T-66) and compares all 145 keys. A swapped hyphen, a
-// dropped ellipsis, a reworded clause, a new doc row or a deleted one all
-// fail here rather than shipping.
+// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 145
+// keys. A swapped hyphen, a dropped ellipsis, a reworded clause, a new doc
+// row or a deleted one all fail here rather than shipping.
 //
-// Backticks are stripped from the doc cell. §7's header note makes mono a
-// DISPLAY concern applied by the consuming component (the governance-copy.ts
-// precedent); the frozen string itself is plain text. Unlike
-// governance-prompt.md, this doc's §7.2-§7.8 DOES use backticks as content
-// (the mount target, env vars, `. _ -`), so that stripping does real work
-// here — every DRIVES / DRIVE_MEMBER string below is written with the
-// backtick-wrapped substring spelled as plain text.
-//
-// A PARAMETERIZED key is called with its own placeholder text, so
-// EDITOR_TITLE_EDIT("{name}") must reproduce the doc's `Edit "{name}"`
-// character for character. The four inline-pluralised keys and the two
-// numeric size helpers can't be checked that way and get their own tests
-// below (§5 #9, #10).
+// Two normalisations, both of them documented rules rather than fudges:
+//   - Backticks are stripped from the doc cell. §7's header note makes mono a
+//     DISPLAY concern applied by the consuming component (the
+//     governance-copy.ts precedent); the frozen string itself is plain text.
+//     Unlike governance-prompt.md, this doc's §7.2-§7.8 DOES use backticks
+//     as content (the mount target, env vars, `. _ -`), so unmono() does
+//     real work here — every DRIVES / DRIVE_MEMBER string below is written
+//     with the backtick-wrapped substring spelled as plain text.
+//   - A PARAMETERIZED key is called with its own placeholder text, so
+//     EDITOR_TITLE_EDIT("{name}") must reproduce the doc's `Edit "{name}"`
+//     character for character. The four inline-pluralised keys and the two
+//     numeric size helpers can't be checked that way and get their own tests
+//     below (§5 #9, #10).
 
 // process.cwd() is the vitest root — ui/ — for every entry point that runs
 // this suite (`pnpm vitest run`, `pnpm test`, make ci). import.meta.url is not
@@ -65,21 +64,9 @@ const SIZE_HELPERS = ["SIZE_MIB(n)", "SIZE_GIB(n)"];
 // too, which a hand-written map by construction could never notice.
 const NAMESPACES: Record<string, unknown>[] = [DRIVES, DRIVE_MEMBER, DRIVE_RUN];
 
-/** `EDITOR_TITLE_EDIT(name)` -> ["EDITOR_TITLE_EDIT", ["name"]]. */
-function splitKey(docKey: string): [string, string[]] {
-  const m = /^([A-Z0-9_]+)\((.*)\)$/.exec(docKey);
-  return m ? [m[1], m[2].split(",").map((a) => a.trim())] : [docKey, []];
-}
-
 // ONE lookup across the three namespaces is safe because none of their keys
 // collide (121 / 22 / 2); the completeness test below is what keeps that true.
-function render(docKey: string): string {
-  const [name, args] = splitKey(docKey);
-  const ns = NAMESPACES.find((n) => name in n);
-  if (!ns) throw new Error(`${docKey}: no such key in DRIVES / DRIVE_MEMBER / DRIVE_RUN`);
-  const value = ns[name];
-  return typeof value === "function" ? (value as (...a: string[]) => string)(...args.map((a) => `{${a}}`)) : String(value);
-}
+const render = (docKey: string) => renderFromNamespaces(docKey, NAMESPACES);
 
 // The six keys that cannot go through the placeholder path get their own tests
 // below (§5 #9, #10).
@@ -440,6 +427,8 @@ const goShape = (lit: string) => lit.replace(GO_VERB, (v) => (v.endsWith("q") ? 
 /** A doc cell as the same shape: `{name}` is the hole the verb fills. */
 const docShape = (text: string) => text.replace(/\{[A-Za-z_]+\}/g, HOLE);
 
+// parseFrozenTables() already scopes to one heading when the regex matches
+// only that heading — the same parser §7.2-§7.8 above uses, for §7.7 alone.
 const sec77 = parseFrozenTables(DOC, /^### 7\.7\b/);
 const mountGo = readFileSync(resolve(process.cwd(), "../internal/runner/mount.go"), "utf8");
 // The drives-bearing api files as ONE text: the size-cap split (53674b46) moved driveRefusal()

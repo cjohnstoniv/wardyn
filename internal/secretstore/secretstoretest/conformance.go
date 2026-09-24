@@ -22,8 +22,12 @@ import (
 // RunConformance exercises the secretstore.Store contract. newStore must return
 // a usable store on each call (it need not be empty; the suite uses unique names).
 func RunConformance(t *testing.T, newStore func(t *testing.T) secretstore.Store) {
-	ctx := context.Background()
-	uniq := func(p string) string { return "conformance/" + p + "/" + uuid.NewString() }
+	// Marked, as every read must be: the Audited decorator refuses a Get whose
+	// context says no purpose.
+	ctx := secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus)
+	// Names keep to the API's secretNameRE: a store may refuse anything else
+	// (vaultkv refuses a "/", which would change the Vault path's shape).
+	uniq := func(p string) string { return "conformance-" + p + "-" + uuid.NewString() }
 
 	t.Run("put_get_roundtrip_binary", func(t *testing.T) {
 		s := newStore(t)

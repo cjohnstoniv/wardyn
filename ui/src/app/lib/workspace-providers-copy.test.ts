@@ -9,10 +9,10 @@ import * as WorkspaceProvidersCopy from "./workspace-providers-copy";
 import { AGENTS, PROVIDER_MEMBER, PROVIDERS } from "./workspace-providers-copy";
 import { MEMBER } from "./governance-copy";
 import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
-import { parseFrozenTables } from "../../test/canon-doc-parser";
+import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE (the drives
-// precedent, canon-doc-parser.ts's parseFrozenTables(), T-66): this suite does
+// precedent, user-drives-copy.test.ts's parseFrozenTables()): this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
 // workspace-providers-prompt.md §7.2-§7.5 + §7.7 back out of the doc and
 // compares all 102 keys. A swapped hyphen, a dropped ellipsis, a reworded
@@ -22,10 +22,15 @@ import { parseFrozenTables } from "../../test/canon-doc-parser";
 // nothing today per the doc's own header note) and is excluded by the doc's
 // stated regex: /^### 7\.[2-57]\b/ matches 7.2, 7.3, 7.4, 7.5, 7.7 — not 7.6.
 //
-// A parameterized key is called with its own placeholder text, so
-// REMOVE_CONFIRM_TITLE("{kind}") must reproduce the doc's `Remove the {kind}
-// row?` character for character. The pluralised keys (§5 #9) can't be
-// checked that way and get their own tests below.
+// Two normalisations, both documented rules rather than fudges (the drives
+// precedent):
+//   - Backticks are stripped from the doc cell. §7's header note makes mono a
+//     display concern applied by the consuming component; the frozen string
+//     itself is plain text.
+//   - A parameterized key is called with its own placeholder text, so
+//     REMOVE_CONFIRM_TITLE("{kind}") must reproduce the doc's `Remove the {kind}
+//     row?` character for character. The pluralised keys (§5 #9) can't be
+//     checked that way and get their own tests below.
 
 // process.cwd() is the vitest root — ui/ — for every entry point that runs
 // this suite (`pnpm vitest run`, `pnpm test`, make ci).
@@ -47,21 +52,9 @@ const PLURALISED = ["SAVED_NARROWED(n)", "CARD_PROVIDERS(n)", "CARD_AGENTS(n)", 
 // "{kind}" so it must reproduce the doc cell character for character.
 const NAMESPACES: Record<string, unknown>[] = [PROVIDERS, PROVIDER_MEMBER, AGENTS];
 
-/** `REMOVE_CONFIRM_TITLE(kind)` -> ["REMOVE_CONFIRM_TITLE", ["kind"]]. */
-function splitKey(docKey: string): [string, string[]] {
-  const m = /^([A-Z0-9_]+)\((.*)\)$/.exec(docKey);
-  return m ? [m[1], m[2].split(",").map((a) => a.trim())] : [docKey, []];
-}
-
 // ONE lookup across the three namespaces is safe because none of their keys
 // collide (61 / 3 / 38); the completeness test below is what keeps that true.
-function render(docKey: string): string {
-  const [name, args] = splitKey(docKey);
-  const ns = NAMESPACES.find((n) => name in n);
-  if (!ns) throw new Error(`${docKey}: no such key in PROVIDERS / PROVIDER_MEMBER / AGENTS`);
-  const value = ns[name];
-  return typeof value === "function" ? (value as (...a: string[]) => string)(...args.map((a) => `{${a}}`)) : String(value);
-}
+const render = (docKey: string) => renderFromNamespaces(docKey, NAMESPACES);
 
 const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 

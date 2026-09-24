@@ -128,7 +128,7 @@ func TestWorkspaceReadRedaction(t *testing.T) {
 	for _, a := range []arm{
 		{
 			name:      "a plain member reading an operator-owned workspace",
-			session:   ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember),
+			session:   ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser),
 			forbidden: append(append([]string{}, leaks...), r3TopologyEgress),
 			// The row is still USEFUL: a member picks a workspace by name.
 			required: []string{"payments"},
@@ -181,7 +181,7 @@ func TestWorkspaceReadRedaction(t *testing.T) {
 			name    string
 			session *http.Cookie
 		}{
-			{"the workspace's owner", ssoSession(t, owner, "owner@corp.example", oidc.RoleMember)},
+			{"the workspace's owner", ssoSession(t, owner, "owner@corp.example", oidc.RoleUser)},
 			{"a super admin", ssoSession(t, "sub-super", "super@corp.example", oidc.RoleAdmin)},
 		} {
 			t.Run(c.name, func(t *testing.T) {
@@ -211,7 +211,7 @@ func TestWorkspaceReadRedaction(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		r = r.WithContext(operatorCtx("sub-plain-member", "m@corp.example", oidc.RoleMember))
+		r = r.WithContext(operatorCtx("sub-plain-member", "m@corp.example", oidc.RoleUser))
 		ws, ok := srv.getWorkspaceReadable(httptest.NewRecorder(), r, st.ws.ID)
 		if !ok {
 			t.Fatal("getWorkspaceReadable refused an operator-owned workspace for a member")
