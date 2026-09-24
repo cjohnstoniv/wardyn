@@ -254,7 +254,7 @@ func (s *Server) computeSCMAccessRowsFor(ctx context.Context, sc types.SiteConfi
 	// Only the rows this caller may bring work from (capWorkspaceProvider, the
 	// gate every repository door applies): a refused org reads as no org.
 	rows := capVisible(ctx, s, capWorkspaceProvider, s.perUserADORows(ctx, sc),
-		func(row types.GitProvider) string { return row.ID })
+		func(pr perUserADORow) string { return pr.row.ID })
 	out := make([]SCMAccess, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, s.scmAccessForRow(ctx, row, subject))

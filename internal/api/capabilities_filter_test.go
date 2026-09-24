@@ -106,7 +106,7 @@ func carrierServer(t *testing.T, site types.SiteConfig, grants []types.Capabilit
 }
 
 func memberCookie(t *testing.T) *http.Cookie {
-	return ssoSession(t, capSub, capEmail, oidc.RoleMember)
+	return ssoSession(t, capSub, capEmail, oidc.RoleUser)
 }
 
 // getJSON GETs path and decodes the body's top-level keys.
