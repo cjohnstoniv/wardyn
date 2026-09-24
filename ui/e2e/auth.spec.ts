@@ -7,6 +7,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 import { SIGNIN } from "../src/app/lib/sign-in-copy";
+import { SIGNIN_HELP_LINK_LABEL } from "../src/app/lib/people-access-copy";
 
 // Auth / sign-in lane.
 //
@@ -333,6 +334,61 @@ test.describe("sign-in refusals name Wardyn and point this reader at what they c
   });
 });
 
+// #484 — the admin-written request-access help, published on the anonymous
+// /healthz and shown under the four refusals a person cannot clear alone.
+// /healthz is mocked at the network boundary, like the SSO-only specs above.
+test.describe("admin-written help under a sign-in refusal (#484)", () => {
+  const HELP_TEXT = `Ask in #it-helpdesk — it's "Wardyn access" you want. <b>not bold</b>`;
+  const HELP_URL = "https://it.corp.example/request";
+
+  async function mockHelp(page: Page): Promise<void> {
+    await page.route("**/healthz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          status: "ok",
+          sso: true,
+          token_login: true,
+          sign_in_help_text: HELP_TEXT,
+          sign_in_help_url: HELP_URL,
+        }),
+      }),
+    );
+  }
+
+  test("the no_role refusal shows Wardyn's sentence first, then the admin's text and Request access", async ({ page }) => {
+    await mockHelp(page);
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=no_role");
+
+    const alert = page.getByRole("alert");
+    await expect(alert).toHaveText(SIGNIN.NO_ROLE);
+    const help = page.getByTestId("sign-in-help");
+    // Literal text: the markup in it is characters, never an element.
+    await expect(help.getByText(HELP_TEXT, { exact: true })).toBeVisible();
+    await expect(help.locator("b")).toHaveCount(0);
+    const link = help.getByRole("link", { name: SIGNIN_HELP_LINK_LABEL });
+    await expect(link).toHaveAttribute("href", HELP_URL);
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    // Wardyn's own sentence stays first.
+    const [alertBox, helpBox] = await Promise.all([alert.boundingBox(), help.boundingBox()]);
+    expect(alertBox && helpBox && helpBox.y > alertBox.y).toBe(true);
+  });
+
+  test("a timeout refusal gets nothing extra", async ({ page }) => {
+    await mockHelp(page);
+    await clearTokenInit(page);
+    await page.goto("/?auth_error=oidc_transient");
+
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sign in with SSO" })).toBeVisible();
+    await expect(page.getByTestId("sign-in-help")).toHaveCount(0);
+    await expect(page.getByText(HELP_TEXT)).toHaveCount(0);
+  });
+});
+
 // R4/F027 — a 5xx from the daemon is not a statement about the caller.
 //
 // probeAuth used to return a bare boolean, so a 500 on the mount probe was
@@ -371,26 +427,41 @@ test.describe("outage vs. rejection (R4/F027)", () => {
   });
 
   test("the gate keeps asking /healthz, so an SSO-only deployment is not left with no way in", async ({ page }) => {
-    // /healthz is down for the gate's FIRST read only. The one-shot mount fetch
-    // this replaced read that as sso:false and never asked again.
-    let served = 0;
-    await page.route("**/healthz", async (route) => {
-      served += 1;
-      if (served === 1) return route.fulfill({ status: 503, body: "" });
-      return route.fallback();
-    });
+    // /healthz is down until `healthy` flips. The one-shot mount fetch this
+    // replaced read the outage as sso:false and never asked again.
+    //
+    // No request count: App.tsx polls /healthz itself (HEALTH_POLL_MS) in
+    // every auth state, so "served more than once" holds with the gate's own
+    // re-ask paused. What is pinned is the gate's own reads: the outage on
+    // screen first, then the recovery reaching the screen ONLY through the
+    // gate's poll. page.clock drives SSO_POLL_MS (sign-in.tsx) instead of a
+    // real 10s setInterval racing a loaded CI host.
+    await page.clock.install();
+    let healthy = false;
+    await page.route("**/healthz", (route) =>
+      healthy
+        ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) })
+        : route.fulfill({ status: 503, body: "" }),
+    );
     await clearTokenInit(page);
     await page.goto("/");
-    // #457: the FIRST read is the outage, so the screen is honestly
-    // "checking" until the next poll (SSO_POLL_MS) lands the real answer —
-    // longer than the default assertion timeout covers.
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+    // #457: no answer yet, so the gate is honestly "checking" and offers no door.
+    await expect(page.getByRole("status").filter({ hasText: SIGNIN.CHECKING })).toBeVisible();
+    await expect(signInToken(page)).toBeHidden();
 
-    // What must NOT happen is the posture being frozen on the outage's
-    // answer — the gate has asked more than once.
-    await expect
-      .poll(() => served, { timeout: 30_000 })
-      .toBeGreaterThan(1);
+    // Only the gate's own unanswered reads (mount + two SSO_POLL_MS ticks)
+    // turn "checking" into "still checking" — so its mount read has landed on
+    // the outage before `healthy` flips below. runFor, not fastForward: the
+    // latter fires a due interval at most once.
+    await page.clock.runFor("00:21");
+    await expect(page.getByRole("status").filter({ hasText: SIGNIN.STILL_CHECKING })).toBeVisible();
+    await expect(signInToken(page)).toBeHidden();
+
+    // The daemon comes back. The posture must not stay frozen on the outage:
+    // one more SSO_POLL_MS tick and the gate offers the token door.
+    healthy = true;
+    await page.clock.fastForward("00:11");
+    await expect(signInToken(page)).toBeVisible();
   });
 });
 
@@ -483,7 +554,7 @@ test.describe("the restored path is checked against the re-authenticated role (M
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    await page.goto("/drives");
+    await page.goto("/admin/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
     await page.route("**/api/v1/**", (route) =>
@@ -516,7 +587,7 @@ test.describe("the restored path is checked against the re-authenticated role (M
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    await page.goto("/drives");
+    await page.goto("/admin/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
     await page.route("**/api/v1/**", (route) =>
@@ -575,10 +646,10 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
     await expect(banner).toHaveCount(0);
   });
   // VL-26 (V1 lens D): the gate is the ROUTE SHELL, not the nav. A person who
-  // types /settings (or any admin route) while /me is refused gets the same
-  // banner and no screen — before the fix the nav was hidden but the route
-  // still painted operator controls off the fail-open context default.
-  test("a 500 on /me shows the banner on /settings and /governance — no screen paints for an unknown identity", async ({ page }) => {
+  // types /admin/settings (or any admin route) while /me is refused gets the
+  // same banner and no screen — before the fix the nav was hidden but the
+  // route still painted operator controls off the fail-open context default.
+  test("a 500 on /me shows the banner on /admin/settings and /admin/governance — no screen paints for an unknown identity", async ({ page }) => {
     let meFailing = true;
     await page.route("**/api/v1/me", (route) => {
       if (!meFailing) return route.fallback();
@@ -586,7 +657,7 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
     });
     await bootWithStoredToken(page, GOOD_TOKEN);
 
-    for (const path of ["/settings", "/governance"]) {
+    for (const path of ["/admin/settings", "/admin/governance"]) {
       await page.goto(path);
       await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Settings" })).toHaveCount(0);

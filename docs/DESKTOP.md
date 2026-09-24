@@ -383,7 +383,7 @@ answer for anything that decides what this daemon *is* rather than what the org
 
 **On `a′`, MDM overwrites what the developer changed in the console.** The
 developer is the admin on this tier, so they can edit the provider policy at
-`/providers` — and `wardyn-desktop.sh` re-applies `/etc/wardyn/site-config.json`
+`/admin/providers` — and `wardyn-desktop.sh` re-applies `/etc/wardyn/site-config.json`
 on **every converge tick** (every 5 minutes; the file is a full-document replace,
 so re-applying the same file is a safe no-op rather than accumulation). If the
 MDM file NAMES `workspace_providers` or `agent_providers`, the org's copy wins
@@ -747,8 +747,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.10|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.10|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.12|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.12|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

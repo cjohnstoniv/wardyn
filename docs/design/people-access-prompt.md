@@ -458,6 +458,10 @@ signed-in human should never be told to go set an env var themselves.
 
 ### 7.8 `sso_rbac` setup-check (`internal/api/setup_checks.go`'s `ssoRBACCheck`) — reworded
 
+> Superseded by #484: the row's label and all three strings now come from
+> [admin-access-canon.md](admin-access-canon.md), and it warns only when neither a role map nor an
+> admin list is set.
+
 | State | Field | Today | Reworded |
 |---|---|---|---|
 | ok | `Detail` | `WARDYN_OIDC_ROLE_MAP` is set: signed-in humans are assigned admin/member from their IdP roles/groups/email. | Role mapping is configured — from `WARDYN_OIDC_ROLE_MAP`, the People step, or both — so signed-in humans are assigned admin/member from their IdP roles/groups/email. |

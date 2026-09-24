@@ -144,12 +144,12 @@ export function WorkspacesScreen() {
         description={description}
         actions={
           <>
-            {/* The one door to /drives from a nav-less screen (user-drives §6).
-                `outline`: the teal stays on Add workspace, and a drive is
+            {/* The one door to /admin/drives from a nav-less screen (user-drives
+                §6). `outline`: the teal stays on Add workspace, and a drive is
                 allocated rather than onboarded. SUPER only — a member and a
                 security admin have nothing to act on there. */}
             {operator && (
-              <Button variant="outline" onClick={() => navigate("/drives")}>
+              <Button variant="outline" onClick={() => navigate("/admin/drives")}>
                 {DRIVES.TITLE}
               </Button>
             )}

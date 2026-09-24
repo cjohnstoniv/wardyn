@@ -139,10 +139,10 @@ func GroupsTruncatedFromContext(ctx context.Context) bool {
 // RoleFromContext ALREADY answers member when this is true, so authorization
 // needs this predicate for nothing: every tier decision keeps reading the role.
 // It exists for the two things the clamped role cannot say on its own — the
-// console's banner ("your usual role is paused"), and the seams that must
-// refuse rather than clamp, namely the credential MINT doors, where a
-// member-stamped credential would be re-stamped admin at the next login and
-// outlive the mode (internal/api/membermode.go).
+// console's banner ("your usual role is paused"), and the credential doors:
+// the API-token mint refuses, because a member-stamped token would be
+// re-stamped admin at the next login and outlive the mode; an SSH key is
+// accepted but stored capped, so no login re-stamps it (internal/api/sshkeys.go).
 func MemberModeFromContext(ctx context.Context) bool {
 	m, _ := ctx.Value(memberModeCtxKey{}).(bool)
 	return m

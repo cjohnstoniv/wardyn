@@ -14,7 +14,7 @@ import (
 // database holding a 0.7 row in each of the four places "member" was stored,
 // then checks no column still holds it and neither CHECK takes it back.
 func TestPG_TierRenameRewritesEveryStoredMember(t *testing.T) {
-	const renameFloor = "0070"
+	const renameFloor = "0074"
 	pool, schema := partialSchemaPool(t, renameFloor)
 	ctx := context.Background()
 
@@ -31,6 +31,8 @@ func TestPG_TierRenameRewritesEveryStoredMember(t *testing.T) {
 			[]any{adminTok, uuid.NewString()}},
 		// The 0043 column default, as every pre-0.6 key was backfilled.
 		{"member key", `INSERT INTO ssh_public_keys (fingerprint, principal, public_key) VALUES ('SHA256:m', 'm@example.com', 'k')`, nil},
+		// A key registered in the user view: 0070's cap pins it to the old word.
+		{"capped key", `INSERT INTO ssh_public_keys (fingerprint, principal, public_key, role, capped) VALUES ('SHA256:c', 'c@example.com', 'k', 'member', true)`, nil},
 		{"member ticket", `INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, expires_at, role)
 			VALUES ('t-m', gen_random_uuid(), 'human', 'm@example.com', now() + interval '1 minute', 'member')`, nil},
 	} {
@@ -62,6 +64,7 @@ func TestPG_TierRenameRewritesEveryStoredMember(t *testing.T) {
 		{"member token", `SELECT role FROM api_tokens WHERE id = '` + memberTok.String() + `'`, "user"},
 		{"admin token", `SELECT role FROM api_tokens WHERE id = '` + adminTok.String() + `'`, "admin"},
 		{"member key", `SELECT role FROM ssh_public_keys WHERE fingerprint = 'SHA256:m'`, "user"},
+		{"capped key", `SELECT role FROM ssh_public_keys WHERE fingerprint = 'SHA256:c'`, "user"},
 		{"member ticket", `SELECT role FROM attach_tickets WHERE token_sha256 = 't-m'`, "user"},
 	} {
 		if err := pool.QueryRow(ctx, c.q).Scan(&role); err != nil {
@@ -88,6 +91,10 @@ func TestPG_TierRenameRewritesEveryStoredMember(t *testing.T) {
 	if err := pool.QueryRow(ctx, `INSERT INTO ssh_public_keys (fingerprint, principal, public_key) VALUES ('SHA256:d', 'd', 'k') RETURNING role`).
 		Scan(&role); err != nil || role != "user" {
 		t.Errorf("ssh_public_keys default role = %q (%v), want user", role, err)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE ssh_public_keys SET role = 'admin' WHERE fingerprint = 'SHA256:c'`); err == nil {
+		t.Error("a capped key was promoted to admin after the rename; the re-created cap must refuse it")
 	}
 
 	// A type a saved mapping names cannot be deleted out from under it.

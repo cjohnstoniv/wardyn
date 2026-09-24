@@ -34,6 +34,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
+WARDYN_LOG_TAG="[e2e]"
 source "${REPO_ROOT}/scripts/lib/common.sh"
 
 # Provision + exec wardyn-test-pg on the same daemon as up.sh pg (dual-daemon boxes).
@@ -71,7 +72,7 @@ _PORT="${ADDR#*:}"
 PID_FILE="${BIN_DIR}/wardynd-${_PORT}.pid"
 LOG_FILE="${BIN_DIR}/wardynd-${_PORT}.log"
 
-log()  { printf '\033[1;34m[e2e]\033[0m %s\n' "$*"; }
+# log() uses WARDYN_LOG_TAG="[e2e]" set before sourcing common.sh above.
 die()  { printf '\033[1;31m[e2e:err]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # psql helper against the seeding container.

@@ -14,6 +14,10 @@ import { TopBar } from "./top-bar";
 import { useUserDrive, type Role } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { baseMeDrive } from "../../lib/test-fixtures";
+import { registerUnsaved } from "../../lib/unsaved-registry";
+import { UnsavedGuardProvider } from "../../lib/use-unsaved-guard";
+import { UNSAVED } from "../../lib/unsaved-copy";
+import { aheadByHours } from "../../lib/test-clock";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
@@ -49,6 +53,7 @@ function renderMobileNav(role: Role = "admin") {
           memberPreviewAvailable: false,
           runner: "",
           networkPolicy: "",
+          sso: false,
         }}
       />
     </MemoryRouter>,
@@ -141,7 +146,7 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   }
 
   it("warns and offers a re-auth link when the session is about to die", async () => {
-    renderWithMe(new Date(Date.now() + 2 * 60 * 1000).toISOString());
+    renderWithMe(aheadByHours(2 / 60)); // 2 minutes
     expect(
       await screen.findByText(/session is expiring soon/i),
     ).toBeInTheDocument();
@@ -151,7 +156,7 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   });
 
   it("stays silent while the session has plenty of time left", async () => {
-    renderWithMe(new Date(Date.now() + 60 * 60 * 1000).toISOString());
+    renderWithMe(aheadByHours(1));
     await screen.findByText("cj"); // let /me resolve
     expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
   });
@@ -521,29 +526,53 @@ describe("SidebarNav (member role — B3)", () => {
       labels,
     );
   });
-});
 
-// Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the
-// describe block above only drives the sidebar) is meaningless on a member's
-// own Getting Started, which has no /setup?step= deep link at all.
-function renderTopBar(role: Role) {
-  return render(
-    <MemoryRouter>
-      <ThemeProvider>
-        <TopBar
-          onSignOut={() => {}}
+  // #460 (Q460-1): Settings joined the sidebar (#217) as an admin-only entry
+  // — a member's own three-item nav stays exactly as small as B3 pins above.
+  // The account menu keeps its own entry for BOTH roles (Q460-2, TopBar's own
+  // describe block below has the general Demos-gating precedent for that
+  // menu) — this is Settings's own pin that it didn't move.
+  it("Settings sits last in the admin sidebar", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    const links = screen.getAllByRole("link");
+    expect(links.at(-1)!.textContent).toMatch(/^Settings/);
+  });
+
+  it("Settings is absent from a member's sidebar", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("user");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.queryByRole("link", { name: /^Settings/ })).toBeNull();
+  });
+
+  // #460 review (M13) — `role`'s own fail-open default is "admin"
+  // (operator-context.tsx) while identity is still unresolved. Gating only
+  // on `role !== "user"` (as an earlier draft did) would show Settings
+  // during that window for EVERY role — including a member, who then sees
+  // it vanish the instant their real "user" role lands. Pinning
+  // identityResolved directly, independent of role, is what a mutation
+  // dropping that clause back to the old shape would fail here.
+  it("Settings is absent while identity is unresolved, even though role fails open to admin", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <MobileNav
+          pendingApprovals={0}
+          attentionCount={0}
           meta={{
             trustDomain: "example.test",
             identityProvider: "spiffe",
-            principal: "u@example.test",
+            principal: "",
             email: "",
             name: "",
-            method: "sso",
-            resolved: true,
-            identityResolved: true,
-            operator: role === "admin",
-            securityOperator: role !== "user",
-            role,
+            method: "",
+            resolved: false,
+            identityResolved: false,
+            operator: true,
+            securityOperator: true,
+            role: "admin",
             sessionExpiresAt: null,
             memberLocalDirRoot: null,
             userDrive: null,
@@ -554,15 +583,133 @@ function renderTopBar(role: Role) {
             memberPreviewAvailable: false,
             runner: "",
             networkPolicy: "",
+            sso: false,
           }}
-          pendingApprovals={0}
-          attentionCount={0}
-          onNewRun={() => {}}
         />
-      </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.queryByRole("link", { name: /^Settings/ })).toBeNull();
+  });
+
+  it("a member still reaches Settings from the account menu", async () => {
+    const user = userEvent.setup();
+    renderTopBar("user");
+    await user.click(screen.getAllByRole("button").at(-1)!);
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: /Settings/ })).toBeInTheDocument();
+  });
+});
+
+// Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the
+// describe block above only drives the sidebar) is meaningless on a member's
+// own Getting Started, which has no /setup?step= deep link at all.
+// #460 review — wrapped in UnsavedGuardProvider: a no-op while nothing's
+// dirty (every existing assertion below is unaffected), and what the
+// account-menu guard test just past this function needs to see the real
+// confirm dialog instead of the context's no-provider fallback.
+function renderTopBar(role: Role) {
+  return render(
+    <MemoryRouter>
+      <UnsavedGuardProvider>
+        <ThemeProvider>
+          <TopBar
+            onSignOut={() => {}}
+            meta={{
+              trustDomain: "example.test",
+              identityProvider: "spiffe",
+              principal: "u@example.test",
+              email: "",
+              name: "",
+              method: "sso",
+              resolved: true,
+              identityResolved: true,
+              operator: role === "admin",
+              securityOperator: role !== "user",
+              role,
+              sessionExpiresAt: null,
+              memberLocalDirRoot: null,
+              userDrive: null,
+              userDriveDeniedByProfile: "",
+              userDriveUnavailable: "",
+              memberMode: false,
+              memberModeNoCredential: false,
+              memberPreviewAvailable: false,
+              runner: "",
+              networkPolicy: "",
+              sso: false,
+            }}
+            pendingApprovals={0}
+            attentionCount={0}
+            onNewRun={() => {}}
+          />
+        </ThemeProvider>
+      </UnsavedGuardProvider>
     </MemoryRouter>,
   );
 }
+
+// #460 review — every plain <Link> in the account menu (top-bar.tsx) must go
+// through the same guardedClick the sidebar already uses; Settings is the
+// entry the review named explicitly.
+describe("TopBar — account-menu links are guarded (#460 review)", () => {
+  it("Settings, dirty: opens the confirm, and Keep editing stays", async () => {
+    const user = userEvent.setup();
+    const unregister = registerUnsaved("dirty-test-editor-stay", () => "unsaved text");
+    try {
+      renderTopBar("admin");
+      await user.click(screen.getAllByRole("button").at(-1)!);
+      const menu = screen.getByRole("menu");
+      await user.click(within(menu).getByRole("menuitem", { name: /Settings/ }));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(UNSAVED.TITLE)).toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole("button", { name: UNSAVED.STAY }));
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("Settings, dirty: Discard proceeds", async () => {
+    const user = userEvent.setup();
+    const unregister = registerUnsaved("dirty-test-editor-discard", () => "unsaved text");
+    try {
+      renderTopBar("admin");
+      await user.click(screen.getAllByRole("button").at(-1)!);
+      await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /Settings/ }));
+      await user.click(await screen.findByRole("button", { name: UNSAVED.DISCARD }));
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("a clean session's Settings click opens no dialog", async () => {
+    const user = userEvent.setup();
+    renderTopBar("admin");
+    await user.click(screen.getAllByRole("button").at(-1)!);
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /Settings/ }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  // #460 review (M9b) — every plain <Link> here is guarded, not only
+  // Settings: the wordmark itself links to /runs and is the FIRST control in
+  // the header, reached before the account menu on every screen.
+  it("the wordmark/logo link (-> /runs) is guarded too", async () => {
+    const user = userEvent.setup();
+    const unregister = registerUnsaved("dirty-logo-test", () => "unsaved text");
+    try {
+      renderTopBar("admin");
+      await user.click(screen.getByRole("link", { name: /Wardyn/i }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(UNSAVED.TITLE)).toBeInTheDocument();
+    } finally {
+      unregister();
+    }
+  });
+});
 
 // 0.7.3 F6: the Fence/NetworkPolicy chips are gone outright — no degraded
 // chip, no replacement. Both were deployment-wide facts fixed at boot that
