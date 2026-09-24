@@ -176,7 +176,7 @@ func admitWorkspaceDoor(name string, fire func(t *testing.T, srv *Server, st *ow
 			t.Helper()
 			srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
 			st.siteConfig = sc
-			session := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+			session := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 			if operator {
 				session = admitAdminSession(t)
 			}
@@ -715,7 +715,7 @@ func TestProviderLaneVetoAtTheTwoLauncherGrantSites(t *testing.T) {
 func operatorContext() context.Context { return context.Background() }
 
 func memberContext() context.Context {
-	return withOIDCRole(withOIDCHuman(context.Background(), "sub-admit-member"), oidc.RoleMember)
+	return withOIDCRole(withOIDCHuman(context.Background(), "sub-admit-member"), oidc.RoleUser)
 }
 
 // laneRow is a provider row with an explicit lane list.

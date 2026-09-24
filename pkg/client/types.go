@@ -138,6 +138,17 @@ type (
 	// without a nameable element type a caller could not author one at all.
 	EgressRedirect = types.EgressRedirect
 
+	// ModelProviders is the admin's model-provider configuration, carried in
+	// SiteConfig.ModelProviders; the types below are its parts. Aliased so a
+	// caller can author the block through PutSiteConfig. Configuration only:
+	// no credential lives on a record.
+	ModelProviders    = types.ModelProviders
+	ModelProvider     = types.ModelProvider
+	ModelProviderKind = types.ModelProviderKind
+	ProviderAuth      = types.ProviderAuth
+	BedrockSettings   = types.BedrockSettings
+	ProviderHarness   = types.ProviderHarness
+
 	// UserDrive is one admin-registered drive (migration 0054's user_drives
 	// row), embedded in UserDriveListItem. Written via DriveRequest.
 	UserDrive = types.UserDrive
