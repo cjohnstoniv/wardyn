@@ -80,7 +80,7 @@ func rbacServer(t *testing.T, operatorEmails ...string) *Server {
 // IdP. The encoding is the one oidc.encodeSession produces:
 // base64url(json(Session)) "." base64url(HMAC-SHA256(json)).
 //
-// role must be oidc.RoleAdmin or oidc.RoleMember — decodeSession treats an
+// role must be oidc.RoleAdmin or oidc.RoleUser — decodeSession treats an
 // empty Role as no session (the pre-0.5-cookie guard), so every session this
 // helper mints needs one explicitly. Since B2, role (not email-list
 // membership) is what requireOperator/isOperator gate on (see TestIsOperator
@@ -94,7 +94,7 @@ func ssoSession(t *testing.T, sub, email, role string) *http.Cookie {
 	// would look like a pre-0.7 one and every SSO test would silently fall
 	// through to the admin-token path.
 	payload, err := json.Marshal(oidc.Session{
-		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role,
+		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role, UserType: "standard",
 		Expiry: time.Now().UTC().Add(time.Hour),
 	})
 	if err != nil {
@@ -148,7 +148,7 @@ func TestIsOperator(t *testing.T) {
 		{"admin token: no session, is operator", context.Background(), true},
 		{"local mode: no session, is operator", withLocalPrincipal(context.Background(), "local:alice"), true},
 		{"sso session, admin role, is operator", operatorCtx("sub-1", rbacOperator, oidc.RoleAdmin), true},
-		{"sso session, member role, is not operator", operatorCtx("sub-2", rbacViewer, oidc.RoleMember), false},
+		{"sso session, member role, is not operator", operatorCtx("sub-2", rbacViewer, oidc.RoleUser), false},
 		// Defense-in-depth: B1's decodeSession refuses to hand out a session with
 		// an empty role at all, so this should be unreachable in practice — but
 		// isOperator must still fail closed, not open, if it ever were.
@@ -284,7 +284,7 @@ var readRoutes = []string{
 // a signed-in human with the MEMBER role must be refused on every gated route.
 func TestRequireOperator_ViewerRefusedOnEveryGatedRoute(t *testing.T) {
 	srv := rbacServer(t, rbacOperator)
-	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleMember)
+	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleUser)
 	for _, rt := range gatedRoutes {
 		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
 			w := doSSO(t, srv, rt.method, rt.path, viewer, "{}")
@@ -321,7 +321,7 @@ func TestRequireOperator_OperatorPassesEveryGatedRoute(t *testing.T) {
 // TestRequireOperator_ViewerKeepsReads: read routes are untouched by the gate.
 func TestRequireOperator_ViewerKeepsReads(t *testing.T) {
 	srv := rbacServer(t, rbacOperator)
-	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleMember)
+	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleUser)
 	for _, path := range readRoutes {
 		t.Run(path, func(t *testing.T) {
 			w := doSSO(t, srv, http.MethodGet, path, viewer, "")
@@ -341,7 +341,7 @@ func TestRequireOperator_ViewerKeepsReads(t *testing.T) {
 // consults Config.OperatorEmails at all.
 func TestRequireOperator_RoleGatesNotEmailList(t *testing.T) {
 	srv := rbacServer(t, rbacOperator) // rbacOperator IS on the allowlist
-	memberOnList := ssoSession(t, "sub-1", rbacOperator, oidc.RoleMember)
+	memberOnList := ssoSession(t, "sub-1", rbacOperator, oidc.RoleUser)
 	adminOffList := ssoSession(t, "sub-2", rbacViewer, oidc.RoleAdmin)
 	for _, rt := range gatedRoutes {
 		t.Run("listed-email member-role "+rt.method+" "+rt.path, func(t *testing.T) {
@@ -387,7 +387,7 @@ func TestMeReportsOperatorRole(t *testing.T) {
 		wantSecurityOperator          bool
 	}{
 		{"admin role is operator", "sub-op", "ops@corp.example", oidc.RoleAdmin, true, true},
-		{"member role is not operator", "sub-viewer", rbacViewer, oidc.RoleMember, false, false},
+		{"member role is not operator", "sub-viewer", rbacViewer, oidc.RoleUser, false, false},
 		// 0.7's third tier, and the reason the second field exists: NOT an
 		// operator (the console must keep hiding the super-admin writes) while
 		// security_operator IS true (approvals/audit/permissions/governance are

@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -49,7 +50,7 @@ func (s *Server) liveCapEnv(ctx context.Context, present map[string]bool, provid
 		BedrockRegionSet: s.cfg.BedrockRegion != "",
 		BedrockModelSet:  s.cfg.BedrockModel != "",
 		ManagedBlobPresent: func(provider string) bool {
-			_, ok, err := s.readManagedBlob(ctx, provider)
+			_, ok, err := s.readManagedBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), provider)
 			return err == nil && ok
 		},
 		ResidentSubscriptionLive: residentLive,

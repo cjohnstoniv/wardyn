@@ -35,6 +35,7 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 - [Network: upstream proxy and egress redirects](#network-upstream-proxy-and-egress-redirects)
 - [Toolchain-fidelity environment](#toolchain-fidelity-environment)
 - [Recommended builds on compose](#recommended-builds-on-compose)
+- [Secrets from files (Vault Agent / CSI)](#secrets-from-files-vault-agent--csi)
 - [Rotating the age key](#rotating-the-age-key)
 - [Upgrades](#upgrades)
 - [Kubernetes: day-2](#kubernetes-day-2)
@@ -53,7 +54,7 @@ copy is permanent.
 |---|---|---|---|
 | Postgres | volume `<project>_postgres_data` | runs, approvals, workspaces, policies, encrypted secrets, the append-only audit log — and, under the default `pg` recording store, the PTY asciicasts too | everything |
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
-| Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
+| Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity the `local` key-encryption key is derived from — the key that wraps every stored secret's data key | every secret in Postgres becomes undecryptable ciphertext |
 | User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
 | Audit fallback | `WARDYN_AUDIT_SPOOL` and its `.consumed` / `.quarantine` sidecars; Compose mounts their directory on `<project>_audit` | pending failed-Postgres writes, their replay cursor, and permanently refused events | audit events absent from the database backup |
 
@@ -757,8 +758,8 @@ forcing a re-login that derives one fresh.
 
 | The merged map (chart `WARDYN_OIDC_ROLE_MAP` + console People-step rows) | Signed-in humans | Admin token / local mode |
 |---|---|---|
-| empty | listed in `WARDYN_OIDC_OPERATOR_EMAILS` → **admin**, others → **member**; all **admin** only when the allowlist is also unset (override-only under OIDC — the pre-0.5 behavior) | always **admin** |
-| non-empty | mapped by `roles`/`groups`/email claim to **admin**, **`security_admin`** or **member**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE` (which takes `admin`/`member` only), or denies the login when that is also unset | always **admin** |
+| empty | listed in `WARDYN_OIDC_OPERATOR_EMAILS` → **admin**, others → **user**; all **admin** only when the allowlist is also unset (override-only under OIDC — the pre-0.5 behavior) | always **admin** |
+| non-empty | mapped by `roles`/`groups`/email claim to **admin**, **`security_admin`** or **user**; no match falls through to `WARDYN_OIDC_DEFAULT_ROLE` (which takes `admin`/`user` only), or denies the login when that is also unset | always **admin** |
 
 A console-added row keys on this exact same table: adding the deployment's
 *first* row (with the chart map also unset) or removing its *last* one moves the
@@ -819,19 +820,19 @@ A few things that don't fit the grid:
   map — the same code the preview panel surfaces when it can't check a row.
 
 **Deriving the role** (`WARDYN_OIDC_ROLE_MAP`, a CSV of `value=role` pairs, e.g.
-`Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin`; full semantics in
+`Wardyn.Admin=admin,eng-team=user,alice@corp.com=admin`; full semantics in
 [ENV.md](ENV.md)): each `value` is matched case-insensitively against the ID
 token's `roles` claim (an Entra App Role — the priority path; app-registration
 walkthrough in `.claude/skills/wardyn-k8s-setup`), its `groups` claim, or the
-signed-in email. Matches fold **highest wins** over three ranks — `member` <
+signed-in email. Matches fold **highest wins** over three ranks — `user` <
 `security_admin` < `admin` — whichever claim produced them (`roleRank`,
 `internal/auth/oidc/derive.go`): a human matching a `security_admin` row and a
-`member` row is a security admin; one matching an `admin` row anywhere is an
+`user` row is a security admin; one matching an `admin` row anywhere is an
 admin, exactly as before 0.7. `WARDYN_OIDC_OPERATOR_EMAILS` is **not
 replaced**: an email on it is still an *additional* `admin` match
 (`LegacyAdminEmails`), so a deployment adopting the role map keeps its current
 operators with zero re-configuration. `WARDYN_OIDC_DEFAULT_ROLE`
-(`admin`/`member`, unset = deny) covers everyone the map doesn't name —
+(`admin`/`user`, unset = deny) covers everyone the map doesn't name —
 `security_admin` is **refused** there and fails boot (`validDefaultRole`,
 `cmd/wardynd/boot_deps.go`): the role map is the only way to reach that tier, so
 it is never the tier granted by fallthrough to everyone nobody named.
@@ -867,6 +868,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, the one model-access lane each may use, whether that credential is shared or captured per person, and the AWS access portal every person signs in against. Both verbs, for the sibling row's reason: the block names the org's model-provider choices and its identity provider. A member is served a narrower document instead — the `enabled`/`mechanism`/`credential_source` fields on `GET /setup/status`'s harness rows, which carry no portal URL | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
+| the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
@@ -874,6 +876,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
+| `GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}` — the enrolment tokens still redeemable and cancelling one before a laptop redeems it: the same pair for tokens, returning neither a token nor its hash | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach-ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
@@ -900,8 +903,13 @@ a row above or a filed entry here.
 
 On an Azure DevOps organisation backed by Entra ID, a `workspace_providers` row's credential lane
 can be set to per-user sign-in instead of one shared PAT — see
-[docs/adoption/azure-devops-entra.md](adoption/azure-devops-entra.md) for the app registration, the
+[docs/AZURE-DEVOPS.md](AZURE-DEVOPS.md) for the app registration, the
 row's fields, and what a member sees.
+
+A deployment carries at most **one enabled** row on the `entra` lane: each person signs in to one
+Azure DevOps organisation. Both write doors refuse a second enabled one with a 400
+(`git[N].lanes: git[M] already carries the "entra" lane …`); a disabled second row is accepted,
+and enabling it later is refused the same way.
 
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
@@ -914,7 +922,7 @@ org→desktop channel MDM already delivers as `/etc/wardyn/site-config.json`
 new plumbing and no DDL. It also means **two doors write them**, and the grid
 below is what tells them apart.
 
-| | Dedicated endpoints (the console's `/providers` screen) | `PUT /site-config` (the CLI / MDM door) |
+| | Dedicated endpoints (the console's `/admin/providers` screen) | `PUT /site-config` (the CLI / MDM door) |
 |---|---|---|
 | **Route** | `GET`/`PUT /workspace-providers`, `GET`/`PUT /agent-providers` — both verbs admin-only, for the reason the tier table above gives: a base URL names corporate topology and an `sso_start_url` names the org's IdP | `PUT /site-config`, admin-only, a **full-document replace** of everything except integrations |
 | **Writes what** | exactly one block, replaced whole; `{}` is the clear form | the whole document, provider blocks included when the body NAMES them |
@@ -928,7 +936,7 @@ SSH clone URL carries no path a base URL can be compared against
 (`git@github.com:acme/x.git` is not `/acme/x`), so a row scoped to one org
 admits an SSH clone of ANY org on that host, with the deployment's
 `ssh-key-<host>` secret. That is a documented ceiling of 0.7.2, not an
-oversight, and it is never silent: the `/providers` screen says it under the
+oversight, and it is never silent: the `/admin/providers` screen says it under the
 row's lanes, and run create puts it on the 201 as a warning (with a
 `run.provider.ssh_host_level` audit row) whenever a path-scoped row admits an
 SSH repository. **The remedy is the row's own `lanes` list** — drop `ssh` from a
@@ -951,7 +959,7 @@ an `azure_devops` provider row names it.
 
 **On the desktop tier this grid has a winner.** `wardyn-desktop.sh` re-applies
 `/etc/wardyn/site-config.json` on every converge tick, so on `a′` — where the
-developer IS the admin and can open `/providers` — an MDM file that NAMES a
+developer IS the admin and can open `/admin/providers` — an MDM file that NAMES a
 provider block overwrites a local console edit within five minutes, and one that
 omits it leaves the edit standing. See
 [DESKTOP.md § Posture switches are env vars, never site-config](DESKTOP.md#posture-switches-are-env-vars-never-site-config).
@@ -1863,9 +1871,9 @@ the hidden claim was going to wall. Such a login is **denied**
 (`auth_error=claims_overage`), with a server log line naming the claim and the
 var. The check is narrow, so the ordinary posture is untouched: a login whose
 claims genuinely matched is served as-is (a hidden claim can only ever *narrow* a
-highest-wins match), and so is a fallthrough to `member`, the narrowest tier
+highest-wins match), and so is a fallthrough to `user`, the narrowest tier
 there is — a human in 200+ groups still signs in. Only a default WIDER than
-`member` is refused. The remedy is the operator's, and retrying will not clear
+`user` is refused. The remedy is the operator's, and retrying will not clear
 it: carry the tier on Entra App Roles, map the human's email directly, or stop
 defaulting unmatched humans to `admin`.
 
@@ -2103,7 +2111,7 @@ logs out **every** principal and revokes **every** live API token in the
 deployment — CI and automation credentials included — in one audited call. That
 is the tier working as designed. Incident response is the security admin's job,
 the two tiers deliberately do not nest (a security admin still cannot reach into
-a run, and their SSH key and attach ticket still stamp `member`), and a
+a run, and their SSH key and attach ticket still stamp `user`), and a
 revocation only ever *subtracts* reach — it grants the caller nothing.
 
 What bounds it is that a revocation is not a lockout. The session cutoff is a
@@ -2134,6 +2142,36 @@ for its subjects; deleting one requires unassigning it first (never a silent
 widening). Stated honestly: profiles narrow by omission — a profile that omits
 secret grants revokes them for its subjects (the editor warns); a member's
 long-lived API token keeps the group snapshot it was minted with until re-minted.
+
+### When everyone is an admin, and what a refused person is told
+
+**The everyone-is-an-admin warning.** With SSO configured, a person nobody has
+mapped derives `admin` only when there is **neither** a role map (the chart's
+`WARDYN_OIDC_ROLE_MAP` or a People-step row) **nor** an admin list (the operator
+allowlist, `WARDYN_OIDC_OPERATOR_EMAILS`). That one state — and only that one —
+grades the setup checklist's "Who is an admin" row `warn`, holds the console in
+the People step, and shows every admin a banner above every page until a mapping
+or an admin list exists. An admin list alone is enough: an unmatched person then
+derives `member`. Members see neither.
+
+**Request-access help (`sign_in_help_text`, `sign_in_help_url`).** Two optional
+SiteConfig fields, edited on the People step ("When someone can't sign in") or
+through `PUT /site-config`. The sign-in page shows them under Wardyn's own
+sentence — never instead of it — on the four refusals a person cannot clear
+alone: no role, an email domain that isn't allowed, too many groups to list, and
+a missing `email_verified` claim. Timeouts and configuration errors get nothing.
+**Both are public by design:** the anonymous `/healthz` publishes them, because
+the reader has, by definition, not signed in — so name your request process, not
+your internal systems. The text is plain text (at most 1,000 characters; no
+line breaks, control characters, line/paragraph separators or invisible format
+characters such as bidi overrides and zero-width spaces; quotes are fine) and is
+rendered as text, never markup. The link must be an `http://` or `https://`
+address with a real host name — no spaces, no `user:pass@`, none of those
+hidden characters, a query string is fine — and always reads "Request access".
+Every write records both values in the clear on `site_config.write`. A write outside those bounds is refused with a 400 naming the
+field, and a stored value that no longer passes is dropped from `/healthz`
+rather than published. Like the provider blocks, a body that does not name a
+field carries the stored value forward; name it as `""` to clear it.
 
 ### Every denial that isn't a 404
 
@@ -2172,7 +2210,7 @@ admin walking the member path, not an incident.
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
-| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`). A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyMemberGovernance`), since it runs at sandbox boot unattended the way exec does. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
@@ -2223,16 +2261,18 @@ stamp is written at `POST /me/ssh-keys` time from the registering session's role
 and RE-stamped — both columns — on every OIDC login for that principal, across
 every key they hold. The gateway never reads the role live at connect time (SSH
 carries no session for `requireOperator`), so a demoted admin's key loses the
-override at their next login (re-stamped `role=member`) or once `role_checked_at`
+override at their next login (re-stamped `role=user`) or once `role_checked_at`
 ages past the TTL — whichever comes first; deleting the key (`DELETE
 /me/ssh-keys/{fingerprint}`, self-service) and re-registering is the immediate
 lever. Strictly weaker than the web terminal's live `requireOperator` gate, but no
 longer unboundedly so. The same TTL is why **an admin upgrading from 0.5 (or pre-`0046`)
 does not get the override on the key they already have until it is refreshed**:
-`0043` backfills every pre-existing row as `member` (fail-closed) and `0046`
+`0043` backfills every pre-existing row as `member` (fail-closed; `0074` renames it `user`) and `0046`
 backfills `role_checked_at` as `NULL`, which `sshAuth` treats as infinitely
-stale. A member's key never satisfies the override (`docs/SSH.md`'s Bounds
-section; `threatmodel/THREAT-MODEL.md` residual #15). See
+stale. A member's key never satisfies the override, and neither does a key an
+admin registered while in the user view, which is stored capped (migration
+`0070_ssh_key_view_capped`; `docs/SSH.md`'s Bounds section;
+`threatmodel/THREAT-MODEL.md` residual #15). See
 [ROADMAP.md](../ROADMAP.md) for what's queued.
 
 **None of this governance is a paid tier.** The admin/member split, the capability
@@ -2270,7 +2310,7 @@ an ungranted capability, a foreign resource — are the ones a member would meet
 identically, and carry no marker.)
 
 **Both admin tiers get the control** — a `security_admin` as well as a super
-admin — and both clamp to `member`, because the clamp knows only one direction;
+admin — and both clamp to `user`, because the clamp knows only one direction;
 exiting restores whichever tier you were actually signed in as. It is offered
 over SSO only: the admin token, local mode and a deployment with no identity
 provider are one shared credential with no per-person role to pause, so there is
@@ -2316,11 +2356,17 @@ else. Everything outside model access is untouched too: `GET /me` still returns
 the admin's own user-drive allocation, and their own runs, workspaces and
 secrets are still theirs (ceilings 1 and 2).
 
-Two doors REFUSE instead of clamping, both with `409`: minting an API token
-(`POST /me/tokens`) and registering an SSH key (`POST /me/ssh-keys`). Both
-credentials carry a role stamp that is re-derived from your REAL role at your
-next sign-in, so one minted "as a member" would quietly become an admin
+Minting an API token (`POST /me/tokens`) REFUSES instead of clamping, with
+`409`: a token carries a role stamp that is re-derived from your REAL role at
+your next sign-in, so one minted "as a member" would quietly become an admin
 credential that outlives the mode. Exit first.
+
+Registering an SSH key (`POST /me/ssh-keys`) is allowed in the mode, and the key
+is stored **capped** (migration `0070_ssh_key_view_capped`): it is a member key
+for good. Your sign-in re-stamp leaves its role at `user`, and the SSH
+gateway never grants it the admin override, even while you are an admin. It
+reaches your own runs and nothing else. A break-glass key that reaches other
+people's runs is registered outside the mode.
 
 > **It shows you what a member SEES. It is not proof that a member is
 > REFUSED.** Four ceilings, all deliberate:
@@ -2335,8 +2381,8 @@ credential that outlives the mode. Exit first.
 >    member mode still holds the admin override on other people's runs over SSH.
 >    By the identical argument, any `wdn_` API token you already hold keeps its
 >    own stamped role (the token lane replays the DB row, never the session), as
->    does the deployment admin bearer token. The `409` mint doors stop NEW
->    credentials; they cannot reach into old ones. Your browser session is
+>    does the deployment admin bearer token. The `409` token door and the
+>    capped key door stop NEW credentials; they cannot reach into old ones. Your browser session is
 >    clamped; another credential of yours is a different session.
 > 3. **Rolling upgrades.** The flag rides the existing session cookie with no
 >    codec bump (a bump would sign every live session out mid-rollout, which is
@@ -2680,10 +2726,10 @@ writable, though a row stored under an earlier release still loads, still sits i
 `azure_openai` is gone as a kind.
 
 **Settings** (account menu) is the one surface for these — a Model provider card,
-a radio group over concrete lanes; the standalone `/integrations` page is deleted
-and redirects there. **The Git host card retired in 0.7.2.** Its three git
+a radio group over concrete lanes; the standalone `/integrations` page is deleted.
+**The Git host card retired in 0.7.2.** Its three git
 credential lanes (GitHub App, PAT, SSH key) now render INSIDE the provider row
-they apply to, on the Workspace Providers screen (`/providers`); Settings keeps a
+they apply to, on the Workspace Providers screen (`/admin/providers`); Settings keeps a
 card in its place that summarizes the provider policy and links there. The lanes
 are the same radio group over the same concrete lanes — what changed is that
 "which git hosts this org clones from" and "how a run authenticates to them"
@@ -3072,6 +3118,63 @@ grep 'daemon egress proxy configured' <logs>
 A malformed `WARDYN_DAEMON_PROXY_URL` (not `http://`/`https://`, no host, or an embedded credential)
 refuses boot rather than silently falling back to direct — same posture as `WARDYN_TRUSTED_CA_FILE`.
 
+### Control-plane to proxy TLS
+
+Every run's `wardyn-proxy` sidecar calls `wardynd` for everything it does on the
+run's behalf, and one of those calls — `GET /api/v1/internal/injection/{grant}` —
+answers with a credential **value**. Since 0.7.12 that hop is TLS on every install
+shape except a loopback-only local one, and the proxy trusts exactly one root for
+it.
+
+- **wardynd's end.** On first boot `wardynd` mints an internal CA (ECDSA P-256, ten
+  years) and stores it in the secret store as `wardyn-internal-ca`, beside its
+  signing key: age-encrypted in Postgres, in every backup that carries the
+  signing key, reserved from the secrets API and from every grant. At each boot
+  it signs a serving certificate for the host of `WARDYN_CONTROL_PLANE_URL` — the
+  exact name every proxy dials — and serves `/api/v1/internal/*` and `/healthz`
+  on `WARDYN_INTERNAL_LISTEN` (default `:8443`, TLS 1.3 only). A bind failure
+  ends the daemon. The console listener (`WARDYN_LISTEN`) is unchanged.
+- **The proxy's end.** Dispatch puts the CA's public certificate in each run's
+  sealed proxy config (`control_plane_ca_pem`: the docker driver's
+  `WARDYN_PROXY_CONFIG_JSON`, the k8s driver's per-run Secret — where the per-run
+  MITM CA already travels). The proxy trusts that certificate and nothing else
+  for every control-plane call: the resolve, mints, token renewal, decisions,
+  approvals and uploads. Not the system roots, and not `WARDYN_TRUSTED_CA_FILE`:
+  that bundle is for egress, because a TLS-inspecting box sits between the proxy
+  and the internet, never between the proxy and `wardynd`. A wrong CA, a wrong
+  name, or an https URL with no CA fails the call closed — at startup, the proxy
+  does not start.
+- **"Local", precisely.** `http://` is accepted only when the URL's host is
+  `localhost`, an address in `127.0.0.0/8`, or `::1` — matched literally, with no
+  DNS lookup. `wardynd` applies the rule at boot and the proxy at start (one
+  function, `hoptls.CheckURL`); anything else is refused with the fix in the
+  message. `host.docker.internal` is not local: those bytes cross a bridge or the
+  Docker Desktop VM boundary.
+- **Per install shape.** Nothing to configure on any of them:
+
+  | Install | `WARDYN_CONTROL_PLANE_URL` | Notes |
+  |---|---|---|
+  | Helm (`k8s.enabled`) | `https://<release>.<namespace>.svc.cluster.local:8443` | Service port `internal` (`service.internalPort`); the chart's NetworkPolicy grants it to run proxies |
+  | Compose, Desktop, m′ | `https://wardynd:8443` | on `wardyn-internal`; never published to the host |
+  | Host mode (`scripts/run-host.sh`) | `https://host.docker.internal:8443` | `wardynd` binds `:8443` on the host |
+
+- **Checking it.** `/healthz` reports `"proxy_hop_tls": true`, and `wardynd`
+  logs `proxy-facing TLS listener (internal CA)` with the address at boot. A local
+  install reports `false` and logs a warning naming the loopback URL.
+- **Rotation.** The CA is replaced at boot once less than a year of its validity
+  remains. Runs dispatched under the old CA then fail closed on their next
+  control-plane call and must be relaunched. To rotate early, stop `wardynd`,
+  delete the row (`DELETE FROM secrets WHERE owned_by = '' AND name =
+  'wardyn-internal-ca';`) and start it again.
+- **What is not on this hop.** `wardyn-tetragon-ingest` still posts to the
+  console listener in plaintext with an audit-write-only bearer: an integrity
+  exposure, not a confidentiality one — a captured token can forge ground-truth
+  events until it rotates, and cannot read or mint a credential. Moving it onto
+  the TLS listener is #606. The console listener also still serves
+  `/api/v1/internal/*` for test harnesses and for runs dispatched before the
+  upgrade, which finish on the plaintext path they started with. The proxy authenticates to `wardynd` with its run token
+  (bearer, not mTLS — `threatmodel/THREAT-MODEL.md` B6).
+
 ### Corporate TLS-inspection root
 
 A TLS-inspecting upstream proxy — one that terminates and re-signs TLS with its
@@ -3200,6 +3303,55 @@ one `to` spells, else the default of the scheme `to` spells (`80` for an
 explicit `http://`, `443` otherwise). A `to` whose port is not a decimal
 1-65535 is refused at `PUT /site-config` rather than silently read as `443` by
 one reader and rejected outright by another.
+
+### Git push confinement and content rules
+
+Two independent controls sit on the brokered git lanes (`github_token`,
+`git_pat`), and an operator tuning one must not assume it moves the other.
+
+- **WHERE a push may land.** Branch-namespace confinement
+  (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`, on by default for the App lane;
+  `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, off by default for `git_pat`) —
+  see [docs/ENV.md](ENV.md) for both rows.
+- **WHAT a push may touch.** `push_rules` (`deny_paths`,
+  `max_inspect_pack_mib`) — a policy field, not an env var, set per run. An
+  operator ceiling that sets `push_rules` is a floor, not a cap: an unset
+  proposal inherits it wholesale, `deny_paths` is unioned with the ceiling's,
+  and `max_inspect_pack_mib` is capped only when the ceiling's value is
+  non-zero. See [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec) for
+  the field reference, the pattern language, and what the inspector can and
+  cannot see.
+
+The residuals an operator should plan for:
+
+- **A push over the inspection ceiling is refused, not held** — the remedy is
+  raising `max_inspect_pack_mib` (bounded 0..64 at write time), never a
+  console approval, because holding would ask a person to approve a push
+  nobody inspected.
+- **`ssh_key` is ungovernable by construction.** git's own SSH transport has
+  no broker seam, so `push_rules` cannot be enforced on it; a policy that sets
+  `push_rules` while `ssh_key` is the run's only git-capable grant is legal
+  but graded a medium-risk item on the Review rail rather than blocked.
+- **On `git_pat`, only WHERE is behind a switch.** Branch-namespace
+  confinement on the `git_pat` lane is off by default and needs
+  `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`; `push_rules` applies to every
+  `git_pat` push whatever that switch is set to. Neither changes the PAT
+  itself: it keeps whatever scope the operator issued it with.
+- **A first push to a new branch enumerates the whole new tree.** Under
+  branch-namespace confinement the pushed commit's parent stays on the forge,
+  so the pack holds nothing to diff against: every root file is named whether
+  changed or not, and every untouched directory, symlink or submodule arrives
+  as an opaque entry. When the forge is GitHub, a matched entry the pack does
+  not carry is compared with the parent commit's trees through GitHub's REST
+  API (the run's own credential for the lane, trees only), and a legitimate
+  rename, restore or directory move passes — only an add, change, move or
+  restore under a denied path is refused. That comparison cannot run on a
+  `git_pat` grant to a non-GitHub forge, when no parent counts, or when a
+  read fails, times out or needs more than 64 reads — there, any matched
+  entry the pack does not carry refuses the push, including every root file.
+  So `deny_paths: ["Makefile"]` on a GitLab PAT refuses every push to a repo
+  that has a Makefile. See "What the rules see, and what they do not" in
+  [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec).
 
 ### Internal hosts
 
@@ -4182,7 +4334,11 @@ token to the configured gateway proxy-side (TLS-MITM, exactly as it is sent to
 `api.anthropic.com` today) instead of only ever the public host — see
 [CHANGELOG.md](../CHANGELOG.md). The harness-login (`claude setup-token`) lane
 is exempt and always stays on the public host: that flow mints the OAuth token
-itself and must not be redirected.
+itself and must not be redirected. With a gateway configured, a resident
+subscription credential is mounted only when the run's own policy reaches the
+**gateway** (its host, or a `*.` wildcard covering it, judged as the proxy will
+judge the CONNECT); an `api.anthropic.com` or `*.anthropic.com` entry no longer
+counts, because the run never dials the vendor host.
 
 Two invariants carry over unchanged: the `egress_redirects` lane above still
 points the AGENT'S OWN configuration (its `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL`
@@ -4363,7 +4519,8 @@ session recording; absent (never an empty string) otherwise.
 `wardyn-rec`, which PUTs the finished recording to the proxy pod
 (`http://wardyn-proxy:3128/wardyn/v1/recordings/<runID>`), which forwards it to
 `WARDYN_CONTROL_PLANE_URL` — the chart points this at the control plane's
-in-cluster Service FQDN. Delivery failure is deliberately non-fatal to the task
+in-cluster Service FQDN, on the internal TLS port ([Control-plane to proxy
+TLS](#control-plane-to-proxy-tls)). Delivery failure is deliberately non-fatal to the task
 but bounded (`cmd/wardyn-rec/main.go`'s upload client timeout), so it cannot hold
 a finished task's exit longer. A cluster-wide baseline default-deny NetworkPolicy
 or a mesh authorization policy can drop the proxy-pod → control-plane hop even
@@ -4497,19 +4654,177 @@ An agent CLI is present there only if the repo's own devcontainer installs it; a
 agent run on an image without one fails at the CLI, visibly, rather than being
 silently patched.
 
+## Secrets from files (Vault Agent / CSI)
+
+Every secret-carrying `wardynd` boot setting has a `<VAR>_FILE` twin that holds
+a **path** instead of the value: `WARDYN_PG_DSN_FILE`,
+`WARDYN_PG_MIGRATE_DSN_FILE`, `WARDYN_ADMIN_TOKEN_FILE`, `WARDYN_AGE_KEY_FILE`,
+`WARDYN_OIDC_CLIENT_SECRET_FILE`, `WARDYN_DIRECTORY_CLIENT_SECRET_FILE`,
+`WARDYN_AUDIT_SINKS_FILE` and `WARDYN_ORG_ENROLMENT_TOKEN_FILE`
+([ENV.md](ENV.md)). Use them when a control requires
+secrets delivered at runtime (Vault Agent injector, Secrets Store CSI driver,
+projected volumes), or when a posture scanner flags secret env vars.
+
+How `wardynd` reads them (`resolveSecretFiles`, `cmd/wardynd/secret_file.go`):
+
+- **Once, at boot.** A rotated file takes effect on the next restart, the same
+  as a changed env var.
+- **Both forms set refuses boot**, naming both variables. There is no
+  precedence.
+- **An unreadable, empty, group- or world-writable file refuses boot**, naming
+  the variable and the path. The content is never logged or echoed. The mode
+  is checked on the opened file, so the file checked is the file read.
+- **One trailing newline is trimmed** (`\n` or `\r\n`). Anything else in the
+  file is part of the value.
+- **Other-readable is refused only on a file wardynd's own non-root uid
+  owns.** That is the hand-made host file, and `chmod 640` fixes it (under
+  Vault Agent, set `agent-inject-perms-<name>`). Other-readable files that a
+  supported mechanism produces are allowed: a kubelet Secret volume
+  (root-owned `0440` under `fsGroup`), a Secrets Store CSI file (root-owned
+  `0644`, readable by a non-root process only through the other-read bit) and
+  Vault Agent's default (`0644`, owned by the agent's uid). This is why the
+  rule differs from `WARDYN_DAEMON_PROXY_SECRET`'s 0600 rule. Scope the mount
+  to the wardynd container.
+
+On Kubernetes, `secretFiles.enabled=true` delivers the chart's own Secrets this
+way with no other change (chart README, "Boot secrets as files"). Both examples
+below replace the Kubernetes Secret entirely. They use generic names: Vault at
+`https://vault.example:8200`, a Vault role `wardyn` bound to the chart's
+ServiceAccount, and a KV v2 secret at `secret/data/wardyn/boot` with keys
+`pg_dsn`, `admin_token` and `age_key`. Both leave `postgres.dsn.secretRef.name`
+empty (it has a non-empty default), so the DSN comes only from the file.
+
+**Vault Agent injector.** The injector writes each secret to `/vault/secrets/`.
+`agent-pre-populate-only` runs the agent as an init container only, which is
+enough because wardynd reads once at boot.
+
+```yaml
+podAnnotations:
+  vault.hashicorp.com/agent-inject: "true"
+  vault.hashicorp.com/agent-pre-populate-only: "true"
+  vault.hashicorp.com/service: "https://vault.example:8200"
+  vault.hashicorp.com/role: "wardyn"
+  vault.hashicorp.com/agent-inject-secret-pg-dsn: "secret/data/wardyn/boot"
+  vault.hashicorp.com/agent-inject-template-pg-dsn: |
+    {{- with secret "secret/data/wardyn/boot" }}{{ .Data.data.pg_dsn }}{{ end }}
+  vault.hashicorp.com/agent-inject-perms-pg-dsn: "0440"
+  vault.hashicorp.com/agent-inject-secret-admin-token: "secret/data/wardyn/boot"
+  vault.hashicorp.com/agent-inject-template-admin-token: |
+    {{- with secret "secret/data/wardyn/boot" }}{{ .Data.data.admin_token }}{{ end }}
+  vault.hashicorp.com/agent-inject-perms-admin-token: "0440"
+  vault.hashicorp.com/agent-inject-secret-age-key: "secret/data/wardyn/boot"
+  vault.hashicorp.com/agent-inject-template-age-key: |
+    {{- with secret "secret/data/wardyn/boot" }}{{ .Data.data.age_key }}{{ end }}
+  vault.hashicorp.com/agent-inject-perms-age-key: "0440"
+postgres:
+  dsn:
+    secretRef:
+      name: ""
+env:
+  WARDYN_PG_DSN_FILE: /vault/secrets/pg-dsn
+  WARDYN_ADMIN_TOKEN_FILE: /vault/secrets/admin-token
+  WARDYN_AGE_KEY_FILE: /vault/secrets/age-key
+networkPolicy:
+  egress:
+    extra:
+      # The agent runs inside the wardynd pod, so the pod's egress policy
+      # applies to it. Narrow this to your Vault address.
+      - ports: [{port: 8200, protocol: TCP}]
+```
+
+The injector's Kubernetes auth needs a ServiceAccount token in the pod, and
+the chart turns automount off. Either set `serviceAccount.automount=true`, or
+mount a projected token through `extraVolumes` and name that volume in
+`vault.hashicorp.com/agent-service-account-token-volume-name`.
+
+**Secrets Store CSI driver** (Vault provider shown; other providers take the same
+chart values). The driver mounts the files from the node, so the pod's
+NetworkPolicy and ServiceAccount automount do not apply.
+
+```yaml
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: wardyn-boot
+spec:
+  provider: vault
+  parameters:
+    vaultAddress: "https://vault.example:8200"
+    roleName: "wardyn"
+    objects: |
+      - objectName: "pg-dsn"
+        secretPath: "secret/data/wardyn/boot"
+        secretKey: "pg_dsn"
+      - objectName: "admin-token"
+        secretPath: "secret/data/wardyn/boot"
+        secretKey: "admin_token"
+      - objectName: "age-key"
+        secretPath: "secret/data/wardyn/boot"
+        secretKey: "age_key"
+```
+
+```yaml
+extraVolumes:
+  - name: boot-secrets-csi
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: wardyn-boot
+extraVolumeMounts:
+  - name: boot-secrets-csi
+    mountPath: /mnt/secrets-store
+    readOnly: true
+postgres:
+  dsn:
+    secretRef:
+      name: ""
+env:
+  WARDYN_PG_DSN_FILE: /mnt/secrets-store/pg-dsn
+  WARDYN_ADMIN_TOKEN_FILE: /mnt/secrets-store/admin-token
+  WARDYN_AGE_KEY_FILE: /mnt/secrets-store/age-key
+```
+
+The chart counts an `env`/`extraEnv` `_FILE` entry as that secret being wired.
+The auth and age-key render checks pass. Naming it beside the chart's own
+source (`auth.adminToken.*`, `postgres.dsn.*`, `secrets.ageKey*`) is refused
+at render, as it would be at boot, and so is naming both `WARDYN_X` and
+`WARDYN_X_FILE`. The file path itself is not a secret, which
+is why it can sit in `env`.
+
+**Compose.** `deploy/compose/docker-compose.yaml` still passes the plain
+variables, and `WARDYN_ADMIN_TOKEN` falls back to the demo token when it is
+empty. A `_FILE` beside a non-empty plain variable refuses boot. Before you use a
+`_FILE` twin, set the plain variable to `""` under `environment:` in a compose
+override file. Blanking it in `.env` does not work, because the `:-` default
+fills an empty value.
+
 ## Rotating the age key
 
-The secret store binds **one** age identity for both encryption and decryption
-(`internal/secretstore/pg`), so simply changing `WARDYN_AGE_KEY` migrates nothing
-— it strands every existing ciphertext. Startup decrypts the persisted signing
+Each stored secret is an envelope (`internal/secretstore/pg`, since 0.7.12): the
+value is sealed with AES-256-GCM under its own data key, bound to the row's owner
+and name, and that data key is wrapped by the `local` key-encryption key — derived
+from `WARDYN_AGE_KEY` with HKDF-SHA256 and recorded on each row as
+`kek_id` (`local:<fingerprint of the public recipient>`). So simply changing
+`WARDYN_AGE_KEY` migrates nothing — every row still names the old key, and a read
+refuses a row whose `kek_id` is not the configured one. Startup decrypts the persisted signing
 key through `loadOrCreateSigningKey` / `loadOrCreateSecret` and fails closed on
 a mismatch, before serving requests. A healthy start checks that boot key, not
 every application secret; verify a secret-dependent run after recovery too.
 
+The at-rest cipher is AES-256-GCM from the Go standard library
+(`cipher.NewGCMWithRandomNonce`, which draws each 96-bit nonce inside Go's
+cryptographic module) with HKDF-SHA256 key derivation, so Go's FIPS 140-3 mode
+(`GODEBUG=fips140=on`) applies to it — and with the Go version in `go.mod` it also
+runs under `GODEBUG=fips140=only`. That is a statement about this path only: the
+build does not pin a frozen module snapshot (`GOFIPS140`), and age (used once,
+to convert pre-envelope rows) is outside it.
+
 `wardynd -rotate-age-key <key-file>` is the supported rotation, a **maintenance
-mode, not a server start**: it mints a new identity, re-encrypts every row of the
-`secrets` table from the current key to the new one in ONE transaction, replaces
-the key file, writes a `secret.rekey` audit event, and exits. It never opens a
+mode, not a server start**: it mints a new identity, rewraps every row's data key
+from the current key-encryption key to the new one in ONE transaction — the sealed
+values are never decrypted and not rewritten — replaces the key file, writes a
+`secret.rekey` audit event, and exits. It never opens a
 listener and never dispatches a run. Three properties:
 
 - **The daemon must be stopped.** A serving wardynd holds the OLD identity in
@@ -4518,11 +4833,12 @@ listener and never dispatches a run. Three properties:
   lock (`db.SecretRekeyLockKey`) refuses a second concurrent *rotation*, but it
   cannot see a serving daemon, so stopping it is **your** step, not one the tool
   enforces.
-- **All-or-nothing.** The whole re-encryption runs in ONE transaction. A row the
-  current key cannot decrypt aborts everything with an error naming that secret
-  and how far it got (`rekey ABORTED after 3 of 9 rows …`), and nothing is
+- **All-or-nothing.** The whole rewrap runs in ONE transaction. A row whose data
+  key the current key cannot unwrap aborts everything with an error naming that
+  row and how far it got (`rekey ABORTED after 3 of 9 rows …`), and nothing is
   committed — every secret is still readable with the old key. There is no
-  half-rotated state to diagnose.
+  half-rotated state to diagnose. A pre-envelope row aborts it too: boot the
+  upgraded daemon once, which converts them (see [Upgrades](#upgrades)), before rotating.
 - **The CLI never sees the key.** `wardyn` has no rotation surface at all; this
   is a `wardynd` flag, run by whoever has shell access to the key file.
 
@@ -4556,6 +4872,16 @@ WARDYN_PG_DSN='postgres://…' WARDYN_AGE_KEY="$(cat ~/.wardyn/age.key)" \
 docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 ```
 
+**With `WARDYN_AGE_KEY_FILE` on Kubernetes**, the key file is a read-only
+Secret, CSI or Vault Agent mount, and the rotation cannot replace it in place.
+Rotate against a writable copy instead. Scale wardynd to 0, then in a one-off
+pod (or on a host with the DSN) copy the mounted key to a scratch file you own
+(`umask 077; cp /etc/wardyn/secrets/age-key /tmp/age.key`). Run
+`WARDYN_AGE_KEY_FILE=/tmp/age.key wardynd -rotate-age-key /tmp/age.key`. Then
+write the new key into the Secret, or into the Vault/CSI source it comes from,
+before you scale back up. Until the source holds the new key, every restart
+reads the retired one and fails closed.
+
 Verify the same way the restore runbook does — a row count proves nothing about
 decryptability, so launch a run against a workspace that depends on a stored
 secret and confirm it starts. The audit trail records the rotation itself:
@@ -4578,12 +4904,287 @@ is the **only** key that reads the store. Save it before doing anything else.
 Whatever you do, **back the key up off-host.** Rotation re-encrypts what is there;
 it cannot recover a key you have already lost.
 
+## Store mode: credentials in Vault
+
+With `WARDYN_SECRET_STORE=vaultkv`, every stored credential's value lives in
+your organisation's Vault KV v2 engine (OpenBao is a supported, API-compatible
+endpoint), and Wardyn keeps only a pointer row in Postgres: owner, name, when,
+and where in Vault (`enc_version` 2, `kek_id` `vaultkv:<mount>/<path>`, no
+ciphertext). Wardyn does no at-rest cryptography for such a row, and holds no
+key: once every row is in Vault, `WARDYN_AGE_KEY` is unset. Every read is one
+Vault read, so it appears in your Vault audit device (with the path and the
+token's entity; values HMAC'd) as well as in Wardyn's audit log. Wardyn's own
+boot keys (signing, session, UI-session, SSH host) live there too.
+
+**Paths.** Under the mount (`WARDYN_VAULT_KV_MOUNT`, default `wardyn`) and the
+install's prefix (`WARDYN_VAULT_KV_PREFIX`; the chart sets the release
+namespace):
+
+```
+<prefix>/platform/<name>               Wardyn's boot keys
+<prefix>/operator/<name>               operator-namespace credentials
+<prefix>/people/<owner>/<name>         a person's credentials; <owner> is the
+                                       principal in base32hex, lowercase, unpadded
+```
+
+Each value is `{"value": "<base64>"}` with `custom_metadata`
+`wardyn-owner`, `wardyn-name`, `wardyn-kind` and `wardyn-format`, and
+`max_versions` `WARDYN_VAULT_KV_MAX_VERSIONS` (default 1, so a replaced value
+does not linger). A read derives the path from the row's owner and name and
+refuses a row that points anywhere else, then refuses a value whose metadata
+names another row: a pointer moved by a database writer reads nothing.
+Removing a credential is `DELETE metadata/<path>`, every version at once.
+Paths carry the owner and name, so they reach your Vault audit log.
+
+**Policy.** Least privilege, templated so another install in another namespace
+cannot read this one's paths. There is no `destroy/` or `undelete/` stanza and
+no `delete` on `data/`: Wardyn never calls any of them. `read` on
+`wardyn/config` lets wardynd check at boot that a KV v2 engine is mounted at
+`WARDYN_VAULT_KV_MOUNT`: a mistyped mount, or an engine not yet enabled, fails
+boot instead of the first write.
+
+```hcl
+# <accessor> is the Kubernetes auth mount's accessor (vault auth list)
+path "wardyn/config" {
+  capabilities = ["read"]
+}
+path "wardyn/data/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
+  capabilities = ["create", "update", "read"]
+}
+path "wardyn/metadata/{{identity.entity.aliases.<accessor>.metadata.service_account_namespace}}/*" {
+  capabilities = ["create", "update", "read", "delete", "list"]
+}
+```
+
+With token-file authentication (compose, VMs) there is no Kubernetes alias to
+template on: write the install's `WARDYN_VAULT_KV_PREFIX` literally, as
+`wardyn/data/<prefix>/*` and `wardyn/metadata/<prefix>/*`, and give each
+install its own policy.
+
+Until a second role for the boot keys lands (`WARDYN_VAULT_ROLE_PLATFORM`,
+CS-12b), one role writes both `platform/` and `people/`: whoever holds
+Wardyn's Vault token can create, update and delete the boot keys and every
+person's credentials alike.
+
+**Authentication.** There is no Vault token in an environment variable, by
+design.
+
+- *Kubernetes* (`WARDYN_VAULT_AUTH=kubernetes`, the default). The chart
+  projects a dedicated service-account token with audience `vault` at
+  `/var/run/secrets/wardyn-vault/token` (`secretStore.vault.*` in
+  `values.yaml`). Configure the role to match:
+
+  ```sh
+  vault write auth/kubernetes/role/wardyn \
+      bound_service_account_names=<the chart's service account> \
+      bound_service_account_namespaces=<the release namespace> \
+      audience=vault policies=wardyn-kv token_ttl=1h
+  ```
+- *Token file* (`WARDYN_VAULT_AUTH=token-file`), for compose and VMs: a
+  Vault Agent sink or a CSI file at `WARDYN_VAULT_TOKEN_FILE`, re-read
+  when Vault answers 403. `deploy/compose/docker-compose.vault.yaml` is
+  the compose overlay.
+
+wardynd logs in at boot and **refuses to start if it cannot**, renews its token
+at two thirds of its TTL, and logs in again if a renewal fails. TLS uses
+`WARDYN_VAULT_CACERT_FILE`, else `WARDYN_TRUSTED_CA_FILE`, else the system
+roots, in a TLS config of its own; `http://` is refused except to a loopback
+host.
+
+**When Vault is unavailable.** A sealed, throttled or unreachable Vault (a 429, a
+5xx, a timeout; each call retried three times first) is *transient*: the
+credential sink answers the proxy 503, "Wardyn couldn't reach the service that
+holds this run's credential", distinct from a missing credential's 424. (No
+last-good grace period rides out a transient failure yet.)
+A 401 or 403, a value that is gone, or a binding that does not match is
+*definitive*: revoking Wardyn's Vault role bites at once. (A 401 or 403 makes
+wardynd log in again, or re-read its token file, at most once every 30 s.)
+**Do not restart wardynd during a Vault outage**: its boot keys are in Vault,
+so it will wait for Vault rather than boot.
+
+**Moving an install to Vault, and back.** Online, one row per transaction, safe
+while a daemon serves; idempotent and resumable.
+
+```sh
+# 0. Boot this version once with your WARDYN_AGE_KEY (it converts any
+#    pre-envelope rows), and take the Postgres dump (see Backup).
+# 1. Configure WARDYN_VAULT_* and WARDYN_SECRET_STORE=vaultkv, keep
+#    WARDYN_AGE_KEY set, and restart: new writes go to Vault, old rows still read.
+# 2. Move the rest:
+wardynd -migrate-secrets -to=vaultkv
+#    INFO wardynd: stored secrets migrated to=vaultkv moved=7 soft_deleted=0
+# 3. Unset WARDYN_AGE_KEY and restart. Boot refuses, naming the command above,
+#    while any local row remains.
+```
+
+`-to=local` moves every row back (it needs `WARDYN_AGE_KEY`); each value is
+removed from Vault once its row holds it locally. Each run writes one
+`secret.migrate` audit row and one `secret.read` per value it moved. A
+migration never overwrites a value already at the target path: if one is there
+(a write landing at the same moment, or a leftover), it stops and names the row.
+
+**Checking both sides.** `wardynd -reconcile` lists the pointer rows and the
+Vault paths side by side and reports pointers whose value is gone and values no
+row points to. It reads metadata only, deletes nothing, and exits non-zero when
+it finds either. A crash between the two writes of a Put or a Delete is what
+produces one; neither leaks a value to anyone.
+
+**Erasure horizon.** A removed credential is gone from Vault at once (all
+versions); what survives is your Vault storage's own snapshots and backups,
+under your retention. **Backup** in store mode is the Postgres dump plus your
+Vault's own backup: the dump alone holds pointers, not values.
+
+## Store mode: credentials in Azure Key Vault
+
+With `WARDYN_SECRET_STORE=azurekv`, every stored credential's value lives in
+your organisation's Azure Key Vault as a secret, and Wardyn keeps only a
+pointer row in Postgres (`enc_version` 2, `kek_id`
+`azurekv:<vault-host>/<secret name>#<n>`, no ciphertext). Everything the Vault
+section above says about pointer rows, the boot keys, `-migrate-secrets` (here
+`-to=azurekv|local`), `-reconcile`, and transient versus definitive failures
+applies unchanged. No Azure SDK is involved: the Entra token exchange and the
+Key Vault calls are plain HTTPS. One external store is configured at a time;
+to move from Vault to Key Vault, migrate to local first.
+
+**Use a vault dedicated to Wardyn** (Microsoft's "a vault per application"
+advice), and give wardynd's identity **Key Vault Secrets Officer** on it and
+nothing else. Every read is a `SecretGet` in the vault's `AuditEvent` log, with
+wardynd's identity and the secret's URI. Secrets Officer also grants backup,
+restore and recover, which Wardyn never calls; the least-privilege alternative
+is a custom role with exactly these `dataActions`:
+
+```
+Microsoft.KeyVault/vaults/secrets/getSecret/action
+Microsoft.KeyVault/vaults/secrets/setSecret/action
+Microsoft.KeyVault/vaults/secrets/readMetadata/action
+Microsoft.KeyVault/vaults/secrets/update/action
+Microsoft.KeyVault/vaults/secrets/delete
+Microsoft.KeyVault/vaults/secrets/purge/action
+```
+
+Leave out `purge/action` to withhold purge (see "Removing a credential" below).
+
+**Names, versions and the owner check.** Key Vault names cannot hold `/`, `@`,
+`.` or `_`, so a secret's name is derived from its row, one per owner and name:
+
+```
+<prefix>-<platform|operator|people>-<32 hex of SHA-256(owner, name)>-g<generation>
+```
+
+`<prefix>` is `WARDYN_AZURE_KV_PREFIX` (the chart sets the release namespace).
+Each value is the base64 of the bytes (content type
+`application/octet-stream;base64`, at most 18 KiB) with tags `wardyn-owner`,
+`wardyn-name`, `wardyn-kind` and `wardyn-format`. A read derives the name from
+the row's owner and name and refuses a row that points to any other name or
+vault, then refuses a value whose tags name another row. A replace is a new
+**version** of the same name, and every earlier version is **disabled**: Key
+Vault cannot delete old versions. A write lists the versions before it writes
+and disables only those, so it never disables a newer one, and writes to one
+credential wait for each other across replicas. Once the name holds
+`WARDYN_AZURE_KV_MAX_VERSIONS` versions (default 100, well under the 500 at
+which Key Vault's backup of a secret fails; the vault's own count decides, not
+the pointer row), the next write starts a new generation, a fresh name, and
+the old generation is deleted. A read that loaded the row just before such a
+write committed can find the old name already deleted: it is refused once, with
+no grace, and the next read follows the row to the new name. Each write is one transaction in the vault's
+secret-create limit (300 per 10 seconds, shared with key and certificate
+imports), plus a version listing and one update per version it disables.
+
+**Authentication.** There is no client secret, by design.
+
+- *Workload identity* on AKS (`WARDYN_AZURE_AUTH=workload-identity`, the
+  default). With `secretStore.azure.*` set, the chart labels the pod
+  `azure.workload.identity/use: "true"` and annotates the service account with
+  `azure.workload.identity/client-id`; the webhook projects a token and sets
+  `AZURE_FEDERATED_TOKEN_FILE`, which wardynd re-reads at every exchange.
+  Add a federated credential for the chart's service account:
+
+  ```sh
+  az identity federated-credential create --name wardyn \
+      --identity-name <identity> --resource-group <group> \
+      --issuer "$(az aks show -n <cluster> -g <group> --query oidcIssuerProfile.issuerUrl -o tsv)" \
+      --subject system:serviceaccount:<namespace>:<the chart's service account> \
+      --audience api://AzureADTokenExchange
+  az role assignment create --role "Key Vault Secrets Officer" \
+      --assignee <the identity's client id> --scope <the vault's resource id>
+  ```
+- *Managed identity* on a VM (`WARDYN_AZURE_AUTH=managed-identity`): the
+  instance metadata service, never through a proxy. `WARDYN_AZURE_CLIENT_ID`
+  selects a user-assigned identity.
+
+wardynd gets a token at boot and **refuses to start if it cannot**, then keeps
+it until five minutes before it expires. TLS uses `WARDYN_TRUSTED_CA_FILE`,
+else the system roots, in a TLS config of its own; `http://` is refused except
+to a loopback host. The default NetworkPolicy denies wardynd's egress: allow
+the vault and `login.microsoftonline.com` in `networkPolicy.egress.extra`.
+
+**When Key Vault is unavailable.** A 429, a 5xx, a timeout or any token
+endpoint failure is transient (each call retried three times first, honouring
+`Retry-After`). A token endpoint refusal is transient too: Entra answers
+`invalid_client` for passing conditions (`AADSTS700024`, a projected token
+outside its valid time while the kubelet refreshes it), so it rides the
+15-minute grace. A 401 fetches a new token at most once every 30 s; a 403, a
+secret that is gone or disabled, or a binding that does not match is
+definitive. Revoking wardynd's role at the vault bites at once; removing its
+federated credential bites when its cached token expires (within the hour) and
+the vault then refuses the call. A write, the wait for the credential's lock
+included, gives up after six times `WARDYN_SECRET_STORE_TIMEOUT` (30 s by
+default), so an outage never holds a database connection longer.
+
+**Removing a credential, and the erasure horizon.** Removal is a soft delete
+of the secret (every version), then, with `WARDYN_AZURE_KV_PURGE=auto` (the
+default), a purge. Withholding purge is your choice: purge protection on the
+vault, or a custom role without the purge permission. Then the purge is
+refused, the secret stays soft-deleted, and the `secret.delete` audit row says
+`purged: false` with `recoverable_days`, the vault's retention (7 to 90 days,
+fixed when the vault was created). `WARDYN_AZURE_KV_PURGE=never` never purges.
+Until then your organisation can recover the value; ask the vault's operators
+to purge it sooner. `wardynd -reconcile` lists each soft-deleted value no
+row points to, with the days until the vault purges it (a listing, not a
+failure), and `-migrate-secrets -to=local` counts the old copies it left
+soft-deleted (`soft_deleted` in its log line and `secret.migrate` row). Wardyn
+never recovers a deleted secret: a credential removed and added again within
+the retention reuses the name after a purge, or takes a new generation. After the purge, what survives is your vault's own
+backups. **Backup** in store mode is the Postgres dump plus the vault's.
+
 ## Upgrades
 
 Migrations are **forward-only**. `internal/db` records each applied filename in
 `schema_migrations` and applies anything new on boot, under an advisory lock so
 concurrent starts do not race. There are no `down` migrations and no downgrade
 path — a rollback to an older wardynd against a migrated database is unsupported.
+
+**Upgrading from 0.7.11 or earlier converts every stored secret, once, and it
+cannot be undone without the backup.** `0069_secret_envelope_v1` adds the envelope columns, and
+the first boot of 0.7.12 or later re-seals every existing (pre-envelope,
+age-encrypted) row of
+`secrets` as envelope v1 — before it reads its own boot keys, which live in the
+same table. It runs as one transaction under its own advisory lock
+(`db.SecretConvertLockKey`): a second replica starting at the same moment waits,
+then finds nothing left to convert, and every later boot converts nothing. After
+it commits, an older wardynd can read none of these rows. There is **no rolling
+upgrade across this release**:
+
+```sh
+# 0. Take the Postgres dump (see Backup) AND confirm you hold the age key. The
+#    dump plus that key is the ONLY way back to an older wardynd afterwards.
+# 1. Stop EVERY older replica — one-instance locking cannot see it under
+#    -allow-multi-instance. An older binary still running keeps writing
+#    pre-envelope payloads, which the new version refuses by name ("an older
+#    wardynd is still writing"). A NEW name it wrote is converted at the next
+#    restart;
+#    a name it REPLACED is overwritten in place and must be set again.
+# 2. Start the new version with the SAME WARDYN_AGE_KEY. The log says how many it converted:
+#    INFO wardynd: converted stored secrets to envelope v1; … secrets=7
+```
+
+- **A row the key cannot decrypt stops the boot**, naming it —
+  `v0 conversion ABORTED after 2 of 9 rows (nothing committed …): (owned_by="", name="github-app-key") does not decrypt with WARDYN_AGE_KEY`.
+  Nothing was converted and the older binary still reads the store. Set the key
+  that row was written with, or delete that one row if it is dead, and start again.
+- **`WARDYN_AGE_KEY` unset now refuses to start** while any row is sealed under an
+  age key (pre-envelope or `local:`), instead of minting an ephemeral key that
+  would strand them all.
 
 **Upgrading to 0.7 signs every SSO human out, once.** The session payload gained
 a codec version and `decodeSession` requires an exact match
@@ -4733,20 +5334,28 @@ because PostgreSQL requires ownership for `ALTER TABLE` and for
 `CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade. Every 0.6.x release ships
 through `0049`, so this path applies `0050`–`0062`, and most of it is exactly
 this shape: `0050` (secrets), `0052` and `0060` (api_tokens, created back in
-`0045`), `0055` (workspaces) and `0062`, `0063`, `0064`, `0065` (approvals and
+`0045`), `0055` (workspaces) and `0062`, `0063`, `0064`, `0065`, `0072`, `0073` (approvals and
 `agent_runs`, both created in `0001`) are
 `ALTER TABLE` on tables an earlier release created — `0050` also drops and
 re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
 (`0062` widens `approvals.state` with `CANCELLED`, `0064` widens
 `approvals.kind` with `credential_reauth`), `0063` adds the
-`agent_runs.status_detail` column and `0065` adds `agent_runs.autonomy_level` — and `0056`, `0057` and `0058` are three successive
+`agent_runs.status_detail` column, `0065` adds `agent_runs.autonomy_level`, `0072` adds the
+run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `governance_profile_id`) and `0073` the
+lease columns (`lost_at`, `lost_reason`, `ending_soon_for`, `ending_soon_sec`) — and `0056`, `0057` and `0058` are three successive
 `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
 two migrations earlier in the same run, so it is not an instance of the hazard.)
 The same shape recurs one release later: `0067` adds `user_drives.object_scheme`,
 and `user_drives` itself was `0054`'s table — created inside the already-shipped
 0.7 line, not this upgrade's own batch — so an install carried forward from a
-released 0.7.x hits the identical ownership requirement on its next upgrade.
+released 0.7.x hits the identical ownership requirement on its next upgrade —
+as does `0069`, which adds the envelope columns to `secrets` (`0001`'s table),
+and `0070`, which adds `ssh_public_keys.capped` (`0033`'s table). `0074` does
+too: it renames the stored `member` tier to `user`, re-adding the role CHECK on
+`api_tokens` (`0045`'s table), moving the role default there and on
+`ssh_public_keys` (`0033`'s, whose `0070` cap it re-creates), and altering
+`role_mappings` (`0051`'s).
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does
@@ -4772,7 +5381,7 @@ above that is the first secret write: `0050` moves the `secrets` primary key
 from `(name)` to `(owned_by, name)` (`internal/db/migrations/0050_secret_owned_by.sql:19-24`),
 and the older binary's `INSERT … ON CONFLICT (name)`
 (`internal/secretstore/pg/pg.go:78` at `v0.6.6`; the same statement on this
-branch already reads `ON CONFLICT (owned_by, name)`, `internal/secretstore/pg/pg.go:94`)
+branch already reads `ON CONFLICT (owned_by, name)`, `internal/secretstore/pg/pg.go` `Store.Put`)
 names a constraint that no longer exists, which Postgres refuses as
 `SQLSTATE 42P10` ("no unique or exclusion constraint matching the ON CONFLICT
 specification") on every secret upsert. Take the dump before the upgrade, not
@@ -5670,13 +6279,13 @@ driver, not a guess:
   at `/work`, `/workspace` or elsewhere under `/home/agent` (`internal/runner/mount.go`'s allowed
   target prefixes). Nothing is mounted at `/home/agent` itself, because a volume there would
   shadow each image's baked `.bashrc`, swallow the reserved drive target `/home/agent/drive`, and
-  hide the read-only `~/.claude` bind the subscription path mounts. **Risk carried by the cache
-  volume specifically:** an `emptyDir` at `/home/agent/.cache` shadows the full image's
-  pre-created, agent-owned `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`) with a
-  fresh directory whose ownership the kubelet decides — `FSGroup` is only applied to a pod with a
-  drive attached (`internal/runner/k8s/drives.go`), so a run with `disk_mib` set and no drive can
-  get a root-owned mount the uid-1000 agent cannot write into; only the conformance "Cache" fill
-  target, run against a real cluster, catches this. **What the proof
+  hide the read-only `~/.claude` bind the subscription path mounts. **The cache volume starts
+  cold:** an `emptyDir` at `/home/agent/.cache` shadows the full image's pre-created
+  `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`), so the Go build cache is
+  rebuilt from empty. The mount is writable without `FSGroup`: the kubelet creates an `emptyDir`
+  root-owned but `0777`, the same mode `/tmp` and `/home/agent/work` have been written through by
+  the uid-1000 agent since 0.7.5; the conformance "Cache" fill target writes it against a real
+  cluster. **What the proof
   does not cover:** the kind conformance evidence is from the busybox conformance-agent image on
   runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and
   Kata. The live kind SSO walk separately exercises a real `agent-run` boot — the aws-sso sign-in

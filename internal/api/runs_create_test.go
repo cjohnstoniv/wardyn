@@ -31,7 +31,7 @@ func TestCreateRun_ReservedTaskIsRejected(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.OIDC = &oidc.Authenticator{}
 	h.srv.router = h.srv.routes()
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	for task := range reservedRunTasks {
 		t.Run(task, func(t *testing.T) {
