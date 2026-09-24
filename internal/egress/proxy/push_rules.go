@@ -8,12 +8,15 @@ package proxy
 //
 // Three outcomes, and they are the whole feature:
 //
-//   - the buffered request is bigger than the run's inspection ceiling, so it
-//     is refused rather than waved through unread (brokered:git:push-too-large);
-//   - the inspector cannot answer from the request's own bytes — a thin pack
-//     whose delta bases stayed on the forge, a body in a content-coding this
-//     proxy cannot read past, a pack that is malformed or over one of
-//     internal/gitpack's own ceilings (brokered:git:push-uninspectable);
+//   - the buffered request is bigger than the run's inspection ceiling, or an
+//     otherwise-inspectable pack costs more than one of internal/gitpack's own
+//     ceilings allow, so it is refused rather than waved through unread —
+//     both with the same fix, push fewer commits at a time
+//     (brokered:git:push-too-large);
+//   - the inspector cannot answer from the request's own bytes at all — a
+//     thin pack whose delta bases stayed on the forge, a body in a
+//     content-coding this proxy cannot read past, a pack that is malformed
+//     (brokered:git:push-uninspectable);
 //   - a path the push introduces matches a deny rule (brokered:git:push-rules).
 //
 // Otherwise the buffered bytes go onward unchanged.
@@ -97,11 +100,19 @@ const (
 	// introduces matched push_rules.deny_paths.
 	ruleSourceGitRules = "brokered:git:push-rules"
 	// ruleSourceGitPackBig marks a brokered push refused because its body is
-	// larger than push_rules.max_inspect_pack_mib. Refused rather than held:
-	// holding would ask a person to approve a push nobody inspected.
+	// larger than push_rules.max_inspect_pack_mib, or because an honest,
+	// fully-inspectable pack still costs more objects, bytes, tree entries or
+	// changed paths than internal/gitpack's own ceilings allow
+	// (gitpack.ErrTooLarge). Refused rather than held: holding would ask a
+	// person to approve a push nobody inspected. Both cases have the same fix
+	// on the sender's side — push fewer commits at a time.
 	ruleSourceGitPackBig = "brokered:git:push-too-large"
 	// ruleSourceGitPackBlind marks a brokered push refused because the
-	// inspector could not answer from the request's own bytes.
+	// inspector could not answer from the request's own bytes at all — a thin
+	// pack's delta bases, a ref whose commit is not in the pack, or a shape git
+	// would read differently (gitpack.ErrUninspectable) — or because a control
+	// error (an unreadable rule, an unsupported encoding, a busy scan slot)
+	// left the rules unable to run.
 	ruleSourceGitPackBlind = "brokered:git:push-uninspectable"
 	// ruleSourceGitForgeRead marks the broker's OWN credentialed reads of
 	// api.github.com on a push's behalf: one ALLOW row per push that read the
@@ -432,6 +443,12 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 		return nil, noRelease, false
 	}
 	res, err := gitpack.Inspect(buf)
+	if errors.Is(err, gitpack.ErrTooLarge) {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBig, http.StatusRequestEntityTooLarge,
+			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
+				"\npush fewer commits at a time")
+		return nil, noRelease, false
+	}
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+

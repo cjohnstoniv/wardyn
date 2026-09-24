@@ -65,6 +65,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   UTF-8, are now refused at write time (`400`) instead of stored as a deny rule that matches
   almost nothing. The git broker reads them the same way, so a policy that bypassed write-time
   validation with one has every push refused rather than the entry ignored (#271).
+- A push of a few hundred commits from a merge-heavy history is no longer refused as
+  uninspectable while far below every size limit. Push content rules charged each merge again for
+  every directory the other side had changed, so such a push crossed the inspector's tree-entry
+  ceiling at about 570 commits. Each comparison is now charged once, and the ceiling is justified
+  against measured real history (#254). An honest push that still crosses one of
+  `internal/gitpack`'s own ceilings (object count, inflated bytes, tree entries, changed paths) now
+  refuses with `413`/`brokered:git:push-too-large` instead of `415`/`brokered:git:push-uninspectable`,
+  since it names the same fix as an oversized push: fewer commits at a time.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
