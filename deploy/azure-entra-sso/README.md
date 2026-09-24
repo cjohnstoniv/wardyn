@@ -219,10 +219,13 @@ back to admin.
 
 After Steps 3 and 4 have run once, `05-kind-deploy.sh <ref>` redeploys one
 commit: it builds every image from `git archive` of that ref under a
-per-commit tag, runs `quickstart.sh`, and re-applies the Entra overlay plus
-the Bedrock region and model with `--reuse-values`. `06-kind-follow-main.sh`
-runs it for the newest `main` commit whose CI passed, and does nothing when
-that commit is already deployed — run it on a schedule. Both need `TENANT_ID`
+per-commit tag, loads them, and makes one `helm upgrade --reuse-values` with
+the Entra overlay plus the Bedrock region and model. It does not re-run
+`quickstart.sh`, whose own upgrade carries no overlay. `06-kind-follow-main.sh`
+runs it for the newest `main` commit whose CI passed and that descends from
+the commit the cluster is running (read off its `c-<sha>` image tag), one run
+at a time, and does nothing when that commit is already deployed — run it on a
+schedule. Both need `TENANT_ID`
 and `CLIENT_ID` in the environment; the client secret stays in the cluster's
 `wardyn-entra-oidc` Secret.
 
