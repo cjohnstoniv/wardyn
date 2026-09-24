@@ -109,6 +109,15 @@ const SingleInstanceLockKey int64 = 0x5741524459_494E53 // ASCII "WARDYINS"
 // the rekey has already retired.
 const SecretRekeyLockKey int64 = 0x5741524459_524B59 // ASCII "WARDYRKY"
 
+// BootKeyLockKey serializes the CREATE path of cmd/wardynd's boot keys
+// (loadOrCreateSecret) across replicas that boot with -allow-multi-instance.
+// Without it two replicas booting at once against an empty store each generate
+// a key, each Put, and the loser serves with a key nobody else holds. Taken
+// with the BLOCKING AdvisoryLock, like migrateAdvisoryLockKey: the second
+// replica must wait and then read the first one's key, not skip. Any stable
+// value works, as long as it differs from every other key in this file.
+const BootKeyLockKey int64 = 0x5741524459_424B59 // ASCII "WARDYBKY"
+
 // SecretConvertLockKey makes the boot conversion of legacy (v0) secrets rows to
 // envelope v1 single-writer (secretstore/pg's ConvertV0). Taken with the
 // TRANSACTION-scoped pg_advisory_xact_lock and BLOCKING, like
@@ -227,6 +236,29 @@ func TryAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (releas
 		conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key) //nolint:errcheck // best-effort release
 		conn.Release()
 	}, true, nil
+}
+
+// AdvisoryLock is TryAdvisoryLock's BLOCKING sibling: it waits for session-level
+// advisory lock key until ctx ends, and returns an error rather than proceeding
+// unlocked. Same release contract, and the same pool_max_conns >= 2 need.
+func AdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64) (release func(), err error) {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("db: acquire advisory lock conn: %w", err)
+	}
+	unlock := func() {
+		// Background context, as in TryAdvisoryLock; unlocking a lock this
+		// session does not hold is a harmless no-op.
+		conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, key) //nolint:errcheck // best-effort release
+		conn.Release()
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, key); err != nil {
+		// pgx can return ctx's error after the server granted the lock, so
+		// unlock rather than hand back a connection that may still hold it.
+		unlock()
+		return nil, fmt.Errorf("db: advisory lock: %w", err)
+	}
+	return unlock, nil
 }
 
 // Connect opens a pgxpool to dsn and performs a lightweight liveness check.

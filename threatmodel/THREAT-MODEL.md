@@ -1929,7 +1929,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     Two things are stored under it in the same table. First, every credential
     kept in the secret store: model API keys, forge tokens, SSH keys, captured
     AWS SSO sessions. Second, up to four process-global keys that
-    `loadOrCreateSecret` (`cmd/wardynd/main.go`) mints on first use:
+    `loadOrCreateSecret` (`cmd/wardynd/boot_keys.go`) mints on first use:
     - the embedded-identity ES256 signing key (`wardyn-signing-key`), always
       present, which signs every run-identity token (SVID) and the ground-truth
       sensor token;

@@ -41,7 +41,7 @@ func (m mapKeyStore) Put(_ context.Context, name string, v []byte) error {
 func TestLoadHopTLS_RefusesPlaintextOnNonLocalInstall(t *testing.T) {
 	for _, u := range []string{"http://wardynd:8080", "http://wardyn.wardyn.svc.cluster.local:8080", "http://host.docker.internal:8080"} {
 		store := mapKeyStore{}
-		_, err := loadHopTLS(context.Background(), store, u)
+		_, err := loadHopTLS(context.Background(), unlocked(store), u)
 		if err == nil || !strings.Contains(err.Error(), "refusing to start") || !strings.Contains(err.Error(), "WARDYN_INTERNAL_LISTEN") {
 			t.Errorf("%s: boot must refuse, naming the fix; got %v", u, err)
 		}
@@ -53,7 +53,7 @@ func TestLoadHopTLS_RefusesPlaintextOnNonLocalInstall(t *testing.T) {
 
 func TestLoadHopTLS_LoopbackHTTPIsLocal(t *testing.T) {
 	store := mapKeyStore{}
-	hop, err := loadHopTLS(context.Background(), store, "http://127.0.0.1:8080")
+	hop, err := loadHopTLS(context.Background(), unlocked(store), "http://127.0.0.1:8080")
 	if err != nil || hop != nil {
 		t.Fatalf("loopback http is the local install: want (nil, nil), got (%v, %v)", hop, err)
 	}
@@ -64,11 +64,11 @@ func TestLoadHopTLS_LoopbackHTTPIsLocal(t *testing.T) {
 
 func TestLoadHopTLS_CAStableAcrossBoots_RotatedNearExpiry(t *testing.T) {
 	store := mapKeyStore{}
-	first, err := loadHopTLS(context.Background(), store, "https://wardynd:8443")
+	first, err := loadHopTLS(context.Background(), unlocked(store), "https://wardynd:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := loadHopTLS(context.Background(), store, "https://wardynd:8443")
+	second, err := loadHopTLS(context.Background(), unlocked(store), "https://wardynd:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestLoadHopTLS_CAStableAcrossBoots_RotatedNearExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	store[secretInternalCA] = stale
-	rotated, err := loadHopTLS(context.Background(), store, "https://wardynd:8443")
+	rotated, err := loadHopTLS(context.Background(), unlocked(store), "https://wardynd:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestLoadHopTLS_CAStableAcrossBoots_RotatedNearExpiry(t *testing.T) {
 // The listener serves the proxy's routes over TLS a pinned client verifies,
 // nothing else, and fails closed for a client pinned to another CA.
 func TestInternalListener_OnlyInternalRoutes_OverPinnedTLS(t *testing.T) {
-	hop, err := loadHopTLS(context.Background(), mapKeyStore{}, "https://127.0.0.1:8443")
+	hop, err := loadHopTLS(context.Background(), unlocked(mapKeyStore{}), "https://127.0.0.1:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestInternalListener_BindFailureIsFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	hop, err := loadHopTLS(context.Background(), mapKeyStore{}, "https://wardynd:8443")
+	hop, err := loadHopTLS(context.Background(), unlocked(mapKeyStore{}), "https://wardynd:8443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestInternalListener_BindFailureIsFatal(t *testing.T) {
 // The listener's floor is TLS 1.3: a client capped at TLS 1.2 is refused even
 // when it pins the right CA.
 func TestInternalListener_RefusesTLS12Client(t *testing.T) {
-	hop, err := loadHopTLS(context.Background(), mapKeyStore{}, "https://127.0.0.1:8443")
+	hop, err := loadHopTLS(context.Background(), unlocked(mapKeyStore{}), "https://127.0.0.1:8443")
 	if err != nil {
 		t.Fatal(err)
 	}

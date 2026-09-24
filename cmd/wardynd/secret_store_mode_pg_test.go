@@ -72,7 +72,7 @@ func TestBuildSecretStore_StoreModeBootsWithNoAgeKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store-mode boot with no age key: %v", err)
 	}
-	first, err := loadOrCreateSigningKey(t.Context(), s)
+	first, err := loadOrCreateSigningKey(t.Context(), unlocked(s))
 	if err != nil {
 		t.Fatalf("first boot mints the signing key: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestBuildSecretStore_StoreModeBootsWithNoAgeKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := loadOrCreateSigningKey(t.Context(), s2)
+	second, err := loadOrCreateSigningKey(t.Context(), unlocked(s2))
 	if err != nil || !first.Equal(second) {
 		t.Fatalf("second boot = (%v); want the same signing key back", err)
 	}
@@ -123,11 +123,11 @@ func TestLoadOrCreateSecret_NeverMintsOverAGoneExternalValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadOrCreateSigningKey(t.Context(), s); err != nil {
+	if _, err := loadOrCreateSigningKey(t.Context(), unlocked(s)); err != nil {
 		t.Fatal(err)
 	}
 	ext.vals = map[string][]byte{}
-	if _, err := loadOrCreateSigningKey(t.Context(), s); err == nil {
+	if _, err := loadOrCreateSigningKey(t.Context(), unlocked(s)); err == nil {
 		t.Fatal("boot minted a new signing key over a pointer row whose value is gone")
 	}
 	if len(ext.vals) != 0 {
@@ -196,14 +196,14 @@ func TestLoadOrCreateSecret_NeverMintsOverAValueNotInWardynsFormat(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadOrCreateSigningKey(t.Context(), s); err != nil {
+	if _, err := loadOrCreateSigningKey(t.Context(), unlocked(s)); err != nil {
 		t.Fatalf("first boot mints the signing key: %v", err)
 	}
 	v.mu.Lock()
 	v.data["ns1/platform/"+secretSigningKey] = map[string]any{"password": "x"}
 	writes := v.dataWrites
 	v.mu.Unlock()
-	if _, err := loadOrCreateSigningKey(t.Context(), s); err == nil {
+	if _, err := loadOrCreateSigningKey(t.Context(), unlocked(s)); err == nil {
 		t.Fatal("boot accepted a signing key whose Vault data holds no value")
 	}
 	v.mu.Lock()

@@ -293,7 +293,7 @@ type optionalFeatures struct {
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
 // verbatim from run() — construction order and log lines are unchanged.
-func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool *pgxpool.Pool, secrets secretstore.Store, secureCookies bool, subPostureOK bool) (optionalFeatures, error) {
+func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool *pgxpool.Pool, secrets secretstore.Store, bootKeys bootKeyStore, secureCookies bool, subPostureOK bool) (optionalFeatures, error) {
 	var of optionalFeatures
 
 	// Recording store (pluggable seam; default "pg" — see boot_flags.go). pg
@@ -322,7 +322,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// is scoped to it) — validateOperatorPosture needs it after the block closes.
 	var hasRoleMap bool
 	if *f.oidcIssuer != "" {
-		sessKey, kerr := loadOrCreateSessionKey(bootCtx, secrets)
+		sessKey, kerr := loadOrCreateSessionKey(bootCtx, bootKeys)
 		if kerr != nil {
 			return of, kerr
 		}
@@ -517,7 +517,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// guard). loadOrCreateSSHHostKey follows the identical loadOrCreateSecret
 	// pattern as the signing/session keys above.
 	if *f.sshListen != "" {
-		hostKey, herr := loadOrCreateSSHHostKey(bootCtx, secrets)
+		hostKey, herr := loadOrCreateSSHHostKey(bootCtx, bootKeys)
 		if herr != nil {
 			return of, herr
 		}
@@ -532,7 +532,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// minted ONLY when the gateway is enabled, the same discipline as the SSH
 	// host key above.
 	if *f.uiListen != "" {
-		uiKey, kerr := loadOrCreateUISessionKey(bootCtx, secrets)
+		uiKey, kerr := loadOrCreateUISessionKey(bootCtx, bootKeys)
 		if kerr != nil {
 			return of, kerr
 		}
@@ -550,7 +550,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		}
 	}
 
-	hop, herr := loadHopTLS(bootCtx, secrets, *f.controlURL)
+	hop, herr := loadHopTLS(bootCtx, bootKeys, *f.controlURL)
 	if herr != nil {
 		return of, herr
 	}
