@@ -80,8 +80,8 @@ function roleLabel(role: string): string {
       return PEOPLE.ROLE_ADMIN;
     case "security_admin":
       return PEOPLE.ROLE_SECURITY_ADMIN;
-    case "member":
-      return PEOPLE.ROLE_MEMBER;
+    case "user":
+      return PEOPLE.ROLE_USER;
     default:
       return role;
   }
@@ -103,7 +103,7 @@ function roleLabelInSentence(role: string): string {
   switch (role) {
     case "admin":
     case "security_admin":
-    case "member":
+    case "user":
       return roleLabel(role).toLowerCase();
     default:
       return role;
@@ -559,7 +559,7 @@ function AddMappingForm({
               // WARDYN_OIDC_DEFAULT_ROLE.
               { value: "admin", label: PEOPLE.ROLE_ADMIN },
               { value: "security_admin", label: PEOPLE.ROLE_SECURITY_ADMIN },
-              { value: "member", label: PEOPLE.ROLE_MEMBER },
+              { value: "user", label: PEOPLE.ROLE_USER },
             ]}
           />
         </Field>

@@ -41,6 +41,29 @@ out; guarded, the 0.5 defaults simply carry forward.
 {{- $ssh := .Values.ssh | default dict -}}
 {{- $ui := .Values.uiSandbox | default dict -}}
 {{- $ageRef := .Values.secrets.ageKeySecretRef | default dict -}}
+{{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
+{{- /*
+secretFiles mode: the three Secrets the chart already wires (DSN, admin token,
+age key) are projected into ONE read-only volume and wardynd gets
+WARDYN_*_FILE paths instead of secretKeyRef env (cmd/wardynd resolveSecretFiles).
+Same Secrets, same keys — only the delivery changes, so env mode (the default)
+renders byte-identically to before this existed. A DSN delivered as
+env.WARDYN_PG_DSN_FILE (Vault Agent / CSI) leaves both postgres.dsn fields empty,
+which is why the DSN entry is conditional at all (secret.yaml refuses the rest).
+*/ -}}
+{{- $sf := .Values.secretFiles | default dict -}}
+{{- $filesDir := $sf.mountPath | default "/etc/wardyn/secrets" -}}
+{{- $chartDSN := or .Values.postgres.dsn.secretRef.name .Values.postgres.dsn.value -}}
+{{- $chartToken := or .Values.auth.adminToken.secretRef.name .Values.auth.adminToken.value -}}
+{{- $ageSecret := "" -}}
+{{- $ageItem := "age-key" -}}
+{{- if $ageRef.name -}}
+{{- $ageSecret = $ageRef.name -}}
+{{- $ageItem = $ageRef.key | default "age-key" -}}
+{{- else if or .Values.secrets.ageKeyFromSecret (and .Values.secrets.ageKey (not .Values.postgres.dsn.secretRef.name)) -}}
+{{- $ageSecret = include "wardyn.secretName" . -}}
+{{- end -}}
+{{- $bootFiles := and $sf.enabled (or $chartDSN $chartToken $ageSecret) -}}
 {{- $digest := .Values.image.digest | default "" -}}
 {{- if and $digest (not (hasPrefix "sha256:" $digest)) -}}
 {{- fail (printf "wardyn: image.digest=%q must be a full digest beginning with \"sha256:\" (sha256: followed by 64 hex characters). It is appended as <repository>@<digest>, so a bare hex string renders `<repository>@<that string>`, which no kubelet can pull — and the pod ImagePullBackOffs with nothing else to go on. Putting a digest in image.tag or image.repository does not work either: they render `repo:sha256:...` and `repo@sha256:...:<appVersion>` respectively, which is why this key exists." $digest) -}}
@@ -108,6 +131,9 @@ spec:
     metadata:
       labels:
         {{- include "wardyn.labels" . | nindent 8 }}
+        {{- if eq (include "wardyn.azureWorkloadIdentity" .) "true" }}
+        azure.workload.identity/use: "true"
+        {{- end }}
       {{- $podAnnotations := .Values.podAnnotations | default dict }}
       {{- if .Values.defaultPolicy }}
       {{- /* Forces a rollout when the ConfigMap's content changes — a Deployment
@@ -153,6 +179,9 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - -listen=:{{ .Values.service.port }}
+            # The proxy-facing TLS listener (internal CA, minted into the secret
+            # store on first boot): every run's proxy resolves credentials here.
+            - -internal-listen=:{{ $internalPort }}
             {{- if .Values.allowMultiReplica }}
             # wardynd takes the database's single-instance advisory lock at boot
             # and REFUSES to start when another wardynd already holds it — the
@@ -166,6 +195,13 @@ spec:
             - -allow-multi-instance
             {{- end }}
           env:
+            {{- if and $chartDSN $sf.enabled }}
+            # secretFiles.enabled: every chart-wired secret below is a PATH into
+            # the read-only boot-secrets volume, never a value in the pod spec
+            # or the process environment.
+            - name: WARDYN_PG_DSN_FILE
+              value: {{ printf "%s/pg-dsn" $filesDir | quote }}
+            {{- else if $chartDSN }}
             # DSN is the only required input; pulled from the (external or
             # chart-created) Secret so it never appears in the pod spec.
             - name: WARDYN_PG_DSN
@@ -173,7 +209,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "wardyn.secretName" . }}
                   key: {{ .Values.postgres.dsn.key }}
-            {{- if or .Values.auth.adminToken.secretRef.name .Values.auth.adminToken.value }}
+            {{- end }}
+            {{- if and $chartToken $sf.enabled }}
+            - name: WARDYN_ADMIN_TOKEN_FILE
+              value: {{ printf "%s/admin-token" $filesDir | quote }}
+            {{- else if $chartToken }}
             # Admin bearer token. Unset (and no OIDC) => every API route 401s
             # while /healthz still reports Ready, so secret.yaml fails the render
             # instead of shipping a control plane that serves nothing.
@@ -194,7 +234,10 @@ spec:
             - name: WARDYN_SSO_ONLY
               value: "true"
             {{- end }}
-            {{- if $ageRef.name }}
+            {{- if and $ageSecret $sf.enabled }}
+            - name: WARDYN_AGE_KEY_FILE
+              value: {{ printf "%s/age-key" $filesDir | quote }}
+            {{- else if $ageRef.name }}
             # age secret-store identity, wired from a SEPARATE Secret this
             # chart never creates or otherwise references — for an operator-
             # owned Secret (e.g. one a Postgres operator manages and would
@@ -214,6 +257,67 @@ spec:
                 secretKeyRef:
                   name: {{ include "wardyn.secretName" . }}
                   key: age-key
+            {{- end }}
+            {{- with .Values.secretStore }}
+            {{- if and .backend (ne .backend "pg") }}
+            - name: WARDYN_SECRET_STORE
+              value: {{ .backend | quote }}
+            {{- end }}
+            {{- if and .vault .vault.addr }}
+            # Store mode's Vault client (docs/OPERATIONS.md "Store mode").
+            - name: WARDYN_VAULT_ADDR
+              value: {{ .vault.addr | quote }}
+            {{- with .vault.namespace }}
+            - name: WARDYN_VAULT_NAMESPACE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: WARDYN_VAULT_AUTH
+              value: {{ .vault.auth | quote }}
+            {{- if eq .vault.auth "kubernetes" }}
+            - name: WARDYN_VAULT_AUTH_MOUNT
+              value: {{ .vault.authMount | quote }}
+            - name: WARDYN_VAULT_ROLE
+              value: {{ .vault.role | quote }}
+            - name: WARDYN_VAULT_K8S_TOKEN_FILE
+              value: "/var/run/secrets/wardyn-vault/token"
+            {{- else }}
+            - name: WARDYN_VAULT_TOKEN_FILE
+              value: {{ .vault.tokenFile | quote }}
+            {{- end }}
+            - name: WARDYN_VAULT_KV_MOUNT
+              value: {{ .vault.kvMount | quote }}
+            - name: WARDYN_VAULT_KV_PREFIX
+              value: {{ .vault.kvPrefix | default $.Release.Namespace | quote }}
+            - name: WARDYN_VAULT_KV_MAX_VERSIONS
+              value: {{ .vault.maxVersions | quote }}
+            {{- end }}
+            {{- if and .azure .azure.vaultUrl }}
+            # Store mode's Key Vault client (docs/OPERATIONS.md "Store mode:
+            # credentials in Azure Key Vault"). With workload identity the
+            # webhook sets AZURE_FEDERATED_TOKEN_FILE, which wardynd reads.
+            - name: WARDYN_AZURE_KV_URL
+              value: {{ .azure.vaultUrl | quote }}
+            - name: WARDYN_AZURE_AUTH
+              value: {{ .azure.auth | quote }}
+            {{- with .azure.tenantId }}
+            - name: WARDYN_AZURE_TENANT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .azure.clientId }}
+            - name: WARDYN_AZURE_CLIENT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .azure.authorityHost }}
+            - name: WARDYN_AZURE_AUTHORITY_HOST
+              value: {{ . | quote }}
+            {{- end }}
+            - name: WARDYN_AZURE_KV_PREFIX
+              value: {{ .azure.prefix | default $.Release.Namespace | quote }}
+            - name: WARDYN_AZURE_KV_MAX_VERSIONS
+              value: {{ .azure.maxVersions | quote }}
+            - name: WARDYN_AZURE_KV_PURGE
+              value: {{ .azure.purge | quote }}
+            {{- end }}
             {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_RECORDING_STORE") }}
             # persistence.enabled is the SINGLE recording switch it is documented
@@ -316,9 +420,11 @@ spec:
             # The Service's in-cluster FQDN, not a bare name: correct whether
             # sandbox proxy pods run in THIS namespace or in a different
             # k8s.runsNamespace (a bare Service name only resolves within the
-            # SAME namespace's DNS search path).
+            # SAME namespace's DNS search path). https on the internal port:
+            # wardynd certifies exactly this host with its internal CA, and
+            # refuses to boot on an http:// value that is not loopback.
             - name: WARDYN_CONTROL_PLANE_URL
-              value: {{ printf "http://%s.%s.svc.cluster.local:%d" (include "wardyn.fullname" .) .Release.Namespace (int .Values.service.port) | quote }}
+              value: {{ printf "https://%s.%s.svc.cluster.local:%d" (include "wardyn.fullname" .) .Release.Namespace $internalPort | quote }}
             {{- end }}
             {{- if $ssh.enabled }}
             - name: WARDYN_SSH_LISTEN
@@ -339,6 +445,9 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
+              protocol: TCP
+            - name: internal
+              containerPort: {{ $internalPort }}
               protocol: TCP
             {{- if $ssh.enabled }}
             - name: ssh
@@ -416,6 +525,19 @@ spec:
               mountPath: /etc/wardyn/trusted-ca
               readOnly: true
             {{- end }}
+            {{- if eq (include "wardyn.vaultProjectedToken" .) "true" }}
+            - name: wardyn-vault-token
+              mountPath: /var/run/secrets/wardyn-vault
+              readOnly: true
+            {{- end }}
+            {{- if $bootFiles }}
+            - name: boot-secrets
+              mountPath: {{ $filesDir }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -433,6 +555,52 @@ spec:
         - name: trusted-ca
           configMap:
             name: {{ include "wardyn.fullname" . }}-trusted-ca
+        {{- end }}
+        {{- if eq (include "wardyn.vaultProjectedToken" .) "true" }}
+        # A token for Vault alone: its audience is Vault's, so it is useless
+        # against the API server, and the kubelet refreshes it in place
+        # (wardynd re-reads it at every login).
+        - name: wardyn-vault-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ .Values.secretStore.vault.tokenAudience | quote }}
+                  expirationSeconds: {{ .Values.secretStore.vault.tokenExpirationSeconds }}
+                  path: token
+        {{- end }}
+        {{- if $bootFiles }}
+        # 0440, not 0400: the files are root-owned, and the kubelet makes them
+        # readable through podSecurityContext.fsGroup — wardynd (uid 65532)
+        # reads them via that group. The kubelet adds group-read under fsGroup
+        # regardless, so 0440 is simply the mode the pod actually sees.
+        - name: boot-secrets
+          projected:
+            defaultMode: 0440
+            sources:
+              {{- if $chartDSN }}
+              - secret:
+                  name: {{ include "wardyn.secretName" . }}
+                  items:
+                    - key: {{ .Values.postgres.dsn.key }}
+                      path: pg-dsn
+              {{- end }}
+              {{- if $chartToken }}
+              - secret:
+                  name: {{ include "wardyn.authSecretName" . }}
+                  items:
+                    - key: {{ .Values.auth.adminToken.key }}
+                      path: admin-token
+              {{- end }}
+              {{- if $ageSecret }}
+              - secret:
+                  name: {{ $ageSecret }}
+                  items:
+                    - key: {{ $ageItem }}
+                      path: age-key
+              {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

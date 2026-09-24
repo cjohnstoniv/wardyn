@@ -675,6 +675,7 @@ too.
 | `WARN_STORED_CLAMPED(policy, name)` | saved policy "{policy}" was clamped to your governance profile "{name}" |
 | `WARN_WORKSPACE_DENIED(host, name)` | workspace host "{host}" is denied by your governance profile "{name}" — the run launches, but that host is refused at the proxy |
 | `WARN_GRANT_DROPPED(name, kind, reason)` | governance profile "{name}": dropped {kind} grant no longer within the deployment's eligible grants ({reason}) |
+| `WARN_PUSH_RULES_DROPPED(name)` | governance profile "{name}": push_rules dropped — this profile's ceiling sets none, so the deployment default's content rules do not apply to members of it |
 | `DENIED_STALE_GROUPS` | groups_snapshot_stale: your group membership snapshot is missing or was truncated at sign-in, and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved |
 | `DENIED_SEEDED_IMAGE(image)` | image {image} comes from your own workspace's base image and is not granted to you — ask an admin to grant the exact image ref, or launch with the agent's convention image |
 | `DENIED_WORKSPACE_LLM_CRED` | llm_cred is operator-only — an admin binds a workspace's model/harness credential (PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding |
@@ -692,6 +693,10 @@ rather than re-worded, because the shipped wording is the better wording:
   (`internal/api/governance.go`), which fires when a redeploy removes a pairing from
   `WARDYN_DEFAULT_POLICY` that a stored profile still names: the grant is dropped rather than
   the run failed, and the member is told. It rides the same `warnings[]` list as the two above.
+  **`WARN_PUSH_RULES_DROPPED`** is its `push_rules` mirror (`droppedPushRulesWarning`, same
+  file): it fires at the same resolve seam when the deployment default carries `push_rules` and
+  the assigned profile's ceiling sets none, so the deployment's content rules stop applying to
+  that profile's members — said out loud rather than dropped in silence (#272).
 - **`DENIED_SEEDED_IMAGE`** is `denyMemberSeededImage`'s refusal
   (`internal/api/runs_create_validate.go`) verbatim — the **seeded-image door**, closing the gap
   §1 names: a workspace's own `base_image` sets `req.Image` *after* `denyMemberRequest` has

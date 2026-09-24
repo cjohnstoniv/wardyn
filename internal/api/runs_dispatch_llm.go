@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -168,8 +169,10 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// override (nil => the global operator config).
 	if !t.harnessLogin {
 		// refresh=true: dispatch (like the real launch's create) may redeem a captured AWS SSO
-		// session's rotating refresh token and persist the rotated pair.
-		t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, true, bedrockRef, sso)
+		// session's rotating refresh token and persist the rotated pair — the same
+		// sso-refresh purpose the create path (resolveLLMLanes) records for a
+		// refreshing read, not a plain dispatch read.
+		t.bedrock = s.resolveBedrockAuth(secretstore.WithPurpose(ctx, secretstore.PurposeSSORefresh), run.Agent, t.subscription, modelRun, true, bedrockRef, sso)
 		t.bedrockReady = t.bedrock.ready
 		// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
 		// (never-resident); consumed by the CA / injection / MITM-host wiring

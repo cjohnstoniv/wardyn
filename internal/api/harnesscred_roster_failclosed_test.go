@@ -113,7 +113,7 @@ func TestHarnessLogin_ScopeIsTheAuthorizedReadNotASecondOne(t *testing.T) {
 	srv := New(cfg)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
 	rows := audit.find("harness.login.started")
 	if w.Code != http.StatusOK {
 		// Refusing is an acceptable answer — stamping the SHARED credential is not.

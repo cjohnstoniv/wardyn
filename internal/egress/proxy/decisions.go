@@ -46,9 +46,6 @@ type decisionSink struct {
 }
 
 func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
 	s := &decisionSink{
 		endpoint: controlPlaneURL + "/api/v1/internal/decisions",
 		token:    token,
