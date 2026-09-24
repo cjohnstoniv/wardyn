@@ -29,7 +29,7 @@ import (
 // recorded run never used is now DENIED.
 //
 // Two things are proven at different layers, honestly:
-//   - The profile ENDPOINT (POST /runs/{id}/profile) is exercised LIVE and must
+//   - The profile ENDPOINT (POST /runs/{id}/profile/synthesize) is exercised LIVE and must
 //     return a STRUCTURALLY tightened proposal (allow_all forced off,
 //     first_use_approval forced on). Its synthesized ALLOWLIST is derived from the
 //     run's egress-decision audit; in host-mode on a managed-VM docker those
@@ -202,12 +202,12 @@ else echo "PASS canary example.com blocked (rc=$crc) — confined to the recorde
 	return err == nil, string(bytes.TrimSpace(out))
 }
 
-// synthesizeProfile calls POST /api/v1/runs/{id}/profile (Recording Mode).
+// synthesizeProfile calls POST /api/v1/runs/{id}/profile/synthesize (Recording Mode).
 func (h *harness) synthesizeProfile(t *testing.T, id uuid.UUID) profileProposal {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	status, raw, err := h.authedJSON(ctx, http.MethodPost, "/api/v1/runs/"+id.String()+"/profile", nil)
+	status, raw, err := h.authedJSON(ctx, http.MethodPost, "/api/v1/runs/"+id.String()+"/profile/synthesize", nil)
 	if err != nil {
 		t.Fatalf("POST profile: %v", err)
 	}

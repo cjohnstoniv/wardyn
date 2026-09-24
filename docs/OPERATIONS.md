@@ -876,7 +876,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
-| `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach-ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
+| `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach/ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |

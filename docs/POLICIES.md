@@ -27,7 +27,7 @@ this same JSON through this same validator — there is no separate UI schema.
   visible before launch via the **Preflight** button (`POST /runs/preflight`).
 - **"Make a policy from this run"**, on a run's detail page. Synthesizes a
   policy from that run's observed behavior via `handleSynthesizeProfile` (`POST
-  /runs/{id}/profile`) — the honest home for "write the policy from what
+  /runs/{id}/profile/synthesize`) — the honest home for "write the policy from what
   happened," rather than a promise the run screen can't keep.
 
 All three share one component, `policy-panel.tsx` — a mono JSON textarea plus

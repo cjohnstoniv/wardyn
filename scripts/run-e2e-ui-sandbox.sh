@@ -162,7 +162,7 @@ api() {
 # mint_ticket RUN_ID -> prints the single-use ticket on stdout
 mint_ticket() {
   local rid="$1" st
-  st=$(api POST "/api/v1/runs/${rid}/attach-ticket")
+  st=$(api POST "/api/v1/runs/${rid}/attach/ticket")
   [[ "${st}" == "200" ]] || { fail "mint attach ticket for ${rid}: status ${st}: $(cat "${TMPDIR}/resp.json")"; return 1; }
   jq -r '.ticket' "${TMPDIR}/resp.json"
 }

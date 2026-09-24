@@ -183,7 +183,7 @@ terminal uses — there is no second ticket type), then `GET` the enter URL on
 the UI origin.
 
 ```sh
-TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach-ticket" \
+TICKET=$(curl -sf -X POST "$WARDYN_URL/api/v1/runs/$RUN_ID/attach/ticket" \
   -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" | jq -r .ticket)
 xdg-open "$UI_ORIGIN/__wardyn/enter?run=$RUN_ID&app=vscode&ticket=$TICKET"
 ```
@@ -316,7 +316,7 @@ sandbox-authored JavaScript. Every cookie failure — absent, malformed, forged,
 expired — answers the same 403, so there is no oracle to probe.
 
 **Ticket.** Single-use, 30s TTL, owner-or-admin at mint
-(`POST /runs/{id}/attach-ticket`). A stale or already-redeemed ticket is a 403
+(`POST /runs/{id}/attach/ticket`). A stale or already-redeemed ticket is a 403
 with a `ui.auth` denial in the log.
 
 **Only declared ports.** The port is captured from the effective policy when

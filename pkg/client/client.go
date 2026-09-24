@@ -753,7 +753,7 @@ func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
 }
 
-// ProfileResult is the decoded POST /api/v1/runs/{id}/profile reply (Recording
+// ProfileResult is the decoded POST /api/v1/runs/{id}/profile/synthesize reply (Recording
 // Mode): the synthesized least-privilege sandbox profile plus the observations
 // it was built from. Only the fields callers render/save are modeled — the full
 // server response (profileResponse) additionally carries a per-item risk

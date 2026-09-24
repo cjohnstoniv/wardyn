@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Recording-Mode profile synthesis — POST /api/v1/runs/{id}/profile.
+// Recording-Mode profile synthesis — POST /api/v1/runs/{id}/profile/synthesize.
 // ADVISORY + read-only: Wardyn replays a recording run's observed behaviour
 // (egress, exec, file writes, connects) into a PROPOSED least-privilege run +
 // inline_policy for a human to review. It never creates a run or mints a credential.
@@ -38,7 +38,7 @@ export interface ProfileObservations {
   anomalies?: string[];
 }
 
-// POST /api/v1/runs/{id}/profile response (kind:"profile_proposal"). proposed.run
+// POST /api/v1/runs/{id}/profile/synthesize response (kind:"profile_proposal"). proposed.run
 // reuses the composer RunInput shape; inline_policy is the same RunPolicySpec the
 // compose-review screen already renders.
 export interface ProfileProposal {

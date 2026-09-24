@@ -10,7 +10,7 @@
 // real attach WebSocket refuses before the upgrade completes. Every case in
 // the sibling spec intercepts three things: the run read (so TerminalPane
 // mounts AttachTerminal instead of the autonomous/starting notice), the
-// attach-ticket POST, and the socket itself — the same technique
+// attach/ticket POST, and the socket itself — the same technique
 // providers.spec.ts's `attachWithRealTerminal` already establishes for the
 // harness-login pane's REAL-terminal cases.
 //
@@ -56,11 +56,11 @@ export async function stubInteractiveRun(target: Page | BrowserContext, runId: s
   });
 }
 
-/** POST /api/v1/runs/{id}/attach-ticket — a fixed, deterministic ticket (the
+/** POST /api/v1/runs/{id}/attach/ticket — a fixed, deterministic ticket (the
  *  browser cannot put the admin bearer on a WS handshake; see
  *  attach-terminal.tsx's isAdminTokenOnlyMode). */
 export async function stubAttachTicket(target: Page | BrowserContext, runId: string): Promise<void> {
-  await target.route(`**/api/v1/runs/${runId}/attach-ticket`, (route) =>
+  await target.route(`**/api/v1/runs/${runId}/attach/ticket`, (route) =>
     route.fulfill({ json: { ticket: "e2e-cockpit-ticket" } }),
   );
 }
