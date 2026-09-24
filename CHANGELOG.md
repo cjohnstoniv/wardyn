@@ -44,6 +44,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   on the commit, on that branch, succeeded (`scripts/ci-green-for-sha.sh`), so a release branch
   still running on the same commit does not hold `main` back; a manual dispatch on a red commit
   skips. `:latest` now lags `main` by one CI run (#664).
+- **Approval scope caret: choosing "Until…" no longer drops keyboard focus to the page body** —
+  the popover swapped its content on Enter without moving focus anywhere; it now lands on the
+  sub-view's "← Back" control (#481).
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.

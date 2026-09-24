@@ -306,6 +306,25 @@ describe("LiveApprovals", () => {
       expect(screen.getByText(/needs a workspace/i)).toBeInTheDocument();
     });
 
+    // #481: pressing Enter on "Until…" swaps the popover's content but left
+    // focus behind on the (now-unmounted) "Until…" button, so it fell to the
+    // page body. "← Back" is the sub-view's first control — Enter should
+    // land focus there.
+    it("#481: choosing Until… moves focus to the sub-view's '← Back' control", async () => {
+      listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      const user = userEvent.setup();
+
+      const caret = within(panel).getAllByRole("button", { name: /more options/i })[0];
+      await user.click(caret);
+      const until = await screen.findByText("Until…");
+      until.closest("button")!.focus();
+      await user.keyboard("{Enter}");
+
+      expect(await screen.findByRole("button", { name: /back/i })).toHaveFocus();
+    });
+
     it("picking Once from the approve caret decides immediately with scope once", async () => {
       listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
       render(<LiveApprovals runId="r1" />);
