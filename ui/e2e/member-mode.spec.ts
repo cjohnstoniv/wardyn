@@ -32,7 +32,7 @@ async function mockMemberMode(
     const json = await response.json();
     json.member_mode = true;
     json.member_mode_no_credential = noCredential;
-    json.role = "member";
+    json.role = "user";
     json.operator = false;
     json.security_operator = false;
     await route.fulfill({ response, json });

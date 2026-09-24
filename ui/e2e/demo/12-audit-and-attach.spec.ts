@@ -158,7 +158,7 @@ test("beat 4 — the trail", async () => {
   // Act 6's card, verbatim: the browser half of this video is the receipts half.
   await chapter(page, "The receipts", "Everything above, on the record");
 
-  await page.goto("/audit");
+  await page.goto("/admin/audit");
   await expect(page.getByRole("heading", { name: "Audit", level: 1 })).toBeVisible({ timeout: 60_000 });
   // The count badge is the screen's own "status === ready" tell — everything
   // below filters a window that has actually loaded.

@@ -77,7 +77,7 @@ func endsAtBody(at time.Time) string {
 }
 
 func ownerSession(t *testing.T) *http.Cookie {
-	return ssoSession(t, endWaitOwner, "owner@corp.example", oidc.RoleMember)
+	return ssoSession(t, endWaitOwner, "owner@corp.example", oidc.RoleUser)
 }
 
 // TestSetRunEnd_ExtendingIsTheLease: without the gate an owner extends within

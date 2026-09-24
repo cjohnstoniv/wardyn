@@ -329,7 +329,7 @@ func TestPushRulesMatchWhatCouldLieBeneathAnOpaqueEntry(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.pattern+" vs "+c.path+" "+c.mode, func(t *testing.T) {
 			rs := compilePushRules(&types.PushRulesSpec{DenyPaths: []string{c.pattern}})
-			_, total, unknown, err := rs.match([]gitpack.Change{{Path: c.path, Mode: c.mode, Size: -1}})
+			_, total, unknown, err := rs.match([]gitpack.Change{{Path: c.path, Mode: c.mode}})
 			if err != nil {
 				t.Fatalf("match: %v", err)
 			}

@@ -654,7 +654,7 @@ const groupsSnapshotStaleMsg = "groups_snapshot_stale: your group membership sna
 // with the zero value — must NOT be copied here: carrying on means silently
 // substituting the deployment ceiling for a profile that may be far narrower,
 // which is a widening triggered by a database hiccup.
-func writeCeilingError(w http.ResponseWriter, err error) {
+func writeCeilingError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errGroupsSnapshotStale) {
 		// Identical to err.Error() now that the sentinel carries the message;
 		// spelled out because THIS is the site that defines what the body is,
@@ -662,7 +662,7 @@ func writeCeilingError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), "resolve governance ceiling", err))
+	writeServerError(w, r, "resolve governance ceiling", err)
 }
 
 // writeCeilingErrorPrefixed is writeCeilingError for a seam that has its own
@@ -680,12 +680,12 @@ func writeCeilingError(w http.ResponseWriter, err error) {
 //
 // Everything else keeps the seam's own prefix over the underlying error, which
 // is the 500 an operator reads, not the member.
-func writeCeilingErrorPrefixed(w http.ResponseWriter, prefix string, err error) {
+func writeCeilingErrorPrefixed(w http.ResponseWriter, r *http.Request, prefix string, err error) {
 	if errors.Is(err, errGroupsSnapshotStale) {
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), strings.TrimRight(prefix, ": "), err))
+	writeServerError(w, r, strings.TrimRight(prefix, ": "), err)
 }
 
 // ceilingErrorStatus is writeCeilingError's status half, for the two seams that
@@ -900,7 +900,29 @@ func (s *Server) ceilingFromProfile(p *types.GovernanceProfile, err error, deplo
 	spec := p.Ceiling.Clone()
 	kept, warns := reintersectGovernanceGrants(spec.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants, p.Name)
 	spec.EligibleGrants = kept
+	warns = append(warns, droppedPushRulesWarning(spec, s.cfg.DefaultPolicy, p.Name)...)
 	return governanceCeiling{Spec: spec, Limits: p.Limits, Profile: p, Warnings: warns}, nil
+}
+
+// droppedPushRulesWarning is ceilingFromProfile's push_rules mirror of
+// reintersectGovernanceGrants's grant-kind drop: when the deployment default
+// carries push_rules and this profile's own ceiling does not, the deployment's
+// content rules silently stop applying to this profile's members.
+//
+// clampPushRules itself cannot say this — it clamps an already-resolved
+// ceiling and never sees what the deployment default would have said — and a
+// bare ceiling with no push_rules is otherwise indistinguishable from "the
+// operator deliberately left this narrower". This is the one seam where
+// resolving a profile assignment sees BOTH specs at once, so it is the one
+// place the drop can be said out loud (see #272).
+func droppedPushRulesWarning(profile, deployment types.RunPolicySpec, profileName string) []string {
+	if deployment.PushRules.IsSet() && !profile.PushRules.IsSet() {
+		return []string{fmt.Sprintf(
+			"governance profile %q: push_rules dropped — this profile's ceiling sets none, "+
+				"so the deployment default's content rules do not apply to members of it",
+			profileName)}
+	}
+	return nil
 }
 
 // reintersectGovernanceGrants re-applies the monotone-⊆ bound at RESOLVE time,
