@@ -285,7 +285,7 @@ describe("RunsScreen — Start-a-run route state redirects to the New run page",
 // says so plainly, and that admin copy is unchanged.
 describe("RunsScreen — member vs admin count line", () => {
   it("a member sees \"Your runs · N\"", async () => {
-    renderScreen("member");
+    renderScreen("user");
     expect(await screen.findByText("Your runs · 1")).toBeInTheDocument();
   });
 
@@ -756,7 +756,7 @@ describe("RunsScreen board — an ephemeral run names itself honestly", () => {
 describe("RunsScreen — the member's empty board", () => {
   it("a member with no runs gets the member empty state, not the operator first-run funnel", async () => {
     listRunsMock.mockResolvedValue([]);
-    renderScreen("member");
+    renderScreen("user");
 
     expect(await screen.findByText("Runs you launch appear here")).toBeInTheDocument();
     expect(screen.queryByText("No runs yet")).not.toBeInTheDocument();
@@ -765,11 +765,11 @@ describe("RunsScreen — the member's empty board", () => {
     expect(screen.getByRole("link", { name: /getting started/i })).toHaveAttribute("href", "/setup");
   });
 
-  // The predicate must be `role !== "admin"`, not `role === "member"`.
+  // The predicate must be `role !== "admin"`, not `role === "user"`.
   // /setup/status is redacted on !isOperator (internal/api/setup.go), and
   // isOperator is SUPER-admin only — so a security admin's status arrives with
   // checks [], secrets.present [] and the driver withheld, exactly like a
-  // member's. Through `role === "member"` this tier would fall into the
+  // member's. Through `role === "user"` this tier would fall into the
   // operator funnel and read every withheld field as a fact: "Needs the
   // <name> secret" for secrets that may well exist, over two /setup deep
   // links that land on a Getting Started which ignores ?step. Every sibling

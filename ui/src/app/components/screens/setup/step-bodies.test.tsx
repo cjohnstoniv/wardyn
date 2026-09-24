@@ -43,6 +43,9 @@ vi.mock("../../../lib/api/health", () => ({
   health: {
     health: (...a: unknown[]) => healthMock(...a),
     getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    // #492: setup-screen.tsx's reloadSiteConfig now reads the ETag-carrying
+    // snapshot — routed through the SAME mock these tests already drive.
+    getSiteConfigSnapshot: async (...a: unknown[]) => ({ siteConfig: await getSiteConfigMock(...a), etag: null }),
     putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
   },
 }));
@@ -351,11 +354,11 @@ describe("step-bodies.tsx — smoke", () => {
   it("#161: a blocking warn lands under 'Blocking'; a non-blocking fail lands under 'Worth a look'", () => {
     renderReview(
       reviewStatus([
-        { id: "sso_rbac", label: "SSO role mapping", status: "warn", blocking: true },
+        { id: "sso_rbac", label: "Who is an admin", status: "warn", blocking: true },
         { id: "kvm", label: "/dev/kvm", status: "fail", detail: "missing" },
       ]),
     );
-    expect(screen.getByText("Blocking").closest("section")).toHaveTextContent("SSO role mapping");
+    expect(screen.getByText("Blocking").closest("section")).toHaveTextContent("Who is an admin");
     expect(screen.getByText("Worth a look").closest("section")).toHaveTextContent("/dev/kvm");
   });
 

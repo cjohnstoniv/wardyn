@@ -132,7 +132,7 @@ describe("MemberModeMenuItem", () => {
   }
 
   // The /me tier shapes, verbatim: "admin" is both predicates, "security_admin"
-  // is only the second, "member" is neither (me.go's two predicates).
+  // is only the second, "user" is neither (me.go's two predicates).
   const admin = { operator: true, securityOperator: true, method: "sso", memberPreviewAvailable: true };
   const securityAdmin = { operator: false, securityOperator: true, method: "sso" };
   const member = { operator: false, securityOperator: false, method: "sso" };

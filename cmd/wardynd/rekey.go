@@ -35,9 +35,10 @@ const rekeyActor = "wardyn/rotate-age-key"
 const rekeyConnectTimeout = 30 * time.Second
 
 // rotateAgeKeyMode is wardynd's `-rotate-age-key <path>` MAINTENANCE MODE: mint
-// a new age identity, re-encrypt every stored secret from the old identity to it
-// in one transaction, replace the key file at path, and exit. It never starts a
-// server, never opens a listener and never touches the runner — so it also runs
+// a new age identity, rewrap every stored secret's data key from the old
+// identity's local KEK to the new one's in one transaction, replace the key
+// file at path, and exit. It never starts a server, never opens a listener and
+// never touches the runner — so it also runs
 // BEFORE validateConfig, whose TLS/bind posture rules are about serving and
 // would otherwise refuse a perfectly good rotation on a compose environment.
 //
@@ -148,7 +149,7 @@ func rotateAgeKeyMode(f *bootFlags, keyPath string) error {
 		return fmt.Errorf("the secret store IS rotated (%d rows) and %s now holds the new key, but the directory could not be fsynced: %w — copy the key out of that file before rebooting the host", n, keyPath, err)
 	}
 
-	slog.Info("wardynd: age key rotated; every stored secret is re-encrypted to the new identity. Restart wardynd with the new WARDYN_AGE_KEY.",
+	slog.Info("wardynd: age key rotated; every stored secret's data key is rewrapped under the new identity. Restart wardynd with the new WARDYN_AGE_KEY.",
 		slog.Int("secrets", n),
 		slog.String("key_file", keyPath),
 		slog.String("public_recipient", newID.Recipient().String()),
