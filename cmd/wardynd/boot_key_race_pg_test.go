@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
 func TestBootKeyCreate_TwoConcurrentBootsEndOnOneKey(t *testing.T) {
@@ -92,7 +93,7 @@ func TestBootKeyCreate_TwoConcurrentBootsEndOnOneKey(t *testing.T) {
 			t.Fatalf("boot %d: %v", i, err)
 		}
 	}
-	stored, err := storeA.Get(ctx, name)
+	stored, err := storeA.Get(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), name)
 	if err != nil {
 		t.Fatalf("read stored key: %v", err)
 	}
