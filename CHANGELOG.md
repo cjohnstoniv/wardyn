@@ -283,6 +283,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   points to, and is audited (`secret.write` failure, reason `row`), for Wardyn's own writes (a
   captured or refreshed sign-in, a pasted harness credential) as for the API's. Tested against a fake Key
   Vault; not yet run against a live one.
+- **Every read of a stored secret is now audited, once (#647).** Before, only the injection
+  sinks recorded `secret.read`; boot-key reads, the GitHub App and git PAT/SSH key reads at mint,
+  resident secrets placed at dispatch, and every status check that decrypts a captured sign-in or
+  the managed subscription token left no row. wardynd now wraps its secret store in one decorator that
+  records a `secret.read` for each read, carrying why it happened (`purpose`: `boot`,
+  `broker-mint`, `dispatch`, `managed-token`, `migrate`, `sso-refresh`, `ado-refresh`, `status`),
+  whose namespace it was made for, the store, and the row it opened (`ref`, `row_owner`). The
+  injection sinks keep their own row, with its grant and jti, and now name the stored row too; the
+  decorator stays silent for those reads, so no read is counted twice. A read that finds nothing
+  records nothing, and a refused row is a `failure` without the store's error text. The first
+  0.8 boot records one `migrate` read per legacy row it converts. A read in store mode names the
+  store (`vaultkv` or `azurekv`). A guard type-checks every read site, the boot conversion's and
+  `wardynd -migrate-secrets`' bulk reads included, and fails the build on one that says neither
+  why it reads nor that it records the read itself, following the context the read actually
+  receives; it also fails on a new path to a stored value inside the store that it does not check; a read that still reaches the store
+  with no purpose is refused and recorded as an `unmarked` failure. The row's owner, the read's own
+  owner, and ref are all cut to 512 bytes and stripped of control characters before they are
+  recorded, since a database writer controls them. Deployments that poll setup status often will
+  see more `secret.read` rows: each status check that decrypts a captured sign-in is now one.
 - **Store mode: credentials can live in your organisation's Vault, and Wardyn holds no key
   (#644).** `WARDYN_SECRET_STORE=vaultkv` writes every stored credential to a Vault KV v2 engine
   (OpenBao is a supported endpoint) and keeps only a pointer row in Postgres (`enc_version` 2, no

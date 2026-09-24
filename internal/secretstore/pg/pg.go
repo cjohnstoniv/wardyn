@@ -10,8 +10,8 @@
 //
 // Security invariant: the plaintext and the DEK are only in memory during the
 // Put/Get call, and no error carries either — errors name the row, never its
-// value. The caller is responsible for emitting a "secret.read" audit event
-// before using a returned value.
+// value. Reads are recorded by the secretstore.Audited decorator wardynd wraps
+// this store in; Get reports the row it read to it (secretstore.NoteRow).
 package pg
 
 import (
@@ -215,6 +215,7 @@ func (s *Store) Get(ctx context.Context, name string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: get %s: %w", rowRef(s.owner, name), err)
 	}
+	secretstore.NoteRow(ctx, secretstore.Row{Store: s.Name(), Owner: e.ownedBy, Name: e.name, Ref: e.kekID})
 	return s.open(ctx, e)
 }
 

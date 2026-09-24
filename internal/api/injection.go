@@ -91,6 +91,16 @@ func (s *Server) oauthProviderForSentinel(secretName string) (provider subscript
 // both sides agree — see types.ResolvedInjection for why.
 type injectionResponse = types.ResolvedInjection
 
+// withStoreRow adds the row a SiteAudited read reported — its store, ref and
+// owner (secretstore.Row.AuditData) — to a site's secret.read data. A read that
+// found no row adds nothing.
+func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
+	for k, v := range row.AuditData() {
+		data[k] = v
+	}
+	return data
+}
+
 // handleInternalInjection resolves an api_key grant to its injectable header
 // value for the run's wardyn-proxy sidecar (startup mint).
 //
@@ -286,7 +296,8 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// operator's writes under "" only, so no row ever exists under those
 	// strings and the lookup falls back to the operator row: today's single
 	// namespace, unchanged, for every pre-0.7 deployment.
-	secret, err := s.cfg.Secrets.For(claims.Sub).Get(r.Context(), minted.Injection.SecretName)
+	rctx, row := secretstore.SiteAudited(r.Context())
+	secret, err := s.cfg.Secrets.For(claims.Sub).Get(rctx, minted.Injection.SecretName)
 	if err != nil {
 		// Fail closed; the proxy refuses to start without its injections. The
 		// reason tells a store outage from a credential that is gone or refused.
@@ -299,7 +310,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
-			mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
+			mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}, row))))
 		if reason == "store-unavailable" {
 			// Transient: the organisation's store did not answer. A distinct
 			// status, so it is never mistaken for a credential that is gone.
@@ -316,7 +327,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", minted.Injection.SecretName, "success",
-		mustJSON(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub})))
+		mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}, row))))
 
 	formattedValue := formatInjectionValue(minted.Injection.Format, secret)
 

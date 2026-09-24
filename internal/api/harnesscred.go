@@ -890,10 +890,10 @@ func NewManagedCredProvider(store secretstore.Store, provider string) subscripti
 	return &managedCredProvider{store: store, provider: provider}
 }
 
-func (p *managedCredProvider) read() (subscription.Token, error) {
+func (p *managedCredProvider) read(ctx context.Context) (subscription.Token, error) {
 	// p.store is the operator-wide managed credential (NewManagedCredProvider's
 	// caller passes the raw, unscoped store) — not per-principal.
-	raw, err := p.store.Get(context.Background(), harnessCredSecretName(p.provider))
+	raw, err := p.store.Get(ctx, harnessCredSecretName(p.provider))
 	if errors.Is(err, secretstore.ErrNotFound) {
 		return subscription.Token{}, fmt.Errorf("no managed %s credential connected", p.provider)
 	}
@@ -918,10 +918,12 @@ func (p *managedCredProvider) read() (subscription.Token, error) {
 
 // Current returns the managed token (no refresh — see type doc).
 func (p *managedCredProvider) Current(ctx context.Context) (subscription.Token, error) {
-	return p.read()
+	return p.read(secretstore.WithPurpose(ctx, secretstore.PurposeManagedToken))
 }
 
-// Peek is identical to Current here (no refresh side effect to avoid).
+// Peek is identical to Current here (no refresh side effect to avoid). Its
+// callers only ask whether a token is there (managedInjectReady), so its read
+// is recorded as a status read.
 func (p *managedCredProvider) Peek() (subscription.Token, error) {
-	return p.read()
+	return p.read(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus))
 }
