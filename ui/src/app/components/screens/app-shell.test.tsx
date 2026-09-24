@@ -17,6 +17,7 @@ import { baseMeDrive } from "../../lib/test-fixtures";
 import { registerUnsaved } from "../../lib/unsaved-registry";
 import { UnsavedGuardProvider } from "../../lib/use-unsaved-guard";
 import { UNSAVED } from "../../lib/unsaved-copy";
+import { aheadByHours } from "../../lib/test-clock";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
@@ -145,7 +146,7 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   }
 
   it("warns and offers a re-auth link when the session is about to die", async () => {
-    renderWithMe(new Date(Date.now() + 2 * 60 * 1000).toISOString());
+    renderWithMe(aheadByHours(2 / 60)); // 2 minutes
     expect(
       await screen.findByText(/session is expiring soon/i),
     ).toBeInTheDocument();
@@ -155,7 +156,7 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   });
 
   it("stays silent while the session has plenty of time left", async () => {
-    renderWithMe(new Date(Date.now() + 60 * 60 * 1000).toISOString());
+    renderWithMe(aheadByHours(1));
     await screen.findByText("cj"); // let /me resolve
     expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
   });

@@ -287,8 +287,10 @@ jobs:
           cache-dependency-path: ui/pnpm-lock.yaml
       # Routed through make so the dev loop and CI stand up the SAME Postgres:
       # the inline `docker run` this replaced had drifted a major version away
-      # from scripts/up.sh (17 here, 16 there) for a month. `make dev-pg` also
-      # creates the wardyn_e2e database the seeder expects.
+      # from scripts/up.sh (17 here, 16 there) for a month. `make dev-pg` only
+      # gives us the named "wardyn-test-pg" container (#210); run-ui-e2e.sh
+      # picks its own per-run database name and e2e-backend.sh's cmd_up
+      # creates and drops it.
       - name: Start Postgres (named container so the seeder can psql into it)
         run: make dev-pg
       - name: Install UI deps

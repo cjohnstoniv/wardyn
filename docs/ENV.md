@@ -472,7 +472,9 @@ that one instead, and the claude-specific screen assertions stand down while the
 host measurement still applies), `WARDYN_E2E_UI_ADDR` (the UI-sandbox
 gateway's second listener on the Playwright e2e backend, default `:8089`;
 `scripts/e2e-backend.sh` — it must differ from `WARDYN_E2E_ADDR`, which the
-daemon itself enforces).
+daemon itself enforces). `WARDYN_E2E_ADDR` is the backend's console listener,
+default `:8088`. `scripts/run-ui-e2e.sh` picks a free port for each of the two
+that is unset, so two runs on one host never share one.
 
 The rest of the Playwright e2e backend's knobs (`scripts/e2e-backend.sh`,
 `scripts/run-ui-e2e.sh`, `scripts/screenshots.sh`, `test/e2e/e2e.sh`) are
@@ -487,7 +489,7 @@ until it landed, ten of these thirteen were undocumented and unenforced in
 | `WARDYN_E2E_DSN` | string (DSN) | `postgres://wardyn:wardyn@localhost:55432/wardyn_e2e?sslmode=disable` | The Postgres DSN `wardynd` itself connects with. `run-ui-e2e.sh`/`screenshots.sh` compose this FOR you from `WARDYN_E2E_PG_HOSTPORT` + the DB name — set it directly only when calling `e2e-backend.sh` outside those wrappers |
 | `WARDYN_E2E_PG_HOSTPORT` | string (`host:port`) | `localhost:55432` | Where `run-ui-e2e.sh`/`screenshots.sh` point `WARDYN_E2E_DSN` at. **The one var to set on a shared box** where `:55432` is held by another job's Postgres — pair it with a `WARDYN_E2E_PG_CONTAINER` that actually publishes that port, or `e2e-backend.sh` refuses the mismatch loudly (F062) |
 | `WARDYN_E2E_PG_CONTAINER` | string | `wardyn-test-pg` | The container `e2e-backend.sh` runs `pg_isready`/`psql`/seed SQL against via `docker exec` — independent of the DSN's host:port, which is why the two must agree |
-| `WARDYN_E2E_PG_DBNAME` | string | `wardyn_e2e` | The e2e database name; `screenshots.sh` overrides it to `wardyn_shots` so its own run never collides with a concurrent `run-ui-e2e.sh` |
+| `WARDYN_E2E_PG_DBNAME` | string | `wardyn_e2e` (`run-ui-e2e.sh`: `wardyn_e2e_<pid>`) | The e2e database name. Unset, `run-ui-e2e.sh` names one after its own PID and drops it on exit, so concurrent runs never share a database; a name you set is kept. `screenshots.sh` overrides it to `wardyn_shots` so its own run never collides with a concurrent `run-ui-e2e.sh` |
 | `WARDYN_E2E_TOKEN` | string | `wardyn-e2e-token` | The fixed admin bearer token the seeded backend accepts, so specs never need a real sign-in flow |
 | `WARDYN_E2E_AGE_KEY` | string | (unset = mint a fresh one) | Pins the backend's secret-store age identity instead of minting one per `up` via `wardynd -gen-age-key`. Leave unset — a committed value would be a publicly-known key, and `wardynd` fail-closed refuses those |
 | `WARDYN_E2E_SKIP_BUILD` | bool | (unset = build) | `1` reuses the already-built `.e2e-bin/wardynd` instead of rebuilding it. `run-ui-e2e.sh`/`screenshots.sh` set this themselves after their own one-time build, so later `e2e-backend.sh up` calls in the same run don't rebuild per spec |
