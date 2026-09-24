@@ -153,6 +153,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   happens at the next tagged release — this lands the pipeline, not a pushed
   image.
 
+- **The Azure DevOps kind profile and the compose role matrix now run nightly (#476).**
+  `.github/workflows/nightly.yml` gains two jobs: `kind-sso-ado-walk` brings up its own kind
+  cluster (`wardyn-ado` / `:8580`, `WARDYN_KIND_SSO_PROFILE=ado`) and drives
+  `scripts/kind-sso-walk.sh`'s Azure DevOps profile — the console signing in against a fake Entra
+  tenant, the member's login capturing their Azure DevOps credential, and their run redeeming it
+  (REST + `git ls-remote`) through the proxy's gate and broker; `compose-sso-roles` drives
+  `scripts/compose-sso-roles.sh` against both compose-shaped SSO deployments (`mprime`,
+  `compose-sso`), hermetic and local. Both jobs assert their script's own closing `PASS` line
+  rather than trusting a bare exit code, the same load-bearing check `kind-sso-walk` already uses —
+  an unset gate variable makes either script self-skip and exit 0, which would otherwise be a
+  permanently green job proving nothing. Both are wired into the nightly failure notifier.
+
 ### Security
 
 - **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
