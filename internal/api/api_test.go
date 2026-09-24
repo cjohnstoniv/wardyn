@@ -77,6 +77,8 @@ type fakeApprovals struct {
 	requestErr error
 	cancelErr  error
 	cancelled  []cancelCall
+	expireErr  error
+	expired    []uuid.UUID
 	countErr   error
 	// countForRun, when > 0, is what CountForRun answers regardless of the map —
 	// the per-run cap is 4096 rows and seeding them all would prove nothing the
@@ -195,6 +197,33 @@ func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason 
 		f.cancelled = append(f.cancelled, cancelCall{RunID: runID, Reason: reason, Count: n})
 	}
 	return n, nil
+}
+
+// ExpireOne mirrors approval.ExpireOne over the map: PENDING moves to EXPIRED
+// and is recorded; anything else (already decided, or absent) is a silent
+// no-op, matching the real FSM's idempotent treatment of the race.
+func (f *fakeApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.expireErr != nil {
+		return f.expireErr
+	}
+	ap, ok := f.byID[id]
+	if !ok || ap.State != types.ApprovalPending {
+		return nil
+	}
+	ap.State = types.ApprovalExpired
+	ap.DecidedBy = "system"
+	f.byID[id] = ap
+	f.expired = append(f.expired, id)
+	return nil
+}
+
+// expiredCalls returns a snapshot of what ExpireOne moved, under the lock.
+func (f *fakeApprovals) expiredCalls() []uuid.UUID {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]uuid.UUID(nil), f.expired...)
 }
 
 // CountForRun counts this run's rows in any state (R3-F071's cap reads it).

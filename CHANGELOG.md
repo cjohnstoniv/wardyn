@@ -16,6 +16,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   status that sent it there and refreshes behind it, so a slow second read no longer hides the rail.
   `runs.spec.ts`'s search tests retry the fill itself, since a reload of the board can detach the
   input a fill lands on.
+- **`wardyn-toolgate` closes its own approval on giving up, instead of leaving it `PENDING`
+  for the sweeper (#811).** The gate's own `-deadline` and the server's periodic approval
+  sweep shared the same ceiling, but the sweep only catches a stale `PENDING` row on its
+  next tick — up to `approval-expiry-interval` (10m default) after the gate already
+  returned deny for it. In that window an operator could still approve a call the agent had
+  already abandoned. The gate now tells the control plane (`POST
+  /wardyn/v1/approvals/{id}/expire`) the moment it gives up, moving the row straight to
+  `EXPIRED`; an approval that beats that call is honoured rather than denied. Only a
+  `tool_call` row the sandbox itself raised can be withdrawn this way — an Azure DevOps
+  escalation stays the operator's — and the audit row names the run's agent.
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.

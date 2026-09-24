@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -382,6 +383,81 @@ func TestExpireStale_AlreadyDecidedRace(t *testing.T) {
 	// Zero expired because the approval was already decided.
 	if expired != 0 {
 		t.Errorf("expected 0 expired, got %d", expired)
+	}
+}
+
+// ─── ExpireOne (#811: the client that raised the row closes it itself) ──────
+
+// TestExpireOne_MovesPendingToExpired is the happy path: a PENDING row is
+// EXPIRED immediately, with no age check (unlike ExpireStale), and the same
+// approval.expire audit action the periodic sweep emits, attributed to the
+// run's agent that withdrew it — nothing ties the call to a deadline, so it
+// must not read as a system event.
+func TestExpireOne_MovesPendingToExpired(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+
+	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash"}`)))
+	// Freshly raised — proves the transition is NOT age-gated the way
+	// ExpireStale's is.
+	if err := approval.ExpireOne(ctx, st, ap.ID, "spiffe://wardyn/run/x", "client_withdrawn"); err != nil {
+		t.Fatalf("expire one: %v", err)
+	}
+
+	got, err := st.GetApproval(ctx, ap.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != types.ApprovalExpired {
+		t.Errorf("want EXPIRED, got %s", got.State)
+	}
+	if got.DecidedBy != "system" {
+		t.Errorf("want decided_by=system, got %s", got.DecidedBy)
+	}
+
+	var expireEvents int
+	for _, ev := range st.audit {
+		if ev.Action == "approval.expire" {
+			expireEvents++
+			if ev.ActorType != types.ActorAgent || ev.Actor != "spiffe://wardyn/run/x" {
+				t.Errorf("want actor agent spiffe://wardyn/run/x, got %s %s", ev.ActorType, ev.Actor)
+			}
+			if !strings.Contains(string(ev.Data), `"reason":"client_withdrawn"`) {
+				t.Errorf("want reason client_withdrawn in data, got %s", ev.Data)
+			}
+		}
+	}
+	if expireEvents != 1 {
+		t.Errorf("expected 1 expire audit event, got %d", expireEvents)
+	}
+}
+
+// TestExpireOne_AlreadyDecidedIsSilent proves the idempotent race handling: a
+// row a human (or the periodic sweep) already decided must not error and must
+// not emit a second, contradicting audit row.
+func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+
+	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash"}`)))
+	if _, err := approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice@example.com", Reason: "ok",
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	before := len(st.audit)
+
+	if err := approval.ExpireOne(ctx, st, ap.ID, "spiffe://wardyn/run/x", "client_withdrawn"); err != nil {
+		t.Fatalf("expire one on an already-decided row must be a silent no-op, got: %v", err)
+	}
+	got, _ := st.GetApproval(ctx, ap.ID)
+	if got.State != types.ApprovalApproved {
+		t.Errorf("an already-decided row must not be overwritten, got state %s", got.State)
+	}
+	if len(st.audit) != before {
+		t.Errorf("expected no new audit event for a no-op race, got %d new", len(st.audit)-before)
 	}
 }
 

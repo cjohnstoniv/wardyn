@@ -61,6 +61,7 @@ func internalDoors(runID, grantID uuid.UUID) []struct {
 		{"approvals request", http.MethodPost, "/api/v1/internal/approvals",
 			`{"kind":"egress_domain","host":"evil.example"}`},
 		{"approvals get", http.MethodGet, "/api/v1/internal/approvals/" + uuid.New().String(), ""},
+		{"approvals expire", http.MethodPost, "/api/v1/internal/approvals/" + uuid.New().String() + "/expire", ""},
 		{"credentials mint", http.MethodPost, "/api/v1/internal/credentials/mint",
 			`{"grant_id":"` + grantID.String() + `"}`},
 		{"injection resolve", http.MethodGet, "/api/v1/internal/injection/" + grantID.String(), ""},
