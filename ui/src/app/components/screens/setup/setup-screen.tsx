@@ -90,7 +90,13 @@ import {
 // demo catalog + launched-set reader are imported eagerly above (xterm-free).
 const DemoDetail = React.lazy(() => import("./demos-step"));
 
-export function SetupScreen({ onDone }: { onDone: () => void }) {
+export function SetupScreen({
+  onDone,
+  initialStatus = null,
+}: {
+  onDone: () => void;
+  initialStatus?: SetupStatus | null;
+}) {
   const operator = useOperator();
   // Defence in depth: this screen only ever mounts once App.tsx's SetupRoute
   // has let roleResolved through AND role === "admin" (onboarding-screen.tsx),
@@ -119,7 +125,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       ? (want as SetupStepId)
       : "environment";
   });
-  const [status, setStatus] = React.useState<SetupStatus | null>(null);
+  // #806: seeded from the status the console already holds (App.tsx's poll —
+  // the very read that sent a gated install here), so the rail paints on the
+  // chunk alone instead of waiting on a second /setup/status round trip behind
+  // "Checking Wardyn's setup…". The mount recheck below still replaces it.
+  const [status, setStatus] = React.useState<SetupStatus | null>(initialStatus);
   const [rechecking, setRechecking] = React.useState(false);
   const [lastCheckedAt, setLastCheckedAt] = React.useState<Date | null>(null);
   // Bumped whenever a host re-check COMPLETES — EnvironmentStep reads it as

@@ -160,19 +160,31 @@ test.describe("Runs board (default view)", () => {
     await openRuns(page);
 
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
-    await search.fill("e2e fixture 4");
 
-    // Only the COMPLETED fixture-4 run should remain. The filter itself is
-    // synchronous client-side state (runs.tsx's `filtered` is re-derived from
-    // `runs` + `query` on every render — nothing async sits between the fill
-    // and the board reflecting it, so a longer timeout buys nothing a real
-    // stall wouldn't also blow through). The structural card count is the
-    // stronger signal: `getByText("e2e fixture 0")` without `exact` is a
-    // substring match, so it is provably watching the SAME "is fixture 0
-    // gone" fact as `run-card` count 1 — asserting both pins the invariant
-    // two independent ways instead of leaning on one text query alone.
+    // #806: the filter itself is synchronous client-side state (runs.tsx's
+    // `filtered` is re-derived from `runs` + `query` on every render), so a
+    // slow render was never the failure — the recorded failure was "run-card
+    // count: Received 9", the fill never reaching React at all. The likely
+    // mechanism: openRuns' navTo("Runs") changes location.key, which re-runs
+    // load() (runs.tsx), and load() flips status to "loading", which unmounts
+    // the toolbar input. "e2e fixture 0" can already be visible from the
+    // FIRST load, so the fill can land on the input that reload is about to
+    // detach, and its input event never reaches React's root listener. A
+    // longer wait only re-checks the same lost fill. Retrying the fill itself
+    // converges: each attempt either lands or it doesn't, and `toHaveValue`
+    // inside the loop tells them apart.
+    await expect(async () => {
+      await search.fill("e2e fixture 4");
+      await expect(search).toHaveValue("e2e fixture 4");
+      await expect(page.getByTestId("run-card")).toHaveCount(1, { timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
+
+    // The structural card count above is the stronger signal:
+    // `getByText("e2e fixture 0")` without `exact` is a substring match, so
+    // it is provably watching the SAME "is fixture 0 gone" fact as
+    // `run-card` count 1 — asserting both pins the invariant two independent
+    // ways instead of leaning on one text query alone.
     await expect(page.getByText("e2e fixture 4")).toBeVisible();
-    await expect(page.getByTestId("run-card")).toHaveCount(1);
     await expect(page.getByText("e2e fixture 0", { exact: true })).toHaveCount(0);
   });
 
@@ -180,10 +192,15 @@ test.describe("Runs board (default view)", () => {
     await openRuns(page);
 
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
-    await search.fill("zzz-no-such-run-zzz");
 
-    // EmptyState for a query renders this copy (runs.tsx).
-    await expect(page.getByText("No runs match these filters.")).toBeVisible();
+    // Same dropped-fill non-determinism as the test above — same input, same
+    // fix: retry the fill itself, not just the assertion after it.
+    await expect(async () => {
+      await search.fill("zzz-no-such-run-zzz");
+      await expect(search).toHaveValue("zzz-no-such-run-zzz");
+      // EmptyState for a query renders this copy (runs.tsx).
+      await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
     await expect(page.getByText("Try a different search term or facet.")).toBeVisible();
 
     // Clearing the filters restores the full board. The board's own 3s poll
