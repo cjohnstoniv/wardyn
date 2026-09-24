@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -127,6 +128,20 @@ func TestUpstreamProxy_MemberRowNeverChangesURL(t *testing.T) {
 	if got != "http://legit-proxy.corp:8080" {
 		t.Fatalf("resolveRunUpstreamProxy = %q, want the operator's URL — "+
 			"a member row named as the site-config ref must never change it", got)
+	}
+}
+
+// TestUpstreamProxy_SecretLaneResolvesThroughTheAuditedStore: wardynd's store
+// is secretstore.Audited, which refuses a read whose context says no purpose.
+// The secret lane must mark its read, or every run silently falls back to
+// direct egress, recorded as secret-not-found.
+func TestUpstreamProxy_SecretLaneResolvesThroughTheAuditedStore(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{"corp-proxy-url": []byte("http://legit-proxy.corp:8080")}}
+	h := newHarness(t)
+	h.srv.cfg.Secrets = secretstore.Audited(sec, &recRecorder{})
+	siteCfg := types.SiteConfig{UpstreamProxySecretRef: "corp-proxy-url"}
+	if got := h.srv.resolveRunUpstreamProxy(context.Background(), uuid.New(), siteCfg, nil); got != "http://legit-proxy.corp:8080" {
+		t.Fatalf("resolveRunUpstreamProxy through the audited store = %q, want the secret's URL", got)
 	}
 }
 
