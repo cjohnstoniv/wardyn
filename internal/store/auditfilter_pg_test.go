@@ -32,7 +32,7 @@ func TestPG_AuditFilterSQLAgreesWithGo(t *testing.T) {
 	}
 	pg := store.NewPG(pool)
 
-	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	base := time.Now().UTC().Truncate(time.Second)
 	runA, runB := uuid.New(), uuid.New()
 	// "runA.probe" is there for ActionPrefix "run_": a LIKE rendering would
 	// read the underscore as a wildcard and match it; starts_with and Go do not.

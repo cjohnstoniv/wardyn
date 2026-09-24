@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 var codecTestKey = []byte("0123456789abcdef0123456789abcdef")
@@ -26,7 +27,10 @@ func signedWith(key []byte, payload string) string {
 		base64.RawURLEncoding.EncodeToString(sessionHMAC(key, []byte(payload)))
 }
 
-const validSessionJSON = `{"v":1,"sub":"sub-alice","email":"alice@corp.example","role":"admin","expiry":"2099-01-01T00:00:00Z"}`
+// sessionExpiry is an hour ahead of the clock, so no fixture here rots into the past.
+var sessionExpiry = time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+
+var validSessionJSON = `{"v":2,"sub":"sub-alice","email":"alice@corp.example","role":"admin","ut":"standard","expiry":"` + sessionExpiry + `"}`
 
 // TestDecodeSession_RefusesMalformedCookies: each malformed shape is refused,
 // never half-read into a session.
@@ -60,7 +64,7 @@ func FuzzDecodeSession(f *testing.F) {
 	f.Add(signedWith(codecTestKey, validSessionJSON))
 	f.Add(signedWith([]byte("ffffffffffffffffffffffffffffffff"), validSessionJSON))
 	f.Add(signedWith(codecTestKey, `{"v":1,"role":`))
-	f.Add(signedWith(codecTestKey, `{"v":0,"sub":"s","role":"admin","expiry":"2099-01-01T00:00:00Z"}`))
+	f.Add(signedWith(codecTestKey, `{"v":0,"sub":"s","role":"admin","expiry":"`+sessionExpiry+`"}`))
 	f.Add(base64.RawURLEncoding.EncodeToString([]byte(validSessionJSON)) + ".")
 	f.Add("..")
 	f.Add("")

@@ -62,7 +62,7 @@ func TestPG_AuditExportPagesPastOnePageAndScopesAMember(t *testing.T) {
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-	member := ssoSession(t, memberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, memberSub, "member@corp.example", oidc.RoleUser)
 
 	export := func(cookie *http.Cookie, query string) []types.AuditEvent {
 		t.Helper()

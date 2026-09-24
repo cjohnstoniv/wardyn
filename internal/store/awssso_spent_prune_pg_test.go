@@ -26,7 +26,7 @@ func TestPG_PruneAWSSSOSpentTokens_DeletesOnlyBeforeCutoff(t *testing.T) {
 	}
 	pg := store.NewPG(pool)
 
-	cutoff := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	cutoff := time.Now().UTC().Truncate(time.Second)
 	marks := map[string]time.Time{
 		"fp-old":       cutoff.Add(-time.Hour),
 		"fp-at-cutoff": cutoff,
