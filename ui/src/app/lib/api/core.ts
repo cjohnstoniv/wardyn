@@ -36,7 +36,7 @@ export const SESSION_ENDED_REASON = "Your session ended. Sign in again to contin
 // protocol-relative host a router's replaceState would dial cross-origin.
 // `/\evil.com` is the same trick some browsers normalize a backslash into a
 // slash for. Neither a bare `/` (the landing decision, not "where you were")
-// nor `/setup` (its own gate) is a real return path. Applied at BOTH ends —
+// nor `/setup` (its own gate) is a real return path, in either view. Applied at BOTH ends —
 // here at capture (belt) and again by the caller at restore (suspenders) —
 // one rule, checked twice, rather than trusted to travel through state
 // unchecked.
@@ -46,7 +46,9 @@ export function safeReturnPath(path: string | null | undefined): string {
     !path.startsWith("//") &&
     !path.startsWith("/\\") &&
     path !== "/" &&
-    path !== "/setup"
+    path !== "/setup" &&
+    path !== "/admin" &&
+    path !== "/admin/setup"
     ? path
     : "/runs";
 }

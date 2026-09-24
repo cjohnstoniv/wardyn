@@ -153,6 +153,30 @@ func unionDeniedDomains(spec *types.RunPolicySpec, add []string) []string {
 	return unionDomains(&spec.DeniedDomains, add)
 }
 
+// subsetOf reports whether every element of need is present in have. The
+// empty set is a subset of everything by this reading; a caller for whom an
+// empty need must fail closed (the Azure DevOps capability lane) guards that
+// case itself before calling in.
+func subsetOf[T comparable](need, have []T) bool {
+	for _, n := range need {
+		if !slices.Contains(have, n) {
+			return false
+		}
+	}
+	return true
+}
+
+// intersect returns the elements of a that are also in b, in a's order.
+func intersect[T comparable](a, b []T) []T {
+	var out []T
+	for _, v := range a {
+		if slices.Contains(b, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // refreshRun re-reads a run after a state-changing step (build failure,
 // dispatch) so the caller returns the store's freshest row; on read error the
 // pre-step snapshot is returned unchanged.

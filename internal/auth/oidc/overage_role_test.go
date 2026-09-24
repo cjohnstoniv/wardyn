@@ -64,7 +64,7 @@ func TestOverageWidensRole(t *testing.T) {
 		// The ordinary posture: member is the narrowest tier there is, so no
 		// hidden claim could have produced less. A human in 200+ groups must
 		// still be able to sign in.
-		{"overage + default member fallthrough", overageNames("groups"), writoidc.RoleMember, defaultMatch(writoidc.RoleMember), false},
+		{"overage + default member fallthrough", overageNames("groups"), writoidc.RoleUser, defaultMatch(writoidc.RoleUser), false},
 		// No overage: the token answered the question, whatever the answer was.
 		{"no claim_names at all", nil, writoidc.RoleAdmin, defaultMatch(writoidc.RoleAdmin), false},
 		// A distributed claim this package derives nothing from is not an
@@ -99,14 +99,14 @@ func TestOverageWidensRole(t *testing.T) {
 // Counterfactual: remove the overageWidensRole branch from CallbackHandler and
 // leg 2 mints a cookie with Role=admin instead of redirecting.
 func TestOverageLoginDeniedNotPromoted(t *testing.T) {
-	roleMap := map[string]string{"walled-contractors": writoidc.RoleMember}
+	roleMap := map[string]string{"walled-contractors": writoidc.RoleUser}
 
 	t.Run("claim present: walled to member", func(t *testing.T) {
 		env := newIdPEnv(t)
 		auth := env.newRoleAuth(t, roleMap, writoidc.RoleAdmin, nil)
 		_, sess := doRoleCallback(t, env, auth, "contractor@corp.example", nil, []string{"walled-contractors"})
-		if sess.Role != writoidc.RoleMember {
-			t.Fatalf("role = %q, want %q — the control leg must be walled, or the overage leg proves nothing", sess.Role, writoidc.RoleMember)
+		if sess.Role != writoidc.RoleUser {
+			t.Fatalf("role = %q, want %q — the control leg must be walled, or the overage leg proves nothing", sess.Role, writoidc.RoleUser)
 		}
 	})
 
@@ -139,12 +139,12 @@ func TestOverageLoginDeniedNotPromoted(t *testing.T) {
 	// token, with the default set to the narrowest tier, still signs in.
 	t.Run("overage + default member still signs in", func(t *testing.T) {
 		env := newIdPEnv(t)
-		auth := env.newRoleAuth(t, roleMap, writoidc.RoleMember, nil)
+		auth := env.newRoleAuth(t, roleMap, writoidc.RoleUser, nil)
 		f2BuildOverageIDToken(t, env, "sub-contractor", "contractor@corp.example")
 		w, sess := doCallback(t, auth)
-		if sess.Role != writoidc.RoleMember {
+		if sess.Role != writoidc.RoleUser {
 			t.Fatalf("role = %q (status %d, %q), want %q — a human in 200+ groups must still be able to sign in when the default cannot widen",
-				sess.Role, w.Code, w.Result().Header.Get("Location"), writoidc.RoleMember)
+				sess.Role, w.Code, w.Result().Header.Get("Location"), writoidc.RoleUser)
 		}
 	})
 }

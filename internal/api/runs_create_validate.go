@@ -425,6 +425,8 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 	if s.isOperator(r.Context()) {
 		return governanceCeiling{}, false
 	}
+	// One capability snapshot for every field below (capBatch's ctx memo).
+	r = r.WithContext(withCapBatch(r.Context()))
 	if req.DevcontainerRepo != "" {
 		return governanceCeiling{}, s.denyMemberField(w, r, "runs.image", "byoi_member",
 			"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image")
@@ -461,7 +463,7 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
 	if err != nil {
-		writeCeilingError(w, err)
+		writeCeilingError(w, r, err)
 		return governanceCeiling{}, true
 	}
 	if s.denyMemberGovernance(w, r, req, ceiling) {
@@ -515,6 +517,14 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 	if ceiling.Limits.DenyTaskModeExec && req.TaskMode == "exec" {
 		return s.denyMemberField(w, r, "runs.task_mode", "governance_profile", fmt.Sprintf(
 			"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.", name))
+	}
+	// The same door through an interactive run: a task with interactive_start
+	// unset or "shell" is run by the image as `bash -lc` at boot, before anyone
+	// attaches. Same predicate as the autonomy gate and dispatch, so the limit
+	// and the seed cannot disagree; `!= "agent"` keeps an unknown value refused.
+	if ceiling.Limits.DenyTaskModeExec && req.InteractiveStart != "agent" && interactiveBootSeed(requestIsInteractive(req), req.Task) != "" {
+		return s.denyMemberField(w, r, "runs.interactive_start", "governance_profile", fmt.Sprintf(
+			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name))
 	}
 	// Post-coercion, and that is the whole gate. req.Interactive is still the RAW
 	// field here — this function runs before the empty-task→interactive coercion
