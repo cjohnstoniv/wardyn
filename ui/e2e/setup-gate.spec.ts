@@ -393,7 +393,10 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await skipHero(page);
     await page.goto("/");
     await page.waitForURL(/\/setup/);
-    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    // #469 (CI-flake): this heading is the first paint of the lazily loaded
+    // setup funnel, and on a loaded CI runner it has missed the default 5s
+    // (the retry then passes in ~1.5s). Same 15s as openPermissionsFromPeople.
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("Step 1 of 4")).toBeVisible();
     // "3" (CONFIG_STEPS) is a constant; the demo count is derived live from
     // stepOrder(status), so it's asserted by pattern, not a hand-kept number.
@@ -437,7 +440,7 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     await skipHero(page);
     await page.goto("/");
     await page.waitForURL(/\/setup/);
-    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
 
     // Scoped to the full rail's own landmark: "Required" is also a substring
     // of the step-counter's subline ("Required before a run can launch…"),
@@ -480,7 +483,7 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
     });
     await skipHero(page);
     await page.goto("/setup");
-    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
     // exact: Playwright's default text match is substring + case-insensitive,
     // and the honest note below contains "recommended" as a lowercase word.
     await expect(page.getByText("Recommended", { exact: true })).toHaveCount(0);

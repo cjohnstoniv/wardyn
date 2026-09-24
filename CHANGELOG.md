@@ -10,6 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`ui-e2e` runs its specs in three concurrent lanes and hardens four specs that flaked in CI
+  (#469).** `scripts/run-ui-e2e.sh`'s default (all-spec) invocation now runs three isolated backends
+  at once (`WARDYN_E2E_LANES`, 1-3), each with its own ports and database and each claiming the next
+  unclaimed spec, so every spec still gets a freshly seeded backend; an explicit spec list runs one
+  lane. CI's Playwright step took 241 s and 322 s in its first two runs, against 581 s serially.
+  Each spec keeps its own failure artifacts under `ui/test-results/<spec>/`, which is what CI now
+  uploads, and CI records video only on a retry. The first lazy-loaded paint in
+  `setup-gate.spec.ts` and `episode-catalog.spec.ts` gets more than the default expect timeout,
+  `runs.spec.ts` retries a search fill together with its assertion, and `workspaces.spec.ts`
+  unroutes before teardown so a poll in flight cannot fail a finished test.
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.

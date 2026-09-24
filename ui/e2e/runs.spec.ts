@@ -160,19 +160,32 @@ test.describe("Runs board (default view)", () => {
     await openRuns(page);
 
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
-    await search.fill("e2e fixture 4");
 
     // Only the COMPLETED fixture-4 run should remain. The filter itself is
     // synchronous client-side state (runs.tsx's `filtered` is re-derived from
     // `runs` + `query` on every render — nothing async sits between the fill
-    // and the board reflecting it, so a longer timeout buys nothing a real
-    // stall wouldn't also blow through). The structural card count is the
-    // stronger signal: `getByText("e2e fixture 0")` without `exact` is a
-    // substring match, so it is provably watching the SAME "is fixture 0
-    // gone" fact as `run-card` count 1 — asserting both pins the invariant
-    // two independent ways instead of leaning on one text query alone.
+    // and the board reflecting it). #469 (CI-flake): a loaded host still saw
+    // "Received: 9", the filter not applied at all, which fits a fill the input
+    // lost (a remount resets `query`), and no timeout brings a lost fill back.
+    // So the fill is retried with the count, not just waited on. The structural card
+    // count is the stronger signal: `getByText("e2e fixture 0")` without
+    // `exact` is a substring match, so it is provably watching the SAME "is
+    // fixture 0 gone" fact as `run-card` count 1 — asserting both pins the
+    // invariant two independent ways instead of leaning on one text query
+    // alone.
+    // Run once, before the retry loop below: a soft check so a fill
+    // Playwright drops here is reported as its own named failure instead of
+    // being silently absorbed. toPass isn't a Playwright test retry, so a
+    // failure caught only inside it never reaches stats.flaky either — this
+    // runs outside that loop so it can't be swallowed by it.
+    await search.fill("e2e fixture 4");
+    expect.soft(await search.inputValue(), "search value after the first fill").toBe("e2e fixture 4");
+    await expect(async () => {
+      await search.fill("e2e fixture 4");
+      await expect(search).toHaveValue("e2e fixture 4");
+      await expect(page.getByTestId("run-card")).toHaveCount(1, { timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
     await expect(page.getByText("e2e fixture 4")).toBeVisible();
-    await expect(page.getByTestId("run-card")).toHaveCount(1);
     await expect(page.getByText("e2e fixture 0", { exact: true })).toHaveCount(0);
   });
 
@@ -180,10 +193,19 @@ test.describe("Runs board (default view)", () => {
     await openRuns(page);
 
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
-    await search.fill("zzz-no-such-run-zzz");
 
-    // EmptyState for a query renders this copy (runs.tsx).
-    await expect(page.getByText("No runs match these filters.")).toBeVisible();
+    // EmptyState for a query renders this copy (runs.tsx). #469 (CI-flake):
+    // retried with the fill, for the same lost-fill reason as the test above.
+    // See the fixture-4 test above: this soft pre-check runs once, outside
+    // the retry loop, so a lost fill is a named failure instead of being
+    // silently folded into the empty-state assertion inside toPass.
+    await search.fill("zzz-no-such-run-zzz");
+    expect.soft(await search.inputValue(), "search value after the first fill").toBe("zzz-no-such-run-zzz");
+    await expect(async () => {
+      await search.fill("zzz-no-such-run-zzz");
+      await expect(search).toHaveValue("zzz-no-such-run-zzz");
+      await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
     await expect(page.getByText("Try a different search term or facet.")).toBeVisible();
 
     // Clearing the filters restores the full board. The board's own 3s poll

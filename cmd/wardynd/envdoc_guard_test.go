@@ -70,6 +70,8 @@ var envDocAllow = map[string]bool{
 	"WARDYN_E2E_ALLOW_ALL_SKIPPED": true, "WARDYN_SCREENSHOTS": true,
 	// scripts/lib/common.sh's log() prefix, set by each e2e script that sources it.
 	"WARDYN_LOG_TAG": true,
+	// #469: run-ui-e2e.sh's concurrent-lane count. Shell-only.
+	"WARDYN_E2E_LANES": true,
 	// 0.7.4: run-ui-e2e.sh's LIVE mode — the external base URL that points the
 	// `live` Playwright project (ui/e2e/live/) at a real cluster instead of the
 	// hermetic backend. Shell-only, so the E2E-shell ratchet below is what keeps
