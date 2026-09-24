@@ -25,7 +25,7 @@
 // stays scoped to this one spec file and touches no other spec's fixture.
 import type { BrowserContext, Page, WebSocketRoute } from "@playwright/test";
 import { ADMIN_TOKEN } from "./fixtures";
-import type { AttachHolder } from "../src/app/lib/types/runs";
+import type { AttachHolder, AttachModeMsg } from "../src/app/lib/types/runs";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
@@ -73,13 +73,15 @@ export async function stubTakeover(target: Page | BrowserContext, runId: string)
 // The attach-mode control frame the daemon sends as a TEXT frame on every
 // connect (internal/api/attach_holder.go) — same shape
 // attach-terminal-session.test.tsx's attachModeFrame builds at the component
-// level; this is its browser-level twin.
+// level; this is its browser-level twin. Typed against the TS mirror that
+// wire-parity.test.ts pins to the Go struct, so a rename there breaks this.
 export function attachModeFrame(readOnly: boolean, holder?: Partial<AttachHolder> & { principal: string }): string {
+  const holderDefaults: AttachHolder = { held: true, since: "2026-09-21T12:00:00Z", cols: 80, rows: 24, source: "web" };
   return JSON.stringify({
     type: "attach-mode",
     read_only: readOnly,
-    holder: holder ? { held: true, since: "2026-09-21T12:00:00Z", cols: 80, rows: 24, source: "web", ...holder } : undefined,
-  });
+    holder: holder ? { ...holderDefaults, ...holder } : undefined,
+  } satisfies AttachModeMsg);
 }
 
 /**
