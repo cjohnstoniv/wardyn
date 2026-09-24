@@ -23,9 +23,9 @@ import (
 func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPublicKey, error) {
 	const q = `
 		INSERT INTO ssh_public_keys (` + sshKeyCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		RETURNING ` + sshKeyCols
-	out, err := scanSSHKey(s.Pool.QueryRow(ctx, q, k.Fingerprint, k.Principal, k.Name, k.PublicKey, k.Role, k.RoleCheckedAt, k.CreatedAt))
+	out, err := scanSSHKey(s.Pool.QueryRow(ctx, q, k.Fingerprint, k.Principal, k.Name, k.PublicKey, k.Role, k.RoleCheckedAt, k.Capped, k.CreatedAt))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -68,9 +68,12 @@ func (s PG) GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (typ
 // login, and a promoted human's keys upgrade the same way, with no
 // delete-then-re-register needed. A principal with no registered keys is a
 // normal, silent no-op (RowsAffected 0) — logging in has nothing to refresh.
+//
+// A CAPPED key (migration 0070, registered in the user view) keeps its user
+// role: the login refreshes only its timestamp, never promotes it.
 func (s PG) RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error {
 	_, err := s.Pool.Exec(ctx,
-		`UPDATE ssh_public_keys SET role = $1, role_checked_at = $2 WHERE principal = $3`,
+		`UPDATE ssh_public_keys SET role = CASE WHEN capped THEN role ELSE $1 END, role_checked_at = $2 WHERE principal = $3`,
 		role, checkedAt, principal)
 	if err != nil {
 		return fmt.Errorf("store: refresh ssh key roles: %w", err)
@@ -97,11 +100,11 @@ func (s PG) DeleteSSHKey(ctx context.Context, fingerprint, principal string) err
 // sshKeyCols is THE ssh_public_keys column list, in scanSSHKey's order (four
 // pasted sites). One list, not two: every column is written at registration,
 // and RefreshSSHKeyRoles updates two in place rather than adding any.
-const sshKeyCols = `fingerprint, principal, name, public_key, role, role_checked_at, created_at`
+const sshKeyCols = `fingerprint, principal, name, public_key, role, role_checked_at, capped, created_at`
 
 func scanSSHKey(row pgx.Row) (types.SSHPublicKey, error) {
 	var k types.SSHPublicKey
-	err := row.Scan(&k.Fingerprint, &k.Principal, &k.Name, &k.PublicKey, &k.Role, &k.RoleCheckedAt, &k.CreatedAt)
+	err := row.Scan(&k.Fingerprint, &k.Principal, &k.Name, &k.PublicKey, &k.Role, &k.RoleCheckedAt, &k.Capped, &k.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.SSHPublicKey{}, ErrNotFound
 	}

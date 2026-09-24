@@ -43,12 +43,6 @@ type ADOGrant struct {
 	Capabilities []adoscope.Capability
 }
 
-// ADOGrantSource answers, for a host, the run's Azure DevOps grant. ok=false
-// means the host is not covered and the gate stands aside.
-type ADOGrantSource interface {
-	ADOGrantFor(host string) (ADOGrant, bool)
-}
-
 // adoRefProtected is the base protected-ref rule: no grant carries a
 // protected-branch list yet, so every ref counts as protected. Fail closed.
 func adoRefProtected(string) bool { return true }

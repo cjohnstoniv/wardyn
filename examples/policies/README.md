@@ -13,7 +13,7 @@ misspelled field, so you can sanity-check a policy before you launch.
 
 ## Console template chips
 
-The policy panel's template chips (`/runs/new` and `/policies`) are seeded
+The policy panel's template chips (`/runs/new` and `/admin/policies`) are seeded
 from three of these files as compiled-in consts in
 `ui/src/app/components/wardyn/policy-panel.tsx` — **not** read from disk at
 runtime: `default.json` → **Package registries**, `ci.json` → **CI baseline**,

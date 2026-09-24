@@ -79,3 +79,32 @@ func TestDeviceRevokeCmd(t *testing.T) {
 		t.Fatal("revoke with a truncated id succeeded, want a parse error before any request")
 	}
 }
+
+func TestDeviceEnrolTokenListAndRevokeCmds(t *testing.T) {
+	id := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, []types.DeviceEnrolmentToken{{ID: id, DeviceName: "alices-laptop", MintedBy: "admin"}})
+	var execErr error
+	out := captureStdout(t, func() {
+		execErr = execCmd(t, "device", "enrol-token-list", "--url", srv.URL, "--token", "tok")
+	})
+	if execErr != nil {
+		t.Fatal(execErr)
+	}
+	if !strings.Contains(out, id.String()) || !strings.Contains(out, "alices-laptop") {
+		t.Fatalf("list output lacks the full id or device name:\n%s", out)
+	}
+	if req := srv.last(); req.method != http.MethodGet || req.path != "/api/v1/admin/devices/enrolment-tokens" {
+		t.Fatalf("request = %s %s", req.method, req.path)
+	}
+
+	srv = newCmdServer(t, http.StatusNoContent, nil)
+	if err := execCmd(t, "device", "enrol-token-revoke", id.String(), "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatal(err)
+	}
+	if req := srv.last(); req.method != http.MethodDelete || req.path != "/api/v1/admin/devices/enrolment-tokens/"+id.String() {
+		t.Fatalf("request = %s %s", req.method, req.path)
+	}
+	if err := execCmd(t, "device", "enrol-token-revoke", "790047a8", "--url", srv.URL, "--token", "tok"); err == nil {
+		t.Fatal("revoke with a truncated id succeeded, want a parse error before any request")
+	}
+}

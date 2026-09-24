@@ -87,7 +87,8 @@ func (s *Server) routes() chi.Router {
 			//   direct registrations in this body   (both groups)
 			//   mountPermissionRoutes  (this file)  securityOps
 			//   mountAccountRoutes     (this file)  securityOps
-			//   adminRoutes            (this file)  one per group
+			//   adminRoutes            (this file)  one per group, plus
+			//       mountUserTypeRoutes (user_types.go) securityOps
 			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
@@ -776,6 +777,10 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	// User types (migration 0071_user_types): defining a type is the same
+	// security-tier duty as authoring a governance profile; deciding who IS a
+	// type stays on the operatorOnly /access routes.
+	s.mountUserTypeRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the

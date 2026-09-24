@@ -69,6 +69,7 @@ func newPATBrokerProxySpec(t *testing.T, spec types.RunPolicySpec, grants map[st
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 		PATGrants:       grants,
 	})
 	return p, buf
@@ -230,6 +231,7 @@ func TestPATBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 		PATGrants:       map[string]PATGrant{"gitlab.com": {GrantID: grantID}},
 	})
 
