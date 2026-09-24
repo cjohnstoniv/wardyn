@@ -69,7 +69,7 @@ func TestCreateRun_SurfacesMemberNarrowingWarnings(t *testing.T) {
 
 	body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com","evil.example.com"]}}`
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-		ssoSession(t, "sub-warn-member", "dev@corp.example", oidc.RoleMember), body)
+		ssoSession(t, "sub-warn-member", "dev@corp.example", oidc.RoleUser), body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create = %d, want 201 (a drop narrows, it does not refuse): %s", w.Code, w.Body.String())
 	}

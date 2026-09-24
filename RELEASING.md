@@ -12,7 +12,8 @@ document is that process, written down.
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to
   `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag. The gate is the
-  `.github/workflows/ci.yml` job list: `build`, `diagrams`, `ui`, `ui-e2e`,
+  `.github/workflows/ci.yml` job list: `changes`, `go`
+  (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e`,
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
   `envbuild-integration`, `test-pg`, `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
@@ -51,6 +52,10 @@ locally with the required services; follow `.github/workflows/ci.yml` for
 image builds, cluster setup, and environment variables. Run the Playwright
 lane with `scripts/run-ui-e2e.sh`. Without `WARDYN_TEST_PG` the Postgres
 suite prints a loud SKIPPED line.
+
+Before tagging, run `scripts/stress-proxy-cgroup.sh` (needs docker). It sends
+the egress proxy's worst inspection load through it under the sidecar's 256
+MiB memory cap and fails on a refused request or an OOM kill.
 
 Screenshot freshness is advisory and CI-only. On a pull request, `ci.yml`'s
 `diagrams` job compares the PR diff and adds a warning annotation when the
@@ -158,7 +163,7 @@ another maintainer. Use the chosen version throughout this checklist.
    job (docs/CI.md "Pin the wardyn checkout"). **`docs/DESKTOP.md`'s real-hardware
    smoke recipe** also pins both image tags by hand (`WARDYN_WARDYND_IMAGE`,
    `WARDYN_PROXY_IMAGE` — the desktop tier's MDM config has no `$WARDYN_VERSION`
-   to interpolate; X1a-F10 found this stale for a whole release cycle).
+   to interpolate; a past review found this stale for a whole release cycle).
    `scripts/test-claims-match-code.sh` fails if either pin drifts from
    `internal/version/version.go`.
    `scripts/test-install-sh.sh` asserts the two agree with each other, but it
@@ -171,7 +176,7 @@ another maintainer. Use the chosen version throughout this checklist.
    commit** before tagging.
 
    **Also add a `ROADMAP.md` Shipped row for the release you are cutting**
-   (X1c-F2 found the Shipped table stuck on "Built, awaiting release" for
+   (a past review found the Shipped table stuck on "Built, awaiting release" for
    three released versions in a row) — a new row plus flipping that release's
    own `### What vX.Y shipped` intro from "Built, awaiting release" to
    "Shipped as `vX.Y.Z`", pointing at the CHANGELOG's now-dated entry instead
@@ -179,7 +184,7 @@ another maintainer. Use the chosen version throughout this checklist.
 
    **Also regenerate `docs/TEST-GAPS.md`: `make test-gaps`** (needs the union
    coverage profile `make ci`/`cover-check` already produced this run) —
-   X1c-F13/D-7 found the generator gained a Kubernetes-gated bucket with
+   a past review found the generator gained a Kubernetes-gated bucket with
    nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
    `make test-gaps` is a standalone target, not in `make ci`.
 
@@ -355,7 +360,9 @@ A job conditional on `push`, a schedule, or a path filter must **not** be a requ
 context: GitHub does not treat a never-reported required context as passing, so
 the PR sits at "Expected — waiting for status to be reported" and cannot be
 merged. Every `nightly.yml` job is such a job, `buildx-smoke` (the multi-arch
-build) included. A job's check name is its `name:` when it sets one, otherwise
+build) included. `ci.yml`'s change classifier (#932) never skips a required job:
+one whose work a change cannot affect still runs, skips its steps and reports
+success (docs/CI.md, "Incremental CI"). A job's check name is its `name:` when it sets one, otherwise
 its job id, so renaming either is the same protection change as deleting the
 job.
 
