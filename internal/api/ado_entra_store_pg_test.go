@@ -83,7 +83,7 @@ func TestPG_ADOEntraStore_NamespaceIsolation(t *testing.T) {
 func TestPG_ADOEntraStore_ReservedNameRefusedThroughGenericSecrets(t *testing.T) {
 	h, _ := newRunOwnerPGHarness(t)
 	const owner = "alice-ado-pg-b"
-	alice := ssoSession(t, owner, "alice-b@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, owner, "alice-b@corp.example", oidc.RoleUser)
 	const rowID = "ado-row-pg-b"
 	name := adoEntraSecretName(rowID)
 

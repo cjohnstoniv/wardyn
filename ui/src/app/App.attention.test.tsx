@@ -86,7 +86,7 @@ describe("App — the shell's attention-badge poll pauses on /runs", () => {
   it("neg: keeps ticking off /runs", async () => {
     pollRegistry.clear();
     render(
-      <MemoryRouter initialEntries={["/policies"]}>
+      <MemoryRouter initialEntries={["/admin/policies"]}>
         <App />
       </MemoryRouter>,
     );

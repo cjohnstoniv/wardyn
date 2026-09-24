@@ -1416,7 +1416,7 @@ func TestHandleTestSiteConfigProxy_ReachedWithRecordingPresentNoWarning(t *testi
 // allowlist must be refused, never reach the handler.
 func TestHandleTestSiteConfig_OperatorOnly(t *testing.T) {
 	srv := rbacServer(t, rbacOperator)
-	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleMember)
+	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleUser)
 	for _, path := range []string{
 		"/api/v1/site-config/test-proxy",
 		"/api/v1/site-config/test-redirect",

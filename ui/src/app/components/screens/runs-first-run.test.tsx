@@ -42,6 +42,13 @@ describe("RunsFirstRun — model provider row icon", () => {
     expect(container).toBeInTheDocument(); // smoke: mounted at all
   });
 
+  // RunsFirstRun renders for admin tiers only, so its Connect door opens the
+  // Admin view's Settings, where the org's shared model credential lives.
+  it("llmReady:false links Connect to /admin/settings", () => {
+    renderIt(readiness({ llmReady: false }));
+    expect(screen.getByRole("link", { name: "Connect →" })).toHaveAttribute("href", "/admin/settings");
+  });
+
   it("llmReady:true renders the check icon, not the dashed one", () => {
     renderIt(readiness({ llmReady: true }));
     const row = screen.getByText("Model provider").closest("li")!;

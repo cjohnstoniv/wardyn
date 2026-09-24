@@ -549,7 +549,7 @@ describe("AdoCapabilityCard — the Entra-consent state", () => {
     expect(within(card).getByText("Acts as")).toBeInTheDocument();
     expect(within(card).getByText("dana@acme.example")).toBeInTheDocument();
     const cta = within(card).getByRole("link", { name: ADO.REQ_CONSENT_CTA });
-    expect(cta).toHaveAttribute("href", "/settings#azure-devops");
+    expect(cta).toHaveAttribute("href", "/account#azure-devops");
   });
 
   it("someone who is not the owner sees who it's waiting on, and no door", async () => {
@@ -589,7 +589,7 @@ describe("AdoCapabilityCard — the mid-run sign-in state", () => {
     expect(within(card).getByText("Connection ended")).toBeInTheDocument();
     expect(within(card).getByText("Your Azure DevOps connection ended mid-run")).toBeInTheDocument();
     expect(within(card).getByText(/held while you sign in again/)).toBeInTheDocument();
-    expect(within(card).getByRole("link", { name: ADO.CONNECT_ADO })).toHaveAttribute("href", "/settings#azure-devops");
+    expect(within(card).getByRole("link", { name: ADO.CONNECT_ADO })).toHaveAttribute("href", "/account#azure-devops");
     expect(card.textContent).not.toMatch(/consent|four minutes/i);
   });
 

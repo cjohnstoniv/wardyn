@@ -148,7 +148,7 @@ func TestRecordRouteStaysOnTheOperatorTier(t *testing.T) {
 		session *http.Cookie
 	}{
 		{"security admin", ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)},
-		{"plain member", ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember)},
+		{"plain member", ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := doSSO(t, srv, http.MethodPost, path, tc.session, `{"name":"build & test"}`)

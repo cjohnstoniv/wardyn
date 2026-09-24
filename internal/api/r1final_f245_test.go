@@ -59,7 +59,7 @@ func TestScannedProfileIsProjectedPerTier(t *testing.T) {
 		{
 			name:    "a plain member reading an operator-owned workspace",
 			ownedBy: "",
-			session: ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember),
+			session: ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser),
 			// The host axis AND the internal egress hosts: this tier decides
 			// nothing about either.
 			gone: []string{"required_secrets", "secret_files_present", "leak_findings", "egress_domains", "suggested_egress"},
@@ -79,7 +79,7 @@ func TestScannedProfileIsProjectedPerTier(t *testing.T) {
 		{
 			name:    "the workspace's own owner",
 			ownedBy: owner,
-			session: ssoSession(t, owner, "owner@corp.example", oidc.RoleMember),
+			session: ssoSession(t, owner, "owner@corp.example", oidc.RoleUser),
 			// Nothing is withheld from the person who authored these paths.
 			kept: []string{"required_secrets", "secret_files_present", "leak_findings", "egress_domains", "suggested_egress", "languages"},
 		},
@@ -107,7 +107,7 @@ func TestScannedProfileIsProjectedPerTier(t *testing.T) {
 func TestListArmProjectsTheProfileToo(t *testing.T) {
 	// ticket: F245
 	srv, _ := newTopologyWorkspaceServer(t, "")
-	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/workspaces", member, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /workspaces = %d: %s", w.Code, w.Body.String())
@@ -132,7 +132,7 @@ func TestUnparseableProfileFailsClosed(t *testing.T) {
 	// ticket: F245
 	srv, st := newTopologyWorkspaceServer(t, "")
 	st.ws.Profile = json.RawMessage(`{"egress_domains":[` + r3TopologyEgress) // truncated on purpose
-	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/workspaces/"+st.ws.ID.String(), member, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET = %d: %s", w.Code, w.Body.String())

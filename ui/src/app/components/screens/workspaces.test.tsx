@@ -296,7 +296,7 @@ describe("WorkspacesScreen — member workspace access", () => {
   function renderAsMember() {
     return render(
       <OperatorProvider operator={false} memberLocalDirRoot="/home/agent-projects">
-        <RoleProvider role="member">
+        <RoleProvider role="user">
           <MemoryRouter>
             <WorkspacesScreen />
           </MemoryRouter>
@@ -311,7 +311,7 @@ describe("WorkspacesScreen — member workspace access", () => {
   });
 
   // add-workspace-dialog.tsx:168 — the writable checkbox unmounts (not
-  // resets) once role==="member" && kind==="local_dir", so a box checked
+  // resets) once role==="user" && kind==="local_dir", so a box checked
   // while Repository was still selected must not ride along into the
   // submitted local_dir source.
   it("a member's local_dir submit drops writable even if it was checked under Repository first", async () => {
@@ -421,7 +421,7 @@ describe("WorkspacesScreen — the User drives door", () => {
   it("a member never sees it — /drives is SUPER and the entry points say so", async () => {
     render(
       <OperatorProvider operator={false}>
-        <RoleProvider role="member">
+        <RoleProvider role="user">
           <MemoryRouter>
             <WorkspacesScreen />
           </MemoryRouter>

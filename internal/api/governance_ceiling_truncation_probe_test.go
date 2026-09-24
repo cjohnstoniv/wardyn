@@ -112,7 +112,7 @@ func TestGovernanceCeiling_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
 					t.Errorf("ceilingErrorStatus = %d, want 403", ceilingErrorStatus(err))
 				}
 				w := httptest.NewRecorder()
-				writeCeilingError(w, err)
+				writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 				if w.Code != http.StatusForbidden || !containsAll(w.Body.String(), "groups_snapshot_stale", "sign in again") {
 					t.Errorf("writeCeilingError = %d %q; want 403 naming groups_snapshot_stale and the remedy", w.Code, w.Body.String())
 				}
@@ -192,7 +192,7 @@ func TestGovernanceCeiling_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
 		st.tokenRaw = apiTokenPrefix + "f2probe"
 		st.token = &types.APIToken{
 			ID: uuid.New(), Principal: "sub-legacy-token", Email: "legacy@corp.example",
-			Role: oidc.RoleMember, Groups: []string{"a-team"}, GroupsTruncated: nil, Name: "legacy",
+			Role: oidc.RoleUser, Groups: []string{"a-team"}, GroupsTruncated: nil, Name: "legacy",
 		}
 		call := func() *httptest.ResponseRecorder {
 			r := httptest.NewRequest(http.MethodGet, "/api/v1/policies/default", nil)

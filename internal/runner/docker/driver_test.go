@@ -1171,3 +1171,46 @@ func TestEnsureImage_ReportsPullingOnlyWhenAbsent(t *testing.T) {
 		}
 	})
 }
+
+// TestEndSandbox_StopsTheAgentKeepsItAndRemovesTheProxy is the lease end on
+// Docker: the agent container is stopped but NOT removed (its writable layer is
+// the kept files), the proxy sidecar is removed (no network path), and the
+// per-run network stays. A second end is a no-op, and a later kill still tears
+// the kept sandbox down completely.
+func TestEndSandbox_StopsTheAgentKeepsItAndRemovesTheProxy(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	runID := testSpec().RunID
+
+	for i := range 2 {
+		if err := d.EndSandbox(ctx, sb.Ref); err != nil {
+			t.Fatalf("EndSandbox #%d: %v", i+1, err)
+		}
+	}
+	agent := f.containers[sb.Ref]
+	if agent == nil || agent.removed || agent.state == nil || agent.state.Status != "exited" {
+		t.Fatalf("agent after the end = %+v; want stopped and still present", agent)
+	}
+	if p := f.containers[proxyContainerName(runID)]; p == nil || !p.removed {
+		t.Error("the proxy sidecar must be removed at the end — it is the agent's only network path")
+	}
+	if _, ok := f.networks[internalNetName(runID)]; !ok {
+		t.Error("the per-run network was removed at the end; teardown owns it")
+	}
+
+	if err := d.KillSandbox(ctx, sb.Ref); err != nil {
+		t.Fatalf("KillSandbox of the kept sandbox: %v", err)
+	}
+	if !f.containers[sb.Ref].removed {
+		t.Error("a kill after the end must remove the kept agent container")
+	}
+	if _, ok := f.networks[internalNetName(runID)]; ok {
+		t.Error("a kill after the end must remove the per-run network")
+	}
+}

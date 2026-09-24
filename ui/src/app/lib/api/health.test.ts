@@ -114,6 +114,8 @@ describe("health — site-config integrations round-trip", () => {
       // The agent roster rides on the same door and needs the same strip: a
       // stale spread would silently re-enable an agent the admin just turned off.
       agent_providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
+      // The model-provider block, for the agent roster's reason.
+      model_providers: { providers: [{ id: "corp-gateway", kind: "custom_endpoint", base_url: "https://gw.corp.example" }] },
       effective_scm_hosts: ["github.com"],
     };
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(echoed), { status: 200 }));
@@ -242,7 +244,7 @@ describe("health.whoami() — the user-drive pair", () => {
     method: "sso",
     operator: false,
     security_operator: false,
-    role: "member",
+    role: "user",
     email: "alice@corp.example",
     ...extra,
   });

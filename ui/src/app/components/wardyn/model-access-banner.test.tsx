@@ -24,6 +24,7 @@ import { ModelAccessProvider, useClaimModelAccessDoor, useModelAccessDoor } from
 import { OperatorProvider } from "./operator-context";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { absoluteTime } from "../../lib/format";
+import { aheadByHours } from "../../lib/test-clock";
 import { baseStatus } from "../../lib/test-fixtures";
 import type { SetupHarnessTool, SetupModelAccess, SetupStatus } from "../../lib/types";
 
@@ -97,13 +98,6 @@ beforeEach(() => {
   }
 });
 afterEach(() => vi.restoreAllMocks());
-
-// aheadByHours is the deadline fixture for every "lapses in …" case: a stamp
-// the reader's clock will always see as the future. A hardcoded one cannot be —
-// it is a future date only until it isn't.
-function aheadByHours(h: number): string {
-  return new Date(Date.now() + h * 60 * 60 * 1000).toISOString();
-}
 
 describe("the strip says nothing when there is nothing to say", () => {
   it.each([["live"], ["not_applicable"]])("state %s renders no sentence", (state) => {
@@ -377,13 +371,13 @@ describe("where the strip is withheld", () => {
     expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
   });
 
-  it.each([["/settings"], ["/providers"]])("not on %s for an OPERATOR — those pages mount the pane", (path) => {
+  it.each([["/admin/settings"], ["/admin/providers"], ["/account"]])("not on %s for an OPERATOR — those pages mount the pane", (path) => {
     renderStrip({ access: { state: "not_configured" }, path, operator: true });
     expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
   });
 
-  it("but a MEMBER keeps it on /settings — the card's AWS button is admin-only there", () => {
-    renderStrip({ access: { state: "not_configured" }, path: "/settings" });
+  it("but a user keeps it on /account — the card's AWS button is admin-only there", () => {
+    renderStrip({ access: { state: "not_configured" }, path: "/account" });
     expect(screen.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
 });

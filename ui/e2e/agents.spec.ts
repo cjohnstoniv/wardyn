@@ -49,9 +49,9 @@ const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
 async function gotoAgentsTab(page: Page): Promise<void> {
   await gotoConsole(page);
-  await navToRoute(page, "/settings");
+  await navToRoute(page, "/admin/settings");
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
-  await expect(page).toHaveURL(/\/providers$/);
+  await expect(page).toHaveURL(/\/admin\/providers$/);
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
 }
 

@@ -183,7 +183,7 @@ async function mockMemberDrive(page: Page, drive: MeUserDrive | null, deniedBy =
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
-    json.role = "member";
+    json.role = "user";
     json.operator = false;
     json.security_operator = false;
     json.user_drive = drive;
@@ -507,10 +507,10 @@ test.describe("drives — the registry is SUPER's, and it has no nav item for an
     await expect(door).toBeVisible();
     await expect(door).not.toHaveClass(/bg-primary/);
     await door.click();
-    await expect(page).toHaveURL(/\/drives$/);
+    await expect(page).toHaveURL(/\/admin\/drives$/);
 
     // The second home of the same component (setup step + Settings).
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("user-drives-card");
     await expect(card).toBeVisible();
     await expect(card.getByText(DRIVES.CARD_LEAD)).toBeVisible();
@@ -518,7 +518,7 @@ test.describe("drives — the registry is SUPER's, and it has no nav item for an
     // than rendering a zero.
     await expect(card.getByText(DRIVES.CARD_EMPTY)).toBeVisible();
     await card.getByText(DRIVES.CARD_OPEN).click();
-    await expect(page).toHaveURL(/\/drives$/);
+    await expect(page).toHaveURL(/\/admin\/drives$/);
   });
 
   test("a security admin is offered neither door, and every write on the screen is parked", async ({ page }) => {
@@ -529,7 +529,7 @@ test.describe("drives — the registry is SUPER's, and it has no nav item for an
     // registry — so they see no entry point at all.
     await navTo(page, "Workspaces");
     await expect(page.getByRole("button", { name: DRIVES.TITLE, exact: true })).toHaveCount(0);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await expect(page.getByTestId("user-drives-card")).toHaveCount(0);
 
     // Reaching /drives directly: GET /drives is operatorOnly, so a real
@@ -546,7 +546,7 @@ test.describe("drives — the registry is SUPER's, and it has no nav item for an
         body: JSON.stringify({ error: "forbidden" }),
       });
     });
-    await navToRoute(page, "/drives");
+    await navToRoute(page, "/admin/drives");
     await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
     await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
@@ -675,7 +675,7 @@ test.describe("drives — what the member is told at New run", () => {
     await page.route("**/api/v1/me", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
-      json.role = "member";
+      json.role = "user";
       json.operator = false;
       json.security_operator = false;
       json.user_drive = null;
@@ -1369,7 +1369,7 @@ test.describe("run-detail — the SSH/CLI/UI-apps card is owner-or-admin, and no
     await page.route("**/api/v1/me", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
-      json.role = "member";
+      json.role = "user";
       json.operator = false;
       json.security_operator = false;
       json.principal = principal;

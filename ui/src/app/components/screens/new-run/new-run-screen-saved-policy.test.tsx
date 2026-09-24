@@ -81,6 +81,25 @@ beforeEach(() => {
   myCapabilitiesMock.mockReset().mockReturnValue(null);
 });
 
+// M-1b: Policies is Admin view only (/admin/policies), so the empty picker's
+// "New policy →" door renders only for the tier that authors policies — for a
+// user it would lead to a page that is guaranteed to refuse them.
+describe("NewRunScreen — the empty saved-policy picker's New policy door", () => {
+  it("an admin gets New policy → /admin/policies", async () => {
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: /Reuse a saved policy/ }));
+    expect(await screen.findByText(/No saved policies yet/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "New policy →" })).toHaveAttribute("href", "/admin/policies");
+  });
+
+  it("neg: a user sees the empty note with no door", async () => {
+    renderAsMember();
+    await user.click(await screen.findByRole("button", { name: /Reuse a saved policy/ }));
+    expect(await screen.findByText(/No saved policies yet/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "New policy →" })).not.toBeInTheDocument();
+  });
+});
+
 describe("NewRunScreen — the saved-policy lane", () => {
   // A member's list read redacts secret refs (redactPoliciesForRead) — this is
   // what that redacted body looks like on the wire.

@@ -57,13 +57,13 @@ func TestSsoRBACCheck(t *testing.T) {
 			// The frozen strings (docs/design/admin-access-canon.md), byte for byte.
 			if tc.wantStatus == "warn" {
 				if chk.Detail != "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin." ||
-					chk.Fix != "Map people to admin or member on the People step, so only the people you name can change this deployment." {
+					chk.Fix != "Map people to admin or user on the People step, so only the people you name can change this deployment." {
 					t.Errorf("warn strings drifted from the canon: %+v", chk)
 				}
 				if !chk.Blocking {
 					t.Error("warn must stay Blocking")
 				}
-			} else if chk.Detail != "People are mapped to admin or member, so a person's role comes from their sign-in." || chk.Blocking {
+			} else if chk.Detail != "People are mapped to admin or user, so a person's role comes from their sign-in." || chk.Blocking {
 				t.Errorf("ok row drifted from the canon or blocks: %+v", chk)
 			}
 		})
@@ -552,6 +552,18 @@ func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
 // secrets.ageKeyFromSecret over the postgres.dsn.secretRef Secret's `age-key`
 // entry, and secrets.ageKeySecretRef.name for a separate Secret), and the
 // console's own remedy has to name them.
+// In store mode there is no local key to be durable: the age-key row gives
+// way to store_external, which names the store (design §3).
+func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
+	chk := secretStoreCheck("Vault at vault.example:8200", true)
+	if chk.ID != "store_external" || chk.Status != "ok" || !strings.Contains(chk.Detail, "Vault at vault.example:8200") {
+		t.Fatalf("store mode row = %+v", chk)
+	}
+	if got := secretStoreCheck("", false); got.ID != "age_key" || got.Status != "warn" {
+		t.Fatalf("local mode row = %+v, want the age-key warning unchanged", got)
+	}
+}
+
 func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	if fix := ageKeyCheck(true).Fix; fix != "" {
 		t.Errorf("durable arm carries a Fix (%q) — an ok row has nothing to fix", fix)
@@ -581,6 +593,22 @@ func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	// leak into, and -age-key / the env var is what compose and install.sh write.
 	if !strings.Contains(chk.Fix, "-age-key") {
 		t.Errorf("Fix dropped the host-side -age-key answer — Fix = %q", chk.Fix)
+	}
+}
+
+// TestAgeKeyCheckDetailNamesUnrecoverableConsequence is #755 (0.7.12 release
+// review, F3). The warn arm's Detail said secrets "become unreadable after a
+// restart", which reads as a one-time, future event. The row only shows while
+// wardynd runs on an ephemeral key, and convertSecretStore refuses that boot
+// whenever age-sealed rows exist, so no earlier ephemeral key's rows can be
+// present here: what the operator must hear is that what is stored NOW is lost
+// at the next restart, and that the next boot refuses to start over it.
+func TestAgeKeyCheckDetailNamesUnrecoverableConsequence(t *testing.T) {
+	detail := ageKeyCheck(false).Detail
+	for _, want := range []string{"lost at the next restart", "no key set afterward", "next boot refuses to start"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("Detail does not say %q — Detail = %q", want, detail)
+		}
 	}
 }
 
@@ -722,7 +750,7 @@ var setupCheckBlockingStatus = map[string]string{
 // Blocking decision recorded here must fail the build, not default quietly
 // to non-blocking.
 var setupCheckNeverBlocks = map[string]bool{
-	"env_builder": true, "k8s_egress_containment": true, "age_key": true,
+	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true,
 	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
@@ -797,6 +825,7 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, ageKeyCheck(true))
 	assertSetupCheckBlocking(t, ageKeyCheck(false))
+	assertSetupCheckBlocking(t, secretStoreCheck("Vault at vault.example:8200", true))
 
 	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{}, nil))
 	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{UpstreamProxySecretRef: "x"}, map[string]bool{}))

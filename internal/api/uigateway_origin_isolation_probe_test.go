@@ -73,7 +73,7 @@ func TestCookieForRunAIsRefusedOnRunBPath(t *testing.T) {
 
 	// A fully valid, unexpired, correctly-signed cookie for run A.
 	cookieA := &http.Cookie{Name: uiCookieName, Value: h.srv.encodeUISession(uiSession{
-		Run: runA, App: "code", Port: uiTestPort, Principal: h.owner, Role: oidc.RoleMember,
+		Run: runA, App: "code", Port: uiTestPort, Principal: h.owner, Role: oidc.RoleUser,
 		Expires: time.Now().Add(time.Hour).Unix(), IssuedAt: time.Now().Unix(),
 	})}
 

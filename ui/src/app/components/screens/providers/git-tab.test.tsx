@@ -8,7 +8,7 @@
 // re-typed here).
 import * as React from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { GitProvider } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -625,7 +625,12 @@ describe("GitTab", () => {
       const row = screen.getByTestId("provider-row-github");
       await userEvent.type(within(row).getByLabelText("Access token"), "ghp_x");
       await userEvent.click(within(row).getByRole("button", { name: "Save" }));
-      await screen.findByText(/Stored as/);
+      // #355: this harness's `present` never flips (it's the fixed prop the
+      // test passed in, not a real reload), so the field goes back to its
+      // unstored form after save — waiting on "Stored as" (fixed to only
+      // render once actually stored) would never resolve here. The save
+      // cycle's own completion signal is the cleared, no-longer-busy field.
+      await waitFor(() => expect(within(row).getByLabelText("Access token")).toHaveValue(""));
       expect(onStatusRefresh).toHaveBeenCalledTimes(1);
     });
 
@@ -642,7 +647,9 @@ describe("GitTab", () => {
       await userEvent.type(urls, "{Enter}https://git.corp.example/team");
       await userEvent.type(within(row).getByLabelText("Access token"), "ghp_x");
       await userEvent.click(within(row).getByRole("button", { name: "Save" }));
-      await screen.findByText(/Stored as/);
+      // #355: same non-reloading harness as above — wait on the credential
+      // field itself, not "Stored as" (which no longer renders unstored).
+      await waitFor(() => expect(within(row).getByLabelText("Access token")).toHaveValue(""));
       expect(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS)).toHaveValue(
         "https://github.com/acme\nhttps://git.corp.example/team",
       );

@@ -149,19 +149,19 @@ describe("firstRunLanding — a member takes a different rule than the admin", (
   // member A's mark — was real. Done-states come from the page's own
   // creator-scoped listRuns, not from this decision.
   it("a member opens on their own Getting Started", () => {
-    expect(firstRunLanding({ has_runs: false }, "member")).toBe("/setup");
+    expect(firstRunLanding({ has_runs: false }, "user")).toBe("/setup");
   });
 
   it("an unreachable daemon lands a member on Runs, not the tour", () => {
     expect(
-      firstRunLanding({ unreachable: true, has_runs: false }, "member"),
+      firstRunLanding({ unreachable: true, has_runs: false }, "user"),
     ).toBe("/runs");
   });
 
   // Negative control: has_runs is a GLOBAL server signal (someone else's
   // runs). A member's landing never consults it.
   it("a member with global has_runs:true still opens on their own Getting Started", () => {
-    expect(firstRunLanding({ has_runs: true }, "member")).toBe("/setup");
+    expect(firstRunLanding({ has_runs: true }, "user")).toBe("/setup");
   });
 });
 
@@ -238,7 +238,7 @@ describe("setupGateActive", () => {
   });
 
   it("never gates a member — their checks are redacted, so the gate would have no exit", () => {
-    expect(setupGateActive({ checks: [blocking] }, "member")).toBe(false);
+    expect(setupGateActive({ checks: [blocking] }, "user")).toBe(false);
     expect(setupGateActive({ checks: [blocking] }, "admin")).toBe(true);
   });
 
@@ -290,5 +290,24 @@ describe("gate-once-per-load", () => {
     expect(gateAlreadyFired()).toBe(false);
     markGateFired();
     expect(gateAlreadyFired()).toBe(true);
+  });
+
+  // #469: a re-render at the location it fired from is the same access, still
+  // waiting on its redirect — it must redirect again, not read the gate as spent.
+  it("stays live at the location it fired from, and only there", () => {
+    markGateFired("k1");
+    expect(gateAlreadyFired("k1")).toBe(false);
+    expect(gateAlreadyFired("k2")).toBe(true);
+    // Arriving in the funnel seals it: after that not even the location it
+    // fired from re-fires (the router reuses "default" for untagged entries).
+    markGateFired();
+    expect(gateAlreadyFired("k1")).toBe(true);
+    markGateFired("k1");
+    expect(gateAlreadyFired("k1")).toBe(true);
+  });
+
+  it("arriving in the funnel directly arms it for every location", () => {
+    markGateFired();
+    expect(gateAlreadyFired("default")).toBe(true);
   });
 });

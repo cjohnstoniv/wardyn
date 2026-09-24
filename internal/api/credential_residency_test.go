@@ -278,7 +278,7 @@ func TestSetupStatusResidency_PerUserSSOReachesTheWireSignedInOrNot(t *testing.T
 			if signedIn {
 				putAWSSSOBlob(t, srv, awsSSOTestFixedNow.Add(time.Hour))
 			}
-			member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+			member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 			row := harnessRow(t, doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, ""), "claude-code")
 			if row.CredentialResidency != string(residencySandbox) {
 				t.Errorf("credential_residency = %q, want %q — a per_user bedrock_sso row is resident "+
@@ -291,7 +291,7 @@ func TestSetupStatusResidency_PerUserSSOReachesTheWireSignedInOrNot(t *testing.T
 	// verdict at all. A refusal has none to publish, and pretending otherwise is
 	// what would make the status row unnecessary.
 	srv, _ := perUserLoginSrv(t)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member, `{"agent":"claude-code","task":"t"}`)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("preflight = %d, want 422; body=%s", w.Code, w.Body.String())

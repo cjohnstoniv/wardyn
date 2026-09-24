@@ -6,6 +6,7 @@
 import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute } from "./fixtures";
 import { DRIVE_MEMBER } from "../src/app/lib/user-drives-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { Page } from "@playwright/test";
 
 // Run this file's tests SERIALLY. They share one backend and the policy table is
@@ -500,20 +501,25 @@ test("create form surfaces the reserved user-drive target refusal (HTTP 400)", a
 // signed-in MEMBER can read policies but not CRUD them"); only the writes
 // (POST/PUT/DELETE) are operatorOnly. This file only ever walked it as an
 // admin, so nothing pinned the read-only render for the two other tiers.
-// security_admin is the interesting one: /policies gates on plain
-// useOperator(), the SAME OPERATOR_ONLY_REASON a member gets — unlike
-// /permissions (SECURITY_ONLY_REASON, permissions.spec.ts), the security tier
-// earns this screen NO extra reach. Read-only: neither test creates a row, so
-// the file's empty-table invariant (header comment) holds either way.
+// security_admin is the interesting one: /admin/policies gates on plain
+// useOperator(), the SAME OPERATOR_ONLY_REASON a member would get — unlike
+// /admin/permissions (SECURITY_ONLY_REASON, permissions.spec.ts), the
+// security tier earns this screen NO extra reach. Read-only: neither test
+// creates a row, so the file's empty-table invariant (header comment) holds
+// either way. M-1b: Policies moved to /admin/policies — a MEMBER never
+// reaches the screen's own reason any more (this harness's security-admin
+// splice has no real SSO session, so its access stays the permissive "url"
+// tier and it still passes the view gate straight through; only a member's
+// role check is unconditional, admin-member-modes-design.md §2.1).
 test.describe("Policies — member and security-admin reads", () => {
   // ticket: X2-F12
-  test("a member reads the list, and every write is parked with the admin-only reason", async ({ page }) => {
+  test("a member is refused the admin view before the list ever loads", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
-    await navToRoute(page, "/policies");
-    await expect(page.getByRole("heading", { name: "Policies", level: 1 })).toBeVisible();
-    await expect(page.getByText(OPERATOR_ONLY_REASON).first()).toBeVisible();
-    await expect(page.getByRole("button", { name: "New policy" })).toBeDisabled();
+    await navToRoute(page, "/admin/policies");
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Policies", level: 1 })).toHaveCount(0);
   });
 
   test("a security admin reads the list too, and gets the SAME parked writes — security is not operator here", async ({

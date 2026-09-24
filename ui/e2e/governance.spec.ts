@@ -18,7 +18,8 @@ import {
 } from "./fixtures";
 import { GOVERNANCE as GOV, LIMITS_CHIP, MEMBER, PEOPLE, PERM, PREVIEW, RUBRIC } from "../src/app/lib/governance-copy";
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
-import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -849,32 +850,25 @@ test.describe("governance — the two storage ceilings round-trip through the ed
   });
 });
 
-// X3-F5 — /governance is /permissions' securityOps sibling: hidden from a
-// member's nav, reachable by typing the URL, and its 403 was reported as an
-// unreachable control plane over a Retry that 403s forever.
+// X3-F5 — /admin/governance is /admin/permissions' securityOps sibling:
+// hidden from a member's nav, reachable by typing the URL. M-1b: Governance
+// moved under /admin/*, so a member's own 403/500 render (what this test used
+// to pin) is now unreachable — the admin-view gate refuses them, and nothing
+// is fetched at all (admin-member-modes-design.md §2.3's refusal-page row).
 test.describe("Governance — a member by URL is told the tier, not an outage", () => {
-  test("a 403 names the role and offers no Retry; a 500 still does", async ({ page }) => {
+  test("the admin-view refusal, before /api/v1/governance is ever asked", async ({ page }) => {
     await mockMemberRole(page);
-    await page.route("**/api/v1/governance", (route) =>
-      route.request().method() === "GET"
-        ? route.fulfill({ status: 403, contentType: "application/json", body: '{"error":"forbidden"}' })
-        : route.continue(),
-    );
+    let fetched = false;
+    await page.route("**/api/v1/governance", async (route) => {
+      fetched = true;
+      await route.fallback();
+    });
     await gotoConsole(page);
-    await navToRoute(page, "/governance");
+    await navToRoute(page, "/admin/governance");
 
-    await expect(page.getByText(SECURITY_ONLY_REASON).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
     await expect(page.getByRole("button", { name: GOV.FETCH_FAILED_TITLE })).toHaveCount(0);
-    await expect(page.getByText(GOV.FETCH_FAILED_BODY)).toHaveCount(0);
-
-    await page.unrouteAll({ behavior: "ignoreErrors" });
-    await mockMemberRole(page);
-    await page.route("**/api/v1/governance", (route) =>
-      route.request().method() === "GET"
-        ? route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' })
-        : route.continue(),
-    );
-    await page.goto("/governance");
-    await expect(page.getByText(GOV.FETCH_FAILED_BODY)).toBeVisible();
+    expect(fetched).toBe(false);
   });
 });

@@ -242,6 +242,37 @@ describe("ModelProviderCard", () => {
     expect(screen.queryByLabelText(/^region$/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^model$/i)).not.toBeInTheDocument();
   });
+
+  // #355: SecretLane's "Stored as <name>" caption rendered beside an UNSTORED
+  // Save button too — the ternary that also serves the Replace flow's
+  // "Replaces <name>" fell to "Stored as" in its else arm, which is exactly
+  // the unstored case. A reader took the caption as "already saved". Every
+  // SecretLane shares this component (Anthropic/OpenAI keys here, the git
+  // PAT/SSH lanes on /providers), so the fix and its pin both live in the
+  // shared component, not a Bedrock-only spot (PR #352 review, finding 5).
+  describe('#355: "Stored as" only beside an actually-stored secret', () => {
+    it("unstored: no \"Stored as\" caption beside Save", async () => {
+      model();
+      await user.click(screen.getByRole("radio", { name: /API key/ }));
+      expect(screen.getByLabelText("Anthropic API key")).toBeInTheDocument();
+      expect(screen.queryByText(/Stored as/)).not.toBeInTheDocument();
+    });
+
+    it("stored, not editing: \"Stored as <name>\" shows beside Replace/Disconnect", async () => {
+      model(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+      await user.click(screen.getByRole("radio", { name: /API key/ }));
+      expect(screen.getByRole("button", { name: "Replace" })).toBeInTheDocument();
+      expect(screen.getByText(/Stored as/)).toHaveTextContent("anthropic-api-key");
+    });
+
+    it("stored, editing (Replace clicked): \"Replaces <name>\", never \"Stored as\"", async () => {
+      model(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+      await user.click(screen.getByRole("radio", { name: /API key/ }));
+      await user.click(screen.getByRole("button", { name: "Replace" }));
+      expect(screen.getByText(/Replaces/)).toHaveTextContent("anthropic-api-key");
+      expect(screen.queryByText(/Stored as/)).not.toBeInTheDocument();
+    });
+  });
 });
 
 // F2 (Appendix A #2): three call sites open HarnessLoginPane; two pass

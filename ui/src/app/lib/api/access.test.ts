@@ -23,7 +23,7 @@ describe("access.upsertMapping — stale_token_snapshots wire mirror", () => {
           JSON.stringify({
             id: "m-1",
             value: "engineering",
-            role: "member",
+            role: "user",
             stale_token_snapshots: 3,
             tokens_revoked: 2,
           }),
@@ -31,24 +31,24 @@ describe("access.upsertMapping — stale_token_snapshots wire mirror", () => {
         ),
       ),
     );
-    const res = await access.upsertMapping({ value: "engineering", role: "member" });
+    const res = await access.upsertMapping({ value: "engineering", role: "user" });
     expect(res.staleTokenSnapshots).toBe(3);
     expect(res.tokensRevoked).toBe(2);
     // The two counts, not the raw wire keys, ride on `mapping`.
-    expect(res.mapping).toEqual({ id: "m-1", value: "engineering", role: "member" });
+    expect(res.mapping).toEqual({ id: "m-1", value: "engineering", role: "user" });
   });
 
   it("omits stale_token_snapshots when the write demoted no outstanding token", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ id: "m-1", value: "engineering", role: "member" }), {
+        new Response(JSON.stringify({ id: "m-1", value: "engineering", role: "user" }), {
           status: 201,
           headers: { "Content-Type": "application/json" },
         }),
       ),
     );
-    const res = await access.upsertMapping({ value: "engineering", role: "member" });
+    const res = await access.upsertMapping({ value: "engineering", role: "user" });
     expect(res.staleTokenSnapshots).toBeUndefined();
     expect(res.created).toBe(true);
   });
