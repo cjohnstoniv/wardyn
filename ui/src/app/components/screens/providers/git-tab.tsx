@@ -16,6 +16,7 @@
 import * as React from "react";
 import type { GitLane, GitProvider, GitProviderKind, LegacyGitLane } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AVAILABILITY } from "../../../lib/availability-copy";
 import { PERM } from "../../../lib/permissions-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import { S as GIT_S, HostSummary, Lane as CredentialLane, LaneBody, SecretLane } from "../settings/connection-cards";
@@ -265,7 +266,12 @@ function Row({
           off: a provider disabled today can still carry a stale audience
           list an admin needs to see and change. */}
       <div className="border-b border-border p-3">
-        <AvailabilityControl kind="workspace_provider" value={row.id} />
+        <AvailabilityControl
+          kind="workspace_provider"
+          value={row.id}
+          onlyHint={AVAILABILITY.PROVIDER_ONLY_HINT}
+          note={AVAILABILITY.PROVIDER_NOTE}
+        />
       </div>
 
       {row.disabled ? (

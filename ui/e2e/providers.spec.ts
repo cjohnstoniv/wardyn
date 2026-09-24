@@ -1048,6 +1048,11 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
     await expect(reloaded).toBeVisible();
     await expect(reloaded.getByRole("button", { name: AVAILABILITY.ONLY })).toHaveAttribute("aria-pressed", "true");
     await expect(reloaded.getByText(/standard/)).toBeVisible();
+    // The mock's two provider lines, and the last audience locked while Only is on.
+    await expect(reloaded.getByText(AVAILABILITY.PROVIDER_ONLY_HINT)).toBeVisible();
+    await expect(reloaded.getByText(AVAILABILITY.PROVIDER_NOTE)).toBeVisible();
+    await expect(reloaded.getByRole("button", { name: /Remove.*standard/i })).toBeDisabled();
+    await expect(reloaded.getByText(AVAILABILITY.LAST_AUDIENCE_LOCKED)).toBeVisible();
 
     // The wire itself — restricted, and the allow row naming this exact kind/value.
     const view = await (

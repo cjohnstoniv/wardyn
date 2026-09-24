@@ -6,8 +6,8 @@
 // AvailabilityControl — the ONE "Available to" control every admin-set
 // resource carries (user-types design mock-08/user-types-design.md §2.6,
 // UT-7b): Everyone, or Only these types/groups/people. Embedded inline in a
-// git provider row, an agent roster row, an org workspace row and a stored
-// policy row (each caller supplies its own `kind`/`value`).
+// git provider row, an agent roster row and an org workspace's detail page
+// (each caller supplies its own `kind`/`value`).
 //
 // Self-contained and independent of whatever draft/Save cycle the editor
 // around it runs: availability is a securityOps fact even when drawn inside
@@ -50,23 +50,26 @@ const AUDIENCES: { value: AudienceType; label: string; hint: string }[] = [
   { value: "user", label: SUBJECT_LABEL.user, hint: AVAILABILITY.HINT_USER },
 ];
 
-export function AvailabilityControl({
-  kind,
-  value,
-  /** A family-specific line under the control — e.g. the image family's
-   *  "Images are off for everyone until you list someone here." (§2.6).
-   *  Falls back to the standing "never merely hidden" fact. */
-  hint = AVAILABILITY.FOOTER,
-}: {
+type AvailabilityControlProps = {
   kind: string;
   value: string;
-  hint?: React.ReactNode;
-}) {
-  // Availability is a securityOps fact (§7): an operatorOnly editor around
-  // this control (a git provider row, the roster) never makes it writable —
-  // only a security admin or a super admin (isOperator) may change it, the
-  // same gate /permissions itself reads.
-  const securityOperator = useSecurityOperator();
+  /** The family's line after the Everyone/Only toggle, from the mock (the
+   *  git provider row's AVAILABILITY.PROVIDER_ONLY_HINT). */
+  onlyHint?: string;
+  /** The family's note under the list (AVAILABILITY.PROVIDER_NOTE). */
+  note?: string;
+};
+
+// Availability is a securityOps fact (§7), and so is its read: GET
+// /permissions/availability refuses anyone else with a 403 and an
+// authz.denied audit row. So the control is drawn, and read, only for a
+// security admin or a super admin. Other callers who can open the same page
+// (their own workspace's detail page, say) get nothing, not an error line.
+export function AvailabilityControl(props: AvailabilityControlProps) {
+  return useSecurityOperator() ? <Control {...props} /> : null;
+}
+
+function Control({ kind, value, onlyHint, note }: AvailabilityControlProps) {
   const [view, setView] = React.useState<AvailabilityView | null>(null);
   const [status, setStatus] = React.useState<"loading" | "ready" | "error">("loading");
   const [busy, setBusy] = React.useState(false);
@@ -135,23 +138,27 @@ export function AvailabilityControl({
     // free the next time the row re-renders with a fresh `value`, same as
     // the rest of this control's fail-quiet reads.
     return status === "error" ? (
-      <p className="text-meta text-muted-foreground">{AVAILABILITY.LABEL} — couldn't load.</p>
+      <p className="text-meta text-muted-foreground">{AVAILABILITY.LOAD_FAILED}</p>
     ) : null;
   }
 
-  const disabled = !securityOperator || busy;
+  // DELETE /permissions/grants has no restriction check, so removing the
+  // last listed audience while "Only these" is on would leave the resource
+  // for nobody, silently. The last one's × stays disabled until Everyone.
+  const lastLocked = view.restricted && view.allowed_by.length === 1;
 
   return (
     <Field label={AVAILABILITY.LABEL}>
       <Segmented
         value={view.restricted ? "only" : "everyone"}
         onChange={(v) => setRestricted(v === "only")}
-        disabled={disabled}
+        disabled={busy}
         options={[
           { value: "everyone", label: AVAILABILITY.EVERYONE },
           { value: "only", label: AVAILABILITY.ONLY },
         ]}
       />
+      {onlyHint && <p className="text-meta text-muted-foreground">{onlyHint}</p>}
       {putError && <p className="text-xs leading-snug text-danger">{putError}</p>}
 
       {view.allowed_by.length > 0 && (
@@ -164,7 +171,8 @@ export function AvailabilityControl({
                 <button
                   type="button"
                   aria-label={`${PERM.REMOVE} ${SUBJECT_LABEL[g.subject_type] ?? g.subject_type} ${subjectText(g)}`}
-                  disabled={disabled}
+                  title={lastLocked ? AVAILABILITY.LAST_AUDIENCE_LOCKED : undefined}
+                  disabled={busy || lastLocked}
                   onClick={() => removeAudience(g)}
                   className="ml-0.5 disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -175,12 +183,13 @@ export function AvailabilityControl({
           ))}
         </div>
       )}
+      {lastLocked && <p className="text-meta text-muted-foreground">{AVAILABILITY.LAST_AUDIENCE_LOCKED}</p>}
 
       <div className="flex flex-wrap items-center gap-2">
         <Segmented
           value={audienceType}
           onChange={setAudienceType}
-          disabled={disabled}
+          disabled={busy}
           options={AUDIENCES.map((a) => ({ value: a.value, label: a.label }))}
         />
         <Input
@@ -188,16 +197,16 @@ export function AvailabilityControl({
           placeholder={AVAILABILITY.ADD_PLACEHOLDER}
           value={audience}
           onChange={(e) => setAudience(e.target.value)}
-          disabled={disabled}
+          disabled={busy}
           className="h-8 max-w-[220px] font-mono"
         />
-        <Button variant="outline" size="sm" disabled={disabled || !audience.trim()} onClick={addAudience}>
+        <Button variant="outline" size="sm" disabled={busy || !audience.trim()} onClick={addAudience}>
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
           {AVAILABILITY.ADD_CTA}
         </Button>
       </div>
 
-      <p className="text-meta text-muted-foreground">{hint}</p>
+      {note && <p className="text-meta text-muted-foreground">{note}</p>}
     </Field>
   );
 }

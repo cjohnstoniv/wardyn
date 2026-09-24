@@ -35,6 +35,7 @@ vi.mock("../../lib/api/permissions", async () => {
 
 import { AVAILABILITY } from "../../lib/availability-copy";
 import { AvailabilityControl } from "./availability-control";
+import { OperatorProvider } from "./operator-context";
 
 const EVERYONE = { kind: "workspace_provider", value: "azure_devops", restricted: false, allowed_by: [] };
 const ONLY_WITH_ONE = {
@@ -107,7 +108,7 @@ describe("AvailabilityControl", () => {
   });
 
   it("removing an audience deletes its grant by id, then reloads", async () => {
-    getAvailabilityMock.mockResolvedValueOnce(ONLY_WITH_ONE).mockResolvedValueOnce(EVERYONE);
+    getAvailabilityMock.mockResolvedValueOnce({ ...ONLY_WITH_ONE, restricted: false }).mockResolvedValueOnce(EVERYONE);
     deleteGrantMock.mockResolvedValue(undefined);
     render(<AvailabilityControl kind="workspace_provider" value="azure_devops" />);
     await screen.findByText(/developer/);
@@ -130,5 +131,47 @@ describe("AvailabilityControl", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: AVAILABILITY.ONLY })).toHaveAttribute("aria-pressed", "true"),
     );
+  });
+
+  it("while Only is on, the last audience can't be removed, and says why", async () => {
+    getAvailabilityMock.mockResolvedValue(ONLY_WITH_ONE);
+    render(<AvailabilityControl kind="workspace_provider" value="azure_devops" />);
+
+    const remove = await screen.findByRole("button", { name: /Remove.*developer/i });
+    expect(remove).toBeDisabled();
+    expect(remove).toHaveAttribute("title", AVAILABILITY.LAST_AUDIENCE_LOCKED);
+    expect(screen.getByText(AVAILABILITY.LAST_AUDIENCE_LOCKED)).toBeInTheDocument();
+    await userEvent.click(remove);
+    expect(deleteGrantMock).not.toHaveBeenCalled();
+  });
+
+  it("renders the family's hint and note when the editor passes them", async () => {
+    getAvailabilityMock.mockResolvedValue(EVERYONE);
+    render(
+      <AvailabilityControl
+        kind="workspace_provider"
+        value="azure_devops"
+        onlyHint={AVAILABILITY.PROVIDER_ONLY_HINT}
+        note={AVAILABILITY.PROVIDER_NOTE}
+      />,
+    );
+
+    expect(await screen.findByText(AVAILABILITY.PROVIDER_ONLY_HINT)).toBeInTheDocument();
+    expect(screen.getByText(AVAILABILITY.PROVIDER_NOTE)).toBeInTheDocument();
+  });
+
+  // GET /permissions/availability is securityOps: for anyone else it is a 403
+  // and an authz.denied audit row, so a user-tier caller never reads it.
+  it("draws nothing and never reads availability for a caller below the security tier", async () => {
+    getAvailabilityMock.mockResolvedValue(EVERYONE);
+    const { container } = render(
+      <OperatorProvider operator={false} securityOperator={false}>
+        <AvailabilityControl kind="workspace" value="ws-1" />
+      </OperatorProvider>,
+    );
+
+    await Promise.resolve();
+    expect(getAvailabilityMock).not.toHaveBeenCalled();
+    expect(container).toBeEmptyDOMElement();
   });
 });
