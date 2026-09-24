@@ -115,6 +115,7 @@ var queryParamNotAnID = map[string]string{
 	"actor":                     "audit principal filter; ANDed inside auditScope, so a member's own-run feed only narrows",
 	"actor_type":                "audit filter; narrows an already-scoped feed",
 	"outcome":                   "audit filter; narrows an already-scoped feed",
+	"origin":                    "audit filter, enum device|organisation (parseAuditFilter 400s anything else); narrows an already-scoped feed",
 	"force":                     "operator confirmation flag",
 	"confirm":                   "operator confirmation flag",
 	"acknowledge_access_change": "operator confirmation flag",
