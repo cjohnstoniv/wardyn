@@ -16,10 +16,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
 // secretKeyStore is the minimal secret-store surface loadOrCreateSecret needs.
@@ -68,7 +68,7 @@ func holdsSingleInstanceLock(context.Context) (func(), error) { return func() {}
 // SECURITY (boot-key destruction): the previous per-key logic treated ANY
 // Get error as "key not present" and then generated + Put a fresh key,
 // OVERWRITING whatever ciphertext was already there. The pg secret store
-// distinguishes a TRUE not-found (it wraps pgx.ErrNoRows) from an age-decrypt
+// distinguishes a TRUE not-found (secretstore.ErrNotFound) from an age-decrypt
 // failure (a generic error). Conflating the two meant a single transient/
 // permanent decrypt error silently rotated the key, invalidating every issued
 // SVID and every active session cookie. We now regenerate ONLY when the key is
@@ -116,7 +116,7 @@ func loadOrCreateSecret(
 // loadBootKey reports ok with the stored key when it is usable, !ok when it
 // must be created, and an error when it must not be.
 func loadBootKey(ctx context.Context, secrets secretKeyStore, name string, valid func([]byte) bool) (raw []byte, ok bool, err error) {
-	raw, err = secrets.Get(ctx, name)
+	raw, err = secrets.Get(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), name)
 	switch {
 	case err == nil:
 		if valid(raw) {
@@ -126,8 +126,10 @@ func loadBootKey(ctx context.Context, secrets secretKeyStore, name string, valid
 		// over it. This is safe — the stored value cannot serve its purpose
 		// anyway.
 		return nil, false, nil
-	case errors.Is(err, pgx.ErrNoRows):
-		// TRUE not-found (first boot): create.
+	case errors.Is(err, secretstore.ErrNotFound):
+		// TRUE not-found (first boot): create. Only an absent ROW is not-found: a
+		// pointer row whose external value is gone is a refusal, so a lost boot
+		// key is never minted over.
 		return nil, false, nil
 	default:
 		// Decrypt failure or any other Get error: FAIL CLOSED. Do NOT generate

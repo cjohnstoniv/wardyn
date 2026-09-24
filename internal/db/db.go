@@ -117,6 +117,14 @@ const SecretRekeyLockKey int64 = 0x5741524459_524B59 // ASCII "WARDYRKY"
 // replica must wait and then read the first one's key, not skip. Any stable
 // value works, as long as it differs from every other key in this file.
 const BootKeyLockKey int64 = 0x5741524459_424B59 // ASCII "WARDYBKY"
+
+// SecretConvertLockKey makes the boot conversion of legacy (v0) secrets rows to
+// envelope v1 single-writer (secretstore/pg's ConvertV0). Taken with the
+// TRANSACTION-scoped pg_advisory_xact_lock and BLOCKING, like
+// migrateAdvisoryLockKey: a second replica booting at the same moment must wait
+// and then find nothing left to convert, not skip ahead and read v0 rows.
+const SecretConvertLockKey int64 = 0x5741524459_454E56 // ASCII "WARDYENV"
+
 // AuditChainLockKey serializes appends to the audit_events hash chain
 // (migration 0047). Unlike every key above it is taken with the TRANSACTION
 // -scoped pg_advisory_xact_lock, never the session-scoped form: it is released

@@ -811,16 +811,18 @@ cmd_up() {
 
   # Sandbox → control-plane reachability CONFIRMATION (the inverse of the
   # host-mode warning setup.sh prints). In this compose path wardynd runs as a
-  # container on wardyn-internal, so a run's proxy sidecar reaches it at
-  # http://wardynd:8080 over Docker DNS with NO host/NAT hop — which is what
-  # lets workspace VERIFY report its result (the exact thing that can't work on
-  # Docker Desktop + WSL2 when wardynd runs host-mode). Prove it with a
-  # throwaway container on the same network; never fatal.
-  if [ "$(wardynd_probe "${ENV_FILE}" /healthz | tail -n1)" = "200" ]; then
-    log "Sandbox → control-plane reachability: OK — workspace recordings and confined replays will complete on this instance."
+  # container on wardyn-internal, so a run's proxy sidecar reaches it over
+  # Docker DNS with NO host/NAT hop — at https://wardynd:8443, the TLS listener
+  # pinned to wardynd's internal CA. The probe asks the console port on the
+  # same network (the pin cannot be checked without that CA) and reads the
+  # /healthz bit saying the proxies' hop is TLS; never fatal.
+  _reach="$(wardynd_probe "${ENV_FILE}" /healthz)"
+  if [ "$(printf '%s' "${_reach}" | tail -n1)" = "200" ] && printf '%s' "${_reach}" | grep -q '"proxy_hop_tls": *true'; then
+    log "Sandbox → control-plane reachability: OK — proxies reach wardynd over TLS (https://wardynd:8443); recordings and confined replays will complete."
   else
-    warn "sandbox → control-plane probe failed (http://wardynd:8080 on wardyn-internal). Verify results may not report and Record captures will land empty (record_failed); check 'docker network inspect wardyn-internal'."
+    warn "sandbox → control-plane probe failed, or /healthz does not report proxy_hop_tls (wardynd on wardyn-internal). Verify results may not report and Record captures will land empty (record_failed); check 'docker network inspect wardyn-internal' and WARDYN_CONTROL_PLANE_URL."
   fi
+  unset _reach
 
   # LOCAL-MODE no-auth GATE smoke (closes the masking class from the N1/forwarder
   # regression). /healthz is OUTSIDE the auth group, and the container healthcheck

@@ -43,11 +43,11 @@ func TestBootKeyCreate_TwoConcurrentBootsEndOnOneKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("age identity: %v", err)
 	}
-	storeA, err := buildSecretStore(poolA, id.String(), "pg")
+	storeA, err := buildSecretStore(ctx, poolA, id.String(), "pg", nil, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatalf("store A: %v", err)
 	}
-	storeB, err := buildSecretStore(poolB, id.String(), "pg")
+	storeB, err := buildSecretStore(ctx, poolB, id.String(), "pg", nil, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatalf("store B: %v", err)
 	}

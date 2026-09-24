@@ -286,6 +286,9 @@ type optionalFeatures struct {
 	// set. nil is the ABSENT mode all the way down: the search endpoint answers
 	// its distinct 503 and every "who" field stays free text.
 	dir directory.Directory
+	// hop is the control-plane to proxy TLS (internal_tls.go); nil only on a
+	// loopback-http local install.
+	hop *hopTLS
 }
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
@@ -332,10 +335,9 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			return of, fmt.Errorf("parse WARDYN_OIDC_ROLE_MAP: %w", rerr)
 		}
 		hasRoleMap = len(roleMap) > 0
-		defaultRole := strings.TrimSpace(*f.oidcDefaultRole)
-		if defaultRole != "" && !validDefaultRole(defaultRole) {
-			return of, fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
-				defaultRole, oidc.RoleAdmin, oidc.RoleMember, oidc.RoleSecurityAdmin)
+		defaultRole, derr := parseDefaultRole(*f.oidcDefaultRole)
+		if derr != nil {
+			return of, derr
 		}
 		// The redirect URL is TWO things, and oidc.New only validates one of
 		// them: the IdP callback target (it checks non-empty, nothing more)
@@ -548,6 +550,12 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		}
 	}
 
+	hop, herr := loadHopTLS(bootCtx, bootKeys, *f.controlURL)
+	if herr != nil {
+		return of, herr
+	}
+	of.hop = hop
+
 	return of, nil
 }
 
@@ -570,7 +578,7 @@ func warnRoleMapPosture(roleMap map[string]string, f *bootFlags, defaultRole str
 	// a role map for claim-based members.
 	if len(roleMap) == 0 {
 		if len(splitCSV(*f.oidcOperatorEmails)) > 0 {
-			slog.Warn("wardynd: no WARDYN_OIDC_ROLE_MAP set — roles come only from the WARDYN_OIDC_OPERATOR_EMAILS allowlist (listed = admin, everyone else = member); set a role map to derive admin/member from SSO roles/groups instead")
+			slog.Warn("wardynd: no WARDYN_OIDC_ROLE_MAP set — roles come only from the WARDYN_OIDC_OPERATOR_EMAILS allowlist (listed = admin, everyone else = user); set a role map to derive admin/user from SSO roles/groups instead")
 		}
 	} else if len(splitCSV(*f.oidcEmailDomains)) == 0 {
 		// Same warning shape as the WARDYN_OIDC_OPERATOR_EMAILS one above
@@ -659,6 +667,21 @@ func componentsInfo(f *bootFlags, runnerTarget string, recStore recording.Store)
 // org, discovered at audit time.
 func validDefaultRole(role string) bool {
 	return oidc.ValidRole(role) && role != oidc.RoleSecurityAdmin
+}
+
+// parseDefaultRole validates WARDYN_OIDC_DEFAULT_ROLE, accepting the pre-0.8
+// "member" as the user tier with the boot WARN until 0.9.
+func parseDefaultRole(raw string) (string, error) {
+	role := strings.TrimSpace(raw)
+	if role == oidc.LegacyRoleMember {
+		slog.Warn(oidc.LegacyRoleMemberWarning("WARDYN_OIDC_DEFAULT_ROLE", ""))
+		role = oidc.RoleUser
+	}
+	if role != "" && !validDefaultRole(role) {
+		return "", fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
+			role, oidc.RoleAdmin, oidc.RoleUser, oidc.RoleSecurityAdmin)
+	}
+	return role, nil
 }
 
 // chartMapHasNoAdminPath reports whether the chart role map grants
