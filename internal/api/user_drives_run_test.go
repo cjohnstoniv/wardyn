@@ -234,7 +234,7 @@ func TestSeedRequestDriveOperatorSkipsTheDoor(t *testing.T) {
 func TestSeedRequestDrive422Matrix(t *testing.T) {
 	// A caller with a sub and NO email claim, so email_local has nothing to
 	// truncate. Only the home-derivation row needs it.
-	noEmailCtx := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleMember), nil)
+	noEmailCtx := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleUser), nil)
 	for _, tc := range []struct {
 		name         string
 		store        *driveStore
@@ -366,7 +366,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 				tier: types.CapabilitySubjectUser,
 			},
 			runnerTarget: "k8s", req: driveRunRequest(true, nil),
-			ctx: withOIDCGroups(operatorCtx("sub_drive_bob", "bob@corp.example", oidc.RoleMember), []string{"eng"}),
+			ctx: withOIDCGroups(operatorCtx("sub_drive_bob", "bob@corp.example", oidc.RoleUser), []string{"eng"}),
 			want: "drive: your sub cannot name a directory " +
 				"(lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name " +
 				"(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)",
@@ -500,7 +500,7 @@ func TestSeedRequestDriveShareIsBindableAtMountTime(t *testing.T) {
 	// The claim `bob` names the directory that exists; every arm below uses it,
 	// so the only thing that differs between them is the fact under test.
 	shareCtx := func() context.Context {
-		return withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleMember), nil)
+		return withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleUser), nil)
 	}
 
 	t.Run("the home directory is there and the drive mounts", func(t *testing.T) {
@@ -525,7 +525,7 @@ func TestSeedRequestDriveShareIsBindableAtMountTime(t *testing.T) {
 		// The same share, a member whose directory nobody created — the
 		// offboarding-in-reverse case: allocated in Wardyn, absent on the NAS.
 		srv, rec := driveShareServer(st, []string{root})
-		ctx := withOIDCGroups(operatorCtx("carol", "carol@corp.example", oidc.RoleMember), nil)
+		ctx := withOIDCGroups(operatorCtx("carol", "carol@corp.example", oidc.RoleUser), nil)
 		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
 		if ok || mount != nil {
 			t.Fatalf("mount = %+v; want a refusal rather than a directory Docker would create", mount)
@@ -557,7 +557,7 @@ func TestSeedRequestDriveShareIsBindableAtMountTime(t *testing.T) {
 			t.Fatalf("write file: %v", err)
 		}
 		srv, _ := driveShareServer(st, []string{root})
-		ctx := withOIDCGroups(operatorCtx("dave", "dave@corp.example", oidc.RoleMember), nil)
+		ctx := withOIDCGroups(operatorCtx("dave", "dave@corp.example", oidc.RoleUser), nil)
 		_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
 		if ok || w.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("code = %d, ok = %v; want 422", w.Code, ok)

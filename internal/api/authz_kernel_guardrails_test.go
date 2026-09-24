@@ -260,7 +260,7 @@ func TestCapabilityResolutionIsMonotone(t *testing.T) {
 
 	decide := func(grants []types.CapabilityGrant, enf map[string]bool, kind, value string, stale bool) bool {
 		srv := capServer(&monotoneStore{grants: grants, enf: enf})
-		ctx := withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleMember), groups)
+		ctx := withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleUser), groups)
 		ctx = withOIDCGroupsTruncated(ctx, stale)
 		allowed, err := srv.newCapBatch(ctx).decide(ctx, kind, capKinds[kind].direction, value)
 		if err != nil {

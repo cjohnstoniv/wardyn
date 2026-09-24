@@ -67,7 +67,7 @@ test("V12b act 1 — grant them the host", async () => {
 
   await dexSignIn("admin@wardyn.local");
   await page.waitForURL(/\/(runs|setup)/, { timeout: 60_000 });
-  await page.goto("/permissions");
+  await page.goto("/admin/permissions");
   await expect(page.getByRole("heading", { name: "Permissions" }).first()).toBeVisible({ timeout: 30_000 });
   await caption(page, "This install enforces Egress hosts — a member may only decide hosts an admin granted them.");
   await beat(page, PACE.read);
@@ -204,7 +204,7 @@ test("V12b act 5 — the trail holds both halves", async () => {
   test.setTimeout(240_000);
   const page = stage();
 
-  await page.goto("/audit");
+  await page.goto("/admin/audit");
   const search = page.getByPlaceholder("Search events, domains, run IDs…");
   await search.fill("authz.denied");
   await expect(page.getByText("authz.denied").first()).toBeVisible({ timeout: 60_000 });

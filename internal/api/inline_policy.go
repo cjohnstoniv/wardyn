@@ -167,7 +167,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// store error and 403s an unanswerable group snapshot (see effectiveCeiling).
 	ceiling, ceilErr := s.effectiveCeiling(ctx)
 	if ceilErr != nil {
-		writeCeilingError(w, ceilErr)
+		writeCeilingError(w, r, ceilErr)
 		return types.RunPolicySpec{}, nil, nil, false
 	}
 
