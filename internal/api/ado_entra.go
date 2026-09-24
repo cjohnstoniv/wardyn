@@ -602,7 +602,7 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	granted := adoEntraSplitScope(resp.Scope)
+	granted := strings.Fields(resp.Scope)
 	if resp.RefreshToken == "" || len(granted) == 0 {
 		// No refresh token means nothing to store and nothing to renew; no
 		// granted scope means the authority told us nothing about what this

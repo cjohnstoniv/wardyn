@@ -43,6 +43,9 @@ vi.mock("../../../lib/api/health", () => ({
   health: {
     health: (...a: unknown[]) => healthMock(...a),
     getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    // #492: setup-screen.tsx's reloadSiteConfig now reads the ETag-carrying
+    // snapshot — routed through the SAME mock these tests already drive.
+    getSiteConfigSnapshot: async (...a: unknown[]) => ({ siteConfig: await getSiteConfigMock(...a), etag: null }),
     putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
     testProxy: (...a: unknown[]) => testProxyMock(...a),
     testRedirect: (...a: unknown[]) => testRedirectMock(...a),
