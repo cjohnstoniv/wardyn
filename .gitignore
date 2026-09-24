@@ -134,6 +134,8 @@ ds-bundle/
 # decisions (Q458-1..3) — a shipped-feature record like ado-entra-prompt.md
 # above, not a scratch note.
 !/docs/design/ado-card-canon.md
+# #484's frozen-strings table (the mock round's canon; the mock itself stays local).
+!/docs/design/admin-access-canon.md
 # CONSOLE-RULES.md is a permanent doc, not a mock round: docs/README.md indexes it
 # and every UI review cites it, so it ships with the repo like any other doc.
 !/docs/design/SYNC.md
@@ -145,6 +147,9 @@ ds-bundle/
 # 0.8/ ships for the same reason: the 0.8 issues and ROADMAP.md's v0.8 row both
 # link to the design document, so it has to be in the repo they link from.
 !/docs/design/0.8/
+# unsaved-guard-canon.md is the same shape as hybrid-0.8.md: a published canon
+# doc for a shipped feature (#460), not a mock round with its own mock/ dir.
+!/docs/design/unsaved-guard-canon.md
 !/docs/design/first-contact-prototype/
 # signin-first-contact-canon.md is #457's frozen-strings table, cited by
 # CHANGELOG.md and sign-in-copy.ts's header comment — ships for the same
@@ -154,6 +159,12 @@ ds-bundle/
 # twins (episodes.ts) — a permanent doc, not a mock round, same shape as
 # CONSOLE-RULES.md above.
 !/docs/design/demo-video-source-canon.md
+# terminal-escape-canon.md is a permanent doc (#133), not a mock round or a
+# proposal draft — it ships for the same reason CONSOLE-RULES.md does.
+!/docs/design/terminal-escape-canon.md
+# announced-failures-canon.md is the shipped canon for #459's frozen strings
+# (RAIL.LAUNCH_ERROR_LABEL etc.) — the accompanying copy modules cite it.
+!/docs/design/announced-failures-canon.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 

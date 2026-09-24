@@ -157,7 +157,7 @@ export function RunsFirstRun({
                 ) : (
                   <>
                     Not connected — agent runs need one. Governed commands run without one.{" "}
-                    <Link to="/settings" className="font-medium text-primary hover:underline">
+                    <Link to="/admin/settings" className="font-medium text-primary hover:underline">
                       Connect →
                     </Link>
                   </>
