@@ -548,9 +548,8 @@ type Config struct {
 	// or "" in local mode. Set, /setup/status shows store_external instead of
 	// the age-key row.
 	SecretStoreExternal string
-	// SecretKeyService describes the key service that wraps every stored
-	// credential's data key ("Vault Transit at vault.example:8200"), or ""
-	// when the local key does. Set, /setup/status shows kek_service.
+	// SecretKeyService describes the key service wrapping every stored data key
+	// ("Vault Transit at host"), or "" for the local key; set, /setup/status shows kek_service.
 	SecretKeyService string
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
