@@ -522,9 +522,10 @@ persistence:
 #
 # Renamed from `userDrives` in 0.8 (issue #658 — the wire route (/drives) and
 # the audit actions (drive.*) already said "drive"; this chart key was the one
-# holdout). A clean break, no alias: a `helm upgrade --reuse-values` that still
-# carries the old `userDrives` key renders with drives RBAC off until the
-# values are updated to `drives` — see docs/sdk.md "Renamed in 0.8".
+# holdout). A clean break, no alias, and not a silent one: a render whose values
+# still say `userDrives.enabled=true` is refused (templates/rbac.yaml) until
+# they say `drives.enabled=true` and `userDrives.enabled=false` instead — see
+# docs/sdk.md "Renamed in 0.8".
 #
 # Two Kubernetes backends, both claim-based (a pod may not bind a host path, and
 # Pod Security Standards forbids hostPath at Baseline and Restricted alike):

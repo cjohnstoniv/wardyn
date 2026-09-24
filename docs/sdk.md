@@ -198,7 +198,7 @@ path. The chart key is a clean break, no alias — see
 | `GET /runs/{id}/attach-holder` | `GET /runs/{id}/attach/holder` | HTTP route, aliased for one minor |
 | `POST /runs/{id}/attach-ticket` | `POST /runs/{id}/attach/ticket` | HTTP route, aliased for one minor |
 | `POST /runs/{id}/profile` | `POST /runs/{id}/profile/synthesize` | HTTP route, aliased for one minor |
-| Helm `userDrives.enabled` | Helm `drives.enabled` | Chart value, clean break (no alias) |
+| Helm `userDrives.enabled` | Helm `drives.enabled` | Chart value, clean break (no alias); the chart refuses `userDrives.enabled=true` |
 
 ## Local dev: principal override
 

@@ -93,7 +93,7 @@ func countPVCVerbs(cs *fake.Clientset) map[string]int {
 
 // assertOnlyChartGrantedVerbs is the RBAC ceiling as a per-case assertion: the
 // chart's Role lists get and create and nothing else (the Makefile pins that
-// list, and pins that userDrives.enabled is what gates the rule existing at
+// list, and pins that drives.enabled is what gates the rule existing at
 // all), so a driver that reached for list, watch, patch or delete would fail on
 // a real cluster with a 403 an operator cannot fix by flipping a switch.
 //
@@ -264,7 +264,7 @@ func TestEnsureDrivePVC_ForbiddenNamesTheSwitch(t *testing.T) {
 	if !errors.Is(err, errDrivePVCForbidden) {
 		t.Fatalf("err = %v, want errors.Is(err, errDrivePVCForbidden)", err)
 	}
-	for _, want := range []string{drive.ObjectName, "persistentvolumeclaims", "userDrives.enabled"} {
+	for _, want := range []string{drive.ObjectName, "persistentvolumeclaims", "drives.enabled"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %q, want it to name %q", err.Error(), want)
 		}
@@ -751,7 +751,7 @@ func assertRefusalKeepsClusterNamesToItself(t *testing.T, err error) {
 }
 
 // TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch is the DEFAULT deployment's
-// failure and the one the review found unmapped: userDrives.enabled is off out
+// failure and the one the review found unmapped: drives.enabled is off out
 // of the box, so the Role has no persistentvolumeclaims rule at all and the
 // LOOKUP is refused — before any Create the old code was the only mapper of.
 // Unmapped it surfaced the apiserver's own "cannot get resource" text, which
@@ -772,7 +772,7 @@ func TestEnsureDrivePVC_ForbiddenLookupNamesTheSwitch(t *testing.T) {
 			if !errors.Is(err, errDrivePVCForbidden) {
 				t.Fatalf("err = %v, want errors.Is(err, errDrivePVCForbidden)", err)
 			}
-			for _, want := range []string{drive.ObjectName, "persistentvolumeclaims", "userDrives.enabled"} {
+			for _, want := range []string{drive.ObjectName, "persistentvolumeclaims", "drives.enabled"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("err = %q, want it to name %q", err.Error(), want)
 				}
@@ -817,7 +817,7 @@ func TestEnsureDrivePVC_ForbiddenCarriesTheApiserverQuotaText(t *testing.T) {
 	}
 	// ONE remedy, not two: the whole point of choosing is that the reader is not
 	// handed the RBAC instruction for a problem RBAC will not fix.
-	if strings.Contains(got, "userDrives.enabled") {
+	if strings.Contains(got, "drives.enabled") {
 		t.Errorf("err = %q, want the quota remedy ALONE — the chart switch is not this reader's move", got)
 	}
 	assertRefusalKeepsClusterNamesToItself(t, err)

@@ -41,15 +41,15 @@
  *      REFUSED_BACKEND naming the flag:
  *        helm --kube-context kind-wardyn-quickstart upgrade wardyn \
  *          deploy/helm/wardyn -n wardyn --reuse-values \
- *          --set userDrives.enabled=true \
+ *          --set drives.enabled=true \
  *        && kubectl --context kind-wardyn-quickstart -n wardyn \
  *          rollout status deploy/wardyn
  *      C8 names the flag's EFFECT ("this cluster's chart lets Wardyn ask it for
  *      disks"), never the flag.
  *      THE KEY IS TOP-LEVEL. 04d-script.md §5 #2 spells it
  *      `k8s.userDrives.enabled`, and this file carried that spelling too; the
- *      chart reads `.Values.userDrives` (values.yaml:411, rbac.yaml:60, and
- *      the Makefile's own render gates at :541,567-568). A `--set
+ *      chart reads `.Values.drives` (top-level `userDrives` before 0.8, #658;
+ *      templates/rbac.yaml and the Makefile's helm-lint render gates). A `--set
  *      k8s.userDrives.enabled=true` upgrade SUCCEEDS and sets a key nothing
  *      reads, so the flip silently does not happen and 3.11 dies six minutes
  *      into the take. Owner ledger: the script's §5 #2 needs the same fix.
@@ -137,7 +137,7 @@ const CLUSTER_NAMESPACE = process.env.WARDYN_V04D_NAMESPACE || "wardyn";
  *  so a refusal hands back the command that fixes it rather than a diagnosis. */
 const CHART_FLIP =
   `helm --kube-context ${CLUSTER_CONTEXT} upgrade wardyn deploy/helm/wardyn ` +
-  `-n ${CLUSTER_NAMESPACE} --reuse-values --set userDrives.enabled=true ` +
+  `-n ${CLUSTER_NAMESPACE} --reuse-values --set drives.enabled=true ` +
   `&& kubectl --context ${CLUSTER_CONTEXT} -n ${CLUSTER_NAMESPACE} rollout status deploy/wardyn`;
 
 /** A single lowercase word, so the PVC slug is unambiguous and TTS reads it

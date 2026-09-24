@@ -584,7 +584,10 @@ Helm handles as an ordinary create-then-prune.
 
 Renamed from `userDrives.enabled` in 0.8 (issue #658), a clean break with no
 alias — a `--reuse-values` upgrade from an older release must set `drives`
-explicitly; see docs/sdk.md's "Renamed in 0.8" table.
+explicitly; see docs/sdk.md's "Renamed in 0.8" table. The chart refuses to
+render while the old `userDrives.enabled` is `true`, since nothing reads it any
+more: set `drives.enabled=true` and `userDrives.enabled=false` (or delete the
+`userDrives` block from your values file).
 
 A **user drive** is per-person storage a run mounts at `/home/agent/drive`. An
 admin registers a drive and allocates it in the console; a member ticks a box on

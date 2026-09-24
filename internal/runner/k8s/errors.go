@@ -62,7 +62,7 @@ var errDriveClaimNotProvisioned = errors.New("drive: your drive's volume is not 
 // EITHER the claim's Get or its Create with a 403.
 //
 // Both arms map here, and the Get one is the failure a DEFAULT deployment
-// actually meets: userDrives.enabled is off out of the box, so the runner Role
+// actually meets: drives.enabled is off out of the box, so the runner Role
 // carries no persistentvolumeclaims rule at all and the LOOKUP — the one call
 // even an admin-provisioned share makes — is what gets refused first. Left
 // unmapped it surfaced the apiserver's own "cannot get resource" text, which
@@ -90,7 +90,7 @@ var errDrivePVCForbidden = errors.New("the apiserver refused this deployment acc
 // reader would have used (`exceeded quota`, the substring the quota admission
 // plugin's message always carries), so one instruction arrives instead of two.
 const (
-	driveForbiddenRBAC = "grant the wardynd ServiceAccount `persistentvolumeclaims: get, create` in the runs namespace (Helm chart: userDrives.enabled=true)"
+	driveForbiddenRBAC = "grant the wardynd ServiceAccount `persistentvolumeclaims: get, create` in the runs namespace (Helm chart: drives.enabled=true)"
 
 	driveForbiddenQuota = "a storage ResourceQuota in the runs namespace is the cause and RBAC is not: raise the quota, or lower this drive's allocation"
 )
