@@ -407,9 +407,13 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 			continue
 		}
 		rep.Checked++
-		// A row points at loc whether or not its value is live: a soft-deleted
+		// A row claims the path its owner and name DERIVE, never the one it
+		// records: a forged pointer cannot hide another value from the orphan
+		// list. It claims it whether or not the value is live: a soft-deleted
 		// value behind a row is dangling, not an orphan as well.
-		pointed[secretstore.RefObject(loc)] = true
+		if want, err := s.ext.Ref(e.ownedBy, e.name, loc); err == nil {
+			pointed[want] = true
+		}
 		err := s.ext.Check(ctx, e.ownedBy, e.name, loc)
 		switch {
 		case errors.Is(err, secretstore.ErrUnavailable):

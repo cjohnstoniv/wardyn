@@ -68,6 +68,8 @@ var envDocAllow = map[string]bool{
 	// F061: run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
 	// file, and screenshots.sh's own self-set gate for docs.spec.ts.
 	"WARDYN_E2E_ALLOW_ALL_SKIPPED": true, "WARDYN_SCREENSHOTS": true,
+	// scripts/lib/common.sh's log() prefix, set by each e2e script that sources it.
+	"WARDYN_LOG_TAG": true,
 	// 0.7.4: run-ui-e2e.sh's LIVE mode — the external base URL that points the
 	// `live` Playwright project (ui/e2e/live/) at a real cluster instead of the
 	// hermetic backend. Shell-only, so the E2E-shell ratchet below is what keeps
@@ -80,6 +82,8 @@ var envDocAllow = map[string]bool{
 	"WARDYN_LIVE_AWS_SSO": true, "WARDYN_LIVE_BASE_URL": true, "WARDYN_LIVE_IDENTITIES_FILE": true,
 	"WARDYN_LIVE_ADO_ORG": true, "WARDYN_LIVE_ADO_PROJECT": true, "WARDYN_LIVE_ADO_REPO": true,
 	"WARDYN_LIVE_ADO_SPACED_PROJECT": true, "WARDYN_LIVE_ADO_SPACED_REPO": true,
+	"WARDYN_LIVE_ADO_WRITE": true, "WARDYN_LIVE_ADO_PAT_PROBE": true, "WARDYN_LIVE_ADO_PAT_PROBE_SCOPE": true,
+	"WARDYN_LIVE_ADO_PAT_PROBE_TENANT_ID": true, "WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID": true,
 	"WARDYN_LIVE_AWS_SSO_START_URL": true, "WARDYN_LIVE_AWS_SSO_REGION": true,
 	"WARDYN_LIVE_AWS_SSO_TOKEN_FILE": true, "WARDYN_LIVE_BEDROCK_ACCOUNT_ID": true,
 	"WARDYN_LIVE_BEDROCK_ROLE_NAME": true, "WARDYN_LIVE_BEDROCK_REGION": true,

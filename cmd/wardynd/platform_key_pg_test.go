@@ -20,7 +20,7 @@ func TestPG_BootWithAPlatformKeyNeedsRewrapOnce(t *testing.T) {
 	ctx := t.Context()
 	id, platform := mustAgeIdentity(t), mustAgeIdentity(t)
 
-	before, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0)
+	before, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestPG_BootWithAPlatformKeyNeedsRewrapOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	split, err := buildSecretStore(ctx, pool, id.String(), platform, "", nil, 0)
+	split, err := buildSecretStore(ctx, pool, id.String(), platform, "", nil, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -75,7 +75,8 @@ func (a liveAdmin) childToken(policy, ttl string) string {
 // livePolicy is the documented least-privilege policy (docs/OPERATIONS.md),
 // with the prefix spelled out instead of templated on the Kubernetes alias.
 func livePolicy(mount, prefix string) string {
-	return fmt.Sprintf(`path "%[1]s/data/%[2]s/*" { capabilities = ["create", "update", "read"] }
+	return fmt.Sprintf(`path "%[1]s/config" { capabilities = ["read"] }
+path "%[1]s/data/%[2]s/*" { capabilities = ["create", "update", "read"] }
 path "%[1]s/metadata/%[2]s/*" { capabilities = ["create", "update", "read", "delete", "list"] }
 `, mount, prefix)
 }
@@ -113,6 +114,29 @@ func TestLive_VaultKV(t *testing.T) {
 	a, mount, prefix := liveSetup(t)
 	s, _ := liveStore(t, a, mount, prefix, "1h")
 	ctx := t.Context()
+
+	t.Run("unserved_mount_fails", func(t *testing.T) {
+		if _, err := New(ctx, Config{Addr: a.addr, Auth: AuthTokenFile, TokenFile: writeFile(t, a.token), Mount: mount + "-typo", Prefix: prefix, MaxVersions: 1}); err == nil {
+			t.Fatal("New against a mount that does not exist succeeded")
+		}
+		// An unrestricted token, so Vault answers the router's 404 rather than
+		// a policy 403.
+		root, err := New(ctx, Config{Addr: a.addr, Auth: AuthTokenFile, TokenFile: writeFile(t, a.token), Mount: mount, Prefix: prefix, MaxVersions: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bad := *root
+		bad.mount = mount + "-typo"
+		if _, err := bad.Put(ctx, "", "k", "", []byte("v"), false); err == nil {
+			t.Fatal("Put under a mount that does not exist succeeded")
+		}
+		if err := bad.Delete(ctx, "", "k", ""); err == nil {
+			t.Fatal("Delete under a mount that does not exist succeeded")
+		}
+		if err := s.Delete(ctx, "", "never-written", ""); err != nil {
+			t.Fatalf("Delete of a path never written, on the real mount: %v", err)
+		}
+	})
 
 	t.Run("roundtrip_binary_and_binding", func(t *testing.T) {
 		ref, err := s.Put(ctx, "alice@example.com", "pat", "", []byte("a\x00\xffb"), false)
