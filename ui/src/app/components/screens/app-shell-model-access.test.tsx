@@ -18,6 +18,7 @@ import { MODEL_ACCESS_BANNER } from "../wardyn/model-access-copy";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { baseStatus } from "../../lib/test-fixtures";
+import { aheadByHours } from "../../lib/test-clock";
 
 // The model-access strip's place in the stack.
 //
@@ -86,7 +87,7 @@ describe("AppShell (the model-access strip)", () => {
     role: "member",
     email: "alice@corp.example",
     // Inside SESSION_WARN_MS, so the session strip is on screen too.
-    session_expires_at: new Date(Date.now() + 60_000).toISOString(),
+    session_expires_at: aheadByHours(1 / 60), // 1 minute
   };
 
   it("renders BELOW the session-expiry banner", async () => {
@@ -103,8 +104,8 @@ describe("AppShell (the model-access strip)", () => {
     expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
   });
 
-  it("is withheld on /settings for an OPERATOR, which already mounts the same pane", async () => {
-    renderShellAt("/settings", { ...MEMBER_WITH_DYING_SESSION, operator: true, role: "admin" });
+  it("is withheld on /admin/settings for an OPERATOR, which already mounts the same pane", async () => {
+    renderShellAt("/admin/settings", { ...MEMBER_WITH_DYING_SESSION, operator: true, role: "admin" });
     await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
     await waitFor(() => expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull());
   });
@@ -112,8 +113,8 @@ describe("AppShell (the model-access strip)", () => {
   // …and the member it does not: the Settings card's AWS button is
   // `disabled={!operator}` there, so hiding the strip would strand exactly the
   // person the refusal sentence sends to that page.
-  it("stays for a MEMBER on /settings", async () => {
-    renderShellAt("/settings", MEMBER_WITH_DYING_SESSION);
+  it("stays for a user on /account", async () => {
+    renderShellAt("/account", MEMBER_WITH_DYING_SESSION);
     expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
 

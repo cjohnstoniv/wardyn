@@ -71,13 +71,39 @@ if [[ "${WARDYN_E2E_REAL_MODEL:-}" == "1" ]]; then
 fi
 
 # ── wardynd lifecycle (this driver owns it for the duration) ─────────────────
-# ponytail: teardown is PATTERN-based, not PID-based, on purpose — it must also
-# reap a wardynd this script did not start (see start_wardynd below). Do not
-# "improve" it by remembering the nohup'd PID; that reintroduces the false-green
-# this guards against. (run-e2e-live.sh reads its own PID because it has the
-# opposite policy: kill only what it started.)
+# ponytail: teardown targets whatever holds BASE's port, not a remembered PID,
+# on purpose — it must also reap a wardynd this script did not start (see
+# start_wardynd below). Do not "improve" it by remembering the nohup'd PID;
+# that reintroduces the false-green this guards against. (run-e2e-live.sh
+# reads its own PID because it has the opposite policy: kill only what it
+# started.)
+#
+# This used to be `pkill -f 'bin/wardynd'`, which matches every wardynd on the
+# host by command-line substring — including a developer's own daemon serving
+# an unrelated port (#210). Killing only the process bound to BASE's port
+# keeps the "reap a stray/foreign wardynd" property the pattern match was for,
+# without touching one bound elsewhere.
+# The port is what follows the LAST colon of the host part, as e2e-backend.sh
+# splits its ADDR; the path is cut first so a trailing slash cannot ride along.
+BASE_PORT="${BASE#*://}"; BASE_PORT="${BASE_PORT%%/*}"; BASE_PORT="${BASE_PORT##*:}"
+if [[ ! "${BASE_PORT}" =~ ^[0-9]+$ ]]; then
+  warn "WARDYN_E2E_BASE_URL (${BASE}) names no port; this driver stops whatever holds that port, so it needs one"
+  exit 1
+fi
 stop_wardynd() {
-  pkill -f 'bin/wardynd' >/dev/null 2>&1 || true
+  local pids
+  if command -v fuser >/dev/null 2>&1; then
+    # -TERM, not fuser's SIGKILL default: wardynd does a graceful shutdown on
+    # SIGTERM (cmd/wardynd/boot_serve.go waits for background work, adapters.go
+    # flushes audit), and the ss fallback below already sends SIGTERM via plain
+    # `kill`. A bare -k would skip that shutdown and disagree with the fallback
+    # for no reason.
+    fuser -k -TERM "${BASE_PORT}/tcp" >/dev/null 2>&1 || true
+  else
+    pids="$(ss -ltnpH "sport = :${BASE_PORT}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u)"
+    # shellcheck disable=SC2086 # one PID per word
+    [[ -n "${pids}" ]] && kill ${pids} 2>/dev/null
+  fi
   wait_down "${BASE}" || warn "a wardynd is still answering ${BASE} after stop"
 }
 

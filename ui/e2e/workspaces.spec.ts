@@ -180,6 +180,14 @@ test.describe("Add workspace dialog", () => {
 // so the role is spliced the usual way and the OWNER is spliced onto the list
 // the console reads — that pair is exactly the member shape this fix is about.
 test.describe("Workspaces — a member deletes the row they own", () => {
+  test.afterEach(async ({ page }) => {
+    // #469 (CI-flake): the list's poll can still be inside the route handler
+    // below when the test ends, and closing the context disposes the response
+    // it is reading ("Response has been disposed"). Same teardown as
+    // setup-gate.spec.ts and people-access.spec.ts.
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
   test("their own row's Delete is live and lands; an operator-owned row stays parked", async ({ page }) => {
     const mine = uniqueName("mine");
     const created = await page.request.post("/api/v1/workspaces", {

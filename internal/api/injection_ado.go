@@ -300,9 +300,9 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		JTI:       minted.JTI,
 		ExpiresAt: access.ExpiresAt.UnixMilli(),
 		// Informational only: the proxy's gate pins the organisation from the
-		// dispatch-time ADOGrants in its own configuration, not from this.
+		// dispatch-time ADOGrant in its own configuration, not from this.
 		Organisation: snapshot.Organisation,
-		// Not the gate's input either (dispatch-time ADOGrants are); the hold
+		// Not the gate's input either (dispatch-time ADOGrant are); the hold
 		// reads it only to confirm a capability ask came back granted.
 		Capabilities: adoCapabilityStrings(responseCaps),
 	})

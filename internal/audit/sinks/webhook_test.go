@@ -33,6 +33,22 @@ func makeEvent(action string) types.AuditEvent {
 	}
 }
 
+// waitThenSettle polls every 5ms, for up to 2s, until cond holds, then waits
+// one settle window more. The poll replaces a fixed sleep sized to "the flush
+// interval plus some slack", which guessed how fast the machine is. The settle
+// window is what lets the exact-count assertion after it see an over-count (a
+// duplicate delivery, a re-POST after a 200, a second drop): the poll alone
+// returns the moment the count is first reached. Callers pass their sink's
+// FlushInterval.
+func waitThenSettle(t *testing.T, settle time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(settle)
+}
+
 // collectBatches reads from a channel and counts total events received across
 // all HTTP requests to the httptest server.
 func TestWebhookSink_Batching(t *testing.T) {
@@ -88,8 +104,7 @@ func TestWebhookSink_Batching(t *testing.T) {
 		}
 	}
 
-	// Wait for flush interval + some slack.
-	time.Sleep(200 * time.Millisecond)
+	waitThenSettle(t, 50*time.Millisecond, func() bool { return int(received.Load()) >= total })
 	cancel()
 	<-done
 
@@ -163,7 +178,7 @@ func TestWebhookSink_RetryOnServerError(t *testing.T) {
 	}()
 
 	_ = sink.Emit(ctx, makeEvent("retry.test"))
-	time.Sleep(500 * time.Millisecond)
+	waitThenSettle(t, 50*time.Millisecond, func() bool { return attempts.Load() >= 3 })
 	cancel()
 	<-done
 
@@ -219,9 +234,7 @@ func TestWebhookSink_DropCounterOnOverflow(t *testing.T) {
 func TestWebhookSink_DropCounterOnRetryExhaustion(t *testing.T) {
 	t.Parallel()
 
-	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts.Add(1)
 		io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusInternalServerError) // always fail to force retries
 	}))
@@ -252,13 +265,9 @@ func TestWebhookSink_DropCounterOnRetryExhaustion(t *testing.T) {
 		t.Fatalf("Emit: %v", err)
 	}
 
-	// Wait until the server has seen all retry attempts for the batch, then a hair
-	// more so deliverWithRetry records the drop after the final failed attempt.
-	deadline := time.Now().Add(2 * time.Second)
-	for attempts.Load() < int32(maxRetries) && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	time.Sleep(50 * time.Millisecond)
+	// deliverWithRetry records the drop only after the final failed attempt, so
+	// a nonzero count already means every retry has been spent.
+	waitThenSettle(t, 30*time.Millisecond, func() bool { return sink.Drops() != 0 })
 
 	if drops := sink.Drops(); drops != 1 {
 		t.Errorf("drop counter after retry exhaustion: got %d, want 1", drops)

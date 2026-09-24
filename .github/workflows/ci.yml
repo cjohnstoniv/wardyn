@@ -226,7 +226,8 @@ jobs:
   # full live compose stack is exercised by the nightly workflow instead.
   # One job, not shards: it is not the critical path (`build` is), a shard adds
   # a check and repeats the setup, and the per-spec reseed costs about a second
-  # (docs/CI.md has the measurements).
+  # (docs/CI.md has the measurements). Inside the job, run-ui-e2e.sh runs the
+  # specs in three concurrent lanes, each with its own backend (#469).
   ui-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -245,8 +246,10 @@ jobs:
           cache-dependency-path: ui/pnpm-lock.yaml
       # Routed through make so the dev loop and CI stand up the SAME Postgres:
       # the inline `docker run` this replaced had drifted a major version away
-      # from scripts/up.sh (17 here, 16 there) for a month. `make dev-pg` also
-      # creates the wardyn_e2e database the seeder expects.
+      # from scripts/up.sh (17 here, 16 there) for a month. `make dev-pg` only
+      # gives us the named "wardyn-test-pg" container (#210); run-ui-e2e.sh
+      # picks its own per-run database name and e2e-backend.sh's cmd_up
+      # creates and drops it.
       - name: Start Postgres (named container so the seeder can psql into it)
         run: make dev-pg
       - name: Install UI deps
@@ -269,9 +272,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: playwright-report
-          path: |
-            ui/playwright-report/**
-            ui/test-results/**
+          # run-ui-e2e.sh writes each spec's failure artifacts (screenshot,
+          # video, trace) to ui/test-results/<spec>/; it runs no HTML reporter.
+          path: ui/test-results/**
       - name: Say so if playwright-report did not upload
         if: always() && steps.upload_playwright_report.outcome == 'failure'
         run: echo "::warning title=Reports missing::playwright-report did not upload; this job's result stands on its tests, but the reports are not attached to this run."

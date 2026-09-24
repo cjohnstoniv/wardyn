@@ -157,7 +157,7 @@ another maintainer. Use the chosen version throughout this checklist.
    job (docs/CI.md "Pin the wardyn checkout"). **`docs/DESKTOP.md`'s real-hardware
    smoke recipe** also pins both image tags by hand (`WARDYN_WARDYND_IMAGE`,
    `WARDYN_PROXY_IMAGE` — the desktop tier's MDM config has no `$WARDYN_VERSION`
-   to interpolate; X1a-F10 found this stale for a whole release cycle).
+   to interpolate; a past review found this stale for a whole release cycle).
    `scripts/test-claims-match-code.sh` fails if either pin drifts from
    `internal/version/version.go`.
    `scripts/test-install-sh.sh` asserts the two agree with each other, but it
@@ -170,7 +170,7 @@ another maintainer. Use the chosen version throughout this checklist.
    commit** before tagging.
 
    **Also add a `ROADMAP.md` Shipped row for the release you are cutting**
-   (X1c-F2 found the Shipped table stuck on "Built, awaiting release" for
+   (a past review found the Shipped table stuck on "Built, awaiting release" for
    three released versions in a row) — a new row plus flipping that release's
    own `### What vX.Y shipped` intro from "Built, awaiting release" to
    "Shipped as `vX.Y.Z`", pointing at the CHANGELOG's now-dated entry instead
@@ -178,7 +178,7 @@ another maintainer. Use the chosen version throughout this checklist.
 
    **Also regenerate `docs/TEST-GAPS.md`: `make test-gaps`** (needs the union
    coverage profile `make ci`/`cover-check` already produced this run) —
-   X1c-F13/D-7 found the generator gained a Kubernetes-gated bucket with
+   a past review found the generator gained a Kubernetes-gated bucket with
    nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
    `make test-gaps` is a standalone target, not in `make ci`.
 

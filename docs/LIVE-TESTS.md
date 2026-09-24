@@ -56,7 +56,7 @@ output to the OS temp directory. Nothing is written inside the repository.
 **One at a time.** Run live suites one at a time, and never alongside a heavy
 test gate.
 
-## One-time setup (the owner)
+## One-time setup
 
 ### Test identities
 

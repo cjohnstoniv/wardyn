@@ -294,7 +294,9 @@ func (s *Server) storeADOEntraBlob(ctx context.Context, owner, rowID string, blo
 	if err != nil {
 		return fmt.Errorf("marshal azure devops sign-in blob: %w", err)
 	}
-	return s.cfg.Secrets.For(owner).Put(ctx, adoEntraSecretName(rowID), raw)
+	err = s.cfg.Secrets.For(owner).Put(ctx, adoEntraSecretName(rowID), raw)
+	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, adoEntraSecretName(rowID))
+	return err
 }
 
 // ── redemption ──────────────────────────────────────────────────────────────
