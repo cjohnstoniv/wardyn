@@ -205,6 +205,15 @@ function SetupRoute({
   React.useEffect(() => {
     void import("./components/screens/onboarding/onboarding-screen");
   }, []);
+  // Being IN the funnel satisfies the gate's purpose for this load, so arriving
+  // here seals it (setup-gate.ts's gateFiredAt). A load can start directly on
+  // /setup (a reload while onboarding, the SSO callback's return), outside the
+  // gate's wrapper; unsealed, the funnel's own "Open Permissions" would bounce
+  // back to step one. Here, not in the lazy funnel, so sealing never waits on
+  // its chunk.
+  React.useEffect(() => {
+    markGateFired();
+  }, []);
   if (!roleResolved) return <RouteFallback />;
   return (
     <React.Suspense fallback={<RouteFallback />}>

@@ -11,7 +11,7 @@ import * as React from "react";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { act, render, screen, cleanup, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, Link, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import App, { FirstRunLanding, RequireSetup } from "./App";
 import { RoleProvider } from "./components/wardyn/operator-context";
 import { resetGateForTests } from "./components/screens/setup/setup-gate";
@@ -29,6 +29,7 @@ vi.mock("./components/screens/onboarding/onboarding-screen", () => ({
     <div>
       setup funnel stub <span data-testid="funnel-key">{useLocation().key}</span>
       <Link to="/">home</Link>
+      <Link to="/admin/runs">admin runs</Link>
     </div>
   ),
 }));
@@ -81,55 +82,65 @@ describe("RequireSetup — a re-render before the redirect lands (#469)", () => 
   });
 });
 
-describe("App — an unreachable status read never replaces a real one (#469)", () => {
-  function jsonResponse(status: number, body: unknown): Response {
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      json: async () => body,
-      text: async () => JSON.stringify(body),
-    } as Response;
-  }
-  const GATED = {
-    ready: false,
-    has_runs: false,
-    onboarding_complete: false,
-    checks: [BLOCKING],
-    auth: { mode: "token", local_loopback: false },
-    runner: { driver: "docker", confinement_classes: ["CC1"] },
-    providers: [],
-    secrets: { present: [], github_app: false },
-    age_key: { durable: true },
-    platform: { os: "linux", wsl: false },
-  };
-  const ME_ADMIN = { principal: "cj", method: "token", operator: true, security_operator: true, role: "admin", email: "" };
+function jsonResponse(status: number, body: unknown): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  } as Response;
+}
+const GATED = {
+  ready: false,
+  has_runs: false,
+  onboarding_complete: false,
+  checks: [BLOCKING],
+  auth: { mode: "token", local_loopback: false },
+  runner: { driver: "docker", confinement_classes: ["CC1"] },
+  providers: [],
+  secrets: { present: [], github_app: false },
+  age_key: { durable: true },
+  platform: { os: "linux", wsl: false },
+};
+const ME_ADMIN = { principal: "cj", method: "token", operator: true, security_operator: true, role: "admin", email: "" };
 
-  /** Every /setup/status read after the first `good` ones answers 500. */
-  function mountApp(good: number): () => number {
-    let reads = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((url: RequestInfo | URL) => {
-        const u = String(url);
-        if (u.includes("/setup/status")) {
-          reads += 1;
-          return Promise.resolve(reads <= good ? jsonResponse(200, GATED) : jsonResponse(500, {}));
-        }
-        if (u.includes("/healthz")) return Promise.resolve(jsonResponse(200, { status: "ok", sso: false }));
-        if (u.includes("/readyz")) return Promise.resolve(jsonResponse(200, { status: "ok" }));
-        if (u.includes("/me")) return Promise.resolve(jsonResponse(200, ME_ADMIN));
-        if (u.includes("/approvals") || u.includes("/runs")) return Promise.resolve(jsonResponse(200, []));
-        return Promise.resolve(jsonResponse(200, {}));
-      }),
+/** Every /setup/status read after the first `good` ones answers 500.
+ *  `browser` mounts over jsdom's real window.history, cold-loaded at "/". */
+function mountApp(good: number, browser = false): () => number {
+  let reads = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes("/setup/status")) {
+        reads += 1;
+        return Promise.resolve(reads <= good ? jsonResponse(200, GATED) : jsonResponse(500, {}));
+      }
+      if (u.includes("/healthz")) return Promise.resolve(jsonResponse(200, { status: "ok", sso: false }));
+      if (u.includes("/readyz")) return Promise.resolve(jsonResponse(200, { status: "ok" }));
+      if (u.includes("/me")) return Promise.resolve(jsonResponse(200, ME_ADMIN));
+      if (u.includes("/approvals") || u.includes("/runs")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.resolve(jsonResponse(200, {}));
+    }),
+  );
+  if (browser) {
+    window.history.replaceState(null, "", "/");
+    render(
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>,
     );
+  } else {
     render(
       <MemoryRouter initialEntries={["/"]}>
         <App />
       </MemoryRouter>,
     );
-    return () => reads;
   }
+  return () => reads;
+}
 
+describe("App — an unreachable status read never replaces a real one (#469)", () => {
   it("a failed re-read keeps the gated status: '/' still lands in the funnel, not on Runs", async () => {
     const reads = mountApp(1);
     await screen.findByText("setup funnel stub");
@@ -157,5 +168,43 @@ describe("App — an unreachable status read never replaces a real one (#469)", 
     mountApp(0);
     await screen.findByText("runs screen stub");
     expect(screen.queryByText("setup funnel stub")).toBeNull();
+  });
+});
+
+describe("App — once in the funnel, the gate stays spent for the load (#469 review)", () => {
+  afterEach(() => window.history.replaceState(null, "", "/"));
+
+  // The router keys every entry it did not push "default" — the cold load the
+  // gate fired from, and a plain fragment link's entry alike. Leaving the
+  // funnel and then taking the shell's skip link must not re-fire the gate.
+  async function leaveTheFunnel(): Promise<void> {
+    await screen.findByText("setup funnel stub");
+    await userEvent.setup().click(screen.getByRole("link", { name: "admin runs" }));
+    await screen.findByText("runs screen stub");
+    expect(window.location.pathname).toBe("/admin/runs");
+  }
+  async function expectStillOnRuns(): Promise<void> {
+    // Settle the router's transition before asserting nothing moved.
+    await act(async () => {});
+    expect(window.location.pathname).toBe("/admin/runs");
+    expect(screen.getByText("runs screen stub")).toBeInTheDocument();
+    expect(screen.queryByText("setup funnel stub")).toBeNull();
+  }
+
+  it("the skip link (a fragment anchor) keeps an operator who left the funnel where they are", async () => {
+    mountApp(1, true);
+    await leaveTheFunnel();
+    await userEvent.setup().click(screen.getByRole("link", { name: /skip to main content/i }));
+    await expectStillOnRuns();
+  });
+
+  it("an untagged history entry (pushState(null) + popstate) does not re-fire it either", async () => {
+    mountApp(1, true);
+    await leaveTheFunnel();
+    await act(async () => {
+      window.history.pushState(null, "", "/admin/runs#main-content");
+      window.dispatchEvent(new PopStateEvent("popstate", { state: null }));
+    });
+    await expectStillOnRuns();
   });
 });

@@ -297,8 +297,12 @@ describe("gate-once-per-load", () => {
     markGateFired("k1");
     expect(gateAlreadyFired("k1")).toBe(false);
     expect(gateAlreadyFired("k2")).toBe(true);
-    markGateFired(); // arriving in the funnel keeps the first mark
-    expect(gateAlreadyFired("k1")).toBe(false);
+    // Arriving in the funnel seals it: after that not even the location it
+    // fired from re-fires (the router reuses "default" for untagged entries).
+    markGateFired();
+    expect(gateAlreadyFired("k1")).toBe(true);
+    markGateFired("k1");
+    expect(gateAlreadyFired("k1")).toBe(true);
   });
 
   it("arriving in the funnel directly arms it for every location", () => {

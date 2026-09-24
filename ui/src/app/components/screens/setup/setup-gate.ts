@@ -134,12 +134,18 @@ export function firstRunLanding(
 // location. A plain boolean read that render as "already fired", fell through
 // to FirstRunLanding and sent a gated install to Runs (#469, CI run
 // 36057885376). The same location is the same access, so it redirects again.
-// Arriving in the funnel arms it with FUNNEL, which no location key equals.
+//
+// The key only matters until the operator ARRIVES in the funnel, which seals
+// the latch with FUNNEL (no location key contains a slash). It must: the
+// router keys every history entry it did not create itself "default" — the
+// cold load the gate fired from, and equally the entry a plain fragment link
+// such as the shell's skip link pushes later — so an unsealed "default" would
+// re-fire the gate on an operator who already left the funnel.
 const FUNNEL = "/setup";
 let gateFiredAt: string | null = null;
 
 export function markGateFired(at: string = FUNNEL): void {
-  gateFiredAt ??= at;
+  if (gateFiredAt === null || at === FUNNEL) gateFiredAt = at;
 }
 
 export function gateAlreadyFired(at?: string): boolean {
