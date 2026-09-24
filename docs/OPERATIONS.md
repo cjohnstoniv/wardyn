@@ -4904,7 +4904,7 @@ ciphertext). Wardyn does no at-rest cryptography for such a row, and holds no
 key: once every row is in Vault, `WARDYN_AGE_KEY` is unset. Every read is one
 Vault read, so it appears in your Vault audit device (with the path and the
 token's entity; values HMAC'd) as well as in Wardyn's audit log. Wardyn's own
-boot keys (signing, session, UI-session, SSH host) live there too.
+boot keys (signing, session, UI-session, SSH host, internal CA) live there too.
 
 **Paths.** Under the mount (`WARDYN_VAULT_KV_MOUNT`, default `wardyn`) and the
 install's prefix (`WARDYN_VAULT_KV_PREFIX`; the chart sets the release

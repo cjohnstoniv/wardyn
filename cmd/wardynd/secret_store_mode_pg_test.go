@@ -310,16 +310,3 @@ func TestReconcileMode_Audits(t *testing.T) {
 		t.Fatalf("audit = %d rows, last %s %s %s; want one secret.reconcile success with checked 1", rec.calls, rec.last.Action, rec.last.Outcome, rec.last.Data)
 	}
 }
-
-// The boot keys live under platform/ (design §2.13): the shared list must
-// name every one of them.
-func TestBootKeysAreThePlatformSet(t *testing.T) {
-	for _, n := range []string{secretSigningKey, secretSessionKey, secretUISessionKey, secretSSHHostKey} {
-		if !secretstore.PlatformNames[n] {
-			t.Errorf("boot key %q is not in secretstore.PlatformNames", n)
-		}
-	}
-	if len(secretstore.PlatformNames) != 4 {
-		t.Errorf("secretstore.PlatformNames has %d names, want the four boot keys", len(secretstore.PlatformNames))
-	}
-}

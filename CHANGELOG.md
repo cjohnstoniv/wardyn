@@ -403,6 +403,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   is no longer cached as "not spent" for the rest of the process's life. The Azure DevOps
   `scm.ado.signin.captured` `store_error` row no longer carries the raw store error (dropped
   `error` field; the cause is in the daemon log).
+- **Store mode files the internal CA with Wardyn's other boot keys (#689).** `wardyn-internal-ca`
+  (the CA every run's proxy pins for the control-plane hop) was filed as an operator credential:
+  under Vault's `operator/` path and Key Vault's `-operator-` names instead of `platform/` and
+  `-platform-`, where a policy or role restricting Wardyn's own keys would not cover it. It now sits
+  with the signing, session, UI-session and SSH host keys, and the list of platform keys is checked
+  against the keys wardynd actually mints at boot, so a new one cannot be left out again.
 - **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
   view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
   The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `user`,
