@@ -16,14 +16,14 @@ import { EPISODES } from "../src/app/lib/demo-videos";
 // behavior obligates the spec that covers it).
 
 async function mockFreshInstall(page: Page, opts: { sso?: boolean } = {}): Promise<void> {
-  // CACHE-AND-SERVE (fixtures.ts#mockMemberSetupStatus), not a real round trip
-  // per match. The landing read and OnboardingScreen's own mount read
-  // (onboarding-screen.tsx) both match here, and getSetupStatus()
-  // (lib/api/setup.ts) answers ANY failure of the second one with the
-  // single-user READY_FALLBACK and never re-fetches — so one dropped fetch, or
-  // a response Playwright disposed mid-.json(), sank the SSO case into
-  // single-user for good, and no longer wait could recover it (#469). One real
-  // fetch, retried; every match after it is served from that body.
+  // CACHE-AND-SERVE (fixtures.ts#mockMemberSetupStatus): one real fetch,
+  // retried, and every match served from that body, so App's status is the
+  // same SSO body for the whole test. The hero renders from App's status
+  // (onboarding-screen.tsx), and a request log shows ONE /setup/status read.
+  // This does NOT explain the SSO case's CI flake (#469): there, the whole
+  // /setup page never paints within the timeout while the retry paints in
+  // under a second, which points at the lazy Getting-started route, not at
+  // this mock. setup-gate.spec fails the same way.
   let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/setup/status*", async (route) => {
     let lastErr: unknown;
