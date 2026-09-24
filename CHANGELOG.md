@@ -130,6 +130,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   every door stores one spelling of the address, and approvals name the repository the same
   way on the REST and git paths. When two repositories in one run would clone into the same
   directory, the run's response now says which one was not cloned (#485).
+- The `gates (gitleaks)` CI check was not hermetic: with `fetch-depth: 0` fetching every remote
+  branch, gitleaks' default scan range (`--all`) meant an accepted finding on someone else's open
+  branch could red every other PR's gate too. `make gitleaks` now scans only the commit under
+  test's own history (`--log-opts="HEAD --full-history --diff-filter=tuxdb"`, gitleaks' own
+  defaults minus `--all`). The fixture false positives that used to need a fresh
+  `.gitleaksignore` fingerprint on every touching commit (`pat_broker_mask_test.go`'s minted PAT,
+  the secret-store's AAD label constant, the install test's stub age key and admin token, the
+  runbook's quoted age recipient and `secrets.allowEphemeralAgeKey` flag) are now a path/regex
+  allowlist in `.gitleaks.toml` instead, which matches regardless of commit, and a repo guard
+  refuses a `.gitleaksignore` path that keeps churning fingerprints (#665).
 - The New Run rail's launch and preflight failures are now `role="alert"` regions, announced to a
   screen reader on arrival (a repeated, identical failure re-announces too), and disabled controls
   that used to explain themselves only through a `title` tooltip — the record pane's operator-only

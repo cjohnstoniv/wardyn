@@ -544,7 +544,9 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 # (no --log-opts) is `git log --full-history --all`, which also scans every
 # other fetched branch (fetch-depth: 0 fetches all of them) — an unmerged
 # branch's own finding then reds every unrelated PR and main alike (#372/G6).
-GITLEAKS_LOG_OPTS ?= HEAD --full-history
+# Passing --log-opts replaces gitleaks' whole default (`--full-history --all
+# --diff-filter=tuxdb`), so the diff filter is restated (#665).
+GITLEAKS_LOG_OPTS ?= HEAD --full-history --diff-filter=tuxdb
 gitleaks: ## Scan this branch's own git history for committed secrets
 	@echo "Scanning git history (log-opts: $(GITLEAKS_LOG_OPTS)) for secrets with gitleaks $(GITLEAKS_VERSION)..."
 	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml --log-opts="$(GITLEAKS_LOG_OPTS)" -v

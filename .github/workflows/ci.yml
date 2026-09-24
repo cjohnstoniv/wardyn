@@ -1219,8 +1219,9 @@ jobs:
   #     CLI, NOT gitleaks-action: the action's default scan range is only the
   #     triggering push/PR diff even with fetch-depth: 0, which silently made
   #     the "full history" claim false. Do not swap back without fixing its
-  #     scan range. `--log-opts="HEAD --full-history"` (Makefile:gitleaks) keeps
-  #     the scan to commits reachable from THIS branch — gitleaks' unscoped
+  #     scan range. `--log-opts="HEAD --full-history --diff-filter=tuxdb"`
+  #     (Makefile:gitleaks) keeps the scan to commits reachable from THIS
+  #     branch, with gitleaks' own diff filter restated — gitleaks' unscoped
   #     default also walks every other fetched branch, so one branch's finding
   #     used to red every unrelated PR and main alike (#372/G6).
   #     Accepted test/dev-fixture secrets are allowlisted by commit fingerprint
