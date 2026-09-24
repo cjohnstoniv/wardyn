@@ -425,7 +425,7 @@ export function DeploymentStep({
         </p>
         <div className="mt-3 flex items-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link to="/permissions">{PT.MULTI_USER_PERMISSIONS_ACTION}</Link>
+            <Link to="/admin/permissions">{PT.MULTI_USER_PERMISSIONS_ACTION}</Link>
           </Button>
           <span className="text-xs text-muted-foreground">{PT.MULTI_USER_PERMISSIONS_HINT}</span>
         </div>

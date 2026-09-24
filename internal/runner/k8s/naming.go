@@ -324,15 +324,14 @@ const (
 // readOnlyRootFilesystem would close it and is NOT set, because the agent
 // legitimately writes those paths.
 //
-// RISK CARRIED BY scratchCachePath SPECIFICALLY: an emptyDir mounted there
-// shadows the full image's pre-created, agent-owned
-// /home/agent/.cache/go-build (deploy/images/full/Dockerfile) with a fresh
-// directory whose ownership the kubelet decides — and FSGroup (drives.go) is
-// only applied to a pod that has a drive attached. A run with disk_mib set and
-// no drive can therefore get a root-owned mount the uid-1000 agent cannot write
-// into, which a unit test using a fake clientset cannot see (it does not model
-// real emptyDir ownership) and only test/conformance's ephemeralFillTargets
-// (the "Cache" target, substrateOwned) catches against a real cluster.
+// scratchCachePath shadows the full image's pre-created
+// /home/agent/.cache/go-build (deploy/images/full/Dockerfile) with an empty
+// directory, so the Go build cache starts cold. The mount itself is writable
+// without FSGroup: the kubelet creates an emptyDir root-owned but 0777, the
+// same mode the /tmp and /home/agent/work volumes have been written through by
+// the uid-1000 agent since 0.7.5. test/conformance's ephemeralFillTargets (the
+// "Cache" target) writes it against a real cluster, which a fake clientset
+// cannot model.
 func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMount) {
 	if diskMiB <= 0 {
 		return nil, nil

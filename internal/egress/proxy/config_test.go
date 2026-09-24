@@ -201,9 +201,9 @@ func TestProxyConfig_NoWarnForNonSSOInjectionHost(t *testing.T) {
 }
 
 // An Azure DevOps grant is enforced only on a terminated connection, so a
-// config carrying ado_grants without the MITM CA fails at boot instead of
+// config carrying ado_grant without the MITM CA fails at boot instead of
 // degrading to a credential-less tunnel.
-func TestApplyDefaultsAndValidate_ADOGrantsRequireTheMITMCA(t *testing.T) {
+func TestApplyDefaultsAndValidate_ADOGrantRequiresTheMITMCA(t *testing.T) {
 	certPEM, keyPEM := genTestCA(t)
 	base := func(cert, key string) *Config {
 		return &Config{
@@ -212,7 +212,7 @@ func TestApplyDefaultsAndValidate_ADOGrantsRequireTheMITMCA(t *testing.T) {
 			RunToken:        "tok",
 			MITMCACertPEM:   cert,
 			MITMCAKeyPEM:    key,
-			ADOGrants:       []ADOGrantConfig{{}},
+			ADOGrant:        &ADOGrantConfig{},
 		}
 	}
 	for name, cfg := range map[string]*Config{
@@ -221,11 +221,45 @@ func TestApplyDefaultsAndValidate_ADOGrantsRequireTheMITMCA(t *testing.T) {
 		"no cert": base("", string(keyPEM)),
 	} {
 		err := cfg.applyDefaultsAndValidate()
-		if err == nil || !strings.Contains(err.Error(), "ado_grants") {
-			t.Errorf("%s: err = %v, want a refusal naming ado_grants", name, err)
+		if err == nil || !strings.Contains(err.Error(), "ado_grant") {
+			t.Errorf("%s: err = %v, want a refusal naming ado_grant", name, err)
 		}
 	}
 	if err := base(string(certPEM), string(keyPEM)).applyDefaultsAndValidate(); err != nil {
-		t.Fatalf("ado_grants with the MITM CA: %v", err)
+		t.Fatalf("ado_grant with the MITM CA: %v", err)
+	}
+}
+
+// A sidecar holds ONE Azure DevOps grant. The gate is keyed by host and every
+// organisation shares dev.azure.com, so a second grant in the older ado_grants
+// list could only overwrite the first one's organisation pin: the sidecar
+// refuses to boot instead of choosing one. A one-entry list, which is all an
+// older control plane ever wrote, still loads.
+func TestLoadConfig_OneADOGrantPerSidecar(t *testing.T) {
+	certPEM, keyPEM := genTestCA(t)
+	grant := func(org string) map[string]any {
+		return map[string]any{"organization": org, "capabilities": []string{"read"}, "hosts": []string{"dev.azure.com"}}
+	}
+	load := func(extra map[string]any) (*Config, error) {
+		extra["mitm_ca_cert_pem"], extra["mitm_ca_key_pem"] = string(certPEM), string(keyPEM)
+		return LoadConfigBytes(baseConfigJSON(t, extra))
+	}
+
+	if _, err := load(map[string]any{"ado_grants": []any{grant("acme"), grant("other")}}); err == nil || !strings.Contains(err.Error(), "ado_grants") {
+		t.Errorf("two legacy grants: err = %v, want a refusal naming ado_grants", err)
+	}
+	if _, err := load(map[string]any{"ado_grants": []any{grant("acme")}, "ado_grant": grant("other")}); err == nil || !strings.Contains(err.Error(), "ado_grant") {
+		t.Errorf("legacy list beside ado_grant: err = %v, want a refusal", err)
+	}
+
+	for key, v := range map[string]any{"ado_grant": grant("acme"), "ado_grants": []any{grant("acme")}} {
+		cfg, err := load(map[string]any{key: v})
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		g, ok := newADOGrantsByHost(cfg.ADOGrant).ADOGrantFor("dev.azure.com")
+		if !ok || g.Organization != "acme" {
+			t.Errorf("%s: grant for dev.azure.com = %+v, %v; want organisation acme", key, g, ok)
+		}
 	}
 }

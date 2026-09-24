@@ -182,7 +182,7 @@ func accessSession(t *testing.T, sub, email, role string, groups []string) *http
 		// Hand-rolled payload: stamp the codec version or decodeSession reads it
 		// as a pre-0.7 cookie and refuses it (see ssoSession in rbac_test.go).
 		V:   oidc.SessionCodecVersion,
-		Sub: sub, Email: email, Role: role, Expiry: time.Now().UTC().Add(time.Hour), Groups: groups,
+		Sub: sub, Email: email, Role: role, UserType: "standard", Expiry: time.Now().UTC().Add(time.Hour), Groups: groups,
 	})
 	if err != nil {
 		t.Fatalf("marshal session: %v", err)
@@ -214,7 +214,7 @@ func TestAccess_Unconfigured503(t *testing.T) {
 
 	routes := []struct{ method, path, body string }{
 		{http.MethodGet, "/api/v1/access", ""},
-		{http.MethodPost, "/api/v1/access/mappings", `{"value":"eng","role":"member"}`},
+		{http.MethodPost, "/api/v1/access/mappings", `{"value":"eng","role":"user"}`},
 		{http.MethodDelete, "/api/v1/access/mappings/" + uuid.NewString(), ""},
 		{http.MethodPost, "/api/v1/access/preview", `{}`},
 	}
@@ -245,7 +245,7 @@ func TestAccess_CanonicalizesValueOnWrite(t *testing.T) {
 	// Empty chart + zero existing rows trips the posture-flip guard (before
 	// admin, after denied) — acknowledge it so this test isolates
 	// canonicalization, not the guard.
-	body := `{"value":"  ENG-Team  ","role":"member","acknowledge_access_change":true}`
+	body := `{"value":"  ENG-Team  ","role":"user","acknowledge_access_change":true}`
 	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
@@ -270,7 +270,7 @@ func TestAccess_ReAddFlipsRoleAndReturns200(t *testing.T) {
 
 	// Chart is non-empty, so the posture-flip guard never applies here — no
 	// acknowledge needed.
-	first := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"eng-team","role":"member"}`)
+	first := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"eng-team","role":"user"}`)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first add: status = %d, want 201; body=%s", first.Code, first.Body.String())
 	}
@@ -284,7 +284,7 @@ func TestAccess_ReAddFlipsRoleAndReturns200(t *testing.T) {
 }
 
 func TestAccess_CollisionWithChart400(t *testing.T) {
-	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, "", nil, nil)
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, "", nil, nil)
 	srv := accessServer(t, auth, &roleMapStore{})
 
 	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"Eng-Team","role":"admin"}`)
@@ -308,7 +308,7 @@ func TestAccess_CollisionWithOperatorAllowlist400(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", []string{"ops@corp.example"}, nil)
 	srv := accessServer(t, auth, &roleMapStore{})
 
-	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"Ops@Corp.Example","role":"member"}`)
+	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"Ops@Corp.Example","role":"user"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
@@ -335,7 +335,7 @@ func TestAccess_EmailMappingRefusedByDefault(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	srv := accessServer(t, auth, &roleMapStore{}) // Config.AllowEmailMappings unset -> false
 
-	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"carol@corp.example","role":"member","acknowledge_access_change":true}`)
+	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"carol@corp.example","role":"user","acknowledge_access_change":true}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
@@ -359,7 +359,7 @@ func TestAccess_EmailMappingAllowedWhenOptedIn(t *testing.T) {
 	cfg.AllowEmailMappings = true
 	srv := New(cfg)
 
-	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"Carol@Corp.Example","role":"member","acknowledge_access_change":true}`)
+	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"Carol@Corp.Example","role":"user","acknowledge_access_change":true}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
@@ -552,11 +552,11 @@ func TestAccess_ShadowedRowGuards(t *testing.T) {
 func TestAccess_ShadowedRowGuard_AddGuardFiresOnRealFlip(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", []string{"ops@corp.example"}, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
-		{ID: uuid.New(), Value: "ops@corp.example", Role: oidc.RoleMember}, // shadowed by the allowlist
+		{ID: uuid.New(), Value: "ops@corp.example", Role: oidc.RoleUser}, // shadowed by the allowlist
 	}}
 	srv := accessServer(t, auth, st)
 
-	blocked := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"design-team","role":"member"}`)
+	blocked := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"design-team","role":"user"}`)
 	if blocked.Code != http.StatusBadRequest {
 		t.Fatalf("without acknowledge: status = %d, want 400 (real arm flip, masked by the shadowed row under the old count-based guard); body=%s", blocked.Code, blocked.Body.String())
 	}
@@ -568,7 +568,7 @@ func TestAccess_ShadowedRowGuard_AddGuardFiresOnRealFlip(t *testing.T) {
 		t.Errorf("flip body = %+v, want required_acknowledgement=true", flip)
 	}
 
-	allowed := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"design-team","role":"member","acknowledge_access_change":true}`)
+	allowed := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"design-team","role":"user","acknowledge_access_change":true}`)
 	if allowed.Code != http.StatusCreated {
 		t.Fatalf("with acknowledge: status = %d, want 201; body=%s", allowed.Code, allowed.Body.String())
 	}
@@ -582,17 +582,17 @@ func TestAccess_InvalidShapeRejected(t *testing.T) {
 		name string
 		body string
 	}{
-		{"empty value", `{"value":"","role":"member","acknowledge_access_change":true}`},
-		{"whitespace-only value", `{"value":"   ","role":"member","acknowledge_access_change":true}`},
+		{"empty value", `{"value":"","role":"user","acknowledge_access_change":true}`},
+		{"whitespace-only value", `{"value":"   ","role":"user","acknowledge_access_change":true}`},
 		{"invalid role", `{"value":"eng-team","role":"superadmin","acknowledge_access_change":true}`},
-		{"non-ASCII value", `{"value":"café","role":"member","acknowledge_access_change":true}`},
+		{"non-ASCII value", `{"value":"café","role":"user","acknowledge_access_change":true}`},
 		// canonicalRoleMapValue's ASCII guard is oidc.ASCIIOnly, the SAME
 		// function the login path applies to claim values — these two arms pin
 		// the ones that distinguish a real ASCII test from a lazy one.
 		// U+017F (LATIN SMALL LETTER LONG S) survives ToLower unchanged and
 		// must stay refused: it case-folds onto ASCII "s", the escalating
 		// direction the guard exists for.
-		{"fold-escalating rune", `{"value":"roſs","role":"member","acknowledge_access_change":true}`},
+		{"fold-escalating rune", `{"value":"roſs","role":"user","acknowledge_access_change":true}`},
 		// U+212A KELVIN SIGN is the arm the row above CANNOT reach: strings.ToLower
 		// folds it to a plain ASCII 'k', so a guard that runs AFTER the fold
 		// accepts this value and stores a DIFFERENT, ASCII one ("kubernetes-admins")
@@ -605,7 +605,7 @@ func TestAccess_InvalidShapeRejected(t *testing.T) {
 		// Invalid UTF-8 decodes to RuneError (U+FFFD), which is above ASCII —
 		// so a byte-level and a rune-level check agree here, and refusing is
 		// the fail-closed answer either way.
-		{"invalid UTF-8 value", `{"value":"\uFFFDeng","role":"member","acknowledge_access_change":true}`},
+		{"invalid UTF-8 value", `{"value":"\uFFFDeng","role":"user","acknowledge_access_change":true}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -628,12 +628,12 @@ func TestAccessRolePosture_Matrix(t *testing.T) {
 		wantAfter         string
 		wantChanges       bool
 	}{
-		{"emails + no default -> denied (fires)", true, "", oidc.RoleMember, accessDeniedRole, true},
-		{"emails + default admin -> widening (fires)", true, oidc.RoleAdmin, oidc.RoleMember, oidc.RoleAdmin, true},
-		{"emails + default member (suppressed)", true, oidc.RoleMember, oidc.RoleMember, oidc.RoleMember, false},
+		{"emails + no default -> denied (fires)", true, "", oidc.RoleUser, accessDeniedRole, true},
+		{"emails + default admin -> widening (fires)", true, oidc.RoleAdmin, oidc.RoleUser, oidc.RoleAdmin, true},
+		{"emails + default member (suppressed)", true, oidc.RoleUser, oidc.RoleUser, oidc.RoleUser, false},
 		{"no emails + default admin -> admin (suppressed)", false, oidc.RoleAdmin, oidc.RoleAdmin, oidc.RoleAdmin, false},
 		{"no emails + no default -> denied (fires)", false, "", oidc.RoleAdmin, accessDeniedRole, true},
-		{"no emails + default member -> member (fires)", false, oidc.RoleMember, oidc.RoleAdmin, oidc.RoleMember, true},
+		{"no emails + default member -> member (fires)", false, oidc.RoleUser, oidc.RoleAdmin, oidc.RoleUser, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -659,7 +659,7 @@ func TestAccess_PostureFlipGuard_FiresAndAcknowledges(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", []string{"ops@corp.example"}, nil) // emails + no default -> denied: fires
 	srv := accessServer(t, auth, &roleMapStore{})
 
-	blocked := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"eng-team","role":"member"}`)
+	blocked := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"eng-team","role":"user"}`)
 	if blocked.Code != http.StatusBadRequest {
 		t.Fatalf("without acknowledge: status = %d, want 400; body=%s", blocked.Code, blocked.Body.String())
 	}
@@ -667,11 +667,11 @@ func TestAccess_PostureFlipGuard_FiresAndAcknowledges(t *testing.T) {
 	if err := json.Unmarshal(blocked.Body.Bytes(), &flip); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !flip.RequiredAcknowledgement || flip.Before != oidc.RoleMember || flip.After != accessDeniedRole {
-		t.Errorf("flip body = %+v, want required_acknowledgement=true before=member after=denied", flip)
+	if !flip.RequiredAcknowledgement || flip.Before != oidc.RoleUser || flip.After != accessDeniedRole {
+		t.Errorf("flip body = %+v, want required_acknowledgement=true before=user after=denied", flip)
 	}
 
-	allowed := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"eng-team","role":"member","acknowledge_access_change":true}`)
+	allowed := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"eng-team","role":"user","acknowledge_access_change":true}`)
 	if allowed.Code != http.StatusCreated {
 		t.Fatalf("with acknowledge: status = %d, want 201; body=%s", allowed.Code, allowed.Body.String())
 	}
@@ -682,12 +682,12 @@ func TestAccess_PostureFlipGuard_FiresAndAcknowledges(t *testing.T) {
 // non-empty (arm 2 already applies) before this write, so adding the
 // deployment's first CONSOLE row cannot be the transition that flips arm.
 func TestAccess_PostureFlipGuard_InertWhenChartNonEmpty(t *testing.T) {
-	auth := newAccessAuth(t, map[string]string{"chart-row": oidc.RoleMember}, "", []string{"ops@corp.example"}, nil)
+	auth := newAccessAuth(t, map[string]string{"chart-row": oidc.RoleUser}, "", []string{"ops@corp.example"}, nil)
 	srv := accessServer(t, auth, &roleMapStore{})
 
 	// Same operator-emails + no-default combination TestAccess_PostureFlipGuard_FiresAndAcknowledges
 	// used to trip the guard — but the chart is non-empty here, so it must not.
-	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"eng-team","role":"member"}`)
+	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"eng-team","role":"user"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (guard inert when the chart map is non-empty); body=%s", w.Code, w.Body.String())
 	}
@@ -705,7 +705,7 @@ func TestAccess_ReversePostureFlipGuard(t *testing.T) {
 	// Seed the deployment's ONLY console row directly (bypassing the add
 	// guard, which is not what this test is about).
 	id := uuid.New()
-	st.rows = append(st.rows, types.RoleMapping{ID: id, Value: "eng-team", Role: oidc.RoleMember})
+	st.rows = append(st.rows, types.RoleMapping{ID: id, Value: "eng-team", Role: oidc.RoleUser})
 
 	// Reverse posture: before = DefaultRole() (admin, since it's set) =
 	// admin; after = admin/member per allowlist -> no operator emails ->
@@ -713,7 +713,7 @@ func TestAccess_ReversePostureFlipGuard(t *testing.T) {
 	// suppressed — switch to a combination that fires: default role unset,
 	// no operator emails (before=denied, after=admin).
 	authFires := newAccessAuth(t, nil, "", nil, nil)
-	stFires := &roleMapStore{rows: []types.RoleMapping{{ID: id, Value: "eng-team", Role: oidc.RoleMember}}}
+	stFires := &roleMapStore{rows: []types.RoleMapping{{ID: id, Value: "eng-team", Role: oidc.RoleUser}}}
 	srvFires := accessServer(t, authFires, stFires)
 
 	blocked := do(t, srvFires, http.MethodDelete, "/api/v1/access/mappings/"+id.String(), adminToken, "")
@@ -757,7 +757,7 @@ func TestAccess_LockoutGuard_SSOAdminBlockedFromDemotingSelf(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
 		{ID: uuid.New(), Value: "admins", Role: oidc.RoleAdmin},
-		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleUser},
 	}}
 	srv := accessServer(t, auth, st)
 	admin := accessSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin, []string{"admins"})
@@ -782,7 +782,7 @@ func TestAccess_LockoutGuard_AdminTokenExempt(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
 		{ID: uuid.New(), Value: "admins", Role: oidc.RoleAdmin},
-		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleUser},
 	}}
 	srv := accessServer(t, auth, st)
 
@@ -793,7 +793,7 @@ func TestAccess_LockoutGuard_AdminTokenExempt(t *testing.T) {
 
 	// The admin-token caller can also demote EVERY SSO human via POST — the
 	// task's other named exemption case.
-	w2 := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"other-team","role":"member","acknowledge_access_change":true}`)
+	w2 := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"other-team","role":"user","acknowledge_access_change":true}`)
 	if w2.Code != http.StatusOK && w2.Code != http.StatusCreated {
 		t.Fatalf("admin-token re-add: status = %d, want 200/201; body=%s", w2.Code, w2.Body.String())
 	}
@@ -807,12 +807,12 @@ func TestAccess_LockoutGuard_POST(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
 		{ID: uuid.New(), Value: "admins", Role: oidc.RoleAdmin},
-		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleUser},
 	}}
 	srv := accessServer(t, auth, st)
 	admin := accessSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin, []string{"admins"})
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/access/mappings", admin, `{"value":"admins","role":"member"}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/access/mappings", admin, `{"value":"admins","role":"user"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (would remove the caller's own admin access); body=%s", w.Code, w.Body.String())
 	}
@@ -834,7 +834,7 @@ func TestAccess_StaleSnapshot_NilGroupsNeverReadsAsLockout(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
 		{ID: uuid.New(), Value: "admins", Role: oidc.RoleAdmin},
-		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleUser},
 	}}
 	srv := accessServer(t, auth, st)
 	// The cookie's own Role is admin (a real prior login derived it), but its
@@ -872,14 +872,14 @@ func TestAccess_StaleSnapshot_NonFlippingWriteAlsoRefused(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
 		{ID: uuid.New(), Value: "admins", Role: oidc.RoleAdmin},
-		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleUser},
 	}}
 	srv := accessServer(t, auth, st)
 	admin := accessSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin, nil)
 
 	// Adds an UNRELATED row — does not touch "admins" at all, and the map
 	// stays non-empty either way, so no posture-flip guard applies.
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/access/mappings", admin, `{"value":"design-team","role":"member"}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/access/mappings", admin, `{"value":"design-team","role":"user"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (stale snapshot, even for a non-flipping write); body=%s", w.Code, w.Body.String())
 	}
@@ -905,7 +905,7 @@ func TestAccess_LockoutGuard_GenuineLockoutStillRefused(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
 		{ID: uuid.New(), Value: "admins", Role: oidc.RoleAdmin},
-		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleUser},
 	}}
 	srv := accessServer(t, auth, st)
 	admin := accessSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin, []string{"admins"})
@@ -929,14 +929,14 @@ func TestAccess_LockoutGuard_GenuineLockoutStillRefused(t *testing.T) {
 // ─── GET /access shape ──────────────────────────────────────────────────────
 
 func TestAccess_GetShapeIncludesShadowedRow(t *testing.T) {
-	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, oidc.RoleMember, []string{"ops@corp.example"}, nil)
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, oidc.RoleUser, []string{"ops@corp.example"}, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
 		// Shadowed by the chart entry above.
 		{ID: uuid.New(), Value: "eng-team", Role: oidc.RoleAdmin, CreatedBy: "admin@corp.example", CreatedAt: time.Now().UTC()},
 		// Shadowed by the operator allowlist.
-		{ID: uuid.New(), Value: "ops@corp.example", Role: oidc.RoleMember, CreatedBy: "admin@corp.example", CreatedAt: time.Now().UTC()},
+		{ID: uuid.New(), Value: "ops@corp.example", Role: oidc.RoleUser, CreatedBy: "admin@corp.example", CreatedAt: time.Now().UTC()},
 		// Not shadowed.
-		{ID: uuid.New(), Value: "design-team", Role: oidc.RoleMember, CreatedBy: "admin@corp.example", CreatedAt: time.Now().UTC()},
+		{ID: uuid.New(), Value: "design-team", Role: oidc.RoleUser, CreatedBy: "admin@corp.example", CreatedAt: time.Now().UTC()},
 	}}
 	srv := accessServer(t, auth, st)
 
@@ -948,8 +948,8 @@ func TestAccess_GetShapeIncludesShadowedRow(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.DefaultRole != oidc.RoleMember || !resp.OperatorEmailsPresent {
-		t.Errorf("response = %+v, want default_role=member operator_emails_present=true", resp)
+	if resp.DefaultRole != oidc.RoleUser || !resp.OperatorEmailsPresent {
+		t.Errorf("response = %+v, want default_role=user operator_emails_present=true", resp)
 	}
 	if len(resp.Mappings) != 4 { // 1 chart + 3 console
 		t.Fatalf("mappings = %+v, want 4 rows (1 chart + 3 console)", resp.Mappings)
@@ -986,7 +986,7 @@ func TestAccess_GetShapeIncludesShadowedRow(t *testing.T) {
 // TestAccess_GetShapeIncludesShadowedRow above.
 func TestAccess_ShadowCauseChartWinsOverAllowlist(t *testing.T) {
 	const both = "ops@corp.example"
-	auth := newAccessAuth(t, map[string]string{both: oidc.RoleMember}, oidc.RoleMember, []string{both}, nil)
+	auth := newAccessAuth(t, map[string]string{both: oidc.RoleUser}, oidc.RoleUser, []string{both}, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
 		{ID: uuid.New(), Value: both, Role: oidc.RoleAdmin, CreatedBy: "admin@corp.example", CreatedAt: time.Now().UTC()},
 	}}
@@ -1021,10 +1021,10 @@ func TestAccess_ShadowCauseChartWinsOverAllowlist(t *testing.T) {
 // decode back to a zero time.Time and slip past any struct-level assertion,
 // while the console would render it as a real date.
 func TestAccess_CreatedAtKeyIsAbsentOnChartRows(t *testing.T) {
-	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, oidc.RoleMember, nil, nil)
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, oidc.RoleUser, nil, nil)
 	stamp := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	st := &roleMapStore{rows: []types.RoleMapping{
-		{ID: uuid.New(), Value: "design-team", Role: oidc.RoleMember, CreatedBy: "admin@corp.example", CreatedAt: stamp},
+		{ID: uuid.New(), Value: "design-team", Role: oidc.RoleUser, CreatedBy: "admin@corp.example", CreatedAt: stamp},
 	}}
 	srv := accessServer(t, auth, st)
 
@@ -1067,12 +1067,12 @@ func TestAccess_CreatedAtKeyIsAbsentOnChartRows(t *testing.T) {
 // sorts before "console", so a shadowed console row always renders directly
 // beneath the chart row that shadows it.
 func TestAccess_MappingsAreSortedByValueThenSource(t *testing.T) {
-	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, oidc.RoleMember, nil, nil)
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, oidc.RoleUser, nil, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
 		// Deliberately inserted out of order.
 		{ID: uuid.New(), Value: "eng-team", Role: oidc.RoleAdmin, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
-		{ID: uuid.New(), Value: "design-team", Role: oidc.RoleMember, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
-		{ID: uuid.New(), Value: "arch-team", Role: oidc.RoleMember, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
+		{ID: uuid.New(), Value: "design-team", Role: oidc.RoleUser, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
+		{ID: uuid.New(), Value: "arch-team", Role: oidc.RoleUser, CreatedBy: "a@corp.example", CreatedAt: time.Now().UTC()},
 	}}
 	srv := accessServer(t, auth, st)
 
@@ -1103,7 +1103,7 @@ func TestAccess_MappingsAreSortedByValueThenSource(t *testing.T) {
 // ─── preview ────────────────────────────────────────────────────────────────
 
 func TestAccess_PreviewExplicitClaims(t *testing.T) {
-	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, "", nil, nil)
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, "", nil, nil)
 	srv := accessServer(t, auth, &roleMapStore{})
 
 	w := do(t, srv, http.MethodPost, "/api/v1/access/preview", adminToken, `{"groups":["eng-team"],"email":"carol@corp.example"}`)
@@ -1114,8 +1114,8 @@ func TestAccess_PreviewExplicitClaims(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !resp.OK || resp.Role != oidc.RoleMember || resp.Error != "" {
-		t.Errorf("preview = %+v, want ok=true role=member no error", resp)
+	if !resp.OK || resp.Role != oidc.RoleUser || resp.Error != "" {
+		t.Errorf("preview = %+v, want ok=true role=user no error", resp)
 	}
 	if len(resp.Matched) != 1 || resp.Matched[0].Source != oidc.MatchSourceMapRow {
 		t.Errorf("matched = %+v, want one map_row match", resp.Matched)
@@ -1128,7 +1128,7 @@ func TestAccess_PreviewExplicitClaims(t *testing.T) {
 // (ui/src/app/lib/types/access.ts:108-112) and, for a no-match preview, [] and
 // never null — the console reads matched.length, which throws on null.
 func TestAccess_PreviewWireShape(t *testing.T) {
-	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, "", nil, nil)
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, "", nil, nil)
 	srv := accessServer(t, auth, &roleMapStore{})
 
 	w := do(t, srv, http.MethodPost, "/api/v1/access/preview", adminToken, `{"groups":["eng-team"]}`)
@@ -1161,7 +1161,7 @@ func TestAccess_PreviewWireShape(t *testing.T) {
 	// arm that actually returns a nil slice from deriveRole (the empty-merged-map arm of deriveRole in derive.go),
 	// so this is the construction that would marshal null without the guard —
 	// a non-empty map falls through to the default_role match instead.
-	empty := newAccessAuth(t, nil, oidc.RoleMember, nil, nil)
+	empty := newAccessAuth(t, nil, oidc.RoleUser, nil, nil)
 	esrv := accessServer(t, empty, &roleMapStore{})
 	ew := do(t, esrv, http.MethodPost, "/api/v1/access/preview", adminToken, `{"groups":["nobody"]}`)
 	if ew.Code != http.StatusOK {
@@ -1173,7 +1173,7 @@ func TestAccess_PreviewWireShape(t *testing.T) {
 }
 
 func TestAccess_PreviewUseSession(t *testing.T) {
-	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleMember}, "", nil, nil)
+	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, "", nil, nil)
 	srv := accessServer(t, auth, &roleMapStore{})
 	// /access/preview is operatorOnly like every other route here, so the
 	// calling session must itself be admin — this pins use_session pulling
@@ -1189,8 +1189,8 @@ func TestAccess_PreviewUseSession(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !resp.OK || resp.Role != oidc.RoleMember {
-		t.Errorf("preview = %+v, want ok=true role=member (derived from the session's own groups claim)", resp)
+	if !resp.OK || resp.Role != oidc.RoleUser {
+		t.Errorf("preview = %+v, want ok=true role=user (derived from the session's own groups claim)", resp)
 	}
 }
 
@@ -1248,8 +1248,8 @@ func TestAccess_DeleteUnknownID404(t *testing.T) {
 func TestAccess_DeleteRecordsValueAndRoleInAudit(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
-		{ID: uuid.New(), Value: "eng-team", Role: oidc.RoleMember},
-		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleMember}, // keeps the map non-empty either way
+		{ID: uuid.New(), Value: "eng-team", Role: oidc.RoleUser},
+		{ID: uuid.New(), Value: "other-team", Role: oidc.RoleUser}, // keeps the map non-empty either way
 	}}
 	h := newHarness(t)
 	cfg := baseTestConfig(h, st)
@@ -1278,8 +1278,8 @@ func TestAccess_DeleteRecordsValueAndRoleInAudit(t *testing.T) {
 		if err := json.Unmarshal(ev.Data, &data); err != nil {
 			t.Fatalf("decode audit data: %v", err)
 		}
-		if data.Value != "eng-team" || data.Role != oidc.RoleMember {
-			t.Errorf("audit data = %+v, want value=eng-team role=member", data)
+		if data.Value != "eng-team" || data.Role != oidc.RoleUser {
+			t.Errorf("audit data = %+v, want value=eng-team role=user", data)
 		}
 	}
 	if !found {
@@ -1301,7 +1301,7 @@ func TestAccess_DeleteAcknowledgeAcceptsParseBoolForms(t *testing.T) {
 	for _, ack := range []string{"1", "T", "TRUE"} {
 		t.Run(ack, func(t *testing.T) {
 			id := uuid.New()
-			st := &roleMapStore{rows: []types.RoleMapping{{ID: id, Value: "eng-team", Role: oidc.RoleMember}}}
+			st := &roleMapStore{rows: []types.RoleMapping{{ID: id, Value: "eng-team", Role: oidc.RoleUser}}}
 			srv := accessServer(t, auth, st)
 
 			w := do(t, srv, http.MethodDelete, "/api/v1/access/mappings/"+id.String()+"?acknowledge_access_change="+ack, adminToken, "")
@@ -1313,7 +1313,7 @@ func TestAccess_DeleteAcknowledgeAcceptsParseBoolForms(t *testing.T) {
 
 	// A garbage value must read as false, not error the request.
 	id := uuid.New()
-	st := &roleMapStore{rows: []types.RoleMapping{{ID: id, Value: "eng-team", Role: oidc.RoleMember}}}
+	st := &roleMapStore{rows: []types.RoleMapping{{ID: id, Value: "eng-team", Role: oidc.RoleUser}}}
 	srv := accessServer(t, auth, st)
 	w := do(t, srv, http.MethodDelete, "/api/v1/access/mappings/"+id.String()+"?acknowledge_access_change=nonsense", adminToken, "")
 	if w.Code != http.StatusBadRequest {
@@ -1400,7 +1400,7 @@ func TestAccess_InvalidRoleNamesAllThreeRoles(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleMember} {
+	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser} {
 		if !strings.Contains(body.Error, role) {
 			t.Errorf("error %q does not name role %q — all three valid roles must be listed", body.Error, role)
 		}

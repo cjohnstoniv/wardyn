@@ -99,7 +99,7 @@ func permAdmin(t *testing.T) *http.Cookie {
 
 func permMember(t *testing.T) *http.Cookie {
 	t.Helper()
-	return ssoSession(t, "sub-perm-member", "dev@corp.example", oidc.RoleMember)
+	return ssoSession(t, "sub-perm-member", "dev@corp.example", oidc.RoleUser)
 }
 
 // ─── validateCapabilityGrant ─────────────────────────────────────────────────
