@@ -736,7 +736,7 @@ policy file. Researched during 0.7 and deliberately not built in it; the
 groundwork is that the posture inputs and the approval FSM it would ride already
 exist.
 
-**Also new for 0.8: hybrid local + remote.** Today Wardyn has two tiers that do
+**Planned for 0.9: hybrid local + remote.** Today Wardyn has two tiers that do
 not know about each other — an org control plane on Kubernetes
 ([docs/OPERATIONS.md](docs/OPERATIONS.md)) and a local daemon per laptop,
 MDM-managed, one machine per developer ([docs/DESKTOP.md](docs/DESKTOP.md): "A
@@ -754,7 +754,14 @@ already an org-authored provider policy MDM delivers as
 channel into a running sandbox. What does not exist is enrolment of a desktop
 into a *remote* control plane, per-run placement, and any link between a laptop's
 filesystem and a cluster sandbox. Researched in 0.7.2 and written up in
-[docs/design/hybrid-0.8.md](docs/design/hybrid-0.8.md); not built in it.
+[docs/design/hybrid-0.8.md](docs/design/hybrid-0.8.md). **0.8 ships the seams, not the rollout:** device
+enrolment into an org control plane and the one audit stream (the laptop's audit rows federated
+to the org) have landed, and 0.8's authorization kernel is built to become the control plane's
+decision API (decisions that serialize, stable refusal codes, a versioned list of resource
+kinds, a principal that carries its device and origin). **The rollout is 0.9:** the org control
+plane deciding for enrolled laptops (signed policy snapshots for offline use, the org deciding
+anything that touches org resources), per-run placement between the laptop and the org's
+cluster and mixing the two, and the disk link. Tracked on the `0.9.0` milestone.
 
 **Punted from 0.7.x, by id.** Every deferral 0.7.0/0.7.1/0.7.2 took a disposition
 on and did not build. The ledger is public here rather than only in a plan file;
@@ -867,6 +874,7 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
 | Milestone | Scope |
 |---|---|
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
+| **v0.9** | **Hybrid local + remote.** MDM-managed laptops enrolled into a remote org control plane on Kubernetes: the org's authorization kernel decides for every enrolled daemon (signed policy snapshots so a laptop keeps working offline under its last policy; the org decides anything that touches org resources), per-run placement between the laptop and the org's cluster, and mixing the two under one identity, one ceiling and one audit stream · the disk link (a local directory in a remote sandbox, a remote drive read locally) · the `member` role alias removed (0.8 warns) |
 | **v1.0** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) · HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry; see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) · k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, a per-pod PIDs limit, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") · CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · signed action receipts (the hash chain itself ships — migration `0047`) · separation of duty on the control plane |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens — the proxy-side push-ref check ships DEFAULT-ON (`agent-run` names the run branch `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and binds the brokered App lane, but the installation token itself cannot self-restrict to a ref prefix. What now ships, opt-in: Wardyn reads a GitHub repository ruleset back (`VerifyRefRuleset`, `internal/broker/ruleset.go`), grades it on the setup checklist (never `fail`), and can refuse every `github_token` mint until one verifies (`WARDYN_GITHUB_REQUIRE_REF_RULESET`, default off). What's still not built: Wardyn never creates or holds the ruleset itself — that needs repo-admin access it deliberately does not request, so creating one stays a manual operator step (`docs/POLICIES.md`) — and the gate defaults off, so an operator who does neither still has an unbound token. The ruleset is a GitHub-only, `github_token`-only mechanism regardless: `git_pat` gained its own receive-pack parsing since 0.7.2 (`WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, default off) and its own content rules since 0.8 (`push_rules`, both brokered lanes) — only `ssh_key` remains structurally outside any receive-pack parser, since git's SSH transport has no broker seam (`threatmodel/THREAT-MODEL.md` asset #4) |
 
