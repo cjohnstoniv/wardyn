@@ -197,7 +197,7 @@ func TestMeAnswersFromMemoryWhileAShareProbeIsStranded(t *testing.T) {
 	})
 	st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 	srv, _ := driveShareServer(st, []string{root})
-	ctx := withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleMember), nil)
+	ctx := withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleUser), nil)
 
 	// The control first: with nothing stranded, this member's drive binds and
 	// /me offers it. A test that only asserted the withheld case would pass on a

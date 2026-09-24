@@ -31,7 +31,7 @@
 //     (/api/v1/me/ssh-keys). The rest of /api/v1/me is NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
-//   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDevices, RevokeDevice
+//   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
 // every registered route family the SDK does not wrap, not a list of
@@ -40,6 +40,7 @@
 // list of what it wraps and what it does not" was exact about neither.
 //
 //   - /api/v1/governance     — governance profiles and assignments (0.7)
+//   - /api/v1/user-types     — the org's user types (0.8)
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
 //   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
@@ -369,8 +370,8 @@ type CreateRunResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// CreateRun submits a new agent run to the control plane.
-// Returns the created run (state PENDING or RUNNING) plus any advisory warnings.
+// CreateRun submits a new agent run and answers once the run row exists (state
+// PENDING, never RUNNING) plus any advisory warnings; build and dispatch continue server-side.
 // Status 201 on success; 400 on validation failure; 422 on policy/confinement
 // mismatch; 503 when the runner is unavailable.
 func (c *Client) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -105,6 +106,59 @@ func TestApplyDispatchModeEnv_ToolApprovals(t *testing.T) {
 				t.Errorf("Env[WARDYN_TOOL_APPROVALS] = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// TestApplyDispatchModeEnv_ApprovalExpiryAfter is RL-1's dispatch-env
+// contract: a hold-mode run's sandbox carries the SAME ceiling the
+// approval-expiry sweeper actually expires a PENDING approval at
+// (WARDYN_APPROVAL_EXPIRY_AFTER), so agent-run and wardyn-toolgate can size
+// their own waits from it instead of a hardcoded literal — never emitted for
+// a non-hold run, the same "don't emit a wire default nobody asked for" shape
+// TestApplyDispatchModeEnv_ToolApprovals already pins for its own var.
+func TestApplyDispatchModeEnv_ApprovalExpiryAfter(t *testing.T) {
+	run := types.AgentRun{ID: uuid.New()}
+
+	t.Run("hold carries the ceiling as a Go duration string", func(t *testing.T) {
+		env := map[string]string{}
+		applyDispatchModeEnv(env, run, dispatchParams{ToolApprovals: "hold", ApprovalExpiryAfter: 72 * time.Hour})
+		if got, want := env["WARDYN_APPROVAL_EXPIRY_AFTER"], "72h0m0s"; got != want {
+			t.Errorf("Env[WARDYN_APPROVAL_EXPIRY_AFTER] = %q, want %q", got, want)
+		}
+	})
+	t.Run("no hold, no ceiling in the sandbox env", func(t *testing.T) {
+		env := map[string]string{}
+		applyDispatchModeEnv(env, run, dispatchParams{ApprovalExpiryAfter: 72 * time.Hour})
+		if _, ok := env["WARDYN_APPROVAL_EXPIRY_AFTER"]; ok {
+			t.Errorf("Env[WARDYN_APPROVAL_EXPIRY_AFTER] set on a non-hold run: %q", env["WARDYN_APPROVAL_EXPIRY_AFTER"])
+		}
+	})
+}
+
+// TestDispatch_HoldRunCarriesConfiguredApprovalCeiling is the dispatch-level
+// half of RL-1: TestApplyDispatchModeEnv_ApprovalExpiryAfter feeds the ceiling
+// in by hand, so it stays green if dispatchRun stops copying
+// Config.ApprovalExpiryAfter into dispatchParams — and both sandbox consumers
+// fall back silently. This one goes through the real create → dispatch path.
+func TestDispatch_HoldRunCarriesConfiguredApprovalCeiling(t *testing.T) {
+	// An L1 autonomy rung derives the hold (TestGovernance_NonEscape row 20's fixture).
+	p := govProfile("autonomy-walled")
+	p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(types.AutonomyL1)}
+	srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
+	srv.cfg.ApprovalExpiryAfter = 72 * time.Hour
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, "sub-walled", []string{"eng"}, false),
+		`{"agent":"claude-code","task":"t","confinement_class":"CC2"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	fr := srv.cfg.Runner.(*fakeRunner)
+	fr.waitForSandbox(t)
+	env := fr.lastSandboxEnv()
+	if env["WARDYN_TOOL_APPROVALS"] != "hold" {
+		t.Fatalf("fixture no longer yields a hold run: WARDYN_TOOL_APPROVALS = %q", env["WARDYN_TOOL_APPROVALS"])
+	}
+	if got, want := env["WARDYN_APPROVAL_EXPIRY_AFTER"], "72h0m0s"; got != want {
+		t.Errorf("Env[WARDYN_APPROVAL_EXPIRY_AFTER] = %q, want %q (the server's configured ceiling)", got, want)
 	}
 }
 

@@ -33,12 +33,13 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import type { SetupStatus } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
 import { readableDiff } from "../../../lib/readable-diff";
-import { useUnsavedGuard } from "../../../lib/use-unsaved-guard";
+import { useRequestLeave, useUnsavedGuard } from "../../../lib/use-unsaved-guard";
+import { UNSAVED } from "../../../lib/unsaved-copy";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
 import { PageHeader } from "../../wardyn/page-header";
-import { OperatorOnlyHint } from "../../wardyn/primitives";
+import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { useOperator } from "../../wardyn/operator-context";
@@ -78,6 +79,12 @@ export function ProvidersScreen() {
   // removing the last row hides the only button that could save that removal,
   // silently discarding the change on navigation.
   const [loadedEmpty, setLoadedEmpty] = React.useState(true);
+  // #460 — the Agents tab is its own resource with its own draft
+  // (agents-tab.tsx), so this screen doesn't hold that state; it only needs
+  // to know WHETHER it's dirty, to chip the PageHeader title and the Agents
+  // Segmented option the same way the Git/Storage draft chips its own.
+  const [agentsDirty, setAgentsDirty] = React.useState(false);
+  const onAgentsDirtyChange = React.useCallback((dirty: boolean) => setAgentsDirty(dirty), []);
 
   const load = React.useCallback(() => {
     setSavedElsewhere(false);
@@ -157,12 +164,27 @@ export function ProvidersScreen() {
   // textarea), so this is a withheld button with a visible cause, not a dead end.
   const invalidGitRow = (draft.git ?? []).some(gitRowInvalid);
 
-  // #217 — the changed fields, as readable text (never the whole draft as
-  // JSON): both "Copy my changes" on a 412 and the unsaved-navigation guard
-  // below read off the same diff, so the guard can never fire on a draft the
-  // banner would call clean.
+  // #217 — the changed fields, as readable text, shown beside Save and
+  // driving every dirty chip on this screen (§460). #460's SavedElsewhereBanner
+  // reads the whole `draft` for its own Copy, not this — but both trace back
+  // to the same original/draft pair, so the guard can never fire on a draft
+  // the banner would call clean.
   const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
-  useUnsavedGuard(changedLines.length > 0);
+  useUnsavedGuard("providers-screen", changedLines.length > 0, () => JSON.stringify(draft, null, 2));
+
+  // #460 review — leaving the Agents tab while ITS draft is dirty unmounts
+  // AgentsTab (agents-tab.tsx's own draft lives nowhere else), silently
+  // dropping the edit with no warning. Git<->Storage never has this problem
+  // (their shared draft lives in THIS screen's own state, so it survives a
+  // tab switch either way) — only a switch AWAY from a dirty Agents tab asks.
+  const requestLeave = useRequestLeave();
+  const handleTabChange = (next: Tab) => {
+    if (tab === "agents" && agentsDirty && next !== "agents") {
+      requestLeave(() => setTab(next));
+      return;
+    }
+    setTab(next);
+  };
 
   const secretsPresent = setupStatus?.secrets.present ?? [];
   const githubApp = setupStatus?.secrets.github_app ?? false;
@@ -170,7 +192,22 @@ export function ProvidersScreen() {
 
   return (
     <div className="mx-auto max-w-[900px] px-6 py-6">
-      <PageHeader title={PROVIDERS.TITLE} description={PROVIDERS.LEAD} />
+      <PageHeader
+        title={PROVIDERS.TITLE}
+        description={PROVIDERS.LEAD}
+        // #460 review — BESIDE the title text (titleBadge), never the
+        // far-right actions slot: the same fact the Segmented tab labels and
+        // the bottom-of-tab marker below are all armed on. Its own testid so
+        // a mutation dropping this specific chip fails a test even though the
+        // beside-Save marker (a different element) still renders.
+        titleBadge={
+          status === "ready" && (changedLines.length > 0 || agentsDirty) ? (
+            <span data-testid="page-header-dirty-chip">
+              <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
+            </span>
+          ) : undefined
+        }
+      />
 
       {status === "forbidden" ? (
         <div className="mt-6">
@@ -197,14 +234,17 @@ export function ProvidersScreen() {
         <section className="mt-6 space-y-4 rounded-xl border border-border bg-card p-5">
           <Segmented
             value={tab}
-            onChange={setTab}
+            onChange={handleTabChange}
             options={[
-              { value: "git", label: PROVIDERS.GIT_TITLE },
-              { value: "storage", label: PROVIDERS.STORAGE_TAB },
+              // #460 — Git and Storage share this screen's one draft/Save,
+              // so both chip on the SAME dirty fact: an edit made on the
+              // other tab is still visible from whichever one is open.
+              { value: "git", label: PROVIDERS.GIT_TITLE, dirty: changedLines.length > 0 },
+              { value: "storage", label: PROVIDERS.STORAGE_TAB, dirty: changedLines.length > 0 },
               // C-UI (W4): rows from SetupStatus.harnesses, the mechanism
               // radio, the credential-source toggle. Present, not hidden —
               // see the file header.
-              { value: "agents", label: AGENTS.AGENTS_TITLE },
+              { value: "agents", label: AGENTS.AGENTS_TITLE, dirty: agentsDirty },
             ]}
           />
 
@@ -214,7 +254,7 @@ export function ProvidersScreen() {
               Copy my changes before Discard mine and reload (= load()) — a
               "Save over theirs" arm is still refused, a security document is
               never last-writer-wins from this banner. */}
-          {savedElsewhere && <SavedElsewhereBanner changedLines={changedLines} onDiscard={load} />}
+          {savedElsewhere && <SavedElsewhereBanner documentText={JSON.stringify(draft, null, 2)} onDiscard={load} />}
           {narrowed !== null && (
             <div className="rounded-lg border border-warning/30 bg-warning-subtle p-3 text-body text-warning">
               {PROVIDERS.SAVED_NARROWED(narrowed)}
@@ -268,6 +308,10 @@ export function ProvidersScreen() {
                  failed, and clicking it changed nothing. */
               onRetryRoster={load}
               onStatusRefresh={refreshSetupStatus}
+              // #460 — lets the PageHeader chip and the Agents Segmented
+              // option reflect THIS tab's own dirty draft, which this screen
+              // otherwise never sees.
+              onDirtyChange={onAgentsDirtyChange}
             />
           )}
           {/* One teal button at a time (CONSOLE-RULES §6, prompt §4): in
@@ -285,7 +329,9 @@ export function ProvidersScreen() {
                   only in a title tooltip a keyboard or a phone never shows. */}
               {!operator && <OperatorOnlyHint />}
               {operator && changedLines.length > 0 && (
-                <span className="mr-auto text-meta text-muted-foreground">{PROVIDERS_DRAFT.UNSAVED_MARKER}</span>
+                <span data-testid="unsaved-marker" className="mr-auto text-meta text-muted-foreground">
+                  {PROVIDERS_DRAFT.UNSAVED_MARKER}
+                </span>
               )}
               <Button disabled={!operator || saving || invalidGitRow} onClick={save}>
                 {PROVIDERS.SAVE_CTA}
