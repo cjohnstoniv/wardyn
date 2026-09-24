@@ -38,6 +38,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shows the server's own reason and a Retry that starts a fresh sandbox. The Azure DevOps
   popup-blocked fallback now reads "Your browser blocked the connect popup." with an "Open Azure
   DevOps sign-in" button.
+- **`wardynd:latest` is published only from a commit CI passed on.** `publish-image.yml` ran on
+  every push to `main` in parallel with CI, so a red commit still became `:latest` — the tag
+  desktop installs pull. It now runs after CI completes and publishes only when every CI push run
+  on the commit, on that branch, succeeded (`scripts/ci-green-for-sha.sh`), so a release branch
+  still running on the same commit does not hold `main` back; a manual dispatch on a red commit
+  skips. `:latest` now lags `main` by one CI run (#664).
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.

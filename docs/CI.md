@@ -531,7 +531,7 @@ endpoint before launching.
 
 ## Images
 
-`wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` on every push to `main`
+`wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` after CI passes on `main`
 ([.github/workflows/publish-image.yml](../.github/workflows/publish-image.yml));
 every release tag publishes all five images (`wardynd`, `wardyn-proxy`,
 `agent-base`, `agent-codex-cli`, `agent-aws-sso`) cosign-signed, each with an

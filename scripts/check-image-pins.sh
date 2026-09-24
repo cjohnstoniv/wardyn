@@ -284,8 +284,8 @@ done < <(grep -h -v '^[[:space:]]*#' ./deploy/images/*/Dockerfile 2>/dev/null \
 # The setup-path section below exempts `ghcr.io/cjohnstoniv/*` because those
 # refs are pinned by the RELEASE TAG the run resolved. That reasoning does NOT
 # carry to deploy/desktop/install.sh, whose default enrolment image is the
-# CONTINUOUS `:latest` publish-image.yml pushes on every merge to main and never
-# cosign-signs — and it runs AS ROOT to mint the device's age identity
+# CONTINUOUS `:latest` publish-image.yml pushes after CI passes on main and
+# never cosign-signs — and it runs AS ROOT to mint the device's age identity
 # (F113/F184). Hard-failing on the default itself would need a release digest,
 # which is a network value this gate cannot resolve; what IS checkable offline is
 # that the installer still tells the person running it.

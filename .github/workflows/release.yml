@@ -4,7 +4,7 @@ name: Release images
 # (keyless), plus a signed-release SBOM — on every vX.Y.Z tag push
 # (RELEASING.md's tagging convention). This is the "release" half of image
 # publishing; .github/workflows/publish-image.yml remains the CONTINUOUS half
-# (wardynd only, :latest + :sha-<commit> on every push to main) — the two no
+# (wardynd only, :latest + :sha-<commit> after CI passes on main) — the two no
 # longer overlap: publish-image.yml's own tags trigger was removed in the same
 # change that added this file (a v* push used to fire BOTH workflows, racing
 # to push the identical wardynd:X.Y.Z ref, one signed one not — see that
