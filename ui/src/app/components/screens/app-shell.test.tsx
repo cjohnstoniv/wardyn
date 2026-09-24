@@ -101,7 +101,8 @@ describe("AppShell (control plane unreachable)", () => {
 // this is the warning that never existed, pinned against /me's
 // session_expires_at (an admin-token/local session, absent here, must never
 // warn: it has nothing to expire).
-describe("AppShell — session-expiry warning (W31-S1-7)", () => {
+describe("AppShell — session-expiry warning", () => {
+  // ticket: W31-S1-7
   afterEach(() => vi.unstubAllGlobals());
 
   function renderWithMe(sessionExpiresAt: string | undefined) {
@@ -170,7 +171,8 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   // A session already past its expiry must read "has expired", not
   // "expiring soon" forever — a one-sided predicate would never resolve to
   // the third state.
-  it("F3-F11: a session already past its expiry reads 'has expired', not 'expiring soon'", async () => {
+  it("a session already past its expiry reads 'has expired', not 'expiring soon'", async () => {
+    // ticket: F3-F11
     renderWithMe(new Date(Date.now() - 60 * 1000).toISOString());
     expect(await screen.findByText(/session has expired/i)).toBeInTheDocument();
     expect(screen.queryByText(/expiring soon/i)).toBeNull();
@@ -179,7 +181,8 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   // `new Date("not-a-date")` parses to an Invalid Date, not null — any
   // arithmetic read off it is NaN, so the banner must guard against that
   // rather than disabling itself silently.
-  it("F3-F11: an unparseable session_expires_at never warns (guarded, not NaN'd into silence)", async () => {
+  it("an unparseable session_expires_at never warns (guarded, not NaN'd into silence)", async () => {
+    // ticket: F3-F11
     renderWithMe("not-a-real-date");
     await screen.findByText("cj");
     expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
@@ -191,7 +194,8 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
 // would flash ADMIN in the account menu next to a still-"unknown" principal
 // before /me resolves, or forever if /me never resolves at all. Gated on
 // meta.method, same as its sibling line just below it.
-describe("AppShell — account-menu role chip gating (L1)", () => {
+describe("AppShell — account-menu role chip gating", () => {
+  // ticket: L1
   afterEach(() => vi.unstubAllGlobals());
 
   it("never shows the role chip while /me hasn't resolved (a permanently failing fetch)", async () => {
@@ -229,7 +233,8 @@ describe("AppShell — account-menu role chip gating (L1)", () => {
 // (probeAuth trivially re-succeeds against the auth-bypassed API on whatever's
 // typed). The account menu must hide Sign out — and say why — whenever /me
 // reports method:"local", while a real session (sso/token) keeps it.
-describe("AppShell — Sign out hidden in local mode (W31-S1-1)", () => {
+describe("AppShell — Sign out hidden in local mode", () => {
+  // ticket: W31-S1-1
   afterEach(() => vi.unstubAllGlobals());
 
   function renderShellAs(method: "local" | "sso" | "token") {
@@ -457,7 +462,8 @@ describe("MobileNav (below-md nav fallback)", () => {
 // left the sidebar entirely — Demos moved to the account
 // menu (TopBar), which since Phase 5 hides it for members (its own describe
 // block below) — routes.go still has no server-side gate on it at all.
-describe("SidebarNav (member role — B3)", () => {
+describe("SidebarNav (member role)", () => {
+  // ticket: B3
   // Workspaces joined the member set (mock M6): a member launches runs AGAINST
   // workspaces and could previously only glimpse them inside the New run
   // picker.
@@ -715,7 +721,8 @@ describe("TopBar — account-menu links are guarded (#460 review)", () => {
 // chip, no replacement. Both were deployment-wide facts fixed at boot that
 // never changed while the console was open; posture now lives on the setup
 // Environment step alone (environment-step.tsx's k8sEgressRow/k8sClassesRow).
-describe("TopBar — the header states no posture (0.7.3 F6)", () => {
+describe("TopBar — the header states no posture", () => {
+  // ticket: 0.7.3 F6
   it("carries no NetworkPolicy or barrier chip", () => {
     renderTopBar("admin");
     const header = screen.getByRole("banner");

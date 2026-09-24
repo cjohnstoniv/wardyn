@@ -638,7 +638,8 @@ describe("serverConfirmsCapture", () => {
 // terminal in AttachTerminal. The pane holds a `starting` phase — with the run
 // id, so Cancel kills a sandbox that is still coming up — and polls the run
 // until it is RUNNING (or ends).
-describe("HarnessLoginPane — the starting phase (P5)", () => {
+describe("HarnessLoginPane — the starting phase", () => {
+  // ticket: P5
   beforeEach(() => {
     harnessLoginMock.mockReset().mockResolvedValue("run-123");
     harnessPasteMock.mockReset().mockResolvedValue(undefined);

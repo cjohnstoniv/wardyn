@@ -69,7 +69,7 @@ func TestSessionGroupsDropsUnmatchableClaims(t *testing.T) {
 // strings.ToLower in CanonicalGroupSubject and this test fails with the crafted
 // names present in the snapshot, while TestSessionGroupsDropsUnmatchableClaims
 // above stays green byte for byte. The same pin exists for the deriveRole path
-// in TestF2_RoleMapPrecedence_ChartOverConsoleOverClaims' KELVIN SIGN case.
+// in TestRoleMapPrecedence_ChartOverConsoleOverClaims' KELVIN SIGN case.
 func TestSessionGroupsGuardsBeforeTheFold(t *testing.T) {
 	for _, crafted := range []string{
 		"\u212Aubernetes-admins", // U+212A KELVIN SIGN lowercases to ASCII 'k'

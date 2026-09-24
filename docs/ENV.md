@@ -460,7 +460,9 @@ projected service-account token with audience `vault`), `WARDYN_TEST_AZURE_KV`
 vault's URL; the identity comes from the Key Vault settings above), `WARDYN_TEST_DOCKER`,
 `WARDYN_TEST_CACHE_REPO`, `WARDYN_TEST_TOOLS_DIR`, `WARDYN_ENVBUILD_TEST_FLOAT`,
 `WARDYN_ENVBUILD_TEST_INT`, `WARDYN_FAKE_MARKER`, `WARDYN_NEGCTL`,
-`WARDYN_E2E_BASE_URL`, `WARDYN_E2E_CLAUDE_CREDS`, `WARDYN_E2E_REAL_MODEL`,
+`WARDYN_FLOOR_PROBE` (the skip-floor probe sentinel `internal/testfloor.Mark`
+logs, which `scripts/test-report.sh` greps from `go test -json` output — never
+read via `os.Getenv`), `WARDYN_E2E_BASE_URL`, `WARDYN_E2E_CLAUDE_CREDS`, `WARDYN_E2E_REAL_MODEL`,
 `WARDYN_E2E_TASKS_DIR`, `WARDYN_E2E_WORK_ROOT`, `WARDYN_E2E_EXPECT_INJECT`,
 `WARDYN_TEST_K8S`, `WARDYN_TEST_K8S_AGENT_IMAGE` (the k8s conformance suite's
 gate + built-agent-image override, `test/conformance/conformance_k8s_test.go`

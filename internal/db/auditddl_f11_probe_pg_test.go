@@ -14,9 +14,9 @@
 //
 // Expected result on feat/v0.7-profiles @ fa910735:
 //
-//	TestPG_ProbeF11_AuditDDLProtected/…                     GREEN except the last subtest
-//	TestPG_ProbeF11_AuditDDLProtected/TRIGGER_privilege…    RED (hypothesis H4)
-//	TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate  RED (hypothesis H2)
+//	TestPG_AuditDDL_Protected/…                             GREEN except the last subtest
+//	TestPG_AuditDDL_Protected/TRIGGER_privilege…            RED (hypothesis H4)
+//	TestPG_AuditDDL_DroppedChainTriggerIsRestoredByMigrate  RED (hypothesis H2)
 package db
 
 import (
@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 func sqlState(err error) string {
@@ -83,12 +85,14 @@ func skipOrFatal(t *testing.T, mustNotSkip bool, format string, args ...any) {
 	t.Skipf(format, args...)
 }
 
-// TestPG_ProbeF11_LaneCannotSilentlySelfSkip pins the derivation itself. On the
+// TestPG_AuditDDL_LaneCannotSilentlySelfSkip pins the derivation itself. On the
 // lane CI actually runs — superuser, URL-form DSN — every probe in this file
 // MUST be in fail-not-skip mode; if that ever stops being true, the append-only
 // probes can go back to reporting `ok` while proving nothing, which is the whole
 // finding.
-func TestPG_ProbeF11_LaneCannotSilentlySelfSkip(t *testing.T) {
+func TestPG_AuditDDL_LaneCannotSilentlySelfSkip(t *testing.T) {
+	// ticket: F11
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 	var canCreateRole bool
@@ -106,7 +110,9 @@ func TestPG_ProbeF11_LaneCannotSilentlySelfSkip(t *testing.T) {
 	}
 }
 
-func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
+func TestPG_AuditDDL_Protected(t *testing.T) {
+	// ticket: F11
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 
@@ -269,7 +275,7 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 	})
 }
 
-// TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate — hypothesis H2.
+// TestPG_AuditDDL_DroppedChainTriggerIsRestoredByMigrate — hypothesis H2.
 //
 // An owner/superuser drops the 0047 trigger. Migrate() records 0047 as applied
 // and skips it on every later boot (isMigrationApplied), and nothing at boot
@@ -279,7 +285,9 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 // at least refuses without the trigger — did not hold on the RC; it does now
 // (ensureAuditTriggers), so this is a GREEN regression pin. The
 // trigger is put back afterwards by re-executing 0047 (idempotent DDL).
-func TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
+func TestPG_AuditDDL_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
+	// ticket: F11
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 

@@ -494,7 +494,8 @@ test.describe("Run header — the autonomy chip (#93/#97)", () => {
 // truncate), not the raised finding's `hidden … 2xl:inline-flex`. 420px is
 // well below the bar's floor (~1300px on a single-line row before the fix),
 // stressing the truncate/overflow-hidden path harder than the width loop above.
-test.describe("Run header — the failure-hint chip survives a narrow viewport (F1-F4)", () => {
+test.describe("Run header — the failure-hint chip survives a narrow viewport", () => {
+  // ticket: F1-F4
   // 0.7.6 finding 6: a STARTING run says what it is waiting ON. The seeded
   // backend has no real substrate behind fixture 1, so the reason is injected on
   // the read the console actually makes — the same route-intercept shape the
@@ -1023,7 +1024,8 @@ test.describe("Attach card — a failing /healthz claims nothing about the deplo
 // pressing Escape, close only the dialog (fine) or also exit focus mode
 // (remounts the terminal pane, dropping the live attach socket on an
 // interactive run — R1-F1's F1-F3 finding).
-test.describe("Focus mode — Escape inside a Deny confirm (F1-F3 repro)", () => {
+test.describe("Focus mode — Escape inside a Deny confirm", () => {
+  // ticket: F1-F3
   test("Escape closes the Deny dialog without also exiting focus mode", async ({ page }) => {
     const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
     sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${runId}'`);

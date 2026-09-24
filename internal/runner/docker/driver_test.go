@@ -18,6 +18,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -216,6 +217,7 @@ func TestEnsureImage_MissingDoesNotHintMakeTargetForANonDemoRef(t *testing.T) {
 }
 
 func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
+	testfloor.Mark(t, "docker")
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)
@@ -393,6 +395,7 @@ func TestCreateSandbox_TopologyPreservesL0UnderGVisor(t *testing.T) {
 }
 
 func TestCreateSandbox_FailClosedOnMissingRuntime(t *testing.T) {
+	testfloor.Mark(t, "docker")
 	f := newFakeDocker() // runc only, no runsc
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)

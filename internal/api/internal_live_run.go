@@ -56,7 +56,7 @@ var terminalGraceRoutes = []string{
 // jti, which is the record an auditor reads for "a token asked to outlive its
 // run". Running this gate in front of it would replace that row with a generic
 // one and buy nothing, because renew's own check is stricter on every axis.
-// Pinned by TestRenewU070_TerminalRunRefusedFailClosed.
+// Pinned by TestTerminalRunRefusedFailClosed.
 var internalSelfGatedRoutes = []string{"/internal/token/renew"}
 
 // refuseTerminalRun is internalAuth's liveness half: the run whose token

@@ -202,7 +202,7 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
 // the run reached RUNNING yet?" into one gate, so an interactive run still
 // STARTING told its own OWNER the operator-only refusal plus a dead "Watch
 // the captured session →" link to a recording that cannot exist yet.
-describe("RunDetailScreen — F1-F1 a not-yet-running interactive run tells its owner it's starting, not that they lack the role", () => {
+describe("RunDetailScreen — a not-yet-running interactive run tells its owner it's starting, not that they lack the role", () => {
   it("an operator on a STARTING interactive run sees the starting notice, never the admin-role refusal", async () => {
     renderRun({ ...RUN, state: "STARTING", interactive: true });
     expect(await screen.findByText(RUN_COCKPIT.starting)).toBeInTheDocument();
@@ -230,7 +230,7 @@ describe("RunDetailScreen — F1-F1 a not-yet-running interactive run tells its 
 
 // F1-F2: the recording fetch had no ordering guard — a slow fetch for an
 // earlier-selected session could resolve AFTER a later one and overwrite it.
-describe("RunDetailScreen — F1-F2 a stale recording fetch never overwrites a later selection", () => {
+describe("RunDetailScreen — a stale recording fetch never overwrites a later selection", () => {
   it("keeps the SECOND selection's cast when the first session's fetch resolves later", async () => {
     let resolveFirst!: (v: unknown) => void;
     // A's fetch stays pending; B's resolves to "missing" (null) immediately —
@@ -288,7 +288,7 @@ describe("RunDetailScreen — F1-F2 a stale recording fetch never overwrites a l
 });
 
 // F1-F11/F1-F12: the session picker's own copy.
-describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker copy", () => {
+describe("RunDetailScreen — the recording tab's session-picker copy", () => {
   const session = {
     id: "e1",
     time: "2026-01-01T00:04:00Z",
@@ -299,7 +299,8 @@ describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker c
     outcome: "success",
   };
 
-  it("F1-F12: names the session's END, not its start — recordings are emitted at detach", async () => {
+  it("names the session's END, not its start — recordings are emitted at detach", async () => {
+    // ticket: F1-F12
     listAuditMock.mockResolvedValue([session]);
     renderRun({ ...RUN, state: "COMPLETED", interactive: true });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -311,7 +312,8 @@ describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker c
     expect(screen.queryByText(/^Attached/)).not.toBeInTheDocument();
   });
 
-  it("F1-F11: a picked SESSION with a missing cast gets session-scoped copy, not the run-scoped sentence", async () => {
+  it("a picked SESSION with a missing cast gets session-scoped copy, not the run-scoped sentence", async () => {
+    // ticket: F1-F11
     listAuditMock.mockResolvedValue([session]);
     getRecordingMock.mockResolvedValue(null);
     renderRun({ ...RUN, state: "COMPLETED", interactive: true });
@@ -325,7 +327,8 @@ describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker c
   });
 
   // Neg: the bare run id (no session picked) keeps the run-scoped sentence.
-  it("F1-F11 neg: the bare run id still gets the run-scoped sentence", async () => {
+  it("negative control: the bare run id still gets the run-scoped sentence", async () => {
+    // ticket: F1-F11
     getRecordingMock.mockResolvedValue(null);
     renderRun({ ...RUN, state: "COMPLETED", interactive: true });
     await screen.findByTestId("run-terminal-pane");
@@ -340,7 +343,7 @@ describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker c
 // F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
 // trail — past the 1000-row cap on the general fetch, the exit code and
 // ending both silently went "unknown". Scoped fetches keep them known.
-describe("RunDetailScreen — F6-F2 the exit code survives a truncated audit trail", () => {
+describe("RunDetailScreen — the exit code survives a truncated audit trail", () => {
   it("still knows the exit code past 1000 rows of unrelated audit history", async () => {
     // The general (capped) fetch: 1000+ rows, none of them run.complete —
     // exactly what a chatty run does to the oldest-first LIST_LIMIT window.
@@ -534,7 +537,7 @@ describe("RunDetailScreen — hasWorkspace covers workspace_id, not just workspa
 // D9: a pre-agent-start failure (mount failure, etc.) never gets an exit code
 // at all — failure_hint is the only place that run says why. Bare server
 // text, no prefix (the state badge already says "Failed").
-describe("RunDetailScreen — D9 failure-hint chip", () => {
+describe("RunDetailScreen — failure-hint chip", () => {
   it("a FAILED run with failure_hint shows the bare server text", async () => {
     renderRun({ ...RUN, state: "FAILED", failure_hint: "image not found on daemon" });
     expect(await screen.findByText("image not found on daemon")).toBeInTheDocument();

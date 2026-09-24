@@ -324,7 +324,8 @@ describe("LiveApprovals", () => {
     // these buttons. A keyboard-only operator could open the menu but never
     // move focus onto "Once". Driven with the keyboard alone: no user.click
     // ever lands on a scope option.
-    it("F3: the scope caret is reachable with the keyboard alone — Tab reaches Once, Enter decides", async () => {
+    it("the scope caret is reachable with the keyboard alone — Tab reaches Once, Enter decides", async () => {
+      // ticket: F3
       listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
       render(<LiveApprovals runId="r1" />);
       const panel = await screen.findByTestId("live-approvals");
@@ -517,7 +518,8 @@ describe("LiveApprovals", () => {
   // so a refused member must read SECURITY_ONLY_REASON, never the plainer
   // OPERATOR_ONLY_REASON that would send a security_admin looking for a role
   // they already hold.
-  describe("X3-F6 — securityOperator gates read SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON", () => {
+  describe("securityOperator gates read SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON", () => {
+    // ticket: X3-F6
     it("panel hint (undecidable row for a member): SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON", async () => {
       listApprovalsMock.mockResolvedValue([
         pending({ id: "t1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
@@ -551,7 +553,8 @@ describe("LiveApprovals", () => {
 
   // D7: a pending row whose host is the agent CLI's known telemetry endpoint
   // gets an identification tag; an ordinary off-policy host does not.
-  describe("D7 — known-telemetry tag", () => {
+  describe("known-telemetry tag", () => {
+    // ticket: D7
     it("tags a row matching the known telemetry host, and only that row", async () => {
       listApprovalsMock.mockResolvedValue([
         pending({ id: "telemetry", requested_scope: { host: "http-intake.logs.us5.datadoghq.com" } }),

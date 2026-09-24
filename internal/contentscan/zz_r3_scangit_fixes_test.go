@@ -12,14 +12,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestF075_FindingsCapBoundsRequest pins F075: nothing capped how many
+// TestFindingsCapBoundsRequest pins F075: nothing capped how many
 // Findings one ScanRequest could return, so a body split into many spans (a
 // JSON connector body with many string leaves, in this test) fanned out into
 // one finding per span with no upper bound — every one destined to be copied
 // verbatim into the decision log. The fix must cap the result and report the
 // truncation honestly via Skipped/SkipReason, the same shape as every other
 // "content not fully inspected" case.
-func TestF075_FindingsCapBoundsRequest(t *testing.T) {
+func TestFindingsCapBoundsRequest(t *testing.T) {
+	// ticket: F075
 	eng := newTestEngine(t, "alert", testSecret)
 	const n = 700 // comfortably above the intended few-hundred cap
 	var sb strings.Builder
@@ -46,7 +47,7 @@ func TestF075_FindingsCapBoundsRequest(t *testing.T) {
 	}
 }
 
-// TestF073_ScanBudgetStopsFurtherScanning pins F073: the per-span
+// TestScanBudgetStopsFurtherScanning pins F073: the per-span
 // max_scan_bytes cap does nothing to bound the TOTAL bytes scanned across a
 // request's many sub-cap spans. This test places ten 500,000-byte padding
 // blocks (5,000,000 bytes total, each individually well under the 1 MiB
@@ -55,7 +56,8 @@ func TestF075_FindingsCapBoundsRequest(t *testing.T) {
 // per-request scan budget is enforced, the secret block — reached only after
 // the budget is exhausted — must NOT be scanned at all: this proves scanning
 // actually STOPPED (bounding the CPU cost), not merely that a flag got set.
-func TestF073_ScanBudgetStopsFurtherScanning(t *testing.T) {
+func TestScanBudgetStopsFurtherScanning(t *testing.T) {
+	// ticket: F073
 	eng := newTestEngine(t, "alert", testSecret)
 	pad := strings.Repeat("A", 500000) // well under the 1 MiB per-span cap
 	var blocks []string
@@ -79,7 +81,7 @@ func TestF073_ScanBudgetStopsFurtherScanning(t *testing.T) {
 	}
 }
 
-// TestF056_AttachmentDecodeFailureRecordedHonestly pins F056: a base64
+// TestAttachmentDecodeFailureRecordedHonestly pins F056: a base64
 // attachment block extractAnthropicAttachments could not decode used to be
 // silently dropped (bare `continue`, no Skipped/SkipReason) and the result
 // still came back Scanned=true/Skipped=false — an undecodable-but-secret-
@@ -87,7 +89,8 @@ func TestF073_ScanBudgetStopsFurtherScanning(t *testing.T) {
 // on_scanner_error=block. The fix must (a) also try the non-StdEncoding
 // alphabets a real client may use before declaring failure, and (b) report a
 // genuine failure honestly so block+on_scanner_error=block refuses it.
-func TestF056_AttachmentDecodeFailureRecordedHonestly(t *testing.T) {
+func TestAttachmentDecodeFailureRecordedHonestly(t *testing.T) {
+	// ticket: F056
 	eng, err := NewEngine(types.LLMInspectionSpec{
 		Mode: "block", DetectSecrets: true, ScanAttachments: true, OnScannerError: "block",
 	}, [][]byte{[]byte(testSecret)})
@@ -126,7 +129,7 @@ func TestF056_AttachmentDecodeFailureRecordedHonestly(t *testing.T) {
 	}
 }
 
-// TestF049_OpenAIChatScansSystemPromptMessage pins F049: THREAT-MODEL.md
+// TestOpenAIChatScansSystemPromptMessage pins F049: THREAT-MODEL.md
 // 5.1a's "Only the system prompt + the last message of each turn are
 // scanned" is true for the Anthropic channel (top-level `system` field) but
 // was false for OpenAI/Codex, which carries the system prompt as a
@@ -134,7 +137,8 @@ func TestF056_AttachmentDecodeFailureRecordedHonestly(t *testing.T) {
 // system prompt was scanned only in the degenerate case where it was ALSO
 // the last message. This places the secret in a system message that is NOT
 // the last message.
-func TestF049_OpenAIChatScansSystemPromptMessage(t *testing.T) {
+func TestOpenAIChatScansSystemPromptMessage(t *testing.T) {
+	// ticket: F049
 	eng := newTestEngine(t, "alert", testSecret)
 	body := `{"model":"gpt-4","messages":[` +
 		`{"role":"system","content":` + jsonString("system secret "+testSecret) + `},` +
@@ -148,7 +152,7 @@ func TestF049_OpenAIChatScansSystemPromptMessage(t *testing.T) {
 	}
 }
 
-// TestF075_FindingsCapDoesNotSuppressBlocking pins B5: the per-request
+// TestFindingsCapDoesNotSuppressBlocking pins B5: the per-request
 // finding cap bounds what a scan REPORTS, never what block mode ENFORCES. An
 // agent that fans out cheap noise ahead of its real secret must not be able
 // to buy a forward that the base tree refused. This mirrors review2's
@@ -157,7 +161,8 @@ func TestF049_OpenAIChatScansSystemPromptMessage(t *testing.T) {
 // then an AKIA... access-key-id (high) — the base tree (and a naive
 // scan-stopping cap) forwards this because the cap fires on cheap noise
 // before the real secret is ever scanned; the fix must still block.
-func TestF075_FindingsCapDoesNotSuppressBlocking(t *testing.T) {
+func TestFindingsCapDoesNotSuppressBlocking(t *testing.T) {
+	// ticket: F075
 	eng, err := NewEngine(types.LLMInspectionSpec{
 		Mode: "block", DetectEntropy: true, DetectSecretPatterns: true, BlockMinSeverity: "high",
 	}, nil)
@@ -184,7 +189,7 @@ func TestF075_FindingsCapDoesNotSuppressBlocking(t *testing.T) {
 	}
 }
 
-// TestB6_FindingsCapTruncationArmExaminesEachFindingOnce pins B6: B5's
+// TestFindingsCapTruncationArmExaminesEachFindingOnce pins B6: B5's
 // keep-back arm re-slices `res.Findings[:maxFindings]` and re-walks the
 // retained tail on EVERY subsequent span once the cap first fires (the
 // retained tail sits between maxFindings and 2*maxFindings, so
@@ -199,7 +204,8 @@ func TestF075_FindingsCapDoesNotSuppressBlocking(t *testing.T) {
 // one of the ~1500 spans after the cap trips — followed by one SevHigh
 // AKIA... access-key-id finding, under ModeBlock with DetectPII +
 // DetectSecretPatterns and default block_min_severity.
-func TestB6_FindingsCapTruncationArmExaminesEachFindingOnce(t *testing.T) {
+func TestFindingsCapTruncationArmExaminesEachFindingOnce(t *testing.T) {
+	// ticket: B6
 	eng, err := NewEngine(types.LLMInspectionSpec{
 		Mode: "block", DetectPII: true, DetectSecretPatterns: true,
 	}, nil)

@@ -46,7 +46,7 @@ func r3bSecondHumanFixture(t *testing.T) (*harness, *Server, uuid.UUID) {
 	return h, srv, runID
 }
 
-// TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns is F147's pin.
+// TestSecondHumanBypassIsScopedToDecisionsTheGateGoverns is F147's pin.
 //
 // approval.second_human.bypass is the record that a four-eyes rule WAS bypassed
 // — that is how docs/ENV.md, docs/OPERATIONS.md and threatmodel/THREAT-MODEL.md
@@ -58,7 +58,8 @@ func r3bSecondHumanFixture(t *testing.T) (*harness, *Server, uuid.UUID) {
 //
 // Each arm below is one of those three, and the control is the real break-glass
 // — without it the whole thing passes by never writing the row at all.
-func TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
+func TestSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
+	// ticket: R3B
 	t.Run("control: a real egress break-glass is still recorded", func(t *testing.T) {
 		t.Setenv(envEgressSecondHuman, "1")
 		h, srv, runID := r3bSecondHumanFixture(t)

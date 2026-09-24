@@ -13,7 +13,7 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 )
 
-// TestR3BJOSERejectsMalformedEd25519JWK is F241's pin: the floor on
+// TestJOSERejectsMalformedEd25519JWK is F241's pin: the floor on
 // github.com/go-jose/go-jose/v4, expressed as BEHAVIOUR rather than as a
 // version string, so an MVS downgrade or a revert fails here instead of
 // silently reopening the window.
@@ -31,7 +31,8 @@ import (
 // document the IdP serves is unmarshalled key-by-key through this code before
 // an ID-token signature is checked. A key that parses into an Ed25519 public
 // key of the wrong length is a key the verifier would then use.
-func TestR3BJOSERejectsMalformedEd25519JWK(t *testing.T) {
+func TestJOSERejectsMalformedEd25519JWK(t *testing.T) {
+	// ticket: R3B
 	for _, tc := range []struct {
 		name string
 		jwk  string

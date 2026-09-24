@@ -18,7 +18,7 @@
 //
 //	cd <repo root> && \
 //	cp local/review-0.7/deep/F2-sso-to-ceiling/governance_ceiling_truncation_probe_test.go internal/api/ && \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'TestF2_' -count=1 -p 4 -v ; \
+//	nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'TestGovernanceCeiling_' -count=1 -p 4 -v ; \
 //	rm -f internal/api/governance_ceiling_truncation_probe_test.go
 package api
 
@@ -35,9 +35,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestF2_TruncatedSnapshotRefusesNotWidens is the table half: every shape a
+// TestGovernanceCeiling_TruncatedSnapshotRefusesNotWidens is the table half: every shape a
 // truncated snapshot can meet the store in, and which of them may be served.
-func TestF2_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
+func TestGovernanceCeiling_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
+	// ticket: F2
 	cases := []struct {
 		name      string
 		groups    []string
@@ -131,11 +132,12 @@ func TestF2_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
 	}
 }
 
-// TestF2_TruncatedSnapshotRefusedAtTheReadSite drives the refusal through HTTP
+// TestGovernanceCeiling_TruncatedSnapshotRefusedAtTheReadSite drives the refusal through HTTP
 // at a ROUTED READ site (GET /policies/default) rather than the create path
 // governance_nonescape_test.go row 16a already covers — the 403 mapping is one
 // function (writeCeilingError) but every routed site has to actually call it.
-func TestF2_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
+func TestGovernanceCeiling_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
+	// ticket: F2
 	newSrv := func(t *testing.T, cs *capStore) (*Server, *govEscapeStore) {
 		t.Helper()
 		st := newGovEscapeStore(cs)

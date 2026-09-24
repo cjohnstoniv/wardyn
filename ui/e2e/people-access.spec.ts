@@ -537,7 +537,8 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
   // to kill, so the ONE surface an operator uses to check a mapping before
   // trusting it called a security_admin a member. §7.2's casing rule keeps the
   // in-sentence form lowercase.
-  test("(f2) preview: a security_admin verdict says so — never 'member' (R4/F033)", async ({ page }) => {
+  test("(f2) preview: a security_admin verdict says so — never 'member'", async ({ page }) => {
+    // ticket: R4/F033
     await mockSsoStatus(page);
     await mockAccessGet(page, baseAccessBody({ posture: { map_empty: false, before: "x", after: "y", changes: false } }));
     await page.route("**/api/v1/access/preview", async (route) => {

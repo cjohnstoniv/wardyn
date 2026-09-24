@@ -600,7 +600,8 @@ describe("user-drives-prompt §7.3 — the preview note matches what the endpoin
 // that freezes it, even when it introduces no string of its own. Pinned in BOTH
 // directions — the doc must describe the note AND the block must still render
 // it, gated on the server's own total rather than a client-side stand-in.
-describe("user-drives-prompt §7.3 — the allocations truncation note (R4/F092)", () => {
+describe("user-drives-prompt §7.3 — the allocations truncation note", () => {
+  // ticket: R4/F092
   const doc = readFileSync(DOC, "utf8");
   const section = doc.slice(doc.indexOf("### 7.3 "), doc.indexOf("### 7.4 "));
   const allocations = readFileSync(

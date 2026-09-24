@@ -286,7 +286,8 @@ describe("WorkspacesScreen — Add workspace dialog opens from both the header b
 // M3 (0027f514): POST /workspaces is member-allowed now — the header "Add
 // workspace" button used to be operator-only. Pin that a MEMBER role sees it
 // enabled, not gated behind the operator-only chip/disabled state.
-describe("WorkspacesScreen — M3 member workspace access", () => {
+describe("WorkspacesScreen — member workspace access", () => {
+  // ticket: M3
   beforeEach(() => {
     listWorkspacesMock.mockReset().mockResolvedValue([]);
     createWorkspaceMock.mockReset();

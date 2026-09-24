@@ -324,14 +324,16 @@ describe("DrivesScreen — the editor collapses the allocation form (one teal at
   });
 });
 
-describe("DrivesScreen — the editor offers only this runner's backends (Q3)", () => {
+describe("DrivesScreen — the editor offers only this runner's backends", () => {
+  // ticket: Q3
   const openNew = async () => {
     await screen.findByText(HOMES.name);
     await userEvent.click(screen.getByRole("button", { name: DRIVES.NEW_CTA }));
     return screen.findByTestId("drives-drive-editor");
   };
 
-  it("Kubernetes offers its pair and neither Docker one, and the managed claim's size is REQUIRED (Q7)", async () => {
+  it("Kubernetes offers its pair and neither Docker one, and the managed claim's size is REQUIRED", async () => {
+    // ticket: Q7
     renderScreen();
     const editor = await openNew();
 
@@ -479,7 +481,8 @@ describe("DrivesScreen — the editor offers only this runner's backends (Q3)", 
   });
 });
 
-describe("DrivesScreen — the re-home confirm dialog (UD-rehome, U3)", () => {
+describe("DrivesScreen — the re-home confirm dialog", () => {
+  // ticket: UD-rehome U3
   it("a 409 on an edit opens the confirm dialog over the server's text, and confirming retries with ?confirm=rehome", async () => {
     const conflict =
       'this drive is allocated to 2 subjects and this change re-homes them: backend "k8s_pvc_static" -> "k8s_pvc". Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=rehome.';

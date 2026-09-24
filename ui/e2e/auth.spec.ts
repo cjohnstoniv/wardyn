@@ -404,7 +404,8 @@ test.describe("admin-written help under a sign-in refusal (#484)", () => {
 //   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
 //   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
 //   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/auth.spec.ts
-test.describe("outage vs. rejection (R4/F027)", () => {
+test.describe("outage vs. rejection", () => {
+  // ticket: R4/F027
   test("a 5xx mount probe does not clear a stored token the daemon never rejected", async ({ page }) => {
     // The daemon is up enough to serve the console, but the runs list 500s —
     // a store outage, a rolling restart, a failing-over Postgres.
@@ -480,7 +481,8 @@ test.describe("outage vs. rejection (R4/F027)", () => {
 //   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
 //   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
 //   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/auth.spec.ts
-test.describe("a session revoked mid-run (R4/F116)", () => {
+test.describe("a session revoked mid-run", () => {
+  // ticket: R4/F116
   test("a 401 arriving on an ALREADY-authenticated console returns to the sign-in gate", async ({
     page,
   }) => {
@@ -519,7 +521,8 @@ test.describe("a session revoked mid-run (R4/F116)", () => {
   // own alert slot (the same box submitToken's own failures use), and
   // re-authenticating returns to the SCREEN the 401 interrupted, not always
   // to Runs.
-  test("a 401 while on another screen shows why, and re-auth returns to that screen (X3-F7)", async ({ page }) => {
+  test("a 401 while on another screen shows why, and re-auth returns to that screen", async ({ page }) => {
+    // ticket: X3-F7
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
@@ -549,7 +552,8 @@ test.describe("a session revoked mid-run (R4/F116)", () => {
 // M2: the plan's own X3-F7 row says "restore the path after re-auth
 // (fallback /runs on 403)" — the captured path belongs to whoever was
 // signed in BEFORE, not necessarily whoever signs back in on this tab.
-test.describe("the restored path is checked against the re-authenticated role (M2)", () => {
+test.describe("the restored path is checked against the re-authenticated role", () => {
+  // ticket: M2
   test("a member re-authenticating over an admin's captured operator-only path lands on Runs, not a dead end", async ({ page }) => {
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
@@ -613,7 +617,8 @@ test.describe("the restored path is checked against the re-authenticated role (M
 // the FULL admin nav off a guess, indistinguishable from an authz breach.
 // identityResolved now gates the nav directly: settled-but-unknown renders
 // NEITHER nav set, and the banner below is the whole page.
-test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav, not a guess)", () => {
+test.describe("settled-but-unknown identity (a failed /me renders no nav, not a guess)", () => {
+  // ticket: B1
   test("a 500 on /me shows the identity-unknown banner, no admin nav and no member nav", async ({ page }) => {
     let meFailing = true;
     await page.route("**/api/v1/me", (route) => {
@@ -678,7 +683,8 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
 // throws), and the local admin token is always dropped either way — the
 // question this answers is whether the SERVER-side OIDC session might still
 // be live, which matters on a shared machine.
-test.describe("R4-F107 — a failed sign-out is surfaced, not swallowed", () => {
+test.describe("a failed sign-out is surfaced, not swallowed", () => {
+  // ticket: R4-F107
   test("POST /auth/logout failing still drops the local session, but toasts that the server wasn't confirmed", async ({
     page,
   }) => {

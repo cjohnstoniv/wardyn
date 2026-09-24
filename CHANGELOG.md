@@ -198,6 +198,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   env-forwarding block and `deploy/desktop/wardyn.env.m-prime.example` are updated to match, and
   docs/ENV.md's six rows name their deprecated alias; docs/DESKTOP.md and docs/OPERATIONS.md use the
   new names.
+- **Test names say what they test, and the skip floor covers every Go suite (#208).** 111 Go
+  tests and 227 vitest/Playwright titles that carried an internal work-item id (`TestF075_…`,
+  `TestPG_ProbeF11_…`, `TestB4F2_…`, `"F3-F11: …"`, `"… (X2-F13)"`) now describe the behaviour
+  under test; the id moved into a `// ticket: …` comment in the test body, still searchable.
+  `TestADOEntraStorePG_*` is now `TestPG_ADOEntraStore_*`, so `-run 'TestPG_'` selects it, and
+  `internal/adoscope/review2_test.go` is folded into `evasion_test.go` / `classify_test.go`.
+  `scripts/test-report.sh`'s skip floor, which fails a suite that silently skips its falsifiable
+  probes, now keys on a `testfloor.Mark(t, "<suite>")` call in the test body instead of a
+  name regex, so a rename can no longer empty it. It reads the expected probes from the source,
+  so a probe that skips or returns before its Mark line turns the report red rather than dropping
+  out. The floor, which covered the pg and unit suites, now covers docker and k8s as well.
 - **The non-admin tier is renamed `member` → `user` (#608).** `/me.role`, a role-map value and
   `WARDYN_OIDC_DEFAULT_ROLE` now read `admin`, `security_admin` or `user`, and the console's
   People step offers "User". Migration `0074_user_tier_rename` rewrites every stored `member`:

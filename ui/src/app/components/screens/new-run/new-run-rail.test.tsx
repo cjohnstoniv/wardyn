@@ -582,7 +582,8 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
   // same pattern as model-access-banner.test.tsx's afterFocusSettles.
   const afterFocusSettles = () => act(() => new Promise((r) => setTimeout(r, 0)));
 
-  describe("where focus goes when the REAL door closes (S1 — review-1)", () => {
+  describe("where focus goes when the REAL door closes", () => {
+    // ticket: S1 (review-1)
     // Escape leaves the state (and the rail's own control) unchanged — the
     // ordinary cancellation path — yet focus still lands on Launch, never on
     // the control that happened to be document.activeElement: the rail
@@ -871,7 +872,8 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
   // Review finding F4: on a deployment with no per-user Azure DevOps row (or
   // no Azure DevOps row at all), preflight never sends git_credential — a
   // shell run there must render no "Credentials" section, not an empty one.
-  it("F4: a shell run with no git_credential fact renders no Credentials heading at all", () => {
+  it("a shell run with no git_credential fact renders no Credentials heading at all", () => {
+    // ticket: F4
     renderRail({});
     expect(screen.queryByText("Credentials")).toBeNull();
   });
@@ -891,12 +893,14 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
   // (above), but showCredentials used to key on `!!gitCredential` — truthy
   // for `live` too — so a shell run with a live Azure DevOps connection and
   // no other credential to describe got an empty "Credentials" heading.
-  it("N5: a live shell run with no other credential renders no empty Credentials heading", () => {
+  it("a live shell run with no other credential renders no empty Credentials heading", () => {
+    // ticket: N5
     renderRail({ gitCredential: { state: "live", source: "org" } });
     expect(screen.queryByText("Credentials")).toBeNull();
   });
 
-  it("the dialog names the row's org (from the 422 body — F1) and offers Continue to Microsoft / Cancel", () => {
+  it("the dialog names the row's org (from the 422 body) and offers Continue to Microsoft / Cancel", () => {
+    // ticket: F1
     // No preflight verdict at all — F1: the org comes from the 422 itself,
     // never from a git_credential fact that may not exist yet.
     renderRail({ adoDialogOpen: true, adoOrg: "https://dev.azure.com/contoso" });
@@ -906,7 +910,8 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
-  it("a blocked popup shows the canon sentence and a plain fallback link to the sign-in URL (F9)", () => {
+  it("a blocked popup shows the canon sentence and a plain fallback link to the sign-in URL", () => {
+    // ticket: F9
     renderRail({ adoDialogOpen: true, adoBlockedUrl: "/api/v1/scm/azure-devops/signin" });
     expect(screen.getByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
     const link = screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN });
@@ -916,7 +921,8 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
 
   // Review follow-up N1: clicking the fallback link ALSO starts the poll
   // (alongside its own href navigation), so the dialog advances on return.
-  it("N1: clicking the fallback link fires onFallbackClick", async () => {
+  it("clicking the fallback link fires onFallbackClick", async () => {
+    // ticket: N1
     const onAdoFallbackClick = vi.fn();
     renderRail({
       adoDialogOpen: true,

@@ -320,7 +320,8 @@ describe("buildSpec — runType (agent run vs governed command)", () => {
 // operator ever toggling them on the Egress step. impliedEgressHosts is the
 // ONE list both buildSpec and step-egress.tsx's "Added by grants:" row read,
 // so the two can never drift on what counts as implied.
-describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx renders (D6/claim3)", () => {
+describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx renders", () => {
+  // ticket: D6 claim3
   it("returns nothing when no grant is active and no repo workspace is selected", () => {
     expect(impliedEgressHosts(initialWizardState())).toEqual([]);
   });
@@ -849,7 +850,8 @@ describe("buildSpec — drive", () => {
 // and NAMES the one thing it cannot carry. A clone that silently dropped
 // `tool_approvals: hold` would launch a less supervised run than the one it
 // copied, which is exactly the class of failure this product exists to prevent.
-describe("B4b — runPrefill: the clone carries both sources, and says what it cannot", () => {
+describe("runPrefill: the clone carries both sources, and says what it cannot", () => {
+  // ticket: B4b
   // A killed run as the two sources actually leave it behind.
   const row = {
     agent: "codex-cli",

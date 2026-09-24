@@ -103,7 +103,8 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
   // assumption that every LiveApprovals mount gates on run ownership the way
   // run-detail.tsx's GET /runs/{id} does. It does not: a viewer who is
   // neither the run's owner nor a security operator sees "Not yours".
-  it("F2: a viewer who is neither the run's owner nor a security operator sees 'Not yours to decide'", async () => {
+  it("a viewer who is neither the run's owner nor a security operator sees 'Not yours to decide'", async () => {
+    // ticket: F2
     listApprovalsMock.mockResolvedValue([escalationRow()]);
     mount({ principal: "someone-else@acme.example", securityOperator: false });
     const card = await screen.findByTestId("ado-capability-card");
@@ -128,7 +129,8 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
 
   // F2 test gap (round 2) — the strip's own SECURITY_ONLY_REASON hint must
   // not show when the viewer CAN in fact decide this row (their own run).
-  it("F2: the strip header does NOT show SECURITY_ONLY_REASON to the run's own owner", async () => {
+  it("the strip header does NOT show SECURITY_ONLY_REASON to the run's own owner", async () => {
+    // ticket: F2
     listApprovalsMock.mockResolvedValue([escalationRow()]);
     mount({ principal: "dana@acme.example" });
     await screen.findByTestId("ado-capability-card");
@@ -141,7 +143,8 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
   // proves this viewer may decide it. Before this fix, run=null showed the
   // owner "Couldn't load this run — try again." and the SECURITY_ONLY_REASON
   // hint, over a row their own list scoping already proved was theirs.
-  it("N4: run=null still renders decidable for a plain viewer — no run-fetch error, no admin-only header", async () => {
+  it("run=null still renders decidable for a plain viewer — no run-fetch error, no admin-only header", async () => {
+    // ticket: N4
     listApprovalsMock.mockResolvedValue([escalationRow()]);
     mount({ principal: "dana@acme.example", run: null });
     const card = await screen.findByTestId("ado-capability-card");
@@ -162,7 +165,8 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
   // F3 (round-2 fix) — the consent state's heading must not claim AWS, and
   // the owner gets the door.
   describe("the Entra-consent row", () => {
-    it("F3: the strip heading names Azure DevOps, never AWS, when every pending row is a consent request", async () => {
+    it("the strip heading names Azure DevOps, never AWS, when every pending row is a consent request", async () => {
+      // ticket: F3
       listApprovalsMock.mockResolvedValue([consentRow()]);
       mount({ principal: "dana@acme.example" });
       await screen.findByTestId("ado-consent-card");
@@ -170,7 +174,8 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
       expect(screen.queryByText(/AWS sign-in needed/)).not.toBeInTheDocument();
     });
 
-    it("F3: the owner gets the consent chip and the door, to the Account card's anchor (#458)", async () => {
+    it("the owner gets the consent chip and the door, to the Account card's anchor (#458)", async () => {
+      // ticket: F3
       listApprovalsMock.mockResolvedValue([consentRow()]);
       mount({ principal: "dana@acme.example" });
       const card = await screen.findByTestId("ado-consent-card");

@@ -557,7 +557,8 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
 // cancels its still-PENDING approvals rather than stranding them until
 // ExpireStale's 24h sweep.
 // ---------------------------------------------------------------------------
-test.describe("B3 — the egress widget's held chip and the Approvals tab badge count LIVE holds", () => {
+test.describe("the egress widget's held chip and the Approvals tab badge count LIVE holds", () => {
+  // ticket: B3
   test("1 PENDING + 1 APPROVED on the same run reads '1 held', never 2", async ({ page }) => {
     clearPending();
     const runId = runningRunId();
@@ -598,7 +599,8 @@ test.describe("B3 — the egress widget's held chip and the Approvals tab badge 
   });
 });
 
-test.describe("B4 — killing a run cancels its still-PENDING approvals", () => {
+test.describe("killing a run cancels its still-PENDING approvals", () => {
+  // ticket: B4
   test("kill ⇒ the PENDING approval becomes CANCELLED with no decision buttons, and the nav badge returns to 0", async ({
     page,
   }) => {
