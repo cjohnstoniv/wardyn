@@ -561,6 +561,8 @@ repository.
 |---|---|---|---|
 | `WARDYN_LIVE_ENTRA` | bool | (unset = skip) | Gate for LL1, the Entra roles suite (Playwright) |
 | `WARDYN_LIVE_ADO` | bool | (unset = skip) | Gate for LL2, the Azure DevOps suite (Go) |
+| `WARDYN_LIVE_ADO_WRITE` | bool | (unset = skip) | Gate for LL2b, bounded access: pushes and deletes one scratch branch (Go) |
+| `WARDYN_LIVE_ADO_PAT_PROBE` | bool | (unset = skip) | Gate for LL2c, the personal access token mint probe (Go, needs a browser sign-in) |
 | `WARDYN_LIVE_BEDROCK` | bool | (unset = skip) | Gate for LL3, the Bedrock suite (Go) |
 | `WARDYN_LIVE_AWS_SSO` | bool | (unset = skip) | Gate for LL4, the AWS SSO through Entra suite (Playwright) |
 | `WARDYN_LIVE_BASE_URL` | URL | (none) | The running Wardyn console the suites sign in to |
@@ -570,6 +572,9 @@ repository.
 | `WARDYN_LIVE_ADO_REPO` | string | (none) | Repository the member can read |
 | `WARDYN_LIVE_ADO_SPACED_PROJECT` | string | `Payments Platform` | Project whose name carries a space, for LL2's second run |
 | `WARDYN_LIVE_ADO_SPACED_REPO` | string | `Card Auth (v2).Service` | Repository in that project, for LL2's second run |
+| `WARDYN_LIVE_ADO_PAT_PROBE_TENANT_ID` | string | (none) | Entra tenant of the LL2c probe app |
+| `WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID` | string | (none) | The LL2c probe's own throwaway public-client app registration, never Wardyn's app |
+| `WARDYN_LIVE_ADO_PAT_PROBE_SCOPE` | string | `499b84ac-1321-427f-aa17-267ca6975798/vso.pats` | Scope LL2c signs in for; `…/user_impersonation` is the other one worth measuring |
 | `WARDYN_LIVE_AWS_SSO_START_URL` | URL | (none) | IAM Identity Center start URL (LL4) |
 | `WARDYN_LIVE_AWS_SSO_REGION` | string | (none) | IAM Identity Center region (LL3, LL4) |
 | `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` | path | (none) | The AWS CLI `sso login` cache file for the member-account profile (LL3). An expired sign-in is a skip |
