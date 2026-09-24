@@ -61,7 +61,7 @@ export function UserDrivesCard() {
       <p className="mt-0.5 text-body leading-snug text-muted-foreground">{DRIVES.CARD_LEAD}</p>
       <button
         type="button"
-        onClick={() => navigate("/drives")}
+        onClick={() => navigate("/admin/drives")}
         className="mt-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:border-border-strong"
       >
         <span>

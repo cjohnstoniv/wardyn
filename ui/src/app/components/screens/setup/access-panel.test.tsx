@@ -58,7 +58,7 @@ function baseAccess(over: Partial<AccessResponse> = {}): AccessResponse {
         created_by: "admin",
       },
     ],
-    default_role: "member",
+    default_role: "user",
     operator_emails_present: true,
     operator_emails: ["ops@corp.example"],
     allow_email_mappings: false,
@@ -130,11 +130,11 @@ describe("AccessPanel — merged table (Variant A)", () => {
     renderPanel(
       baseAccess({
         mappings: [
-          { value: "Wardyn.Contractors", role: "member", source: "chart", shadowed: false, shadow_cause: "" },
+          { value: "Wardyn.Contractors", role: "user", source: "chart", shadowed: false, shadow_cause: "" },
           {
             id: "c2",
             value: "Wardyn.Contractors",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: true,
             shadow_cause: "chart",
@@ -154,7 +154,7 @@ describe("AccessPanel — merged table (Variant A)", () => {
           {
             id: "c3",
             value: "carol@corp.example",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: true,
             shadow_cause: "operator_allowlist",
@@ -169,7 +169,7 @@ describe("AccessPanel — merged table (Variant A)", () => {
   const emailRow = {
     id: "c4",
     value: "bob@corp.example",
-    role: "member" as const,
+    role: "user" as const,
     source: "console" as const,
     shadowed: false,
     shadow_cause: "" as const,
@@ -200,8 +200,8 @@ describe("AccessPanel — merged table (Variant A)", () => {
   });
 
   it("Defaults block: a set default role renders as a chip", () => {
-    renderPanel(baseAccess({ default_role: "member" }));
-    expect(within(screen.getByTestId("access-defaults")).getByText(PEOPLE.ROLE_MEMBER)).toBeInTheDocument();
+    renderPanel(baseAccess({ default_role: "user" }));
+    expect(within(screen.getByTestId("access-defaults")).getByText(PEOPLE.ROLE_USER)).toBeInTheDocument();
   });
 
   it("Defaults block: an unset default role renders DEFAULT_ROLE_UNSET", () => {
@@ -229,7 +229,7 @@ describe("AccessPanel — merged table (Variant A)", () => {
 // non-"admin" role "Member", so a security_admin mapping was rendered as the
 // least-privileged role on the very screen that assigns roles.
 describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
-  it("a security_admin mapping's chip reads ROLE_SECURITY_ADMIN, never ROLE_MEMBER", () => {
+  it("a security_admin mapping's chip reads ROLE_SECURITY_ADMIN, never ROLE_USER", () => {
     renderPanel(
       baseAccess({
         mappings: [
@@ -253,11 +253,11 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
     // filter those out — this asserts on the row's chip specifically.
     const chip = (label: string) => screen.queryAllByText(label).filter((el) => el.tagName !== "BUTTON");
     expect(chip(PEOPLE.ROLE_SECURITY_ADMIN)).toHaveLength(1);
-    expect(chip(PEOPLE.ROLE_MEMBER)).toHaveLength(0);
+    expect(chip(PEOPLE.ROLE_USER)).toHaveLength(0);
   });
 
   // R4/F033: the SIBLING call site the roleLabel() move missed —
-  // renderPreviewResult kept `role === "admin" ? "admin" : "member"`, so the
+  // renderPreviewResult kept `role === "admin" ? "admin" : "user"`, so the
   // one surface an operator uses to CHECK a mapping before trusting it called
   // a security_admin a member. Casing is §7.2's: lowercase mid-sentence.
   it("a security_admin preview verdict says so — never 'member'", async () => {
@@ -271,7 +271,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
     await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
 
     expect(await screen.findByText(PREVIEW.RESULT_MATCHED("security admin", "sec-team"))).toBeInTheDocument();
-    expect(screen.queryByText(PREVIEW.RESULT_MATCHED("member", "sec-team"))).toBeNull();
+    expect(screen.queryByText(PREVIEW.RESULT_MATCHED("user", "sec-team"))).toBeNull();
   });
 
   it("a security_admin default-role verdict says so too", async () => {
@@ -281,7 +281,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
     await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
 
     expect(await screen.findByText(PREVIEW.RESULT_DEFAULT("security admin"))).toBeInTheDocument();
-    expect(screen.queryByText(PREVIEW.RESULT_DEFAULT("member"))).toBeNull();
+    expect(screen.queryByText(PREVIEW.RESULT_DEFAULT("user"))).toBeNull();
   });
 
   // An unrecognized wire role renders ITSELF rather than falling through to a
@@ -320,7 +320,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
   // handleUpsertRoleMapping now embeds the count, and the console renders it.
   it("shows the tokens-revoked receipt after a demotion that revoked some", async () => {
     upsertMappingMock.mockResolvedValue({
-      mapping: { id: "m1", value: "eng-team", role: "member" },
+      mapping: { id: "m1", value: "eng-team", role: "user" },
       created: false,
       tokensRevoked: 3,
     });
@@ -333,7 +333,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
   });
 
   it("shows no receipt when the write revoked nothing", async () => {
-    upsertMappingMock.mockResolvedValue({ mapping: { id: "m1", value: "eng-team", role: "member" }, created: true });
+    upsertMappingMock.mockResolvedValue({ mapping: { id: "m1", value: "eng-team", role: "user" }, created: true });
     renderPanel(baseAccess());
 
     await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "eng-team");
@@ -346,7 +346,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
 
 describe("AccessPanel — add mapping, posture guard (§2.1/§7.3)", () => {
   it("submits directly when the write would NOT flip posture (map already non-empty)", async () => {
-    upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "eng-team", role: "member" }, created: true });
+    upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "eng-team", role: "user" }, created: true });
     const onReload = vi.fn();
     renderPanel(baseAccess({ posture: { map_empty: false, before: "an admin", after: "sign in as a member", changes: true } }), "ready", onReload);
 
@@ -358,7 +358,7 @@ describe("AccessPanel — add mapping, posture guard (§2.1/§7.3)", () => {
   });
 
   it("shows the FIRST_ROW ack dialog pre-emptively when the map is empty and the flip changes the outcome — blocks submit until acked", async () => {
-    upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "eng-team", role: "member" }, created: true });
+    upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "eng-team", role: "user" }, created: true });
     renderPanel(baseAccess({ mappings: [], posture: { map_empty: true, before: "an admin", after: "be denied", changes: true } }));
 
     await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "eng-team");
@@ -586,7 +586,7 @@ function chartPlusTwoConsole(): AccessResponse {
       {
         id: "c2",
         value: "eng-team",
-        role: "member",
+        role: "user",
         source: "console",
         shadowed: false,
         shadow_cause: "",
@@ -606,11 +606,11 @@ describe("AccessPanel — preview panel", () => {
   });
 
   it("RESULT_DEFAULT when ok, nothing matched, and the combined map is non-empty", async () => {
-    previewRoleMock.mockResolvedValue({ role: "member", ok: true, matched: [] });
+    previewRoleMock.mockResolvedValue({ role: "user", ok: true, matched: [] });
     renderPanel(baseAccess({ posture: { map_empty: false, before: "x", after: "y", changes: false } }));
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "nobody");
     await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
-    expect(await screen.findByText(PREVIEW.RESULT_DEFAULT("member"))).toBeInTheDocument();
+    expect(await screen.findByText(PREVIEW.RESULT_DEFAULT("user"))).toBeInTheDocument();
   });
 
   it("RESULT_LEGACY (distinct from RESULT_DEFAULT) when ok, nothing matched, and the combined map is EMPTY", async () => {

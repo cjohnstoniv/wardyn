@@ -273,7 +273,7 @@ func TestObservedEgress_MemberSeesOnlyOwnRuns(t *testing.T) {
 	}
 
 	denied, examined := call(func(ctx context.Context) context.Context {
-		return withOIDCRole(withOIDCHuman(ctx, "sub-bob"), oidc.RoleMember)
+		return withOIDCRole(withOIDCHuman(ctx, "sub-bob"), oidc.RoleUser)
 	})
 	if strings.Join(denied, ",") != "bobs-host.example.com" {
 		t.Errorf("member denied = %v, want only their own run's host", denied)

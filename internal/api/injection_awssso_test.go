@@ -776,8 +776,8 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		want  int
 		wantB string
 	}{
-		{"the run's owner", ssoSession(t, "alice@example.com", "alice@example.com", oidc.RoleMember), http.StatusConflict, "signing in"},
-		{"a foreign member", ssoSession(t, "member-sub", "member@corp.example", oidc.RoleMember), http.StatusNotFound, "approval not found"},
+		{"the run's owner", ssoSession(t, "alice@example.com", "alice@example.com", oidc.RoleUser), http.StatusConflict, "signing in"},
+		{"a foreign member", ssoSession(t, "member-sub", "member@corp.example", oidc.RoleUser), http.StatusNotFound, "approval not found"},
 	} {
 		for _, verb := range []string{"approve", "deny"} {
 			w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/"+verb, tc.sess, "")
@@ -791,7 +791,7 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 	}
 	// …and the foreign member's refusal is BYTE-IDENTICAL to the one a UUID that
 	// does not exist at all gets, so the two cannot be told apart.
-	foreignSess := func() *http.Cookie { return ssoSession(t, "member-sub", "member@corp.example", oidc.RoleMember) }
+	foreignSess := func() *http.Cookie { return ssoSession(t, "member-sub", "member@corp.example", oidc.RoleUser) }
 	fresh := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+uuid.New().String()+"/approve", foreignSess(), "")
 	foreign := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/approve", foreignSess(), "")
 	if fresh.Code != foreign.Code || fresh.Body.String() != foreign.Body.String() {

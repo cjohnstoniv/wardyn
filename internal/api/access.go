@@ -31,7 +31,7 @@ import (
 )
 
 // accessDeniedRole is the JSON spelling of "no role at all" — deriveRole's
-// ok=false outcome. Never a real oidc role constant (RoleAdmin/RoleMember),
+// ok=false outcome. Never a real oidc role constant (RoleAdmin/RoleUser),
 // deliberately, so a client can tell "this caller derives no role" apart from
 // any string the role map could actually produce.
 const accessDeniedRole = "denied"
@@ -186,7 +186,7 @@ func ssoProviderName(issuer string) string {
 func accessRolePosture(a *oidc.Authenticator) (before, after string, changes bool) {
 	before = oidc.RoleAdmin
 	if a.HasOperatorEmails() {
-		before = oidc.RoleMember
+		before = oidc.RoleUser
 	}
 	after = accessDeniedRole
 	if dr := a.DefaultRole(); dr != "" {
@@ -499,7 +499,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !oidc.ValidRole(req.Role) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("role: invalid %q (want %q, %q or %q)", req.Role, oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleMember))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("role: invalid %q (want %q, %q or %q)", req.Role, oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser))
 		return
 	}
 	chart := s.cfg.OIDC.ChartRoleMap()

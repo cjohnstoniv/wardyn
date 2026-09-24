@@ -37,6 +37,14 @@ import (
 // the numbers are. Any stable value works.
 const LoginSupersedeLockClass int32 = 0x574C474E // ASCII "WLGN"
 
+// SecretRowLockClass is the classid of the TRANSACTION-scoped two-argument
+// lock secretstore/pg takes around a store-mode Put, keyed to one (owner,
+// name) row: one writer per row at a time across replicas, so two Puts never
+// interleave their store writes (design §2.3a). Taken with
+// pg_advisory_xact_lock inside the Put's own transaction, not through
+// AdvisoryLockKeyed: it is released by the commit that writes the row.
+const SecretRowLockClass int32 = 0x57534543 // ASCII "WSEC"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take a
 // keyed lock — the in-process slot, the pool connection and the lock itself —
 // before giving up. A caller that runs out of it is REFUSED (retry), not let
