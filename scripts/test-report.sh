@@ -14,7 +14,8 @@
 #   scripts/test-report.sh unit ./...
 #   scripts/test-report.sh docker -tags docker ./internal/runner/...
 #
-# Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER (passed through to go test).
+# Honors env: GOFLAGS, WARDYN_TEST_PG, WARDYN_TEST_DOCKER, WARDYN_TEST_K8S (passed through to go test).
+# WARDYN_TEST_REPORT_COVER=0 drops the coverage flags (and the three coverage files).
 # Exit code mirrors the test run (non-zero if any test failed).
 set -uo pipefail
 
@@ -32,8 +33,15 @@ echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"
 # from any package in the module, not just calls from within the same
 # package as the covered code (module-wide instrumentation regardless of
 # which PKGS are under test). Capture the JSON stream to a file.
-go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" \
-  > "$OUT/test-output.json"
+# The live-substrate suites (conformance, envbuild) turn coverage off: nobody
+# reads their profile, and instrumenting the whole module is compile time spent
+# inside the CI job's own timeout.
+if [ "${WARDYN_TEST_REPORT_COVER:-1}" = "0" ]; then
+  rm -f "$OUT/cover.out" "$OUT/coverage.html" "$OUT/coverage-func.txt"
+else
+  PKGS=(-covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}")
+fi
+go test -json "${PKGS[@]}" > "$OUT/test-output.json"
 GO_EXIT=$?
 
 # Coverage artifacts (best-effort; cover.out may be absent if build failed).
@@ -82,17 +90,54 @@ fi
 if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "unit" ]; then
   REQUIRE_PASS='^(TestF7_|TestRedirectProbe)'
 fi
+# T-08 (G9): conformance and envbuild have no must-pass floor at all today —
+# their Makefile targets call `go test` directly, never through this script —
+# and their falsifiable cases are exactly the ones a capability flip or an
+# unset probe silently turns into a SKIP that never reddens the job (see
+# conformance.go's DefaultRouteProbe/RecordingProbe skip sites). Named by
+# subtest so a rename cannot quietly empty the set, same law as the floors
+# above. WARDYN_TEST_DOCKER/WARDYN_TEST_K8S gate whether the real driver ran
+# at all — a lane without them declared has no substrate, same as the pg
+# floor's default-off shape.
+# Exact names, not a pattern: EVERY one must pass (checked below), so dropping
+# or renaming one case reddens the job even while the others still match.
+REQUIRE_ALL=""
+if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "conformance-docker" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+  REQUIRE_ALL='TestConformanceDocker/L0StructuralEgress TestConformanceDocker/CreateStatusStop TestConformanceDocker/ExecStream TestConformanceDocker/ManagedFiles TestBootEgress_NoFirstUseApproval'
+fi
+if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "conformance-k8s" ] && [ "${WARDYN_TEST_K8S:-}" = "1" ]; then
+  REQUIRE_ALL='TestConformanceK8s/AgentCannotReachAPIServer TestConformanceK8s/CreateStatusStop TestConformanceK8s/WaitExitCode'
+fi
+if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "envbuild" ] && [ "${WARDYN_TEST_DOCKER:-}" = "1" ]; then
+  REQUIRE_ALL='TestBuild_SmokeDockerd TestBuildFromDevcontainerFiles_BakesAgentCLI'
+fi
+if [ -n "$REQUIRE_ALL" ]; then
+  REQUIRE_PASS="^(${REQUIRE_ALL// /|})\$"
+fi
 if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
   # go test -json emits one event per line; a top-level test's outcome is the
   # event whose Test is the bare name (subtests carry a "/"). Extracted with
   # grep/sed so this needs no jq on the runner.
+  #
+  # G9: a REQUIRE_PASS that itself names a subtest (contains "/", e.g.
+  # "TestConformanceDocker/CreateStatusStop") widens the extraction to the
+  # full Test field so those events are not dropped before the match; a
+  # bare-name floor (pg, unit) keeps the narrower "[^\"/]*" filter unchanged,
+  # so this cannot surface an unrelated subtest skip those floors never
+  # claimed to police.
   names() {
-    grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",\"Test\":\"[^\"/]*\"" "$OUT/test-output.json" \
+    local extract='"Test":"[^"/]*"'
+    case "$REQUIRE_PASS" in *"/"*) extract='"Test":"[^"]*"' ;; esac
+    grep -o "\"Action\":\"$1\",\"Package\":\"[^\"]*\",${extract}" "$OUT/test-output.json" \
       | sed 's/.*"Test":"//; s/"$//' | grep -E "$REQUIRE_PASS" | sort -u
   }
   PASSED="$(names pass)"
   SKIPPED="$(names skip)"
   FAILED="$(names fail)"
+  MISSING=""
+  for n in $REQUIRE_ALL; do
+    grep -qxF "$n" <<<"$PASSED" || MISSING="$MISSING $n"
+  done
   if [ -z "$PASSED$SKIPPED$FAILED" ]; then
     echo ">> SKIP FLOOR: no test matching /$REQUIRE_PASS/ ran in suite '$SUITE'." >&2
     echo ">> Those probes are the falsifiable proof of the append-only invariant; a set that matches nothing" >&2
@@ -104,11 +149,19 @@ if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
     if [ "$SUITE" = "pg" ]; then
       echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Give the lane a CREATE ROLE-capable" >&2
       echo ">> role over a URL-form DSN, or set WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2
+    elif [ "$SUITE" = "conformance-docker" ] || [ "$SUITE" = "conformance-k8s" ] || [ "$SUITE" = "envbuild" ]; then
+      echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. These cases are falsifiable ONLY" >&2
+      echo ">> against the real driver (a capability flip, a missing probe, or an unpullable image all read" >&2
+      echo ">> as this same skip) — see conformance.go's skip sites for the specific cause." >&2
     else
       echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Put curl on PATH — these probes" >&2
       echo ">> exist to prove a real curl round-trip and cannot do that skipped. A minimal dev container" >&2
       echo ">> without curl can override this floor with WARDYN_TEST_REPORT_REQUIRE_PASS=<regex-or-empty>." >&2
     fi
+    GO_EXIT=1
+  elif [ -n "$MISSING" ]; then
+    echo ">> SKIP FLOOR: these must-pass cases did not pass (failed, or never ran: renamed, removed or -run filtered):" >&2
+    printf '>>   %s\n' $MISSING >&2
     GO_EXIT=1
   else
     echo ">> skip floor: $(echo "$PASSED" | wc -l | tr -d ' ') probe(s) matching /$REQUIRE_PASS/ passed"
