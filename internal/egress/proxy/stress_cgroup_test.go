@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -72,7 +73,7 @@ func TestStressInspectionUnderProxyCgroup(t *testing.T) {
 	if pushPath == "" {
 		t.Skip("scripts/stress-proxy-cgroup.sh sets WARDYN_STRESS_PUSH_BODY")
 	}
-	exp := "2099-01-01T00:00:00Z"
+	exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 	up := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/internal/credentials/mint" {
 			_, _ = io.WriteString(w, `{"kind":"github_token","token":"gh-inst-token","jti":"j","expires_at":"`+exp+`"}`)
