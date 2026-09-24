@@ -203,7 +203,6 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
 // STARTING told its own OWNER the operator-only refusal plus a dead "Watch
 // the captured session →" link to a recording that cannot exist yet.
 describe("RunDetailScreen — a not-yet-running interactive run tells its owner it's starting, not that they lack the role", () => {
-  // ticket: F1-F1
   it("an operator on a STARTING interactive run sees the starting notice, never the admin-role refusal", async () => {
     renderRun({ ...RUN, state: "STARTING", interactive: true });
     expect(await screen.findByText(RUN_COCKPIT.starting)).toBeInTheDocument();
@@ -232,7 +231,6 @@ describe("RunDetailScreen — a not-yet-running interactive run tells its owner 
 // F1-F2: the recording fetch had no ordering guard — a slow fetch for an
 // earlier-selected session could resolve AFTER a later one and overwrite it.
 describe("RunDetailScreen — a stale recording fetch never overwrites a later selection", () => {
-  // ticket: F1-F2
   it("keeps the SECOND selection's cast when the first session's fetch resolves later", async () => {
     let resolveFirst!: (v: unknown) => void;
     // A's fetch stays pending; B's resolves to "missing" (null) immediately —
@@ -291,7 +289,6 @@ describe("RunDetailScreen — a stale recording fetch never overwrites a later s
 
 // F1-F11/F1-F12: the session picker's own copy.
 describe("RunDetailScreen — the recording tab's session-picker copy", () => {
-  // ticket: F1-F11/F1-F12
   const session = {
     id: "e1",
     time: "2026-01-01T00:04:00Z",
@@ -347,7 +344,6 @@ describe("RunDetailScreen — the recording tab's session-picker copy", () => {
 // trail — past the 1000-row cap on the general fetch, the exit code and
 // ending both silently went "unknown". Scoped fetches keep them known.
 describe("RunDetailScreen — the exit code survives a truncated audit trail", () => {
-  // ticket: F6-F2
   it("still knows the exit code past 1000 rows of unrelated audit history", async () => {
     // The general (capped) fetch: 1000+ rows, none of them run.complete —
     // exactly what a chatty run does to the oldest-first LIST_LIMIT window.
@@ -542,7 +538,6 @@ describe("RunDetailScreen — hasWorkspace covers workspace_id, not just workspa
 // at all — failure_hint is the only place that run says why. Bare server
 // text, no prefix (the state badge already says "Failed").
 describe("RunDetailScreen — failure-hint chip", () => {
-  // ticket: D9
   it("a FAILED run with failure_hint shows the bare server text", async () => {
     renderRun({ ...RUN, state: "FAILED", failure_hint: "image not found on daemon" });
     expect(await screen.findByText("image not found on daemon")).toBeInTheDocument();
