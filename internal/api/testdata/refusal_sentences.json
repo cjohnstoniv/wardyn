@@ -102,6 +102,11 @@
   {
     "reason": "governance_profile",
     "target": "\"runs.interactive_start\"",
+    "sentence": "fmt.Sprintf(\"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.\", name)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.interactive_start\"",
     "sentence": "fmt.Sprintf(\"a startup command is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and with `interactive_start` unset or `shell` an interactive run's task runs as a shell command at sandbox boot, before anyone attaches — \" + \"what `task_mode=exec` does. Launch with `interactive_start=agent` to hand the task to the agent as its first prompt, or without a task.\", name, level, bound)"
   },
   {
