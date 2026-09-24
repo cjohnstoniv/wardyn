@@ -563,8 +563,8 @@ whose pods are both gone, and it is asked for best-effort — a Role without it
 degrades the sweep rather than killing it); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
 only ever resolves one by name). One rule is conditional:
-`persistentvolumeclaims` get+create, rendered only with `userDrives.enabled` —
-see [User drives](#user-drives-userdrivesenabled) below. A run's `disk_mib`
+`persistentvolumeclaims` get+create, rendered only with `drives.enabled` —
+see [User drives](#user-drives-drivesenabled) below. A run's `disk_mib`
 cap needs **no new verb**: `ephemeral-storage` is a field on the pod spec the
 runner already creates, and eviction is read back through the `pods: get` the
 Role already has.
@@ -580,7 +580,14 @@ uninstalling either would take the other's RuntimeClass read permission with it
 Upgrading a release installed before 0.7 renames both objects in place, which
 Helm handles as an ordinary create-then-prune.
 
-### User drives (`userDrives.enabled`)
+### User drives (`drives.enabled`)
+
+Renamed from `userDrives.enabled` in 0.8 (issue #658), a clean break with no
+alias — a `--reuse-values` upgrade from an older release must set `drives`
+explicitly; see docs/sdk.md's "Renamed in 0.8" table. The chart refuses to
+render while the old `userDrives.enabled` is `true`, since nothing reads it any
+more: set `drives.enabled=true` and `userDrives.enabled=false` (or delete the
+`userDrives` block from your values file).
 
 A **user drive** is per-person storage a run mounts at `/home/agent/drive`. An
 admin registers a drive and allocates it in the console; a member ticks a box on
@@ -592,7 +599,7 @@ and Pod Security Standards forbids `hostPath` at Baseline and Restricted alike:
 | `k8s_pvc` (managed) | looks the claim up by name, creates it on first use as `wardyn-drive-<drive-slug>-<home>` with `accessModes: [ReadWriteOnce]` and the allocation as `requests.storage` | `get` + `create` |
 | `k8s_pvc_static` (share) | looks the claim up by name; a missing one fails the run | `get` |
 
-`userDrives.enabled=true` adds exactly `persistentvolumeclaims: ["get","create"]`
+`drives.enabled=true` adds exactly `persistentvolumeclaims: ["get","create"]`
 to the namespaced Role. Leave it on for **any** drive at all: a static share
 needs `get`, and with the rule absent the LOOKUP is what the apiserver refuses
 first. Off, any drive's run fails at dispatch with a hint naming this switch.
@@ -1134,9 +1141,9 @@ See `values.yaml` for all options. Key settings:
 - `networkPolicy.*`: default-deny policy knobs (Postgres port, ingress sources, extra egress)
 - `k8s.*`: the Kubernetes runner substrate, off by default — see
   [Kubernetes runner substrate](#kubernetes-runner-substrate-k8senabled) above.
-- `userDrives.enabled`: adds `persistentvolumeclaims: get, create` to the
+- `drives.enabled`: adds `persistentvolumeclaims: get, create` to the
   k8s-runner Role so runs can mount per-person storage, off by default — see
-  [User drives](#user-drives-userdrivesenabled) above. It is the only key in the
+  [User drives](#user-drives-drivesenabled) above. It is the only key in the
   block: a drive's storage class is a per-drive field in the console, not a chart
   value.
 - `ssh.*`: SSH access into a running sandbox, off by default — see

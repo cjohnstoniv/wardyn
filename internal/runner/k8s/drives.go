@@ -335,7 +335,7 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 	case err == nil:
 		return reuseDriveClaim(existing, drive)
 	case apierrors.IsForbidden(err):
-		// The DEFAULT deployment's failure. userDrives.enabled is off out of the
+		// The DEFAULT deployment's failure. drives.enabled is off out of the
 		// box, so the Role carries no persistentvolumeclaims rule at all and the
 		// very first thing a drive does — the lookup, which even a static share
 		// needs — is refused. Mapped to the same sentinel the Create arm uses,

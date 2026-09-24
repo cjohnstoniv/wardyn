@@ -220,6 +220,11 @@ func (s *Server) routes() chi.Router {
 			// may still hold one for a run THEY created (handleAttachTicket's
 			// getRunAuthorized gate; a foreign run 404s, no existence oracle).
 			r.Post("/runs/{id}/attach-ticket", s.handleAttachTicket)
+			// The three lines above are each issue #658's pre-0.8 alias; their
+			// 0.8 names (mounted alongside, same handlers, kept one minor —
+			// docs/sdk.md "Renamed in 0.8") are factored out of this already-long
+			// function into mountRenamedRunRoutes, called once, below.
+			s.mountRenamedRunRoutes(r)
 
 			// Approvals: reading the queue is a member act (own runs only — see
 			// handleListApprovals), DECIDING is OWNER-OR-ADMIN rather than
@@ -684,6 +689,18 @@ func (s *Server) routes() chi.Router {
 
 	s.mountUI(r)
 	return r
+}
+
+// mountRenamedRunRoutes registers the 0.8 names for three routes issue #658
+// renamed for one consistent shape across the attach family and the
+// synthesize-a-profile verb — carved out of routes() purely for funlen. Each
+// is the SAME handler as its pre-0.8 alias (still mounted inline in routes(),
+// right above the r.Group this is called from), kept one minor; see
+// docs/sdk.md's "Renamed in 0.8" table.
+func (s *Server) mountRenamedRunRoutes(r chi.Router) {
+	r.Post("/runs/{id}/profile/synthesize", s.handleSynthesizeProfile)
+	r.Get("/runs/{id}/attach/holder", s.handleAttachHolder)
+	r.Post("/runs/{id}/attach/ticket", s.handleAttachTicket)
 }
 
 // mountAccountRoutes registers the caller's own account surfaces — per-user

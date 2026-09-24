@@ -444,7 +444,7 @@ fi
 # ── 11. in-place promotion (#131): web holds, ssh observes read-only, web
 #    drops, ssh is promoted on its own socket ─────────────────────────────
 # `wardyn attach` is the exact client the console's terminal uses: it mints
-# its own single-use ticket (POST /runs/{id}/attach-ticket) and dials the WS
+# its own single-use ticket (POST /runs/{id}/attach/ticket) and dials the WS
 # attach endpoint with it — built once here, the same way run-e2e-live.sh
 # already builds the CLI on this host.
 go build -o "${TMPDIR}/wardyn" ./cmd/wardyn || die "build wardyn CLI failed"
@@ -460,13 +460,13 @@ WEB_PID=$!
 
 held=0
 for _ in $(seq 1 15); do
-  status=$(api GET "/api/v1/runs/${RUN_ID}/attach-holder")
+  status=$(api GET "/api/v1/runs/${RUN_ID}/attach/holder")
   src="$(jq -r '.source // empty' "${TMPDIR}/resp.json" 2>/dev/null)"
   [[ "${src}" == "web" ]] && { held=1; break; }
   sleep 1
 done
 if [[ "${held}" -eq 1 ]]; then
-  pass "promotion: web attach holds the terminal (GET attach-holder source=web)"
+  pass "promotion: web attach holds the terminal (GET attach/holder source=web)"
 else
   fail "promotion: web attach never registered as the writer (log: $(cat "${TMPDIR}/web_attach.log"))"
 fi

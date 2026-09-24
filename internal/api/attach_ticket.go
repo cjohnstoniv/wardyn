@@ -21,7 +21,7 @@ import (
 // Attach tickets: browsers cannot set an Authorization header on a WebSocket
 // handshake, so in admin-token auth mode (no OIDC session cookie) the attach
 // WS was unreachable from the UI. The standard fix: the UI first POSTs
-// /runs/{id}/attach-ticket through the NORMAL authenticated surface, receives
+// /runs/{id}/attach/ticket through the NORMAL authenticated surface, receives
 // a single-use, 30s-TTL random ticket bound to that run and to the minting
 // principal, and presents it as ?ticket= on the WS handshake. The ticket is
 // consumed on first use (a reconnect mints a fresh one), so a leaked ticket is
@@ -101,7 +101,7 @@ func ticketActorFromContext(ctx context.Context) (ticketActor, bool) {
 
 // handleAttachTicket mints a single-use WS ticket:
 //
-//	POST /api/v1/runs/{id}/attach-ticket
+//	POST /api/v1/runs/{id}/attach/ticket
 //
 // Mounted INSIDE the humanOrAdminAuth group, owner-or-admin (getRunAuthorized):
 // a run's OWNER may mint a ticket for their own run, same as an admin — a
@@ -189,7 +189,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 // omit ?ticket= and get the same live PTY straight from their session cookie
 // (which browsers attach to a same-origin WebSocket handshake automatically).
 // The TICKET lane is owner-or-admin: minting is itself owner-or-admin-gated
-// (POST /runs/{id}/attach-ticket, getRunAuthorized), so holding a ticket at
+// (POST /runs/{id}/attach/ticket, getRunAuthorized), so holding a ticket at
 // all already proves that much — but the handler (handleAttachWS, attach.go)
 // ALSO re-checks the ticket's own stamped role/principal against the run it
 // names, since this lane never runs humanOrAdminAuth/requireOperator at all

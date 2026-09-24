@@ -70,7 +70,7 @@ disclose them — but a *more severe than documented* instance is in scope):
   **In scope, and please do report:** anything that crosses the
   `security_admin`/super-admin boundary — a principal holding only
   `security_admin` reaching a super-admin-only surface (`/access` role mappings,
-  `POST /api/v1/admin/sandboxes/sweep`, attach / attach-ticket / take-over on a
+  `POST /api/v1/admin/sandboxes/sweep`, attach / attach ticket / take-over on a
   run they do not own, an SSH key stamped above `member`), or a `member` reaching
   either admin tier. A bypass of the four-eyes rule on egress approvals
   (`WARDYN_EGRESS_SECOND_HUMAN=1`) is likewise in scope — except by the admin

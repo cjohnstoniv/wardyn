@@ -243,7 +243,7 @@ export function DemoCaution({ text }: { text: string }) {
 // DemoRunControls — the Start / pending / running-terminal / failed block, and
 // the "Turn this into a policy" payoff a terminated run offers (the SAME
 // runId-driven ProfileReview sheet workspace-detail.tsx mounts for a recorded
-// session — POST /runs/{id}/profile synthesizes a least-privilege policy from
+// session — POST /runs/{id}/profile/synthesize synthesizes a least-privilege policy from
 // whatever the sandbox actually did). Without `onTurnIntoPolicy` that button
 // simply doesn't render, so its owner is whoever can host the sheet.
 export function DemoRunControls({

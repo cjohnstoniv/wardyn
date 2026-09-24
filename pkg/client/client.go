@@ -67,8 +67,8 @@
 //     reason the SSO leg above is — it is a browser redirect dance whose whole
 //     point is a human at a keyboard consenting, and it binds to a browser
 //     session an SDK caller does not have.
-//   - the attach lane under /api/v1/runs/{id} — attach, attach-ticket,
-//     attach-holder, attach/takeover, resources. A WebSocket and its ticket.
+//   - the attach lane under /api/v1/runs/{id} — attach, attach/ticket,
+//     attach/holder, attach/takeover, resources. A WebSocket and its ticket.
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
 //   - the console SPA at /   — static assets
 //
@@ -753,7 +753,7 @@ func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, path, nil, nil)
 }
 
-// ProfileResult is the decoded POST /api/v1/runs/{id}/profile reply (Recording
+// ProfileResult is the decoded POST /api/v1/runs/{id}/profile/synthesize reply (Recording
 // Mode): the synthesized least-privilege sandbox profile plus the observations
 // it was built from. Only the fields callers render/save are modeled — the full
 // server response (profileResponse) additionally carries a per-item risk
@@ -777,10 +777,12 @@ type ProfileResult struct {
 // captured audit / egress / ground-truth events the server proposes a tightened,
 // reusable RunPolicy ("sandbox profile"). ADVISORY and READ-ONLY — it mints
 // nothing and persists no policy (save the proposal via CreatePolicy).
-// POST /api/v1/runs/{id}/profile. Returns 404 when the run does not exist.
+// POST /api/v1/runs/{id}/profile/synthesize (renamed from /profile in 0.8 —
+// docs/sdk.md "Renamed in 0.8" — the old path still answers, as a chi alias,
+// for one minor). Returns 404 when the run does not exist.
 func (c *Client) SynthesizeProfile(ctx context.Context, runID uuid.UUID) (ProfileResult, error) {
 	var out ProfileResult
-	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+runID.String()+"/profile", nil, &out)
+	err := c.do(ctx, http.MethodPost, "/api/v1/runs/"+runID.String()+"/profile/synthesize", nil, &out)
 	return out, err
 }
 

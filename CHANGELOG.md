@@ -103,6 +103,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
   revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
   already detached from itself.
+- **Three route families renamed for one consistent shape (#658), each old path kept as a chi
+  alias for one minor: `GET /runs/{id}/attach-holder` → `attach/holder`, `POST
+  /runs/{id}/attach-ticket` → `attach/ticket`, `POST /runs/{id}/profile` → `profile/synthesize`.**
+  The SDK and CLI now call the new paths. The Helm chart's `userDrives.enabled` is renamed to
+  `drives.enabled` (a clean break, no alias — see `deploy/helm/wardyn/README.md`'s "User drives"
+  section); a `helm upgrade --reuse-values` from an older release must set `drives` explicitly,
+  and the chart refuses to render while `userDrives.enabled` is still `true`.
+  See `docs/sdk.md`'s "Renamed in 0.8" table.
 
 ### Added
 

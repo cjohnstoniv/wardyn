@@ -46,11 +46,11 @@ const mintOKTicket = "test-minted-ticket"
 // request — no Upgrade header, so websocket.Accept always rejects it — would
 // be misread as the server's definitive answer and returned to the caller
 // before the dial these tests exist to exercise ever ran. Only requests for
-// POST .../attach-ticket are intercepted; everything else (the GET dial)
+// POST .../attach/ticket are intercepted; everything else (the GET dial)
 // reaches wsHandler unchanged, so these tests still exercise the real pump.
 func withMintOK(wsHandler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ticket":"` + mintOKTicket + `"}`))
 			return
@@ -638,7 +638,7 @@ func TestAttachCmd_RefusesANonUUIDRunID(t *testing.T) {
 // --------------------------------------------------------------------------
 // Wardyn 0.7.8 lane/v0.7.8-cli-attach: `wardyn attach` mints a single-use
 // attach ticket with whatever token is configured (POST
-// /runs/{id}/attach-ticket, owner-or-admin) and dials with it, instead of
+// /runs/{id}/attach/ticket, owner-or-admin) and dials with it, instead of
 // dialing the WS route directly with a bearer that route's fallback lane
 // requires be an ADMIN'S. These four pin the DONE criteria: a member's own
 // token mints and dials; a foreign run gets the ticket lane's 404 (no
@@ -660,7 +660,7 @@ func TestRunAttach_MintsTicketThenDialsWithIt(t *testing.T) {
 	mintSawToken := false
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
 			if r.Header.Get("Authorization") == "Bearer "+memberToken {
 				mintSawToken = true
 			}
@@ -703,7 +703,7 @@ func TestRunAttach_MintsTicketThenDialsWithIt(t *testing.T) {
 func TestRunAttach_AdminTokenMintsAndDials(t *testing.T) {
 	const adminTicket = "minted-for-admin"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ticket":"` + adminTicket + `"}`))
 			return
@@ -736,7 +736,7 @@ func TestRunAttach_AdminTokenMintsAndDials(t *testing.T) {
 // must never be attempted once the mint has definitively refused.
 func TestRunAttach_ForeignRunMintReturns404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"error":"run not found"}`))
@@ -770,7 +770,7 @@ func TestRunAttach_TicketIsReMintedEachAttach(t *testing.T) {
 	lastTicket.Store("")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach/ticket") {
 			n := atomic.AddInt32(&mintCount, 1)
 			tok := fmt.Sprintf("ticket-%d", n)
 			lastTicket.Store(tok)
@@ -807,7 +807,7 @@ func TestRunAttach_TicketIsReMintedEachAttach(t *testing.T) {
 // TestRunAttach_FallsBackToBareDialWhenMintUnavailable pins the goal's other
 // requirement: "keep the admin/bearer path working exactly as now when no
 // ticket can be minted, so an admin-token CI caller is unaffected." No
-// /attach-ticket route is registered here (an older control plane); the mux's
+// /attach/ticket route is registered here (an older control plane); the mux's
 // own 404 page is not the JSON `{"ticket":...}` shape mintAttachTicket knows
 // how to read, so it is treated as inconclusive rather than a definitive
 // refusal, and the CLI falls back to dialing directly with the configured

@@ -183,6 +183,23 @@ means the same thing regardless of which lane sent it:
 | `raise_failed` | The approval store itself errored while raising a capability, consent, sign-in or re-auth hold. Azure DevOps, AWS SSO. |
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum (`internal/api/ado_entra_store.go`), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
 
+## Renamed in 0.8
+
+Issue #658: the attach route family had three different sub-resource shapes,
+`POST /runs/{id}/profile` was a noun where every sibling POST is a verb, and
+one concept spelled itself four ways across the wire, Go, audit and the Helm
+chart. Each HTTP route below keeps its OLD path mounted as a chi alias for one
+minor (this doc's release plus one); the SDK and CLI already call the NEW
+path. The chart key is a clean break, no alias — see
+`deploy/helm/wardyn/README.md`'s "User drives" section.
+
+| Old | New | Kind |
+|---|---|---|
+| `GET /runs/{id}/attach-holder` | `GET /runs/{id}/attach/holder` | HTTP route, aliased for one minor |
+| `POST /runs/{id}/attach-ticket` | `POST /runs/{id}/attach/ticket` | HTTP route, aliased for one minor |
+| `POST /runs/{id}/profile` | `POST /runs/{id}/profile/synthesize` | HTTP route, aliased for one minor |
+| Helm `userDrives.enabled` | Helm `drives.enabled` | Chart value, clean break (no alias); the chart refuses `userDrives.enabled=true` |
+
 ## Local dev: principal override
 
 `X-Wardyn-Principal` overrides the server-side principal attribution:
