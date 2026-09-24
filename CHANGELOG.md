@@ -16,6 +16,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The key is now `ado_grant` (one grant). The older `ado_grants` list still loads when it holds
   one entry; a list with more than one, or one set beside `ado_grant`, fails the sidecar's
   startup (#452).
+- **The ephemeral-age-key boot refusal names the rows no key can recover (#755).** With
+  `WARDYN_AGE_KEY` unset over age-sealed rows, wardynd told the operator to set the key the rows
+  were written with — but rows written under an earlier ephemeral key have no such key. The
+  refusal now says those rows are unrecoverable and gives the statement that deletes them. The
+  console's "Secret store durability" row now says what is stored under the ephemeral key is lost
+  at the next restart and that the next boot refuses to start, and the Helm values comment for
+  `secrets.ageKeyFromSecret` says no key set afterwards recovers the rows.
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

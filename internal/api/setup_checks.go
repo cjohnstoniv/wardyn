@@ -451,8 +451,12 @@ func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
 	}, true
 }
 
-// ageKeyCheck warns when the secret store's age key is EPHEMERAL: stored secrets
-// become unreadable after a restart.
+// ageKeyCheck warns when the secret store's age key is EPHEMERAL: a fresh
+// identity is minted at every boot with none configured, so what is stored now
+// is lost at the next restart, and that boot refuses to start over the rows it
+// cannot decrypt (convertSecretStore). No earlier ephemeral key's rows can be
+// present while this row shows, since that same refusal kept them from booting;
+// the refusal is where the operator learns those are unrecoverable (#755).
 //
 // The Fix must never offer `helm: env.WARDYN_AGE_KEY` as the cluster
 // answer: it renders the secret store's MASTER key as a plaintext literal in
@@ -473,7 +477,7 @@ func ageKeyCheck(durable bool) SetupCheck {
 	}
 	return SetupCheck{
 		ID: "age_key", Label: "Secret store durability", Status: "warn",
-		Detail: "The secret store uses an EPHEMERAL age key generated at boot; stored secrets (API keys, GitHub App credentials) become unreadable after a restart.",
+		Detail: "The secret store uses an EPHEMERAL age key generated at boot: everything stored under it (API keys, GitHub App credentials) is lost at the next restart — no key set afterward can decrypt it — and the next boot refuses to start until those rows are deleted.",
 		Fix: "Generate a durable key with `wardynd -gen-age-key`, then wire it as WARDYN_AGE_KEY: " +
 			"on a host, -age-key or the env var; " +
 			"on Helm, keep it in a Secret — secrets.ageKeyFromSecret=true (an `age-key` entry in the Secret postgres.dsn.secretRef names) or secrets.ageKeySecretRef.name for a separate one. " +

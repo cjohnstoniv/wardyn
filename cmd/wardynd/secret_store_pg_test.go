@@ -183,6 +183,8 @@ func TestPG_BootAbortsOnAnUndecryptableV0Row(t *testing.T) {
 // TestPG_BootRefusesAnEphemeralKeyOverAgeSealedRows is rule 14: with
 // WARDYN_AGE_KEY unset, a store holding v1 local rows — or v0 rows — refuses to
 // boot instead of minting a key that would strand them. An empty store boots.
+// The refusal also names the way out when no key exists to set (#755): rows
+// written under an EARLIER ephemeral key are unrecoverable and must be deleted.
 func TestPG_BootRefusesAnEphemeralKeyOverAgeSealedRows(t *testing.T) {
 	empty := envelopeDB(t)
 	if _, err := buildSecretStore(t.Context(), empty, "", "", nil, 0, &capturingRecorder{}); err != nil {
@@ -211,6 +213,11 @@ func TestPG_BootRefusesAnEphemeralKeyOverAgeSealedRows(t *testing.T) {
 			_, err := buildSecretStore(t.Context(), pool, "", "", nil, 0, &capturingRecorder{})
 			if err == nil || !strings.Contains(err.Error(), "WARDYN_AGE_KEY is unset, but 1 stored secrets") {
 				t.Fatalf("ephemeral boot over %s = %v, want the rule-14 refusal", label, err)
+			}
+			for _, want := range []string{"earlier ephemeral key", "unrecoverable", "DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%'"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal %q does not say %q", err, want)
+				}
 			}
 		})
 	}
