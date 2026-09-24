@@ -54,8 +54,8 @@ func TestShippedShapeRoleDerivation(t *testing.T) {
 				{email: "admin@wardyn.local", want: RoleAdmin},
 				{email: "operator@wardyn.local", want: RoleAdmin}, // operator allowlist only
 				{email: "secadmin@wardyn.local", want: RoleSecurityAdmin},
-				{email: "member@wardyn.local", want: RoleMember},
-				{email: "member2@wardyn.local", want: RoleMember},
+				{email: "member@wardyn.local", want: RoleUser},
+				{email: "member2@wardyn.local", want: RoleUser},
 				{email: "stranger@wardyn.local", want: deny},
 			},
 		},
@@ -64,11 +64,11 @@ func TestShippedShapeRoleDerivation(t *testing.T) {
 			env:  envFile(t, "deploy/desktop/wardyn.env.m-prime.example"),
 			ids: []id{
 				{email: "dev@example.com", roles: []string{"Wardyn.Admin"}, want: RoleAdmin},
-				{email: "dev@example.com", roles: []string{"Wardyn.Member"}, want: RoleMember},
-				{email: "dev@example.com", groups: []string{"Wardyn.Member"}, want: RoleMember},
+				{email: "dev@example.com", roles: []string{"Wardyn.Member"}, want: RoleUser},
+				{email: "dev@example.com", groups: []string{"Wardyn.Member"}, want: RoleUser},
 				{email: "dev@example.com", roles: []string{"Wardyn.Member", "Wardyn.Admin"}, want: RoleAdmin},
 				{email: "platform-team@example.com", want: RoleAdmin}, // operator allowlist
-				{email: "dev@example.com", want: RoleMember},          // default role: the point of m′
+				{email: "dev@example.com", want: RoleUser},            // default role: the point of m′
 			},
 		},
 		{
@@ -79,9 +79,9 @@ func TestShippedShapeRoleDerivation(t *testing.T) {
 				{email: "admin@wardyn.local", want: RoleAdmin},
 				{email: "operator@wardyn.local", want: RoleAdmin},
 				{email: "secadmin@wardyn.local", want: RoleSecurityAdmin},
-				{email: "member@wardyn.local", want: RoleMember},
-				{email: "member2@wardyn.local", want: RoleMember},  // default role
-				{email: "stranger@wardyn.local", want: RoleMember}, // default role, by design
+				{email: "member@wardyn.local", want: RoleUser},
+				{email: "member2@wardyn.local", want: RoleUser},  // default role
+				{email: "stranger@wardyn.local", want: RoleUser}, // default role, by design
 			},
 		},
 		{
@@ -92,8 +92,8 @@ func TestShippedShapeRoleDerivation(t *testing.T) {
 				{email: "admin@wardyn.local", want: RoleAdmin},
 				{email: "operator@wardyn.local", want: RoleAdmin},
 				{email: "secadmin@wardyn.local", want: RoleSecurityAdmin},
-				{email: "member@wardyn.local", want: RoleMember},
-				{email: "member2@wardyn.local", want: RoleMember},
+				{email: "member@wardyn.local", want: RoleUser},
+				{email: "member2@wardyn.local", want: RoleUser},
 				{email: "stranger@wardyn.local", want: deny},
 			},
 		},
@@ -102,7 +102,7 @@ func TestShippedShapeRoleDerivation(t *testing.T) {
 			env:  envFile(t, "deploy/compose/.env.example"),
 			ids: []id{
 				{email: "demo@wardyn.local", want: RoleAdmin},
-				{email: "member@wardyn.local", want: RoleMember},
+				{email: "member@wardyn.local", want: RoleUser},
 				{email: "stranger@wardyn.local", want: deny},
 			},
 		},

@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -214,7 +215,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	var found bool
 	if !isMechanism {
 		var err error
-		if blob, found, err = s.readADOEntraBlob(ctx, subject, pr.cfg.RowID); err != nil {
+		if blob, found, err = s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, pr.cfg.RowID); err != nil {
 			return SCMAccess{}, err
 		}
 	}
@@ -240,7 +241,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 // map covers nothing honestly, so false.
 func adoBlobCoversBaseline(blob adoEntraBlob, row types.GitProvider) bool {
 	need, err := adoscope.ScopesFor(row.Entra.Profile())
-	return err == nil && adoScopesWithin(need, blob.Scopes)
+	return err == nil && subsetOf(need, blob.Scopes)
 }
 
 // adoOrgDisplay is the row's own address, for the {org} the connect/launch

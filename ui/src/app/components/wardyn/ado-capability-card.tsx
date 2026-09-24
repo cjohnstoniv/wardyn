@@ -458,7 +458,7 @@ function AdoScopeMenu({
 // (or "you allowed it") the wire scope cannot back on every path — see its
 // own doc note in ado-entra-copy.ts.
 //
-// REQ_CONSENT_CTA links to /settings#azure-devops, not a route of its own:
+// REQ_CONSENT_CTA links to /account#azure-devops, not a route of its own:
 // F9 (S10 round 3) pointed it at the same Azure DevOps connection surface
 // #415 built (screens/settings/ado-connection.tsx's AdoConnectionCard,
 // mounted unconditionally on the one settings-screen.tsx page — no tabs, no
@@ -466,7 +466,8 @@ function AdoScopeMenu({
 // label to that card's own CTA ("Connect Azure DevOps", CONNECT_ADO) — a
 // bare `<Link to="/settings">` landed at the top of a five-card page with
 // no way to find the one card this door is actually about, and the two CTAs
-// named the same act two different ways.
+// named the same act two different ways. M-1b: it's your own connection
+// (#386), so the anchor moved to /account when /settings was deleted.
 function AdoConsentCard({
   item,
   viewerPrincipal,
@@ -507,7 +508,7 @@ function AdoConsentCard({
       {isOwner && (
         <div className="mt-3">
           <Button asChild size="sm" variant="info">
-            <Link to="/settings#azure-devops">{copy.cta}</Link>
+            <Link to="/account#azure-devops">{copy.cta}</Link>
           </Button>
         </div>
       )}

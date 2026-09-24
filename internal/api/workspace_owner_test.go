@@ -127,7 +127,7 @@ const (
 // eyeballing "it's a 404 too".
 func TestWorkspaceOwnership_ForeignOwned404Parity(t *testing.T) {
 	srv, st, h := ownerHarness(t, runner.MemberMountPolicy{})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	foreign := st.put(types.Workspace{OwnedBy: ownerOtherSub})
 	missing := uuid.New()
 
@@ -187,7 +187,7 @@ func TestWorkspaceOwnership_ForeignOwned404Parity(t *testing.T) {
 // routes: the owning member is not refused.
 func TestWorkspaceOwnership_OwnerReachesOwn(t *testing.T) {
 	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 
 	// R1-F315: the MUTATIONS are in here too, and each gets its OWN fixture from
 	// inside the loop. That is the whole reason they were missing — this control
@@ -231,7 +231,7 @@ func TestWorkspaceOwnership_OwnerReachesOwn(t *testing.T) {
 // about a row the member can see in their own list.
 func TestWorkspaceOwnership_OperatorOwnedStaysAdminOnly(t *testing.T) {
 	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 	opOwned := st.put(types.Workspace{}) // owned_by == "" — operator-owned
 
@@ -265,7 +265,7 @@ func TestWorkspaceOwnership_OperatorOwnedStaysAdminOnly(t *testing.T) {
 // what keeps the column un-forgeable.
 func TestWorkspaceOwnership_CreateStampsOwner(t *testing.T) {
 	srv, _, _ := ownerHarness(t, runner.MemberMountPolicy{})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	created := func(t *testing.T, sess *http.Cookie, body string) types.Workspace {
@@ -299,7 +299,7 @@ func TestWorkspaceOwnership_CreateStampsOwner(t *testing.T) {
 // plus every operator-owned one, never another member's.
 func TestWorkspaceOwnership_ListScoping(t *testing.T) {
 	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	own := st.put(types.Workspace{OwnedBy: ownerMemberSub})
@@ -372,7 +372,7 @@ func TestWorkspaceOwnership_MemberLocalDirGate(t *testing.T) {
 		}
 	}
 	srv, _, _ := ownerHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	body := func(path string, writable bool) string {
@@ -430,7 +430,7 @@ func TestWorkspaceOwnership_MemberWritableAllowlist(t *testing.T) {
 	srv, _, _ := ownerHarness(t, runner.MemberMountPolicy{
 		Roots: []string{root}, WritableRoots: []string{root}, WritableDeny: []string{vendored},
 	})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 
 	body := func(path string) string {
 		src := types.WorkspaceSource{Type: types.WorkspaceSourceTypeLocalDir, Path: path, Writable: true}
