@@ -28,7 +28,7 @@ func collisionRequest() *http.Request {
 // memberRequest is a plain member SSO session, the caller F336 is about.
 func collisionMemberRequest(sub string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
-	return r.WithContext(withOIDCRole(withOIDCHuman(r.Context(), sub), string(oidc.RoleMember)))
+	return r.WithContext(withOIDCRole(withOIDCHuman(r.Context(), sub), string(oidc.RoleUser)))
 }
 
 // fallbackCollisionStore has NO ActiveRunsAtWorkspacePath, so it takes the in-Go

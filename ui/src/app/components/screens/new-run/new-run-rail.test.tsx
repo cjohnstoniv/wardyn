@@ -43,7 +43,7 @@ vi.mock("../settings/harness-login-pane", () => ({
 }));
 
 import { RunRail } from "./new-run-rail";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
+import { RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import { ModelAccessBanner } from "../../wardyn/model-access-banner";
 import { ModelAccessProvider, useModelAccessDoor } from "../../wardyn/model-access-context";
@@ -51,6 +51,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
+import { aheadByHours } from "../../../lib/test-clock";
 import { AUTONOMY_RAIL, autonomyBoundSentence } from "../../../lib/governance-copy";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import type { AutonomyResolution } from "../../../lib/api/governance";
@@ -107,6 +108,11 @@ function railTree(props: {
   operator?: boolean;
   onLaunch?: () => void;
   launchError?: string | null;
+  /** #459: bumped on every failed launch — remounts the alert so a repeated,
+   *  identical failure is re-announced. */
+  launchErrorSeq?: number;
+  preflightError?: string | null;
+  preflightErrorSeq?: number;
   /** The server refused the launch for the caller's own model credential. */
   credentialRefused?: boolean;
   gitCredential?: SCMAccess;
@@ -146,12 +152,14 @@ function railTree(props: {
         inFlight: false,
         problem: null,
         error: props.launchError ?? null,
+        errorSeq: props.launchErrorSeq ?? 0,
         credentialRefused: props.credentialRefused ?? false,
         warnings: [],
         onOpenRun: null,
       }}
       preflight={{
-        error: null,
+        error: props.preflightError ?? null,
+        errorSeq: props.preflightErrorSeq ?? 0,
         // gitCredential rides the SAME preflight verdict as model_credential
         // does (RunRail derives both from preflight.result) — a synthetic
         // one when the test names only gitCredential, so the case reads as
@@ -480,7 +488,7 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
   });
 
   it("expiring renders the deadline line, and the run is never called refused", () => {
-    const deadline = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    const deadline = aheadByHours(3);
     renderRail({
       agentRow: modelAccessRow(),
       modelAccess: { state: "expiring", action: `Sign in again before ${deadline}`, deadline },
@@ -939,5 +947,42 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
   it("the confirm button shows a spinner and disables while connecting", () => {
     renderRail({ adoDialogOpen: true, adoConnecting: true });
     expect(screen.getByRole("button", { name: ADO.CONNECT_CTA })).toBeDisabled();
+  });
+});
+
+// #459 — the launch and preflight errors become role="alert" regions,
+// announced on arrival, with an sr-only prefix spoken before the server's own
+// (unchanged, still-visible) sentence.
+describe("RunRail — failure lines are announced (#459)", () => {
+  it("the launch error is an alert carrying the sr-only prefix and the server's sentence", () => {
+    renderRail({ launchError: "the server's launch sentence" });
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(RAIL.LAUNCH_ERROR_LABEL);
+    expect(alert).toHaveTextContent("the server's launch sentence");
+    // The sentence itself is unchanged and visible — only the prefix hides.
+    expect(screen.getByText("the server's launch sentence")).toBeVisible();
+  });
+
+  it("the preflight error is an alert carrying the sr-only prefix and the server's sentence", () => {
+    renderRail({ preflightError: "the server's preflight sentence" });
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(RAIL.PREFLIGHT_ERROR_LABEL);
+    expect(alert).toHaveTextContent("the server's preflight sentence");
+  });
+
+  it("a repeated, identical launch failure remounts the alert region (errorSeq keys it)", () => {
+    const r = renderRail({ launchError: "same sentence", launchErrorSeq: 1 });
+    const first = screen.getByRole("alert");
+    r.rerenderWith({ launchError: "same sentence", launchErrorSeq: 2 });
+    const second = screen.getByRole("alert");
+    expect(second).not.toBe(first);
+  });
+
+  it("a repeated, identical preflight failure remounts the alert region (errorSeq keys it)", () => {
+    const r = renderRail({ preflightError: "same sentence", preflightErrorSeq: 1 });
+    const first = screen.getByRole("alert");
+    r.rerenderWith({ preflightError: "same sentence", preflightErrorSeq: 2 });
+    const second = screen.getByRole("alert");
+    expect(second).not.toBe(first);
   });
 });

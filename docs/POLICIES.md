@@ -19,7 +19,7 @@ write time. A guard test fails if a field here drifts from the struct.
 The console has three places a policy gets written, and all three resolve to
 this same JSON through this same validator — there is no separate UI schema.
 
-- **The [`/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
+- **The [`/admin/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
   reusable policy (`POST`/`PUT /policies`).
 - **The run screen's Custom policy.** An `inline_policy` on the create-run
   request, member-authored — this editor carries no operator gate.
@@ -876,6 +876,13 @@ sidecar's inspection slot, and the credential is normally the one the push's
 own discovery request already minted. In the refusal, a path ending in `/`
 names a directory the push does not carry, and `/` alone names the whole tree.
 
+**On a `git_pat` forge other than github.com, deny only paths the repository
+does not hold yet.** No comparison can be made there, so an entry that reaches
+anything the repository already has — `infra/**` against an existing `infra/`,
+or `Makefile` — refuses every push, including one that never touches it. The
+run's risk grade says so (`push_rules`, `deny_paths on <host>`) before the
+first push does.
+
 **What these rules do not stop.**
 
 - **Building on an older commit of the default branch keeps what that commit
@@ -909,10 +916,10 @@ silently matching nothing.
 
 **Phase two** (`require_review_paths`, `deny_new_executables`,
 `max_file_size_mib`, `hold_seconds`, and the held `push_content` approval this
-type reserves) is a later change. Whoever adds a size rule must **decide** what
-an unmeasurable file means rather than compare it: the inspector reports `-1`
-for a blob the pack does not carry, and `-1` passes every "is it under the
-limit" test by accident.
+type reserves) is a later change. Whoever adds a size rule decides with
+`gitpack.Change.Within`, which refuses a size the pack does not carry (a
+submodule pointer, an unchanged file on a second push); `Size()` returns
+`(bytes, known)`, so a bare comparison against a limit does not compile.
 
 **Unenforceable is a warning, not a refusal.** `push_rules` is enforced only on
 the brokered lanes (`github_token`, `git_pat`) — git's own SSH transport has no

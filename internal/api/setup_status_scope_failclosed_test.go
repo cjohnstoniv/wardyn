@@ -56,7 +56,7 @@ func TestSetupStatus_FailedRosterReadNeverResolvesToTheOperatorNamespace(t *test
 	srv.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
 	putAWSSSOBlob(t, srv, awsSSOTestFixedNow.Add(time.Hour)) // the OPERATOR namespace
 
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	// Control: with the roster READABLE, per_user already binds the read to the
 	// member's own namespace. If this fails the fixture proves nothing below.
