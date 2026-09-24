@@ -126,19 +126,35 @@ export function firstRunLanding(
 // than component state on purpose: /setup sits outside the gate's route
 // wrapper, so the wrapper unmounts while the operator is in the funnel and any
 // ref would forget the gate already fired. A fresh load (new tab, F5) re-arms.
-let gateFiredThisLoad = false;
+//
+// It records WHERE it fired (the router location key), not just that it did,
+// because the redirect is not instant: react-router applies a navigation inside
+// startTransition, so any ordinary state update landing before the route change
+// commits (a badge or health poll answering) re-renders the wrapper at the OLD
+// location. A plain boolean read that render as "already fired", fell through
+// to FirstRunLanding and sent a gated install to Runs (#469, CI run
+// 36057885376). The same location is the same access, so it redirects again.
+//
+// The key only matters until the operator ARRIVES in the funnel, which seals
+// the latch with FUNNEL (no location key contains a slash). It must: the
+// router keys every history entry it did not create itself "default" — the
+// cold load the gate fired from, and equally the entry a plain fragment link
+// such as the shell's skip link pushes later — so an unsealed "default" would
+// re-fire the gate on an operator who already left the funnel.
+const FUNNEL = "/setup";
+let gateFiredAt: string | null = null;
 
-export function markGateFired(): void {
-  gateFiredThisLoad = true;
+export function markGateFired(at: string = FUNNEL): void {
+  if (gateFiredAt === null || at === FUNNEL) gateFiredAt = at;
 }
 
-export function gateAlreadyFired(): boolean {
-  return gateFiredThisLoad;
+export function gateAlreadyFired(at?: string): boolean {
+  return gateFiredAt !== null && gateFiredAt !== at;
 }
 
 // Test seam only: unit tests share one module instance across cases.
 export function resetGateForTests(): void {
-  gateFiredThisLoad = false;
+  gateFiredAt = null;
 }
 
 export function setupGateActive(
@@ -245,7 +261,7 @@ export function clearStaleVisitFlags(status: {
 // really does re-mint the module (the module-level latch below resets), while
 // a same-page remount (Getting Started's own re-entry, or this file's own
 // test harness unmount/render) must not re-run the wipe. Same "once per page
-// load" shape as gateFiredThisLoad above, deliberately module state rather
+// load" shape as gateFiredAt above, deliberately module state rather
 // than component state for the identical reason.
 //
 // Known ceiling, no fix available in this lane: "once per page load" can
