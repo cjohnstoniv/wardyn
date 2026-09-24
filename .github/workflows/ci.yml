@@ -45,6 +45,29 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go build cache key date (one cache generation per job per day)
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      # setup-go's own cache uses one key with no job component, so only the
+      # first job to finish ever saves it and every other job restores a
+      # near-empty cache (issue #470). Keying per job here — and saving only
+      # on push to main, so there is one entry per job per day — fixes that.
+      # The save needs a green run: a run that failed early would otherwise pin
+      # a near-empty cache under the day's key until the next day. The unhashed
+      # restore-key keeps a go.sum/Makefile change warm (both caches are
+      # content-addressed, so an older entry is safe to restore).
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-build-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            go-build-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-build-
       - name: Build
         run: make build
       # The production Docker runner lives behind //go:build docker. Compile and
@@ -104,6 +127,15 @@ jobs:
       - name: Say so if go-test-reports did not upload
         if: always() && steps.upload_go_test_reports.outcome == 'failure'
         run: echo "::warning title=Reports missing::go-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
+      - name: Save Go build cache (push to main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-build-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
 
   # ── docs: mermaid diagram gate ────────────────────────────────────────────
   # Validate every fenced mermaid diagram in the public docs (syntax + label-
@@ -235,6 +267,21 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go build cache key date (one cache generation per job per day)
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-ui-e2e-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            go-ui-e2e-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-ui-e2e-
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -275,6 +322,15 @@ jobs:
       - name: Say so if playwright-report did not upload
         if: always() && steps.upload_playwright_report.outcome == 'failure'
         run: echo "::warning title=Reports missing::playwright-report did not upload; this job's result stands on its tests, but the reports are not attached to this run."
+      - name: Save Go build cache (push to main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-ui-e2e-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
 
   # ── deploy: Helm chart lint + render ──────────────────────────────────────
   # The Helm chart is one of the two blessed deploy paths; lint + template-render
@@ -377,6 +433,21 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go build cache key date (one cache generation per job per day)
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-conformance-k8s-
       - name: Build wardyn-proxy image (local only — publishing is publish-image.yml)
         run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:kind-test .
       # H1 (review round 2): the conformance agent image MUST carry
@@ -424,6 +495,15 @@ jobs:
           WARDYN_TEST_K8S_AGENT_IMAGE: wardyn/conformance-agent:kind-test
         run: make test-conformance-k8s
         # No continue-on-error: a real conformance failure must block the build.
+      - name: Save Go build cache (push to main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
 
   # ── deploy: docker-compose config validation ──────────────────────────────
   compose:
@@ -595,6 +675,21 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go build cache key date (one cache generation per job per day)
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-conformance-docker-
       - name: Docker smoke check
         run: docker run --rm hello-world
       - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
@@ -606,6 +701,15 @@ jobs:
           WARDYN_TEST_DOCKER: "1"
         run: make test-conformance-docker
         # No continue-on-error: a real conformance failure must block the build.
+      - name: Save Go build cache (push to main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
 
   # ── real-daemon envbuild integration ───────────────────────────────
   # Exercises the envbuilder push -> finalize-FROM-pushed -> pull cycle against
@@ -625,6 +729,21 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go build cache key date (one cache generation per job per day)
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-envbuild-integration-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            go-envbuild-integration-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-envbuild-integration-
       - name: Docker smoke check
         run: docker run --rm hello-world
       - name: Run envbuild integration test (docker)
@@ -633,6 +752,15 @@ jobs:
         run: make test-envbuild-integration
         # No continue-on-error: a real regression in the push/finalize/pull
         # cycle must block the build.
+      - name: Save Go build cache (push to main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-envbuild-integration-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
 
   # ── Postgres-backed invariant proofs (approval-mint + audit invariants) ───
   # Runs the WARDYN_TEST_PG-gated suite (store/db/secretstore/broker/api +
@@ -658,6 +786,21 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go build cache key date (one cache generation per job per day)
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-test-pg-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            go-test-pg-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-test-pg-
       # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
       # over a URL-form DSN, which can satisfy every precondition the append-only
       # probes guard on. With it set, a probe that would have SKIPPED (and so
@@ -696,6 +839,15 @@ jobs:
       - name: Say so if pg-test-reports did not upload
         if: always() && steps.upload_pg_test_reports.outcome == 'failure'
         run: echo "::warning title=Reports missing::pg-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
+      - name: Save Go build cache (push to main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-test-pg-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
 
   # ── supply-chain: trivy image scan (OS + language packages) ───────────────
   # D3. Covers a surface no existing gate does: `govulncheck` reads Go modules,
@@ -773,6 +925,20 @@ jobs:
         # would otherwise ship in an image CI built and never ran.
         if: matrix.name == 'agent-aws-sso' || matrix.name == 'agent-codex-cli'
         run: docker run --rm --entrypoint agent-run wardyn/${{ matrix.name }}:trivy-scan --selftest
+      # trivy-action's built-in cache (on by default) restores AND saves the
+      # vulnerability DB on every event, so each PR run wrote seven PR-scoped
+      # entries (issue #470). It is off here; the DB is restored below and saved
+      # only from a green push to main. TRIVY_CACHE_DIR is always this path.
+      - name: Trivy DB cache key date
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore trivy DB cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: cache-trivy-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            cache-trivy-
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: wardyn/${{ matrix.name }}:trivy-scan
@@ -781,6 +947,13 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore
           exit-code: '1'
+          cache: false
+      - name: Save trivy DB cache (push to main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.cache/trivy
+          key: cache-trivy-${{ steps.cache-date.outputs.date }}
 
   # ── supply-chain gates ────────────────────────────────────────────────────
   # One matrix job in place of five near-identical checkout + setup-go + one-
@@ -820,6 +993,21 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go build cache key date (one cache generation per job per day)
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-notices-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            go-notices-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-notices-
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9
@@ -831,6 +1019,15 @@ jobs:
       # Frozen lockfile: the notices must describe the pinned tree, not a resolved one.
       - run: pnpm -C ui install --frozen-lockfile
       - run: make notices
+      - name: Save Go build cache (push to main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-notices-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
 
   gates:
     runs-on: ubuntu-latest
@@ -846,8 +1043,34 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          cache: false
+      - name: Go build cache key date (one cache generation per job per day)
+        id: cache-date
+        run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+            ~/.cache/staticcheck
+          key: go-gates-${{ matrix.gate }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: |
+            go-gates-${{ matrix.gate }}-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-gates-${{ matrix.gate }}-
       - name: make ${{ matrix.gate }}
         run: make ${{ matrix.gate }}
+      - name: Save Go build cache (push to main only)
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+            ~/.cache/staticcheck
+          key: go-gates-${{ matrix.gate }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
 
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
