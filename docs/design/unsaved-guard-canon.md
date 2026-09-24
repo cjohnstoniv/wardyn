@@ -31,7 +31,7 @@ file-header note already recorded once).
 
 - **Q460-1 (sidebar placement).** Settings joins the sidebar as an **admin-only** entry, LAST, under
   a hairline divider. A member's own three-item nav (Runs · Approvals · Workspaces) is unchanged —
-  the item is gated on `role !== "member"` in `app-shell.tsx#SidebarNav`, the same file that already
+  the item is gated on `role !== "user"` in `app-shell.tsx#SidebarNav`, the same file that already
   gates it on identity being resolved (#217).
 - **Q460-2 (avatar menu).** The account menu (`top-bar.tsx`) keeps its own Settings entry, for every
   role, unconditionally — the sidebar addition is a second door, not a replacement. Existing muscle

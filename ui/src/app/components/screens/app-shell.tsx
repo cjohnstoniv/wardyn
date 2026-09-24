@@ -421,7 +421,7 @@ function SidebarNav({
   // #460 review — requires identityResolved TRUE, not merely "not yet known
   // to have failed": the account menu's own gate (TopBar, below) can afford
   // to show Settings the instant identity is anything but settled-and-failed,
-  // because role there gates nothing. This one does (role !== "member"), and
+  // because role there gates nothing. This one does (role !== "user"), and
   // role's fail-open default is "admin" (operator-context.tsx) until /me
   // actually resolves — the old `!(resolved && !identityResolved)` shape let
   // that default show Settings during the loading window, then yank it away
@@ -432,7 +432,7 @@ function SidebarNav({
   // three-item nav (navItemsForRole below) stays exactly as small as it was;
   // /settings is still reachable for a member, just from the account menu
   // (TopBar's own unconditional entry), not from here.
-  const settingsReachable = meta.identityResolved && meta.role !== "member";
+  const settingsReachable = meta.identityResolved && meta.role !== "user";
   // M-1b: /settings is deleted — Settings now lives at /admin/settings, Your
   // account at /account (both still mount the unsplit SettingsScreen until
   // M-5 splits it).

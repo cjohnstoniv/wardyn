@@ -513,7 +513,7 @@ func TestUIGateway_EnterRefusesAKeptRun(t *testing.T) {
 
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("kept run: %d %s", rec.Code, rec.Body.String())

@@ -263,7 +263,7 @@ func TestAttach_RefusesAKeptRun(t *testing.T) {
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), refused) {
 		t.Errorf("ticket mint: code=%d body=%q, want 409 %q", w.Code, w.Body.String(), refused)
 	}
-	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleMember, time.Now())
+	tok, err := mintAttachTicket(context.Background(), ast, run, types.ActorHuman, "alice", oidc.RoleUser, time.Now())
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}

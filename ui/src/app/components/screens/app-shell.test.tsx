@@ -541,16 +541,16 @@ describe("SidebarNav (member role — B3)", () => {
 
   it("Settings is absent from a member's sidebar", async () => {
     const user = userEvent.setup();
-    renderMobileNav("member");
+    renderMobileNav("user");
     await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
     expect(screen.queryByRole("link", { name: /^Settings/ })).toBeNull();
   });
 
   // #460 review (M13) — `role`'s own fail-open default is "admin"
   // (operator-context.tsx) while identity is still unresolved. Gating only
-  // on `role !== "member"` (as an earlier draft did) would show Settings
+  // on `role !== "user"` (as an earlier draft did) would show Settings
   // during that window for EVERY role — including a member, who then sees
-  // it vanish the instant their real "member" role lands. Pinning
+  // it vanish the instant their real "user" role lands. Pinning
   // identityResolved directly, independent of role, is what a mutation
   // dropping that clause back to the old shape would fail here.
   it("Settings is absent while identity is unresolved, even though role fails open to admin", async () => {
@@ -593,7 +593,7 @@ describe("SidebarNav (member role — B3)", () => {
 
   it("a member still reaches Settings from the account menu", async () => {
     const user = userEvent.setup();
-    renderTopBar("member");
+    renderTopBar("user");
     await user.click(screen.getAllByRole("button").at(-1)!);
     const menu = screen.getByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: /Settings/ })).toBeInTheDocument();
