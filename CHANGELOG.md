@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A tool call held for a human was denied at once instead of waiting (#711).** The control plane
+  answers a raised approval with the created row, which carries both its `id` and
+  `"state":"PENDING"`; `wardyn-toolgate` read any `state` as a `tool_rules` decision and denied
+  the call as an unrecognised state. It now polls whenever an `id` is present and reads a state
+  with no `id` as the run's own `tool_rules` answer (anything but `APPROVED` still denies).
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both

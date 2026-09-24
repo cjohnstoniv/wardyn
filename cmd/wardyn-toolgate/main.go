@@ -264,23 +264,23 @@ func (g *gate) create(a callArgs) (string, error) {
 	}
 	var out struct {
 		ID string `json:"id"`
-		// State is set ONLY when the run's own tool_rules already decided this
-		// call, in which case the proxy answers terminally and creates no
-		// approval row — there is nothing for a human to decide and nothing to
-		// poll. Absent on every other response, which is why it is read first
-		// and the id requirement applies only when it is missing.
+		// State without an id is the run's own tool_rules deciding this call:
+		// the proxy answered terminally and created no approval row, so there is
+		// nothing to poll. A created row carries an id AND "state":"PENDING", so
+		// the id is read first — a state beside an id is the row's, not a
+		// decision.
 		State string `json:"state"`
 	}
 	if err := json.Unmarshal(b, &out); err != nil {
 		return "", fmt.Errorf("approval create: unreadable response")
 	}
+	if out.ID != "" {
+		return out.ID, nil
+	}
 	if out.State != "" {
 		return "", decidedError{state: out.State}
 	}
-	if out.ID == "" {
-		return "", fmt.Errorf("approval create: no id in response")
-	}
-	return out.ID, nil
+	return "", fmt.Errorf("approval create: no id in response")
 }
 
 // decidedError carries a terminal state the PROXY already decided from the run's
