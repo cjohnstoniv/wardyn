@@ -500,6 +500,49 @@ func TestUIGateway_EnterRequiresRunningRun(t *testing.T) {
 	}
 }
 
+// TestUIGateway_EnterRefusesAKeptRun: a run the lease ended is RUNNING with
+// its agent stopped, so /enter must refuse it with a plain 409 rather than
+// minting a cookie and redirecting into a relay that dies on its first dial
+// (matching the attach gates' TestAttach_RefusesAKeptRun).
+func TestUIGateway_EnterRefusesAKeptRun(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	kept := h.run
+	endedAt := time.Now()
+	kept.LostAt, kept.LostReason = &endedAt, types.LostEnded
+	h.store.putRun(kept)
+
+	rec := h.enter(url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("kept run: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == uiCookieName {
+			t.Fatal("a kept run must not get a relay cookie")
+		}
+	}
+}
+
+// TestUIGateway_RelayRefusesAKeptRun: the per-connection dial gate re-checks
+// the run on EVERY new connection (not just at enter), so a session opened
+// before the run ended must stop working once it is kept, the same as a
+// stopped run.
+func TestUIGateway_RelayRefusesAKeptRun(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	good := h.openSession()
+
+	kept := h.run
+	endedAt := time.Now()
+	kept.LostAt, kept.LostReason = &endedAt, types.LostEnded
+	h.store.putRun(kept)
+
+	if rec := h.relay("/ide", good, nil); rec.Code != http.StatusConflict {
+		t.Fatalf("kept run: %d %s, want 409", rec.Code, rec.Body.String())
+	}
+}
+
 // TestUIGateway_EnterSetsRunScopedCookie pins the cookie's attributes. Path
 // scoping is the control that stops one run's page from making the browser
 // attach another run's session on a shared origin — and, since the path names

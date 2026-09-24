@@ -211,7 +211,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `expires_at` = min(requested_at + the run's wait, the run's end), and the approval sweep expires a
   request at that time as well as at the deployment cutoff. Migration
   `0072_agent_runs_run_limits` adds the four `agent_runs` columns; zero limits keep today's
-  behaviour. Nothing yet stops a run at its end or lets a user change it (#568, #569).
+  behaviour. Nothing yet lets a user change the end or the wait (#569).
+- **A run stops at its end and is kept (#568).** When a run's `ends_at` passes, it is stopped and
+  kept: its pending approvals are cancelled (`run_ended`), its broker credentials revoked, its agent
+  container stopped but not removed, and its proxy sidecar removed, so it has no network. It stays
+  `RUNNING` (and holds its concurrent-run slot) with `lost_at`/`lost_reason: "ended"` on the wire
+  until `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` = tear down at the end) runs out or someone
+  kills it; then it is torn down as `STOPPED`. A substrate that cannot keep a stopped sandbox
+  (Kubernetes), or an end that fails, tears the run down at its end instead, including when the
+  daemon restarts part-way through the end. Attaching to an ended run, or minting an attach ticket
+  for one, answers 409. `run.ending_soon` is audited 24 hours (for runs over two days), 1 hour and
+  10 minutes before the end; `run.ended` and `run.ended.expired` record the end and the grace running
+  out. Migration `0073_agent_runs_lease` adds `lost_at`, `lost_reason`, `ending_soon_for` and
+  `ending_soon_sec`.
 - **Console view routing: the Admin view lives under `/admin/*` (#632).** Every admin screen is
   also mounted at `/admin/…`, and `/account` opens today's Settings. A user who opens an
   Admin-view page gets a refusal page instead of the screen; an SSO admin in the User view is
