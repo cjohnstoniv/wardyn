@@ -103,7 +103,7 @@ test.describe("Recordings — disabled-recording reasons are visible text (#459)
     // substring match that this state's OWN heading, "No recordings yet",
     // also satisfies — ambiguous by design once both exist on screen.
     await gotoConsole(page);
-    await navToRoute(page, "/recordings");
+    await navToRoute(page, "/admin/recordings");
 
     await expect(page.getByRole("heading", { name: "No recordings yet", exact: true })).toBeVisible();
     await expect(
