@@ -99,6 +99,19 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 	if strings.Contains(goJob, "continue-on-error:") {
 		t.Errorf("a step in ci.yml's go job continues on error, so a failed suite or a missing profile can pass:\n%s", goJob)
 	}
+	// The docs-only replacement is a gate too: it runs only on an explicit
+	// 'false', its `go test` line is pinned whole (so nothing can be appended
+	// to swallow a failure), and a tagless leg that finds no guard package
+	// fails instead of passing empty.
+	for _, want := range []string{
+		"\n        if: matrix.suite != 'lint' && needs.changes.outputs.code == 'false'\n",
+		"\n" + `          WARDYN_TEST_PG='' go test -count=1 ${TAGS:+-tags "$TAGS"} $pkgs` + "\n",
+		"\n" + `            [ -n "$TAGS" ] || { echo "::error::no doc-reading guard test found; the discovery pattern regressed"; exit 1; }` + "\n",
+	} {
+		if !strings.Contains(goJob, want) {
+			t.Errorf("ci.yml's go job no longer carries the docs-only guard step's line %q:\n%s", want, goJob)
+		}
+	}
 	build := ciJobBlock(t, string(wf), "build")
 	for _, want := range []string{
 		"needs: [changes, go]",

@@ -190,7 +190,8 @@ jobs:
           files="$(git grep -l -E '"(\.\./)*(docs|threatmodel|ui|\.github)[/"]|CHANGELOG\.md|RELEASING\.md|AGENTS\.md|\.md["`]' -- '*_test.go')" || rc=$?
           [ "$rc" -le 1 ] || exit "$rc"
           if [ -n "$TAGS" ]; then
-            files="$(for f in $files; do grep -l -E "^//go:build .*\b${TAGS}\b" "$f" || true; done)"
+            # The tag as a positive term: `//go:build !docker` is not a docker file.
+            files="$(for f in $files; do grep -l -E "^//go:build (.*[^!a-z0-9_])?${TAGS}\b" "$f" || true; done)"
           fi
           pkgs="$(for f in $files; do dirname "$f"; done | sort -u | sed 's|^|./|')"
           if [ -z "$pkgs" ]; then
@@ -204,6 +205,8 @@ jobs:
       # No continue-on-error, unlike the other report uploads: `build` unions
       # these profiles, so a leg whose profile did not upload has not done its job.
       # overwrite: a "Re-run failed jobs" attempt re-uploads under the same name.
+      # if-no-files-found: error, so a leg that wrote no reports goes red itself
+      # rather than leaving `build` to fail later on a missing directory.
       - name: Upload the suite's reports and coverage profile
         if: always() && matrix.suite != 'lint' && needs.changes.outputs.code != 'false'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -211,6 +214,7 @@ jobs:
           name: go-test-reports-${{ matrix.suite }}
           path: test/reports/go/${{ matrix.suite }}/**
           overwrite: true
+          if-no-files-found: error
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
