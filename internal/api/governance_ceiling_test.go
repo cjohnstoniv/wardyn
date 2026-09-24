@@ -66,7 +66,7 @@ func govServer(st *capStore) *Server {
 // identity, group snapshot, and the snapshot's PF-26 completeness bit.
 func govMemberCtx(groups []string, truncated bool) context.Context {
 	return withOIDCGroupsTruncated(
-		withOIDCGroups(operatorCtx("sub-gov-bob", "bob@corp.example", oidc.RoleMember), groups),
+		withOIDCGroups(operatorCtx("sub-gov-bob", "bob@corp.example", oidc.RoleUser), groups),
 		truncated)
 }
 
@@ -153,7 +153,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		}
 		// And the HTTP shape a routed site would produce.
 		w := httptest.NewRecorder()
-		writeCeilingError(w, err)
+		writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("writeCeilingError(store failure) = %d, want 500", w.Code)
 		}
@@ -237,7 +237,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 			t.Errorf("stale snapshot maps to %d, want 403", code)
 		}
 		w := httptest.NewRecorder()
-		writeCeilingError(w, err)
+		writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusForbidden {
 			t.Errorf("writeCeilingError(stale) = %d, want 403", w.Code)
 		}
@@ -440,6 +440,60 @@ func TestEffectiveCeilingReintersectsGrants(t *testing.T) {
 	if !containsAll(strings.Join(got.Warnings, "\n"), "has-a-grant", "api_key") {
 		t.Errorf("warnings = %v, want one naming the profile and the dropped grant kind", got.Warnings)
 	}
+}
+
+// TestEffectiveCeilingWarnsOnDroppedPushRules pins #272: a profile narrower
+// than the deployment default on push_rules must say so at resolve time, not
+// drop the deployment's content rules in silence.
+func TestEffectiveCeilingWarnsOnDroppedPushRules(t *testing.T) {
+	profile := govProfile("no-push-rules")
+	st := &capStore{govProfile: profile, govTier: types.CapabilitySubjectGroup}
+
+	t.Run("deployment carries push_rules, profile does not: warns", func(t *testing.T) {
+		srv := govServer(st)
+		srv.cfg.DefaultPolicy.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}
+		got, err := srv.effectiveCeiling(govMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("effectiveCeiling: %v", err)
+		}
+		if got.Spec.PushRules.IsSet() {
+			t.Fatalf("profile ceiling unexpectedly carries push_rules: %+v", got.Spec.PushRules)
+		}
+		// BYTE-EXACT frozen copy (docs/design/governance-prompt.md §7.7,
+		// WARN_PUSH_RULES_DROPPED).
+		const want = `governance profile "no-push-rules": push_rules dropped — this profile's ceiling sets none, ` +
+			`so the deployment default's content rules do not apply to members of it`
+		if !slices.Contains(got.Warnings, want) {
+			t.Errorf("warnings = %v\nwant §7.7 BYTE-EXACT: %s", got.Warnings, want)
+		}
+	})
+
+	t.Run("deployment carries none either: no warning", func(t *testing.T) {
+		srv := govServer(st)
+		srv.cfg.DefaultPolicy.PushRules = nil
+		got, err := srv.effectiveCeiling(govMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("effectiveCeiling: %v", err)
+		}
+		if len(got.Warnings) != 0 {
+			t.Errorf("warnings = %v, want none — the deployment had no push_rules to drop", got.Warnings)
+		}
+	})
+
+	t.Run("profile carries its own push_rules: no warning", func(t *testing.T) {
+		profileWithRules := govProfile("has-push-rules")
+		profileWithRules.Ceiling.PushRules = &types.PushRulesSpec{DenyPaths: []string{"secrets/**"}}
+		st := &capStore{govProfile: profileWithRules, govTier: types.CapabilitySubjectGroup}
+		srv := govServer(st)
+		srv.cfg.DefaultPolicy.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}
+		got, err := srv.effectiveCeiling(govMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("effectiveCeiling: %v", err)
+		}
+		if len(got.Warnings) != 0 {
+			t.Errorf("warnings = %v, want none — the profile sets its own push_rules", got.Warnings)
+		}
+	})
 }
 
 // ─── the routed read surfaces ─────────────────────────────────────────────────

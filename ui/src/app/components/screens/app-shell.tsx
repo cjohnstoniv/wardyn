@@ -56,6 +56,7 @@ import { TopBar } from "./top-bar";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
 import { useShellView, useViewResync, ViewSwitch } from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
+import { NAV as SETTINGS_NAV } from "../../lib/unsaved-copy";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
@@ -312,7 +313,7 @@ const USER_NAV: NavItem[] = [
 // view.
 const ADMIN_LOWER: NavItem[] = [
   { to: "/admin/setup", label: "Setup", icon: Compass },
-  { to: "/admin/settings", label: "Settings", icon: Settings },
+  { to: "/admin/settings", label: SETTINGS_NAV.SETTINGS, icon: Settings },
 ];
 const USER_LOWER: NavItem[] = [
   { to: "/setup", label: "Getting started", icon: Compass },
@@ -377,6 +378,10 @@ const ModelAccessBanner = React.lazy(() =>
 // mock approval's third ruling.
 const ConfinementPostureBanner = React.lazy(() =>
   import("../wardyn/confinement-posture").then((m) => ({ default: m.ConfinementPostureBanner })),
+);
+// #484 — same lazy rationale; mounted between the two bands above.
+const EveryoneAdminBanner = React.lazy(() =>
+  import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
 );
 
 const navLinkClass = (isActive: boolean) =>
@@ -680,6 +685,11 @@ export function AppShell({
             <div role="status">
               <React.Suspense fallback={null}>
                 <ModelAccessBanner />
+              </React.Suspense>
+              {/* #484 — admins only: after the per-person credential block,
+              before the cluster-wide confinement note. */}
+              <React.Suspense fallback={null}>
+                <EveryoneAdminBanner />
               </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are

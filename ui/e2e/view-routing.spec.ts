@@ -36,7 +36,7 @@ const ssoAdmin = (page: Page) => patchJSON(page, "**/api/v1/me", (j) => { j.meth
 /** An SSO admin in the User view: the server answers them as a user, and says so. */
 const ssoAdminInUserView = (page: Page) =>
   patchJSON(page, "**/api/v1/me", (j) => {
-    Object.assign(j, { method: "sso", member_mode: true, role: "member", operator: false, security_operator: false });
+    Object.assign(j, { method: "sso", member_mode: true, role: "user", operator: false, security_operator: false });
   });
 
 function auditRequests(page: Page): string[] {
@@ -120,8 +120,13 @@ test.describe("view routing", () => {
 
   test("D1: a single-operator install lands in the Admin view's setup until onboarded, then in the User view", async ({ page }) => {
     let onboarded = false;
-    await patchJSON(page, "**/api/v1/setup/status*", (j) => {
-      Object.assign(j, { has_runs: false, onboarding_complete: onboarded });
+    // Cache-and-serve, not patchJSON: the second goto aborts the first page's
+    // in-flight /setup/status polls, and a route.fetch() per match then throws
+    // "Response has been disposed" (fixtures.ts#mockMemberSetupStatus).
+    let cached: Record<string, unknown> | null = null;
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      cached ??= (await (await route.fetch()).json()) as Record<string, unknown>;
+      await route.fulfill({ json: { ...cached, has_runs: false, onboarding_complete: onboarded } });
     });
     await page.goto("/");
     await expect(page).toHaveURL(/\/admin\/setup/);

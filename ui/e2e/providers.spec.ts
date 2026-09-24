@@ -278,12 +278,23 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // Save providers is STILL on screen — the draft is still there to save.
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeVisible();
 
-    // #217 — the changed field, as readable text (never the whole draft as
-    // JSON): the banner shows it before Copy is even pressed, then Copy
-    // confirms with a toast once it is.
-    await expect(page.getByText(/base_urls.*acme.*→.*acme.*corp\.example/s)).toBeVisible();
+    // #460 (Q460-3) — reversed from #217's "changed fields only" rule: the
+    // banner shows the WHOLE document (the edited row included), and Copy my
+    // changes puts exactly that on the clipboard, never just the diff. The
+    // <pre> is the banner's own preview — the same text also appears in the
+    // (still-mounted) textarea and the row's collapsed summary, so this is
+    // scoped to it rather than page.getByText, which would hit all three.
+    const documentPreview = page.locator("pre");
+    await expect(documentPreview).toContainText("https://github.com/acme");
+    await expect(documentPreview).toContainText("https://git.corp.example/team");
     await page.getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY }).click();
     await expect(page.getByText(PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST)).toBeVisible();
+    const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    const clipboardDraft = JSON.parse(clipboardText);
+    const githubRow = (clipboardDraft.git as { base_urls?: string[] }[]).find((g) =>
+      (g.base_urls ?? []).includes("https://github.com/acme"),
+    );
+    expect(githubRow?.base_urls).toEqual(["https://github.com/acme", "https://git.corp.example/team"]);
 
     // Discard mine and reload is still there, now beside Copy, not the only
     // exit.
@@ -307,7 +318,10 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await expect(row).toBeVisible();
     await row.locator("textarea").fill("https://github.com/acme\nhttps://git.corp.example/team");
     // The dirty marker beside Save — the same fact the guard is armed on.
-    await expect(page.getByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toBeVisible();
+    // #460 added the same "Unsaved changes" chip in three more places
+    // (PageHeader, Git tab, Storage tab), so this targets the beside-Save
+    // marker by its own testid rather than the now-ambiguous text.
+    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_DRAFT.UNSAVED_MARKER);
 
     await sidebarLink(page, "Settings").click();
     const dialog = page.getByRole("alertdialog");
@@ -770,6 +784,9 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
         // The SAME line again — the marker for "the sandbox reprinted itself",
         // not a second, different URL.
         ws.send(Buffer.from(`${DEVICE_VERIFICATION_URL}\n`));
+        // Frames are handled in order (attach-terminal.tsx's onmessage), so
+        // this marker on screen means the duplicate has been handled too.
+        ws.send(Buffer.from("\r\ne2e-after-duplicate\r\n"));
       });
       await context.route(`${DEVICE_VERIFICATION_URL.split("?")[0]}**`, (route) =>
         route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }),
@@ -785,8 +802,9 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
       context.on("page", (p) => newPages.push(p));
       await page.getByRole("button", { name: /start login/i }).click();
       await expect(page.getByTestId("auth-url-link")).toBeVisible();
-      // Give the second (duplicate) WS frame time to be processed.
-      await page.waitForTimeout(200);
+      await expect
+        .poll(() => page.locator(".xterm-screen").first().innerText().catch(() => ""))
+        .toContain("e2e-after-duplicate");
 
       expect(newPages).toHaveLength(1);
       expect(pageErrors).toHaveLength(0);
@@ -916,7 +934,7 @@ async function mockMemberBedrockRowRedacted(
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
-    json.role = "member";
+    json.role = "user";
     json.operator = false;
     json.security_operator = false;
     await route.fulfill({ response, json });

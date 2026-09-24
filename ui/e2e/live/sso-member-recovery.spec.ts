@@ -1191,13 +1191,26 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
 
   // The server's own story of THIS click: created (never refused), credentialed
   // on the fresh capture, and executed. A member reads their own run's trail.
-  const actions = (await page.evaluate(async (id: string) => {
-    const r = await fetch(`/api/v1/audit?run_id=${encodeURIComponent(id)}&limit=200`, { credentials: "include" });
-    const body = (await r.json()) as { items?: Array<{ action: string; outcome?: string }> } | Array<{ action: string; outcome?: string }>;
-    return (Array.isArray(body) ? body : (body.items ?? [])).map((e) => `${e.action}:${e.outcome ?? ""}`);
-  }, runID)) as string[];
+  // POLLED, not read once (#804): run.exec is a follow-on write after the
+  // create that already got this spec onto the run page, and under load the
+  // row can land after a single read — a live walk saw run.create,
+  // credential.mint, secret.read and identity.renew all present with run.exec
+  // still missing. Poll the trail (bounded by SANDBOX_UP, the same ceiling
+  // dispatch itself races against) until run.exec:success appears, and keep
+  // the LAST read for the assertions below rather than fetching again.
+  let actions: string[] = [];
+  const readAuditTrail = async (): Promise<string[]> => {
+    actions = (await page.evaluate(async (id: string) => {
+      const r = await fetch(`/api/v1/audit?run_id=${encodeURIComponent(id)}&limit=200`, { credentials: "include" });
+      const body = (await r.json()) as { items?: Array<{ action: string; outcome?: string }> } | Array<{ action: string; outcome?: string }>;
+      return (Array.isArray(body) ? body : (body.items ?? [])).map((e) => `${e.action}:${e.outcome ?? ""}`);
+    }, runID)) as string[];
+    return actions;
+  };
+  await expect
+    .poll(readAuditTrail, { timeout: SANDBOX_UP })
+    .toContain("run.exec:success");
   expect(actions, "the relaunch created the run").toContain("run.create:success");
-  expect(actions, "the run was dispatched on the fresh capture and executed").toContain("run.exec:success");
   expect(actions.filter((a) => a.startsWith("run.create:failure")), "never refused for its credential").toEqual([]);
 
   // The server agrees on both halves: the member is live again, and the run

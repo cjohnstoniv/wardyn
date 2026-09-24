@@ -43,7 +43,15 @@ type AuditFilter struct {
 	Actor        string          // exact principal, e.g. "alice@corp.example" (human evidence)
 	ActorType    types.ActorType // human / agent / system
 	Outcome      string          // success / failure / warn
+	Origin       string          // AuditOriginDevice or AuditOriginOrganisation
 }
+
+// The two AuditFilter.Origin values: rows a device forwarded, and rows the
+// organisation wrote itself (FederatedDeviceID decides which is which).
+const (
+	AuditOriginDevice       = "device"
+	AuditOriginOrganisation = "organisation"
+)
 
 // IsZero reports whether the filter narrows nothing.
 func (f AuditFilter) IsZero() bool { return f == AuditFilter{} }
@@ -64,6 +72,8 @@ func (f AuditFilter) Matches(ev types.AuditEvent) bool {
 	case f.ActorType != "" && ev.ActorType != f.ActorType:
 		return false
 	case f.Outcome != "" && ev.Outcome != f.Outcome:
+		return false
+	case f.Origin != "" && (FederatedDeviceID(ev) != nil) != (f.Origin == AuditOriginDevice):
 		return false
 	}
 	return true
@@ -115,6 +125,12 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 	}
 	if f.Outcome != "" {
 		add("outcome = $%d", f.Outcome)
+	}
+	switch f.Origin {
+	case AuditOriginDevice:
+		clauses = append(clauses, federatedRowSQL)
+	case AuditOriginOrganisation:
+		clauses = append(clauses, "NOT "+federatedRowSQL)
 	}
 	return clauses, args
 }

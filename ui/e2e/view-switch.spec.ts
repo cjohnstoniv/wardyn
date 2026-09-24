@@ -33,7 +33,7 @@ async function ssoAdminSession(context: BrowserContext, extra: Record<string, un
     const response = await route.fetch();
     const json = await response.json();
     Object.assign(json, { method: "sso", member_mode: session.userView }, extra);
-    if (session.userView) Object.assign(json, { role: "member", operator: false, security_operator: false });
+    if (session.userView) Object.assign(json, { role: "user", operator: false, security_operator: false });
     await route.fulfill({ response, json });
   });
   await context.route("**/api/v1/me/member-mode", async (route) => {
@@ -242,7 +242,7 @@ test.describe("the slimmed avatar menu and the preview", () => {
       const json = await response.json();
       Object.assign(json, { method: "sso", member_mode: session.userView, member_preview_available: !session.userView });
       if (session.userView) {
-        Object.assign(json, { role: "member", operator: false, security_operator: false, member_mode_no_credential: true });
+        Object.assign(json, { role: "user", operator: false, security_operator: false, member_mode_no_credential: true });
       }
       await route.fulfill({ response, json });
     });

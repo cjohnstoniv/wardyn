@@ -213,7 +213,7 @@ the developer is a **member**.
 | Setting | a′ (default) | m′ (member mode) |
 |---|---|---|
 | `WARDYN_LOCAL_MODE` | `true` — loopback callers are always admins | **`false`**, mandatory. Local mode bypasses public-API auth and would hand the developer admin outright |
-| OIDC | absent | **required** — the org IdP authenticates the developer and `deriveRole` maps them to `member`. `WARDYN_OIDC_ROLE_MAP` / `WARDYN_OIDC_OPERATOR_EMAILS` are MDM-set, and the developer is on neither |
+| OIDC | absent | **required** — the org IdP authenticates the developer and `deriveRole` maps them to `user`. `WARDYN_OIDC_ROLE_MAP` / `WARDYN_OIDC_OPERATOR_EMAILS` are MDM-set, and the developer is on neither |
 | `WARDYN_ADMIN_TOKEN` | not used | a **process credential** MDM injects and the developer does not read. It is never surfaced to the browser UI |
 | `WARDYN_MEMBER_MODE` | unset | **`true`** — asserts the above rather than enforcing anything new |
 
@@ -747,8 +747,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.10|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.10|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.12|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.12|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 
