@@ -342,7 +342,7 @@ const (
 	//
 	// It is mask-registered at dispatch, and ADMIN-ONLY by default: a member's
 	// env_secret grant is dropped unless the operator opens
-	// WARDYN_ALLOW_MEMBER_ENV_SECRET. Scope is {"name":"MY_TOKEN",
+	// WARDYN_ALLOW_USER_ENV_SECRET. Scope is {"name":"MY_TOKEN",
 	// "secret_name":"stored-name"}. See threatmodel/THREAT-MODEL.md §5.1a.
 	GrantEnvSecret GrantKind = "env_secret"
 )

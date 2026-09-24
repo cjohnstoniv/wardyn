@@ -194,7 +194,7 @@ type Config struct {
 	// LocalOperator is the principal stamped on runs/approvals/audit in
 	// LocalMode (e.g. "local:<os-user>"). Ignored unless LocalMode is true.
 	LocalOperator string
-	// MemberMode mirrors WARDYN_MEMBER_MODE (cmd/wardynd's validateMemberModePosture
+	// MemberMode mirrors WARDYN_USER_DESKTOP (cmd/wardynd's validateMemberModePosture
 	// already enforces its precondition at boot). internal/api did not carry this
 	// bit before #378/#379: it exists here so handleHealthz can compute
 	// token_login — a member-mode desktop's admin token is a PROCESS credential
@@ -340,7 +340,7 @@ type Config struct {
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
 	// MemberMounts is the operator/MDM-set posture for MEMBER-authored local_dir
-	// binds (WARDYN_MEMBER_WORKSPACE_ROOTS + _MAP + WARDYN_MEMBER_WRITABLE_ROOTS
+	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseMemberMountPolicy). The ZERO VALUE
 	// — the default — means a member may not onboard a host directory at all
 	// (repos and operator-owned workspaces are unaffected), which is the

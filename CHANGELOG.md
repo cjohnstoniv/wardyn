@@ -184,6 +184,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
+  `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
+  `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →
+  `WARDYN_USER_WRITABLE_ROOTS`; `WARDYN_MEMBER_WRITABLE_DENY` → `WARDYN_USER_WRITABLE_DENY`;
+  `WARDYN_ALLOW_MEMBER_ENV_SECRET` → `WARDYN_ALLOW_USER_ENV_SECRET`. Every deprecated name still
+  works and WARNs once at boot (`cliutil.EnvAlias`, `cmd/wardynd/boot_flags.go`'s
+  `resolveDeprecatedEnvAliases`) through 0.8.x; removed in 0.9 (user-types-design.md rev 4 §4's D5
+  ruling). When both spellings are set to different values the new one wins and boot WARNs naming
+  the ignored one. Compose forwards both spellings with EMPTY defaults, so an envelope still setting
+  `WARDYN_MEMBER_MODE=true` boots in member mode (`make compose-config` renders that envelope).
+  Helm's sso-only conflict guard refuses either name (`make helm-lint` checks both), the compose
+  env-forwarding block and `deploy/desktop/wardyn.env.m-prime.example` are updated to match, and
+  docs/ENV.md's six rows name their deprecated alias; docs/DESKTOP.md and docs/OPERATIONS.md use the
+  new names.
 - **The non-admin tier is renamed `member` → `user` (#608).** `/me.role`, a role-map value and
   `WARDYN_OIDC_DEFAULT_ROLE` now read `admin`, `security_admin` or `user`, and the console's
   People step offers "User". Migration `0074_user_tier_rename` rewrites every stored `member`:

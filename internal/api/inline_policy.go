@@ -364,7 +364,7 @@ func capEphemeralDiskPreview(spec *types.RunPolicySpec, maxEphemeralDiskMiB int)
 // scoped to `ceiling.Profile != nil`. A member with NO governance assignment —
 // the default posture, and every pre-0.7 deployment upgrading into 0.7 — ran no
 // member pipeline at all, so the control the docs state UNCONDITIONALLY
-// (threatmodel/THREAT-MODEL.md §5.1a, docs/ENV.md's WARDYN_ALLOW_MEMBER_ENV_SECRET
+// (threatmodel/THREAT-MODEL.md §5.1a, docs/ENV.md's WARDYN_ALLOW_USER_ENV_SECRET
 // row, docs/POLICIES.md's env_secret row) simply did not fire for them and the
 // operator's raw secret value reached their sandbox env at
 // resolveEnvSecretGrants. A ceiling-scoped gate must never carry a rule that is

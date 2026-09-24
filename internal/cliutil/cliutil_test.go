@@ -24,6 +24,31 @@ func TestEnvOr(t *testing.T) {
 	}
 }
 
+func TestEnvAlias(t *testing.T) {
+	for _, c := range []struct {
+		name, newV, oldV, wantNew string
+		wantAliased, wantIgnored  bool
+	}{
+		{name: "old set, new unset: copies old into new", oldV: "value", wantNew: "value", wantAliased: true},
+		{name: "both set, same value: new kept, nothing to report", newV: "v", oldV: "v", wantNew: "v"},
+		{name: "both set, different values: new wins, old reported ignored", newV: "new-value", oldV: "old-value", wantNew: "new-value", wantIgnored: true},
+		{name: "new set, old unset: no-op", newV: "new-value", wantNew: "new-value"},
+		{name: "neither set: no-op", wantNew: ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("CLIUTIL_NEW", c.newV)
+			t.Setenv("CLIUTIL_OLD", c.oldV)
+			aliased, ignored := EnvAlias("CLIUTIL_NEW", "CLIUTIL_OLD")
+			if got := os.Getenv("CLIUTIL_NEW"); got != c.wantNew {
+				t.Errorf("CLIUTIL_NEW = %q, want %q", got, c.wantNew)
+			}
+			if aliased != c.wantAliased || ignored != c.wantIgnored {
+				t.Errorf("EnvAlias = (aliased %v, ignored %v), want (%v, %v)", aliased, ignored, c.wantAliased, c.wantIgnored)
+			}
+		})
+	}
+}
+
 // resetFlags gives each case a private FlagSet (the helpers register on the
 // global flag.CommandLine) and captures flag's error stream so envFatal's
 // message is assertable instead of spraying the test log.

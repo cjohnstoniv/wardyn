@@ -686,7 +686,7 @@ func TestDriveCommentsDoNotClaimTheSpecJSONIsAReachableDriveInput(t *testing.T) 
 // operator being told.
 //
 // WARDYN_USER_DRIVE_HOST_ROOTS bounds where a SHARE may be rooted, and Wardyn
-// binds one person's subdirectory of it. WARDYN_MEMBER_WORKSPACE_ROOTS bounds
+// binds one person's subdirectory of it. WARDYN_USER_WORKSPACE_ROOTS bounds
 // what a MEMBER may onboard and bind WHOLE. Point both at /srv/shares and the
 // member surface hands out every person's home through a path that consults no
 // drive allocation — with both parsers returning no warning, because neither
@@ -736,7 +736,7 @@ func TestMountCeilingOverlapWarnings(t *testing.T) {
 			if !strings.Contains(got[0], tc.want) {
 				t.Errorf("warning = %q, want it to carry %q", got[0], tc.want)
 			}
-			for _, name := range []string{"WARDYN_MEMBER_WORKSPACE_ROOTS", "WARDYN_USER_DRIVE_HOST_ROOTS"} {
+			for _, name := range []string{"WARDYN_USER_WORKSPACE_ROOTS", "WARDYN_USER_DRIVE_HOST_ROOTS"} {
 				if !strings.Contains(got[0], name) {
 					t.Errorf("warning = %q does not name %s — an operator has two variables to choose between", got[0], name)
 				}

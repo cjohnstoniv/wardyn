@@ -992,10 +992,10 @@ migration `0050`)** are the second and third owned nouns after runs.
   `GET /workspaces` returns the caller's own rows plus the operator-owned ones,
   never another member's.
 - **A member's `local_dir` source is bounded by operator-set roots**:
-  `WARDYN_MEMBER_WORKSPACE_ROOTS` (and its per-member `_MAP`, which REPLACES the
+  `WARDYN_USER_WORKSPACE_ROOTS` (and its per-member `_MAP`, which REPLACES the
   shared list for a principal that has an entry) in [ENV.md](ENV.md). Unset = no
   member `local_dir` mounts at all (fail closed); writability needs the separate
-  `WARDYN_MEMBER_WRITABLE_ROOTS` minus `WARDYN_MEMBER_WRITABLE_DENY`.
+  `WARDYN_USER_WRITABLE_ROOTS` minus `WARDYN_USER_WRITABLE_DENY`.
 - **Offboarding is `POST /workspaces/{id}/reassign`** (admin-only): returns the
   row to the operator (`owned_by=""`) and audits `workspace.reassign` with the
   departed member in `from_owner`. Idempotent, so a sweep over a departing
@@ -1375,7 +1375,7 @@ the share mount, never holds a share credential, and never creates a volume with
 
 3. **Set the ceiling**: `WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives`
    ([ENV.md](ENV.md)). Unset means **no `host_path` drive may be registered at
-   all** — the same fail-closed posture `WARDYN_MEMBER_WORKSPACE_ROOTS` takes,
+   all** — the same fail-closed posture `WARDYN_USER_WORKSPACE_ROOTS` takes,
    one level up: a drive's `host_root` is authored in the database by an admin
    and its subdirectories are bound into *other people's* sandboxes, so the
    allowlist over it lives where a console compromise cannot reach it. The
@@ -1423,13 +1423,13 @@ the share mount, never holds a share credential, and never creates a volume with
    the same instant can still both be stored — the gate is a read followed by an
    unconditional write, and the database-level form is 0.7.1.
 
-   **And the drive ceiling must not overlap `WARDYN_MEMBER_WORKSPACE_ROOTS` —
+   **And the drive ceiling must not overlap `WARDYN_USER_WORKSPACE_ROOTS` —
    the member ceiling defeats per-person isolation where they meet.** Per-person
    isolation is the **bind of the subdirectory**: Wardyn hands a run one home out
    of the share and refuses a source that resolved to the root. A member
    workspace is a different surface with a different rule — a member names a
-   directory under `WARDYN_MEMBER_WORKSPACE_ROOTS` and binds it **whole**,
-   writable where `WARDYN_MEMBER_WRITABLE_ROOTS` allows it, and that path
+   directory under `WARDYN_USER_WORKSPACE_ROOTS` and binds it **whole**,
+   writable where `WARDYN_USER_WRITABLE_ROOTS` allows it, and that path
    consults no drive allocation at all. Point the two ceilings at one tree and a
    member onboards the share as a workspace and mounts **every** person's home.
    Each list is valid on its own, so wardynd compares the pair at boot and
@@ -1441,12 +1441,12 @@ the share mount, never holds a share credential, and never creates a volume with
 
    | Shape | The line says |
    |---|---|
-   | The two lists name the same tree | ``WARDYN_MEMBER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name "<p>": a member can onboard that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive allocation. Point the drive ceiling at the share and the member ceiling somewhere else`` |
-   | A member root CONTAINS a drive root | ``WARDYN_MEMBER_WORKSPACE_ROOTS contains "<m>", which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": a member can onboard that share as a workspace and bind it whole, every other person's home included, without a drive allocation. Point the member ceiling at a tree that does not contain the share`` |
-   | A member root is INSIDE a drive root | ``WARDYN_MEMBER_WORKSPACE_ROOTS contains "<m>", which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": member workspaces would be authored inside a share whose directories Wardyn hands out one person at a time. Point the member ceiling outside the share`` |
+   | The two lists name the same tree | ``WARDYN_USER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name "<p>": a member can onboard that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive allocation. Point the drive ceiling at the share and the member ceiling somewhere else`` |
+   | A member root CONTAINS a drive root | ``WARDYN_USER_WORKSPACE_ROOTS contains "<m>", which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": a member can onboard that share as a workspace and bind it whole, every other person's home included, without a drive allocation. Point the member ceiling at a tree that does not contain the share`` |
+   | A member root is INSIDE a drive root | ``WARDYN_USER_WORKSPACE_ROOTS contains "<m>", which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": member workspaces would be authored inside a share whose directories Wardyn hands out one person at a time. Point the member ceiling outside the share`` |
 
    Every member ceiling is compared, the shared list **and** each
-   `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP` per-principal override — an override
+   `WARDYN_USER_WORKSPACE_ROOTS_MAP` per-principal override — an override
    *replaces* the shared list, so it is a ceiling in its own right. The
    comparison is **lexical**, on the values as configured: boot is not the place
    to touch a share that may not be mounted yet.
@@ -1475,7 +1475,7 @@ WARDYN_USER_DRIVE_HOST_ROOT=/srv/wardyn-drives    # compose binds this one, RO, 
 
 in `deploy/compose/.env` (or the environment `docker compose` is run with).
 Unset, both default to nothing exposed — the same opt-in posture
-`WARDYN_WORKSPACES_ROOT` and `WARDYN_MEMBER_WORKSPACE_ROOTS` take.
+`WARDYN_WORKSPACES_ROOT` and `WARDYN_USER_WORKSPACE_ROOTS` take.
 
 **One root on Compose.** The ceiling is a CSV and may name several roots;
 the bind is singular, because compose cannot expand a CSV into volume lines. A
@@ -2201,7 +2201,7 @@ admin walking the member path, not an incident.
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyMemberGovernance`), since it runs at sandbox boot unattended the way exec does. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
-| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
+| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
 | `harness_login_mechanism_principal` | 0.7.3: `POST /setup/harness-login` under a `per_user` row, reached by the shared admin bearer token WITH OIDC CONFIGURED (`refuseHarnessLoginMechanismPrincipal`) — every capture made with that token would land in one namespace and overwrite the last person's session; a real console sign-in or `wdn_` token is reachable instead. Target `setup.harness_login`. Does not fire with no OIDC configured, where the admin token is the only working capture path — see "AWS SSO per person" | ⛔ `422` |
@@ -2422,7 +2422,7 @@ people's runs is registered outside the mode.
 > the plain toggle keeps working throughout, because the console sends the key
 > only for the new posture. Finish the rollout before you rely on what you see.
 
-Note the name collision: the `WARDYN_MEMBER_MODE` environment variable
+Note the name collision: the `WARDYN_USER_DESKTOP` environment variable
 ([ENV.md](ENV.md)) is a different, unrelated thing — a boot-time assertion that
 the human running a single-workstation daemon is a member. It adds no
 middleware and has nothing to do with this toggle, which is per-session and
