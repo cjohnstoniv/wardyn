@@ -20,29 +20,29 @@ type ADOGrantConfig struct {
 	Hosts        []string              `json:"hosts"`
 }
 
-// adoGrantsByHost is the ADOGrantSource the gate reads: one entry per covered host.
+// adoGrantsByHost is what the gate reads: the run's one grant, under each host
+// it covers. Nil == no host gated.
 type adoGrantsByHost map[string]ADOGrant
 
+// ADOGrantFor answers the run's grant for host; ok=false means the host is not
+// covered and the gate stands aside.
 func (m adoGrantsByHost) ADOGrantFor(host string) (ADOGrant, bool) {
 	g, ok := m[strings.ToLower(strings.TrimSuffix(host, "."))]
 	return g, ok
 }
 
-// newADOGrantSource builds the gate's source from configuration. It returns a
-// NIL INTERFACE, not an empty map, when nothing is configured: the gate reads
-// nil as "off", and a typed-nil map inside the interface would not be nil.
-func newADOGrantSource(grants []ADOGrantConfig) ADOGrantSource {
-	m := adoGrantsByHost{}
-	for _, g := range grants {
-		for _, h := range g.Hosts {
-			m[strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))] = ADOGrant{
-				Organization: g.Organization,
-				Capabilities: append([]adoscope.Capability(nil), g.Capabilities...),
-			}
-		}
-	}
-	if len(m) == 0 {
+// newADOGrantsByHost indexes the configured grant by host. It returns nil when
+// nothing is configured, which the gate reads as "off".
+func newADOGrantsByHost(g *ADOGrantConfig) adoGrantsByHost {
+	if g == nil || len(g.Hosts) == 0 {
 		return nil
+	}
+	m := adoGrantsByHost{}
+	for _, h := range g.Hosts {
+		m[strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))] = ADOGrant{
+			Organization: g.Organization,
+			Capabilities: append([]adoscope.Capability(nil), g.Capabilities...),
+		}
 	}
 	return m
 }

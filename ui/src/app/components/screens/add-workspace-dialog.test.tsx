@@ -18,10 +18,10 @@ vi.mock("../../lib/api/workspaces", () => ({ workspaces: { createWorkspace: vi.f
 vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn() } }));
 
 // 0.7 §B — the local_dir root hint follows the workspace-ownership namespace,
-// which /me keys on !isOperator (me.go), not on role === "member". A security
+// which /me keys on !isOperator (me.go), not on role === "user". A security
 // admin's workspaces are owner-stamped like a member's, so memberSourcesAllowed
 // clamps them at authoring time and ValidateMemberMountSource at bind time —
-// asking `role === "member"` here instead would never render the real
+// asking `role === "user"` here instead would never render the real
 // member_local_dir_root /me is already sending them, so a security admin
 // would type a path with no boundary shown and get refused later.
 function renderDialog(operator: boolean, root: string | null) {

@@ -36,7 +36,7 @@ const ssoAdmin = (page: Page) => patchJSON(page, "**/api/v1/me", (j) => { j.meth
 /** An SSO admin in the User view: the server answers them as a user, and says so. */
 const ssoAdminInUserView = (page: Page) =>
   patchJSON(page, "**/api/v1/me", (j) => {
-    Object.assign(j, { method: "sso", member_mode: true, role: "member", operator: false, security_operator: false });
+    Object.assign(j, { method: "sso", member_mode: true, role: "user", operator: false, security_operator: false });
   });
 
 function auditRequests(page: Page): string[] {

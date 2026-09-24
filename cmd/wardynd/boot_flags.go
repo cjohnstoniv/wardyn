@@ -221,6 +221,7 @@ type bootFlags struct {
 
 	approvalExpiryInterval *time.Duration
 	approvalExpiryAfter    *time.Duration
+	endedRunGrace          *time.Duration
 	auditCoalesceWindow    *time.Duration
 
 	envbuild     *bool
@@ -273,6 +274,15 @@ type bootFlags struct {
 	// turns them on; a stray WARDYN_ROTATE_AGE_KEY left in a compose .env would
 	// rotate the store on EVERY boot. See rotateAgeKeyMode (rekey.go).
 	rotateAgeKey *string
+	// migrateSecrets, migrateTo and reconcile are the store-mode maintenance
+	// modes (migrate_secrets.go); like rotateAgeKey they have NO env pair.
+	migrateSecrets *bool
+	migrateTo      *string
+	reconcile      *bool
+	// vault configures the Vault KV v2 external store, azure the Azure Key
+	// Vault one (secret_store.go).
+	vault vaultFlags
+	azure azureFlags
 
 	// allowMultiInstance is the runtime twin of the Helm chart's
 	// allowMultiReplica: it waives the single-instance boot lock
@@ -379,8 +389,8 @@ func parseBootFlags() *bootFlags {
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
 		// shape as -allow-plaintext-listen above.
 		allowOIDCNoOperatorList: flagBool("allow-oidc-no-operator-list", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST", false, "override: allow boot with OIDC SSO configured but WARDYN_OIDC_OPERATOR_EMAILS empty, i.e. — absent a WARDYN_OIDC_ROLE_MAP — every signed-in human admin-equivalent (normally refused — prefer setting the operator allowlist)"),
-		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an Entra App Role ("roles" claim), a "groups" claim entry, or an email to "admin", "security_admin" or "member" (e.g. "Wardyn.Admin=admin,Wardyn.Security=security_admin,eng-team=member"); when more than one matches, the HIGHEST tier wins (member < security_admin < admin). "security_admin" governs approvals, audit, permissions and governance profiles but never reaches another human's run, credentials or host config — and this map is the ONLY way to grant it. Empty (the default) disables role derivation: every signed-in human is "admin", exactly today's behavior`),
-		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "member") assigned when -oidc-role-map is set but nothing in a signed-in human's roles/groups/email matched an entry. "security_admin" is REFUSED here (boot fails closed): it is a mapped tier only, never the tier every unnamed human falls through to — name its App Role/group in -oidc-role-map instead. Empty (the default) DENIES that login instead, naming WARDYN_OIDC_ROLE_MAP in the error page. Ignored when -oidc-role-map is empty`),
+		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an Entra App Role ("roles" claim), a "groups" claim entry, or an email to "admin", "security_admin" or "user" (e.g. "Wardyn.Admin=admin,Wardyn.Security=security_admin,eng-team=user"); when more than one matches, the HIGHEST tier wins (user < security_admin < admin). The pre-0.8 value "member" is still accepted as "user", with a boot warning, until 0.9. "security_admin" governs approvals, audit, permissions and governance profiles but never reaches another human's run, credentials or host config — and this map is the ONLY way to grant it. Empty (the default) disables role derivation: every signed-in human is "admin", exactly today's behavior`),
+		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "user"; the pre-0.8 "member" is accepted as "user", with a boot warning, until 0.9) assigned when -oidc-role-map is set but nothing in a signed-in human's roles/groups/email matched an entry. "security_admin" is REFUSED here (boot fails closed): it is a mapped tier only, never the tier every unnamed human falls through to — name its App Role/group in -oidc-role-map instead. Empty (the default) DENIES that login instead, naming WARDYN_OIDC_ROLE_MAP in the error page. Ignored when -oidc-role-map is empty`),
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "override: allow an email-shaped value (contains \"@\") on a console People-step role mapping (POST /access/mappings). Refused by default — an SSO/Entra deployment's default posture steers to an App Role or group key instead; env WARDYN_OIDC_ROLE_MAP email keys are unaffected either way (legacy, still boot-warned separately)"),
 
 		dirProvider: flagEnv("directory-provider", "WARDYN_DIRECTORY_PROVIDER", "", `identity-directory connector for the console's "who" autocomplete (governance assignment subject, People-step mapping value): "entra" (Microsoft Graph) or empty. Empty (the default) is the whole feature OFF — no directory read, every field stays free text. Enabling it grants wardynd READ OF THE WHOLE DIRECTORY (users + groups, App Roles when consented) and adds daemon-side outbound HTTPS to graph.microsoft.com:443 — see docs/OPERATIONS.md`),
@@ -392,6 +402,7 @@ func parseBootFlags() *bootFlags {
 
 		approvalExpiryInterval: flagDuration("approval-expiry-interval", "WARDYN_APPROVAL_EXPIRY_INTERVAL", 10*time.Minute, "how often to sweep stale PENDING approvals (0 disables)"),
 		approvalExpiryAfter:    flagDuration("approval-expiry-after", "WARDYN_APPROVAL_EXPIRY_AFTER", 24*time.Hour, "PENDING approvals older than this are transitioned to EXPIRED"),
+		endedRunGrace:          flagDuration("ended-run-grace", "WARDYN_ENDED_RUN_GRACE", 7*24*time.Hour, "how long a run whose end has passed keeps its files — stopped, with no network and no broker credentials — before it is torn down (0 tears it down at its end)"),
 		// A maximum GAP between two IDENTICAL consecutive auth.failed rows, not a
 		// cap on how long a streak may run: the flood this bounds was one row a
 		// minute forever from one retrying sidecar, which the auth.failed rate
@@ -471,6 +482,13 @@ func parseBootFlags() *bootFlags {
 		rotateAgeKey: flag.String("rotate-age-key", "", "MAINTENANCE MODE, daemon must be STOPPED: mint a new age identity, rewrap every stored secret's data key from WARDYN_AGE_KEY's key to it in ONE transaction, "+
 			"replace the key file at `path` (previous kept as <path>.bak), then exit. Serves nothing. "+
 			"That file must already hold the CURRENT identity as a bare AGE-SECRET-KEY-... line (# comments allowed) — it is NOT an env file. See docs/OPERATIONS.md"),
+
+		// flag.Bool/flag.String, NOT the env helpers: no env pair by design.
+		migrateSecrets: flag.Bool("migrate-secrets", false, "MAINTENANCE MODE, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit. Idempotent and resumable. See docs/OPERATIONS.md"),
+		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
+		reconcile:      flag.Bool("reconcile", false, "MAINTENANCE MODE: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit (non-zero on any). Deletes nothing"),
+		vault:          registerVaultFlags(),
+		azure:          registerAzureFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address (e.g. ":2222"); empty (the default) disables the gateway entirely — no listener, no new surface`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address (e.g. ":8081"); empty (the default) disables the gateway entirely — no listener, no new surface. MUST differ from -listen: relayed pages are the sandbox's own code, and the separate origin is what keeps them away from the console's session`),

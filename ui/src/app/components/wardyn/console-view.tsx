@@ -43,9 +43,9 @@ export function viewAccess(me: { method: string; role: string; memberMode: boole
   if (me.method === "local") return "url";
   if (me.method === "sso") {
     if (me.memberMode) return "session-user";
-    return me.role === "member" ? "user-only" : "session-admin";
+    return me.role === "user" ? "user-only" : "session-admin";
   }
-  if (me.role === "member") return "user-only";
+  if (me.role === "user") return "user-only";
   return me.sso ? "admin-only" : "url";
 }
 
@@ -59,8 +59,9 @@ export function useViewAccess(): ViewAccess {
   return React.useContext(ViewAccessContext);
 }
 
-// The User-view pages the rules act on (§2.3). Every other user-side path is a
-// pre-split route that M-1b deletes; until then it is left exactly as it was.
+// The User-view pages the rules act on (§2.3). Every other user-side path was
+// a pre-split route; M-1b deleted them, so it now falls to the ordinary
+// catch-all like any other unmatched path.
 const TWIN = /^\/(runs(\/(?!new$)[^/]+)?|approvals|workspaces(\/[^/]+)?|secrets)$/;
 const USER_ONLY = /^\/(runs\/new|account|setup)$/;
 

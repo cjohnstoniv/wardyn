@@ -74,7 +74,7 @@ export function firstRunLanding(
   },
   role: Role = "admin",
 ): "/setup" | "/runs" {
-  if (role === "member") {
+  if (role === "user") {
     // A member always lands on their page (it is theirs to leave). Their
     // done-states come from creator-scoped listRuns observed live by the page
     // itself — never the install-global has_runs, and no longer a per-browser
@@ -149,7 +149,7 @@ export function setupGateActive(
   },
   role: Role = "admin",
 ): boolean {
-  // Deliberately `!== "admin"`, not `role === "member"`, now that role is
+  // Deliberately `!== "admin"`, not `role === "user"`, now that role is
   // three-valued: a security admin must not be walled into the deployer's
   // setup funnel. Every mutation the gate exists to drive (harness credential,
   // integrations, the shared LLM credential) is super-admin-only server-side,
