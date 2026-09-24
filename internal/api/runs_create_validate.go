@@ -463,7 +463,7 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
 	if err != nil {
-		writeCeilingError(w, err)
+		writeCeilingError(w, r, err)
 		return governanceCeiling{}, true
 	}
 	if s.denyMemberGovernance(w, r, req, ceiling) {

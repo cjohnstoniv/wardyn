@@ -131,6 +131,9 @@ spec:
     metadata:
       labels:
         {{- include "wardyn.labels" . | nindent 8 }}
+        {{- if eq (include "wardyn.azureWorkloadIdentity" .) "true" }}
+        azure.workload.identity/use: "true"
+        {{- end }}
       {{- $podAnnotations := .Values.podAnnotations | default dict }}
       {{- if .Values.defaultPolicy }}
       {{- /* Forces a rollout when the ConfigMap's content changes — a Deployment
@@ -254,6 +257,67 @@ spec:
                 secretKeyRef:
                   name: {{ include "wardyn.secretName" . }}
                   key: age-key
+            {{- end }}
+            {{- with .Values.secretStore }}
+            {{- if and .backend (ne .backend "pg") }}
+            - name: WARDYN_SECRET_STORE
+              value: {{ .backend | quote }}
+            {{- end }}
+            {{- if and .vault .vault.addr }}
+            # Store mode's Vault client (docs/OPERATIONS.md "Store mode").
+            - name: WARDYN_VAULT_ADDR
+              value: {{ .vault.addr | quote }}
+            {{- with .vault.namespace }}
+            - name: WARDYN_VAULT_NAMESPACE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: WARDYN_VAULT_AUTH
+              value: {{ .vault.auth | quote }}
+            {{- if eq .vault.auth "kubernetes" }}
+            - name: WARDYN_VAULT_AUTH_MOUNT
+              value: {{ .vault.authMount | quote }}
+            - name: WARDYN_VAULT_ROLE
+              value: {{ .vault.role | quote }}
+            - name: WARDYN_VAULT_K8S_TOKEN_FILE
+              value: "/var/run/secrets/wardyn-vault/token"
+            {{- else }}
+            - name: WARDYN_VAULT_TOKEN_FILE
+              value: {{ .vault.tokenFile | quote }}
+            {{- end }}
+            - name: WARDYN_VAULT_KV_MOUNT
+              value: {{ .vault.kvMount | quote }}
+            - name: WARDYN_VAULT_KV_PREFIX
+              value: {{ .vault.kvPrefix | default $.Release.Namespace | quote }}
+            - name: WARDYN_VAULT_KV_MAX_VERSIONS
+              value: {{ .vault.maxVersions | quote }}
+            {{- end }}
+            {{- if and .azure .azure.vaultUrl }}
+            # Store mode's Key Vault client (docs/OPERATIONS.md "Store mode:
+            # credentials in Azure Key Vault"). With workload identity the
+            # webhook sets AZURE_FEDERATED_TOKEN_FILE, which wardynd reads.
+            - name: WARDYN_AZURE_KV_URL
+              value: {{ .azure.vaultUrl | quote }}
+            - name: WARDYN_AZURE_AUTH
+              value: {{ .azure.auth | quote }}
+            {{- with .azure.tenantId }}
+            - name: WARDYN_AZURE_TENANT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .azure.clientId }}
+            - name: WARDYN_AZURE_CLIENT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .azure.authorityHost }}
+            - name: WARDYN_AZURE_AUTHORITY_HOST
+              value: {{ . | quote }}
+            {{- end }}
+            - name: WARDYN_AZURE_KV_PREFIX
+              value: {{ .azure.prefix | default $.Release.Namespace | quote }}
+            - name: WARDYN_AZURE_KV_MAX_VERSIONS
+              value: {{ .azure.maxVersions | quote }}
+            - name: WARDYN_AZURE_KV_PURGE
+              value: {{ .azure.purge | quote }}
+            {{- end }}
             {{- end }}
             {{- if not (hasKey .Values.env "WARDYN_RECORDING_STORE") }}
             # persistence.enabled is the SINGLE recording switch it is documented
@@ -461,6 +525,11 @@ spec:
               mountPath: /etc/wardyn/trusted-ca
               readOnly: true
             {{- end }}
+            {{- if eq (include "wardyn.vaultProjectedToken" .) "true" }}
+            - name: wardyn-vault-token
+              mountPath: /var/run/secrets/wardyn-vault
+              readOnly: true
+            {{- end }}
             {{- if $bootFiles }}
             - name: boot-secrets
               mountPath: {{ $filesDir }}
@@ -486,6 +555,18 @@ spec:
         - name: trusted-ca
           configMap:
             name: {{ include "wardyn.fullname" . }}-trusted-ca
+        {{- end }}
+        {{- if eq (include "wardyn.vaultProjectedToken" .) "true" }}
+        # A token for Vault alone: its audience is Vault's, so it is useless
+        # against the API server, and the kubelet refreshes it in place
+        # (wardynd re-reads it at every login).
+        - name: wardyn-vault-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ .Values.secretStore.vault.tokenAudience | quote }}
+                  expirationSeconds: {{ .Values.secretStore.vault.tokenExpirationSeconds }}
+                  path: token
         {{- end }}
         {{- if $bootFiles }}
         # 0440, not 0400: the files are root-owned, and the kubelet makes them

@@ -44,9 +44,15 @@ ok()  { echo "ok: $*"; }
 
 # ── 1. nightly notification coverage ─────────────────────────────────────────
 # e2e-live is the ONE deliberate exemption (pre-existing, uncharacterised
-# failures — see nightly.yml's own comment). notify-new-lanes cannot need itself.
+# failures — see nightly.yml's own comment). notify-new-lanes cannot need
+# itself. migration-merge-check is exempt too: it is red from its first run
+# and will stay red for as long as the lead renumbers migrations at merge
+# time (a live dry run found 0069 claimed by several open PRs) — its own red
+# X and step summary are its signal, not a "Still failing" comment on the
+# shared e2e-lane issue, which would mask a real e2e regression as queue
+# hygiene noise.
 NIGHTLY=.github/workflows/nightly.yml
-NOTIFY_EXEMPT="e2e-live notify-new-lanes"
+NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check"
 jobs="$(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$NIGHTLY" | tr '\n' ' ')"
 needs="$(awk '/^  notify-new-lanes:$/{n=1;next} n && /^    needs:/{print;exit}' "$NIGHTLY")"
 [ -n "$needs" ] || bad "$NIGHTLY: notify-new-lanes has no needs: line"
@@ -252,10 +258,10 @@ case "$compose_role_map_line" in
     *'${WARDYN_OIDC_ROLE_MAP:-}'*) ok "docker-compose.yaml's WARDYN_OIDC_ROLE_MAP is a plain passthrough (no runtime default)" ;;
     *) bad "docker-compose.yaml's WARDYN_OIDC_ROLE_MAP is not the bare passthrough \"\${WARDYN_OIDC_ROLE_MAP:-}\" any more (got: ${compose_role_map_line:-<no row found>}) — a non-empty \`:-\` default here silently denies logins on every upgraded deployment (R-03); see TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03" ;;
 esac
-if grep -qE '^WARDYN_OIDC_ROLE_MAP=demo@wardyn\.local=admin,member@wardyn\.local=member\s*$' deploy/compose/.env.example; then
+if grep -qE '^WARDYN_OIDC_ROLE_MAP=demo@wardyn\.local=admin,member@wardyn\.local=user\s*$' deploy/compose/.env.example; then
     ok "deploy/compose/.env.example still seeds the demo/member role-map pair for a fresh .env"
 else
-    bad "deploy/compose/.env.example no longer carries an UNCOMMENTED WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=member row — a fresh compose stack would lose the second identity the member-mode rider added, and this is the ONLY safe place for it (R-03: a docker-compose.yaml runtime default would apply to upgrades too)"
+    bad "deploy/compose/.env.example no longer carries an UNCOMMENTED WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=user row — a fresh compose stack would lose the second identity the member-mode rider added, and this is the ONLY safe place for it (R-03: a docker-compose.yaml runtime default would apply to upgrades too)"
 fi
 
 # ── 9. .gitleaksignore fingerprint churn — a fixture whose flagged value

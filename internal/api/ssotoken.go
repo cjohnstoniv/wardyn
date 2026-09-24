@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -71,6 +72,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
+		// 403, not 404, for a not-found run: same reason as refuseTerminalRun —
+		// claims.RunID comes from the presented run token, not a path parameter,
+		// so a run this store cannot find is that token's own authority gone.
+		// This branch does not split out store.ErrNotFound, so any other store
+		// failure currently answers the same 403.
 		writeError(w, http.StatusForbidden, "run not found for sso-token upload")
 		return
 	}
@@ -184,7 +190,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// member's own login sandbox could PUT over its own genuine capture as often
 	// as it liked — the exact overwrite this guard exists to refuse, reopened by
 	// reading the wrong namespace.
-	if prev, found, rerr := s.readAWSSSOBlob(r.Context(), scope); rerr != nil {
+	if prev, found, rerr := s.readAWSSSOBlob(secretstore.WithPurpose(r.Context(), secretstore.PurposeStatus), scope); rerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
 			loggedMsg(r.Context(), "read existing aws sso credential", rerr), &scope)
 		return

@@ -122,11 +122,12 @@ func NewGitHubMinter(store secretstore.Store, cfg GitHubMinterConfig) (GitHubMin
 // boot) for the life of the process. A read failure (secrets absent/invalid)
 // is returned to the caller (fail closed) and retried on the next mint.
 func (m *githubMinter) client(ctx context.Context) (*gh.Client, error) {
-	idRaw, err := m.store.Get(ctx, m.cfg.AppIDSecret)
+	rctx := secretstore.WithPurpose(ctx, secretstore.PurposeBrokerMint)
+	idRaw, err := m.store.Get(rctx, m.cfg.AppIDSecret)
 	if err != nil {
 		return nil, fmt.Errorf("broker: read github app id secret: %w", err)
 	}
-	pem, err := m.store.Get(ctx, m.cfg.PrivateKeySecret)
+	pem, err := m.store.Get(rctx, m.cfg.PrivateKeySecret)
 	if err != nil {
 		return nil, fmt.Errorf("broker: read github app private key: %w", err)
 	}
