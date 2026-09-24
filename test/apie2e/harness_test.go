@@ -234,6 +234,9 @@ type fakeRunner struct {
 	execCalls   int
 	stopCalls   int
 	killCalls   int
+	// specs is every SandboxSpec CreateSandbox was handed, in order — what
+	// dispatch told the sandbox (its env above all).
+	specs []runner.SandboxSpec
 }
 
 func newFakeRunner() *fakeRunner {
@@ -257,6 +260,7 @@ func (f *fakeRunner) Capabilities(context.Context) (runner.Capabilities, error) 
 func (f *fakeRunner) CreateSandbox(_ context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
 	f.mu.Lock()
 	f.createCalls++
+	f.specs = append(f.specs, spec)
 	f.mu.Unlock()
 	return runner.Sandbox{Ref: "fake-" + spec.RunID.String(), Driver: "fake", EnforcedClass: spec.ConfinementClass}, nil
 }
@@ -311,6 +315,18 @@ func (f *fakeRunner) KillSandbox(context.Context, string) error {
 
 // stopCount returns the StopSandbox call count under the lock (race-clean read
 // for the test, which races the detached completion watcher).
+// specFor is the SandboxSpec dispatched for runID, if CreateSandbox saw one.
+func (f *fakeRunner) specFor(runID uuid.UUID) (runner.SandboxSpec, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.specs {
+		if s.RunID == runID {
+			return s, true
+		}
+	}
+	return runner.SandboxSpec{}, false
+}
+
 func (f *fakeRunner) stopCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

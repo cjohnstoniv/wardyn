@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"path"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -98,14 +98,22 @@ func canonicalSourceIdentity(kind types.SourceKind, locator, ref string) (string
 // "MyGroup/MyRepo.git" back, not "mygroup/myrepo.git". A bare "<org>/<name>"
 // GitHub slug has no host component in the string itself and passes through
 // unchanged.
+//
+// It is STRING SURGERY, not a url.Parse/String round trip. The round trip
+// keeps a path whose escapes are valid exactly as written — "(", "'", "@",
+// "~", "&" and "!" included — but a path holding a raw non-ASCII character is
+// re-escaped wholesale by Go's rules ("é" becomes %C3%A9, and then "(" %28 and
+// "'" %27 too): a second spelling of the same repository, and for an Azure
+// DevOps name one repoLocatorPathSafe then refused outright. The path's one
+// spelling is canonicalRepoAddress's, which the doors apply before this.
 func canonicalRepoLocator(locator string) string {
-	if strings.Contains(locator, "://") {
-		if u, err := url.Parse(locator); err == nil && u.Host != "" {
-			u.Scheme = strings.ToLower(u.Scheme)
-			u.Host = strings.ToLower(u.Host)
-			return u.String()
+	if i := strings.Index(locator, "://"); i >= 0 {
+		end := len(locator)
+		if j := strings.IndexByte(locator[i+3:], '/'); j >= 0 {
+			end = i + 3 + j
 		}
-		return locator
+		host := max(i+3, strings.LastIndexByte(locator[:end], '@')+1)
+		return strings.ToLower(locator[:i+3]) + locator[i+3:host] + strings.ToLower(locator[host:end]) + locator[end:]
 	}
 	// scp-form user@host:path (no scheme) — lowercase only the host between
 	// '@' and the following ':'.
@@ -133,7 +141,7 @@ func canonicalRepoLocator(locator string) string {
 // narrowing: a source's contract may not carry integration:<id> keys.
 // Integrations compose at the aggregate (tier 3, owner decision); the fold
 // would pass them through unharmed, so relaxing later is this one branch.
-func validateSourceWrite(src types.Source) string {
+func validateSourceWrite(src types.Source, adoServerHosts []string) string {
 	switch src.Kind {
 	case types.SourceLocalDir:
 		if src.Locator == "" {
@@ -156,7 +164,7 @@ func validateSourceWrite(src types.Source) string {
 		// The write-door half of the traversal guard: refused here as
 		// a 400 regardless of provider mode, so a never-clonable locator cannot be
 		// AUTHORED and sit in the library waiting for a provider row to widen.
-		if !repoLocatorPathSafe(src.Locator) {
+		if !repoLocatorPathSafe(src.Locator, adoServerHosts) {
 			return fmt.Sprintf(repo400LocatorShape, "locator")
 		}
 		if repoCloneURL(src.Locator) == "" {
@@ -233,6 +241,10 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	ado := s.adoHostsLoader(r.Context()).forAddresses(req.Locator)
+	if req.Kind == types.SourceRepo {
+		req.Locator = canonicalRepoAddress(strings.TrimSpace(req.Locator), ado)
+	}
 	locator, ref := canonicalSourceIdentity(req.Kind, req.Locator, req.Ref)
 	// explicitName is captured BEFORE the lastPathSegment default below fills
 	// req.Name in — the identity-hit branch needs to tell "the operator typed
@@ -241,14 +253,14 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	// is indistinguishable from one that happens to equal the locator's tail.
 	explicitName := strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		req.Name = lastPathSegment(locator)
+		req.Name = lastPathSegment(locator, ado)
 	}
 	src := types.Source{
 		ID: uuid.New(), Kind: req.Kind, Locator: locator, Ref: ref, Name: strings.TrimSpace(req.Name),
 		Requirements: req.Requirements, Status: types.WorkspacePendingScan,
 		CreatedAt: s.cfg.Now().UTC(), UpdatedAt: s.cfg.Now().UTC(),
 	}
-	if msg := validateSourceWrite(src); msg != "" {
+	if msg := validateSourceWrite(src, ado); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -391,12 +403,20 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 }
 
 // lastPathSegment names a source from its locator when the caller didn't:
-// the trailing path/slug segment, or the locator itself when there is none.
-func lastPathSegment(locator string) string {
+// the trailing path/slug segment, or the locator itself when there is none. An
+// Azure DevOps repository is named by its decoded name — "Card Auth
+// (v2).Service", never "Card%20Auth%20(v2).Service".
+func lastPathSegment(locator string, adoServerHosts []string) string {
 	if locator == "" {
 		return locator
 	}
-	return path.Base(locator)
+	base := path.Base(locator)
+	if _, ado := adoscope.CanonicalRepoURL(locator, adoServerHosts); ado {
+		if name, err := adoscope.UnescapeName(base); err == nil {
+			return name
+		}
+	}
+	return base
 }
 
 // overridesBySourceID indexes existing's per-source Overrides by source id —
@@ -435,6 +455,7 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 	ctx := r.Context()
 	now := s.cfg.Now().UTC()
 	carried := overridesBySourceID(existing)
+	ado := s.adoHostsLoader(ctx)
 	atts := make([]types.WorkspaceAttachment, 0, len(srcs))
 	for _, src := range srcs {
 		switch src.Type {
@@ -454,7 +475,7 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 		newID := uuid.New()
 		row, err := s.cfg.Store.UpsertSource(ctx, types.Source{
 			ID: newID, Kind: kind, Locator: locator, Ref: ref,
-			Name: lastPathSegment(locator), Status: types.WorkspacePendingScan,
+			Name: lastPathSegment(locator, ado.forAddresses(locator)), Status: types.WorkspacePendingScan,
 			CreatedAt: now, UpdatedAt: now,
 		})
 		if err != nil {
@@ -482,7 +503,7 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 	var baseImageID *uuid.UUID
 	if baseImage != nil && baseImage.Kind != "" && baseImage.Kind != "recommended" {
 		row, err := s.cfg.Store.UpsertBaseImage(ctx, types.BaseImageEntry{
-			ID: uuid.New(), Kind: baseImage.Kind, Name: lastPathSegment(baseImage.Image),
+			ID: uuid.New(), Kind: baseImage.Kind, Name: lastPathSegment(baseImage.Image, nil),
 			Image: baseImage.Image, Steps: baseImage.Steps,
 			CreatedAt: now, UpdatedAt: now,
 		})

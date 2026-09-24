@@ -73,7 +73,7 @@ export function GettingStarted({
   React.useEffect(() => {
     markGateFired();
   }, []);
-  // Deliberately `!== "admin"`, not `role === "member"`, for the reason
+  // Deliberately `!== "admin"`, not `role === "user"`, for the reason
   // setupGateActive (setup/setup-gate.ts) is written the same way now that role
   // is three-valued: GET /setup/status is redacted for every non-operator
   // (handleSetupStatus -> redactSetupStatusForMember zeroes Checks, Providers

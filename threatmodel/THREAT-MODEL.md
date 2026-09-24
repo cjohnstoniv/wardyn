@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.10)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.12)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -177,7 +177,7 @@ invitation, not an embarrassment.
 | **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | Separate enforcement plane from B2 — a prior agent egress firewall was blind to MCP traffic, so tool egress is a first-class boundary. **Shipped half (v0.7):** a per-tool-call DECISION plane. `cmd/wardyn-toolgate` — an in-sandbox stdio MCP relay built into the agent images — is wired as claude's `--permission-prompt-tool` on a run dispatched with `tool_approvals=hold`; it raises each call through the proxy's brokered `POST /wardyn/v1/approvals`, and the run's OPERATOR-authored `tool_rules` are resolved PROXY-SIDE (`decideByToolRules`, outside the sandbox, on the policy the control plane resolved): `allow`/`deny` answer immediately with no human, `hold` raises the approval, and all three write a decision-log row. **Bypass class, and it is the whole boundary question:** the gate is IN-SANDBOX and COOPERATIVE — an agent that does not call it is not gated, the harness auto-approves its own read-only-safe command class without consulting it, and it covers one harness. A decision plane, not a containment one. Note also that `ToolAllow` is WIDENING authority evaluated outside the sandbox: an operator writing `tool_rules` is pre-approving calls no human will see. **Planned half:** interception of MCP tool-call EGRESS, which is what would make this a boundary rather than a protocol both sides have to honour. |
 | **B4 — Agent-run identity vs. token broker** | 🟢 shipped | SVID-authenticated; the broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | 🟢 shipped | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in §4. |
-| **B6 — Runner data plane vs. control plane** | 🟡 partial | mTLS via X.509-SVID **[planned, arrives with SPIRE]**. Today a per-run bearer token (minted by the embedded identity provider, verified via `internalAuth`) authenticates runner/sidecar callbacks over the operator's network — not mTLS. A compromised runner is assumed; the control plane never trusts runner-asserted identity claims. |
+| **B6 — Runner data plane vs. control plane** | 🟡 partial | **Transport: TLS with a pinned CA [v0.7.12 shipped].** Every proxy→control-plane call — the credential resolve (`GET /api/v1/internal/injection/{grant}`, the one API that returns a secret VALUE), mints, token renewal, decisions, approvals, uploads — rides wardynd's proxy-facing TLS listener (`WARDYN_INTERNAL_LISTEN`), and the proxy trusts only wardynd's own internal CA for it (`internal/hoptls`: minted on first boot into the secret store as `wardyn-internal-ca`, handed to each proxy in its sealed config; never the system roots, never `WARDYN_TRUSTED_CA_FILE`). `http://` is refused at wardynd boot and at proxy start unless the URL's host is loopback (`hoptls.CheckURL`). **Authentication: bearer, not mTLS.** A per-run token (minted by the embedded identity provider, verified via `internalAuth`) authenticates the proxy; mTLS via X.509-SVID is **[planned, arrives with SPIRE]**. So the pinned CA authenticates the server to the proxy, and the bearer the proxy to the server. **Residuals:** the console listener still answers `/api/v1/internal/*` in plaintext for callers that are not a proxy and for runs dispatched before an upgrade to 0.7.12. The standing one is `wardyn-tetragon-ingest`, whose audit-write-only bearer (`aud=wardyn-groundtruth`) still crosses in plaintext: that is an integrity exposure, not a confidentiality one — a captured token can forge ground-truth events until it rotates, and cannot read or mint a credential (#606). Test harnesses are the other caller; whoever can read wardynd's secret store with its age key holds the CA key, the same custody as the signing key. A compromised runner is assumed; the control plane never trusts runner-asserted identity claims. |
 | **B7 — Control plane vs. SIEM/customer** | 🟢 shipped | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
 | **B8 — Untrusted build container vs. host daemon + registry** | 🟢 shipped | The devcontainer build / BYOI wrap (`internal/envbuild`) runs on the HOST Docker daemon, before any confinement tier exists. Capped (CapDrop ALL, resource limits) but not sandboxed by a Confinement Class and not behind `wardyn-proxy`; reaches only `WARDYN_ENVBUILD_BUILD_NETWORK` (compose default: the sandboxes' own bridge, never `host`) plus the layer-cache registry. Residual #13. |
 | **B9 — SSH gateway pre-auth listener vs. everything else** | 🟢 **[v0.5+ shipped]** | An anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`). The DAEMON default is off — no var set, no listener, no host key generated — but **two shipped deployments turn it on for every install**: the one-line installer writes `WARDYN_SSH_LISTEN=:2222` into every `.env` it creates *and backfills it on upgrade*, and the desktop envelope ships it on. So this boundary is live on every managed laptop and every `curl … | sh` box, bound to loopback by the compose host-port publish (`127.0.0.1:2222`) rather than left unexposed. Registered-public-key-only auth; the trust root is the `ssh_public_keys` registry a human writes via self-service `/api/v1/me/ssh-keys`, so this boundary is exactly as strong as that registration step and the pre-auth DoS bounds (§4). Once authenticated, a session is bounded by owner-or-admin authorization (residual #15) and runs entirely inside B1: shell/exec/sftp/`-L` are bridged into the EXISTING sandbox via the same `Runner.Attach`/`ExecStream` calls the browser terminal uses. A new front door, not a new back door. |
@@ -266,6 +266,7 @@ fail-closed gate".
 | Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source, gated additively: operator deny-list, then a canonicalized real path inside an operator/MDM-set root, then a credential-dotfile deny-list. Unset roots = no member host mounts at all. Mechanism: §4.4. Residuals #25, #26 | B1, ID |
 | Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` → `kernel.*` via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. PTY replay is tamper-EVIDENT, not tamper-proof: the upload route accepts a run-token-authenticated PUT for the run's whole lifetime and upserts on conflict, so an in-sandbox actor can overwrite its own cast before the run ends — but every upload emits its own `recording.upload` row, so the overwrite is visible even though the replaced bytes are not recoverable. Detection-only (the `ld-linux`/`mmap` bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable`); host eBPF is blind inside CC3/Kata (`kernel.sensor.blind`). | AU |
 | Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean. Detail: §4.5 | AU |
+| Stored credential moved or forged by a DATABASE writer | **[v0.7.12 shipped]** Every `secrets` row is envelope v1 (`0069_secret_envelope_v1.sql`, `internal/secretstore/pg`): a fresh 32-byte data key per save seals the value with AES-256-GCM, bound as associated data to the row's own `(owned_by, name)`, and the data key is wrapped by a key-encryption key bound to the same pair and its `kek_id` (`internal/secretstore/kek`). A ciphertext moved to another person, another name, or into the operator's slot fails that check; the `local` KEK is derived from `WARDYN_AGE_KEY` with HKDF-SHA256 and is symmetric, so the public age recipient no longer lets anyone write a row that opens. Every refusal names the row, never the value, and is never read as "not found" — so `loadOrCreateSecret` fails boot rather than minting a fresh signing key over a tampered one. Pre-envelope rows are converted once at boot and never read again. After that, an older wardynd still running is refused by name ("an older wardynd is still writing"): a new name it inserts lands as v0 and the next boot converts it; a name it replaces keeps its v1 columns around an age payload and must be set again | Swapping a credential between people or names (F1); forging a credential from the public recipient (F2). NOT a restored old row — residual 48 |
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | Docker: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Kubernetes: default-deny east-west NetworkPolicy **[shipped]** (empty-ingress + own-proxy-only egress per sandbox pod, `internal/runner/k8s/sandbox.go`). | B1, L0 (L1), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) 🟡 **[planned]**. | AU |
@@ -1163,7 +1164,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       hiding a group DENY, and a deny beats an allow. The refusal is SCOPED to
       deployments that actually hold a group deny row of that kind, so an upgrade
       with no such rows still changes nothing, and it sits ABOVE the enforcement
-      switch (`capAllowed` evaluates deny before `capEnforced`), so an unenforced
+      switch (`capAllowed` evaluates deny before `capBatch.enforced`), so an unenforced
       kind no longer rescues the request. **What remains open** is the reachability,
       not the resolution: the caller still cannot USE their group grants until they
       sign in again or re-mint, the condition reports distinctly as
@@ -1877,6 +1878,64 @@ hiding them would repeat the failure mode we are designed to avoid.
     asked for CC1" from "CC1 is what today's runner had to offer," which an
     `enforced` value of CC1 alone cannot say on its own.
 
+48. **A database writer can put a stored credential BACK, and the local key sits
+    beside the data (0.7.12, envelope v1).** Envelope v1 binds each row to its own
+    `(owned_by, name)` and makes forgery need the key-encryption key (§4), but
+    three things stay open. (a) **A restored row still opens:** a superseded or
+    deleted row copied back — from WAL, a replica or a backup — into the SAME
+    `(owned_by, name)` passes its binding and unwraps while that key-encryption
+    key lives, so a Replace, a delete and every future erase are reversible by a
+    database writer until the key is rotated past the old wrap
+    (`wardynd -rotate-age-key`). A database writer is already super-admin
+    equivalent (`role_mappings`, asset 8), so this is disclosed, not engineered
+    around. (b) **The `local` KEK is the only one so far:** whoever
+    holds both the database (or a backup) and `WARDYN_AGE_KEY` reads every value,
+    offline and unlogged; a deleted credential still decrypts from any earlier
+    backup while both exist — the erasure horizon is the deployment's backup
+    retention. A key service (Vault/OpenBao Transit, Azure Key Vault) that keeps
+    the KEK away from the database is the next lane, not this one. (c)
+    **Metadata stays in the clear:** who holds which named credential, and since
+    when, is readable to anyone who can read the table.
+
+49. **One age key guards every stored credential AND the daemon's own
+    signing keys: one key, one shared blast radius.** `WARDYN_AGE_KEY` (or
+    `WARDYN_AGE_KEY_FILE`) is the root of all Postgres secret-store encryption
+    (`internal/secretstore/pg`): the age identity rows are encrypted under, or,
+    with envelope encryption, the input the local KEK is HKDF-derived from.
+    Two things are stored under it in the same table. First, every credential
+    kept in the secret store: model API keys, forge tokens, SSH keys, captured
+    AWS SSO sessions. Second, up to four process-global keys that
+    `loadOrCreateSecret` (`cmd/wardynd/main.go`) mints on first use:
+    - the embedded-identity ES256 signing key (`wardyn-signing-key`), always
+      present, which signs every run-identity token (SVID) and the ground-truth
+      sensor token;
+    - the OIDC session-cookie HMAC key (`wardyn-session-key`), only when an
+      OIDC issuer is configured;
+    - the SSH gateway host key (`wardyn-ssh-host-key`), only when
+      `WARDYN_SSH_LISTEN` is set;
+    - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when
+      `WARDYN_UI_SANDBOX_LISTEN` is set.
+
+    An attacker who holds the age key and a read of that table (the DSN, a
+    backup or a replica) therefore holds all of it at once. That means every
+    stored credential in cleartext and run-identity tokens the broker accepts.
+    Wherever those features are on, it also means a console session forged for
+    any human (admin included), forged UI relay cookies and the SSH gateway's
+    identity. The age key alone, without the ciphertext, decrypts nothing.
+
+    **Not under the age key:** the admin token, the OIDC and directory client
+    secrets, and the DSN. These boot secrets are read from env or their
+    `_FILE` twin, and each is its own blast radius (the admin token is full
+    API admin by itself).
+
+    `-rotate-age-key` re-encrypts every row, or rewraps every row's data key,
+    under a new identity. It does not re-key the boot keys: their plaintext
+    survives a rotation, so a compromise that happened before the rotation
+    still covers them.
+
+    **Planned for 0.8:** separate the boot keys from the credential store's
+    key, so that one compromise no longer yields both.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto. Raised
@@ -2297,7 +2356,7 @@ opaque tunnel and is never offered the operator's bearer.
   by an in-process test, and the full container path by `TestLive_SubscriptionInject`
   (`test/e2e/live/subscription_test.go`; Docker-gated, not in default CI).
   **Interactive** runs install the per-run CA too: the container's main process is
-  `agent-run --idle` (`idleCmd`, `internal/runner/docker/driver.go`), which calls
+  `agent-run --idle` (`idleCmd`, `internal/runner/docker/driver_network.go`), which calls
   the same `install_mitm_ca` batch runs use (`deploy/images/claude-code/agent-run`,
   `deploy/images/common/agent-run-lib.sh`), so a human driving `claude` in the
   attach shell trusts the proxy's TLS termination exactly as a batch run does. SDK
@@ -2412,12 +2471,13 @@ on the row that means "this install cannot tell you about its network".
 **On a healthy Helm install, none of the three blocking rows is ever set — the gate is
 effectively inert there.** `runner` fails only with no live confinement class at all;
 `confinement_floor` warns only when the configured floor is a class the runner does
-not advertise; `sso_rbac` warns only with OIDC configured and no role mapping — though that
-last one is not merely a misconfiguration: a single-operator deployment, or one whose
-operator allowlist already separates admins from members, is a perfectly fine install
-that this row still holds in the funnel until onboarding completes. A correctly
+not advertise; `sso_rbac` warns only with OIDC configured and neither a role mapping nor an
+operator allowlist (#484) — though that last one is not merely a misconfiguration: a
+single-operator deployment is a perfectly fine install that this row still holds in the
+funnel until onboarding completes. A correctly
 configured multi-user Kubernetes deployment (a registered RuntimeClass, a floor the
-chart's values actually advertise, `WARDYN_OIDC_ROLE_MAP` or a People-step mapping set)
+chart's values actually advertise, `WARDYN_OIDC_ROLE_MAP`, a People-step mapping or an
+operator allowlist set)
 never trips any of the three, so the funnel exists for the FIRST-run and
 misconfiguration cases this gate was built for, and simply never fires again once an
 install is healthy — which is the intended shape (the same "a place you go, not a wall
@@ -2517,7 +2577,20 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
   allow — four compressed 31 MiB blobs are a 34 KB request — and the proxy
   sidecar has a hard 256 MiB cap. Inspection takes the same process-wide slot
   and retained-bytes budget as LLM request scanning, and a push that cannot get
-  them in time is refused, never forwarded unread.
+  them in time is refused, never forwarded unread. The slot is one wide
+  (`internal/egress/proxy`'s `maxConcurrentScans`), so inspections run one at a
+  time. One inspection is bounded beyond its body at about 232 MiB, as
+  `internal/gitpack`'s package comment breaks down: `maxInflatedBytes` (128 MiB)
+  of inflated objects, per-object bookkeeping held under 160 bytes an object by
+  `maxObjects` (200,000; about 30 MiB), and a change set of at most
+  `maxChanges` entries, plus one delta result (up to `maxObjectBytes`) that is
+  built before it is charged. Before #250 the object ceiling was 1,048,576, and a
+  legal 16.8 MB pack of that many near-empty blobs was inspected while holding
+  656 MiB; it is now refused as uninspectable. The residual is that the
+  ceilings are not sized jointly to the sidecar: a 64 MiB body (the most
+  `max_inspect_pack_mib` admits) inflating to every ceiling at once, beside a
+  full 64 MiB retained-bytes budget, would pass 256 MiB, and the inflation
+  ceiling is the term to lower if that shape matters.
 - **The key lane is not covered at all.** An `ssh_key` grant is an opaque
   tunnel with no broker seam, so a policy that sets `push_rules` while
   `ssh_key` is the run's only git-capable grant is graded a medium-risk warning
@@ -2970,7 +3043,7 @@ six of nine had rotted onto unrelated code (one past EOF) once the files split.
 The mechanism is structural and tier-independent: (1) the per-run Docker network
 is created with `Internal: true` (no gateway), so the agent container has no
 default route regardless of confinement class — the `NetworkCreate` in
-`CreateSandbox` (`internal/runner/docker/driver.go`); (2) the agent joins ONLY that
+`CreateSandbox` (`internal/runner/docker/driver_network.go`); (2) the agent joins ONLY that
 network — `CreateSandbox` step (3) attaches it at create time via `NetworkMode` +
 `NetworkingConfig`, never the host bridge, and `HTTP_PROXY`/`HTTPS_PROXY`
 (`buildBaseSandboxEnv`, `internal/api/runs_dispatch_mounts.go`) are a convenience

@@ -35,7 +35,7 @@ var terminalRunStates = map[string]bool{
 // decidable for 24h — long enough for an `always` approve to be replayed into
 // the workspace allowlist for a sandbox that no longer existed.
 //
-// A FIFTH writer added anywhere in internal/api or cmd/wardynd reds this test,
+// A new writer added anywhere in internal/api or cmd/wardynd reds this test,
 // which is the point: the author must say which treatment it gets before the
 // transition can ship.
 var terminalWriterCensus = map[string]string{
@@ -48,10 +48,13 @@ var terminalWriterCensus = map[string]string{
 	"sweepRunWatchers":         "reconcileFinalize -> finalizeRunTail",
 	"reconcileWatch":           "reconcileFinalize -> finalizeRunTail",
 	// (2) The kill switch, which deliberately does NOT route through the tail.
-	// handleKillRun is the HTTP half only; the cascade is killRunCascade, which
-	// the login supersede (supersedeCallerLoginRuns) calls too — one cascade with
-	// two callers, so the approval treatment cannot drift between them.
-	"killRunCascade": "calls cancelRunApprovals directly",
+	// handleKillRun is the HTTP half only; the cascade is killRunCascade
+	// (claimKillTransition then killTeardownTail — #122 split the CAS out of the
+	// slow teardown so the login supersede could claim it synchronously and hand
+	// the teardown to a detached goroutine). claimKillTransition is the writer:
+	// it owns the CAS and calls cancelRunApprovals directly, right after. Both
+	// killRunCascade's caller (handleKillRun) and supersedeOneLoginRun call it.
+	"claimKillTransition": "CASes, then calls cancelRunApprovals directly",
 	// (3) The idle reaper, in this package. Reaches the same helper through
 	// api.Server.CancelTerminalRunApprovals, threaded in at boot.
 	"StopRun": "calls cancelApprovals (api.Server.CancelTerminalRunApprovals)",
@@ -65,6 +68,10 @@ var terminalWriterCensus = map[string]string{
 	// which was false at three call sites and is what let a PENDING approval sit
 	// in the queue for 24h and expire as "nobody answered".
 	"failAndRevoke": "calls cancelRunApprovals when from==RunRunning; exempt below it",
+	// (5) The lease (#568): a run whose end passed and could not be kept, or
+	// whose ended-run grace ran out. CASes RUNNING->STOPPED, then
+	// finalizeRunTail.
+	"stopEndedRun": "CASes, then finalizeRunTail",
 }
 
 // TestTerminalRunStateWriterCensus scans every non-test .go file in internal/api

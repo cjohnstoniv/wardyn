@@ -28,10 +28,14 @@ import { SHELL } from "../wardyn/copy";
 import { lastCheckedLabel } from "../../lib/readiness";
 import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { SidebarSettingsLink } from "./sidebar-settings-link";
-// GOVERNANCE.TITLE is ONE string for two places — this nav label and the
-// screen's own heading — the way every other nav entry already works. There is
-// no second "Governance profiles" label (governance-prompt.md §7.2).
-import { GOVERNANCE } from "../../lib/governance-copy";
+// GOVERNANCE_NAV_TITLE is ONE string for two places — this nav label and the
+// governance screen's own heading (governance-copy.ts's GOVERNANCE.TITLE reads
+// the same constant) — the way every other nav entry already works. There is
+// no second "Governance profiles" label (governance-prompt.md §7.2). Imported
+// from nav-copy.ts rather than governance-copy.ts itself so the eager sidebar
+// doesn't drag the whole §7.2-§7.9 screen-only canon table into the entry
+// chunk (#498) for one string.
+import { GOVERNANCE_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
@@ -45,6 +49,7 @@ import {
 } from "../wardyn/operator-context";
 import { health as api, type MeUserDrive } from "../../lib/api/health";
 import { TopBar } from "./top-bar";
+import { ViewAccessProvider, viewAccess } from "../wardyn/console-view";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
@@ -130,6 +135,9 @@ export interface ShellMeta {
    *  confirm" (a k8s daemon that omitted the verdict) apart. */
   runner: string;
   networkPolicy: string;
+  /** /healthz's `sso`: OIDC is configured. With it, the admin token is not a
+   *  person and has no User view (console-view.tsx#viewAccess). */
+  sso: boolean;
 }
 
 /** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
@@ -160,6 +168,7 @@ function useMeta(): [ShellMeta, () => void] {
     memberPreviewAvailable: false,
     runner: "",
     networkPolicy: "",
+    sso: false,
   });
   React.useEffect(() => {
     let alive = true;
@@ -194,6 +203,7 @@ function useMeta(): [ShellMeta, () => void] {
           memberPreviewAvailable: me?.member_preview_available ?? false,
           runner: h.runner ?? "",
           networkPolicy: h.network_policy ?? "",
+          sso: h.sso ?? false,
         });
       })
       .catch(() => {
@@ -275,21 +285,24 @@ const NAV_ITEMS: NavItem[] = [
     badge: "approvals",
   },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
-  { to: "/policies", label: "Policies", icon: UserCog },
+  // M-1b: these five live only under /admin/* now (the plain paths are
+  // deleted) — their own screen isn't in the User view at all, so there's no
+  // twin redirect to lean on the way Runs/Approvals/Workspaces/Secrets do.
+  { to: "/admin/policies", label: "Policies", icon: UserCog },
   // Governance (0.7) sits BETWEEN Policies and Permissions so the three read as
   // one narrowing sequence: the deployment ceiling, the ceilings assigned over
   // it, then the grants layered inside one (mock Q1). Not in MEMBER_NAV_PATHS —
   // a member never sees it, and there is no member governance route; its own
   // routes are securityOps server-side.
-  { to: "/governance", label: GOVERNANCE.TITLE, icon: Scale },
+  { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
   // Permissioning (0.6 pillar 2) sits beside Policies: both answer "what is
   // allowed here", one for runs and one for the humans launching them. It is
   // admin-only — deliberately NOT in MEMBER_NAV_PATHS below, and every route
   // behind it is operatorOnly server-side.
-  { to: "/permissions", label: "Permissions", icon: Users },
+  { to: "/admin/permissions", label: "Permissions", icon: Users },
   { to: "/secrets", label: "Secrets", icon: Lock },
-  { to: "/audit", label: "Audit", icon: ScrollText },
-  { to: "/recordings", label: "Recordings", icon: Play },
+  { to: "/admin/audit", label: "Audit", icon: ScrollText },
+  { to: "/admin/recordings", label: "Recordings", icon: Play },
 ];
 
 // Member console (B3): a member launches/governs only THEIR OWN runs — nav is
@@ -320,12 +333,12 @@ function navItemsForRole(role: Role, identityResolved: boolean): NavItem[] {
   // operator-context.tsx: never harden it), because the answer to a guess is
   // not a different guess, it is declining to draw one.
   if (!identityResolved) return [];
-  // `!== "member"` and NOT `=== "admin"`, which is what makes this correct
+  // `!== "user"` and NOT `=== "admin"`, which is what makes this correct
   // unchanged under the three-tier model: a SECURITY ADMIN gets the full nav
   // (they reach approvals, audit, permissions and governance), and each of
   // those screens gates its own writes on the right predicate. Hiding is
   // cosmetic anyway — see the note above.
-  if (role !== "member") return NAV_ITEMS;
+  if (role !== "user") return NAV_ITEMS;
   return NAV_ITEMS.filter((i) => MEMBER_NAV_PATHS.has(i.to));
 }
 
@@ -371,6 +384,10 @@ const ModelAccessBanner = React.lazy(() =>
 const ConfinementPostureBanner = React.lazy(() =>
   import("../wardyn/confinement-posture").then((m) => ({ default: m.ConfinementPostureBanner })),
 );
+// #484 — same lazy rationale; mounted between the two bands above.
+const EveryoneAdminBanner = React.lazy(() =>
+  import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
+);
 
 const navLinkClass = (isActive: boolean) =>
   cn(
@@ -401,10 +418,25 @@ function SidebarNav({
   // Providers is the case the mock walks); this asks the shared guard first
   // instead of always navigating straight through (lib/use-unsaved-guard.tsx).
   const guardedClick = useGuardedNavClick(navigate);
-  // Same gate as the account menu's own Settings entry (TopBar below): hidden
-  // only while identity is settled but unknown, when the shell paints no
-  // route at all for it to open.
-  const settingsReachable = !(meta.resolved && !meta.identityResolved);
+  // #460 review — requires identityResolved TRUE, not merely "not yet known
+  // to have failed": the account menu's own gate (TopBar, below) can afford
+  // to show Settings the instant identity is anything but settled-and-failed,
+  // because role there gates nothing. This one does (role !== "user"), and
+  // role's fail-open default is "admin" (operator-context.tsx) until /me
+  // actually resolves — the old `!(resolved && !identityResolved)` shape let
+  // that default show Settings during the loading window, then yank it away
+  // the instant a MEMBER's real role landed. Waiting for identityResolved
+  // means every role sees it appear once, correctly, never flash-then-vanish.
+  //
+  // #460 (Q460-1): admin only, in the SIDEBAR specifically — a member's own
+  // three-item nav (navItemsForRole below) stays exactly as small as it was;
+  // /settings is still reachable for a member, just from the account menu
+  // (TopBar's own unconditional entry), not from here.
+  const settingsReachable = meta.identityResolved && meta.role !== "user";
+  // M-1b: /settings is deleted — Settings now lives at /admin/settings, Your
+  // account at /account (both still mount the unsplit SettingsScreen until
+  // M-5 splits it).
+  const settingsTarget = meta.role === "user" ? "/account" : "/admin/settings";
   return (
     <>
       <nav className="space-y-0.5">
@@ -446,7 +478,11 @@ function SidebarNav({
             reachable from the rail, not only the account menu (which keeps
             its own entry too, so no muscle memory breaks). */}
         {settingsReachable && (
-          <SidebarSettingsLink navLinkClass={navLinkClass} onClick={guardedClick("/settings", onNavigate)} />
+          <SidebarSettingsLink
+            to={settingsTarget}
+            navLinkClass={navLinkClass}
+            onClick={guardedClick(settingsTarget, onNavigate)}
+          />
         )}
       </nav>
 
@@ -558,6 +594,7 @@ export function AppShell({
       confinementPosture={confinementPosture}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
+        <ViewAccessProvider value={viewAccess(meta)}>
         <FocusContext.Provider value={focusValue}>
         {/* #217 — above BOTH the sidebar that can navigate away and every
           screen below it that can register a dirty form (lib/use-unsaved-guard.tsx). */}
@@ -663,6 +700,11 @@ export function AppShell({
               <React.Suspense fallback={null}>
                 <ModelAccessBanner />
               </React.Suspense>
+              {/* #484 — admins only: after the per-person credential block,
+              before the cluster-wide confinement note. */}
+              <React.Suspense fallback={null}>
+                <EveryoneAdminBanner />
+              </React.Suspense>
               {/* #162 — last in the stack (mock-approval ruling 3): the four
               bands above are each the better explanation of what you are
               looking at, or block the very thing a run needs to start, and
@@ -717,6 +759,7 @@ export function AppShell({
           </div>
         </UnsavedGuardProvider>
         </FocusContext.Provider>
+        </ViewAccessProvider>
       </RoleProvider>
     </OperatorProvider>
   );

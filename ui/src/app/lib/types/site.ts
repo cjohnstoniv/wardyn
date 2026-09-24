@@ -98,6 +98,12 @@ export interface SiteConfig {
   // stripped from every GET-spread body (SERVER_OWNED_SITE_CONFIG_KEYS) for the
   // sibling blocks' reason.
   model_providers?: ModelProviders;
+  // #484 — the admin's own "what to do next" under the four sign-in refusals a
+  // person cannot clear alone (types.SiteConfig.SignInHelpText/URL). PUBLIC:
+  // the anonymous /healthz publishes both. Plain text, at most 1,000
+  // characters; the URL is http(s) only. Edited on the People step.
+  sign_in_help_text?: string;
+  sign_in_help_url?: string;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE

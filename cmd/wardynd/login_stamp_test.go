@@ -55,7 +55,7 @@ func (r *recordingLoginStampStore) RefreshAPITokenIdentity(_ context.Context, pr
 // fixture picks values that could not be confused for one another by a human
 // reading a failure, and asserts the position of each.
 func TestRefreshLoginStampsPassesPrincipalAndRoleInOrder(t *testing.T) {
-	const sub, role = "auth0|demoted-admin", "member"
+	const sub, role = "auth0|demoted-admin", "user"
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	groups := []string{"eng", "oncall"}
 

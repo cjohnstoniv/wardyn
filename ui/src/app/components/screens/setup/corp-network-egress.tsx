@@ -161,7 +161,6 @@ function RedirectRow({
         variant="outline"
         className="shrink-0"
         disabled={!operator || testing}
-        title={!operator ? T.VIEWER_HINT : undefined}
         onClick={(e) => {
           e.stopPropagation();
           onTest();
@@ -172,7 +171,7 @@ function RedirectRow({
       <button
         type="button"
         aria-label={`Remove ${r.from} redirect`}
-        title={!operator ? T.VIEWER_HINT : "Remove"}
+        title="Remove"
         disabled={!operator}
         className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
         onClick={(e) => {
@@ -182,6 +181,9 @@ function RedirectRow({
       >
         &times;
       </button>
+      {/* #459: one visible reason for both dead controls in this row, not a
+          title tooltip a disabled/keyboard-unreachable control can't surface. */}
+      {!operator && <span className="shrink-0 text-meta text-muted-foreground">{T.VIEWER_HINT}</span>}
     </div>
   );
 }

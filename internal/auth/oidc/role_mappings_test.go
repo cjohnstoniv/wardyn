@@ -66,11 +66,11 @@ func (e *idpEnv) newRoleMappingAuth(t *testing.T, roleMap map[string]string, def
 
 func TestMergeRoleMapsDisjointUnion(t *testing.T) {
 	chart := map[string]string{"wardyn.admin": writoidc.RoleAdmin}
-	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}
+	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleUser}}
 
 	merged, shadowed := writoidc.MergeRoleMapsForTest(chart, nil, rows)
 
-	want := map[string]string{"wardyn.admin": writoidc.RoleAdmin, "eng-team": writoidc.RoleMember}
+	want := map[string]string{"wardyn.admin": writoidc.RoleAdmin, "eng-team": writoidc.RoleUser}
 	if !maps.Equal(merged, want) {
 		t.Errorf("merged = %v, want %v", merged, want)
 	}
@@ -83,13 +83,13 @@ func TestMergeRoleMapsDisjointUnion(t *testing.T) {
 // a chart entry never overwrites it — the chart always wins a collision — and
 // the loss is reported, not silent.
 func TestMergeRoleMapsConsoleKeyShadowedByChart(t *testing.T) {
-	chart := map[string]string{"eng-team": writoidc.RoleMember}
+	chart := map[string]string{"eng-team": writoidc.RoleUser}
 	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleAdmin}}
 
 	merged, shadowed := writoidc.MergeRoleMapsForTest(chart, nil, rows)
 
-	if merged["eng-team"] != writoidc.RoleMember {
-		t.Errorf("merged[eng-team] = %q, want %q (chart wins the collision)", merged["eng-team"], writoidc.RoleMember)
+	if merged["eng-team"] != writoidc.RoleUser {
+		t.Errorf("merged[eng-team] = %q, want %q (chart wins the collision)", merged["eng-team"], writoidc.RoleUser)
 	}
 	if len(shadowed) != 1 || shadowed[0] != "eng-team" {
 		t.Errorf("shadowed = %v, want [eng-team]", shadowed)
@@ -102,7 +102,7 @@ func TestMergeRoleMapsConsoleKeyShadowedByChart(t *testing.T) {
 // a differing console role for that email would be a confusing no-op.
 func TestMergeRoleMapsConsoleRowShadowedByOperatorEmail(t *testing.T) {
 	legacyAdminEmails := []string{"Ops@Corp.Example"} // mixed case, as an operator would type it
-	rows := []writoidc.RoleMapping{{Value: "ops@corp.example", Role: writoidc.RoleMember}}
+	rows := []writoidc.RoleMapping{{Value: "ops@corp.example", Role: writoidc.RoleUser}}
 
 	merged, shadowed := writoidc.MergeRoleMapsForTest(nil, legacyAdminEmails, rows)
 
@@ -123,7 +123,7 @@ func TestMergeRoleMapsConsoleRowShadowedByOperatorEmail(t *testing.T) {
 // trusting the write boundary; this is the sanctioned rewrite the review
 // asked for, pinning the closed contract rather than the old open one.
 func TestMergeRoleMapsRejectsNonCanonicalRow(t *testing.T) {
-	rows := []writoidc.RoleMapping{{Value: "Eng-Team", Role: writoidc.RoleMember}}
+	rows := []writoidc.RoleMapping{{Value: "Eng-Team", Role: writoidc.RoleUser}}
 
 	merged, shadowed := writoidc.MergeRoleMapsForTest(nil, nil, rows)
 
@@ -145,7 +145,7 @@ func TestMergeRoleMapsRejectsInvalidRows(t *testing.T) {
 	}{
 		{"empty value", writoidc.RoleMapping{Value: "", Role: writoidc.RoleAdmin}},
 		{"whitespace-only value", writoidc.RoleMapping{Value: " ", Role: writoidc.RoleAdmin}},
-		{"mixed-case (non-canonical) value", writoidc.RoleMapping{Value: "Eng-Team", Role: writoidc.RoleMember}},
+		{"mixed-case (non-canonical) value", writoidc.RoleMapping{Value: "Eng-Team", Role: writoidc.RoleUser}},
 		{"invalid role", writoidc.RoleMapping{Value: "eng-team", Role: "Admin"}},
 	}
 	for _, tc := range cases {
@@ -170,7 +170,7 @@ func TestMergeRoleMapsRejectsInvalidRows(t *testing.T) {
 func TestMergeRoleMapsRejectedRowNeverFlipsArm(t *testing.T) {
 	rows := []writoidc.RoleMapping{
 		{Value: "", Role: writoidc.RoleAdmin},
-		{Value: "Bad-Case", Role: writoidc.RoleMember},
+		{Value: "Bad-Case", Role: writoidc.RoleUser},
 		{Value: "eng-team", Role: "not-a-role"},
 	}
 	merged, _ := writoidc.MergeRoleMapsForTest(nil, nil, rows)
@@ -190,12 +190,12 @@ func TestMergeRoleMapsRejectedRowNeverFlipsArm(t *testing.T) {
 // lowers the claim before lookup — the matching case-insensitivity lives
 // entirely in deriveRole, not in the merge.
 func TestMergeRoleMapsCanonicalRowMatchesMixedCaseClaim(t *testing.T) {
-	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}
+	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleUser}}
 	merged, _ := writoidc.MergeRoleMapsForTest(nil, nil, rows)
 
 	role, matches, ok := writoidc.DeriveRoleForTest(nil, []string{"ENG-Team"}, "", merged, nil, "")
-	if !ok || role != writoidc.RoleMember {
-		t.Fatalf("role = %q, ok = %v, want %q (a canonical row matches through deriveRole's lowering)", role, ok, writoidc.RoleMember)
+	if !ok || role != writoidc.RoleUser {
+		t.Fatalf("role = %q, ok = %v, want %q (a canonical row matches through deriveRole's lowering)", role, ok, writoidc.RoleUser)
 	}
 	if len(matches) != 1 || matches[0].Source != writoidc.MatchSourceMapRow {
 		t.Errorf("matches = %+v, want one MatchSourceMapRow match", matches)
@@ -209,11 +209,11 @@ func TestMergeRoleMapsCanonicalRowMatchesMixedCaseClaim(t *testing.T) {
 // renders the Match list verbatim and a duplicate would read as two things
 // matching when only one claim value did.
 func TestDeriveRoleDedupesMapRowMatchAcrossClaims(t *testing.T) {
-	roleMap := map[string]string{"eng-team": writoidc.RoleMember}
+	roleMap := map[string]string{"eng-team": writoidc.RoleUser}
 
 	role, matches, ok := writoidc.DeriveRoleForTest([]string{"eng-team"}, []string{"eng-team"}, "", roleMap, nil, "")
-	if !ok || role != writoidc.RoleMember {
-		t.Fatalf("role = %q, ok = %v, want (%q, true)", role, ok, writoidc.RoleMember)
+	if !ok || role != writoidc.RoleUser {
+		t.Fatalf("role = %q, ok = %v, want (%q, true)", role, ok, writoidc.RoleUser)
 	}
 	if len(matches) != 1 {
 		t.Fatalf("matches = %+v, want exactly one deduped MatchSourceMapRow entry", matches)
@@ -227,7 +227,7 @@ func TestDeriveRoleDedupesMapRowMatchAcrossClaims(t *testing.T) {
 // genuinely distinct provenance, not a repeat of the same fact. Only same-
 // value-same-source duplicates get collapsed.
 func TestDeriveRoleKeepsOperatorAllowlistAndMapRowDoubleEntry(t *testing.T) {
-	roleMap := map[string]string{"ops@corp.example": writoidc.RoleMember}
+	roleMap := map[string]string{"ops@corp.example": writoidc.RoleUser}
 	legacyAdminEmails := []string{"ops@corp.example"}
 
 	role, matches, ok := writoidc.DeriveRoleForTest(nil, nil, "ops@corp.example", roleMap, legacyAdminEmails, "")
@@ -252,7 +252,7 @@ func TestMergeRoleMapsPostureFlip(t *testing.T) {
 		t.Fatalf("empty chart + no console rows: merged = %v, want empty", before)
 	}
 
-	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}
+	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleUser}}
 	after, _ := writoidc.MergeRoleMapsForTest(nil, nil, rows)
 	if len(after) == 0 {
 		t.Error("empty chart + first console row: merged is still empty, want non-empty")
@@ -274,7 +274,7 @@ func TestMergeRoleMapsPostureFlip(t *testing.T) {
 // top of.
 func TestMergeRoleMapsChartNonEmptyNeverEmpty(t *testing.T) {
 	chart := map[string]string{"wardyn.admin": writoidc.RoleAdmin}
-	for _, rows := range [][]writoidc.RoleMapping{nil, {}, {{Value: "eng-team", Role: writoidc.RoleMember}}} {
+	for _, rows := range [][]writoidc.RoleMapping{nil, {}, {{Value: "eng-team", Role: writoidc.RoleUser}}} {
 		merged, _ := writoidc.MergeRoleMapsForTest(chart, nil, rows)
 		if len(merged) == 0 {
 			t.Errorf("rows = %v: merged is empty, want the chart entry to always survive", rows)
@@ -309,15 +309,15 @@ func TestCallbackRoleMappingsStoreErrorDeniesLogin(t *testing.T) {
 // chart entry maps to member purely via the wired store.
 func TestCallbackRoleMappingsRowInfluencesRole(t *testing.T) {
 	env := newIdPEnv(t)
-	store := &fakeRoleMappingSource{rows: []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}}
+	store := &fakeRoleMappingSource{rows: []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleUser}}}
 	auth := env.newRoleMappingAuth(t, nil, "", nil, store)
 
 	w, sess := doRoleCallback(t, env, auth, "carol@corp.example", nil, []string{"eng-team"})
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusFound, w.Body.String())
 	}
-	if sess.Role != writoidc.RoleMember {
-		t.Errorf("role = %q, want %q (console row alone, no chart entry)", sess.Role, writoidc.RoleMember)
+	if sess.Role != writoidc.RoleUser {
+		t.Errorf("role = %q, want %q (console row alone, no chart entry)", sess.Role, writoidc.RoleUser)
 	}
 }
 
@@ -327,14 +327,14 @@ func TestCallbackRoleMappingsRowInfluencesRole(t *testing.T) {
 func TestCallbackRoleMappingsChartWinsCollision(t *testing.T) {
 	env := newIdPEnv(t)
 	store := &fakeRoleMappingSource{rows: []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleAdmin}}}
-	auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, "", nil, store)
+	auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", nil, store)
 
 	w, sess := doRoleCallback(t, env, auth, "dana@corp.example", nil, []string{"eng-team"})
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusFound, w.Body.String())
 	}
-	if sess.Role != writoidc.RoleMember {
-		t.Errorf("role = %q, want %q (chart wins the collision, even end to end)", sess.Role, writoidc.RoleMember)
+	if sess.Role != writoidc.RoleUser {
+		t.Errorf("role = %q, want %q (chart wins the collision, even end to end)", sess.Role, writoidc.RoleUser)
 	}
 }
 
@@ -344,7 +344,7 @@ func TestCallbackRoleMappingsChartWinsCollision(t *testing.T) {
 // real login with identical claims would, including a real store read.
 func TestPreviewRoleParityWithCallback(t *testing.T) {
 	env := newIdPEnv(t)
-	store := &fakeRoleMappingSource{rows: []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}}
+	store := &fakeRoleMappingSource{rows: []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleUser}}}
 	auth := env.newRoleMappingAuth(t, nil, "", nil, store)
 
 	previewRole, _, previewOK, err := auth.PreviewRole(context.Background(), nil, []string{"eng-team"}, "carol@corp.example")
@@ -401,7 +401,7 @@ func TestPreviewRoleProvenance(t *testing.T) {
 	})
 
 	t.Run("operator email", func(t *testing.T) {
-		auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, "", []string{"ops@corp.example"}, nil)
+		auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", []string{"ops@corp.example"}, nil)
 		role, matched, ok, err := auth.PreviewRole(context.Background(), nil, []string{"eng-team"}, "ops@corp.example")
 		if err != nil || !ok || role != writoidc.RoleAdmin {
 			t.Fatalf("role = %q, ok = %v, err = %v, want (%q, true, nil)", role, ok, err, writoidc.RoleAdmin)
@@ -412,10 +412,10 @@ func TestPreviewRoleProvenance(t *testing.T) {
 	})
 
 	t.Run("map row", func(t *testing.T) {
-		auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, "", nil, nil)
+		auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", nil, nil)
 		role, matched, ok, err := auth.PreviewRole(context.Background(), nil, []string{"eng-team"}, "eng@corp.example")
-		if err != nil || !ok || role != writoidc.RoleMember {
-			t.Fatalf("role = %q, ok = %v, err = %v, want (%q, true, nil)", role, ok, err, writoidc.RoleMember)
+		if err != nil || !ok || role != writoidc.RoleUser {
+			t.Fatalf("role = %q, ok = %v, err = %v, want (%q, true, nil)", role, ok, err, writoidc.RoleUser)
 		}
 		if !hasMatchSource(matched, writoidc.MatchSourceMapRow) {
 			t.Errorf("matched = %+v, want a MatchSourceMapRow entry", matched)
@@ -423,10 +423,10 @@ func TestPreviewRoleProvenance(t *testing.T) {
 	})
 
 	t.Run("default role fallthrough", func(t *testing.T) {
-		auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, writoidc.RoleMember, nil, nil)
+		auth := env.newRoleMappingAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, writoidc.RoleUser, nil, nil)
 		role, matched, ok, err := auth.PreviewRole(context.Background(), nil, nil, "nobody@corp.example")
-		if err != nil || !ok || role != writoidc.RoleMember {
-			t.Fatalf("role = %q, ok = %v, err = %v, want (%q, true, nil)", role, ok, err, writoidc.RoleMember)
+		if err != nil || !ok || role != writoidc.RoleUser {
+			t.Fatalf("role = %q, ok = %v, err = %v, want (%q, true, nil)", role, ok, err, writoidc.RoleUser)
 		}
 		if !hasMatchSource(matched, writoidc.MatchSourceDefaultRole) {
 			t.Errorf("matched = %+v, want a MatchSourceDefaultRole entry", matched)
@@ -513,7 +513,7 @@ func TestIsOperatorEmail(t *testing.T) {
 // reading them.
 func TestPreviewRoleAgainstParityWithPreviewRole(t *testing.T) {
 	env := newIdPEnv(t)
-	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}
+	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleUser}}
 	store := &fakeRoleMappingSource{rows: rows}
 	auth := env.newRoleMappingAuth(t, nil, "", nil, store)
 
@@ -559,7 +559,7 @@ func TestPreviewRoleAgainstLockoutScenario(t *testing.T) {
 
 	before := []writoidc.RoleMapping{
 		{Value: "admins", Role: writoidc.RoleAdmin},
-		{Value: "other-team", Role: writoidc.RoleMember},
+		{Value: "other-team", Role: writoidc.RoleUser},
 	}
 	role, ok := auth.PreviewRoleAgainst(before, nil, []string{"admins"}, "admin@corp.example")
 	if !ok || role != writoidc.RoleAdmin {
@@ -570,7 +570,7 @@ func TestPreviewRoleAgainstLockoutScenario(t *testing.T) {
 	// would build before actually performing the delete. "other-team"
 	// survives, so the merged map stays non-empty (arm 2) — this caller's
 	// "admins" group now matches nothing in it, and no DefaultRole is set.
-	after := []writoidc.RoleMapping{{Value: "other-team", Role: writoidc.RoleMember}}
+	after := []writoidc.RoleMapping{{Value: "other-team", Role: writoidc.RoleUser}}
 	role, ok = auth.PreviewRoleAgainst(after, nil, []string{"admins"}, "admin@corp.example")
 	if ok {
 		t.Fatalf("after delete: role = %q, ok = %v, want ok=false (this admin would no longer derive any role — the lockout the guard exists to catch)", role, ok)
@@ -588,9 +588,9 @@ func TestDefaultRoleAndHasOperatorEmailsAccessors(t *testing.T) {
 		t.Error("HasOperatorEmails() = true, want false (no LegacyAdminEmails configured)")
 	}
 
-	set := env.newRoleAuth(t, nil, writoidc.RoleMember, []string{"ops@corp.example"})
-	if set.DefaultRole() != writoidc.RoleMember {
-		t.Errorf("DefaultRole() = %q, want %q", set.DefaultRole(), writoidc.RoleMember)
+	set := env.newRoleAuth(t, nil, writoidc.RoleUser, []string{"ops@corp.example"})
+	if set.DefaultRole() != writoidc.RoleUser {
+		t.Errorf("DefaultRole() = %q, want %q", set.DefaultRole(), writoidc.RoleUser)
 	}
 	if !set.HasOperatorEmails() {
 		t.Error("HasOperatorEmails() = false, want true")
@@ -639,7 +639,7 @@ func TestMergedMapEmptyAccountsForShadowing(t *testing.T) {
 	// empty, len(rows)==1" — only an operator-allowlist collision can (below,
 	// nothing about the allowlist ever enters the map itself).
 	shadowedByChart := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleAdmin}, "", nil)
-	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}
+	rows := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleUser}}
 	if shadowedByChart.MergedMapEmpty(rows) {
 		t.Error("MergedMapEmpty(rows) = true, want false (the chart's own entry keeps the map non-empty)")
 	}
@@ -648,14 +648,14 @@ func TestMergedMapEmptyAccountsForShadowing(t *testing.T) {
 	// IS empty — len(rows)==1 but MergedMapEmpty must report true, the exact
 	// divergence A-5 fixes (a raw row count would have said false here).
 	shadowedByAllowlist := env.newRoleAuth(t, nil, "", []string{"ops@corp.example"})
-	opsRow := []writoidc.RoleMapping{{Value: "ops@corp.example", Role: writoidc.RoleMember}}
+	opsRow := []writoidc.RoleMapping{{Value: "ops@corp.example", Role: writoidc.RoleUser}}
 	if !shadowedByAllowlist.MergedMapEmpty(opsRow) {
 		t.Error("MergedMapEmpty(opsRow) = false, want true (the only row is shadowed by the operator allowlist)")
 	}
 
 	// A genuinely unshadowed row makes the map non-empty.
 	nonEmpty := env.newRoleAuth(t, nil, "", nil)
-	if nonEmpty.MergedMapEmpty([]writoidc.RoleMapping{{Value: "design-team", Role: writoidc.RoleMember}}) {
+	if nonEmpty.MergedMapEmpty([]writoidc.RoleMapping{{Value: "design-team", Role: writoidc.RoleUser}}) {
 		t.Error("MergedMapEmpty([design-team]) = true, want false (unshadowed row)")
 	}
 }

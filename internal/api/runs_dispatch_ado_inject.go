@@ -235,7 +235,8 @@ func adoEntraRunForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, b
 // an organisation — so the legacy arm requires the host to be exactly one label
 // in front of visualstudio.com rather than trimming a suffix.
 func adoOrganisationOf(cloneURL string) (string, bool) {
-	t, ok := parseCloneTarget(cloneURL)
+	// nil: an organisation is only ever read off an Azure DevOps SERVICE host.
+	t, ok := parseCloneTarget(cloneURL, nil)
 	if !ok {
 		return "", false
 	}
@@ -328,7 +329,7 @@ type adoEntraLane struct {
 	// exact hosts. The injection alone would attach the person's credential with
 	// nothing narrowing it — the token bounds nothing — so the two always travel
 	// together; nil exactly when no injection was authored.
-	gate []proxy.ADOGrantConfig
+	gate *proxy.ADOGrantConfig
 }
 
 // adoEntraGrade is what the autonomy gate RESOLVED about this run's per-person
@@ -447,9 +448,9 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	if !ok {
 		return adoEntraLane{injections: injections}, false
 	}
-	return adoEntraLane{injections: inj, mitmHosts: mitm, gate: []proxy.ADOGrantConfig{{
+	return adoEntraLane{injections: inj, mitmHosts: mitm, gate: &proxy.ADOGrantConfig{
 		Organization: ado.org, Capabilities: slices.Clone(ado.caps), Hosts: adoEntraHosts(ado.org),
-	}}}, true
+	}}, true
 }
 
 // authorADOEntraInjection authors the whole lane for one run.

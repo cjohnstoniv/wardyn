@@ -244,7 +244,7 @@ describe("health.whoami() — the user-drive pair", () => {
     method: "sso",
     operator: false,
     security_operator: false,
-    role: "member",
+    role: "user",
     email: "alice@corp.example",
     ...extra,
   });
