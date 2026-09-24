@@ -64,7 +64,7 @@ import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { CC_META } from "../../wardyn/cc-meta";
-import { Chip, SectionLabel } from "../../wardyn/primitives";
+import { Chip, OperatorOnlyHint, SectionLabel } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
@@ -968,11 +968,11 @@ function CaughtHosts({
               variant="outline"
               className="h-7"
               disabled={!operator}
-              title={!operator ? OPERATOR_ONLY_REASON : undefined}
               onClick={() => onApproveHosts([host])}
             >
               <Check className="size-3.5" /> Approve
             </Button>
+            {!operator && <OperatorOnlyHint />}
           </li>
         ))}
       </ul>
@@ -980,13 +980,13 @@ function CaughtHosts({
         <Button
           size="sm"
           disabled={!operator || picked.length === 0}
-          title={!operator ? OPERATOR_ONLY_REASON : undefined}
           onClick={() => onApproveHosts(picked, replayName)}
         >
           <ShieldCheck className="size-3.5" /> Approve {picked.length} selected host
           {picked.length === 1 ? "" : "s"} and replay again
         </Button>
       )}
+      {replayName && !operator && <p className="text-meta text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
       <p className="text-meta leading-snug text-muted-foreground">
         These were denied or held for approval because they aren&apos;t in your approved set. Approve one
         only if this workspace legitimately needs it — otherwise leave it blocked. Anything denied live

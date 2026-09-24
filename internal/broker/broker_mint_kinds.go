@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
+
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
-	"time"
 )
 
 // Per-kind credential minters (api_key / git_pat / ssh_key). Carved out of
@@ -106,7 +108,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 		return Minted{}, errors.New("broker: git_pat grant but no secret store configured (fail closed)")
 	}
 	// The run's own owner's row wins, falling back to the operator's (ownerOf).
-	value, err := b.secrets.For(ownerOf(caller)).Get(ctx, sc.SecretName)
+	value, err := b.secrets.For(ownerOf(caller)).Get(secretstore.WithPurpose(ctx, secretstore.PurposeBrokerMint), sc.SecretName)
 	if err != nil {
 		return Minted{}, fmt.Errorf("broker: read git_pat secret %q: %w", sc.SecretName, err)
 	}
@@ -156,7 +158,8 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 	// Same owner-then-operator-fallback rule as mintGitPAT, for both the key
 	// and its optional known_hosts material below.
 	owned := b.secrets.For(ownerOf(caller))
-	key, err := owned.Get(ctx, sc.KeySecretRef)
+	rctx := secretstore.WithPurpose(ctx, secretstore.PurposeBrokerMint)
+	key, err := owned.Get(rctx, sc.KeySecretRef)
 	if err != nil {
 		return Minted{}, fmt.Errorf("broker: read ssh_key secret %q: %w", sc.KeySecretRef, err)
 	}
@@ -165,7 +168,7 @@ func (b *Broker) mintSSHKey(ctx context.Context, caller *identity.Claims, spec t
 	// is authoritative and this ref is normally unset.
 	var knownHosts string
 	if sc.KnownHostsSecretRef != "" {
-		kh, kerr := owned.Get(ctx, sc.KnownHostsSecretRef)
+		kh, kerr := owned.Get(rctx, sc.KnownHostsSecretRef)
 		if kerr != nil {
 			return Minted{}, fmt.Errorf("broker: read ssh_key known_hosts secret %q: %w", sc.KnownHostsSecretRef, kerr)
 		}

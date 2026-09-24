@@ -275,6 +275,12 @@ func (s stubHeartbeatStore) LatestAuditEventByAction(context.Context, string) (t
 	return s.ev, nil
 }
 
+// GetSiteConfig answers /healthz's other read (the sign-in help pair) with
+// nothing configured.
+func (stubHeartbeatStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 // healthzEbpf GETs /healthz and returns its ebpf_groundtruth object.
 func healthzEbpf(t *testing.T, h *harness) map[string]any {
 	t.Helper()

@@ -38,7 +38,7 @@ const (
 // escalation the finding executed.
 func TestCapabilitySubjectsDoesNotFoldOntoAnotherHuman(t *testing.T) {
 	t.Run("a crafted email claim", func(t *testing.T) {
-		users, _, _ := capabilitySubjects(operatorCtx("attacker-sub", craftedEmail, string(oidc.RoleMember)))
+		users, _, _ := capabilitySubjects(operatorCtx("attacker-sub", craftedEmail, string(oidc.RoleUser)))
 		for _, got := range users {
 			if got == victimEmail {
 				t.Fatalf("capabilitySubjects returned %q for a caller whose email claim is %+q — every `user` grant, "+
@@ -55,7 +55,7 @@ func TestCapabilitySubjectsDoesNotFoldOntoAnotherHuman(t *testing.T) {
 	})
 
 	t.Run("a crafted sub claim", func(t *testing.T) {
-		users, _, _ := capabilitySubjects(operatorCtx(craftedSub, "attacker@corp.example", string(oidc.RoleMember)))
+		users, _, _ := capabilitySubjects(operatorCtx(craftedSub, "attacker@corp.example", string(oidc.RoleUser)))
 		for _, got := range users {
 			if got == victimSub {
 				t.Fatalf("capabilitySubjects returned %q for a caller whose sub is %+q.\nusers=%+q", victimSub, craftedSub, users)
@@ -65,7 +65,7 @@ func TestCapabilitySubjectsDoesNotFoldOntoAnotherHuman(t *testing.T) {
 
 	// The control: ASCII case folding is the intended rule and must survive.
 	t.Run("an ASCII identity still folds", func(t *testing.T) {
-		users, _, _ := capabilitySubjects(operatorCtx("Alice", "  Alice@Corp.Example  ", string(oidc.RoleMember)))
+		users, _, _ := capabilitySubjects(operatorCtx("Alice", "  Alice@Corp.Example  ", string(oidc.RoleUser)))
 		for _, want := range []string{"alice", "alice@corp.example"} {
 			if !contains(users, want) {
 				t.Errorf("capabilitySubjects lost %q — a grant written \"Alice@Corp.Example\" must still hit this caller.\nusers=%+q",
@@ -120,7 +120,7 @@ func TestUserSubjectWriteBoundariesShareTheReadRule(t *testing.T) {
 
 			// ONE RULE, both sides: whatever a caller carrying this identity
 			// resolves to is exactly what an admin naming it stores.
-			users, _, _ := capabilitySubjects(operatorCtx(tc.subject, "", string(oidc.RoleMember)))
+			users, _, _ := capabilitySubjects(operatorCtx(tc.subject, "", string(oidc.RoleUser)))
 			if len(users) != 1 || users[0] != tc.want {
 				t.Errorf("the read side resolves %+q to %+q while the write side stores %+q — the two halves of one match "+
 					"disagree", tc.subject, users, tc.want)

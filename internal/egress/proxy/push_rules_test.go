@@ -4,8 +4,12 @@
 package proxy
 
 import (
+	"crypto/sha1"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/adler32"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -313,6 +317,100 @@ func TestPushRulesRefuseWhatCannotBeInspected(t *testing.T) {
 			t.Errorf("a refused push minted %d credentials, want 0", up.mintCalls)
 		}
 	})
+}
+
+// storedZlib frames payload as one uncompressed ("stored") deflate block, so
+// 200,001 objects build in a fraction of a second rather than 200,001
+// compressor runs. payload must be under 64 KiB. Copied from
+// internal/gitpack/pack_limits_test.go rather than shared across packages.
+func storedZlib(payload []byte) []byte {
+	n := uint16(len(payload))
+	out := []byte{0x78, 0x01, 0x01, byte(n), byte(n >> 8), byte(^n), byte(^n >> 8)}
+	out = append(out, payload...)
+	return binary.BigEndian.AppendUint32(out, adler32.Checksum(payload))
+}
+
+// packObjHeader is git's pack object header: type in the top 3 bits, size
+// base-128 from there. Copied from internal/gitpack/pack_test.go's objHeader.
+func packObjHeader(typ byte, size int64) []byte {
+	b := []byte{typ<<4 | byte(size&0x0f)}
+	for size >>= 4; size > 0; size >>= 7 {
+		b[len(b)-1] |= 0x80
+		b = append(b, byte(size&0x7f))
+	}
+	return b
+}
+
+func gitObjectID(typ string, payload []byte) string {
+	h := sha1.New()
+	fmt.Fprintf(h, "%s %d", typ, len(payload))
+	h.Write([]byte{0})
+	h.Write(payload)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// oversizeObjectCountPush is issue #250's own fixture, one object past
+// internal/gitpack's maxObjects ceiling (200,000): a commit, its empty tree
+// (so the walker would report no paths even if it ran), and n-2 distinct
+// 4-byte blobs the tree names don't cover. gitpack.Inspect refuses it with
+// ErrTooLarge before any tree is walked, which is what this test is for —
+// distinguishing that refusal from ErrUninspectable at the proxy.
+func oversizeObjectCountPush(ref string, n int) []byte {
+	const objCommit, objTree, objBlob byte = 1, 2, 3
+	tree := gitObjectID("tree", nil)
+	commit := fmt.Appendf(nil, "tree %s\nauthor T <t@example.com> 1767225600 +0000\n"+
+		"committer T <t@example.com> 1767225600 +0000\n\nx\n", tree)
+	pack := []byte("PACK")
+	pack = binary.BigEndian.AppendUint32(pack, 2)
+	pack = binary.BigEndian.AppendUint32(pack, uint32(n))
+	pack = append(pack, packObjHeader(objCommit, int64(len(commit)))...)
+	pack = append(pack, storedZlib(commit)...)
+	pack = append(pack, packObjHeader(objTree, 0)...)
+	pack = append(pack, storedZlib(nil)...)
+	for i := range n - 2 {
+		payload := binary.BigEndian.AppendUint32(nil, uint32(i))
+		pack = append(pack, packObjHeader(objBlob, int64(len(payload)))...)
+		pack = append(pack, storedZlib(payload)...)
+	}
+	sum := sha1.Sum(pack)
+	cmd := zeroOID + " " + gitObjectID("commit", commit) + " " + ref + firstCaps
+	return append([]byte(pkt(cmd)+"0000"), append(pack, sum[:]...)...)
+}
+
+// TestPushRulesRefuseAGitpackCeiling covers the ceiling gitpack.Inspect hits
+// on a pack it can otherwise read in full — as opposed to
+// TestPushRulesRefuseWhatCannotBeInspected's thin packs and missing refs,
+// which it cannot read at all. Both used to be wrapped in the same
+// --unshallow hint and filed under the same rule source, which told the
+// person the wrong fix for this one: an honest push over a size ceiling is
+// fixed by pushing fewer commits, not by a more complete clone.
+func TestPushRulesRefuseAGitpackCeiling(t *testing.T) {
+	up := newGitBrokerUpstream(t, "gh-inst-token")
+	p, sink := newGitBrokerProxyWithSpec(t,
+		map[string]uuid.UUID{"octocat/hello-world": uuid.New()}, upstreamAddr(up.srv),
+		contentRulesSpec("nonexistent/**"))
+
+	body := oversizeObjectCountPush(BranchNSPrefix(p.runID)+"work", 200_001)
+	rec := postPush(t, p, string(body))
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 (body %q)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "push fewer commits") {
+		t.Errorf("refusal = %q, want the push-fewer-commits hint, not the --unshallow one",
+			rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "unshallow") {
+		t.Errorf("refusal = %q, tells the person to reclone for a push that was fully read",
+			rec.Body.String())
+	}
+	if !strings.Contains(sink.String(), `"rule_source":"`+ruleSourceGitPackBig+`"`) {
+		t.Errorf("decision log = %q, want a %s deny row", sink.String(), ruleSourceGitPackBig)
+	}
+	if up.mintCalls != 0 || up.gitHits != 0 {
+		t.Errorf("a refused push minted %d credentials and reached the forge %d times, want 0 and 0",
+			up.mintCalls, up.gitHits)
+	}
 }
 
 // TestPushRulesForwardAnAllowedPushUnchanged: the buffered bytes go onward

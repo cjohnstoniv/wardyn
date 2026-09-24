@@ -3,7 +3,7 @@
 
 package pg
 
-// Postgres-backed tests for Rekey — the whole-table re-encryption behind
+// Postgres-backed tests for Rekey — the whole-table DEK rewrap behind
 // `wardynd -rotate-age-key`. Both halves of its contract need a real server: the
 // round trip (every row readable under the NEW key and none under the old) and
 // the all-or-nothing abort (one undecryptable row leaves EVERY row untouched),
@@ -96,8 +96,9 @@ var seeded = map[string]string{
 }
 
 // TestRekeyRoundTripsEveryRow: after a rekey, every stored secret reads back
-// verbatim under the NEW identity, the OLD identity reads none of them, and the
-// count returned matches the rows actually rotated.
+// verbatim under the NEW identity, the OLD identity reads none of them, the
+// count returned matches the rows actually rotated — and only the wrap moved:
+// every sealed value is byte-identical, so the rotation decrypted nothing.
 func TestRekeyRoundTripsEveryRow(t *testing.T) {
 	pool := rekeyDatabase(t)
 	ctx := context.Background()
@@ -113,12 +114,19 @@ func TestRekeyRoundTripsEveryRow(t *testing.T) {
 		}
 	}
 
+	before := rawRows(t, pool)
 	n, err := Rekey(ctx, pool, oldID, newID)
 	if err != nil {
 		t.Fatalf("Rekey: %v", err)
 	}
 	if n != len(seeded) {
 		t.Errorf("Rekey re-encrypted %d rows, want %d", n, len(seeded))
+	}
+	for k, r := range rawRows(t, pool) {
+		was := before[k]
+		if !bytes.Equal(r.ct, was.ct) || bytes.Equal(r.wrapped, was.wrapped) || r.kekID == was.kekID {
+			t.Errorf("%s: a rekey must rewrap the DEK (new wrapped_dek and kek_id) and leave the ciphertext alone", k)
+		}
 	}
 
 	newStore, err := New(pool, newID)
@@ -204,6 +212,22 @@ func TestRekeyAbortsWholeTransactionOnUndecryptableRow(t *testing.T) {
 		if _, nerr := newStore.Get(ctx, name); nerr == nil {
 			t.Errorf("after the abort, %s is readable under the NEW key — the transaction was not rolled back", name)
 		}
+	}
+}
+
+// TestRekeyAbortsOnAV0Row: a rotation is not a conversion. A pre-envelope row
+// (one this binary's boot never converted) aborts the rekey by name.
+func TestRekeyAbortsOnAV0Row(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	oldID, newID := mustIdentity(t), mustIdentity(t)
+	seedV0(t, pool, oldID, "", "legacy", "v0-value")
+	n, err := Rekey(ctx, pool, oldID, newID)
+	if err == nil || n != 0 {
+		t.Fatalf("Rekey over a v0 row = (%d, %v), want an abort", n, err)
+	}
+	if !strings.Contains(err.Error(), rowRef("", "legacy")) || !strings.Contains(err.Error(), "convert") {
+		t.Errorf("abort error %q does not name the row and the conversion it needs", err)
 	}
 }
 
