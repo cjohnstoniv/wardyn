@@ -86,9 +86,29 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 			t.Errorf("ci.yml's go job has no leg running `make %s`, so that race pass gates no PR:\n%s", target, goJob)
 		}
 	}
-	if build := ciJobBlock(t, string(wf), "build"); !strings.Contains(build, "run: make cover-union") ||
-		!strings.Contains(build, "needs: go") {
-		t.Errorf("ci.yml's build job must need the go legs and run `make cover-union` over their profiles:\n%s", build)
+	// Only an explicit docs-only classification ('false') swaps the suites for
+	// the guard packages, so a missing or failed classification runs them. The
+	// executing line swallows no failure (an exact line, so no `|| true`), and
+	// no step may continue on error: a leg whose profile did not upload has not
+	// done its job, since build unions those profiles.
+	const fullSuites = "        if: matrix.suite == 'lint' || needs.changes.outputs.code != 'false'\n" +
+		"        run: make ${{ matrix.target }}\n"
+	if !strings.Contains(goJob, fullSuites) {
+		t.Errorf("ci.yml's go job no longer runs `make ${{ matrix.target }}` unless the change is explicitly docs-only:\n%s", goJob)
+	}
+	if strings.Contains(goJob, "continue-on-error:") {
+		t.Errorf("a step in ci.yml's go job continues on error, so a failed suite or a missing profile can pass:\n%s", goJob)
+	}
+	build := ciJobBlock(t, string(wf), "build")
+	for _, want := range []string{
+		"needs: [changes, go]",
+		"LEGS: ${{ needs.go.result }}",
+		"        if: needs.changes.outputs.code != 'false'\n        run: make cover-union\n",
+	} {
+		if !strings.Contains(build, want) {
+			t.Errorf("ci.yml's build job must need every go leg and run `make cover-union` over their "+
+				"profiles unless the change is explicitly docs-only; missing %q:\n%s", want, build)
+		}
 	}
 
 	// (c) CI actually runs it, in the job that has a Postgres service and sets

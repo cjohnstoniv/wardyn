@@ -37,9 +37,9 @@ jobs:
   # Push, merge_group and train/* pull requests are always 'true': they run
   # everything. The rules fail closed: a path in no class counts as backend, so
   # a new directory runs every job until someone decides otherwise. The Go
-  # suites (`go`, `build`) do NOT consult this at all: dozens of guard tests read
-  # the docs, the CHANGELOG, ui/src and the workflows, so no change class is
-  # safe to skip them for (docs/CI.md, "Incremental CI").
+  # suites never skip: dozens of guard tests read the docs, the CHANGELOG,
+  # ui/src and the workflows. A docs-only change narrows them to those guard
+  # packages instead (see the go job; docs/CI.md, "Incremental CI").
   #
   # A job that consumes these outputs must also run when this job FAILED
   # (`!cancelled()`) and compare with != 'false', so a missing output runs the
@@ -106,8 +106,16 @@ jobs:
   # docker-tagged-live sets WARDYN_TEST_DOCKER=1 against a live daemon;
   # conformance-k8s below is the k8s equivalent (WARDYN_TEST_K8S=1 against a
   # live kind cluster).
+  #
+  # A docs-only change (changes.outputs.code == 'false') cannot change compiled
+  # code, race behaviour or coverage, only what the doc-reading guard tests
+  # read. The three test legs then run just those guard packages, found from
+  # the test sources at run time, with plain `go test`; `build` skips the union.
+  # Any other value, including a missing one, runs the full suites.
   go:
     name: go (${{ matrix.suite }})
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -122,10 +130,13 @@ jobs:
             target: build tidy-check lint
           - suite: unit
             target: test-report
+            tags: ''
           - suite: docker
             target: test-report-docker
+            tags: docker
           - suite: k8s
             target: test-report-k8s
+            tags: k8s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -162,15 +173,44 @@ jobs:
             go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-
             go-${{ matrix.suite }}-
       - name: make ${{ matrix.target }}
+        if: matrix.suite == 'lint' || needs.changes.outputs.code != 'false'
         run: make ${{ matrix.target }}
+      # The guard packages: the directories of every test file that names a docs
+      # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
+      # files built under its tag (their packages run with -tags; the rest ran in
+      # the tagless leg), so it may legitimately find none. The tagless leg
+      # finding none means the pattern broke, and fails rather than pass empty.
+      - name: Docs-only change — the doc-reading guard packages only (no race, no coverage)
+        if: matrix.suite != 'lint' && needs.changes.outputs.code == 'false'
+        env:
+          TAGS: ${{ matrix.tags }}
+        run: |
+          set -euo pipefail
+          rc=0
+          files="$(git grep -l -E '"(\.\./)*(docs|threatmodel|ui|\.github)[/"]|CHANGELOG\.md|RELEASING\.md|AGENTS\.md|\.md["`]' -- '*_test.go')" || rc=$?
+          [ "$rc" -le 1 ] || exit "$rc"
+          if [ -n "$TAGS" ]; then
+            files="$(for f in $files; do grep -l -E "^//go:build .*\b${TAGS}\b" "$f" || true; done)"
+          fi
+          pkgs="$(for f in $files; do dirname "$f"; done | sort -u | sed 's|^|./|')"
+          if [ -z "$pkgs" ]; then
+            [ -n "$TAGS" ] || { echo "::error::no doc-reading guard test found; the discovery pattern regressed"; exit 1; }
+            echo "no -tags $TAGS guard test file; nothing to run"
+            exit 0
+          fi
+          echo "$pkgs"
+          # shellcheck disable=SC2086 # one word per package, and -tags only when set
+          WARDYN_TEST_PG='' go test -count=1 ${TAGS:+-tags "$TAGS"} $pkgs
       # No continue-on-error, unlike the other report uploads: `build` unions
       # these profiles, so a leg whose profile did not upload has not done its job.
+      # overwrite: a "Re-run failed jobs" attempt re-uploads under the same name.
       - name: Upload the suite's reports and coverage profile
-        if: always() && matrix.suite != 'lint'
+        if: always() && matrix.suite != 'lint' && needs.changes.outputs.code != 'false'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: go-test-reports-${{ matrix.suite }}
           path: test/reports/go/${{ matrix.suite }}/**
+          overwrite: true
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -186,9 +226,11 @@ jobs:
   # coverage profiles clears the floor. `!cancelled()` so a failed leg still
   # runs this job, which then fails on the first step; with the default
   # `success()` it would be SKIPPED, and a skipped required check can read as
-  # passing.
+  # passing. On a docs-only change (changes.outputs.code == 'false') the legs
+  # ran only the guard packages and wrote no profiles, so the union steps skip;
+  # any other value, including a missing one, requires the union.
   build:
-    needs: go
+    needs: [changes, go]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -199,11 +241,14 @@ jobs:
         run: |
           [ "$LEGS" = success ] || { echo "::error::a go leg did not pass (result: $LEGS); see the go (…) checks"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.code != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: needs.changes.outputs.code != 'false'
         with:
           go-version-file: go.mod
           cache: false
       - name: Download the three suites' profiles
+        if: needs.changes.outputs.code != 'false'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: go-test-reports-*
@@ -211,11 +256,13 @@ jobs:
       # download-artifact puts each artifact in a directory named after it; the
       # union reads test/reports/go/<suite>/, where `make cover-check` writes it.
       - name: Put each profile where the union reads it
+        if: needs.changes.outputs.code != 'false'
         run: for s in unit docker k8s; do mv "test/reports/go/go-test-reports-$s" "test/reports/go/$s"; done
       # The same floor and union `make cover-check` enforces locally, over the
       # profiles the legs produced (scripts/cover-union.sh documents what counts).
       - name: Enforce the union coverage floor
         id: union
+        if: needs.changes.outputs.code != 'false'
         run: make cover-union
       - name: Upload the union coverage report
         id: upload_go_union_report
