@@ -260,7 +260,7 @@ func TestRekeyStampsUpdatedAt(t *testing.T) {
 			t.Fatalf("Put %s: %v", name, err)
 		}
 	}
-	if _, err := pool.Exec(ctx, `UPDATE secrets SET updated_at = '2000-01-01T00:00:00Z'`); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE secrets SET updated_at = now() - interval '1 day'`); err != nil {
 		t.Fatalf("backdate updated_at: %v", err)
 	}
 	var before time.Time
