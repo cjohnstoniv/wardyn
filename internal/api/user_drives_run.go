@@ -183,7 +183,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 	// silently, while a 500 tells them to try again.
 	resolved, err := s.resolveUserDrive(r.Context(), ceiling.Limits.MaxDriveSizeMiB)
 	if err != nil {
-		writeDriveError(w, err)
+		writeDriveError(w, r, err)
 		return nil, false
 	}
 	if resolved == nil {

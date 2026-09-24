@@ -154,3 +154,11 @@ f65039b62411308eb147a61b54b202fa65b4643d:internal/secretstore/pg/pg.go:generic-a
 # domain-separation label constant in internal/secretstore/pg/pg.go (secretAADLabel),
 # not a secret. Commit-scoped to the commit that introduced it.
 b813286778427f215c0bb7c76b50a87685e607f7:internal/secretstore/pg/pg.go:generic-api-key:39
+# PR #594 (envelope v1), rebased onto main after #758: the same AAD label false
+# positive, commit-scoped to the rebased commit that introduces it.
+a405534ec304241fb0e3fdcedc1b2a6539170e16:internal/secretstore/pg/pg.go:generic-api-key:39
+# PR #929 (#926): generic-api-key false positive on deploy/azure-entra-sso/02-app.sh's
+# Azure DevOps resource app id — Microsoft's public, well-known first-party app id,
+# also quoted in docs/adoption/azure-devops-entra.md, not a secret. Commit-scoped to
+# the commit that introduced it.
+7546c7724e0989c757d626b14889ad413d966a41:deploy/azure-entra-sso/02-app.sh:generic-api-key:109

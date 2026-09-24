@@ -24,6 +24,12 @@ regexes = [
     # STRIPS it before the request reaches the sandbox. Its whole job is to be
     # a value that must never come back — never a credential.
     '''MUST-NOT-LEAK''',
+    # internal/secretstore/pg's AAD domain-separation label: a constant string
+    # shaped like generic-api-key, not a secret. Regex- not path-scoped: the
+    # file it lives in stores real secret envelopes and must stay scannable.
+    # Was fingerprinted per-commit before this rule; regex-scoped here instead
+    # so no future value churns a fresh .gitleaksignore entry (SF-15).
+    '''wardyn/secret/v1''',
 ]
 paths = [
     # The leaked-value detector's own tests: intentionally realistic-shaped
@@ -36,4 +42,10 @@ paths = [
     '''ui/src/app/components/screens/workspace-wizard/wizard-types\.test\.ts''',
     '''ui/src/app/components/screens/workspace-wizard/step-base-image\.test\.tsx''',
     '''ui/e2e/workspace-wizard\.spec\.ts''',
+    # The broker mask test mints a FAKE, unique-per-run GitLab PAT fixture
+    # (uuid-suffixed) so it never collides with the process-global mask
+    # registry another test in the package populated. A fresh value every run
+    # meant a fresh commit fingerprint every run too (SF-15) — path-scoped
+    # instead of chased with .gitleaksignore entries.
+    '''internal/egress/proxy/pat_broker_mask_test\.go''',
 ]

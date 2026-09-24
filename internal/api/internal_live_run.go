@@ -106,6 +106,10 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			// 403, not 404: the caller already authenticated with claims.RunID's
+			// own signed token, so a missing run means ITS credential no longer
+			// names anything — an authorization failure, not a member guessing at
+			// a path a 404 would have to keep silent about.
 			s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "")
 			writeError(w, http.StatusForbidden, "run not found")
 			return false

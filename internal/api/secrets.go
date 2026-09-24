@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -46,6 +47,7 @@ var reservedSecretNames = map[string]bool{
 	"wardyn-session-key":    true,
 	"wardyn-ssh-host-key":   true,
 	"wardyn-ui-session-key": true,
+	"wardyn-internal-ca":    true,
 }
 
 // reservedSecret reports whether name is a platform-internal / managed-credential
@@ -208,12 +210,29 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, []byte(body.Value)); err != nil {
+		if errors.Is(err, secretstore.ErrRowNotWritten) {
+			// Rule 18: the value reached the external store but its row did not,
+			// so the store may already serve it behind this failure.
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"secret.write", name, "failure", withSecretOwner(map[string]any{"reason": "row"}, owner, ownerKnown)))
+		}
 		writeServerError(w, r, "store secret", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"secret.write", name, "success", secretOwnerAuditData(owner, ownerKnown)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// auditRowNotWritten is rule 18's audit for Wardyn's own writes (a captured or
+// refreshed sign-in, a pasted credential), as handlePutSecret does it for the
+// API's: a store-mode Put whose value reached the external store but whose
+// row was not written, so the store may already serve the new value.
+func (s *Server) auditRowNotWritten(ctx context.Context, err error, actorType types.ActorType, actor, owner, name string) {
+	if errors.Is(err, secretstore.ErrRowNotWritten) {
+		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "secret.write", name, "failure",
+			withSecretOwner(map[string]any{"reason": "row"}, owner, true)))
+	}
 }
 
 // admitSecretCount is the secretsMaxPerOwner check, sited immediately before
@@ -265,13 +284,39 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("owner") != "" && !s.crossOwnerDeleteHitsARow(w, r, owner, name) {
 		return
 	}
-	if err := s.cfg.Secrets.For(owner).Delete(r.Context(), name); err != nil {
+	ctx, rep := secretstore.WithDeleteReport(r.Context())
+	if err := s.cfg.Secrets.For(owner).Delete(ctx, name); err != nil {
 		writeServerError(w, r, "delete secret", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"secret.delete", name, "success", secretOwnerAuditData(owner, ownerKnown)))
+		"secret.delete", name, "success", secretDeleteAuditData(owner, ownerKnown, *rep)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// secretDeleteAuditData is secretOwnerAuditData plus, when the value lived in
+// an external store, what that store kept (design §2.3a.3): whether it was
+// purged, and for how many days the organisation can still recover it.
+func secretDeleteAuditData(owner string, known bool, rep secretstore.DeleteReport) json.RawMessage {
+	if rep.Store == "" {
+		return secretOwnerAuditData(owner, known)
+	}
+	data := map[string]any{"store": rep.Store, "purged": rep.Purged}
+	if rep.RecoverableDays > 0 {
+		data["recoverable_days"] = rep.RecoverableDays
+	}
+	return withSecretOwner(data, owner, known)
+}
+
+// withSecretOwner adds secretOwnerAuditData's fields to data.
+func withSecretOwner(data map[string]any, owner string, known bool) json.RawMessage {
+	if owner != "" {
+		data["secret_owner"] = owner
+		if !known {
+			data["owner_known"] = false
+		}
+	}
+	return mustJSON(data)
 }
 
 // secretOwnerParam resolves the secret-store namespace PUT, DELETE and the
@@ -545,7 +590,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 			// internal identifier for a condition a member cannot clear without
 			// being told how. Same 403 as before; a plain store failure still
 			// 500s under this seam's own prefix.
-			writeCeilingErrorPrefixed(w, "list secrets: ", err)
+			writeCeilingErrorPrefixed(w, r, "list secrets: ", err)
 			return
 		}
 	}
