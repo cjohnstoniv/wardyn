@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`WARDYN_DAEMON_PROXY_SECRET` no longer refuses boot on a Kubernetes mount (#734).** Its file-mode
+  check refused any group or other bit, so a Secret or projected volume (`0440` under the chart's
+  `fsGroup`) and a Secrets Store CSI file (`0644`) both stopped the daemon. Now a
+  group- or world-writable file is refused; an other-readable one is refused only
+  when the file is owned by wardynd's own non-root uid; group-read is accepted.
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
@@ -598,7 +603,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   diagnostics and logs); the new var is a **file path** instead, read once at
   boot — the daemon's proxy transport is installed before the database connects
   and before the secret store exists, so a secret-store reference cannot be
-  resolved here. The file's mode must be `0600` or tighter, and boot refuses if
+  resolved here. A group- or world-writable file is refused, and boot refuses if
   both vars are set rather than picking one silently. See `docs/ENV.md`.
   This resolves 0.7.6's known gap that `WARDYN_DAEMON_PROXY_URL` had no credentialed-proxy
   form.
