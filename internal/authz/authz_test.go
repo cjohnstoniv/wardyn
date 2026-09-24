@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -161,14 +162,20 @@ func TestEveryDeclaredReasonIsRegistered(t *testing.T) {
 // declaredConsts reads this package's typed string constants, by type name.
 func declaredConsts(t *testing.T) map[string][]string {
 	t.Helper()
-	pkgs, err := parser.ParseDir(token.NewFileSet(), ".", func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	names, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
+	fset := token.NewFileSet()
 	out := map[string][]string{}
-	for _, f := range pkgs["authz"].Files {
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, decl := range f.Decls {
 			gd, ok := decl.(*ast.GenDecl)
 			if !ok || gd.Tok != token.CONST {
