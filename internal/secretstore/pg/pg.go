@@ -10,8 +10,8 @@
 //
 // Security invariant: the plaintext and the DEK are only in memory during the
 // Put/Get call, and no error carries either — errors name the row, never its
-// value. The caller is responsible for emitting a "secret.read" audit event
-// before using a returned value.
+// value. Reads are recorded by the secretstore.Audited decorator wardynd wraps
+// this store in; Get reports the row it read to it (secretstore.NoteRow).
 package pg
 
 import (
@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"time"
 
 	"filippo.io/age"
 	"github.com/jackc/pgx/v5"
@@ -32,8 +33,9 @@ import (
 // Compile-time assertion: Store implements secretstore.Store.
 var _ secretstore.Store = (*Store)(nil)
 
-// encVersion is the row format every write produces. 0 is the legacy age
-// payload, which only the boot conversion (ConvertV0) reads.
+// encVersion is the row format every local write produces. 0 is the legacy
+// age payload, which only the boot conversion (ConvertV0) reads; extVersion is
+// the store-mode pointer row (external.go).
 const encVersion = 1
 
 // ageHeader opens every age payload, and so every row a pre-envelope wardynd
@@ -54,8 +56,16 @@ const secretAADLabel = "wardyn/secret/v1"
 type Store struct {
 	pool *pgxpool.Pool
 	// kek wraps every DEK this store writes and is the only KEK a read accepts:
-	// a row whose kek_id names another is refused.
+	// a row whose kek_id names another is refused. nil in store mode with no
+	// WARDYN_AGE_KEY: then every local (v1) row is refused by name.
 	kek kek.KEK
+	// ext is the configured external store, or nil. Pointer rows (enc_version
+	// 2) are read through it in every mode; writeExt says whether Put writes
+	// there (store mode) or seals locally.
+	ext      secretstore.External
+	writeExt bool
+	// extTimeout bounds each call to ext (Deps.ExternalTimeout).
+	extTimeout time.Duration
 	// owner is the secretstore.Store.For namespace this view is scoped to.
 	// "" (the zero value, and New's own result) is the operator namespace —
 	// every Store built before For existed keeps its exact behavior.
@@ -81,8 +91,32 @@ func localKEK(identity age.Identity) (*kek.Local, error) {
 	return kek.NewLocal(x)
 }
 
-// Name identifies this backend for audit and UI.
-func (s *Store) Name() string { return "pg" }
+// Name identifies this backend for audit and UI: "pg", or in store mode the
+// external store's name ("vaultkv").
+func (s *Store) Name() string {
+	if s.writeExt {
+		return s.ext.Name()
+	}
+	return "pg"
+}
+
+// ExternalName names the configured external store ("vaultkv", "azurekv"),
+// or "" when there is none.
+func (s *Store) ExternalName() string {
+	if s.ext == nil {
+		return ""
+	}
+	return s.ext.Name()
+}
+
+// StoresExternally describes the external store every write goes to ("Vault
+// at vault.example:8200"), or "" in local mode.
+func (s *Store) StoresExternally() string {
+	if s.writeExt {
+		return s.ext.Describe()
+	}
+	return ""
+}
 
 // For returns a view scoped to owner — see secretstore.Store.For's doc
 // comment for the fallback/isolation contract. A shallow copy: owner is the
@@ -105,6 +139,9 @@ func rowRef(owner, name string) string {
 // touched. Nothing is written unless the whole envelope was built, so a failed
 // wrap leaves any existing row as it was.
 func (s *Store) Put(ctx context.Context, name string, value []byte) error {
+	if s.writeExt {
+		return s.putExternal(ctx, name, value)
+	}
 	wrapped, ct, err := seal(ctx, s.kek, s.owner, name, value)
 	if err != nil {
 		return fmt.Errorf("pg secretstore: seal %s: %w", rowRef(s.owner, name), err)
@@ -178,6 +215,7 @@ func (s *Store) Get(ctx context.Context, name string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pg secretstore: get %s: %w", rowRef(s.owner, name), err)
 	}
+	secretstore.NoteRow(ctx, secretstore.Row{Store: s.Name(), Owner: e.ownedBy, Name: e.name, Ref: e.kekID})
 	return s.open(ctx, e)
 }
 
@@ -188,8 +226,12 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 	switch {
 	case e.version == 0:
 		return nil, fmt.Errorf("pg secretstore: %s is a pre-envelope (v0) row written after this database was converted — an older wardynd is still writing to it; stop every older replica, then restart this one to convert the row", ref)
+	case e.version == extVersion:
+		return s.openExternal(ctx, e)
 	case e.version != encVersion:
 		return nil, fmt.Errorf("pg secretstore: row %s "+unknownVersion, ref, e.version)
+	case s.kek == nil:
+		return nil, fmt.Errorf("pg secretstore: %s is sealed under key %q, but this wardynd has no WARDYN_AGE_KEY — keep it set until `wardynd -migrate-secrets` reports none left", ref, e.kekID)
 	case e.kekID != s.kek.ID():
 		return nil, fmt.Errorf("pg secretstore: %s is sealed under key %q, but this wardynd is configured with %q", ref, e.kekID, s.kek.ID())
 	}
@@ -215,6 +257,9 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 // deleting a member's row leaves the operator's readable, and a member can
 // never reach another member's row to delete it in the first place.
 func (s *Store) Delete(ctx context.Context, name string) error {
+	if err := s.deleteExternal(ctx, name); err != nil {
+		return err
+	}
 	if _, err := s.pool.Exec(ctx, `DELETE FROM secrets WHERE owned_by=$1 AND name=$2`, s.owner, name); err != nil {
 		return fmt.Errorf("pg secretstore: delete %s: %w", rowRef(s.owner, name), err)
 	}
@@ -255,6 +300,8 @@ func (s *Store) List(ctx context.Context) ([]string, error) {
 // wrapped_dek and kek_id change; the sealed value (and its DEK) is untouched,
 // so a rotation never decrypts a credential.
 //
+// Pointer rows (store mode) hold nothing under the age key and are left alone.
+//
 // ALL-OR-NOTHING. One transaction: any row that is not a v1 row under the old
 // key, or whose data key does not unwrap, aborts the whole thing — the returned
 // error names the row and how far it had got, and nothing is committed, so every
@@ -294,7 +341,7 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID age.Identity) (
 	// ORDER BY owned_by, name keeps the lock/abort order stable and readable;
 	// the UPDATE below keys on BOTH columns, since two owners can share a name
 	// (migration 0050).
-	rows, err := tx.Query(ctx, `SELECT owned_by, name, enc_version, kek_id, wrapped_dek FROM secrets ORDER BY owned_by, name FOR UPDATE`)
+	rows, err := tx.Query(ctx, `SELECT owned_by, name, enc_version, kek_id, wrapped_dek FROM secrets WHERE enc_version <> $1 ORDER BY owned_by, name FOR UPDATE`, extVersion)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: rekey select: %w", err)
 	}

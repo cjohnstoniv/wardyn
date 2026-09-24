@@ -519,6 +519,11 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 				if err := s.sweepRunWatchers(ctx); err != nil {
 					slog.WarnContext(ctx, "wardynd: run watcher sweep", slog.Any("err", err))
 				}
+				// The lease rides this cadence too: its warnings are minutes
+				// apart and the end is a minute late at worst.
+				if err := s.sweepRunLeases(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: run lease sweep", slog.Any("err", err))
+				}
 			}()
 		}
 	}
@@ -693,6 +698,9 @@ func (s *Server) reconcileFinalize(ctx context.Context, runID uuid.UUID, to type
 	}
 	if isTerminalRunState(cur.State) {
 		return // already finalized (e.g. a concurrent kill won)
+	}
+	if runIsKept(cur) {
+		return // stopped on purpose and kept; the lease sweep owns its end
 	}
 	applied, err := s.casRunState(ctx, runID, cur.State, to)
 	if err != nil {

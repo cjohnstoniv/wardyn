@@ -190,11 +190,11 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   await page.goto("/setup");
   await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
-  // …and on /settings a MEMBER keeps it, deliberately: that card's AWS button
+  // …and on /account a MEMBER keeps it, deliberately: that card's AWS button
   // is admin-only, so hiding the strip there would strand exactly the person a
   // refusal sends to the page (the suppression is operator-only —
   // model-access-banner.tsx's `suppressed`).
-  await page.goto("/settings");
+  await page.goto("/account");
   await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
   await dexSignOut(page);
 });

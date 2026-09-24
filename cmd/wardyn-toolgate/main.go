@@ -49,17 +49,32 @@ func main() {
 // records the decision, the recording records the session.
 const maxCmdBytes = 4096
 
+// defaultDeadline is -deadline's fallback when neither the flag nor
+// WARDYN_APPROVAL_EXPIRY_AFTER says otherwise — the server's own default for
+// the ceiling this mirrors (cmd/wardynd/boot_flags.go's approval-expiry-after).
+const defaultDeadline = 24 * time.Hour
+
 func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	fs := flag.NewFlagSet("wardyn-toolgate", flag.ContinueOnError)
 	// The proxy is the sandbox's one route out, so its address is already in
 	// every agent's environment as the standard proxy variable.
 	base := fs.String("base", os.Getenv("HTTP_PROXY"), "brokered API base URL (default: $HTTP_PROXY — the egress proxy)")
 	poll := fs.Duration("poll", 2*time.Second, "approval poll interval")
-	// A ceiling, not a timeout in the UX sense: claude blocks on this call for
-	// as long as we keep polling, and the approval itself expires server-side
-	// (FSM EXPIRED -> deny) long before this. This only bounds a gate whose
-	// control plane stopped answering entirely.
-	deadline := fs.Duration("deadline", 24*time.Hour, "give up (deny) after this long")
+	// -deadline IS the approval ceiling now (mirrored from
+	// WARDYN_APPROVAL_EXPIRY_AFTER, the same value the approval-expiry sweeper
+	// uses), not a distinct "control plane stopped answering" bound: claude
+	// blocks on this call for as long as we keep polling, and this gate's own
+	// deadline-reached deny normally lands the tool call BEFORE the sweeper's
+	// EXPIRED does — the sweeper only ticks every sweep interval (10m
+	// default) — so on giving up the gate expires the row itself (expire).
+	//
+	// Defaults from WARDYN_APPROVAL_EXPIRY_AFTER (dispatch sets it to the
+	// operator's actual approval-expiry-after when tool_approvals=hold) rather
+	// than a bare literal, so a tool call waits the SAME ceiling the server
+	// will actually hold its approval to — an operator who raises the ceiling
+	// past 24h no longer has this gate give up early on a still-PENDING
+	// approval. -deadline still overrides either way.
+	deadline := fs.Duration("deadline", deadlineDefault(), "give up (deny) after this long (default: $WARDYN_APPROVAL_EXPIRY_AFTER, else 24h)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -70,6 +85,22 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	g := &gate{base: strings.TrimRight(*base, "/"), poll: *poll, deadline: *deadline,
 		client: directClient(), stderr: errOut}
 	return g.serve(in, out)
+}
+
+// deadlineDefault reads WARDYN_APPROVAL_EXPIRY_AFTER (a Go duration string,
+// e.g. "24h0m0s") and returns it, falling back to defaultDeadline when the
+// var is unset, empty or unparseable — never fail the gate over its own
+// default.
+func deadlineDefault() time.Duration {
+	v := os.Getenv("WARDYN_APPROVAL_EXPIRY_AFTER")
+	if v == "" {
+		return defaultDeadline
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return defaultDeadline
+	}
+	return d
 }
 
 // directClient builds the gate's control-plane HTTP client.
@@ -239,13 +270,26 @@ func (g *gate) decide(params json.RawMessage) any {
 		// the sandbox's own approval, so a persistent error ends at deadline.
 		time.Sleep(g.poll)
 	}
+	// Final poll: the loop above can exit with up to one full -poll interval
+	// unchecked (its last sleep runs past `end` before the condition is
+	// re-tested), so a decision landing in that window would otherwise be
+	// missed and denied despite having actually resolved in time. One last
+	// check before giving up catches it.
+	if state, err := g.state(id); err == nil {
+		consecutivePollFailures = 0
+		if res, terminal := g.resultForTerminal(state, a, "the Wardyn operator"); terminal {
+			return res
+		}
+	} else {
+		consecutivePollFailures++
+	}
 	// The gate is giving up either way below — tell the control plane so the
 	// row moves to EXPIRED now, not up to one sweep interval later (#811): a
 	// row left PENDING here is still approvable in the console for that whole
 	// window, after this gate has already returned deny to Claude Code for it.
 	// The answer is the row's final state: an operator approval that landed
-	// after the last PENDING poll wins the CAS and is honoured here. EXPIRED,
-	// or no answer at all, falls through to the deny below.
+	// after the final poll wins the CAS and is honoured here. EXPIRED, or no
+	// answer at all, falls through to the deny below.
 	if state := g.expire(id); state != "EXPIRED" {
 		if res, terminal := g.resultForTerminal(state, a, "the Wardyn operator"); terminal {
 			return res

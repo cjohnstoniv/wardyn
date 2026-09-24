@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { APIResponse, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { EPISODES } from "../src/app/lib/demo-videos";
 
@@ -16,38 +16,29 @@ import { EPISODES } from "../src/app/lib/demo-videos";
 // behavior obligates the spec that covers it).
 
 async function mockFreshInstall(page: Page, opts: { sso?: boolean } = {}): Promise<void> {
+  // CACHE-AND-SERVE (fixtures.ts#mockMemberSetupStatus): one real fetch,
+  // retried, and every match served from that body, so App's status is the
+  // same SSO body for the whole test. The hero renders from App's status
+  // (onboarding-screen.tsx), and a request log shows ONE /setup/status read.
+  // This does NOT explain the SSO case's CI flake (#469): there, the whole
+  // /setup page never paints within the timeout while the retry paints in
+  // under a second, which points at the lazy Getting-started route, not at
+  // this mock. setup-gate.spec fails the same way.
+  let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/setup/status*", async (route) => {
-    // The welcome hero (OnboardingScreen) does not read the landing read's
-    // status — it holds its OWN independent SetupStatus state and fires its
-    // own /setup/status GET from its own mount effect (onboarding-screen.tsx),
-    // strictly AFTER the page has already navigated to /setup. That is a
-    // SECOND real round trip through this same interception, not a cache hit
-    // and not concurrent with the first — confirmed by request timing: the
-    // first settles before waitForURL(/\/setup/) resolves, the second starts
-    // only once OnboardingScreen mounts.
-    //
-    // getSetupStatus() (lib/api/setup.ts) treats ANY fetch failure — not just
-    // a timeout — as "answer READY_FALLBACK" (single-user, unreachable),
-    // with no retry of its own; its effect runs once. So a single dropped
-    // connection on this SECOND round trip, on a loaded CI host, silently
-    // and PERMANENTLY sinks the rest of the test into single-user: nothing
-    // ever re-fetches, so no amount of extra `expect(...).toBeVisible()`
-    // timeout can recover it — this is what made the 15s wait fail outright
-    // rather than just late. Retry the real round trip here instead.
-    let response: APIResponse | undefined;
     let lastErr: unknown;
-    for (let attempt = 0; attempt < 3 && !response; attempt++) {
+    for (let attempt = 0; attempt < 3 && !cached; attempt++) {
       try {
-        response = await route.fetch();
+        const json = (await (await route.fetch()).json()) as Record<string, unknown>;
+        json.onboarding_complete = false;
+        if (opts.sso) json.auth = { ...(json.auth as object), mode: "sso" };
+        cached = json;
       } catch (e) {
         lastErr = e;
       }
     }
-    if (!response) throw lastErr;
-    const json = await response.json();
-    json.onboarding_complete = false;
-    if (opts.sso) json.auth = { ...json.auth, mode: "sso" };
-    await route.fulfill({ response, json });
+    if (!cached) throw lastErr;
+    await route.fulfill({ json: cached });
   });
 }
 

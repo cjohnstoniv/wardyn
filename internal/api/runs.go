@@ -301,6 +301,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// nothing reads back.
 		AutonomyLevel: autonomy.Level,
 	}
+	s.captureRunLimits(&run, ceiling)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		writeServerError(w, r, "create run", err)
@@ -416,11 +417,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", "/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
-	go s.finishCreateRunLaunch(context.WithoutCancel(ctx), createRunLaunch{
+	launch := createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade), gw: gw,
 		wsRefs: wsRefs, driveMount: driveMount, ephemeralDirs: ephemeralDirs,
 		bedrockRef: bedrockRef, runToken: id.Token, created: created,
-	})
+	}
+	launchCtx := context.WithoutCancel(ctx)
+	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })
 }
 
 // seedAndAdmitWorkspace folds a named workspace onto the resolved spec and then

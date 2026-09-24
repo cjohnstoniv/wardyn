@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -196,7 +197,7 @@ func (s *Server) scmAccessForRow(ctx context.Context, pr perUserADORow, subject 
 	var blob adoEntraBlob
 	var found bool
 	if !isMechanism {
-		blob, found, _ = s.readADOEntraBlob(ctx, subject, pr.cfg.RowID)
+		blob, found, _ = s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), subject, pr.cfg.RowID)
 	}
 	out := SCMAccess{State: adoAccessState(isMechanism, found), Org: adoOrgDisplay(row), Kind: string(row.Kind)}
 	switch {

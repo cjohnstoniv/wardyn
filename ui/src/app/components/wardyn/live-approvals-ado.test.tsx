@@ -170,14 +170,14 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
       expect(screen.queryByText(/AWS sign-in needed/)).not.toBeInTheDocument();
     });
 
-    it("F3: the owner gets the consent chip and the door, to the Settings card's anchor (#458)", async () => {
+    it("F3: the owner gets the consent chip and the door, to the Account card's anchor (#458)", async () => {
       listApprovalsMock.mockResolvedValue([consentRow()]);
       mount({ principal: "dana@acme.example" });
       const card = await screen.findByTestId("ado-consent-card");
       expect(within(card).getByText("Needs your Microsoft consent")).toBeInTheDocument();
       const cta = within(card).getByRole("link", { name: ADO.REQ_CONSENT_CTA });
       expect(cta).toBeInTheDocument();
-      expect(cta).toHaveAttribute("href", "/settings#azure-devops");
+      expect(cta).toHaveAttribute("href", "/account#azure-devops");
     });
   });
 });
