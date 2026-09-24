@@ -86,7 +86,6 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
@@ -460,13 +459,12 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 	}
 	// The buffer outlives the slot: it is forwarded from here. Charged while the
 	// slot is still held, so scanRetained keeps its single acquirer.
-	if !scanRetained.acquire(ctx, len(buf)) {
+	release, ok := retainScanBuffer(ctx, len(buf))
+	if !ok {
 		busy()
 		return nil, noRelease, false
 	}
-	var once sync.Once
-	n := len(buf)
-	return bytes.NewReader(buf), func() { once.Do(func() { scanRetained.release(n) }) }, true
+	return bytes.NewReader(buf), release, true
 }
 
 // deniedPaths is the verdict on one inspected push: what the rules refuse, and
