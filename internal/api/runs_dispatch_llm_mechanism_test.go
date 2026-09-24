@@ -723,7 +723,7 @@ func TestResolveLLMInjections_RefusesBeforeResolvingAnySSOScope(t *testing.T) {
 	sandboxEnv := map[string]string{}
 
 	_, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, sandboxEnv,
-		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false, false)
+		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false, false, bedrockCredUngraded())
 	if ok {
 		t.Fatal("dispatch went ahead on an unreadable roster — the credential namespace was decided from a zero site config")
 	}

@@ -521,6 +521,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refused as uninspectable; objects are allocated at their exact size, and a blob's content is
   released once the pack is parsed. A max-legal pack of that shape now keeps 22 MiB. Inspections
   already ran one at a time behind the proxy's inspection slot; a test now pins it.
+- **The autonomy rubric graded a run's Amazon Bedrock model credential as no secret at all (#504).**
+  The secrets axis read only the grants a request carried, and the Bedrock credential (a captured
+  AWS SSO session, a bearer key, SigV4 keys) is handed to the run at dispatch, so such a run graded
+  `secrets=none` on Review and at launch and was capped by the wrong rubric row. It now grades
+  `powerful`, the value the rubric already gives an `api_key` to a host outside the coding-agent
+  baseline, whether the credential is proxy-injected or resident. Both doors grade from the one
+  model-credential resolution, which now runs before the autonomy gate. The grade is frozen for
+  dispatch: a run graded without a Bedrock credential that would be handed one at dispatch fails
+  with `autonomy_grade_drift` instead of launching.
 - **A repository's own `.claude/settings.json` could approve tool calls on a `tool_approvals=hold`
   run before Wardyn's approval gate was asked.** Claude Code resolves `permissions.allow` rules
   before it consults `--permission-prompt-tool`, so a matching rule in the workspace (which the

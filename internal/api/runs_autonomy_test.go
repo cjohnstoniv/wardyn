@@ -1001,13 +1001,13 @@ func TestAutonomyPostureGradesTheADOEntraCredentialAtCreate(t *testing.T) {
 		SecretsBaseline: types.AutonomyL2, SecretsPowerful: types.AutonomyL1,
 	}
 
-	graded := composer.AutonomyPostureOf(autonomyPostureSpec(spec, []types.Workspace{ws}, "", site, grade), types.CC2)
+	graded := composer.AutonomyPostureOf(autonomyPostureSpec(spec, []types.Workspace{ws}, "", site, grade, bedrockCredUngraded()), types.CC2)
 	level, boundBy := composer.FoldAutonomy(rubric, graded)
 
 	// The same spec as dispatch leaves it: the grants the lane really writes.
 	dispatched := spec
 	dispatched.EligibleGrants = adoEntraPostureGrants("contoso")
-	after := composer.AutonomyPostureOf(autonomyPostureSpec(dispatched, []types.Workspace{ws}, "", site, grade), types.CC2)
+	after := composer.AutonomyPostureOf(autonomyPostureSpec(dispatched, []types.Workspace{ws}, "", site, grade, bedrockCredUngraded()), types.CC2)
 	afterLevel, afterBound := composer.FoldAutonomy(rubric, after)
 
 	if graded.Secrets != types.AutonomySecretsPowerful {

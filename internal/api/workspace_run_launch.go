@@ -713,7 +713,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// adoEntraUngraded: the record/verify session door runs no autonomy gate —
 	// it is operator-only and no rubric caps it — so there is no frozen grade
 	// for dispatch to hold the Azure DevOps lane to.
-	result := s.dispatchAndSettle(ctx, created, ceilingForDispatch(ceiling, adoEntraUngraded()), dispatchParams{
+	result := s.dispatchAndSettle(ctx, created, ceilingForDispatch(ceiling, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken:           runToken,
 		Image:              image,
 		Policy:             policy,

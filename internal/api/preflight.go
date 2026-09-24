@@ -289,6 +289,27 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create/Review parity on the declared model-access mechanism: Review answers
+	// the SAME 422 launch would, from the same predicate — a checklist that said
+	// "ready" for a run create refuses is the worse of the two lies. Writes its
+	// own 422; see enforceCreateLLMMechanism.
+	// The caller's own run-identity subject, for the reason named at the create
+	// door (runs.go): a per_user lane resolves against the principal's namespace,
+	// and secretOwnerFromRequest's "" for an operator would preview "sign in
+	// again" for an admin whose own capture is right there.
+	//
+	// The out-param is this handler's ONE resolution of the run's credential
+	// lanes: the gate already resolves them to judge the declared mechanism, and
+	// grading residency from a second resolution would both cost another
+	// secret-store read and let the rail describe a lane the gate did not judge.
+	// The autonomy gate below grades the same resolution, which is why this
+	// sits ahead of it — in launch's order.
+	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
+	var modelCred modelCredentialFacts
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
+		return
+	}
+
 	// The SAME autonomy gate launch runs, in the same place in the order
 	// (runs.go) and on the same folded spec + enforced class — called, not
 	// re-implemented, because a Review that previewed a level launch then
@@ -298,9 +319,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// copy and is discarded with it (preflight dispatches nothing); the 201
 	// warnings belong to the launch channel, and the site-config snapshot to
 	// launch's egress union, so both are dropped here too.
-	// The frozen Azure DevOps grade is dropped with the rest: preflight
-	// dispatches nothing, so there is no dispatch for it to bind.
-	autonomy, _, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	// The frozen Azure DevOps and Bedrock grades are dropped with the rest:
+	// preflight dispatches nothing, so there is no dispatch for them to bind.
+	autonomy, _, _, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred)
 	if !ok {
 		return
 	}
@@ -336,25 +357,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	gspec.MinConfinementClass = enforced
 	riskItems := composer.Grade(runInput, gspec)
 	overallRisk := composer.OverallLevel(riskItems)
-
-	// Create/Review parity on the declared model-access mechanism: Review answers
-	// the SAME 422 launch would, from the same predicate — a checklist that said
-	// "ready" for a run create refuses is the worse of the two lies. Writes its
-	// own 422; see enforceCreateLLMMechanism.
-	// The caller's own run-identity subject, for the reason named at the create
-	// door (runs.go): a per_user lane resolves against the principal's namespace,
-	// and secretOwnerFromRequest's "" for an operator would preview "sign in
-	// again" for an admin whose own capture is right there.
-	//
-	// The out-param is this handler's ONE resolution of the run's credential
-	// lanes: the gate already resolves them to judge the declared mechanism, and
-	// grading residency from a second resolution would both cost another
-	// secret-store read and let the rail describe a lane the gate did not judge.
-	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	var modelCred modelCredentialFacts
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
-		return
-	}
 
 	// LLM-access verdict on the resolved spec — the SAME computation the create path
 	// warns from (resolveRunLLMAccess), so this checklist row and the launch-time

@@ -59,7 +59,7 @@ func runDriveDispatchWith(t *testing.T, fr *fakeRunner, drive *types.DriveMount)
 	// fields and became a parameter every door must pass. The zero ceiling is
 	// what every other dispatch test uses — this test is about drive
 	// composition, not governance.
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Drive: drive,
 	})

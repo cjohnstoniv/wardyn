@@ -34,7 +34,7 @@ func ephemeralDispatch(t *testing.T, policy types.RunPolicySpec, site types.Site
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	srv.cfg.Store = ceilingDispatchStore{dispatchTestStore: st, site: site}
 	run.Task = "" // no agent exec / completion watcher: this is about composition
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policy,
 	})
 	return fr.lastSpec.Resources, audit.events, run.ID

@@ -43,10 +43,14 @@ import (
 // again could disagree — a dropped connection or an admin's edit between the
 // two would grade a run `sealed` and dispatch it to a forge. Review discards
 // it, as it discards the derived field.
+//
+// modelCred is the door's ONE resolution of the run's model credential
+// (enforceCreateLLMMechanism, which both doors now call first); the Bedrock
+// credential it names is graded here and frozen for dispatch (bedrockCredGrade).
 func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req *createRunRequest,
 	spec types.RunPolicySpec, wsRefs []types.Workspace, enforced types.ConfinementClass,
-	ceiling governanceCeiling,
-) (types.AutonomyResolution, []string, types.SiteConfig, adoEntraGrade, bool) {
+	ceiling governanceCeiling, modelCred modelCredentialFacts,
+) (types.AutonomyResolution, []string, types.SiteConfig, adoEntraGrade, bedrockCredGrade, bool) {
 	// Read for EVERY run that declares a repo, bound or not, because launch
 	// dispatches from this snapshot whether or not a rubric graded it. Fail
 	// closed, as admitRepoSources and siteConfigForLaneVeto do on the same
@@ -54,7 +58,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	scmSite, err := s.scmLaneSiteConfig(r.Context(), spec, req.Repo)
 	if err != nil {
 		writeServerError(w, r, "get site config", err)
-		return types.AutonomyResolution{}, nil, types.SiteConfig{}, adoEntraUngraded(), false
+		return types.AutonomyResolution{}, nil, types.SiteConfig{}, adoEntraUngraded(), bedrockCredUngraded(), false
 	}
 	// No profile, or a profile with no rubric: the zero value and no bound. An
 	// UNASSIGNED member — and every operator — is byte-for-byte what they were
@@ -63,7 +67,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	if ceiling.Profile == nil || ceiling.Limits.AutonomyRubric == nil {
 		// adoEntraUngraded: nothing capped this run, so dispatch has no grade to
 		// be held to and resolves the lane exactly as it always did.
-		return types.AutonomyResolution{}, nil, scmSite, adoEntraUngraded(), true
+		return types.AutonomyResolution{}, nil, scmSite, adoEntraUngraded(), bedrockCredUngraded(), true
 	}
 	// THE PER-PERSON AZURE DEVOPS LANE, resolved ONCE here and used twice: the
 	// posture is graded on it, and the frozen answer travels to dispatch on the
@@ -80,7 +84,8 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	adoRun, adoOn := resolveADOEntraRun(scmSite, repoLocatorsOf(spec.WorkspaceRepos),
 		runIdentitySubject(r.Context(), principalFromRequest(r)))
 	grade := adoEntraGradedAs(adoRun, adoOn)
-	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade), enforced)
+	bedrock := bedrockCredGradedAs(modelCred)
+	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock), enforced)
 	level, boundBy := composer.FoldAutonomy(*ceiling.Limits.AutonomyRubric, posture)
 	res := types.AutonomyResolution{Level: level, Posture: posture, BoundBy: boundBy}
 	// An all-unset rubric — or one that leaves this posture's three fields
@@ -88,9 +93,9 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// doc). The posture still travels, so the audit row and Review record what
 	// was graded even when nothing bound it.
 	if level == "" {
-		return res, nil, scmSite, grade, true
+		return res, nil, scmSite, grade, bedrock, true
 	}
-	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade), ceiling.Profile.Name)
+	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade, bedrock), ceiling.Profile.Name)
 	// Here rather than in the ladder: whether the managed settings land depends
 	// on the ENFORCED class's substrate, which only this function holds. No
 	// agent process on an exec run to say it about.
@@ -99,7 +104,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 			warnings = append(warnings, msg)
 		}
 	}
-	return res, warnings, scmSite, grade, ok
+	return res, warnings, scmSite, grade, bedrock, ok
 }
 
 // autonomyLadder enforces a resolved level on the request: the refusals, then
@@ -229,7 +234,7 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 // The empty case is UNREACHABLE — resolveRunAutonomy returns before the ladder
 // when nothing bound the level — and degrades to a readable phrase rather than
 // to an empty parenthetical.
-func autonomyBoundList(boundBy []string, ado adoEntraGrade) string {
+func autonomyBoundList(boundBy []string, ado adoEntraGrade, bedrock bedrockCredGrade) string {
 	var list string
 	switch len(boundBy) {
 	case 0:
@@ -239,7 +244,7 @@ func autonomyBoundList(boundBy []string, ado adoEntraGrade) string {
 	default:
 		list = strings.Join(boundBy[:len(boundBy)-1], ", ") + " and " + boundBy[len(boundBy)-1]
 	}
-	return list + autonomyPowerfulSecretCause(boundBy, ado)
+	return list + autonomyPowerfulSecretCause(boundBy, ado) + bedrockPowerfulSecretCause(boundBy, bedrock)
 }
 
 // autonomyPowerfulSecretCause names the per-person Azure DevOps credential when
@@ -320,7 +325,9 @@ func autonomyAgentLabel(agent string) string {
 //   - the PER-PERSON AZURE DEVOPS lane (unionADOEntraLane), which is the one
 //     lane here that carries a CREDENTIAL and not only reach: dispatch writes
 //     its api_key grants, so the secrets axis has to see them at create or the
-//     level is frozen a rung too high.
+//     level is frozen a rung too high;
+//   - the Amazon Bedrock MODEL credential (unionBedrockCredential), for the
+//     same reason: it is handed to the run at dispatch, and it is a credential.
 //
 // Graded BEFORE the launch-side decisions that can drop a lane — the provider
 // row's per-host veto in persistRunGrants and codex-cli's missing SSH lane —
@@ -331,13 +338,14 @@ func autonomyAgentLabel(agent string) string {
 // on reach it will not get. Lanes added later still, at dispatch, are not
 // here: the model-provider hosts resolved from global configuration and the
 // artifact-redirect substitution. The per-person Azure DevOps lane is authored
-// at dispatch too and IS here, because it is the only one of the three that
-// hands the run a credential — see unionADOEntraLane.
+// at dispatch too and IS here, because it hands the run a credential — see
+// unionADOEntraLane. So is the Bedrock model credential, on the secrets axis
+// only: its hosts stay with the model-provider hosts above.
 //
 // Works on a copy with both domain slices cloned: spec is the one the caller
 // goes on to persist and dispatch, and unionDomains appends in place.
 func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, legacyRepo string,
-	scmSite types.SiteConfig, ado adoEntraGrade,
+	scmSite types.SiteConfig, ado adoEntraGrade, bedrock bedrockCredGrade,
 ) types.RunPolicySpec {
 	out := spec
 	out.AllowedDomains = slices.Clone(spec.AllowedDomains)
@@ -356,6 +364,7 @@ func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, leg
 		unionAllowedDomains(&out, grantLaneEgress(g))
 	}
 	unionADOEntraLane(&out, spec, ado)
+	unionBedrockCredential(&out, bedrock)
 	return out
 }
 
