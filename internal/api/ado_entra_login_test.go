@@ -234,7 +234,7 @@ func newLoginFixture(t *testing.T, attach bool) *loginFixture {
 		RedirectURL: redirect,
 		// Any signed-in human is a member here: this fixture is about the
 		// credential, and role derivation has its own suite.
-		DefaultRole: oidc.RoleMember,
+		DefaultRole: oidc.RoleUser,
 	}, testLoginHMACKey)
 	if err != nil {
 		t.Fatalf("oidc.New against the fake tenant: %v", err)
@@ -536,7 +536,7 @@ func TestDeniedLoginCapturesNothing(t *testing.T) {
 		// NO default role: derivation finds nothing and the login is denied.
 		// (An EMPTY map is not a denial — it means claim-based derivation is
 		// off, and every signed-in human is an admin.)
-		RoleMap: map[string]string{"a-group-nobody-is-in": oidc.RoleMember},
+		RoleMap: map[string]string{"a-group-nobody-is-in": oidc.RoleUser},
 	}, testLoginHMACKey)
 	if err != nil {
 		t.Fatalf("oidc.New against the fake tenant: %v", err)

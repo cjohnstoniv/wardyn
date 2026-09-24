@@ -783,7 +783,7 @@ type AuditEvent struct {
 // two rows can never disagree about which key they name) and the value shown
 // to a human for "verify on first connect".
 //
-// Role is the registering session's OWN role (oidc.RoleAdmin/RoleMember),
+// Role is the registering session's OWN role (oidc.RoleAdmin/RoleUser),
 // stamped at registration by handleAddSSHKey (migration 0043) and REFRESHED
 // on every OIDC login for the authenticating principal's keys (migration
 // 0046). It is a BOUNDED-STALE stamp, not a live check — SSH carries no
@@ -798,7 +798,7 @@ type AuditEvent struct {
 // treats nil as infinitely stale, never as fresh.
 //
 // Capped marks a key registered while an admin's session was in the user view
-// (migration 0070): Role stays member through every login re-stamp, and
+// (migration 0070): Role stays user through every login re-stamp, and
 // sshAuth never grants it the admin override.
 type SSHPublicKey struct {
 	Fingerprint   string     `json:"fingerprint"`

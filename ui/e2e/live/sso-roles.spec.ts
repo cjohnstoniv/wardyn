@@ -53,7 +53,7 @@ const ADMIN_NAV = ["Policies", GOVERNANCE.TITLE, "Permissions", "Secrets", "Audi
 type Want = { role: string; operator: boolean; security: boolean };
 const ADMIN: Want = { role: "admin", operator: true, security: true };
 const SEC: Want = { role: "security_admin", operator: false, security: true };
-const MEMBER: Want = { role: "member", operator: false, security: false };
+const MEMBER: Want = { role: "user", operator: false, security: false };
 
 // deploy/kind/sso/dex.yaml's cast; oidc's TestShippedShapeRoleDerivation holds
 // the same table against the shipped role map.
@@ -121,7 +121,7 @@ for (const [email, want] of CAST) {
     // The console: a member is offered no admin screen; every other tier gets the
     // full nav (app-shell.tsx's navItemsForRole) and each screen gates itself.
     for (const label of ADMIN_NAV) {
-      await expect(page.getByRole("link", { name: new RegExp(`^${label}`) }), label).toHaveCount(want.role === "member" ? 0 : 1);
+      await expect(page.getByRole("link", { name: new RegExp(`^${label}`) }), label).toHaveCount(want.role === "user" ? 0 : 1);
     }
 
     // The API: a super-admin route, a security route, a member route.
@@ -134,7 +134,7 @@ for (const [email, want] of CAST) {
 test(`[${RENDER}] a login that matches no role is ${UNMAPPED_IS_MEMBER ? "a member" : "refused"}`, async ({ page }) => {
   if (UNMAPPED_IS_MEMBER) {
     await dexSignIn(page, "stranger@wardyn.local");
-    expect(await me(page)).toMatchObject({ role: "member", operator: false, security_operator: false });
+    expect(await me(page)).toMatchObject({ role: "user", operator: false, security_operator: false });
     return;
   }
   await page.goto("/");

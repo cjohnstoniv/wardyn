@@ -105,6 +105,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The non-admin tier is renamed `member` → `user` (#608).** `/me.role`, a role-map value and
+  `WARDYN_OIDC_DEFAULT_ROLE` now read `admin`, `security_admin` or `user`, and the console's
+  People step offers "User". Migration `0074_user_tier_rename` rewrites every stored `member`:
+  People-page rows become `user` on the built-in `standard` type (a new `role_mappings.user_type`
+  column, which a type cannot be deleted out from under), and the role snapshots on API tokens,
+  SSH keys and attach tickets become `user`; the `role_mappings` and `api_tokens` CHECKs refuse
+  `member` from then on. The session cookie's codec moves to version 2 and carries the person's
+  user type (`standard` for everyone until sign-in derives one), so **everyone signs in once more
+  after the upgrade**; API tokens keep working. A chart that still says `=member` in
+  `WARDYN_OIDC_ROLE_MAP`, or `WARDYN_OIDC_DEFAULT_ROLE=member`, still boots and signs those
+  people in as `user` (Standard user), with one boot warning per entry; that alias is removed in
+  0.9. `POST /access/mappings` accepts `user` only.
 - **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
   is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
   set; an admin list alone reads ok. While it warns, every admin also sees a banner above every
@@ -259,7 +271,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
   view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
-  The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `member`,
+  The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `user`,
   and it never gains the admin override: the sign-in re-stamp leaves its role alone, a CHECK
   refuses a capped row that reads `admin`, and the SSH gateway refuses the override for it
   (`ssh.auth` reason "capped key (registered in the user view): no admin override"). It still

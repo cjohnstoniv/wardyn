@@ -256,7 +256,7 @@ observation) as you go.
    which the chart's `WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin"` resolves to
    admin. Confirm you land in the forced **Getting Started** flow:
    - **Environment** step — confirm it renders.
-   - **People** step — add `<ENG_GROUP_OID>=member` (from `.env.local`) as a
+   - **People** step — add `<ENG_GROUP_OID>=user` (from `.env.local`) as a
      console-managed mapping, **in the UI**. Then, in the same signed-in tab,
      open `http://localhost:8480/api/v1/me/capabilities` and read
      `session_groups`: as `wardyn-admin` it must contain both `wardyn.admin`

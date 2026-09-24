@@ -934,7 +934,7 @@ async function mockMemberBedrockRowRedacted(
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
-    json.role = "member";
+    json.role = "user";
     json.operator = false;
     json.security_operator = false;
     await route.fulfill({ response, json });

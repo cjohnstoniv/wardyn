@@ -252,7 +252,7 @@ export function FirstRunLanding({ status, admin = false }: { status: SetupStatus
   if (status === null || !roleResolved) return <RouteFallback />;
   const base = firstRunLanding(status, role);
   // A user's landing is theirs alone, whatever the view context says.
-  const to = admin ? `/admin${base}` : role === "member" ? base : viewLanding(base, access);
+  const to = admin ? `/admin${base}` : role === "user" ? base : viewLanding(base, access);
   return <Navigate to={to} replace />;
 }
 
@@ -348,7 +348,7 @@ const OPERATOR_ONLY_PREFIXES = ["/admin/providers"];
 export function roleCanReach(path: string, role: string): boolean {
   const under = (prefixes: string[]) =>
     prefixes.some((p) => path === p || path.startsWith(`${p}/`));
-  if (role === "member") return under(MEMBER_REACHABLE_PREFIXES);
+  if (role === "user") return under(MEMBER_REACHABLE_PREFIXES);
   if (under(OPERATOR_ONLY_PREFIXES)) return role === "admin";
   return true;
 }

@@ -712,7 +712,7 @@ func (s *Server) firstBrokeredRepoFromRuns(ctx context.Context) string {
 // upgrade-safe default; accessRolePosture's `before` reads the same arm) —
 // fine for a single-operator deployment, but it silently grants admin to
 // everyone the moment a second human signs in. An admin list alone is ok
-// (Q457-5): an unmatched person then derives member.
+// (Q457-5): an unmatched person then derives user.
 // consoleRows is whether the store currently holds at least one People-step
 // row (the same nil-Store guard setup.go's own read of it applies —
 // unreadable/absent reads as false, the conservative direction: it surfaces
@@ -728,13 +728,13 @@ func ssoRBACCheck(oidcConfigured, roleMapConfigured, consoleRows, adminList bool
 	if roleMapConfigured || consoleRows || adminList {
 		return SetupCheck{
 			ID: "sso_rbac", Label: "Who is an admin", Status: "ok",
-			Detail: "People are mapped to admin or member, so a person's role comes from their sign-in.",
+			Detail: "People are mapped to admin or user, so a person's role comes from their sign-in.",
 		}, true
 	}
 	return SetupCheck{
 		ID: "sso_rbac", Label: "Who is an admin", Status: "warn",
 		Detail:   "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin.",
-		Fix:      "Map people to admin or member on the People step, so only the people you name can change this deployment.",
+		Fix:      "Map people to admin or user on the People step, so only the people you name can change this deployment.",
 		Blocking: true,
 	}, true
 }

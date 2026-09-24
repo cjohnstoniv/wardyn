@@ -81,7 +81,7 @@ export function TopBar({
   // M-1b: /settings is deleted — Settings now lives at /admin/settings, Your
   // account at /account (both still mount the unsplit SettingsScreen until
   // M-5 splits it).
-  const settingsTarget = meta.role === "member" ? "/account" : "/admin/settings";
+  const settingsTarget = meta.role === "user" ? "/account" : "/admin/settings";
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
       <MobileNav
@@ -242,7 +242,7 @@ export function TopBar({
                 reaches the admin welcome hero or its step query at all, and
                 its own episode catalog is a single flat "Watch" list at the
                 bottom of the page, not a step deep link.
-                `!== "admin"`, never `=== "member"`. Only the SUPER admin's
+                `!== "admin"`, never `=== "user"`. Only the SUPER admin's
                 SetupScreen honours ?step — a security admin's /setup/status is
                 redacted on the same !isOperator predicate (internal/api/setup.go)
                 and App.tsx hands them the same Getting Started, so the deep link

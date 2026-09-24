@@ -57,13 +57,13 @@ func TestSsoRBACCheck(t *testing.T) {
 			// The frozen strings (docs/design/admin-access-canon.md), byte for byte.
 			if tc.wantStatus == "warn" {
 				if chk.Detail != "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin." ||
-					chk.Fix != "Map people to admin or member on the People step, so only the people you name can change this deployment." {
+					chk.Fix != "Map people to admin or user on the People step, so only the people you name can change this deployment." {
 					t.Errorf("warn strings drifted from the canon: %+v", chk)
 				}
 				if !chk.Blocking {
 					t.Error("warn must stay Blocking")
 				}
-			} else if chk.Detail != "People are mapped to admin or member, so a person's role comes from their sign-in." || chk.Blocking {
+			} else if chk.Detail != "People are mapped to admin or user, so a person's role comes from their sign-in." || chk.Blocking {
 				t.Errorf("ok row drifted from the canon or blocks: %+v", chk)
 			}
 		})
