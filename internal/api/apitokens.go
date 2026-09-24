@@ -590,13 +590,13 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // Best effort by contract, like the counter: the mapping edit is already
 // durable when this runs, so a store failure is logged at WARN and reported as
 // zero — never turned into a 500 that would misdescribe what happened.
-func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, before, after []oidc.RoleMapping) int {
+func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, before, after []oidc.RoleMapping, userTypes []types.UserType) int {
 	ctx := r.Context()
 	if s.cfg.Store == nil || s.cfg.OIDC == nil || value == "" {
 		return 0
 	}
-	was, _ := s.cfg.OIDC.PreviewRoleAgainst(before, nil, []string{value}, "")
-	now, _ := s.cfg.OIDC.PreviewRoleAgainst(after, nil, []string{value}, "")
+	was := s.cfg.OIDC.PreviewRoleAgainst(before, userTypes, nil, []string{value}, "").Role
+	now := s.cfg.OIDC.PreviewRoleAgainst(after, userTypes, nil, []string{value}, "").Role
 	if !s.roleSnapshotDrops(was, now) {
 		return 0
 	}
@@ -612,8 +612,8 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 			continue
 		}
 		if apiTokenSnapshotAnswerable(t) {
-			wasT, _ := s.cfg.OIDC.PreviewRoleAgainst(before, nil, t.Groups, t.Email)
-			nowT, _ := s.cfg.OIDC.PreviewRoleAgainst(after, nil, t.Groups, t.Email)
+			wasT := s.cfg.OIDC.PreviewRoleAgainst(before, userTypes, nil, t.Groups, t.Email).Role
+			nowT := s.cfg.OIDC.PreviewRoleAgainst(after, userTypes, nil, t.Groups, t.Email).Role
 			if !s.roleSnapshotDrops(wasT, nowT) || !s.roleSnapshotDrops(t.Role, nowT) {
 				continue
 			}

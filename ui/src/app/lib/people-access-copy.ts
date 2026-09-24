@@ -54,6 +54,9 @@ export const PEOPLE = {
   // string: two homes for one frozen label is how they drift.
   ROLE_SECURITY_ADMIN: "Security admin",
   ROLE_USER: "User",
+  // The built-in user type's name, for when GET /access carries no list to
+  // read it from. A "user" row's chip shows its type's name (UT-2b).
+  TYPE_STANDARD: "Standard user",
   SOURCE_CHART: "From your chart",
   SOURCE_CONSOLE: "Console",
   CHART_HINT: "Edit in your chart values.",
@@ -165,6 +168,13 @@ export const PREVIEW = {
   RESULT_LEGACY: (role: string) =>
     `Would sign in as ${role} — no mappings are configured; the operator allowlist decides.`,
   RESULT_UNKNOWN: "Couldn't check this against your mappings — try again.",
+  // 0.8 user types (packet A canon): the built-in type lost to a custom one,
+  // two custom types tie, or a mapping names a type that doesn't exist.
+  STANDARD_LOST: (values: string) => `${values} also matched, but Standard user never wins against another type.`,
+  RESULT_TIED: (count: number, pairs: string, priority: number) =>
+    `${count === 2 ? "Two" : count} types tie. ${pairs} ${count === 2 ? "both" : "all"} match at priority ${priority}, so this sign-in would be refused. Give one a higher priority.`,
+  RESULT_TYPE_MISSING: (ids: string) =>
+    `Would be denied at sign-in — ${ids} isn't a user type that exists. Create it, or change the mapping that names it.`,
 } as const;
 
 export const ACCESS_STATE = {

@@ -218,6 +218,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   name regex, so a rename can no longer empty it. It reads the expected probes from the source,
   so a probe that skips or returns before its Mark line turns the report red rather than dropping
   out. The floor, which covered the pg and unit suites, now covers docker and k8s as well.
+- **Sign-in derives a user type (#609).** A `WARDYN_OIDC_ROLE_MAP` value, a People row or
+  `WARDYN_OIDC_DEFAULT_ROLE` may now name a user type id (`pm-group=portfolio-manager`); the
+  session carries that type beside the tier. Among the types a person matches, the highest
+  priority wins and Standard user never wins against a custom type. Two custom types at the same
+  top priority refuse the sign-in (`user_type_ambiguous`), and so does a type that doesn't exist
+  (`user_type_unknown`, also warned at boot); both are `auth.failed` rows from
+  `wardyn/oidcCallback`. An `admin` sign-in, the operator allowlist included, is never refused
+  over a type: it lands on Standard user with a warning. `POST /access/mappings` takes `user_type` on a user row and refuses a
+  type that doesn't exist; `GET /access` names each row's type and lists the types; the People
+  preview names the type, a tie and a missing type; `/me` reports `user_type: {id, name}`.
 - **The non-admin tier is renamed `member` → `user` (#608).** `/me.role`, a role-map value and
   `WARDYN_OIDC_DEFAULT_ROLE` now read `admin`, `security_admin` or `user`, and the console's
   People step offers "User". Migration `0074_user_tier_rename` rewrites every stored `member`:

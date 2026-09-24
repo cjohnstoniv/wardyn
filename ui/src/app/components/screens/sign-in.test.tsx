@@ -391,6 +391,18 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline", () 
     expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't check your access/i);
   });
 
+  // 0.8 user types: a sign-in refused over its type names the cause, never
+  // the generic "Sign-in failed".
+  it.each([
+    ["user_type_ambiguous", SIGNIN.USER_TYPE_AMBIGUOUS],
+    ["user_type_unknown", SIGNIN.USER_TYPE_UNKNOWN],
+  ])("renders the %s message", async (code, text) => {
+    window.history.pushState({}, "", `/?auth_error=${code}`);
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(await screen.findByRole("alert")).toHaveTextContent(text);
+  });
+
   // claims_overage must NOT reach the generic fallback: that arm says "Try
   // again", and retrying replays the identical token. The remedy is the
   // admin's, so the copy has to name it.

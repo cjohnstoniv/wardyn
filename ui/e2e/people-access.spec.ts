@@ -145,9 +145,35 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await expect(page.getByRole("button", { name: `${PEOPLE.DELETE} Wardyn.Admin` })).toHaveCount(0);
 
     const defaults = page.getByTestId("access-defaults");
-    await expect(defaults.getByText(PEOPLE.ROLE_USER)).toBeVisible();
+    // A "user" default is the built-in type, named as one (0.8).
+    await expect(defaults.getByText(PEOPLE.TYPE_STANDARD)).toBeVisible();
     await expect(defaults.getByText("ops@corp.example")).toBeVisible();
     await expect(defaults.getByText("sre@corp.example")).toBeVisible();
+  });
+
+  // UT-2b: a user row's chip is its user type's name, read from GET /access's
+  // user_types — a Portfolio manager row never reads as a bare "User".
+  test("a user row names its user type", async ({ page }) => {
+    await mockSsoStatus(page);
+    await mockAccessGet(
+      page,
+      baseAccessBody({
+        mappings: [
+          { value: "Wardyn.Admin", role: "admin", source: "chart", shadowed: false, shadow_cause: "" },
+          { value: "pm-group", role: "user", user_type: "portfolio-manager", source: "chart", shadowed: false, shadow_cause: "" },
+        ],
+        default_role: "admin",
+        posture: { map_empty: false, before: "admin", after: "admin", changes: false },
+        user_types: [
+          { id: "standard", name: "Standard user", description: "", priority: 0, built_in: true },
+          { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false },
+        ],
+      }),
+    );
+    await gotoPeopleStep(page);
+
+    await expect(page.getByText("pm-group")).toBeVisible();
+    await expect(page.getByText("Portfolio manager")).toBeVisible();
   });
 
   test("(b) a shadowed row carries the right badge for both causes", async ({ page }) => {

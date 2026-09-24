@@ -155,6 +155,13 @@ type Config struct {
 	// optional-Config-field rule Revocations, above, follows.
 	RoleMappings RoleMappingSource
 
+	// UserTypes is the store of user types (0.8), read once per login beside
+	// RoleMappings: a role-map value may name a type, and the type's priority
+	// and existence decide which one the session carries. A read error denies
+	// the login with authErrorRoleCheckUnavailable, the same fail-closed rule.
+	// nil means only the built-in "standard" type exists.
+	UserTypes UserTypeSource
+
 	// OnLogin, when set, is called synchronously from CallbackHandler after a
 	// login is APPROVED (role derived, session about to be issued) with the
 	// ID token's sub, the freshly-derived role, and the SAME group snapshot
@@ -791,7 +798,7 @@ const (
 	// common denial shape on an Entra tenant with AllowedEmailDomains set.
 	authErrorEmailVerifiedAbsent = "email_verified_absent"
 	authErrorEmailDomain         = "email_domain"
-	authErrorNoRole              = "no_role"
+	authErrorNoRole              = DenialNoRole
 	// authErrorRoleCheckUnavailable: Config.RoleMappings is wired but
 	// ListRoleMappings errored — the console role-mapping store couldn't be
 	// read, distinct from authErrorNoRole's "checked, and nothing matched".

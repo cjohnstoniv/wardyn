@@ -44,6 +44,37 @@ func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []s
 
 func (noGovernanceStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
 
+// seededUserTypes is the user_types table as the migration leaves it: the
+// built-in type alone. The two methods below answer from it for the base
+// doubles most handler tests compose (/me names the session's type, GET
+// /access lists them).
+var seededUserTypes = []types.UserType{{ID: types.UserTypeStandard, Name: "Standard user", BuiltIn: true}}
+
+func seededUserType(id string) (types.UserType, error) {
+	for _, t := range seededUserTypes {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return types.UserType{}, store.ErrNotFound
+}
+
+func (noGovernanceStore) ListUserTypes(context.Context) ([]types.UserType, error) {
+	return seededUserTypes, nil
+}
+
+func (noGovernanceStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	return seededUserType(id)
+}
+
+func (*capStore) ListUserTypes(context.Context) ([]types.UserType, error) {
+	return seededUserTypes, nil
+}
+
+func (*capStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	return seededUserType(id)
+}
+
 func (noGovernanceStore) ResolveUserDrive(context.Context, []string, []string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	return nil, nil, "", store.ErrNotFound

@@ -44,6 +44,30 @@ type roleMapStore struct {
 	store.Store
 	rows    []types.RoleMapping
 	listErr error
+	// userTypes is the user_types table beyond the built-in row, which
+	// ListUserTypes always includes (the migration seeds it).
+	userTypes    []types.UserType
+	userTypesErr error
+}
+
+func (s *roleMapStore) ListUserTypes(context.Context) ([]types.UserType, error) {
+	if s.userTypesErr != nil {
+		return nil, s.userTypesErr
+	}
+	return append([]types.UserType{{ID: types.UserTypeStandard, Name: "Standard user", BuiltIn: true}}, s.userTypes...), nil
+}
+
+func (s *roleMapStore) GetUserType(ctx context.Context, id string) (types.UserType, error) {
+	list, err := s.ListUserTypes(ctx)
+	if err != nil {
+		return types.UserType{}, err
+	}
+	for _, t := range list {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return types.UserType{}, store.ErrNotFound
 }
 
 // ListAPITokens completes the double for the read the write handlers now make:
@@ -65,6 +89,7 @@ func (s *roleMapStore) UpsertRoleMapping(_ context.Context, m types.RoleMapping)
 	for i, ex := range s.rows {
 		if ex.Value == m.Value {
 			s.rows[i].Role = m.Role
+			s.rows[i].UserType = m.UserType
 			s.rows[i].CreatedBy = m.CreatedBy
 			return s.rows[i], nil
 		}
@@ -99,7 +124,7 @@ func (b accessOIDCBridge) ListRoleMappings(ctx context.Context) ([]oidc.RoleMapp
 	}
 	out := make([]oidc.RoleMapping, len(rows))
 	for i, m := range rows {
-		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role}
+		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role, UserType: m.UserType}
 	}
 	return out, nil
 }
@@ -142,8 +167,9 @@ func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, 
 	t.Cleanup(httpSrv.Close)
 
 	var mappings oidc.RoleMappingSource
+	var userTypes oidc.UserTypeSource
 	if st != nil {
-		mappings = accessOIDCBridge{st: st}
+		mappings, userTypes = accessOIDCBridge{st: st}, st
 	}
 	cfg := oidc.Config{
 		IssuerURL:         httpSrv.URL,
@@ -154,6 +180,7 @@ func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, 
 		DefaultRole:       defaultRole,
 		LegacyAdminEmails: legacyAdminEmails,
 		RoleMappings:      mappings,
+		UserTypes:         userTypes,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -178,11 +205,17 @@ func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, 
 // state a genuinely group-less human produces.
 func accessSession(t *testing.T, sub, email, role string, groups []string) *http.Cookie {
 	t.Helper()
+	return accessSessionOfType(t, sub, email, role, types.UserTypeStandard, groups)
+}
+
+// accessSessionOfType is accessSession stamped with a given user type.
+func accessSessionOfType(t *testing.T, sub, email, role, userType string, groups []string) *http.Cookie {
+	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
 		// Hand-rolled payload: stamp the codec version or decodeSession reads it
 		// as a pre-0.7 cookie and refuses it (see ssoSession in rbac_test.go).
 		V:   oidc.SessionCodecVersion,
-		Sub: sub, Email: email, Role: role, UserType: "standard", Expiry: time.Now().UTC().Add(time.Hour), Groups: groups,
+		Sub: sub, Email: email, Role: role, UserType: userType, Expiry: time.Now().UTC().Add(time.Hour), Groups: groups,
 	})
 	if err != nil {
 		t.Fatalf("marshal session: %v", err)
@@ -642,7 +675,7 @@ func TestAccessRolePosture_Matrix(t *testing.T) {
 				emails = []string{"ops@corp.example"}
 			}
 			auth := newAccessAuth(t, nil, tc.defaultRole, emails, nil)
-			before, after, changes := accessRolePosture(auth)
+			before, after, changes := accessRolePosture(auth, nil)
 			if before != tc.wantBefore || after != tc.wantAfter || changes != tc.wantChanges {
 				t.Errorf("accessRolePosture = (%q, %q, %v), want (%q, %q, %v)",
 					before, after, changes, tc.wantBefore, tc.wantAfter, tc.wantChanges)
@@ -1124,8 +1157,9 @@ func TestAccess_PreviewExplicitClaims(t *testing.T) {
 
 // TestAccess_PreviewWireShape pins the RAW bytes of POST /access/preview's
 // matched[] now that it marshals oidc.Match directly instead of an api-local
-// twin: the three lowercase keys the TS twin declares
-// (ui/src/app/lib/types/access.ts:108-112) and, for a no-match preview, [] and
+// twin: the four lowercase keys the TS twin declares (AccessPreviewMatch in
+// ui/src/app/lib/types/access.ts; user_type only on a user-tier match) and, for
+// a no-match preview, [] and
 // never null — the console reads matched.length, which throws on null.
 func TestAccess_PreviewWireShape(t *testing.T) {
 	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, "", nil, nil)
@@ -1145,10 +1179,10 @@ func TestAccess_PreviewWireShape(t *testing.T) {
 		t.Fatalf("matched = %v, want exactly one entry; body=%s", raw.Matched, w.Body.String())
 	}
 	got := raw.Matched[0]
-	if len(got) != 3 {
-		t.Errorf("match object = %v, want exactly the 3 wire keys (a new exported field on oidc.Match must not leak onto this route)", got)
+	if len(got) != 4 {
+		t.Errorf("match object = %v, want exactly the 4 wire keys (a new exported field on oidc.Match must not leak onto this route)", got)
 	}
-	for _, k := range []string{"value", "role", "source"} {
+	for _, k := range []string{"value", "role", "user_type", "source"} {
 		if _, ok := got[k]; !ok {
 			t.Errorf("match object %v is missing key %q", got, k)
 		}

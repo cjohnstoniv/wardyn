@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -962,7 +961,9 @@ func TestParseRoleMap(t *testing.T) {
 		{"blank entries between commas are skipped", "eng-team=user,,", map[string]string{"eng-team": "user"}, false},
 		{"missing =", "eng-team", nil, true},
 		{"empty key before =", "=admin", nil, true},
-		{"bad role value", "eng-team=owner", nil, true},
+		{"bad role value", "eng-team=Owner", nil, true},
+		{"a user type id is a role value", "pm-group=portfolio-manager", map[string]string{"pm-group": "portfolio-manager"}, false},
+		{"a reserved word is not a type id", "eng-team=denied", nil, true},
 		{"duplicate key", "eng-team=user,eng-team=admin", nil, true},
 		{"duplicate key differs only by case", "Eng-Team=user,eng-team=admin", nil, true},
 		// M2: non-empty input, but every entry is blank — must error, not
@@ -1580,13 +1581,20 @@ const roleCallbackNonce = "nonce-role"
 // when no cookie was issued, e.g. a denied login).
 func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseRecorder, writoidc.Session) {
 	t.Helper()
+	return doCallbackVia(t, auth, auth.CallbackHandler)
+}
+
+// doCallbackVia is doCallback through a given callback handler (e.g. one
+// built by CallbackHandlerWithDenials).
+func doCallbackVia(t *testing.T, auth *writoidc.Authenticator, callback http.HandlerFunc) (*httptest.ResponseRecorder, writoidc.Session) {
+	t.Helper()
 	const stateVal, verifierVal = "state-role", "verifier-role"
 	r := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateVal+"&code=testcode", nil)
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: stateVal})
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: roleCallbackNonce})
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: verifierVal})
 	w := httptest.NewRecorder()
-	auth.CallbackHandler(w, r)
+	callback(w, r)
 
 	var sessCookie *http.Cookie
 	for _, c := range w.Result().Cookies() {
@@ -1604,7 +1612,7 @@ func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseR
 			Sub:      writoidc.PrincipalFromContext(r.Context()),
 			Email:    writoidc.EmailFromContext(r.Context()),
 			Role:     writoidc.RoleFromContext(r.Context()),
-			UserType: cookieUserType(t, sessCookie),
+			UserType: writoidc.UserTypeFromContext(r.Context()),
 			Groups:   writoidc.GroupsFromContext(r.Context()),
 		}
 	})
@@ -1612,27 +1620,6 @@ func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseR
 	checkReq.AddCookie(sessCookie)
 	auth.Middleware(next).ServeHTTP(httptest.NewRecorder(), checkReq)
 	return w, got
-}
-
-// cookieUserType reads the "ut" key straight out of a session cookie's signed
-// payload: nothing publishes the type on the request context yet.
-func cookieUserType(t *testing.T, c *http.Cookie) string {
-	t.Helper()
-	payload, _, _ := strings.Cut(c.Value, ".")
-	if payload == "" {
-		return "" // a denied login's cleared cookie
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(payload)
-	if err != nil {
-		t.Fatalf("session cookie payload: %v", err)
-	}
-	var v struct {
-		UserType string `json:"ut"`
-	}
-	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatalf("session cookie payload: %v", err)
-	}
-	return v.UserType
 }
 
 // doRoleCallback signs an ID token carrying the given roles/groups/email,

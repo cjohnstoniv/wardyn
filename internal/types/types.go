@@ -936,10 +936,16 @@ type CapabilityGrant struct {
 //
 // Value is expected already canonical (trimmed, lowercased, ASCII) by the API
 // write boundary that owns writes to this table — see the migration comment.
+//
+// UserType is the row's user type when Role is the user tier (migration
+// 0070_user_tier_rename's column, a foreign key to user_types); "" on a tier
+// row, and on a user row written before types existed, which reads as the
+// built-in "standard".
 type RoleMapping struct {
 	ID        uuid.UUID `json:"id"`
 	Value     string    `json:"value"`
 	Role      string    `json:"role"`
+	UserType  string    `json:"user_type,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	CreatedBy string    `json:"created_by,omitempty"`
 }

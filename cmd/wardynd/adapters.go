@@ -255,11 +255,9 @@ type pgRoleMappings struct {
 }
 
 // ListRoleMappings delegates to the store — this adapter exists only so
-// internal/auth/oidc, which must stay dependency-free of internal/types (see
-// oidc.RoleMapping's own doc comment), never imports internal/store either.
-// The conversion from types.RoleMapping (id/timestamps/provenance) to
-// oidc.RoleMapping (bare Value/Role) happens here, the one place both types
-// are in scope.
+// internal/auth/oidc never imports internal/store. The conversion from
+// types.RoleMapping (id/timestamps/provenance) to oidc.RoleMapping (bare
+// Value/Role/UserType) happens here, the one place both types are in scope.
 func (r *pgRoleMappings) ListRoleMappings(ctx context.Context) ([]oidc.RoleMapping, error) {
 	rows, err := store.NewPG(r.pool).ListRoleMappings(ctx)
 	if err != nil {
@@ -267,7 +265,7 @@ func (r *pgRoleMappings) ListRoleMappings(ctx context.Context) ([]oidc.RoleMappi
 	}
 	out := make([]oidc.RoleMapping, len(rows))
 	for i, m := range rows {
-		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role}
+		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role, UserType: m.UserType}
 	}
 	return out, nil
 }
