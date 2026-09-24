@@ -341,6 +341,7 @@ export function NewRunScreen() {
     launchDisabled,
     launchSpinning,
     error,
+    errorSeq,
     credentialRefused,
     launchWarnings,
     launchedRunId,
@@ -348,6 +349,7 @@ export function NewRunScreen() {
     preflighting,
     preflightResult,
     preflightError,
+    preflightErrorSeq,
     preflightIsCurrent,
     preflight,
   } = useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLaunchError: adoDoor.notifyLaunchError });
@@ -567,12 +569,20 @@ export function NewRunScreen() {
                       {/* Rulebook §9: an empty picker carries the action that
                           fills it. With no stored policies this lane was a
                           dropdown with nothing in it and no way out. */}
+                      {/* M-1b: Policies is Admin view only (/admin/policies),
+                          so the door renders only for the tier that authors
+                          them. */}
                       {savedPolicies.length === 0 && (
                         <p className="text-xs text-muted-foreground">
-                          No saved policies yet ·{" "}
-                          <Link to="/policies" className="font-medium text-info hover:underline">
-                            New policy →
-                          </Link>
+                          No saved policies yet
+                          {operator && (
+                            <>
+                              {" "}·{" "}
+                              <Link to="/admin/policies" className="font-medium text-info hover:underline">
+                                New policy →
+                              </Link>
+                            </>
+                          )}
                         </p>
                       )}
                     </div>
@@ -707,6 +717,7 @@ export function NewRunScreen() {
             inFlight: launching,
             problem,
             error,
+            errorSeq,
             credentialRefused,
             warnings: launchWarnings,
             onOpenRun: launchedRunId
@@ -715,8 +726,8 @@ export function NewRunScreen() {
           }}
           preflight={
             preflightIsCurrent
-              ? { error: preflightError, result: preflightResult }
-              : { error: null, result: null }
+              ? { error: preflightError, errorSeq: preflightErrorSeq, result: preflightResult }
+              : { error: null, errorSeq: preflightErrorSeq, result: null }
           }
           agentRow={isAgent ? harnesses?.find((h) => h.id === state.agent) : undefined}
           adoDialog={adoDoor.dialog}

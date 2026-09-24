@@ -72,7 +72,7 @@ describe("AppShell — the account chip shows who you are (0.7.1)", () => {
       method: "sso",
       email: "alice.smith@corp.example",
       name: "Alice Smith",
-      role: "member",
+      role: "user",
       operator: false,
       security_operator: false,
     });
@@ -91,7 +91,7 @@ describe("AppShell — the account chip shows who you are (0.7.1)", () => {
       principal: "gsv-member-0001",
       method: "sso",
       email: "alice.smith@corp.example",
-      role: "member",
+      role: "user",
       operator: false,
       security_operator: false,
     });
@@ -131,7 +131,7 @@ describe("AppShell — the account chip shows who you are (0.7.1)", () => {
         method: "sso",
         email: "alice.smith@corp.example",
         name: "Alice Smith",
-        role: "member",
+        role: "user",
         operator: false,
         security_operator: false,
       },

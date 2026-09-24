@@ -199,11 +199,15 @@ function EvidenceBlock({
                     variant="outline"
                     className="shrink-0"
                     disabled={!operator}
-                    title={!operator ? T.VIEWER_HINT : undefined}
                     onClick={() => onUse(r.useValue!)}
                   >
                     Use this
                   </Button>
+                )}
+                {/* #459: visible reason, not a title tooltip a disabled
+                    control can't surface. */}
+                {showUse && r.useValue && !operator && (
+                  <span className="shrink-0 text-meta text-muted-foreground">{T.VIEWER_HINT}</span>
                 )}
               </div>
             ))}
@@ -370,10 +374,15 @@ function ProxyTestBlock({
       )}
     >
       {!hideButton && (
-        <Button size="sm" variant="outline" className="shrink-0" disabled={running || !operator} title={!operator ? T.VIEWER_HINT : undefined} onClick={onTest}>
-          {running ? <Loader2 className="size-3.5 animate-spin" /> : null}
-          {running ? "Testing…" : hasResult ? "Test again" : "Test connectivity"}
-        </Button>
+        <div className="shrink-0 space-y-1">
+          <Button size="sm" variant="outline" disabled={running || !operator} onClick={onTest}>
+            {running ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {running ? "Testing…" : hasResult ? "Test again" : "Test connectivity"}
+          </Button>
+          {/* #459: standing alone (not beside another control in a row) —
+              helper text under it, not a title tooltip. */}
+          {!operator && <p className="text-meta text-muted-foreground">{T.VIEWER_HINT}</p>}
+        </div>
       )}
       <div className="min-w-0 flex-1 space-y-1">
         {state.kind === "idle" && (

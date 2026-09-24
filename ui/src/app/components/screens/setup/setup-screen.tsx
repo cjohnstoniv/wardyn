@@ -38,6 +38,7 @@ import type { AccessLoadState } from "./access-panel";
 import { resolveDefaultCc } from "../../wardyn/default-confinement";
 import { deploymentMode, deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
@@ -51,6 +52,7 @@ import { IntegrationsStep } from "./integrations-step";
 import { ProvidersCard } from "./providers-card";
 import { providers as providersApi } from "../../../lib/api/providers";
 import { PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
+import { SITE } from "../../wardyn/copy";
 import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
   DEMO_STEP_IDS,
@@ -196,6 +198,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // from the funnel; they're embedded in the Integrations "Add integration"
   // dialog instead, which owns its own local copy for editing.
   const [siteConfig, setSiteConfig] = React.useState<SiteConfig | null>(null);
+  // #492: the last GET's (or the last successful PUT's) ETag — sent back as
+  // If-Match on the one write path below, the same discipline
+  // sign-in-help-card.tsx already applies to its own two site-config fields.
+  // Without this, saveSiteConfig PUT the whole document from a GET that could
+  // already be stale (another tab's scm_hosts/egress_redirects save, or that
+  // card's own sign_in_help_* save) and silently reverted it.
+  const [siteConfigEtag, setSiteConfigEtag] = React.useState<string | null>(null);
   // Role-mappings acting surface (0.7 SSO Phase 3) — People's multi-user
   // branch. Owned here, same split every other status-derived fetch on this
   // screen follows (siteConfig, secrets): DeploymentStep only renders it.
@@ -220,6 +229,14 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         setAccessState(e instanceof HttpError && e.status === 503 ? "sso_unavailable" : "fetch_failed");
       });
   }, []);
+  // A role-mapping write can end the everyone-is-an-admin state, and the
+  // shell's banner reads the SHELL's /setup/status (polled every few minutes),
+  // not this screen's — so every access reload re-reads that one too.
+  const { refresh: refreshShellStatus } = useShellSetupStatus();
+  const reloadAccessAndShell = React.useCallback(() => {
+    void loadAccess();
+    void refreshShellStatus();
+  }, [loadAccess, refreshShellStatus]);
   // Default-barrier pick (E3), IN-SESSION only (0.7.8: the default is a
   // server fact — the strongest installed class at or above the policy floor
   // — so there is nothing left to persist here). Null until an explicit
@@ -336,12 +353,18 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // Read-only fetch — the orchestrator only needs SiteConfig to derive the
   // Integrations badge count; every WRITE to it now happens inside the
   // embedded Integrations step's own "Add integration" dialog, which keeps
-  // its own local copy (see integrations/add-integration-dialog.tsx).
+  // its own local copy (see integrations/add-integration-dialog.tsx). Uses
+  // the ETag-carrying snapshot (not plain getSiteConfig) so the write path
+  // below always has the CURRENT document's ETag to send as If-Match, even
+  // though most callers of reloadSiteConfig never write anything themselves.
   const reloadSiteConfig = React.useCallback(() => {
     if (!adminReads) return Promise.resolve();
     return healthApi
-      .getSiteConfig()
-      .then(setSiteConfig)
+      .getSiteConfigSnapshot()
+      .then(({ siteConfig, etag }) => {
+        setSiteConfig(siteConfig);
+        setSiteConfigEtag(etag);
+      })
       .catch(() => {});
   }, [adminReads]);
 
@@ -357,21 +380,41 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // saving step itself already shows (corp-network-proxy.tsx /
   // corp-network-egress.tsx) — never a replacement for it, so a clean save's
   // plain success is untouched.
+  //
+  // #492: sends the last reload's ETag as If-Match (sign-in-help-card.tsx's
+  // own discipline, applied here) — a PUT built from a document that changed
+  // underneath since that reload is refused 412, not silently accepted. On a
+  // 412, reloadSiteConfig() refreshes this orchestrator's copy (and its ETag,
+  // for a retry) but the step's own draft is left exactly where the operator
+  // left it: the Host proxy fields seed from the `siteConfig` PROP once (their
+  // seededRef guard), and the Egress add form / edit row clear or collapse
+  // only when mutate() reports the save landed. mutate() (step-bodies.tsx's
+  // useSiteConfigStep) still shows its own toast for the failure — thrown as
+  // a plain Error here only so its description is the human sentence, not the
+  // server's raw If-Match refusal text.
   const saveSiteConfig = React.useCallback(
     async (next: SiteConfig) => {
-      const result = await healthApi.putSiteConfig(next);
-      await reloadSiteConfig();
-      if (result.danglingSecretRefs.length > 0) {
-        toast.warning(PROVIDERS_DRAFT.SAVED_DANGLING_REFS(result.danglingSecretRefs));
-      }
-      // A POINTER on the wire: only a PRESENT positive number is a narrowed-
-      // sources warning — never `?? 0`, which would claim "narrowed nothing"
-      // for a save (this screen's own) that named no provider block at all.
-      if (typeof result.sourcesNoLongerAdmitted === "number" && result.sourcesNoLongerAdmitted > 0) {
-        toast.warning(PROVIDERS.SAVED_NARROWED(result.sourcesNoLongerAdmitted));
+      try {
+        const result = await healthApi.putSiteConfig(next, siteConfigEtag);
+        await reloadSiteConfig();
+        if (result.danglingSecretRefs.length > 0) {
+          toast.warning(PROVIDERS_DRAFT.SAVED_DANGLING_REFS(result.danglingSecretRefs));
+        }
+        // A POINTER on the wire: only a PRESENT positive number is a narrowed-
+        // sources warning — never `?? 0`, which would claim "narrowed nothing"
+        // for a save (this screen's own) that named no provider block at all.
+        if (typeof result.sourcesNoLongerAdmitted === "number" && result.sourcesNoLongerAdmitted > 0) {
+          toast.warning(PROVIDERS.SAVED_NARROWED(result.sourcesNoLongerAdmitted));
+        }
+      } catch (e) {
+        if (e instanceof HttpError && e.status === 412) {
+          await reloadSiteConfig();
+          throw new Error(SITE.SAVED_ELSEWHERE);
+        }
+        throw e;
       }
     },
-    [reloadSiteConfig],
+    [reloadSiteConfig, siteConfigEtag],
   );
 
   const loadSecrets = React.useCallback(() => {
@@ -783,7 +826,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           />
         )}
         {stepId === "people" && (
-          <DeploymentStep status={status} access={access} accessState={accessState} onReloadAccess={loadAccess} />
+          <DeploymentStep status={status} access={access} accessState={accessState} onReloadAccess={reloadAccessAndShell} />
         )}
         {stepId === "corp_network" && (
           <CorpNetworkStep

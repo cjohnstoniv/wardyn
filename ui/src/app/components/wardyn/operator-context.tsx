@@ -316,7 +316,7 @@ export function useCanMutate(ownedBy?: string): boolean {
 }
 
 // The B1/B2-derived Wardyn role (GET /api/v1/me's `role`) — "admin",
-// "security_admin" or "member". `operator` above stays the legacy boolean every
+// "security_admin" or "user". `operator` above stays the legacy boolean every
 // existing gate reads; Role is additive, for UX that needs the named tier
 // itself (nav filtering, the account-menu chip) rather than a yes/no.
 //
@@ -324,7 +324,7 @@ export function useCanMutate(ownedBy?: string): boolean {
 // values: member === !operator is FALSE for a security admin. Gate on the
 // predicate that matches the surface (useOperator / useSecurityOperator), never
 // on a role comparison of your own.
-export type Role = "admin" | "security_admin" | "member";
+export type Role = "admin" | "security_admin" | "user";
 
 // Default "admin": the SAME fail-open rationale as `operator` above (an
 // unresolved /me, a failed fetch, or a component mounted with no

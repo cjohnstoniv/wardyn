@@ -9,7 +9,7 @@
 // and the isCustom* trust-domain/identity-provider checks stay in
 // app-shell.tsx, which SidebarNav also relies on for its own trust-domain
 // panel.
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   ChevronsUpDown,
   Compass,
@@ -25,6 +25,8 @@ import {
 import { WardynWordmark } from "../wardyn/logo";
 import { Chip } from "../wardyn/primitives";
 import { useTheme } from "../wardyn/theme-provider";
+import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
+import { NAV } from "../../lib/unsaved-copy";
 import { Button } from "../ui/button";
 import {
   DropdownMenu,
@@ -71,6 +73,15 @@ export function TopBar({
   // neither). Display only — usePrincipal() still reads meta.principal.
   const display = meta.name || meta.email || meta.principal;
   const { theme, toggle } = useTheme();
+  // #460 review — every plain <Link> in this header can navigate away from a
+  // dirty editor (app-shell.tsx#SidebarNav's own guardedClick precedent);
+  // this menu is the one place besides the sidebar the console offers that.
+  const navigate = useNavigate();
+  const guardedClick = useGuardedNavClick(navigate);
+  // M-1b: /settings is deleted — Settings now lives at /admin/settings, Your
+  // account at /account (both still mount the unsplit SettingsScreen until
+  // M-5 splits it).
+  const settingsTarget = meta.role === "user" ? "/account" : "/admin/settings";
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
       <MobileNav
@@ -80,6 +91,7 @@ export function TopBar({
       />
       <Link
         to="/runs"
+        onClick={guardedClick("/runs")}
         className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
       >
         {/* F7-F2: icon-only below sm, so New run + the user menu stay onscreen. */}
@@ -194,29 +206,30 @@ export function TopBar({
                 sidebar: this menu entry and the Runs empty state's "guided
                 tour" link (runs-first-run.tsx) are the two ways in. */}
             <DropdownMenuItem asChild>
-              <Link to="/setup">
+              <Link to="/setup" onClick={guardedClick("/setup")}>
                 <Compass className="size-4" /> Getting started
               </Link>
             </DropdownMenuItem>
             {/* Settings is the one home for connections — Host · Model provider ·
-                Providers · Your SSH keys. It replaced /integrations, which now
-                redirects here, and the barrier chip above points at it too.
-                Hidden on a SETTLED-but-unknown identity: /settings is the two-click
-                route to the operator-only Model-provider Connect/Disconnect card
-                and the Providers card into admin /providers, and the shell paints
-                no route at all in that state, so the link would be an invitation
-                to a blank page. Sign out below stays — it is the one control that
-                still works. */}
+                Providers · Your SSH keys. M-1b: /settings and /integrations are
+                both deleted (clean break) — an admin tier lands on
+                /admin/settings, a member on their own /account. Hidden on a
+                SETTLED-but-unknown identity: this is the two-click route to the
+                operator-only Model-provider Connect/Disconnect card and the
+                Providers card into /admin/providers, and the shell paints no
+                route at all in that state, so the link would be an invitation
+                to a blank page. Sign out below stays — it is the one control
+                that still works. */}
             {!(meta.resolved && !meta.identityResolved) && (
               <DropdownMenuItem asChild>
-                <Link to="/settings">
-                  <Settings className="size-4" /> Settings
+                <Link to={settingsTarget} onClick={guardedClick(settingsTarget)}>
+                  <Settings className="size-4" /> {NAV.SETTINGS}
                 </Link>
               </DropdownMenuItem>
             )}
             <MemberModeMenuItem meta={meta} />
             <DropdownMenuItem asChild>
-              <Link to="/ssh-keys">
+              <Link to="/ssh-keys" onClick={guardedClick("/ssh-keys")}>
                 <KeyRound className="size-4" /> SSH keys
               </Link>
             </DropdownMenuItem>
@@ -229,14 +242,14 @@ export function TopBar({
                 reaches the admin welcome hero or its step query at all, and
                 its own episode catalog is a single flat "Watch" list at the
                 bottom of the page, not a step deep link.
-                `!== "admin"`, never `=== "member"`. Only the SUPER admin's
+                `!== "admin"`, never `=== "user"`. Only the SUPER admin's
                 SetupScreen honours ?step — a security admin's /setup/status is
                 redacted on the same !isOperator predicate (internal/api/setup.go)
                 and App.tsx hands them the same Getting Started, so the deep link
                 is exactly as dead for them. */}
             {meta.role === "admin" && (
               <DropdownMenuItem asChild>
-                <Link to="/setup?step=sealed-box">
+                <Link to="/setup?step=sealed-box" onClick={guardedClick("/setup?step=sealed-box")}>
                   <FlaskConical className="size-4" /> Demos
                 </Link>
               </DropdownMenuItem>
