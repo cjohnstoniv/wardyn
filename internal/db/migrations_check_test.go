@@ -520,3 +520,89 @@ func closedEnumChecks() []closedEnumCheck {
 		)},
 	}
 }
+
+// cappedRoleCheckRe is the WHOLE shape of ssh_public_keys' capped CHECK
+// (`NOT capped OR role = '<literal>'`, 0070 then 0074), anchored, capturing
+// the role literal. The clause is `NOT <bool column> OR <column> =
+// '<literal>'`, a shape closedEnumChecks cannot express (it models `col IN
+// (...)` and bare `col = 'literal'`, not a second column ORed in — see
+// columnCheckValues and checkGlueRe), so this constraint is pinned with its
+// own narrow parser rather than folded into that case table.
+var cappedRoleCheckRe = regexp.MustCompile(`(?is)^\s*NOT\s+capped\s+OR\s+role\s*=\s*'([^']*)'\s*$`)
+
+var (
+	mentionsCappedRe = regexp.MustCompile(`(?i)\bcapped\b`)
+	addConstraintRe  = regexp.MustCompile(`(?is)ADD\s+CONSTRAINT\s+(\w+)`)
+	dropConstraintRe = regexp.MustCompile(`(?is)DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?(\w+)`)
+)
+
+// effectiveCappedSSHRole returns the role literal ssh_public_keys' capped
+// CHECK admits, after ALL migrations are applied in lexical order — the LAST
+// migration that (re)defines the constraint wins, the same rule
+// effectiveCheckValues and effectiveAgentRunStates use. It fails closed the
+// way columnCheckValues does: any ssh_public_keys CHECK that mentions capped
+// but is not exactly that shape stops the test, and dropping the cap without
+// re-adding it leaves no literal to return.
+func effectiveCappedSSHRole(t *testing.T) (string, bool) {
+	t.Helper()
+	targetsRe := targetsTableRe("ssh_public_keys")
+	var literal, constraint string
+	found := false
+	for _, name := range readMigrationNames(t) {
+		data := readMigration(t, name)
+		for _, stmt := range strings.Split(data, ";") {
+			if !targetsRe.MatchString(stmt) {
+				continue
+			}
+			for _, m := range dropConstraintRe.FindAllStringSubmatch(sqlLineCommentRe.ReplaceAllString(stmt, " "), -1) {
+				if found && m[1] == constraint {
+					found = false
+				}
+			}
+			for _, expr := range checkExprs(stmt) {
+				if !mentionsCappedRe.MatchString(expr) {
+					continue
+				}
+				m := cappedRoleCheckRe.FindStringSubmatch(expr)
+				if m == nil {
+					t.Fatalf("%s: ssh_public_keys CHECK %q mentions capped but is not `NOT capped OR role = '<literal>'`. "+
+						"Model the new shape here - a guard that skips a cap it cannot read reports a broken cap as pinned",
+						name, strings.TrimSpace(expr))
+				}
+				literal, found = m[1], true // last writer (lexically-latest migration) wins
+				constraint = ""
+				if a := addConstraintRe.FindStringSubmatch(stmt); a != nil {
+					constraint = a[1]
+				}
+			}
+		}
+	}
+	return literal, found
+}
+
+// TestSSHCappedRoleCheckPinnedToRoleUser guards the ONE role-literal CHECK
+// closedEnumChecks cannot model: ssh_public_keys' `NOT capped OR role =
+// '<literal>'` (0070, renamed by 0074's tier rename). Unlike
+// role_mappings.role and api_tokens.role, that literal was hand-typed rather
+// than derived from oidc.Roles in the migration SQL itself (SQL cannot
+// reference a Go constant), so nothing previously caught a drift between the
+// two — the same blindness 0053 closed for role_mappings.role, one CHECK
+// shape over. A capped key is, by construction, pinned to the ONE non-admin
+// tier (0070's whole point: a key registered in the user view can never read
+// admin), so the literal must equal oidc.RoleUser and nothing else.
+func TestSSHCappedRoleCheckPinnedToRoleUser(t *testing.T) {
+	literal, found := effectiveCappedSSHRole(t)
+	if !found {
+		t.Fatal("no ssh_public_keys capped-role CHECK found in migrations")
+	}
+	if literal != oidc.RoleUser {
+		t.Errorf("ssh_public_keys' capped CHECK pins role = %q, want %q (oidc.RoleUser) — a capped key must never "+
+			"be able to hold a role the Go side does not call the non-admin tier", literal, oidc.RoleUser)
+	}
+	for _, other := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin} {
+		if literal == other {
+			t.Errorf("ssh_public_keys' capped CHECK pins role = %q, which is a PRIVILEGED role (%s) — a capped key "+
+				"would then be able to read it, defeating the whole cap", literal, other)
+		}
+	}
+}
