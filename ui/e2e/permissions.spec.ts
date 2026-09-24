@@ -5,7 +5,7 @@
 
 import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute } from "./fixtures";
 import { CAPABILITY_KINDS, KIND, PERM, PERM_DRAFT } from "../src/app/lib/permissions-copy";
-import { SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 
 // ---------------------------------------------------------------------------
 // Permissions screen e2e (lane: permissions, port 8088, db wardyn_e2e).
@@ -288,34 +288,28 @@ test.describe("permissions — an inert grant renders neutral, never live (F4-F5
   });
 });
 
-// X3-F5 — /permissions is a securityOps route hidden from a member's nav, so a
-// member reaches it only by typing the URL, where the 403 was rendered as "We
-// couldn't reach the Wardyn control plane" over a Retry that 403s forever. The
-// harness bearer is always an admin server-side (fixtures.ts), so the refusal
-// is the thing spliced here — what is real is the console's own three-way.
+// X3-F5 — /admin/permissions is a securityOps route hidden from a member's
+// nav, so a member reaches it only by typing the URL. M-1b: Permissions moved
+// under /admin/*, so the screen's own 403/500 render this test used to pin is
+// now unreachable — the admin-view gate refuses a member before anything is
+// fetched (admin-member-modes-design.md §2.3's refusal-page row). The harness
+// bearer is always an admin server-side (fixtures.ts); what's real here is
+// the console's own view gate, not the server's 403.
 test.describe("Permissions — a member by URL is told the tier, not an outage", () => {
-  test("a 403 names the role and offers no Retry; a 500 still does", async ({ page }) => {
+  test("the admin-view refusal, before /api/v1/permissions is ever asked", async ({ page }) => {
     await mockMemberRole(page);
-    await page.route("**/api/v1/permissions", (route) =>
-      route.request().method() === "GET"
-        ? route.fulfill({ status: 403, contentType: "application/json", body: '{"error":"forbidden"}' })
-        : route.continue(),
-    );
+    let fetched = false;
+    await page.route("**/api/v1/permissions", async (route) => {
+      fetched = true;
+      await route.fallback();
+    });
     await gotoConsole(page);
-    await navToRoute(page, "/permissions");
+    await navToRoute(page, "/admin/permissions");
 
-    await expect(page.getByText(SECURITY_ONLY_REASON).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
     await expect(page.getByRole("button", { name: /retry/i })).toHaveCount(0);
-
-    await page.unrouteAll({ behavior: "ignoreErrors" });
-    await mockMemberRole(page);
-    await page.route("**/api/v1/permissions", (route) =>
-      route.request().method() === "GET"
-        ? route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' })
-        : route.continue(),
-    );
-    await page.goto("/permissions");
-    await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible();
+    expect(fetched).toBe(false);
   });
 });
 

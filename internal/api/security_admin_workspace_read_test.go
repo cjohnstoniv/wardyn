@@ -137,8 +137,8 @@ func TestSecurityAdminReadsForeignWorkspace(t *testing.T) {
 	}
 
 	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
-	member := ssoSession(t, memberSub, "owner@corp.example", oidc.RoleMember)
-	other := ssoSession(t, "sub-someone-else", "else@corp.example", oidc.RoleMember)
+	member := ssoSession(t, memberSub, "owner@corp.example", oidc.RoleUser)
+	other := ssoSession(t, "sub-someone-else", "else@corp.example", oidc.RoleUser)
 
 	for _, key := range routes {
 		method, pattern, _ := strings.Cut(key, " ")

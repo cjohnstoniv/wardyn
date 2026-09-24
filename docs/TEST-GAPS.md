@@ -83,7 +83,7 @@ Real-daemon driver funcs; the fakeDocker tests self-skip them, so they read
 ## Kubernetes-gated — need a real cluster (WARDYN_TEST_K8S=1)
 
 internal/runner/k8s's session funcs (Attach/Close/ExecStream/Read/Resize/Write)
-— X1c-F13: these used to fall into "Untested" above with nothing distinguishing
+— a past review found these used to fall into "Untested" above with nothing distinguishing
 "nobody has ever exercised the k8s substrate" from "this needs a cluster no
 per-PR run has." Classified by package (no cluster here to prove it).
 

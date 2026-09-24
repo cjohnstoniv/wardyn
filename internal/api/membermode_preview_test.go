@@ -49,7 +49,7 @@ func memberPreviewSession(t *testing.T, mm, noCredential bool) *http.Cookie {
 func memberPreviewSessionAs(t *testing.T, sub, role string, mm, noCredential bool) *http.Cookie {
 	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
-		V: oidc.SessionCodecVersion, Sub: sub, Email: memberPreviewAdminEmail, Role: role,
+		V: oidc.SessionCodecVersion, Sub: sub, Email: memberPreviewAdminEmail, Role: role, UserType: "standard",
 		MemberMode: mm, MemberModeNoCredential: noCredential,
 		Expiry: time.Now().UTC().Add(time.Hour),
 	})
@@ -264,7 +264,7 @@ func TestMemberPreview_SharedRosterDowngradesToThePlainMode(t *testing.T) {
 // docs/AUDIT-ACTIONS.md sentence false.
 func TestMemberPreview_RealMemberIsNeverGrantedThePosture(t *testing.T) {
 	srv, audit, _, _ := memberPreviewSrv(t)
-	member := memberPreviewSessionAs(t, "sub-real-member", oidc.RoleMember, false, false)
+	member := memberPreviewSessionAs(t, "sub-real-member", oidc.RoleUser, false, false)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true,"no_credential":true}`)
 	if w.Code != http.StatusOK {
@@ -288,7 +288,7 @@ func TestMemberPreview_RealMemberIsNeverGrantedThePosture(t *testing.T) {
 	if _, present := datum["no_credential"]; present {
 		t.Errorf("a real member's row carries no_credential: %v", datum)
 	}
-	if datum["real_role"] != oidc.RoleMember {
+	if datum["real_role"] != oidc.RoleUser {
 		t.Errorf("real_role = %v, want member", datum["real_role"])
 	}
 	// A member is never offered the control either.
