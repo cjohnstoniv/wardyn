@@ -140,6 +140,12 @@ type Config struct {
 	Identity identity.Provider
 	// Approvals is the approval FSM service.
 	Approvals ApprovalService
+	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's
+	// ceiling on how long any request waits for a decision. A run's captured
+	// wait (captureRunLimits) never exceeds it. 0 means unknown here. Dispatch
+	// also mirrors it onto a hold-mode run's sandbox (approval_expiry.go, RL-1).
+	ApprovalExpiryAfter time.Duration
+	RunLeaseConfig      // the run lease's settings (run_lease_server.go)
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
 	// GitHubRulesets, when set, lets the setup checklist ask GitHub whether the
@@ -268,6 +274,10 @@ type Config struct {
 	// ControlPlaneURL is the externally-reachable base URL handed to sidecars
 	// (proxy config) so they can call the internal endpoints.
 	ControlPlaneURL string
+	// ControlPlaneCAPEM is wardynd's internal CA certificate (internal/hoptls),
+	// handed to every proxy as the only root it trusts for ControlPlaneURL.
+	// Empty only when ControlPlaneURL is loopback http (a local install).
+	ControlPlaneCAPEM string
 	// ProxyURL, when set, overrides the WARDYN_PROXY_URL injected into sandbox
 	// env. Defaults to "http://wardyn-proxy:3128" (the per-run proxy sidecar
 	// hostname set by the docker driver). Non-secret: it is a network address,
@@ -530,8 +540,14 @@ type Config struct {
 	// AgeKeyDurable reports whether the secret store's age key was SUPPLIED
 	// (WARDYN_AGE_KEY/-age-key non-empty) vs ephemerally generated at boot. When
 	// false, stored secrets are unreadable after a restart — surfaced by
-	// /setup/status as a durability warning. Computed at boot in cmd/wardynd.
+	// /setup/status as a durability warning. Computed at boot in cmd/wardynd;
+	// true in store mode, where no local key holds anything.
 	AgeKeyDurable bool
+	// SecretStoreExternal describes the organisation's store that every
+	// credential is written to in store mode ("Vault at vault.example:8200"),
+	// or "" in local mode. Set, /setup/status shows store_external instead of
+	// the age-key row.
+	SecretStoreExternal string
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
 	// posture. Computed at boot in cmd/wardynd (listenIsLoopback).
@@ -834,6 +850,7 @@ type Server struct {
 	// handleDeviceAuditIngest's one-push-per-device cap. Process-local like
 	// the limiters above; an entry lives only as long as its request.
 	ingestInFlight sync.Map
+	runLeaseState  // the run lease sweep's process state (run_lease_server.go)
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two

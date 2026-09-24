@@ -40,7 +40,7 @@ const (
 func memberModeSSOSession(t *testing.T, sub, email, role string, mm bool) *http.Cookie {
 	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
-		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role,
+		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role, UserType: "standard",
 		MemberMode: mm,
 		Expiry:     time.Now().UTC().Add(time.Hour),
 	})
@@ -181,8 +181,8 @@ func TestMemberMode_Toggle(t *testing.T) {
 	if body["operator"] != false || body["security_operator"] != false {
 		t.Errorf("operator/security_operator = %v/%v, want false/false", body["operator"], body["security_operator"])
 	}
-	if body["role"] != oidc.RoleMember {
-		t.Errorf("role = %v, want %q", body["role"], oidc.RoleMember)
+	if body["role"] != oidc.RoleUser {
+		t.Errorf("role = %v, want %q", body["role"], oidc.RoleUser)
 	}
 	if body["principal"] != memberModeAdminSub {
 		t.Errorf("principal = %v, want %q — the mode never changes who you are", body["principal"], memberModeAdminSub)
@@ -203,7 +203,7 @@ func TestMemberMode_Toggle(t *testing.T) {
 	// classMember precisely so that toggling OFF is always reachable, and a
 	// member who finds the control must not meet a 4xx for asking to be what
 	// they already are.
-	member := ssoSession(t, "sub-real-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-real-member", "member@corp.example", oidc.RoleUser)
 	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("a real member toggling on = %d, want 200: %s", w.Code, w.Body.String())
@@ -255,7 +255,7 @@ func TestMemberMode_DeniedOnEveryOperatorOnlyRoute(t *testing.T) {
 	// uses it.
 	matrixSrv, _, _, _ := newAuthzMatrixServer(t)
 	mmAdmin := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
-	realMember := ssoSession(t, "sub-control-member", "control@corp.example", oidc.RoleMember)
+	realMember := ssoSession(t, "sub-control-member", "control@corp.example", oidc.RoleUser)
 
 	adminTierRoutes := 0
 	for key, rc := range routeMatrix {
@@ -404,7 +404,7 @@ func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
 
 	// An ORDINARY member's denial carries no member_mode key at all — the flag
 	// is a marker, not a field every row now has to answer.
-	member := ssoSession(t, "sub-plain-member", "plain@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-plain-member", "plain@corp.example", oidc.RoleUser)
 	if d := doSSO(t, srv, http.MethodPost, "/api/v1/policies", member, "{}"); d.Code != http.StatusForbidden {
 		t.Fatalf("POST /policies as a member = %d, want 403", d.Code)
 	}
@@ -438,19 +438,18 @@ func TestMemberMode_SecurityAdminSurfaceDeniedToo(t *testing.T) {
 	}
 }
 
-// TestMemberMode_RefusesTokenAndKeyMint: the two doors that must REFUSE rather
-// than clamp. OnLogin re-stamps every API token and SSH key of a principal to
-// their freshly derived role at the next sign-in (store.RefreshAPITokenRoles,
-// the ssh-key stamp refresh), so a credential minted "as a member" would
-// silently become admin — a credential that outlives the mode is the one thing
-// this feature must not leave behind.
-func TestMemberMode_RefusesTokenAndKeyMint(t *testing.T) {
+// TestMemberMode_RefusesTokenMint: the door that must REFUSE rather than
+// clamp. OnLogin re-stamps every API token of a principal to their freshly
+// derived role at the next sign-in (store.RefreshAPITokenIdentity), so a token
+// minted "as a member" would silently become admin — a credential that outlives
+// the mode is the one thing this feature must not leave behind. The SSH-key
+// door stores a capped key instead (TestSSHKeys_UserViewAddIsCapped).
+func TestMemberMode_RefusesTokenMint(t *testing.T) {
 	srv, _ := memberModeServer(t)
 	on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
 
 	for _, tc := range []struct{ name, path, body string }{
 		{"api token", "/api/v1/me/tokens", `{"name":"minted-in-member-mode"}`},
-		{"ssh key", "/api/v1/me/ssh-keys", `{"public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIbdmX7dazl2gKzTjv0xfDCp4wTapmeoUaItm/kYMQz9 who@host"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := doSSO(t, srv, http.MethodPost, tc.path, on, tc.body)
@@ -587,7 +586,7 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 		f := newScopeFixture(t)
 		id := f.seedEgress(t, "registry.npmjs.org")
 		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve",
-			ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember),
+			ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser),
 			decideBody(t, types.ScopeAlways, nil))
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("member picking always = %d, want 403: %s", w.Code, w.Body.String())
@@ -623,7 +622,7 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 	cfg := baseTestConfig(h, newTokenMemStore())
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
-	member := ssoSession(t, "sub-w6-member", "w6-member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-w6-member", "w6-member@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true}`)
 	if w.Code != http.StatusOK {
@@ -653,7 +652,7 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 	// The audit row is still written — the request WAS made and answered, and
 	// real_role records the tier it was made from.
 	ev := lastAuditEvent(t, h.audit.events, "auth.member_mode")
-	if data := auditData(t, ev); data["real_role"] != oidc.RoleMember {
-		t.Errorf("real_role = %v, want %q", data["real_role"], oidc.RoleMember)
+	if data := auditData(t, ev); data["real_role"] != oidc.RoleUser {
+		t.Errorf("real_role = %v, want %q", data["real_role"], oidc.RoleUser)
 	}
 }
