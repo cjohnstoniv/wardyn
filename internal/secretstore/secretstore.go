@@ -19,13 +19,12 @@
 // ARCHITECTURE.md invariant 1 is the authoritative list of which credentials
 // those are and what bounds each one. Deliberately NOT restated here: a second
 // copy of that list is the thing that drifts out of date.
-// Audit coverage of reads is partial and honestly bounded: the proxy-side
-// api_key injection path emits a dedicated secret.read event
-// (internal/api/injection.go); the broker's git_pat and GitHub App private-key
-// reads are audited via the higher-level credential.mint event instead of an
-// individual secret.read (see internal/broker); and boot-time reads — the
-// platform signing/session keys (cmd/wardynd) — are currently NOT audited. Do
-// not treat "every read is an audit event" as a guarantee.
+// Every read is audited once (credential-storage design §2.6): wardynd wraps
+// the store in Audited, which records a secret.read for each Get with the
+// purpose its caller put in the context (WithPurpose). The injection sinks
+// record their own richer secret.read and mark the context SiteAudited so the
+// decorator stays silent. cmd/wardynd's secret-read guard pins that every Get
+// site does one or the other.
 package secretstore
 
 import (
@@ -55,8 +54,8 @@ var ErrRowNotWritten = errors.New("secretstore: the value reached the external s
 type Store interface {
 	Name() string
 	Put(ctx context.Context, name string, value []byte) error
-	// Get returns the plaintext. Callers are responsible for emitting the
-	// corresponding audit event before using the value.
+	// Get returns the plaintext. The context says why (WithPurpose) or that
+	// the caller records the read itself (SiteAudited); see Audited.
 	Get(ctx context.Context, name string) ([]byte, error)
 	Delete(ctx context.Context, name string) error
 	List(ctx context.Context) ([]string, error)

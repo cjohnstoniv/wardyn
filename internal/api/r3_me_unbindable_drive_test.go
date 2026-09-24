@@ -43,7 +43,7 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 		return root, &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 	}
 	memberCtx := func(sub string) context.Context {
-		return withOIDCGroups(operatorCtx(sub, sub+"@corp.example", oidc.RoleMember), nil)
+		return withOIDCGroups(operatorCtx(sub, sub+"@corp.example", oidc.RoleUser), nil)
 	}
 
 	t.Run("/me and the launch agree about a missing home directory", func(t *testing.T) {

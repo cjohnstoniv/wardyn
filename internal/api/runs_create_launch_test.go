@@ -176,3 +176,53 @@ func TestCreateRun_DispatchPanicFailsTheRun(t *testing.T) {
 		t.Errorf("run.dispatch failure rows = %d, want at least 1 — a panicked launch must leave a trail", n)
 	}
 }
+
+// TestServer_WaitBackground_WaitsForCreateRunLaunch: the POST /runs launch
+// runs detached after the 201, so http.Server.Shutdown cannot see it. It must
+// go through goBackground so that wardynd's shutdown (WaitBackground) waits for
+// a dispatch already in CreateSandbox, instead of leaving the run STARTING with
+// its grants and a half-made sandbox.
+func TestServer_WaitBackground_WaitsForCreateRunLaunch(t *testing.T) {
+	gr := &coldPullRunner{fakeRunner: &fakeRunner{}, gate: make(chan struct{}), entered: make(chan struct{})}
+	var once sync.Once
+	release := func() { once.Do(func() { close(gr.gate) }) }
+	t.Cleanup(release)
+	srv, _, _, _ := createLaunchFixture(t, gr)
+	member := govSession(t, "sub-member", []string{"eng"}, false)
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member, `{"agent":"claude-code","task":"t"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	var body createRunResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	select {
+	case <-gr.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the detached launch never reached CreateSandbox after the 201")
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		srv.WaitBackground()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+		t.Fatal("WaitBackground returned while the create-run launch was still in CreateSandbox — shutdown must wait for it")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WaitBackground never returned after CreateSandbox was released")
+	}
+	if got, err := srv.cfg.Store.GetRun(context.Background(), body.ID); err != nil || got.State != types.RunRunning {
+		t.Errorf("run state when WaitBackground returned = %q (err %v), want %q — the launch had not finished",
+			got.State, err, types.RunRunning)
+	}
+}

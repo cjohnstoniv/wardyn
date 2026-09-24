@@ -108,7 +108,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// contract). Presentational only — ValidateMemberMountSource, not this
 	// value, is what actually enforces the boundary at bind time.
 	//
-	// Keyed on !isOperator, NOT on role == RoleMember: the constraint follows
+	// Keyed on !isOperator, NOT on role == RoleUser: the constraint follows
 	// the workspace-OWNERSHIP namespace (secretOwnerFromRequest, deliberately
 	// still isOperator — see runs_policy.go), so a SECURITY ADMIN's workspaces
 	// are owner-stamped like a member's and are clamped by the same roots. This

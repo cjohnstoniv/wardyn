@@ -137,7 +137,7 @@ func TestPG_SSHKeys_RoleCheckedAtRoundTripsAndRefreshes(t *testing.T) {
 		Fingerprint:   fmt.Sprintf("SHA256:stamped-%s-%d", t.Name(), time.Now().UnixNano()),
 		Principal:     "bob2@example.com",
 		PublicKey:     "ssh-ed25519 AAAAtest3 bob2@laptop",
-		Role:          "member",
+		Role:          "user",
 		RoleCheckedAt: &checkedAt,
 		CreatedAt:     time.Now().UTC(),
 	}
@@ -201,7 +201,7 @@ func TestPG_SSHKeys_CappedKeyStaysMemberAtLogin(t *testing.T) {
 	key := func(tag string, capped bool) types.SSHPublicKey {
 		return types.SSHPublicKey{
 			Fingerprint: fmt.Sprintf("SHA256:%s-%s-%d", tag, t.Name(), time.Now().UnixNano()),
-			Principal:   principal, PublicKey: "ssh-ed25519 AAAA" + tag, Role: "member",
+			Principal:   principal, PublicKey: "ssh-ed25519 AAAA" + tag, Role: "user",
 			RoleCheckedAt: &registered, Capped: capped, CreatedAt: time.Now().UTC(),
 		}
 	}
@@ -220,7 +220,7 @@ func TestPG_SSHKeys_CappedKeyStaysMemberAtLogin(t *testing.T) {
 	for _, tc := range []struct {
 		k        types.SSHPublicKey
 		wantRole string
-	}{{capped, "member"}, {uncapped, "admin"}} {
+	}{{capped, "user"}, {uncapped, "admin"}} {
 		got, err := st.GetSSHKeyByFingerprint(ctx, tc.k.Fingerprint)
 		if err != nil {
 			t.Fatalf("get: %v", err)

@@ -57,13 +57,13 @@ func TestSsoRBACCheck(t *testing.T) {
 			// The frozen strings (docs/design/admin-access-canon.md), byte for byte.
 			if tc.wantStatus == "warn" {
 				if chk.Detail != "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin." ||
-					chk.Fix != "Map people to admin or member on the People step, so only the people you name can change this deployment." {
+					chk.Fix != "Map people to admin or user on the People step, so only the people you name can change this deployment." {
 					t.Errorf("warn strings drifted from the canon: %+v", chk)
 				}
 				if !chk.Blocking {
 					t.Error("warn must stay Blocking")
 				}
-			} else if chk.Detail != "People are mapped to admin or member, so a person's role comes from their sign-in." || chk.Blocking {
+			} else if chk.Detail != "People are mapped to admin or user, so a person's role comes from their sign-in." || chk.Blocking {
 				t.Errorf("ok row drifted from the canon or blocks: %+v", chk)
 			}
 		})
@@ -593,6 +593,22 @@ func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	// leak into, and -age-key / the env var is what compose and install.sh write.
 	if !strings.Contains(chk.Fix, "-age-key") {
 		t.Errorf("Fix dropped the host-side -age-key answer — Fix = %q", chk.Fix)
+	}
+}
+
+// TestAgeKeyCheckDetailNamesUnrecoverableConsequence is #755 (0.7.12 release
+// review, F3). The warn arm's Detail said secrets "become unreadable after a
+// restart", which reads as a one-time, future event. The row only shows while
+// wardynd runs on an ephemeral key, and convertSecretStore refuses that boot
+// whenever age-sealed rows exist, so no earlier ephemeral key's rows can be
+// present here: what the operator must hear is that what is stored NOW is lost
+// at the next restart, and that the next boot refuses to start over it.
+func TestAgeKeyCheckDetailNamesUnrecoverableConsequence(t *testing.T) {
+	detail := ageKeyCheck(false).Detail
+	for _, want := range []string{"lost at the next restart", "no key set afterward", "next boot refuses to start"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("Detail does not say %q — Detail = %q", want, detail)
+		}
 	}
 }
 

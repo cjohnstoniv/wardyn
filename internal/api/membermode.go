@@ -10,7 +10,7 @@ package api
 // What the mode is. An admin asks to be treated as a member for the rest of
 // this browser session. internal/auth/oidc does the whole of the clamping:
 // Session.MemberMode rides the existing cookie and contextWithPrincipal — the
-// one read of the stamped role — publishes RoleMember instead. Nothing in this
+// one read of the stamped role — publishes RoleUser instead. Nothing in this
 // package re-derives a tier, so every predicate here (isOperator,
 // isSecurityOperator, every ownsRunOrAdmin) follows for free.
 //
@@ -40,7 +40,7 @@ const (
 	// memberModeMintRefusal is the 409 the API-token mint door answers with
 	// while the mode is on: a token minted here would be re-stamped with the
 	// caller's REAL role at their next sign-in (store.RefreshAPITokenIdentity,
-	// fired by OnLogin), so a "member" token would quietly become an admin one
+	// fired by OnLogin), so a "user" token would quietly become an admin one
 	// and outlive the mode that created it. The SSH-key door no longer refuses:
 	// a key registered in the mode is stored capped instead (sshkeys.go,
 	// migration 0070).
@@ -151,7 +151,7 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	// — and audit — a posture nobody is in, and would make this row's own
 	// AUDIT-ACTIONS sentence ("only on a row that turned the mode ON with it")
 	// false.
-	noCred := preview && realRole != oidc.RoleMember
+	noCred := preview && realRole != oidc.RoleUser
 	datum := map[string]any{"enabled": req.Enabled, "real_role": realRole}
 	if noCred {
 		datum["no_credential"] = true

@@ -305,11 +305,11 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// foreign-run reach and nothing else.
 	//
 	// Fallback for a caller with no OIDC role on ctx: unreachable here (the
-	// no-verified-human refusal above returned already), but RoleMember is the
+	// no-verified-human refusal above returned already), but RoleUser is the
 	// fail-closed value if that ever changes.
 	role := oidcRoleFromContext(ctx)
 	if role == "" {
-		role = oidc.RoleMember
+		role = oidc.RoleUser
 	}
 	// The group snapshot's completeness marker, stamped from the MINTING
 	// session's own bit (migration 0052's api_tokens.groups_truncated). The
@@ -617,7 +617,7 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 			if !s.roleSnapshotDrops(wasT, nowT) || !s.roleSnapshotDrops(t.Role, nowT) {
 				continue
 			}
-		} else if !s.roleSnapshotDrops(t.Role, oidc.RoleMember) {
+		} else if !s.roleSnapshotDrops(t.Role, oidc.RoleUser) {
 			continue
 		}
 		if !slices.Contains(principals, t.Principal) {
