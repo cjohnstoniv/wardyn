@@ -37,8 +37,8 @@ func TestPG_WorkspaceMemberScope(t *testing.T) {
 	ctx := context.Background()
 
 	const subA, subB = "sub-member-a", "sub-member-b"
-	memberA := ssoSession(t, subA, "a@corp.example", oidc.RoleMember)
-	memberB := ssoSession(t, subB, "b@corp.example", oidc.RoleMember)
+	memberA := ssoSession(t, subA, "a@corp.example", oidc.RoleUser)
+	memberB := ssoSession(t, subB, "b@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	byOwner := map[string][]uuid.UUID{}

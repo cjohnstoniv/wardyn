@@ -805,8 +805,8 @@ func TestValidateSSOOnlyPosture(t *testing.T) {
 // memSecretStore is a minimal in-memory secretstore.Store good enough for
 // buildOptionalFeatures to construct a REAL oidc.Authenticator (session key
 // bootstrap) without a live Postgres-backed store. Pre-seeded by the caller,
-// so Get always finds the key and loadOrCreateSecret's not-found path (which
-// checks for pgx.ErrNoRows specifically) is never exercised.
+// so Get always finds the key and loadOrCreateSecret's not-found path is
+// never exercised.
 type memSecretStore struct{ vals map[string][]byte }
 
 func (s *memSecretStore) Name() string { return "mem-test" }
@@ -842,6 +842,7 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
+	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
 	return &bootFlags{
 		recordingSel:            &recordingSel,
 		recordingDir:            &recordingDir,
@@ -871,6 +872,7 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 		scanAIAdvisor: &scanAIAdvisor,
 		sshListen:     &sshListen,
 		uiListen:      &uiListen,
+		controlURL:    &controlURL,
 	}
 }
 
@@ -894,11 +896,9 @@ func TestSSOOnlyPosture_WiredThroughTheRealBootPath(t *testing.T) {
 	defer httpSrv.Close()
 	oidcSrv.SetIssuer(httpSrv.URL)
 
-	// Pre-seeded with a valid session key: loadOrCreateSecret's not-found path
-	// checks for pgx.ErrNoRows SPECIFICALLY (a Postgres sentinel), so a fake
-	// store's secretstore.ErrNotFound would trip its fail-CLOSED default
-	// branch instead — pre-seeding sidesteps that path entirely, which is
-	// all this test needs: a real Authenticator, not a real bootstrap.
+	// Pre-seeded with a valid session key, so loadOrCreateSecret's not-found
+	// path is never taken: this test needs a real Authenticator, not a real
+	// bootstrap.
 	newStore := func() *memSecretStore {
 		return &memSecretStore{vals: map[string][]byte{secretSessionKey: []byte("01234567890123456789012345678901")}}
 	}

@@ -106,6 +106,7 @@ func newGitBrokerProxyWithSpec(t *testing.T, grants map[string]uuid.UUID, upstre
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 		GitGrants:       grants,
 	})
 	return p, buf
@@ -217,6 +218,7 @@ func TestGitBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
 		GitGrants:       map[string]uuid.UUID{"octocat/hello-world": grantID},
 	})
 

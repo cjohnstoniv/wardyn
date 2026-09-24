@@ -24,7 +24,7 @@ import (
 func TestMemberApprovalListByRun(t *testing.T) {
 	srv, ast, aap, _ := newAuthzMatrixServer(t)
 	const mine, theirs = "sub-member", "sub-other-member"
-	member := ssoSession(t, mine, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, mine, "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 	ownRun, foreignRun := seedAuthzRun(ast, mine), seedAuthzRun(ast, theirs)
 	ownAp, foreignAp := aap.seed(ownRun), aap.seed(foreignRun)
@@ -59,7 +59,7 @@ func TestMemberListsFailClosedWithoutCreatorScope(t *testing.T) {
 	// real double implements is invisible to the handler's type assertion.
 	srv.cfg.Store = struct{ store.Store }{ast}
 	srv.cfg.Approvals = struct{ ApprovalService }{aap}
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	ownRun, foreignRun := seedAuthzRun(ast, "sub-member"), seedAuthzRun(ast, "sub-other-member")
