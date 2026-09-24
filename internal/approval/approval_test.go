@@ -728,7 +728,7 @@ func TestDecide_AuditDataCarriesDecisionExpiresAt(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}
 	runID := uuid.New()
-	until := time.Date(2030, 1, 2, 3, 4, 5, 0, time.FixedZone("x", 3600))
+	until := time.Now().Add(24 * time.Hour).Truncate(time.Second).In(time.FixedZone("x", 3600))
 
 	bounded, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"a.example.com"}`)))
 	if _, err := approval.Decide(ctx, st, bounded.ID, types.ActorHuman, types.ApprovalDecision{
