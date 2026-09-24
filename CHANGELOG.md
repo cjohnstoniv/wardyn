@@ -61,6 +61,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "run not found" (the sandbox-side, run-token-authenticated doors) are now commented with why: the
   caller's own presented token names the missing run, so a lookup miss is that token's authority
   gone, not a path a member could probe (#189).
+- `push_rules.deny_paths` entries with leading or trailing whitespace, or that are not valid
+  UTF-8, are now refused at write time (`400`) instead of stored as a deny rule that matches
+  almost nothing. The git broker reads them the same way, so a policy that bypassed write-time
+  validation with one has every push refused rather than the entry ignored (#271).
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now

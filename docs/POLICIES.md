@@ -909,8 +909,11 @@ trimmed), so `*.pem` matches `server.pem` and not `certs/server.pem`, while
 as in `.gitignore` and `CODEOWNERS`: `infra/` reads as `infra/**`. An entry
 with an empty, `.` or `..` segment — `./infra/**`, `infra//**`, `a/../b` — is
 **refused at write time**, because no git path contains one and the rule would
-silently match nothing; a policy that reaches the broker carrying one anyway
-has every push refused rather than the entry ignored. A pattern that is not a
+silently match nothing; so is an entry with leading or trailing whitespace
+(almost certainly a typo) or one that is not valid UTF-8. A policy that
+reaches the broker carrying any of these anyway has every push refused rather
+than the entry ignored. `..` inside a segment (`infra..x/`) is an ordinary
+name and reads as written. A pattern that is not a
 valid Go pattern — an unterminated `[`, say — is compared literally rather than
 silently matching nothing.
 
@@ -943,7 +946,7 @@ there is nothing here for a silent ceiling to protect against.
 
 | Field | Type | Default | What it does |
 |---|---|---|---|
-| `deny_paths` | `[]string` | `[]` | Path patterns (e.g. `.github/workflows/**`) refused in a push — see **Pattern language** above. Each entry at most **256 bytes**, no NUL or other control character; rejected (`400`) at write time. **No count cap** — deny-only lists narrow rather than widen, the same stance `denied_domains` takes, and a clamp-merged list can legitimately exceed what either the operator's ceiling or the member's own proposal authored on its own. The matcher therefore bounds its own work instead of assuming the list is short: a list long enough that matching it against a push would not finish in bounded time refuses that push (`brokered:git:push-uninspectable`) rather than being ground through. |
+| `deny_paths` | `[]string` | `[]` | Path patterns (e.g. `.github/workflows/**`) refused in a push — see **Pattern language** above. Each entry at most **256 bytes**, valid UTF-8, no NUL or other control character, and no leading or trailing whitespace; rejected (`400`) at write time. **No count cap** — deny-only lists narrow rather than widen, the same stance `denied_domains` takes, and a clamp-merged list can legitimately exceed what either the operator's ceiling or the member's own proposal authored on its own. The matcher therefore bounds its own work instead of assuming the list is short: a list long enough that matching it against a push would not finish in bounded time refuses that push (`brokered:git:push-uninspectable`) rather than being ground through. |
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
 
 ## `llm_inspection` — `LLMInspectionSpec`
