@@ -596,6 +596,22 @@ func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	}
 }
 
+// TestAgeKeyCheckDetailNamesUnrecoverableConsequence is #755 (0.7.12 release
+// review, F3). The warn arm's Detail said secrets "become unreadable after a
+// restart", which reads as a one-time, future event. The row only shows while
+// wardynd runs on an ephemeral key, and convertSecretStore refuses that boot
+// whenever age-sealed rows exist, so no earlier ephemeral key's rows can be
+// present here: what the operator must hear is that what is stored NOW is lost
+// at the next restart, and that the next boot refuses to start over it.
+func TestAgeKeyCheckDetailNamesUnrecoverableConsequence(t *testing.T) {
+	detail := ageKeyCheck(false).Detail
+	for _, want := range []string{"lost at the next restart", "no key set afterward", "next boot refuses to start"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("Detail does not say %q — Detail = %q", want, detail)
+		}
+	}
+}
+
 // ── finding 3: bedrock_provider / llm_provider under a per-principal caller ──
 
 // bedrockRowVia is bedrockProviderCheck fed the SAME setupBedrock a real

@@ -290,4 +290,23 @@ describe("gate-once-per-load", () => {
     markGateFired();
     expect(gateAlreadyFired()).toBe(true);
   });
+
+  // #469: a re-render at the location it fired from is the same access, still
+  // waiting on its redirect — it must redirect again, not read the gate as spent.
+  it("stays live at the location it fired from, and only there", () => {
+    markGateFired("k1");
+    expect(gateAlreadyFired("k1")).toBe(false);
+    expect(gateAlreadyFired("k2")).toBe(true);
+    // Arriving in the funnel seals it: after that not even the location it
+    // fired from re-fires (the router reuses "default" for untagged entries).
+    markGateFired();
+    expect(gateAlreadyFired("k1")).toBe(true);
+    markGateFired("k1");
+    expect(gateAlreadyFired("k1")).toBe(true);
+  });
+
+  it("arriving in the funnel directly arms it for every location", () => {
+    markGateFired();
+    expect(gateAlreadyFired("default")).toBe(true);
+  });
 });

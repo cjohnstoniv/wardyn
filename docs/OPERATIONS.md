@@ -3294,6 +3294,55 @@ explicit `http://`, `443` otherwise). A `to` whose port is not a decimal
 1-65535 is refused at `PUT /site-config` rather than silently read as `443` by
 one reader and rejected outright by another.
 
+### Git push confinement and content rules
+
+Two independent controls sit on the brokered git lanes (`github_token`,
+`git_pat`), and an operator tuning one must not assume it moves the other.
+
+- **WHERE a push may land.** Branch-namespace confinement
+  (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS`, on by default for the App lane;
+  `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, off by default for `git_pat`) —
+  see [docs/ENV.md](ENV.md) for both rows.
+- **WHAT a push may touch.** `push_rules` (`deny_paths`,
+  `max_inspect_pack_mib`) — a policy field, not an env var, set per run. An
+  operator ceiling that sets `push_rules` is a floor, not a cap: an unset
+  proposal inherits it wholesale, `deny_paths` is unioned with the ceiling's,
+  and `max_inspect_pack_mib` is capped only when the ceiling's value is
+  non-zero. See [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec) for
+  the field reference, the pattern language, and what the inspector can and
+  cannot see.
+
+The residuals an operator should plan for:
+
+- **A push over the inspection ceiling is refused, not held** — the remedy is
+  raising `max_inspect_pack_mib` (bounded 0..64 at write time), never a
+  console approval, because holding would ask a person to approve a push
+  nobody inspected.
+- **`ssh_key` is ungovernable by construction.** git's own SSH transport has
+  no broker seam, so `push_rules` cannot be enforced on it; a policy that sets
+  `push_rules` while `ssh_key` is the run's only git-capable grant is legal
+  but graded a medium-risk item on the Review rail rather than blocked.
+- **On `git_pat`, only WHERE is behind a switch.** Branch-namespace
+  confinement on the `git_pat` lane is off by default and needs
+  `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`; `push_rules` applies to every
+  `git_pat` push whatever that switch is set to. Neither changes the PAT
+  itself: it keeps whatever scope the operator issued it with.
+- **A first push to a new branch enumerates the whole new tree.** Under
+  branch-namespace confinement the pushed commit's parent stays on the forge,
+  so the pack holds nothing to diff against: every root file is named whether
+  changed or not, and every untouched directory, symlink or submodule arrives
+  as an opaque entry. When the forge is GitHub, a matched entry the pack does
+  not carry is compared with the parent commit's trees through GitHub's REST
+  API (the run's own credential for the lane, trees only), and a legitimate
+  rename, restore or directory move passes — only an add, change, move or
+  restore under a denied path is refused. That comparison cannot run on a
+  `git_pat` grant to a non-GitHub forge, when no parent counts, or when a
+  read fails, times out or needs more than 64 reads — there, any matched
+  entry the pack does not carry refuses the push, including every root file.
+  So `deny_paths: ["Makefile"]` on a GitLab PAT refuses every push to a repo
+  that has a Makefile. See "What the rules see, and what they do not" in
+  [docs/POLICIES.md](POLICIES.md#push_rules--pushrulesspec).
+
 ### Internal hosts
 
 The proxy's unconditional private/loopback/link-local/metadata/CGNAT/NAT64 IP

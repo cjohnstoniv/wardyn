@@ -52,6 +52,10 @@ image builds, cluster setup, and environment variables. Run the Playwright
 lane with `scripts/run-ui-e2e.sh`. Without `WARDYN_TEST_PG` the Postgres
 suite prints a loud SKIPPED line.
 
+Before tagging, run `scripts/stress-proxy-cgroup.sh` (needs docker). It sends
+the egress proxy's worst inspection load through it under the sidecar's 256
+MiB memory cap and fails on a refused request or an OOM kill.
+
 Screenshot freshness is advisory and CI-only. On a pull request, `ci.yml`'s
 `diagrams` job compares the PR diff and adds a warning annotation when the
 console (anything under `ui/src/app` or `ui/src/styles`) changed and `docs/img`

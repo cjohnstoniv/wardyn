@@ -20,10 +20,13 @@ async function mockFreshInstall(page: Page, opts: { sso?: boolean } = {}): Promi
   // retried, and every match served from that body, so App's status is the
   // same SSO body for the whole test. The hero renders from App's status
   // (onboarding-screen.tsx), and a request log shows ONE /setup/status read.
-  // This does NOT explain the SSO case's CI flake (#469): there, the whole
-  // /setup page never paints within the timeout while the retry paints in
-  // under a second, which points at the lazy Getting-started route, not at
-  // this mock. setup-gate.spec fails the same way.
+  // This does NOT explain the SSO case's CI flake (#469), and neither did a
+  // slow lazy route: setup-gate.spec's identical failure (CI run 36057885376)
+  // shows the page REACHING /setup and then settling on Runs. The gate's
+  // redirect lands inside a router transition, and an App state update that
+  // arrived first re-rendered the gate at "/" with its once-per-load latch
+  // already set (App.tsx RequireSetup, setup-gate.ts gateFiredAt). This fresh
+  // install is gated the same way (the e2e runner row is blocking).
   let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/setup/status*", async (route) => {
     let lastErr: unknown;

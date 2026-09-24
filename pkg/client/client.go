@@ -406,8 +406,8 @@ type CreateRunResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// CreateRun submits a new agent run to the control plane.
-// Returns the created run (state PENDING or RUNNING) plus any advisory warnings.
+// CreateRun submits a new agent run and answers once the run row exists (state
+// PENDING, never RUNNING) plus any advisory warnings; build and dispatch continue server-side.
 // Status 201 on success; 400 on validation failure; 422 on policy/confinement
 // mismatch; 503 when the runner is unavailable.
 func (c *Client) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
