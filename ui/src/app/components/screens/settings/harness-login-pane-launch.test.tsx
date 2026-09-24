@@ -18,8 +18,8 @@ import userEvent from "@testing-library/user-event";
 
 // lastAttachOutput captures the onOutput callback the pane hands AttachTerminal
 // on its most recent render — the only way to feed it a PTY chunk without a
-// real xterm (Finding 7a's tab-navigate case needs this; every other case in
-// this file never gets far enough to mount the terminal at all).
+// real xterm (the door's ready state needs this; most cases in this file
+// never get far enough to mount the terminal at all).
 let lastAttachOutput: ((chunk: string) => void) | undefined;
 // The pane reaches AttachTerminal (and through it xterm's stylesheet); no case
 // here gets far enough to mount it, but the import itself has to resolve.
@@ -49,7 +49,8 @@ import { HttpError } from "../../../lib/api/core";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import type { AgentRun } from "../../../lib/types";
 import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_STUCK_LEAD_IN, RUN_POLL_SLOW_START_MS } from "./login-start-wait";
-import { STARTING_CONTAINER_CREATING, STUCK_IMAGE_PULL } from "../run-status-detail";
+import { STARTING_CONTAINER_CREATING } from "../run-status-detail";
+import { SIGNIN_PROGRESS } from "./login-pane-copy";
 
 // U-11 (W6 blind lens) — the no-credential member preview offers "Sign in to
 // AWS" (Getting Started renders the CTA off a not_configured state) and the
@@ -150,24 +151,80 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
     vi.mocked(runsApiMocked.getRun).mockReset();
   });
 
-  it("a STARTING run on an unpullable image shows the registry's words and offers Cancel ONLY", async () => {
+  // #628 state 7: an image that will not pull is the DOWNLOAD step failing.
+  // The door shows the server's detail as is and offers Retry, which starts a
+  // fresh sandbox — and stops the stuck one, which is still STARTING.
+  it("a STARTING run on an unpullable image fails the download step, verbatim, with Retry", async () => {
+    const detail = "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied";
     vi.mocked(runsApiMocked.getRun).mockResolvedValue({
       id: "run-123",
       state: "STARTING",
-      status_detail: "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied",
+      status_detail: detail,
       status_reason: "ImagePullBackOff",
     } as AgentRun);
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
 
     const alertBox = await screen.findByRole("alert");
+    expect(alertBox).toHaveTextContent(detail);
+    expect(alertBox).not.toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
+    const steps = screen.getByTestId("signin-progress");
+    expect(steps).toHaveTextContent(SIGNIN_PROGRESS.STEP_DOWNLOAD_FAILED);
+    expect(steps).not.toHaveTextContent(SIGNIN_PROGRESS.STEP_WAIT("AWS"));
+    expect(screen.getByRole("button", { name: SIGNIN_PROGRESS.CANCEL })).toBeInTheDocument();
+
+    harnessLoginMock.mockResolvedValue("run-456");
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-456", state: "PENDING" } as AgentRun);
+    await userEvent.click(screen.getByRole("button", { name: SIGNIN_PROGRESS.RETRY }));
+    expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
+    expect(await screen.findByTestId("login-sandbox-starting")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // Docker names no terminal pull reason: its pull fails the run outright. The
+  // step the run was on when it ended is what says the download failed.
+  it("a run that fails while Pulling fails the download step with the run's own sentence", async () => {
+    vi.mocked(runsApiMocked.getRun)
+      .mockResolvedValueOnce({
+        id: "run-123",
+        state: "STARTING",
+        status_detail: "image: Pulling: ghcr.io/example/agent-aws-sso:0.8.0",
+        status_reason: "Pulling",
+      } as AgentRun)
+      .mockResolvedValue({
+        id: "run-123",
+        state: "FAILED",
+        failure_hint: "docker: pull ghcr.io/example/agent-aws-sso:0.8.0: manifest unknown",
+      } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    const starting = await screen.findByTestId("login-sandbox-starting");
+    expect(starting).toHaveTextContent(SIGNIN_PROGRESS.STEP_DOWNLOAD_ACTIVE);
+    expect(starting).toHaveTextContent(SIGNIN_PROGRESS.DOWNLOAD_HINT);
+
+    const alertBox = await screen.findByRole("alert", {}, { timeout: 5000 });
+    expect(alertBox).toHaveTextContent("docker: pull ghcr.io/example/agent-aws-sso:0.8.0: manifest unknown");
+    expect(screen.getByTestId("signin-progress")).toHaveTextContent(SIGNIN_PROGRESS.STEP_DOWNLOAD_FAILED);
+    expect(screen.getByRole("button", { name: SIGNIN_PROGRESS.RETRY })).toBeInTheDocument();
+  });
+
+  // The other terminal reasons are not the download: the image is here, and
+  // the container will not start from it. Those keep the stuck lead-in and
+  // offer no retry — it earns the identical answer until an admin acts.
+  it("a container that will not start keeps the stuck lead-in and offers Cancel ONLY", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "STARTING",
+      status_detail: "agent: CrashLoopBackOff: back-off restarting failed container",
+      status_reason: "CrashLoopBackOff",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    const alertBox = await screen.findByRole("alert");
     expect(alertBox).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
-    expect(alertBox).toHaveTextContent(STUCK_IMAGE_PULL);
-    expect(alertBox).toHaveTextContent("pull access denied");
-    // Try again is suppressed. It earns the identical answer until an admin
-    // changes the cluster or the image, exactly as U-11's 409 does — a test
-    // asserting Try again here would pin behavior this ruling withholds.
-    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /try again|retry/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
   });
 
@@ -186,8 +243,9 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
 
     const alertBox = await screen.findByRole("alert");
-    expect(alertBox).toHaveTextContent(STUCK_IMAGE_PULL);
-    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+    expect(alertBox).toHaveTextContent("agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied");
+    expect(screen.getByTestId("signin-progress")).toHaveTextContent(SIGNIN_PROGRESS.STEP_DOWNLOAD_FAILED);
+    expect(screen.getByRole("button", { name: SIGNIN_PROGRESS.RETRY })).toBeInTheDocument();
   });
 
   // The other half of the field report's sentence: "ContainerCreating for two
@@ -263,9 +321,8 @@ describe("a terminal ending that arrived only as a failure_hint", () => {
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
 
     const alertBox = await screen.findByRole("alert");
-    expect(alertBox).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
-    expect(alertBox).toHaveTextContent("pull access denied");
-    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+    expect(alertBox).toHaveTextContent("agent: ImagePullBackOff: rpc error: pull access denied");
+    expect(screen.getByRole("button", { name: SIGNIN_PROGRESS.RETRY })).toBeInTheDocument();
   });
 
   // The old daemon: a reason and a hint, no detail. Never a lead-in with nothing
@@ -334,112 +391,82 @@ describe("a dismissal from outside the pane still ends the login run", () => {
   });
 });
 
-// Finding 7a (0.7.5 field report): the verification tab opens on the click,
-// not from inside a PTY callback — a callback isn't a user gesture, so a
-// popup opened there gets blocked. This navigates it once the URL is known.
-describe("the verification tab opens on the click (Finding 7a)", () => {
+// #628 / Finding 7a: the click that starts the sign-in opens NO tab. The tab
+// opens only from the door's Open button, once the provider's page exists —
+// a fresh gesture, so no popup blocker has a reason to refuse it.
+describe("the provider tab opens only from the Open button (#628)", () => {
   let openSpy: MockInstance<typeof window.open>;
-  let fakeWindow: { opener: unknown; location: { href: string }; closed: boolean; close: ReturnType<typeof vi.fn>; document: { write: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> } };
+  let fakeWindow: { opener: unknown; location: { href: string } };
+  const DEVICE_URL = "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH";
 
   beforeEach(() => {
-    harnessLoginMock.mockReset();
+    harnessLoginMock.mockReset().mockResolvedValue("run-123");
     lastAttachOutput = undefined;
     vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
     vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
-    fakeWindow = {
-      opener: {},
-      location: { href: "about:blank" },
-      closed: false,
-      close: vi.fn(),
-      document: { write: vi.fn(), close: vi.fn() },
-    };
-    // vitest 4: re-spying an already-spied global (`window.open` here, spied by
-    // every test in this block) returns the SAME mock instance rather than a
-    // fresh wrapper, so its call history otherwise leaks across tests — clear
-    // it so each test's assertion covers only what IT triggered.
+    fakeWindow = { opener: {}, location: { href: "" } };
+    // vitest 4: re-spying an already-spied global returns the SAME mock
+    // instance, so clear its history per test.
     openSpy = vi.spyOn(window, "open").mockClear().mockReturnValue(fakeWindow as unknown as Window);
   });
 
-  // The red case: goes red on any refactor that hoists an `await` above the
-  // tab-open line — `harnessLogin` never resolves here, so if the open moved
-  // below it, `window.open` would never be called at all.
-  it("opens the tab SYNCHRONOUSLY, before the launch POST resolves", async () => {
-    harnessLoginMock.mockReturnValue(new Promise<string>(() => {})); // never resolves
+  async function attachAws() {
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("fake-terminal");
+  }
+
+  it("Start login opens nothing, and the door waits on AWS until the link arrives", async () => {
+    await attachAws();
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(screen.getByTestId("signin-progress")).toHaveTextContent(SIGNIN_PROGRESS.STEP_WAIT("AWS"));
+    expect(screen.getByText(SIGNIN_PROGRESS.WAIT_HINT("AWS"))).toBeInTheDocument();
+  });
+
+  it("the link arriving opens nothing either — it arms the Open button, with the device code beside it", async () => {
+    await attachAws();
+    await act(async () => lastAttachOutput?.(`${DEVICE_URL}\n`));
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: SIGNIN_PROGRESS.OPEN("AWS") })).toBeInTheDocument();
+    expect(screen.getByTestId("signin-device-code")).toHaveTextContent("ABCD-EFGH");
+    expect(screen.getByTestId("signin-ready")).toHaveTextContent(DEVICE_URL);
+  });
+
+  it("the Open click opens the tab, severs opener, navigates it, and moves to the opened state", async () => {
+    await attachAws();
+    await act(async () => lastAttachOutput?.(`${DEVICE_URL}\n`));
+    await userEvent.click(screen.getByRole("button", { name: SIGNIN_PROGRESS.OPEN("AWS") }));
     expect(openSpy).toHaveBeenCalledWith("", "_blank");
+    expect(fakeWindow.opener).toBeNull();
+    expect(fakeWindow.location.href).toBe(DEVICE_URL);
+    expect(screen.getByTestId("signin-tab-open")).toHaveTextContent(SIGNIN_PROGRESS.TAB_OPEN("AWS"));
+    expect(screen.getByTestId("signin-device-code")).toHaveTextContent("ABCD-EFGH");
+
+    await userEvent.click(screen.getByRole("button", { name: SIGNIN_PROGRESS.REOPEN }));
+    expect(openSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("navigates the tab already open when the verification URL appears — never a second window.open", async () => {
-    harnessLoginMock.mockResolvedValue("run-123");
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
-    await screen.findByTestId("fake-terminal");
-    await act(async () => lastAttachOutput?.("https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n"));
-    expect(fakeWindow.location.href).toBe("https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH");
-    expect(openSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("a blocked popup still surfaces the header link and AUTH_TAB_BLOCKED_NOTE", async () => {
+  it("a blocked Open stays on the ready state, whose copy-link fallback is already there", async () => {
     openSpy.mockReturnValue(null);
-    harnessLoginMock.mockResolvedValue("run-123");
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
-    await screen.findByTestId("fake-terminal");
-    await act(async () => lastAttachOutput?.("https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n"));
-    expect(await screen.findByTestId("auth-url-link")).toBeInTheDocument();
-    expect(screen.getByTestId("auth-tab-blocked-note")).toBeInTheDocument();
+    await attachAws();
+    await act(async () => lastAttachOutput?.(`${DEVICE_URL}\n`));
+    await userEvent.click(screen.getByRole("button", { name: SIGNIN_PROGRESS.OPEN("AWS") }));
+    expect(screen.queryByTestId("signin-tab-open")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: SIGNIN_PROGRESS.COPY_LINK })).toBeInTheDocument();
   });
 
-  // The two `stuck` arms must also close the placeholder tab, not just
-  // return early — it was foregrounded by the click and reads "this page
-  // changes to your provider's sign-in page by itself… if nothing happens,
-  // go back there", on the one start that never will, with the error
-  // sitting on the tab behind it. CHANGELOG.md's "Wardyn closes it while it
-  // is still the placeholder (Cancel, an error, a completed sign-in)"
-  // covers exactly these two states too.
-  it.each([["STARTING"], ["FAILED"]] as const)(
-    "a %s run stuck on a terminal reason closes the placeholder tab with the error",
-    async (state) => {
-      harnessLoginMock.mockResolvedValue("run-123");
-      vi.mocked(runsApiMocked.getRun).mockResolvedValue({
-        id: "run-123",
-        state,
-        status_detail: "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied",
-        status_reason: "ImagePullBackOff",
-        failure_hint:
-          state === "FAILED"
-            ? "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): denied"
-            : undefined,
-      } as AgentRun);
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
-      expect(await screen.findByRole("alert")).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
-      // Exactly once: the arm returns, so the poll cannot close it again.
-      expect(fakeWindow.close).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  // The negative control: the generic FAILED arm already closed it, and still does.
-  it("an ordinary FAILED run (no terminal reason) still closes the tab", async () => {
-    harnessLoginMock.mockResolvedValue("run-123");
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
-      id: "run-123",
-      state: "FAILED",
-      failure_hint: "boom",
-    } as AgentRun);
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
-    await screen.findByRole("alert");
-    expect(fakeWindow.close).toHaveBeenCalled();
-  });
-
-  it("Cancel closes the tab", async () => {
-    harnessLoginMock.mockResolvedValue("run-123");
-    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+  it("the Claude door has the same ready state, with no device code and no printed link", async () => {
+    const oauth = "https://claude.ai/oauth/authorize?code=true&client_id=abc&response_type=code&state=xyz";
+    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
     await screen.findByTestId("fake-terminal");
-    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
-    expect(fakeWindow.close).toHaveBeenCalled();
+    expect(screen.getByTestId("signin-progress")).toHaveTextContent(SIGNIN_PROGRESS.STEP_WAIT("Claude"));
+    await act(async () => lastAttachOutput?.(`${oauth}\n`));
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("signin-device-code")).not.toBeInTheDocument();
+    expect(screen.getByTestId("signin-ready")).not.toHaveTextContent(oauth);
+    await userEvent.click(screen.getByRole("button", { name: SIGNIN_PROGRESS.OPEN("Claude") }));
+    expect(fakeWindow.location.href).toBe(oauth);
+    expect(screen.getByTestId("signin-tab-open")).toHaveTextContent(SIGNIN_PROGRESS.TAB_OPEN("Claude"));
   });
 });

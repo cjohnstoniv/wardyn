@@ -909,7 +909,7 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
   it("a blocked popup shows the canon sentence and a plain fallback link to the sign-in URL (F9)", () => {
     renderRail({ adoDialogOpen: true, adoBlockedUrl: "/api/v1/scm/azure-devops/signin" });
     expect(screen.getByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: ADO.CONNECT_CTA });
+    const link = screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN });
     expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
     expect(link).toHaveAttribute("target", "_blank");
   });
@@ -923,7 +923,7 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
       adoBlockedUrl: "/api/v1/scm/azure-devops/signin",
       onAdoFallbackClick,
     });
-    await userEvent.click(screen.getByRole("link", { name: ADO.CONNECT_CTA }));
+    await userEvent.click(screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN }));
     expect(onAdoFallbackClick).toHaveBeenCalledTimes(1);
   });
 

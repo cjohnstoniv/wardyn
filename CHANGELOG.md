@@ -26,6 +26,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `EXPIRED`; an approval that beats that call is honoured rather than denied. Only a
   `tool_call` row the sandbox itself raised can be withdrawn this way — an Azure DevOps
   escalation stays the operator's — and the audit row names the run's agent.
+- **Signing in no longer opens a blank tab (#628).** Starting the AWS or Claude sign-in used to open
+  an about:blank tab straight away, and on a first launch the person sat on it while the sign-in
+  image downloaded. The dialog now stays put and shows three steps: starting the sign-in sandbox,
+  downloading the sign-in image ("Can take a few minutes the first time." — no runner reports pull
+  progress, so there is no percentage; the step lights while the runner reports `Pulling`, which only
+  the Docker runner does — on Kubernetes the kubelet reports `ContainerCreating` through a pull, so the
+  first step stays lit), and waiting for the provider. Once the provider's page is
+  ready, an "Open AWS sign-in" (or "Open Claude sign-in") button opens it, with the device code
+  beside it and a copy-link fallback; the tab still has its `opener` severed. A failed image pull
+  shows the server's own reason and a Retry that starts a fresh sandbox. The Azure DevOps
+  popup-blocked fallback now reads "Your browser blocked the connect popup." with an "Open Azure
+  DevOps sign-in" button.
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.

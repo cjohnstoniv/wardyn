@@ -28,7 +28,7 @@ import {
   ShieldCheck,
   Terminal,
 } from "lucide-react";
-import { Button } from "../../ui/button";
+import { Button, buttonVariants } from "../../ui/button";
 import {
   Chip,
   DoneChip,
@@ -458,10 +458,10 @@ export function MemberGettingStarted() {
                         href={adoBlockedUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="font-medium text-info hover:underline"
+                        className={buttonVariants({ variant: "outline", size: "sm" })}
                         onClick={handleAdoFallbackClick}
                       >
-                        {ADO.CONNECT_ADO}
+                        {ADO.CONNECT_POPUP_OPEN}
                       </a>
                     </p>
                   )}
