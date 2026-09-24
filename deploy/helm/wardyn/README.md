@@ -355,8 +355,8 @@ allowlist kept as a safety net:
 ```yaml
 env:
   WARDYN_OIDC_ISSUER: "https://login.microsoftonline.com/<tenant-id>/v2.0"
-  WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=member"
-  WARDYN_OIDC_DEFAULT_ROLE: "member"          # unmatched users land here instead of being denied
+  WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=user"
+  WARDYN_OIDC_DEFAULT_ROLE: "user"          # unmatched users land here instead of being denied
   WARDYN_OIDC_OPERATOR_EMAILS: "platform@corp.example"  # legacy admin safety net, still honored
 
 extraEnv:
@@ -687,13 +687,12 @@ mount point `/home/agent/drive`, and hide the read-only `~/.claude` bind the sub
 uses. `readOnlyRootFilesystem` would close the residual and is deliberately not set, because the
 agent legitimately writes those paths.
 
-**Risk carried by the cache volume specifically:** an `emptyDir` mounted at `/home/agent/.cache`
-shadows the full image's pre-created, agent-owned `/home/agent/.cache/go-build`
-(`deploy/images/full/Dockerfile`) with a fresh directory whose ownership the kubelet decides —
-`FSGroup` is only applied to a pod that has a drive attached (`internal/runner/k8s/drives.go`), so
-a run with `disk_mib` set and no drive can get a root-owned mount the uid-1000 agent cannot write
-into. Only `test/conformance`'s `ephemeralFillTargets` "Cache" target, run against a real cluster,
-catches this — a fake-clientset unit test cannot see real `emptyDir` ownership.
+**The cache volume starts cold:** an `emptyDir` mounted at `/home/agent/.cache` shadows the full
+image's pre-created `/home/agent/.cache/go-build` (`deploy/images/full/Dockerfile`), so the Go
+build cache is rebuilt from empty. The mount is writable without `FSGroup`: the kubelet creates an
+`emptyDir` root-owned but `0777`, the same mode `/tmp` and `/home/agent/work` have been written
+through by the uid-1000 agent since 0.7.5. `test/conformance`'s `ephemeralFillTargets` "Cache"
+target writes it against a real cluster.
 
 Each volume AND their sum are capped at `disk_mib`: the kubelet counts `emptyDir` usage toward the
 pod's `ephemeral-storage` total as well, so a pod with the run's shape writing 40Mi into each

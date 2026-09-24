@@ -10,6 +10,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -76,10 +77,11 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 		return false
 	}
 	ctx := r.Context()
+	rctx, row := secretstore.SiteAudited(ctx)
 	fail := func(status int, reason, body string) bool {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", bedrockAPIKeySecret, "failure",
-			mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
+			mustJSON(withStoreRow(map[string]any{"reason": reason, "grant_id": grantID}, row))))
 		writeError(w, status, body)
 		return true
 	}
@@ -105,7 +107,7 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 	if bedrockBearerSnapshotOf(scope) != recorded || !scope.readsBearer() {
 		return fail(http.StatusForbidden, "scope_changed", credentialReauthScopeChangedRefusal)
 	}
-	secret := s.bedrockBearerFor(ctx, scope)
+	secret := s.bedrockBearerFor(rctx, scope)
 	if len(secret) == 0 {
 		if scope.perUser {
 			return fail(http.StatusFailedDependency, "per_user_bearer_absent", bedrockBearerNamespaceNotOwn)
@@ -124,10 +126,10 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 	// under shared those differ, and the trail must name the one billed.
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", bedrockAPIKeySecret, "success",
-		mustJSON(map[string]any{
+		mustJSON(withStoreRow(map[string]any{
 			"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI,
 			"owner": recorded.OwnerSubject, "credential_source": recorded.CredentialSource,
-		})))
+		}, row))))
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host:   minted.Injection.Host,
 		Header: minted.Injection.Header,

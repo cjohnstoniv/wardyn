@@ -212,7 +212,7 @@ func validateOperatorPosture(oidcConfigured bool, operatorEmails []string, allow
 	return errors.New("refusing to start: OIDC SSO is configured but the operator allowlist is empty — " +
 		"EVERY human the IdP signs in would be admin-equivalent (rewrite policies/workspaces/site-config, connect the shared harness credential, " +
 		"write and delete secrets, decide approvals, and open an interactive shell in any running sandbox) — absent a role map — " +
-		"set WARDYN_OIDC_OPERATOR_EMAILS to the humans who may do that — everyone else becomes a member who reads their OWN runs and can launch runs — " +
+		"set WARDYN_OIDC_OPERATOR_EMAILS to the humans who may do that — everyone else becomes a user who reads their OWN runs and can launch runs — " +
 		"or set WARDYN_OIDC_ROLE_MAP for claim-based roles instead, " +
 		"or explicitly set WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true to override")
 }

@@ -132,6 +132,30 @@ invitation, not an embarrassment.
    classic branch protection (a different API) does not surface in the rules
    endpoint this reads, so a repo protected that way still grades unconfined.
 
+   **Push content, not only push location, since 0.8.** Branch-namespace
+   confinement bounds WHERE a push lands; it says nothing about WHAT the push
+   changes there. `push_rules` (`deny_paths`, `max_inspect_pack_mib`) closes
+   that gap on both brokered lanes — `github_token` and `git_pat` alike,
+   read independently of either lane's branch-namespace switch — by buffering
+   the receive-pack request up to an inspection ceiling and refusing a push
+   that introduces a denied path, is too large to inspect, or cannot be read
+   from its own bytes (`internal/egress/proxy/push_rules.go`; rule sources
+   `brokered:git:push-rules`, `brokered:git:push-too-large`,
+   `brokered:git:push-uninspectable`; see `docs/POLICIES.md`). No new
+   invariant: this is invariant 5, "fail closed; never overclaim"
+   (`ARCHITECTURE.md`), applied to a request the broker cannot fully read —
+   an uninspectable push is refused rather than forwarded on the assumption
+   it is clean — and it keeps the broker's own "no widening" and "fail
+   closed" invariants (`internal/broker/broker.go`) intact by adding a
+   proxy-side gate ahead of forwarding rather than changing what is minted.
+   It decides what reaches the forge, not whether a credential is issued,
+   because the push's own discovery request has already minted it.
+   Same structural bound as branch-namespace confinement: unenforceable on an
+   `ssh_key` push (no receive-pack parser sits on git's SSH transport), and
+   enforced on `git_pat` regardless of `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`
+   — that switch is WHERE-only and never gates WHAT a `git_pat` push may
+   touch.
+
 5. **Audit integrity** — the append-only control-plane log, eBPF ground truth,
    PTY recordings. Tampering defeats incident response. Append-only protects what
    IS written; it does not yet guarantee every control-plane action produces an

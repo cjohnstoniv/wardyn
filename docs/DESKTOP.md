@@ -213,7 +213,7 @@ the developer is a **member**.
 | Setting | a′ (default) | m′ (member mode) |
 |---|---|---|
 | `WARDYN_LOCAL_MODE` | `true` — loopback callers are always admins | **`false`**, mandatory. Local mode bypasses public-API auth and would hand the developer admin outright |
-| OIDC | absent | **required** — the org IdP authenticates the developer and `deriveRole` maps them to `member`. `WARDYN_OIDC_ROLE_MAP` / `WARDYN_OIDC_OPERATOR_EMAILS` are MDM-set, and the developer is on neither |
+| OIDC | absent | **required** — the org IdP authenticates the developer and `deriveRole` maps them to `user`. `WARDYN_OIDC_ROLE_MAP` / `WARDYN_OIDC_OPERATOR_EMAILS` are MDM-set, and the developer is on neither |
 | `WARDYN_ADMIN_TOKEN` | not used | a **process credential** MDM injects and the developer does not read. It is never surfaced to the browser UI |
 | `WARDYN_USER_DESKTOP` | unset | **`true`** — asserts the above rather than enforcing anything new |
 
@@ -383,7 +383,7 @@ answer for anything that decides what this daemon *is* rather than what the org
 
 **On `a′`, MDM overwrites what the developer changed in the console.** The
 developer is the admin on this tier, so they can edit the provider policy at
-`/providers` — and `wardyn-desktop.sh` re-applies `/etc/wardyn/site-config.json`
+`/admin/providers` — and `wardyn-desktop.sh` re-applies `/etc/wardyn/site-config.json`
 on **every converge tick** (every 5 minutes; the file is a full-document replace,
 so re-applying the same file is a safe no-op rather than accumulation). If the
 MDM file NAMES `workspace_providers` or `agent_providers`, the org's copy wins

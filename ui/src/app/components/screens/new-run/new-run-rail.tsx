@@ -527,7 +527,7 @@ export function RunRail({
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* The action that fills the gap rides next to the
                   need, not only in a footer. Links are --info, never teal. */}
-              <Link to="/settings" className="font-medium text-info hover:underline">
+              <Link to="/account" className="font-medium text-info hover:underline">
                 {RAIL_MODEL_ACCESS.NO_PROVIDER_CTA}
               </Link>
             </p>

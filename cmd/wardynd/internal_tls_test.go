@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,16 +19,18 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
-// mapKeyStore is the pg store's contract in memory: absent => pgx.ErrNoRows.
+// mapKeyStore is the pg store's contract in memory: absent => secretstore.ErrNotFound
+// joined with pgx.ErrNoRows.
 type mapKeyStore map[string][]byte
 
 func (m mapKeyStore) Get(_ context.Context, name string) ([]byte, error) {
 	if v, ok := m[name]; ok {
 		return v, nil
 	}
-	return nil, pgx.ErrNoRows
+	return nil, errors.Join(secretstore.ErrNotFound, pgx.ErrNoRows)
 }
 
 func (m mapKeyStore) Put(_ context.Context, name string, v []byte) error {

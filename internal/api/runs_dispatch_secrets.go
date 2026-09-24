@@ -21,6 +21,7 @@ package api
 import (
 	"context"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -94,7 +95,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 			reserved = append(reserved, name)
 			continue
 		}
-		val, err := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(ctx, name)
+		val, err := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), name)
 		if err != nil || len(val) == 0 {
 			missing++
 			continue
@@ -188,7 +189,7 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 			// runIdentitySubject(run.CreatedBy): same owner-then-operator-fallback
 			// rule as resolveLLMInspectionSecrets above, through the same
 			// chokepoint.
-			val, gerr := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(ctx, secretName)
+			val, gerr := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), secretName)
 			if gerr != nil || len(val) == 0 {
 				skip = "secret could not be resolved"
 			} else {

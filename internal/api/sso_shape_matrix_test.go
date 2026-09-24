@@ -43,8 +43,8 @@ func TestSSOShapeRoleMatrix(t *testing.T) {
 	cast := ssoShapeCast{
 		admin:   ssoPersona{name: "admin", role: oidc.RoleAdmin, operator: true, security: true, cookie: ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)},
 		sec:     ssoPersona{name: "security_admin", role: oidc.RoleSecurityAdmin, security: true, cookie: ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)},
-		member:  ssoPersona{name: "member", role: oidc.RoleMember, cookie: ssoSession(t, ssoShapeMemberSub, "member@corp.example", oidc.RoleMember)},
-		member2: ssoPersona{name: "member2", role: oidc.RoleMember, cookie: ssoSession(t, "sub-member2", "member2@corp.example", oidc.RoleMember)},
+		member:  ssoPersona{name: "member", role: oidc.RoleUser, cookie: ssoSession(t, ssoShapeMemberSub, "member@corp.example", oidc.RoleUser)},
+		member2: ssoPersona{name: "member2", role: oidc.RoleUser, cookie: ssoSession(t, "sub-member2", "member2@corp.example", oidc.RoleUser)},
 	}
 	for _, sh := range shapes {
 		t.Run(sh.name, func(t *testing.T) {

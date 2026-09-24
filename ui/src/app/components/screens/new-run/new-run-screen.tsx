@@ -566,12 +566,20 @@ export function NewRunScreen() {
                       {/* Rulebook §9: an empty picker carries the action that
                           fills it. With no stored policies this lane was a
                           dropdown with nothing in it and no way out. */}
+                      {/* M-1b: Policies is Admin view only (/admin/policies),
+                          so the door renders only for the tier that authors
+                          them. */}
                       {savedPolicies.length === 0 && (
                         <p className="text-xs text-muted-foreground">
-                          No saved policies yet ·{" "}
-                          <Link to="/policies" className="font-medium text-info hover:underline">
-                            New policy →
-                          </Link>
+                          No saved policies yet
+                          {operator && (
+                            <>
+                              {" "}·{" "}
+                              <Link to="/admin/policies" className="font-medium text-info hover:underline">
+                                New policy →
+                              </Link>
+                            </>
+                          )}
                         </p>
                       )}
                     </div>
