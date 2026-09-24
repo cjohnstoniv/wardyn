@@ -115,10 +115,16 @@ func probeSignIn(ctx context.Context, t *testing.T, tenant, clientID, scope stri
 	if code == "" {
 		Fatalf(t, "sign-in did not return a code")
 	}
-	resp, err := http.PostForm(authority+"token", url.Values{
+	form := url.Values{
 		"client_id": {clientID}, "grant_type": {"authorization_code"}, "code": {code},
 		"redirect_uri": {redirect}, "code_verifier": {verifier}, "scope": {scope},
-	})
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authority+"token", strings.NewReader(form.Encode()))
+	if err != nil {
+		Fatalf(t, "token redeem: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		Fatalf(t, "token redeem: %v", err)
 	}

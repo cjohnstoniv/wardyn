@@ -30,8 +30,12 @@ import (
 //  4. asks to create a repository — repo_admin, above the ceiling — and must
 //     get 403 without any request being raised.
 //
+// The branch is inside the run's own namespace, refs/heads/wardyn/<run-id>/:
+// the git broker counts every other ref as protected, so a push there asks for
+// policy_bypass, not code_write (adoRunRefProtected, internal/egress/proxy).
+//
 // It writes to the repository (one scratch branch, deleted at step 3), so it
-// has its own gate on top of LL2's.
+// has its own gate, WARDYN_LIVE_ADO_WRITE, instead of LL2's.
 func TestLiveADOBounded(t *testing.T) {
 	Require(t, EnvADOWrite, EnvBaseURL, EnvIdentities, EnvADOOrg, EnvADOProject, EnvADORepo)
 	ids, err := LoadIdentities()
@@ -45,7 +49,6 @@ func TestLiveADOBounded(t *testing.T) {
 	org, project, repo := os.Getenv(EnvADOOrg), os.Getenv(EnvADOProject), os.Getenv(EnvADORepo)
 	projectURL := "https://dev.azure.com/" + org + "/" + adoscope.EscapeName(project)
 	repoURL := projectURL + "/_git/" + adoscope.EscapeName(repo)
-	branch := fmt.Sprintf("wardyn-live/ll2b-%d", time.Now().Unix())
 
 	// Each failed step exits with its own code, named in the failure below.
 	task := fmt.Sprintf(`set -u
@@ -55,20 +58,21 @@ echo "rest-read=$code"; test "$code" = 200 || exit 11
 git clone -q %[2]s /tmp/ll2b || exit 12
 cd /tmp/ll2b
 git -c user.name=wardyn-live -c user.email=wardyn-live@invalid commit -q --allow-empty -m "wardyn live LL2b" || exit 13
-if git push -q origin HEAD:refs/heads/%[3]s; then echo push-before-approval=ALLOWED; exit 14; fi
+ref="refs/heads/wardyn/${WARDYN_RUN_ID}/ll2b"
+if git push -q origin "HEAD:$ref"; then echo push-before-approval=ALLOWED; exit 14; fi
 echo push-before-approval=refused
 i=0
-until git push -q origin HEAD:refs/heads/%[3]s; do
+until git push -q origin "HEAD:$ref"; do
   i=$((i+1)); test $i -ge 60 && exit 15
   sleep 5
 done
 echo push-after-approval=ok
-git push -q origin :refs/heads/%[3]s || exit 16
+git push -q origin ":$ref" || exit 16
 echo branch-deleted=ok
 code=$(curl -sS -o /dev/null -w '%%{http_code}' -X POST -H 'Content-Type: application/json' \
-  -d '{"name":"wardyn-live-must-not-exist"}' %[4]s)
+  -d '{"name":"wardyn-live-must-not-exist"}' %[3]s)
 echo "above-ceiling=$code"; test "$code" = 403 || exit 17
-`, shellQuote(projectURL+"/_apis/git/repositories?api-version=7.1"), shellQuote(repoURL), branch,
+`, shellQuote(projectURL+"/_apis/git/repositories?api-version=7.1"), shellQuote(repoURL),
 		shellQuote(projectURL+"/_apis/git/repositories?api-version=7.1"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
@@ -124,7 +128,7 @@ echo "above-ceiling=$code"; test "$code" = 403 || exit 17
 			"approval (the row's default profile holds code_write, or the lane is not enforcing), 15 push still refused "+
 			"after approval (or never approvable: the member has not consented to vso.code_write, so sign in to Azure "+
 			"DevOps again from Settings), 16 branch delete, 17 repository create not refused (the ceiling holds repo_admin). "+
-			"A branch %s may be left behind on exit 16 (docs/LIVE-TESTS.md, LL2b)", run.ID, run.State, run.FailureHint, branch)
+			"Branch refs/heads/wardyn/%s/ll2b may be left behind on exit 16 (docs/LIVE-TESTS.md, LL2b)", run.ID, run.State, run.FailureHint, run.ID)
 	}
 	if !approved {
 		Fatalf(t, "run %s completed but no code_write request was ever raised", run.ID)

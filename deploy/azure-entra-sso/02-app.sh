@@ -111,14 +111,22 @@ ADO_SCOPES=(vso.analytics vso.build vso.code vso.graph vso.identity vso.memberen
   vso.packaging vso.profile vso.project vso.release vso.securefiles_read vso.serviceendpoint vso.test
   vso.variablegroups_read vso.wiki vso.work vso.code_write)
 if az ad sp show --id "${ADO_API}" >/dev/null 2>&1; then
+  # `az ad app permission add` appends without de-duplicating, so a re-run on
+  # a reused app adds only the scopes the app does not already hold.
+  HELD="$(az ad app show --id "${CLIENT_ID}" \
+    --query "requiredResourceAccess[?resourceAppId=='${ADO_API}'].resourceAccess[].id" -o tsv)"
   ADO_PERMS=()
   for s in "${ADO_SCOPES[@]}"; do
     id="$(az ad sp show --id "${ADO_API}" --query "oauth2PermissionScopes[?value=='${s}'].id | [0]" -o tsv)"
     [[ -n "${id}" && "${id}" != "None" ]] || { echo "Azure DevOps publishes no delegated scope ${s}" >&2; exit 1; }
-    ADO_PERMS+=("${id}=Scope")
+    grep -qx "${id}" <<<"${HELD}" || ADO_PERMS+=("${id}=Scope")
   done
-  echo "==> az ad app permission add (Azure DevOps: ${ADO_SCOPES[*]})"
-  az ad app permission add --id "${CLIENT_ID}" --api "${ADO_API}" --api-permissions "${ADO_PERMS[@]}"
+  if ((${#ADO_PERMS[@]})); then
+    echo "==> az ad app permission add (Azure DevOps: ${#ADO_PERMS[@]} of ${#ADO_SCOPES[@]} scopes not yet held)"
+    az ad app permission add --id "${CLIENT_ID}" --api "${ADO_API}" --api-permissions "${ADO_PERMS[@]}"
+  else
+    echo "==> the app already holds every Azure DevOps scope"
+  fi
   echo "    Grant admin consent once (or let each person consent at their first Azure DevOps sign-in):"
   echo "    az ad app permission admin-consent --id ${CLIENT_ID}"
 else
