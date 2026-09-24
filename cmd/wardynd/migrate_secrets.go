@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/azurekv"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
@@ -62,7 +63,14 @@ func secretStoreMaintenance(f *bootFlags) error {
 	if fan != nil {
 		defer func() { _ = fan.Close() }()
 	}
-	s, err := openSecretStore(ctx, pool, f)
+	// The store bare (newSecretStore), not audited: neither mode reads through
+	// Get. Migrate's reads are recorded one by one (migrateMode), and
+	// Reconcile reads store metadata only, never a value.
+	ext, err := buildExternalStore(ctx, f.vault, f.azure, *f.trustedCAFile)
+	if err != nil {
+		return err
+	}
+	s, err := newSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, ext, *f.vault.timeout, rec)
 	if err != nil {
 		return err
 	}
@@ -86,9 +94,12 @@ func migrateMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recorde
 	default:
 		return fmt.Errorf("refusing to migrate: -to must be %q, %q or %q, not %q", vaultkv.Name, azurekv.Name, secretstorepg.MigrateLocal, to)
 	}
-	res, err := ps.Migrate(ctx, to, func(owner, name string) {
+	// Migrate opens every value it moves without a Get, so its context carries
+	// the purpose the read guard requires, and each read is recorded here.
+	mctx := secretstore.WithPurpose(ctx, secretstore.PurposeMigrate)
+	res, err := ps.Migrate(mctx, to, func(owner, name string) {
 		// One secret.read per value read on the way (design §2.3a.9).
-		emitMaintenanceAudit(ctx, rec, migrateActor, "secret.read", name, "success", map[string]any{"purpose": "migrate", "owner": owner, "to": to})
+		emitMaintenanceAudit(ctx, rec, migrateActor, "secret.read", name, "success", map[string]any{"purpose": string(secretstore.PurposeMigrate), "owner": owner, "to": to})
 	})
 	data := map[string]any{"from": from, "to": to, "count": res.Moved}
 	if res.SoftDeleted > 0 {

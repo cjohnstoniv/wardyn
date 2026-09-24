@@ -125,6 +125,7 @@ log them.
 | `WARDYN_DIRECTORY_CLIENT_ID` | string | (unset = reuses `WARDYN_OIDC_CLIENT_ID`) | client id of a **dedicated, least-privilege** app registration for the directory read. The default reuses the OIDC app, which then needs admin-consented Graph **application** permissions — `User.Read.All` + `Group.Read.All` (`Directory.Read.All` works but is broader; add `Application.Read.All` only if App Roles should appear in suggestions). The consent is performed by a **tenant admin in Entra** — Wardyn cannot grant itself any of it. All three `WARDYN_DIRECTORY_TENANT`/`_CLIENT_ID`/`_CLIENT_SECRET` are set together or not at all; a half-configured set is a **boot refusal**, never a silent fallback to the OIDC credentials (flag `-directory-client-id`) |
 | `WARDYN_DIRECTORY_CLIENT_SECRET` 🔒 | string | (unset = reuses `WARDYN_OIDC_CLIENT_SECRET`) | client secret of that dedicated app registration. **`WARDYN_DIRECTORY_PROVIDER=entra` is REFUSED AT BOOT** when neither this nor `WARDYN_OIDC_CLIENT_SECRET` is set: Microsoft Graph needs the client-credentials flow, and a **public** OIDC client (PKCE, no secret — a supported registration shape, see `WARDYN_OIDC_CLIENT_SECRET` above) cannot perform it at all. Same refusal when no OIDC is configured at all (an admin-token or local-mode deployment has no issuer to derive a tenant from). The connector itself can only answer `503` lazily at the first keystroke, so the check lives at boot where it can name what to set (`resolveDirectoryConfig`, `cmd/wardynd/boot_posture.go`) (flag `-directory-client-secret`) |
 | `WARDYN_APPROVAL_EXPIRY_AFTER` | duration | `24h` | PENDING approvals older than this expire (flag `-approval-expiry-after`) |
+| `WARDYN_ENDED_RUN_GRACE` | duration | `168h` (7 days) | how long a run whose end (`ends_at`, from its owner's run limits) has passed keeps its files. At the end the run is stopped and KEPT: its agent container is stopped but not removed, its proxy sidecar is removed so it has no network, its broker credentials are revoked and its pending approvals cancelled. Past the grace it is torn down (`STOPPED`). `0` tears a run down at its end. A substrate that cannot keep a stopped sandbox (Kubernetes) always tears down at the end (flag `-ended-run-grace`) |
 | `WARDYN_APPROVAL_EXPIRY_INTERVAL` | duration | `10m` | sweep interval for stale approvals; 0 disables (flag `-approval-expiry-interval`) |
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |
 | `WARDYN_AUDIT_COALESCE_WINDOW` | duration | `5m` | fold IDENTICAL consecutive `auth.failed` audit rows — same refusing boundary, same `reason`, same path (the peer is deliberately NOT in the key: a caller that rotates its source address would otherwise write one row per request) — into the FIRST row plus one **new** summary row carrying `count`, `peers` (distinct peer IPs, port stripped, saturating at 100), `peer_ips` (those addresses, capped at 100) and `peers_truncated`, `first_seen` and `last_seen`. Never an update of the first row: `audit_events` is append-only and hash-chained, so a summary is always another append. **This is the maximum GAP between two consecutive identical rows, not a cap on how long a streak may run:** the flood it exists for was one row a minute, forever, from a single sidecar retrying a renew the control plane would never grant, which the `auth.failed` rate limiter (1/sec, burst 5) never trips — and which still evicted every real security event out of the console's 1000-row window in minutes. A streak is also closed at 1000 rows, so one summary row can never stand for unbounded volume, and folded rows are counted in `wardyn_auth_failed_suppressed_total` exactly like rate-limited ones. **The summary row pays the `auth.failed` rate limiter too**, exactly like a first row — a streak closes on every key change, so an unmetered summary emit would hand a client alternating two paths one free audit row per two requests; a summary the limiter refuses is dropped and counted in that same series. The same window folds the hybrid device routes' `device.enrol` and `device.audit.ingest` failure rows (`docs/AUDIT-ACTIONS.md`, Devices). `0` disables the folding entirely (one row per refusal, pre-0.7.2 behaviour). See `threatmodel/THREAT-MODEL.md` (flag `-audit-coalesce-window`) |
@@ -471,7 +472,9 @@ that one instead, and the claude-specific screen assertions stand down while the
 host measurement still applies), `WARDYN_E2E_UI_ADDR` (the UI-sandbox
 gateway's second listener on the Playwright e2e backend, default `:8089`;
 `scripts/e2e-backend.sh` — it must differ from `WARDYN_E2E_ADDR`, which the
-daemon itself enforces).
+daemon itself enforces). `WARDYN_E2E_ADDR` is the backend's console listener,
+default `:8088`. `scripts/run-ui-e2e.sh` picks a free port for each of the two
+that is unset, so two runs on one host never share one.
 
 The rest of the Playwright e2e backend's knobs (`scripts/e2e-backend.sh`,
 `scripts/run-ui-e2e.sh`, `scripts/screenshots.sh`, `test/e2e/e2e.sh`) are
@@ -486,7 +489,7 @@ until it landed, ten of these thirteen were undocumented and unenforced in
 | `WARDYN_E2E_DSN` | string (DSN) | `postgres://wardyn:wardyn@localhost:55432/wardyn_e2e?sslmode=disable` | The Postgres DSN `wardynd` itself connects with. `run-ui-e2e.sh`/`screenshots.sh` compose this FOR you from `WARDYN_E2E_PG_HOSTPORT` + the DB name — set it directly only when calling `e2e-backend.sh` outside those wrappers |
 | `WARDYN_E2E_PG_HOSTPORT` | string (`host:port`) | `localhost:55432` | Where `run-ui-e2e.sh`/`screenshots.sh` point `WARDYN_E2E_DSN` at. **The one var to set on a shared box** where `:55432` is held by another job's Postgres — pair it with a `WARDYN_E2E_PG_CONTAINER` that actually publishes that port, or `e2e-backend.sh` refuses the mismatch loudly (F062) |
 | `WARDYN_E2E_PG_CONTAINER` | string | `wardyn-test-pg` | The container `e2e-backend.sh` runs `pg_isready`/`psql`/seed SQL against via `docker exec` — independent of the DSN's host:port, which is why the two must agree |
-| `WARDYN_E2E_PG_DBNAME` | string | `wardyn_e2e` | The e2e database name; `screenshots.sh` overrides it to `wardyn_shots` so its own run never collides with a concurrent `run-ui-e2e.sh` |
+| `WARDYN_E2E_PG_DBNAME` | string | `wardyn_e2e` (`run-ui-e2e.sh`: `wardyn_e2e_<pid>`) | The e2e database name. Unset, `run-ui-e2e.sh` names one after its own PID and drops it on exit, so concurrent runs never share a database; a name you set is kept. `screenshots.sh` overrides it to `wardyn_shots` so its own run never collides with a concurrent `run-ui-e2e.sh` |
 | `WARDYN_E2E_TOKEN` | string | `wardyn-e2e-token` | The fixed admin bearer token the seeded backend accepts, so specs never need a real sign-in flow |
 | `WARDYN_E2E_AGE_KEY` | string | (unset = mint a fresh one) | Pins the backend's secret-store age identity instead of minting one per `up` via `wardynd -gen-age-key`. Leave unset — a committed value would be a publicly-known key, and `wardynd` fail-closed refuses those |
 | `WARDYN_E2E_SKIP_BUILD` | bool | (unset = build) | `1` reuses the already-built `.e2e-bin/wardynd` instead of rebuilding it. `run-ui-e2e.sh`/`screenshots.sh` set this themselves after their own one-time build, so later `e2e-backend.sh up` calls in the same run don't rebuild per spec |
@@ -497,6 +500,7 @@ until it landed, ten of these thirteen were undocumented and unenforced in
 | `WARDYN_E2E_LIVE_BASE_URL` | string (URL) | (unset = hermetic) | `run-ui-e2e.sh` LIVE mode: run specs from `ui/e2e/live/` against an ALREADY-RUNNING external Wardyn at this URL — today the kind SSO cluster (`scripts/kind-sso-walk.sh`, which exports it) — instead of booting and re-seeding the hermetic `-runner none` backend. It also becomes `WARDYN_E2E_BASE_URL`, which is the `live` Playwright project's base URL. Unset (every other caller) leaves the default path byte-identical: the hermetic backend is built, brought up per spec and torn down as before. Every live spec ALSO self-skips without `WARDYN_TEST_K8S=1` |
 | `WARDYN_E2E_ALLOW_ALL_SKIPPED` | string (space-separated spec basenames) | (unset = none allowlisted) | `run-ui-e2e.sh` only (F061): names spec files allowed to report zero executed tests (every test in the file skipped) without failing the gate. Empty by default — a spec that skips its whole file is a red flag until named here on purpose |
 | `WARDYN_SCREENSHOTS` | bool | (unset = skip) | Set by `screenshots.sh` itself (never by hand): gates `ui/e2e/screenshots/docs.spec.ts` so a bare `pnpm e2e` never regenerates the doc PNGs — only `make screenshots` does |
+| `WARDYN_LOG_TAG` | string | `==>` | Console prefix for `scripts/lib/common.sh`'s `log()`. Set by the sourcing script itself (`e2e-backend.sh` → `[e2e]`, `run-ui-e2e.sh` → `[e2e-ui]`, `screenshots.sh` → `[screenshots]`), never by hand |
 
 The kind quickstart (`deploy/kind/quickstart.sh`) and the kind SSO walk
 (`scripts/kind-sso-walk.sh`, `deploy/kind/sso/overlay.sh` — see OPERATIONS.md
@@ -559,6 +563,8 @@ repository.
 |---|---|---|---|
 | `WARDYN_LIVE_ENTRA` | bool | (unset = skip) | Gate for LL1, the Entra roles suite (Playwright) |
 | `WARDYN_LIVE_ADO` | bool | (unset = skip) | Gate for LL2, the Azure DevOps suite (Go) |
+| `WARDYN_LIVE_ADO_WRITE` | bool | (unset = skip) | Gate for LL2b, bounded access: pushes and deletes one scratch branch (Go) |
+| `WARDYN_LIVE_ADO_PAT_PROBE` | bool | (unset = skip) | Gate for LL2c, the personal access token mint probe (Go, needs a browser sign-in) |
 | `WARDYN_LIVE_BEDROCK` | bool | (unset = skip) | Gate for LL3, the Bedrock suite (Go) |
 | `WARDYN_LIVE_AWS_SSO` | bool | (unset = skip) | Gate for LL4, the AWS SSO through Entra suite (Playwright) |
 | `WARDYN_LIVE_BASE_URL` | URL | (none) | The running Wardyn console the suites sign in to |
@@ -568,6 +574,9 @@ repository.
 | `WARDYN_LIVE_ADO_REPO` | string | (none) | Repository the member can read |
 | `WARDYN_LIVE_ADO_SPACED_PROJECT` | string | `Payments Platform` | Project whose name carries a space, for LL2's second run |
 | `WARDYN_LIVE_ADO_SPACED_REPO` | string | `Card Auth (v2).Service` | Repository in that project, for LL2's second run |
+| `WARDYN_LIVE_ADO_PAT_PROBE_TENANT_ID` | string | (none) | Entra tenant of the LL2c probe app |
+| `WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID` | string | (none) | The LL2c probe's own throwaway public-client app registration, never Wardyn's app |
+| `WARDYN_LIVE_ADO_PAT_PROBE_SCOPE` | string | `499b84ac-1321-427f-aa17-267ca6975798/vso.pats` | Scope LL2c signs in for; `…/user_impersonation` is the other one worth measuring |
 | `WARDYN_LIVE_AWS_SSO_START_URL` | URL | (none) | IAM Identity Center start URL (LL4) |
 | `WARDYN_LIVE_AWS_SSO_REGION` | string | (none) | IAM Identity Center region (LL3, LL4) |
 | `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` | path | (none) | The AWS CLI `sso login` cache file for the member-account profile (LL3). An expired sign-in is a skip |

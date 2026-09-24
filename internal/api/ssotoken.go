@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -189,7 +190,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// member's own login sandbox could PUT over its own genuine capture as often
 	// as it liked — the exact overwrite this guard exists to refuse, reopened by
 	// reading the wrong namespace.
-	if prev, found, rerr := s.readAWSSSOBlob(r.Context(), scope); rerr != nil {
+	if prev, found, rerr := s.readAWSSSOBlob(secretstore.WithPurpose(r.Context(), secretstore.PurposeStatus), scope); rerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
 			loggedMsg(r.Context(), "read existing aws sso credential", rerr), &scope)
 		return

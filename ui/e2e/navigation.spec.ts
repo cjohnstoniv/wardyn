@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, mockMemberRole, navTo, sidebarLink, type NavLabel } from "./fixtures";
+import { test, expect, gotoConsole, mockMemberRole, navTo, navToRoute, sidebarLink, type NavLabel } from "./fixtures";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { HEALTH_POLL_MS } from "../src/app/App";
@@ -14,9 +14,9 @@ import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 // The shell (app-shell.tsx) renders a FLAT eight-item sidebar — Runs, Approvals,
 // Workspaces, Policies, Permissions, Secrets, Audit, Recordings — of react-router
 // <NavLink>s (role="link"), with no group headings, plus Settings last under a
-// divider (#217 — it also keeps its long-standing account-menu entry, so
-// existing muscle memory doesn't break). SSH keys and Demos remain account-menu
-// only.
+// divider, admin only (#217, #460 Q460-1 — it also keeps its long-standing
+// account-menu entry for every role, so existing muscle memory doesn't
+// break). SSH keys and Demos remain account-menu only.
 // The top bar carries a "Toggle theme" button (aria-label) and no posture
 // chips (0.7.3 F6 removed the Fence/NetworkPolicy chips — posture lives on
 // the setup Environment step). Each screen supplies its own <h1> via
@@ -174,6 +174,22 @@ test.describe("navigation + shell", () => {
     await expect(page.getByText(/This host, what runs your agents/i)).toBeVisible();
   });
 
+  // #460 (Q460-1): Settings joined the sidebar (#217) as an ADMIN-ONLY entry
+  // — a member's own three-item nav (Runs/Approvals/Workspaces) stays exactly
+  // as small as it was. The route and the account-menu entry are unchanged
+  // for a member (Q460-2, "Members see no change" is about the SIDEBAR only).
+  // M-1b: /settings is deleted — a member's route is now /account (an admin's
+  // is /admin/settings, pinned by the M-1b tests below).
+  test("#460 — Settings is in the sidebar for an admin, not for a member", async ({ page }) => {
+    await mockMemberRole(page);
+    await gotoConsole(page);
+    await expect(sidebarLink(page, "Settings")).toHaveCount(0);
+    // Still reachable by route and from the account menu — only the sidebar
+    // entry is gone.
+    await navToRoute(page, "/account");
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+  });
+
   // M-1b — /settings is deleted, and the two Settings doors split by role: an
   // admin tier lands on the Admin view's /admin/settings, a user on their own
   // /account. Both mount the same screen today, so the h1 alone can't tell
@@ -189,19 +205,19 @@ test.describe("navigation + shell", () => {
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
   });
 
-  test("M-1b — as a user, the sidebar and account-menu Settings both land on /account, never the refusal", async ({ page }) => {
+  // M-1b — #460 above already pins that a member has no sidebar Settings
+  // entry at all, so this covers the account-menu-only door open to a
+  // member: /account, never the refusal.
+  test("M-1b — as a user, the account-menu Settings lands on /account, never the refusal", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
-    await navTo(page, "Settings");
-    await expect(page).toHaveURL(/\/account$/);
-    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toHaveCount(0);
-    await navTo(page, "Runs");
     await page.locator("header").getByRole("button").last().click();
     await page.getByRole("menu").getByRole("menuitem", { name: "Settings" }).click();
     await expect(page).toHaveURL(/\/account$/);
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
     await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toHaveCount(0);
   });
+
 
   // B1 — the sidebar itself is the surface the fail-open bug widened: a
   // settled-but-unknown /me used to render the FULL admin nav (every item in

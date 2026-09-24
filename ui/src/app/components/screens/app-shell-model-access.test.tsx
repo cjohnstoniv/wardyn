@@ -18,6 +18,7 @@ import { MODEL_ACCESS_BANNER } from "../wardyn/model-access-copy";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { baseStatus } from "../../lib/test-fixtures";
+import { aheadByHours } from "../../lib/test-clock";
 
 // The model-access strip's place in the stack.
 //
@@ -86,7 +87,7 @@ describe("AppShell (the model-access strip)", () => {
     role: "user",
     email: "alice@corp.example",
     // Inside SESSION_WARN_MS, so the session strip is on screen too.
-    session_expires_at: new Date(Date.now() + 60_000).toISOString(),
+    session_expires_at: aheadByHours(1 / 60), // 1 minute
   };
 
   it("renders BELOW the session-expiry banner", async () => {

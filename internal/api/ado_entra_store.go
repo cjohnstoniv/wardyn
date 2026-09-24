@@ -386,7 +386,7 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	unlock := s.adoEntra.lock(owner, cfg.RowID)
 	defer unlock()
 
-	blob, found, err := s.readADOEntraBlob(ctx, owner, cfg.RowID)
+	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, cfg.RowID)
 	if err != nil {
 		return ADOEntraAccess{}, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
 	}

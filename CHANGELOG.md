@@ -117,6 +117,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `WARDYN_OIDC_ROLE_MAP`, or `WARDYN_OIDC_DEFAULT_ROLE=member`, still boots and signs those
   people in as `user` (Standard user), with one boot warning per entry; that alias is removed in
   0.9. `POST /access/mappings` accepts `user` only.
+- **CI does less per pull request (#932).** The three Go tag-set suites and lint run as parallel
+  `go (…)` legs, and the required `build` check unions their coverage profiles (`make cover-union`).
+  A docs-only or ui-only pull request skips the conformance, Postgres, envbuild and Helm work, and
+  a docs-only one skips `ui-e2e` too. A docs-only change still runs the Go packages whose guard
+  tests read the docs, with plain `go test` (no race detector, no coverage union).
+  Required checks still report success when their steps are skipped. Three image builds reuse
+  main's Docker layer cache (docs/CI.md, "Incremental CI").
 - **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
   is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
   set; an admin list alone reads ok. While it warns, every admin also sees a banner above every
@@ -152,6 +159,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The Azure DevOps per-user setup guide moved from `docs/adoption/azure-devops-entra.md` (a
   point-in-time field report location) to `docs/AZURE-DEVOPS.md`, indexed in `docs/README.md`
   alongside a new `docs/LIVE-TESTS.md` row, and gained a request-flow sequence diagram (#465).
+- **`make ci` no longer runs the Go tree six times (#467).** The three `test-report` suites
+  (tagless, `-tags docker`, `-tags k8s`) now run under `-race -covermode=atomic`, so coverage and
+  race detection ride in one pass per tag set instead of two — `test-race` is kept as a local alias
+  for `cover-check`, and `build-docker`/`build-k8s` are dropped from `ci:` since `cover-check`'s
+  suites already compile and test those tag sets. `run-e2e-subscription.sh`'s teardown now kills the
+  process bound to its own port instead of `pkill -f 'bin/wardynd'`, which used to kill every
+  wardynd on the host including a developer's own daemon on another port. `test-race-pg` is now in
+  `.PHONY`. Five scripts (`e2e-backend.sh`, `run-ui-e2e.sh`, `screenshots.sh`, `run-e2e-byoi.sh`,
+  `stage-agent-binary.sh`) drop a locally re-declared `log()`/`die()` that only differed from
+  `scripts/lib/common.sh`'s default by a tag or matched it exactly; the new `WARDYN_LOG_TAG` env var
+  lets a caller set the prefix without re-declaring the function. (The kind SSO walk rename to
+  `walk` and the `test/e2e/live` → `test/e2e/tasks` orchestrator rename from the same issue are
+  deferred — see the PR description.)
 - **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
   `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
   `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
@@ -166,9 +186,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
   this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
   revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
   already detached from itself.
+- **Two UI e2e runs on one host no longer collide (#210, in part).** Left unset,
+  `scripts/run-ui-e2e.sh` now picks free ports for its backend instead of `:8088`/`:8089`, and
+  names its database `wardyn_e2e_<pid>`, which it drops on exit. `scripts/run-e2e-subscription.sh`
+  stops only the `wardynd` holding its own port, where it used to kill every `wardynd` on the
+  host. `make lint` gains `scripts/check-fixture-dates.sh`, which fails a test file that gains a
+  literal date.
 
 ### Added
 
+- **An admin editor with unsaved work now guards against losing it, and Settings joins the
+  sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
+  its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away
+  in-app opens a "Leave without saving?" confirm (closing or reloading the tab triggers the
+  browser's own `beforeunload` prompt instead), shared via one hook
+  (`ui/src/app/lib/use-unsaved-guard.tsx`) and one registry (`ui/src/app/lib/unsaved-registry.ts`).
+  The 412 save-conflict banner (`saved-elsewhere-banner.tsx`) now reads "Someone else saved this
+  first" and its "Copy my changes" puts the WHOLE document on the clipboard, not just the changed
+  fields, with a select-the-text fallback if the clipboard write fails. Settings joins the sidebar
+  as a LAST, admin-only entry under a hairline divider — the account menu keeps its own entry too,
+  for every role.
 - **Migration-numbering collision gates (#667).** `make lint` now runs
   `scripts/check-migration-numbers.sh`: a new migration file must use a numeric
   prefix greater than every prefix already on the branch it targets
@@ -210,7 +247,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `expires_at` = min(requested_at + the run's wait, the run's end), and the approval sweep expires a
   request at that time as well as at the deployment cutoff. Migration
   `0072_agent_runs_run_limits` adds the four `agent_runs` columns; zero limits keep today's
-  behaviour. Nothing yet stops a run at its end or lets a user change it (#568, #569).
+  behaviour. Nothing yet lets a user change the end or the wait (#569).
+- **A run stops at its end and is kept (#568).** When a run's `ends_at` passes, it is stopped and
+  kept: its pending approvals are cancelled (`run_ended`), its broker credentials revoked, its agent
+  container stopped but not removed, and its proxy sidecar removed, so it has no network. It stays
+  `RUNNING` (and holds its concurrent-run slot) with `lost_at`/`lost_reason: "ended"` on the wire
+  until `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` = tear down at the end) runs out or someone
+  kills it; then it is torn down as `STOPPED`. A substrate that cannot keep a stopped sandbox
+  (Kubernetes), or an end that fails, tears the run down at its end instead, including when the
+  daemon restarts part-way through the end. Attaching to an ended run, or minting an attach ticket
+  for one, answers 409. `run.ending_soon` is audited 24 hours (for runs over two days), 1 hour and
+  10 minutes before the end; `run.ended` and `run.ended.expired` record the end and the grace running
+  out. Migration `0073_agent_runs_lease` adds `lost_at`, `lost_reason`, `ending_soon_for` and
+  `ending_soon_sec`.
 - **Console view routing: the Admin view lives under `/admin/*` (#632).** Every admin screen is
   also mounted at `/admin/…`, and `/account` opens today's Settings. A user who opens an
   Admin-view page gets a refusal page instead of the screen; an SSO admin in the User view is
@@ -270,6 +319,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   points to, and is audited (`secret.write` failure, reason `row`), for Wardyn's own writes (a
   captured or refreshed sign-in, a pasted harness credential) as for the API's. Tested against a fake Key
   Vault; not yet run against a live one.
+- **Every read of a stored secret is now audited, once (#647).** Before, only the injection
+  sinks recorded `secret.read`; boot-key reads, the GitHub App and git PAT/SSH key reads at mint,
+  resident secrets placed at dispatch, and every status check that decrypts a captured sign-in or
+  the managed subscription token left no row. wardynd now wraps its secret store in one decorator that
+  records a `secret.read` for each read, carrying why it happened (`purpose`: `boot`,
+  `broker-mint`, `dispatch`, `managed-token`, `migrate`, `sso-refresh`, `ado-refresh`, `status`),
+  whose namespace it was made for, the store, and the row it opened (`ref`, `row_owner`). The
+  injection sinks keep their own row, with its grant and jti, and now name the stored row too; the
+  decorator stays silent for those reads, so no read is counted twice. A read that finds nothing
+  records nothing, and a refused row is a `failure` without the store's error text. The first
+  0.8 boot records one `migrate` read per legacy row it converts. A read in store mode names the
+  store (`vaultkv` or `azurekv`). A guard type-checks every read site, the boot conversion's and
+  `wardynd -migrate-secrets`' bulk reads included, and fails the build on one that says neither
+  why it reads nor that it records the read itself, following the context the read actually
+  receives; it also fails on a new path to a stored value inside the store that it does not check; a read that still reaches the store
+  with no purpose is refused and recorded as an `unmarked` failure. The row's owner, the read's own
+  owner, and ref are all cut to 512 bytes and stripped of control characters before they are
+  recorded, since a database writer controls them. Deployments that poll setup status often will
+  see more `secret.read` rows: each status check that decrypts a captured sign-in is now one.
 - **Store mode: credentials can live in your organisation's Vault, and Wardyn holds no key
   (#644).** `WARDYN_SECRET_STORE=vaultkv` writes every stored credential to a Vault KV v2 engine
   (OpenBao is a supported endpoint) and keeps only a pointer row in Postgres (`enc_version` 2, no

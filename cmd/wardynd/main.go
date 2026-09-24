@@ -201,10 +201,11 @@ func run() error {
 	}
 
 	// Secret store (pluggable seam; default "pg" = envelope-encrypted Postgres
-	// rows). Returned only after its v0 rows are converted, so the boot-key
-	// reads below never see one. rootCtx, not bootCtx: the conversion is one
+	// rows), wrapped so every read is audited once (secretstore.Audited).
+	// Returned only after its v0 rows are converted, so the boot-key reads
+	// below never see one. rootCtx, not bootCtx: the conversion is one
 	// all-or-nothing transaction over the whole table.
-	secrets, err := openSecretStore(rootCtx, pool, f)
+	secrets, err := openSecretStore(rootCtx, pool, f, maskedRec)
 	if err != nil {
 		return err
 	}
@@ -382,6 +383,7 @@ func run() error {
 		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
 		// mirrors it onto a hold-mode run's sandbox (RL-1).
 		ApprovalExpiryAfter: *f.approvalExpiryAfter,
+		RunLeaseConfig:      api.RunLeaseConfig{EndedRunGrace: *f.endedRunGrace},
 		// Same minter, second use: the setup checklist asks it whether GitHub
 		// confines the App to the run branch namespace. nil when no App is
 		// configured, which omits the row.
@@ -735,7 +737,7 @@ func loadOrCreateSecret(
 ) ([]byte, error) {
 	// secretKeyStore has no For: the boot keys it bootstraps (identity signing,
 	// OIDC session) are process-global, never per-principal.
-	raw, err := secrets.Get(ctx, name)
+	raw, err := secrets.Get(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), name)
 	switch {
 	case err == nil:
 		if valid(raw) {

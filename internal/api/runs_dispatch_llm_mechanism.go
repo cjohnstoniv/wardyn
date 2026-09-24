@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -463,7 +464,13 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	// launched by newStepRun, never decoded from a create body) — the same term
 	// llmMechanismGateApplies passes.
 	modelRun := isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive)
-	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
+	// refresh may redeem and rotate the captured SSO session, so those reads are
+	// not a mere status check.
+	purpose := secretstore.PurposeStatus
+	if refresh {
+		purpose = secretstore.PurposeSSORefresh
+	}
+	l.bedrock = s.resolveBedrockAuth(secretstore.WithPurpose(ctx, purpose), req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
 	// The SAME predicate dispatch applies, with the same terms — including the
 	// posture term, whose absence here made every SSO deployment's managed run
 	// read as "subscription" at create and dispatch as something else.
@@ -594,7 +601,7 @@ func (s *Server) llmUnavailableDetail(ctx context.Context, run types.AgentRun, l
 	// The run's OWN scope: under per_user the expiry worth naming is this
 	// principal's, and the operator's says nothing about why their run has no
 	// credential.
-	blob, found, err := s.readAWSSSOBlob(ctx, sso)
+	blob, found, err := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sso)
 	if err != nil || !found || blob.ExpiresAt.IsZero() {
 		return ""
 	}

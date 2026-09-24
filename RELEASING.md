@@ -12,7 +12,8 @@ document is that process, written down.
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to
   `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag. The gate is the
-  `.github/workflows/ci.yml` job list: `build`, `diagrams`, `ui`, `ui-e2e`,
+  `.github/workflows/ci.yml` job list: `changes`, `go`
+  (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e`,
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
   `envbuild-integration`, `test-pg`, `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
@@ -354,7 +355,9 @@ A job conditional on `push`, a schedule, or a path filter must **not** be a requ
 context: GitHub does not treat a never-reported required context as passing, so
 the PR sits at "Expected — waiting for status to be reported" and cannot be
 merged. Every `nightly.yml` job is such a job, `buildx-smoke` (the multi-arch
-build) included. A job's check name is its `name:` when it sets one, otherwise
+build) included. `ci.yml`'s change classifier (#932) never skips a required job:
+one whose work a change cannot affect still runs, skips its steps and reports
+success (docs/CI.md, "Incremental CI"). A job's check name is its `name:` when it sets one, otherwise
 its job id, so renaming either is the same protection change as deleting the
 job.
 

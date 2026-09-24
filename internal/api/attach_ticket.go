@@ -152,6 +152,10 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
 		return
 	}
+	if runIsKept(run) {
+		writeError(w, http.StatusConflict, "run has ended; cannot attach")
+		return
+	}
 	at, principal := actorFromRequest(r)
 	// DELIBERATELY isOperator — this role field means exactly "reaches runs its
 	// holder does not own" (attach.go's == oidc.RoleAdmin consume check), never

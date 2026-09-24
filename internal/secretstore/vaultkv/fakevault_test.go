@@ -221,7 +221,7 @@ func (f *fakeVault) metadata(w http.ResponseWriter, r *http.Request, p string, b
 		for v, d := range e.versions {
 			dt := ""
 			if d == nil {
-				dt = "2026-01-01T00:00:00Z"
+				dt = time.Now().UTC().Format(time.RFC3339)
 			}
 			versions[strconv.Itoa(v)] = map[string]any{"deletion_time": dt, "destroyed": false}
 		}

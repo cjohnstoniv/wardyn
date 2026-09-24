@@ -145,6 +145,7 @@ type Config struct {
 	// wait (captureRunLimits) never exceeds it. 0 means unknown here. Dispatch
 	// also mirrors it onto a hold-mode run's sandbox (approval_expiry.go, RL-1).
 	ApprovalExpiryAfter time.Duration
+	RunLeaseConfig      // the run lease's settings (run_lease_server.go)
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
 	// GitHubRulesets, when set, lets the setup checklist ask GitHub whether the
@@ -849,6 +850,7 @@ type Server struct {
 	// handleDeviceAuditIngest's one-push-per-device cap. Process-local like
 	// the limiters above; an entry lives only as long as its request.
 	ingestInFlight sync.Map
+	runLeaseState  // the run lease sweep's process state (run_lease_server.go)
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
