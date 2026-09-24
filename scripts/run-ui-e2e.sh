@@ -37,6 +37,7 @@ cd "${REPO_ROOT}"
 # DOCKER_HOST here so the Playwright child processes (approvals.spec.ts shells
 # out to `docker exec wardyn-test-pg`) hit the daemon e2e-backend.sh provisions
 # on — not the default one.
+WARDYN_LOG_TAG="[e2e-ui]"
 . "${REPO_ROOT}/scripts/lib/common.sh"
 wardyn_pick_docker_host
 
@@ -56,7 +57,7 @@ export WARDYN_E2E_PG_DBNAME="${DB}"
 export WARDYN_E2E_PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
 
-log() { printf '\033[1;34m[e2e-ui]\033[0m %s\n' "$*"; }
+# log() uses WARDYN_LOG_TAG="[e2e-ui]" set before sourcing common.sh above.
 
 # LIVE mode (WARDYN_E2E_LIVE_BASE_URL): run a spec from ui/e2e/live/ against an
 # ALREADY-RUNNING external Wardyn — the kind SSO cluster

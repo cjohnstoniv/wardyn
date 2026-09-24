@@ -49,6 +49,9 @@ warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; restore_default; exit 1; }
 
 command -v docker >/dev/null 2>&1 || die "docker not found"
+# stop_wardynd below frees the port with fuser; without it the stop is a no-op
+# and the next start would silently reach the OLD daemon.
+command -v fuser >/dev/null 2>&1 || die "fuser (psmisc) required"
 
 # ── prereq: staged subscription creds ────────────────────────────────────────
 CREDS_DIR="${WARDYN_E2E_CLAUDE_CREDS:-$HOME/.wardyn/claude-creds}"
@@ -71,13 +74,17 @@ if [[ "${WARDYN_E2E_REAL_MODEL:-}" == "1" ]]; then
 fi
 
 # ── wardynd lifecycle (this driver owns it for the duration) ─────────────────
-# ponytail: teardown is PATTERN-based, not PID-based, on purpose — it must also
+# ponytail: teardown is PORT-based, not PID-based, on purpose — it must also
 # reap a wardynd this script did not start (see start_wardynd below). Do not
 # "improve" it by remembering the nohup'd PID; that reintroduces the false-green
 # this guards against. (run-e2e-live.sh reads its own PID because it has the
 # opposite policy: kill only what it started.)
+# The old pattern-based kill of every bin/wardynd process took down every
+# wardynd on the HOST, including a developer's own daemon on another port —
+# this script only owns ${BASE}'s port, so it only kills whatever is bound there.
 stop_wardynd() {
-  pkill -f 'bin/wardynd' >/dev/null 2>&1 || true
+  local port="${BASE##*:}"; port="${port%%/*}"
+  fuser -k -TERM "${port}/tcp" >/dev/null 2>&1 || true
   wait_down "${BASE}" || warn "a wardynd is still answering ${BASE} after stop"
 }
 
