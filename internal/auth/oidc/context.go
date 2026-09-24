@@ -70,7 +70,7 @@ func NameFromContext(ctx context.Context) string {
 // verified, or "" when there is no SSO session.
 //
 // Effective, not stamped: a session in "view as member" mode (Session.MemberMode)
-// answers RoleMember here whatever its cookie says, because contextWithPrincipal
+// answers RoleUser here whatever its cookie says, because contextWithPrincipal
 // clamps it at the single origin. Nothing outside this package ever sees the
 // stamped role, which is the point — see MemberModeFromContext below.
 // This package only DERIVES and CARRIES the role — see CallbackHandler /
@@ -185,7 +185,7 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	// re-deriving it from a group snapshot that may be truncated.
 	role := sess.Role
 	if sess.MemberMode {
-		role = RoleMember
+		role = RoleUser
 	}
 	ctx = context.WithValue(ctx, roleCtxKey{}, role)
 	ctx = context.WithValue(ctx, memberModeCtxKey{}, sess.MemberMode)

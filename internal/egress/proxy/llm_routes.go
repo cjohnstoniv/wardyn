@@ -29,6 +29,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
@@ -107,83 +109,30 @@ var scanSlots = make(chan struct{}, maxConcurrentScans)
 // instead of allocating tens of MiB.
 var maxRetainedScanBytes = 64 << 20 // 64 MiB
 
-// scanRetained is that budget. Package-level for the same reason scanSlots is:
-// the ceiling is the PROCESS's.
-var scanRetained = &byteBudget{limit: func() int { return maxRetainedScanBytes }}
+// scanRetained is that budget, a semaphore over BYTES (scanSlots counts
+// requests, the wrong unit for a memory bound). Package-level for the same
+// reason scanSlots is: the ceiling is the PROCESS's.
+var scanRetained = semaphore.NewWeighted(int64(maxRetainedScanBytes))
 
-// byteBudget is a context-bounded semaphore over BYTES (the slot semaphore
-// counts requests, which is the wrong unit for a memory bound).
+// retainScanBuffer charges n bytes to scanRetained, waiting (ctx-bounded) for
+// room, and returns an idempotent release. false means the caller must FAIL
+// CLOSED, exactly as an expired scan-slot wait does.
 //
-// Acquisition is serialized by construction: scanBufferedBody charges the
-// budget while still holding its scan slot, and maxConcurrentScans is 1, so
-// there is never more than one acquirer and a partial acquisition cannot
-// deadlock against another. The `used == 0` escape hatch keeps a single body
-// larger than the whole budget from waiting forever on a budget only it could
-// free.
-type byteBudget struct {
-	limit    func() int
-	mu       sync.Mutex
-	used     int
-	released chan struct{}
-}
-
-// acquire charges n bytes, waiting (ctx-bounded) for room. It reports whether
-// the charge was taken; false means the caller must FAIL CLOSED, exactly as an
-// expired scan-slot wait does.
-func (b *byteBudget) acquire(ctx context.Context, n int) bool {
-	tick := time.NewTicker(scanRetainPollInterval)
-	defer tick.Stop()
-	for {
-		b.mu.Lock()
-		if b.used == 0 || b.used+n <= b.limit() {
-			b.used += n
-			b.mu.Unlock()
-			return true
-		}
-		if b.released == nil {
-			b.released = make(chan struct{}, 1)
-		}
-		waiter := b.released
-		b.mu.Unlock()
-		select {
-		case <-waiter:
-		case <-tick.C: // re-check: a wakeup may have been coalesced
-		case <-ctx.Done():
-			return false
-		}
+// Callers charge while still holding their scan slot, and maxConcurrentScans is
+// 1, so there is never more than one acquirer and a partial charge cannot
+// deadlock against another. A body larger than the whole budget is charged as
+// the whole budget, so it waits for an empty budget instead of forever on room
+// only it could free. TryAcquire goes first because Acquire refuses an expired
+// ctx even when there is room, and the ctx may have run out during the body
+// read: only an actual wait is bounded by it.
+func retainScanBuffer(ctx context.Context, n int) (func(), bool) {
+	w := int64(min(n, maxRetainedScanBytes))
+	if !scanRetained.TryAcquire(w) && scanRetained.Acquire(ctx, w) != nil {
+		return nil, false
 	}
+	var once sync.Once
+	return func() { once.Do(func() { scanRetained.Release(w) }) }, true
 }
-
-// release returns n bytes. Idempotent per call site via the closure
-// scanBufferedBody hands out, so a caller's `defer release()` cannot
-// double-credit.
-func (b *byteBudget) release(n int) {
-	b.mu.Lock()
-	b.used -= n
-	if b.used < 0 {
-		b.used = 0
-	}
-	waiter := b.released
-	b.mu.Unlock()
-	if waiter != nil {
-		select {
-		case waiter <- struct{}{}:
-		default:
-		}
-	}
-}
-
-// inUse reports the bytes currently charged (tests observe the LIFETIME claim
-// with it).
-func (b *byteBudget) inUse() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.used
-}
-
-// scanRetainPollInterval re-checks the budget after a coalesced wakeup. Only
-// reached under memory pressure.
-const scanRetainPollInterval = 25 * time.Millisecond
 
 // scanQueueWait bounds how long a request may wait for a scan slot.
 //
@@ -627,18 +576,17 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 	// here, after the read and the scan peak, for two reasons: the size is only
 	// known now, and the extraction peak this request is about to leave behind
 	// is what the slot above already accounted for. Still under the slot, so
-	// there is exactly one acquirer (see byteBudget). Expiry fails CLOSED — the
+	// there is exactly one acquirer (see retainScanBuffer). Expiry fails CLOSED — the
 	// same Deny + 502 the slot wait takes — so memory pressure can never turn
 	// into a body forwarded unscanned.
 	charge := func() (func(), bool) {
-		n := len(buffered)
-		if !scanRetained.acquire(ctx, n) {
+		release, ok := retainScanBuffer(ctx, len(buffered))
+		if !ok {
 			emit(egress.Deny, ruleSourceLLM, nil)
 			p.httpError(w, readErrMsg, ctx.Err(), http.StatusBadGateway)
 			return noRelease, false
 		}
-		var once sync.Once
-		return func() { once.Do(func() { scanRetained.release(n) }) }, true
+		return release, true
 	}
 	if len(buffered) > maxLLMScanBody {
 		if p.scanner.BlocksOnError() {

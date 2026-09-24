@@ -16,7 +16,9 @@ package oidc
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -45,8 +47,28 @@ import (
 const (
 	RoleAdmin         = "admin"
 	RoleSecurityAdmin = "security_admin"
-	RoleMember        = "member"
+	RoleUser          = "user"
 )
+
+// LegacyRoleMember is the pre-0.8 name of RoleUser. WARDYN_OIDC_ROLE_MAP values
+// and WARDYN_OIDC_DEFAULT_ROLE still accept it, with a boot WARN, as the user
+// tier on the built-in "standard" type, so an Entra setup that maps an App Role
+// to "member" keeps signing people in until the org remaps it. It is never
+// stored and never a session role. ponytail: removed in 0.9, when "member"
+// becomes an unknown role like any other.
+const LegacyRoleMember = "member"
+
+// LegacyRoleMemberWarning is the boot WARN for one aliased "member" value.
+// variable names the setting; entry is the role-map pair as written, or ""
+// for WARDYN_OIDC_DEFAULT_ROLE, which only the chart sets.
+func LegacyRoleMemberWarning(variable, entry string) string {
+	subject, fix := variable+"=member", "change it in your chart"
+	if entry != "" {
+		subject, fix = "Entry "+strconv.Quote(entry), "remap it in Getting started -> People, or in your chart"
+	}
+	return variable + `: "member" is no longer a role. ` + subject +
+		` maps to the built-in user type "standard" (Standard user) until you ` + fix + `. The alias is removed in 0.9.`
+}
 
 // ValidRole reports whether s is a recognized role value. Used to validate
 // WARDYN_OIDC_ROLE_MAP entries (ParseRoleMap), console role-mapping rows
@@ -65,7 +87,7 @@ const (
 //
 // A slice rather than a map so the order is stable for callers that render it;
 // membership goes through ValidRole.
-var Roles = []string{RoleAdmin, RoleSecurityAdmin, RoleMember}
+var Roles = []string{RoleAdmin, RoleSecurityAdmin, RoleUser}
 
 // WARDYN_OIDC_DEFAULT_ROLE validates through validDefaultRole (cmd/wardynd),
 // which is STRICTER than this: it additionally refuses RoleSecurityAdmin.
@@ -99,7 +121,7 @@ func roleRank(role string) int {
 		return 3
 	case RoleSecurityAdmin:
 		return 2
-	case RoleMember:
+	case RoleUser:
 		return 1
 	default:
 		return 0
@@ -108,10 +130,10 @@ func roleRank(role string) int {
 
 // ParseRoleMap parses WARDYN_OIDC_ROLE_MAP: a comma-separated list of
 // "value=role" pairs, e.g.
-// "Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin". value is matched
+// "Wardyn.Admin=admin,eng-team=user,alice@corp.com=admin". value is matched
 // case-insensitively against an ID token's roles/groups claims or its email
 // (see deriveRole); role must satisfy ValidRole — RoleAdmin, RoleSecurityAdmin
-// or RoleMember. This map is the ONLY way a session reaches RoleSecurityAdmin
+// or RoleUser. This map is the ONLY way a session reaches RoleSecurityAdmin
 // (see that constant's doc): the chart carries it the moment ValidRole accepts
 // it, with no other boot knob to turn. Empty/blank input
 // returns a nil map (role derivation disabled — Config.RoleMap's empty
@@ -134,8 +156,12 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 		if !cut || k == "" {
 			return nil, fmt.Errorf("malformed entry %q: want value=role", pair)
 		}
+		if v == LegacyRoleMember {
+			slog.Warn(LegacyRoleMemberWarning("WARDYN_OIDC_ROLE_MAP", k+"="+v))
+			v = RoleUser
+		}
 		if !ValidRole(v) {
-			return nil, fmt.Errorf("entry %q: invalid role %q (want %q, %q or %q)", pair, v, RoleAdmin, RoleSecurityAdmin, RoleMember)
+			return nil, fmt.Errorf("entry %q: invalid role %q (want %q, %q or %q)", pair, v, RoleAdmin, RoleSecurityAdmin, RoleUser)
 		}
 		// A non-ASCII key can NEVER match: deriveRole skips non-ASCII claim
 		// values before lookup (ASCIIOnly, the fold-escalation guard), so
@@ -268,7 +294,7 @@ func mergeRoleMaps(chart map[string]string, legacyAdminEmails []string, rows []R
 		// here, not stored as a dead-or-dangerous key. An empty/whitespace
 		// Value would match ANY empty/whitespace claim in deriveRole's loop
 		// (ASCIIOnly("") is true) — an admin escalation if Role is admin. An
-		// invalid Role can never resolve to RoleAdmin/RoleMember in
+		// invalid Role can never resolve to RoleAdmin/RoleUser in
 		// deriveRole's switch, but its mere presence still flips roleMap from
 		// empty to non-empty, moving deriveRole from its no-role-map arm
 		// (legacy allowlist alone) to its role-map-present arm — denying
@@ -421,7 +447,7 @@ func (a *Authenticator) PreviewRoleAgainst(rows []RoleMapping, roles, groups []s
 // Precedence:
 //  1. An empty roleMap disables claim-based derivation: the role comes from the
 //     legacy operator allowlist alone — an email on legacyAdminEmails is
-//     RoleAdmin, anyone else RoleMember (main's operator/viewer split, preserved
+//     RoleAdmin, anyone else RoleUser (main's operator/viewer split, preserved
 //     with no role map). With NEITHER a role map nor an allowlist every human is
 //     RoleAdmin (true pre-0.5) — so adopting WARDYN_OIDC_ROLE_MAP is opt-in and
 //     upgrade-safe, and so is running on only WARDYN_OIDC_OPERATOR_EMAILS.
@@ -453,7 +479,7 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 		if emailInList(email, legacyAdminEmails) {
 			return RoleAdmin, []Match{{Value: email, Role: RoleAdmin, Source: MatchSourceOperatorAllowlist}}, true
 		}
-		return RoleMember, nil, true
+		return RoleUser, nil, true
 	}
 	// best is the highest-ranking match found so far ("" = nothing yet). The
 	// fold replaced a pair of booleans when the third tier landed: two bools
@@ -760,7 +786,7 @@ func unanswerableWidensRole(unanswerable bool, role string, matches []Match) boo
 	if !slices.ContainsFunc(matches, func(m Match) bool { return m.Source == MatchSourceDefaultRole }) {
 		return false
 	}
-	return roleRank(role) > roleRank(RoleMember)
+	return roleRank(role) > roleRank(RoleUser)
 }
 
 // printableASCII reports whether every rune of s is a printable ASCII

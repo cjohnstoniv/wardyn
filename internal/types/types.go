@@ -113,6 +113,13 @@ func (s RunState) IsTerminal() bool {
 // every constant scanned from this file, so the two cannot disagree.
 var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
 
+// LostReason says why a kept run lost its sandbox (AgentRun.LostReason).
+type LostReason string
+
+// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
+// and kept for the ended-run grace.
+const LostEnded LostReason = "ended"
+
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
 type ActorType string
@@ -259,6 +266,13 @@ type AgentRun struct {
 	// against these captured bounds, never against the profile's current ones.
 	RunLimits           RunLimits  `json:"run_limits"`
 	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`
+	// LostAt / LostReason mark a run that lost its sandbox but is KEPT: its
+	// agent is stopped and its proxy gone, so it has no network, while its
+	// files stay. The run keeps its RunState (RUNNING, so it still holds a quota
+	// slot); only a kill or the ended-run grace makes it terminal. Nil / "" is a
+	// live run. Migration 0073.
+	LostAt     *time.Time `json:"lost_at,omitempty"`
+	LostReason LostReason `json:"lost_reason,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
@@ -454,12 +468,12 @@ type ResolvedInjection struct {
 	// Organisation is the Azure DevOps organisation a per-person Azure DevOps
 	// credential was dispatched for, on that lane's resolves only (empty on
 	// every other). It is informational: the proxy does not read it. The
-	// proxy's REST gate pins the organisation from the dispatch-time ADOGrants
+	// proxy's REST gate pins the organisation from the dispatch-time ADOGrant
 	// in its own configuration (proxy.ADOGrantConfig), never from a resolve.
 	Organisation string `json:"organisation,omitempty"`
 	// Capabilities is the same lane's GRANTED capability set, in the
 	// internal/adoscope vocabulary. The gate does NOT hold requests to it: it
-	// reads the dispatch-time ADOGrants. The proxy reads it in one place only,
+	// reads the dispatch-time ADOGrant. The proxy reads it in one place only,
 	// on a capability ask's resolve (ado_hold.go), to confirm the capability it
 	// asked for came back granted. Empty on every other lane.
 	Capabilities []string `json:"capabilities,omitempty"`
@@ -733,6 +747,12 @@ type AuditEvent struct {
 	SourceIP  string          `json:"source_ip,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 
+	// DeviceID names the enrolled device that forwarded this row, and is nil
+	// on every row the organisation wrote itself. Derived on read from the
+	// stored row (store.FederatedDeviceID), never a column and never taken
+	// from a caller: a device that claims one is refused.
+	DeviceID *uuid.UUID `json:"device_id,omitempty"`
+
 	// PrevHash/RowHash are the tamper-evidence chain (migration 0047):
 	// RowHash = SHA-256(PrevHash || canonical serialization of the fields
 	// above), hex, computed BY POSTGRES in the audit_events BEFORE INSERT
@@ -763,7 +783,7 @@ type AuditEvent struct {
 // two rows can never disagree about which key they name) and the value shown
 // to a human for "verify on first connect".
 //
-// Role is the registering session's OWN role (oidc.RoleAdmin/RoleMember),
+// Role is the registering session's OWN role (oidc.RoleAdmin/RoleUser),
 // stamped at registration by handleAddSSHKey (migration 0043) and REFRESHED
 // on every OIDC login for the authenticating principal's keys (migration
 // 0046). It is a BOUNDED-STALE stamp, not a live check — SSH carries no
@@ -778,7 +798,7 @@ type AuditEvent struct {
 // treats nil as infinitely stale, never as fresh.
 //
 // Capped marks a key registered while an admin's session was in the user view
-// (migration 0070): Role stays member through every login re-stamp, and
+// (migration 0070): Role stays user through every login re-stamp, and
 // sshAuth never grants it the admin override.
 type SSHPublicKey struct {
 	Fingerprint   string     `json:"fingerprint"`

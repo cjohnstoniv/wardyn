@@ -205,6 +205,15 @@ function SetupRoute({
   React.useEffect(() => {
     void import("./components/screens/onboarding/onboarding-screen");
   }, []);
+  // Being IN the funnel satisfies the gate's purpose for this load, so arriving
+  // here seals it (setup-gate.ts's gateFiredAt). A load can start directly on
+  // /setup (a reload while onboarding, the SSO callback's return), outside the
+  // gate's wrapper; unsealed, the funnel's own "Open Permissions" would bounce
+  // back to step one. Here, not in the lazy funnel, so sealing never waits on
+  // its chunk.
+  React.useEffect(() => {
+    markGateFired();
+  }, []);
   if (!roleResolved) return <RouteFallback />;
   return (
     <React.Suspense fallback={<RouteFallback />}>
@@ -252,7 +261,7 @@ export function FirstRunLanding({ status, admin = false }: { status: SetupStatus
   if (status === null || !roleResolved) return <RouteFallback />;
   const base = firstRunLanding(status, role);
   // A user's landing is theirs alone, whatever the view context says.
-  const to = admin ? `/admin${base}` : role === "member" ? base : viewLanding(base, access);
+  const to = admin ? `/admin${base}` : role === "user" ? base : viewLanding(base, access);
   return <Navigate to={to} replace />;
 }
 
@@ -270,9 +279,10 @@ export function FirstRunLanding({ status, admin = false }: { status: SetupStatus
 // the DAEMON names the rows that mean it (a dead runner, an unenforceable
 // confinement floor, SSO with no role mapping) — a grade alone never holds it,
 // and a row about the caller's own credential never can.
-function RequireSetup({ status }: { status: SetupStatus | null }) {
+export function RequireSetup({ status }: { status: SetupStatus | null }) {
   const role = useRole();
   const roleResolved = useRoleResolved();
+  const { key } = useLocation();
   // B1, same reasoning as FirstRunLanding above: setupGateActive() reads the
   // role, so a /me that never answered would bounce an unknown human into the
   // ADMIN funnel on the fail-open default. Decline to gate instead — the route
@@ -292,9 +302,10 @@ function RequireSetup({ status }: { status: SetupStatus | null }) {
   // OUT of the funnel afterwards is informed wandering, not a gate escape —
   // the failing checks stay visible on every surface, and the funnel's own
   // affordances (People's "Open Permissions" et al.) must be able to leave.
-  // See setup-gate.ts's gateFiredThisLoad for why this is module state.
-  if (!gateAlreadyFired() && setupGateActive(status, role)) {
-    markGateFired();
+  // See setup-gate.ts's gateFiredAt for why this is module state, and why it
+  // is keyed by location.
+  if (!gateAlreadyFired(key) && setupGateActive(status, role)) {
+    markGateFired(key);
     // Only an admin is ever gated, and the funnel is the Admin view's.
     return <Navigate to="/admin/setup" replace />;
   }
@@ -333,21 +344,22 @@ const MODEL_ACCESS_POLL_MS = 300_000;
 // path after re-auth) — NOT a general client-side route guard (nav-hiding
 // elsewhere is deliberately cosmetic; the server is the real gate). Mirrors
 // this file's own <Route> tree tiers below: a member's REACHABLE surface is
-// wider than their NAV set — Runs/Approvals/Workspaces PLUS the three
+// wider than their NAV set — Runs/Approvals/Workspaces PLUS the two
 // self-service routes with no sidebar entry at all (/secrets: WRITE/DELETE
-// are self-service since migration 0050, routes.go; /settings and
-// /ssh-keys: the account menu renders both for every role,
-// app-shell.tsx:820-831). Providers is the SUPER-only route, gated
+// are self-service since migration 0050, routes.go; /ssh-keys: the account
+// menu renders it for every role, app-shell.tsx:820-831) and /account, the
+// member's own page. M-1b: /settings and the plain /providers are gone —
+// Providers now lives only at /admin/providers, the SUPER-only route, gated
 // operatorOnly server-side — restorable only for an actual admin, never a
 // security admin either. Drives is not: a security admin manages its grants
 // and preview (securityOps), so their return path there is honoured. Nothing
-// under /admin is reachable for a user; /account is their own page.
-const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/account", "/settings", "/ssh-keys"];
-const OPERATOR_ONLY_PREFIXES = ["/providers", "/admin/providers"];
+// under /admin is reachable for a user.
+const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/account", "/ssh-keys"];
+const OPERATOR_ONLY_PREFIXES = ["/admin/providers"];
 export function roleCanReach(path: string, role: string): boolean {
   const under = (prefixes: string[]) =>
     prefixes.some((p) => path === p || path.startsWith(`${p}/`));
-  if (role === "member") return under(MEMBER_REACHABLE_PREFIXES);
+  if (role === "user") return under(MEMBER_REACHABLE_PREFIXES);
   if (under(OPERATOR_ONLY_PREFIXES)) return role === "admin";
   return true;
 }
@@ -488,7 +500,13 @@ export default function App() {
         // flight across a sign-out, and its late answer describes the person
         // who just left.
         if (authRef.current !== "authed") return;
-        setSetupStatus(status);
+        // An `unreachable` answer is READY_FALLBACK's made-up payload (no
+        // checks, has_runs:false), so it never replaces a real one: the gate,
+        // the landing and the model-access door keep deciding from the last
+        // status the daemon actually sent. Only the FIRST read may land it —
+        // with nothing better known, it is what keeps a daemon that can't
+        // answer from trapping anyone in the funnel.
+        setSetupStatus((prev) => (status.unreachable && prev && !prev.unreachable ? prev : status));
       })
       .catch(() => {
         /* leave the last-known status in place — never trap behind a failed probe */
@@ -736,58 +754,13 @@ export default function App() {
                 </React.Suspense>
               }
             />
-            <Route
-              path="/policies"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <PoliciesScreen />
-                </React.Suspense>
-              }
-            />
-            {/* Between /policies and /permissions, the order the sidebar
-                reads (mock Q1). Gated server-side by the securityOps route
-                group; the screen itself gates its writes on
-                useSecurityOperator, and a member never sees the nav item. */}
-            <Route
-              path="/governance"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <GovernanceScreen />
-                </React.Suspense>
-              }
-            />
-            {/* SUPER, gated server-side by the operatorOnly route group; the
-                screen itself gates its writes on useOperator, and no nav entry
-                or entry point exists for a member or a security admin. */}
-            <Route
-              path="/drives"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <DrivesScreen />
-                </React.Suspense>
-              }
-            />
-            {/* SUPER, gated server-side by the operatorOnly route group (both
-                GET/PUT /workspace-providers); the screen itself gates its
-                writes on useOperator, and no nav entry or entry point exists
-                for a member or a security admin (their door is two numeric
-                rows on /governance instead). */}
-            <Route
-              path="/providers"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <ProvidersScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/permissions"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <PermissionsScreen />
-                </React.Suspense>
-              }
-            />
+            {/* M-1b: /policies, /governance, /drives, /providers, /permissions,
+                /integrations(/:id), /settings, /audit and /recordings are
+                deleted, clean break — each lives only at its /admin/* twin
+                now (mounted above). A stale bookmark or link falls to the
+                catch-all below. /secrets, /workspaces(/:id) and /ssh-keys
+                stay: they're in the User view's own URL scheme
+                (admin-member-modes-design.md §2.3). */}
             <Route
               path="/secrets"
               element={
@@ -795,26 +768,6 @@ export default function App() {
                   <SecretsScreen />
                 </React.Suspense>
               }
-            />
-            {/* /integrations is gone — Settings is the one home for connections
-              now (Host · Model provider · Providers · Your SSH keys). The
-              redirect is kept because the barrier chip, the old account menu
-              and any operator bookmark pointed here. */}
-            <Route
-              path="/integrations"
-              element={<Navigate to="/settings" replace />}
-            />
-            <Route
-              path="/settings"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <SettingsScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/integrations/:id"
-              element={<Navigate to="/settings" replace />}
             />
             <Route
               path="/workspaces"
@@ -829,22 +782,6 @@ export default function App() {
               element={
                 <React.Suspense fallback={<RouteFallback />}>
                   <WorkspaceDetailScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/audit"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <AuditScreen />
-                </React.Suspense>
-              }
-            />
-            <Route
-              path="/recordings"
-              element={
-                <React.Suspense fallback={<RouteFallback />}>
-                  <RecordingScreen />
                 </React.Suspense>
               }
             />

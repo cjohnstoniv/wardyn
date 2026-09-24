@@ -15,6 +15,8 @@ import (
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // CallbackHandler handles the IdP redirect. It:
@@ -435,6 +437,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		Email:           cc.email,
 		Name:            cc.name,
 		Role:            role,
+		UserType:        types.UserTypeStandard,
 		Expiry:          idToken.Expiry,
 		IssuedAt:        time.Now().UTC(), // D16: the cutoff SessionRevocations compares against
 		Groups:          groups,

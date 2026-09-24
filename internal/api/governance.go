@@ -654,7 +654,7 @@ const groupsSnapshotStaleMsg = "groups_snapshot_stale: your group membership sna
 // with the zero value — must NOT be copied here: carrying on means silently
 // substituting the deployment ceiling for a profile that may be far narrower,
 // which is a widening triggered by a database hiccup.
-func writeCeilingError(w http.ResponseWriter, err error) {
+func writeCeilingError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errGroupsSnapshotStale) {
 		// Identical to err.Error() now that the sentinel carries the message;
 		// spelled out because THIS is the site that defines what the body is,
@@ -662,7 +662,7 @@ func writeCeilingError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), "resolve governance ceiling", err))
+	writeServerError(w, r, "resolve governance ceiling", err)
 }
 
 // writeCeilingErrorPrefixed is writeCeilingError for a seam that has its own
@@ -680,12 +680,12 @@ func writeCeilingError(w http.ResponseWriter, err error) {
 //
 // Everything else keeps the seam's own prefix over the underlying error, which
 // is the 500 an operator reads, not the member.
-func writeCeilingErrorPrefixed(w http.ResponseWriter, prefix string, err error) {
+func writeCeilingErrorPrefixed(w http.ResponseWriter, r *http.Request, prefix string, err error) {
 	if errors.Is(err, errGroupsSnapshotStale) {
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), strings.TrimRight(prefix, ": "), err))
+	writeServerError(w, r, strings.TrimRight(prefix, ": "), err)
 }
 
 // ceilingErrorStatus is writeCeilingError's status half, for the two seams that
