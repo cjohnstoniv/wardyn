@@ -11,7 +11,7 @@
 // roleRank's fold. "security_admin" is the 0.7 third tier and is MAPPED-ONLY
 // (never a default role, never derivable from the operator allowlist), which
 // is why a role mapping is the one surface that can hand it out at all.
-export type AccessRole = "admin" | "security_admin" | "member";
+export type AccessRole = "admin" | "security_admin" | "user";
 
 // A single row of GET /access's merged table — a chart row (no id/created_*)
 // or a console row. shadow_cause is "" unless shadowed is true.

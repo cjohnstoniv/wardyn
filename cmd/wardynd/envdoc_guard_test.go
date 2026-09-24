@@ -28,6 +28,8 @@ var envDocRoots = []string{"cmd", "internal"}
 var envDocAllow = map[string]bool{
 	"WARDYN_TEST_BOOL": true, "WARDYN_TEST_DUR": true, "WARDYN_TEST_STR": true,
 	"WARDYN_TEST_PG": true, "WARDYN_TEST_DOCKER": true, "WARDYN_TEST_CACHE_REPO": true,
+	"WARDYN_TEST_VAULT": true, "WARDYN_TEST_VAULT_TOKEN_FILE": true, "WARDYN_TEST_VAULT_K8S_JWT_FILE": true,
+	"WARDYN_TEST_AZURE_KV":  true,
 	"WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
 	"WARDYN_ENVBUILD_TEST_INT": true, "WARDYN_FAKE_MARKER": true, "WARDYN_NEGCTL": true,
 	"WARDYN_E2E_BASE_URL": true, "WARDYN_E2E_CLAUDE_CREDS": true,
@@ -66,6 +68,8 @@ var envDocAllow = map[string]bool{
 	// F061: run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
 	// file, and screenshots.sh's own self-set gate for docs.spec.ts.
 	"WARDYN_E2E_ALLOW_ALL_SKIPPED": true, "WARDYN_SCREENSHOTS": true,
+	// scripts/lib/common.sh's log() prefix, set by each e2e script that sources it.
+	"WARDYN_LOG_TAG": true,
 	// 0.7.4: run-ui-e2e.sh's LIVE mode — the external base URL that points the
 	// `live` Playwright project (ui/e2e/live/) at a real cluster instead of the
 	// hermetic backend. Shell-only, so the E2E-shell ratchet below is what keeps
@@ -78,6 +82,8 @@ var envDocAllow = map[string]bool{
 	"WARDYN_LIVE_AWS_SSO": true, "WARDYN_LIVE_BASE_URL": true, "WARDYN_LIVE_IDENTITIES_FILE": true,
 	"WARDYN_LIVE_ADO_ORG": true, "WARDYN_LIVE_ADO_PROJECT": true, "WARDYN_LIVE_ADO_REPO": true,
 	"WARDYN_LIVE_ADO_SPACED_PROJECT": true, "WARDYN_LIVE_ADO_SPACED_REPO": true,
+	"WARDYN_LIVE_ADO_WRITE": true, "WARDYN_LIVE_ADO_PAT_PROBE": true, "WARDYN_LIVE_ADO_PAT_PROBE_SCOPE": true,
+	"WARDYN_LIVE_ADO_PAT_PROBE_TENANT_ID": true, "WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID": true,
 	"WARDYN_LIVE_AWS_SSO_START_URL": true, "WARDYN_LIVE_AWS_SSO_REGION": true,
 	"WARDYN_LIVE_AWS_SSO_TOKEN_FILE": true, "WARDYN_LIVE_BEDROCK_ACCOUNT_ID": true,
 	"WARDYN_LIVE_BEDROCK_ROLE_NAME": true, "WARDYN_LIVE_BEDROCK_REGION": true,
@@ -96,6 +102,9 @@ var envDocShellOnly = map[string]bool{
 	// sibling, and a mapping only: what enables the gateway is
 	// WARDYN_UI_SANDBOX_LISTEN, which Go does read.
 	"WARDYN_UI_SANDBOX_PORT": true,
+	// The store-mode compose overlay's host directory holding the Vault token
+	// (deploy/compose/docker-compose.vault.yaml); Go reads the mounted file.
+	"WARDYN_VAULT_TOKEN_DIR": true,
 	// UI build stage + its cross-compile targets: read by scripts/up.sh and
 	// interpolated by docker-compose.yaml into build args, never by Go.
 	"WARDYN_UI_STAGE": true, "WARDYN_HOST_GOOS": true, "WARDYN_HOST_GOARCH": true,

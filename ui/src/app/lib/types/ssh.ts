@@ -18,8 +18,9 @@ export interface SSHPublicKey {
   // holder does not own — until it expires on its own (role_checked_at older
   // than WARDYN_SSH_ROLE_TTL) or the holder is demoted at their next login;
   // deleting and re-registering the key drops the override immediately too.
-  // Keys registered before 0.6 are backfilled "member". docs/SSH.md §Bounds;
-  // the console shows it because otherwise nobody can see it.
+  // Keys registered before 0.6 were backfilled "member" (0074 renames it
+  // "user"). docs/SSH.md §Bounds; the console shows it because otherwise
+  // nobody can see it.
   role: string;
   role_checked_at?: string; // when `role` was last (re-)stamped; absent/undefined for a pre-0046 row
   created_at: string;
