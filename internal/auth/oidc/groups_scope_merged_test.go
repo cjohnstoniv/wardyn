@@ -126,7 +126,7 @@ func newMergedScopeAuth(t *testing.T, idp *scopeLoginIdP, chart map[string]strin
 		ClientSecret: "secret",
 		RedirectURL:  "http://localhost/auth/callback",
 		RoleMap:      chart,
-		DefaultRole:  writoidc.RoleMember,
+		DefaultRole:  writoidc.RoleUser,
 		RoleMappings: &fakeRoleMappingSource{rows: rows},
 	}, testHMACKey)
 	if err != nil {
@@ -145,7 +145,7 @@ func newMergedScopeAuth(t *testing.T, idp *scopeLoginIdP, chart map[string]strin
 func TestLoginWarnsWhenTheMERGEDMapNeedsTheGroupsScope(t *testing.T) {
 	withGroups := []string{"openid", "profile", "email", "groups"}
 	entraShape := []string{"openid", "profile", "email", "offline_access"}
-	groupRow := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}
+	groupRow := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleUser}}
 
 	cases := []struct {
 		name            string
@@ -244,7 +244,7 @@ func TestLoginWarnsWhenTheMERGEDMapNeedsTheGroupsScope(t *testing.T) {
 // once, and a login that DOES carry the claim settles the question for good.
 func TestMergedGroupsScopeWarningIsOncePerProcess(t *testing.T) {
 	withGroups := []string{"openid", "profile", "email", "groups"}
-	groupRow := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleMember}}
+	groupRow := []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleUser}}
 
 	t.Run("three groupless logins say it once", func(t *testing.T) {
 		idp := newScopeLoginIdP(t, withGroups)

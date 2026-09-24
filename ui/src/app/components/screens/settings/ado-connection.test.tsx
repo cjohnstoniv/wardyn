@@ -24,8 +24,8 @@ function status(scm_access?: SetupStatus["scm_access"]): SetupStatus {
 
 // #458: the card reads location.hash (the hash-focus effect), so every
 // render needs a Router in scope. initialEntries defaults to a plain
-// /settings landing — no hash, no focus.
-function renderCard(ui: React.ReactElement, initialEntries: string[] = ["/settings"]) {
+// /account landing — no hash, no focus.
+function renderCard(ui: React.ReactElement, initialEntries: string[] = ["/account"]) {
   return render(<MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>);
 }
 
@@ -96,13 +96,13 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
   });
 
   // #458 — the capability card's consent CTA and the mid-run sign-in door
-  // both land on /settings#azure-devops; arriving with that hash must move
+  // both land on /account#azure-devops; arriving with that hash must move
   // focus onto this card (no other anchor exists on a five-card page).
   describe("arrival with #azure-devops focuses the card (#458)", () => {
     it("focuses the section when the URL hash matches and a row is configured", () => {
       renderCard(
         <AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />,
-        ["/settings#azure-devops"],
+        ["/account#azure-devops"],
       );
       const section = screen.getByText("Azure DevOps").closest("section")!;
       expect(section).toHaveAttribute("id", "azure-devops");
@@ -110,7 +110,7 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
       expect(document.activeElement).toBe(section);
     });
 
-    it("does not steal focus on a plain /settings landing (no hash)", () => {
+    it("does not steal focus on a plain /account landing (no hash)", () => {
       renderCard(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />);
       const section = screen.getByText("Azure DevOps").closest("section")!;
       expect(document.activeElement).not.toBe(section);
@@ -124,7 +124,7 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
       try {
         renderCard(
           <AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />,
-          ["/settings#azure-devops"],
+          ["/account#azure-devops"],
         );
         expect(focusSpy).toHaveBeenCalledWith({ focusVisible: true });
       } finally {
@@ -149,7 +149,7 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
       }
       const initial = status({ state: "not_configured", cause: "row_is_newer" });
       const { rerender } = render(
-        <MemoryRouter initialEntries={["/settings#azure-devops"]}>
+        <MemoryRouter initialEntries={["/account#azure-devops"]}>
           <Harness s={initial} />
         </MemoryRouter>,
       );
@@ -166,7 +166,7 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
       // so no navigation happens and location.key is unchanged.
       const reloaded = status({ state: "not_configured", cause: "row_is_newer" });
       rerender(
-        <MemoryRouter initialEntries={["/settings#azure-devops"]}>
+        <MemoryRouter initialEntries={["/account#azure-devops"]}>
           <Harness s={reloaded} />
         </MemoryRouter>,
       );
