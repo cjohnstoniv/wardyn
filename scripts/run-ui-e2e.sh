@@ -176,7 +176,10 @@ for spec in "${specs[@]}"; do
   fi
   rm -f "${results_json}"
   spec_ok=0
-  ( cd ui && PLAYWRIGHT_JSON_OUTPUT_NAME="${results_json}" pnpm exec playwright test "${spec_rel}" --workers=1 --reporter=list,json ) && spec_ok=1
+  # A per-spec output dir: every Playwright run empties its output dir first, so
+  # with the shared default (ui/test-results) the NEXT spec deleted a failing
+  # spec's screenshot, video and error-context before CI's upload saw them.
+  ( cd ui && PLAYWRIGHT_JSON_OUTPUT_NAME="${results_json}" pnpm exec playwright test "${spec_rel}" --workers=1 --reporter=list,json --output="test-results/${base%.spec.ts}" ) && spec_ok=1
 
   # Read the stats Playwright's own run just wrote, defaulting every field to 0
   # (`// 0`) so a missing/corrupt results.json cannot throw arithmetic garbage
