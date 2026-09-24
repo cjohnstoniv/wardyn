@@ -50,12 +50,13 @@ async function nudgeUntil(page: Page, done: () => Promise<boolean>, timeoutMs = 
 
 async function mockGatedStatus(
   page: Page,
-  overrides: { onboarded?: boolean; sso?: boolean; nonBlockingFail?: boolean } = {},
+  overrides: { onboarded?: boolean; sso?: boolean; nonBlockingFail?: boolean; hasRuns?: boolean } = {},
 ): Promise<void> {
   await page.route("**/api/v1/setup/status*", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
     json.onboarding_complete = overrides.onboarded ?? false;
+    json.has_runs = overrides.hasRuns ?? json.has_runs;
     if (overrides.sso) {
       // The owner's live reproduction was the multi-user (SSO) funnel; sso
       // mode is also what renders People's "Open Permissions" affordance.
@@ -133,6 +134,48 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await page.goto("/");
     await page.waitForURL(/\/setup/);
     await expect(page.getByText("Getting started").first()).toBeVisible();
+  });
+
+  test("a shell update landing mid-redirect keeps a gated install in the funnel (#469)", async ({ page }) => {
+    // CI run 36057885376: waitForURL(/\/setup/) passed, then the page settled
+    // on Runs. react-router applies the gate's redirect inside a transition,
+    // so an App state update landing first re-renders the gate at "/" — which
+    // read its once-per-load latch as spent and let "/" land on Runs
+    // (has_runs:true). Reproduced on purpose: App's readiness probe (/readyz,
+    // read only by App's health poll) is held until the redirect's
+    // replaceState, which stalls 10ms the way a loaded host does, so React
+    // yields before the route change renders and the held answer lands first.
+    await mockGatedStatus(page, { hasRuns: true });
+    await skipHero(page);
+    await page.addInitScript(() => {
+      let release!: () => void;
+      const redirected = new Promise<void>((r) => (release = r));
+      const realFetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        if (!String(input instanceof Request ? input.url : input).endsWith("/readyz")) return realFetch(input, init);
+        // Read ahead, so the released answer reaches App in microtasks only.
+        const answer = realFetch(input, init).then(async (r) => {
+          const body = await r.json();
+          return { ok: r.ok, status: r.status, json: async () => body } as Response;
+        });
+        return redirected.then(() => answer);
+      };
+      const replaceState = history.replaceState.bind(history);
+      history.replaceState = (data, unused, url) => {
+        replaceState(data, unused, url);
+        if (String(url).includes("/admin/setup")) {
+          const until = performance.now() + 10;
+          while (performance.now() < until) {
+            /* a loaded host */
+          }
+          release();
+        }
+      };
+    });
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible({ timeout: 15_000 });
+    await expect(page).toHaveURL(/\/admin\/setup/);
   });
 
   test("the funnel can leave itself: People → Open Permissions lands on /permissions", async ({
