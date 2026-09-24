@@ -155,6 +155,10 @@ ds-bundle/
 # twins (episodes.ts) — a permanent doc, not a mock round, same shape as
 # CONSOLE-RULES.md above.
 !/docs/design/demo-video-source-canon.md
+# console-residue-0.8 is #157's mock round for the residue batch: the frozen
+# tables and the mock that draws them.
+!/docs/design/console-residue-0.8-prompt.md
+!/docs/design/console-residue-0.8-mock/
 # terminal-escape-canon.md is a permanent doc (#133), not a mock round or a
 # proposal draft — it ships for the same reason CONSOLE-RULES.md does.
 !/docs/design/terminal-escape-canon.md
