@@ -51,7 +51,7 @@ func TestIsSecurityOperator(t *testing.T) {
 		{"sso admin: both tiers", operatorCtx("sub-1", rbacOperator, oidc.RoleAdmin), true, true},
 		// THE distinguishing row.
 		{"sso security_admin: security tier only", operatorCtx(secAdminSub, secAdminMail, oidc.RoleSecurityAdmin), true, false},
-		{"sso member: neither", operatorCtx("sub-2", rbacViewer, oidc.RoleMember), false, false},
+		{"sso member: neither", operatorCtx("sub-2", rbacViewer, oidc.RoleUser), false, false},
 		// Defense-in-depth, same as isOperator's: decodeSession refuses an
 		// empty role outright, but both predicates must fail CLOSED if it ever
 		// reached them.
@@ -86,7 +86,7 @@ func TestRequireSecurityOperator(t *testing.T) {
 	}{
 		{"admin passes", oidc.RoleAdmin, http.StatusOK},
 		{"security_admin passes", oidc.RoleSecurityAdmin, http.StatusOK},
-		{"member is refused", oidc.RoleMember, http.StatusForbidden},
+		{"member is refused", oidc.RoleUser, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -146,7 +146,7 @@ func TestRequireSecurityOperator(t *testing.T) {
 func TestAPITokenStampsRealSecurityAdminRole(t *testing.T) {
 	srv, _, _ := apiTokenTestServer(t)
 	for _, tc := range []struct{ role string }{
-		{oidc.RoleAdmin}, {oidc.RoleSecurityAdmin}, {oidc.RoleMember},
+		{oidc.RoleAdmin}, {oidc.RoleSecurityAdmin}, {oidc.RoleUser},
 	} {
 		t.Run(tc.role, func(t *testing.T) {
 			sess := ssoSession(t, "sub-"+tc.role, tc.role+"@corp.example", tc.role)
@@ -240,8 +240,8 @@ func TestSSHKeyNeverStampsSecurityAdmin(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &added); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if added.Role != oidc.RoleMember {
-		t.Fatalf("ssh key stamped role %q for a security admin, want %q (the field means foreign-run reach)", added.Role, oidc.RoleMember)
+	if added.Role != oidc.RoleUser {
+		t.Fatalf("ssh key stamped role %q for a security admin, want %q (the field means foreign-run reach)", added.Role, oidc.RoleUser)
 	}
 }
 
@@ -499,7 +499,7 @@ func TestSecurityAdminCanStopAForeignRun(t *testing.T) {
 	// And the member, which is what makes it a TIER statement: a plain member is
 	// refused with the byte-identical 404 a missing run gives, and the run is
 	// untouched.
-	if code, state := kill(t, oidc.RoleMember); code != http.StatusNotFound || state != types.RunRunning {
+	if code, state := kill(t, oidc.RoleUser); code != http.StatusNotFound || state != types.RunRunning {
 		t.Errorf("member kill of a foreign run = %d, state %q; want 404 and the run still RUNNING", code, state)
 	}
 }

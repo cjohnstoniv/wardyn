@@ -41,7 +41,7 @@ func TestF2_RoleMapPrecedence_ChartOverConsoleOverClaims(t *testing.T) {
 	chart := map[string]string{
 		"wardyn.admin": writoidc.RoleAdmin,
 		"kernel-team":  writoidc.RoleAdmin,
-		"eng-team":     writoidc.RoleMember,
+		"eng-team":     writoidc.RoleUser,
 	}
 	allowlist := []string{"Alice@Corp.Example"} // mixed case on purpose: matching is EqualFold
 
@@ -61,17 +61,17 @@ func TestF2_RoleMapPrecedence_ChartOverConsoleOverClaims(t *testing.T) {
 			name:   "console row cannot promote a chart MEMBER key to admin",
 			rows:   []writoidc.RoleMapping{{Value: "eng-team", Role: writoidc.RoleAdmin}},
 			groups: []string{"eng-team"}, email: bob,
-			wantRole: writoidc.RoleMember, wantOK: true, wantShadowed: []string{"eng-team"},
+			wantRole: writoidc.RoleUser, wantOK: true, wantShadowed: []string{"eng-team"},
 		},
 		{
 			name:  "console row cannot demote a chart ADMIN key to member",
-			rows:  []writoidc.RoleMapping{{Value: "wardyn.admin", Role: writoidc.RoleMember}},
+			rows:  []writoidc.RoleMapping{{Value: "wardyn.admin", Role: writoidc.RoleUser}},
 			roles: []string{"Wardyn.Admin"}, email: bob,
 			wantRole: writoidc.RoleAdmin, wantOK: true, wantShadowed: []string{"wardyn.admin"},
 		},
 		{
 			name:     "console row cannot demote an operator-allowlisted email",
-			rows:     []writoidc.RoleMapping{{Value: alice, Role: writoidc.RoleMember}},
+			rows:     []writoidc.RoleMapping{{Value: alice, Role: writoidc.RoleUser}},
 			email:    "ALICE@corp.example",
 			wantRole: writoidc.RoleAdmin, wantOK: true, wantShadowed: []string{alice},
 		},
@@ -105,13 +105,13 @@ func TestF2_RoleMapPrecedence_ChartOverConsoleOverClaims(t *testing.T) {
 		},
 		{
 			name:   "nothing matched, default member",
-			groups: []string{"unmapped"}, email: bob, def: writoidc.RoleMember,
-			wantRole: writoidc.RoleMember, wantOK: true,
+			groups: []string{"unmapped"}, email: bob, def: writoidc.RoleUser,
+			wantRole: writoidc.RoleUser, wantOK: true,
 		},
 		{
 			name:   "a match beats the default even when the default is higher",
 			groups: []string{"eng-team"}, email: bob, def: writoidc.RoleAdmin,
-			wantRole: writoidc.RoleMember, wantOK: true,
+			wantRole: writoidc.RoleUser, wantOK: true,
 		},
 		{
 			name:     "non-ASCII claim never folds onto an ASCII admin key (KELVIN SIGN for k)",
@@ -170,7 +170,7 @@ func TestF2_RoleMapArm1_NoMapMeansAllowlistOnly(t *testing.T) {
 	if len(merged) != 0 {
 		t.Fatalf("merged = %v, want empty", merged)
 	}
-	if role, _, ok := writoidc.DeriveRoleForTest([]string{"Wardyn.Admin"}, []string{"anything"}, "dev@corp.example", merged, []string{"ops@corp.example"}, ""); !ok || role != writoidc.RoleMember {
+	if role, _, ok := writoidc.DeriveRoleForTest([]string{"Wardyn.Admin"}, []string{"anything"}, "dev@corp.example", merged, []string{"ops@corp.example"}, ""); !ok || role != writoidc.RoleUser {
 		t.Errorf("no map, not allowlisted = (%q,%v), want member (claims are IGNORED under arm 1)", role, ok)
 	}
 	if role, _, ok := writoidc.DeriveRoleForTest(nil, nil, "OPS@corp.example", merged, []string{"ops@corp.example"}, ""); !ok || role != writoidc.RoleAdmin {

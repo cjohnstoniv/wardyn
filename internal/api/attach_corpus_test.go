@@ -45,7 +45,7 @@ func TestAttachCorpus_TakeoverPromotesWebObserverOverSSHHolder(t *testing.T) {
 		srv, _, fr, audit, run := holderTestServer(t)
 		ts := httptest.NewServer(panicFails(t, srv.Handler()))
 		defer ts.Close()
-		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 
 		// holderSecond holds the run's terminal from the CLI...
 		ch := newFakeSSHChannel()

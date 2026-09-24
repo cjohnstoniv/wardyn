@@ -172,7 +172,7 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 	// Status 500 is createRunUnconfiguredStore's controlled errCreateRunNoStoreConfigured
 	// (its doc comment above), the proof each request reached CreateRun rather
 	// than stopping at an earlier refusal — asserted here, not just implied.
-	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), body)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("member: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
@@ -353,7 +353,7 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 	// createRunUnconfiguredStore's controlled errCreateRunNoStoreConfigured
 	// (its doc comment above), the proof this request reached CreateRun rather
 	// than stopping at an earlier refusal.
-	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), body)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("member: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
 	}
@@ -977,7 +977,7 @@ func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
 		}
 		srv := New(cfg)
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-			ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember), body)
+			ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser), body)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
 		}
@@ -1013,7 +1013,7 @@ func TestIntegrations_MemberList_OwnKeyListed(t *testing.T) {
 		cfg.Secrets = secrets
 		srv := New(cfg)
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/integrations",
-			ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember), "")
+			ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser), "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("list = %d, want 200: %s", w.Code, w.Body.String())
 		}
@@ -1048,7 +1048,7 @@ func TestIntegrations_MemberSelectsOwnKey_NoWarning(t *testing.T) {
 		cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
 		srv := New(cfg)
 		return doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-			ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember), body)
+			ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser), body)
 	}
 	w := createRun(&memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}})
 	if w.Code != http.StatusCreated {

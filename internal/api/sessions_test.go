@@ -154,7 +154,7 @@ func TestRevokeSessions_AdminRevokesAll(t *testing.T) {
 
 func TestRevokeSessions_MemberForbidden(t *testing.T) {
 	srv, fake := sessionsTestServer(t)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", member, `{"sub":"alice@corp.example"}`)
 	if w.Code != http.StatusForbidden {
@@ -326,7 +326,7 @@ func TestSecurityAdminRevokesSuperAdmin(t *testing.T) {
 	// so this test cannot be read as "the route is simply open".
 	t.Run("a member is still refused", func(t *testing.T) {
 		srv, fake, _ := sessionsTestServerWithTokens(t, nil)
-		member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+		member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 		if w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", member, `{"sub":"`+superSub+`"}`); w.Code != http.StatusForbidden {
 			t.Errorf("member: status = %d, want 403", w.Code)
 		}

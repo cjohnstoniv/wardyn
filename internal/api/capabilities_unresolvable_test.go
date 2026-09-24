@@ -138,7 +138,7 @@ func TestCapUnresolvableGroupDenyStillRefusesThroughCapScan(t *testing.T) {
 		srv := New(baseTestConfig(newHarness(t), st))
 		// nil groups => capabilitySubjects reports stale (a pre-0.6 cookie or a
 		// pre-0.7 API token, the population this path exists for).
-		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "member", nil, false)
+		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "user", nil, false)
 		deny, allow, err := srv.capScan(ctx, capSecret, "prod-db")
 		if err != nil {
 			t.Fatalf("capScan: %v", err)
@@ -157,7 +157,7 @@ func TestCapUnresolvableGroupDenyStillRefusesThroughCapScan(t *testing.T) {
 	t.Run("stale snapshot, no group deny of that kind: unaffected", func(t *testing.T) {
 		st := &capStore{grants: rows}
 		srv := New(baseTestConfig(newHarness(t), st))
-		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "member", nil, false)
+		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "user", nil, false)
 		// capModelProvider has no group deny row in the matrix, so the scoping
 		// that keeps "an upgrade with no configuration changes nothing" must
 		// hold: no refusal.
@@ -174,7 +174,7 @@ func TestCapUnresolvableGroupDenyStillRefusesThroughCapScan(t *testing.T) {
 	t.Run("answerable snapshot never asks the question", func(t *testing.T) {
 		st := &capStore{grants: rows}
 		srv := New(baseTestConfig(newHarness(t), st))
-		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "member", []string{"eng"}, false)
+		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "user", []string{"eng"}, false)
 		if _, _, err := srv.capScan(ctx, capSecret, "prod-db"); err != nil {
 			t.Fatalf("capScan: %v", err)
 		}
@@ -187,7 +187,7 @@ func TestCapUnresolvableGroupDenyStillRefusesThroughCapScan(t *testing.T) {
 	t.Run("a store error refuses rather than allowing", func(t *testing.T) {
 		st := &capStore{grants: rows, err: fmt.Errorf("boom")}
 		srv := New(baseTestConfig(newHarness(t), st))
-		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "member", nil, false)
+		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "user", nil, false)
 		if _, _, err := srv.capScan(ctx, capSecret, "prod-db"); err == nil {
 			t.Fatal("capScan returned nil error when the store failed; an unresolvable question must not answer 'allowed'")
 		}
@@ -203,7 +203,7 @@ func TestCapUnresolvableGroupDenyStillRefusesThroughCapScan(t *testing.T) {
 func TestCapUnresolvableGroupDenyReadCostIsPerValueNotPerTable(t *testing.T) {
 	st := &capStore{grants: capUnresolvableMatrixRows()}
 	srv := New(baseTestConfig(newHarness(t), st))
-	ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "member", nil, false)
+	ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "user", nil, false)
 
 	const n = 200
 	for i := 0; i < n; i++ {

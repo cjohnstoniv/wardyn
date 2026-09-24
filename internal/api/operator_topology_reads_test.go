@@ -103,7 +103,7 @@ func TestOperatorTopologyReadsAreNotMemberReadable(t *testing.T) {
 		{"/api/v1/base-images", []string{"registry.internal.corp.example", "artifactory.internal.corp.example"}},
 	}
 
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	for _, rt := range routes {

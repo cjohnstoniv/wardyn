@@ -35,7 +35,7 @@ func seedToken(t *testing.T, st store.PG, principal, raw string, groups []string
 		ID:        uuid.New(),
 		Principal: principal,
 		Email:     principal + "@example.com",
-		Role:      "member",
+		Role:      "user",
 		Groups:    groups,
 		Name:      "ci",
 		CreatedAt: time.Now().UTC(),
@@ -76,7 +76,7 @@ func TestPG_APITokens_LookupTouchRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lookup by raw: %v", err)
 	}
-	if got.ID != created.ID || got.Email != created.Email || got.Role != "member" {
+	if got.ID != created.ID || got.Email != created.Email || got.Role != "user" {
 		t.Errorf("lookup = %+v, want the seeded row", got)
 	}
 	// The identity snapshot has to survive the JSONB round trip — a group grant
@@ -250,7 +250,7 @@ func TestPG_APITokens_RefreshIdentityAtLogin(t *testing.T) {
 	if got := roleOf(a2.ID); got != "admin" {
 		t.Errorf("a2 role = %q, want admin — the refresh stopped at the first row", got)
 	}
-	if got := roleOf(b1.ID); got != "member" {
+	if got := roleOf(b1.ID); got != "user" {
 		t.Errorf("bob's role = %q, want member — one human's login re-stamped ANOTHER human's token", got)
 	}
 	if got := groupsOf(a1.ID); len(got) != 2 || got[0] != "eng" || got[1] != "oncall" {
@@ -264,10 +264,10 @@ func TestPG_APITokens_RefreshIdentityAtLogin(t *testing.T) {
 	if _, err := st.RevokeAPIToken(ctx, gone.ID, "", time.Now().UTC()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if err := st.RefreshAPITokenIdentity(ctx, alice, "member", []string{"eng"}, true); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, alice, "user", []string{"eng"}, true); err != nil {
 		t.Fatalf("RefreshAPITokenIdentity (demote): %v", err)
 	}
-	if got := roleOf(a1.ID); got != "member" {
+	if got := roleOf(a1.ID); got != "user" {
 		t.Errorf("a1 role = %q after demotion, want member — a demoted human kept admin on an outstanding token", got)
 	}
 	// gone was promoted with the rest while it was still live, THEN revoked,
@@ -313,7 +313,7 @@ func TestPG_APITokens_RefreshIdentityCarriesGroupsAndTruncated(t *testing.T) {
 	// exactly the shape sessionGroups (internal/auth/oidc/derive.go) reports
 	// for a human who fell off the snapshot cap or hit an IdP-side overage.
 	sessionBGroups := []string{"team-c"}
-	if err := st.RefreshAPITokenIdentity(ctx, principal, "member", sessionBGroups, true); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, principal, "user", sessionBGroups, true); err != nil {
 		t.Fatalf("RefreshAPITokenIdentity: %v", err)
 	}
 
@@ -334,7 +334,7 @@ func TestPG_APITokens_RefreshIdentityCarriesGroupsAndTruncated(t *testing.T) {
 	// A THIRD login with a complete snapshot must be able to clear the bit —
 	// proving it is not a one-way ratchet, i.e. RefreshAPITokenIdentity binds
 	// truncated EXACTLY as given, not OR'd with whatever was there before.
-	if err := st.RefreshAPITokenIdentity(ctx, principal, "member", []string{"team-c", "team-d"}, false); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, principal, "user", []string{"team-c", "team-d"}, false); err != nil {
 		t.Fatalf("RefreshAPITokenIdentity (session C): %v", err)
 	}
 	got, err = st.GetAPITokenByRaw(ctx, raw)

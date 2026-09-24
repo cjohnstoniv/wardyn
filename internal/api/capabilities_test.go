@@ -294,7 +294,7 @@ const (
 // memberCtx is what humanOrAdminAuth publishes for a signed-in MEMBER, group
 // snapshot included. Passing nil groups models a pre-0.6 cookie.
 func memberCtx(groups []string) context.Context {
-	return withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleMember), groups)
+	return withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleUser), groups)
 }
 
 func grant(st types.CapabilitySubjectType, subject, kind, value string, effect types.CapabilityEffect) types.CapabilityGrant {
@@ -570,7 +570,7 @@ func TestCapAllowedEnforcementReadIsSkippedOnAllow(t *testing.T) {
 // duplicated — an admin who wrote the grant against the email must get the same
 // answer as one who wrote it against the sub.
 func TestCapabilitySubjects(t *testing.T) {
-	ctx := withOIDCGroups(operatorCtx("Sub-BOB", "BOB@Corp.Example", oidc.RoleMember), []string{"eng"})
+	ctx := withOIDCGroups(operatorCtx("Sub-BOB", "BOB@Corp.Example", oidc.RoleUser), []string{"eng"})
 	users, groups, stale := capabilitySubjects(ctx)
 	if !slices.Equal(users, []string{"sub-bob", "bob@corp.example"}) {
 		t.Errorf("users = %v, want the lowercased sub then email", users)
@@ -585,7 +585,7 @@ func TestCapabilitySubjects(t *testing.T) {
 	// A session whose sub and email are the same string must not offer it twice
 	// — a duplicated subject would double-count nothing today but makes the
 	// eventual /me/capabilities listing lie about where a grant came from.
-	same := withOIDCGroups(operatorCtx("bob@corp.example", "bob@corp.example", oidc.RoleMember), []string{})
+	same := withOIDCGroups(operatorCtx("bob@corp.example", "bob@corp.example", oidc.RoleUser), []string{})
 	users, _, _ = capabilitySubjects(same)
 	if len(users) != 1 {
 		t.Errorf("users = %v, want one entry when sub and email are identical", users)

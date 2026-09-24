@@ -132,7 +132,7 @@ func TestListApprovals_MemberSeesOnlyTheirOwnRuns(t *testing.T) {
 	mineAP := aap.seed(mineRun)
 	foreignAP := aap.seed(foreignRun)
 
-	member := ssoSession(t, memberSub, "list-member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, memberSub, "list-member@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/approvals", member, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("member list = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -199,7 +199,7 @@ func TestListApprovals_MemberFailsClosedWithoutTheScopedRead(t *testing.T) {
 	// arm is unreachable outside a test and would otherwise never be exercised.
 	srv.cfg.Approvals = unscopedApprovals{aap}
 
-	member := ssoSession(t, "sub-list-member", "list-member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-list-member", "list-member@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/approvals", member, "")
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("member list on an unscoped backend = %d, want 500 — falling through to the fleet-wide "+

@@ -525,8 +525,8 @@ func TestAttachTakeoverReason(t *testing.T) {
 // existence oracle, and no "is anyone watching?" oracle over someone else's run.
 func TestAttachHolderEndpoints_ForeignRun404(t *testing.T) {
 	srv, _, _, _, run := holderTestServer(t)
-	stranger := ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleMember)
-	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+	stranger := ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleUser)
+	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/runs/" + run.ID.String() + "/attach-holder"},
@@ -570,7 +570,7 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 
 	// first client: the holder
 	c1 := dialAttach(t, ts, srv, run.ID, holderOwner, "&cols=80&rows=24")
@@ -863,7 +863,7 @@ func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
 		want    int
 	}{
 		{"owner", func(t *testing.T) *http.Cookie {
-			return ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+			return ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 		}, http.StatusOK},
 		{"super admin", func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
@@ -872,7 +872,7 @@ func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
 			return ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin)
 		}, http.StatusNotFound},
 		{"member, not the owner", func(t *testing.T) *http.Cookie {
-			return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleMember)
+			return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleUser)
 		}, http.StatusNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

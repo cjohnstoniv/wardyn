@@ -843,7 +843,7 @@ func loginStartURL(t *testing.T, audit *memAudit) string {
 // choosing and have Wardyn bake it into every later Bedrock run's ~/.aws/config.
 func TestHandleHarnessLogin_PerUserUsesTheRowsStartURL(t *testing.T) {
 	for who, sess := range map[string]*http.Cookie{
-		"member": ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember),
+		"member": ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser),
 		"admin":  ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin),
 	} {
 		t.Run(who, func(t *testing.T) {
@@ -866,7 +866,7 @@ func TestHandleHarnessLogin_PerUserUsesTheRowsStartURL(t *testing.T) {
 // all — still answers a member 403, and the operator still passes.
 func TestHandleHarnessLogin_MemberRefusedWithoutPerUserRow(t *testing.T) {
 	shared := types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO}
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	for name, rows := range map[string][]types.AgentProvider{
 		"a shared row":   {shared},
 		"a disabled row": {{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal, Disabled: true}},
@@ -1106,7 +1106,7 @@ func TestPerUserLoginRow_IsKeyedByAgentNotOnlyMechanism(t *testing.T) {
 		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
 	})
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("member status = %d, want 403; body=%s", w.Code, w.Body.String())
 	}

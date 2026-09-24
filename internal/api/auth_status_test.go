@@ -66,7 +66,7 @@ func TestSessionRejectionResponse(t *testing.T) {
 func expiredSSOSession(t *testing.T, sub, email, role string) *http.Cookie {
 	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
-		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role,
+		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role, UserType: "standard",
 		Expiry: time.Now().UTC().Add(-time.Hour),
 	})
 	if err != nil {

@@ -66,7 +66,7 @@ func govServer(st *capStore) *Server {
 // identity, group snapshot, and the snapshot's PF-26 completeness bit.
 func govMemberCtx(groups []string, truncated bool) context.Context {
 	return withOIDCGroupsTruncated(
-		withOIDCGroups(operatorCtx("sub-gov-bob", "bob@corp.example", oidc.RoleMember), groups),
+		withOIDCGroups(operatorCtx("sub-gov-bob", "bob@corp.example", oidc.RoleUser), groups),
 		truncated)
 }
 
@@ -153,7 +153,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		}
 		// And the HTTP shape a routed site would produce.
 		w := httptest.NewRecorder()
-		writeCeilingError(w, err)
+		writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("writeCeilingError(store failure) = %d, want 500", w.Code)
 		}
@@ -237,7 +237,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 			t.Errorf("stale snapshot maps to %d, want 403", code)
 		}
 		w := httptest.NewRecorder()
-		writeCeilingError(w, err)
+		writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusForbidden {
 			t.Errorf("writeCeilingError(stale) = %d, want 403", w.Code)
 		}

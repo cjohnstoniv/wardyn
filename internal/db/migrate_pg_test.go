@@ -21,11 +21,13 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -83,21 +85,21 @@ func isConcurrentMigrateRace(err error) bool {
 	return false
 }
 
-// embeddedMigrationCount is the number of *.sql migrations bundled in the embed
-// FS; schema_migrations must track each exactly once after Migrate().
-func embeddedMigrationCount(t *testing.T) int {
+// embeddedMigrationNames is the *.sql filenames bundled in the embed FS;
+// schema_migrations must track each exactly once after Migrate().
+func embeddedMigrationNames(t *testing.T) []string {
 	t.Helper()
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
 	}
-	n := 0
+	var names []string
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			n++
+			names = append(names, e.Name())
 		}
 	}
-	return n
+	return names
 }
 
 // TestMigrateAppliesAndIsIdempotent proves the live-DB idempotency the Migrate()
@@ -109,45 +111,44 @@ func TestMigrateAppliesAndIsIdempotent(t *testing.T) {
 	pool := pgPool(t) // first Migrate() already ran
 	ctx := context.Background()
 
-	want := embeddedMigrationCount(t)
-	if want == 0 {
+	names := embeddedMigrationNames(t)
+	if len(names) == 0 {
 		t.Fatal("no embedded migrations; embed glob is broken")
 	}
 
-	// Every embedded migration must be tracked exactly once after the first run.
-	countRecorded := func() int {
+	// Compare the recorded SET with the embedded one, filename by filename, so a
+	// failure names the file: one Migrate did not record, or a recorded one that
+	// no embedded migration accounts for. A row count could only say "off by one"
+	// (#210). filename is the table's primary key, so no name can be recorded
+	// twice.
+	assertRecordedSetIsEmbeddedSet := func(when string) {
 		t.Helper()
-		var n int
-		if err := pool.QueryRow(ctx,
-			`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
-			t.Fatalf("count schema_migrations: %v", err)
+		rows, err := pool.Query(ctx, `SELECT filename FROM schema_migrations ORDER BY filename`)
+		if err != nil {
+			t.Fatalf("read schema_migrations: %v", err)
 		}
-		return n
+		recorded, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatalf("read schema_migrations: %v", err)
+		}
+		for _, name := range names {
+			if !slices.Contains(recorded, name) {
+				t.Errorf("%s: %s is not recorded in schema_migrations", when, name)
+			}
+		}
+		for _, name := range recorded {
+			if !slices.Contains(names, name) {
+				t.Errorf("%s: schema_migrations records %s, which is not an embedded migration", when, name)
+			}
+		}
 	}
-	if got := countRecorded(); got != want {
-		t.Fatalf("schema_migrations rows after first Migrate = %d, want %d", got, want)
-	}
+	assertRecordedSetIsEmbeddedSet("after first Migrate")
 
-	// No filename is tracked more than once (filename is the PK; a dupe would
-	// mean a migration was applied twice).
-	var maxDupe int
-	if err := pool.QueryRow(ctx, `
-		SELECT COALESCE(MAX(c),0) FROM (
-			SELECT COUNT(*) AS c FROM schema_migrations GROUP BY filename
-		) g`).Scan(&maxDupe); err != nil {
-		t.Fatalf("dupe check: %v", err)
-	}
-	if maxDupe != 1 {
-		t.Errorf("a migration filename is tracked %d times; Migrate is not idempotent", maxDupe)
-	}
-
-	// Re-running Migrate() must be a clean no-op: same row count, no error.
+	// Re-running Migrate() must be a clean no-op: same recorded set, no error.
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("second Migrate (should be no-op): %v", err)
 	}
-	if got := countRecorded(); got != want {
-		t.Errorf("schema_migrations rows after second Migrate = %d, want %d (re-run must not add rows)", got, want)
-	}
+	assertRecordedSetIsEmbeddedSet("after second Migrate")
 }
 
 // TestMigrateAdvisoryLockSerializesBoots: Migrate() takes the dedicated
@@ -680,8 +681,8 @@ func TestPG_MigrateAppliesTheUpgradeSetOverNonEmptyData(t *testing.T) {
 	if wsOwner != "" || secretOwner != "" {
 		t.Errorf("pre-upgrade rows did not take the '' owner default: workspace=%q secret=%q", wsOwner, secretOwner)
 	}
-	if tokenRole != "member" {
-		t.Errorf("pre-upgrade api_tokens.role = %q, want the column default 'member'", tokenRole)
+	if tokenRole != "user" {
+		t.Errorf("pre-upgrade api_tokens.role = %q, want the column default 'member' as renamed by the tier rename, 'user'", tokenRole)
 	}
 
 	// 0050 REBUILT THE PRIMARY KEY on a table holding a row. Asserted from the

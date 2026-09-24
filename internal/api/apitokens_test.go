@@ -193,7 +193,7 @@ func TestAPITokenAuth_ContextParityWithSession(t *testing.T) {
 		ID:        uuid.New(),
 		Principal: tokenMemberSub,
 		Email:     tokenMemberMail,
-		Role:      oidc.RoleMember,
+		Role:      oidc.RoleUser,
 		Groups:    []string{"eng", "oncall"},
 		// A 0.7 mint RECORDS completeness (handleCreateAPIToken stamps the bit);
 		// leaving this nil would make the fixture a pre-0.7 row, which
@@ -265,7 +265,7 @@ func TestAPITokenAuth_NilGroupsStaySnapshotUnavailable(t *testing.T) {
 	srv, st, _ := apiTokenTestServer(t)
 	const raw = apiTokenPrefix + "nilgroups"
 	if _, err := st.CreateAPIToken(context.Background(), types.APIToken{
-		ID: uuid.New(), Principal: tokenMemberSub, Role: oidc.RoleMember, Groups: nil,
+		ID: uuid.New(), Principal: tokenMemberSub, Role: oidc.RoleUser, Groups: nil,
 	}, raw); err != nil {
 		t.Fatalf("seed token: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestAPITokenAuth_NilGroupsStaySnapshotUnavailable(t *testing.T) {
 // token once existed".
 func TestAPITokenAuth_RevokedIsRefused(t *testing.T) {
 	srv, _, _ := apiTokenTestServer(t)
-	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleMember)
+	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleUser)
 	raw, created := mintToken(t, srv, sess, "ci")
 
 	if w := do(t, srv, http.MethodGet, "/api/v1/me", raw, ""); w.Code != http.StatusOK {
@@ -319,7 +319,7 @@ func TestAPITokenAuth_RevokedIsRefused(t *testing.T) {
 // single character — the lookup is over the hash, never a prefix or a name.
 func TestAPITokenAuth_WrongHashIsRefused(t *testing.T) {
 	srv, _, _ := apiTokenTestServer(t)
-	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleMember)
+	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleUser)
 	raw, _ := mintToken(t, srv, sess, "ci")
 
 	nearMiss := raw[:len(raw)-1] + map[bool]string{true: "0", false: "1"}[strings.HasSuffix(raw, "1")]
@@ -360,7 +360,7 @@ func TestAPITokenAuth_AdminTokenStillWorks(t *testing.T) {
 // stamped role instead of falling through to "no session role to demote".
 func TestAPIToken_CannotReachAdminRouteUnlessAdminPrincipal(t *testing.T) {
 	srv, _, _ := apiTokenTestServer(t)
-	memberRaw, _ := mintToken(t, srv, ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleMember), "member-ci")
+	memberRaw, _ := mintToken(t, srv, ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleUser), "member-ci")
 	adminRaw, _ := mintToken(t, srv, ssoSession(t, tokenAdminSub, tokenAdminEmail, oidc.RoleAdmin), "admin-ci")
 
 	// GET /tokens and DELETE /tokens/{id} are the two admin-gated routes this
@@ -392,8 +392,8 @@ func TestAPIToken_CannotReachAdminRouteUnlessAdminPrincipal(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &me); err != nil {
 		t.Fatalf("decode /me: %v", err)
 	}
-	if me["principal"] != tokenMemberSub || me["operator"] != false || me["role"] != oidc.RoleMember {
-		t.Errorf("/me = %v, want principal=%s operator=false role=%s", me, tokenMemberSub, oidc.RoleMember)
+	if me["principal"] != tokenMemberSub || me["operator"] != false || me["role"] != oidc.RoleUser {
+		t.Errorf("/me = %v, want principal=%s operator=false role=%s", me, tokenMemberSub, oidc.RoleUser)
 	}
 	if me["principal"] == adminTokenPrincipal {
 		t.Error("a token resolved to the ADMIN identity — the whole point is that it never can")
@@ -404,10 +404,10 @@ func TestAPIToken_CannotReachAdminRouteUnlessAdminPrincipal(t *testing.T) {
 
 func TestAPITokens_CreateListRevoke(t *testing.T) {
 	srv, _, h := apiTokenTestServer(t)
-	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleMember)
+	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleUser)
 	raw, created := mintToken(t, srv, sess, "laptop")
 
-	if created.Principal != tokenMemberSub || created.Role != oidc.RoleMember || created.Name != "laptop" {
+	if created.Principal != tokenMemberSub || created.Role != oidc.RoleUser || created.Name != "laptop" {
 		t.Errorf("created = %+v, want the caller's own principal/role and the given name", created)
 	}
 	ev := lastAuditEvent(t, h.audit.events, "token.create")
@@ -438,7 +438,7 @@ func TestAPITokens_CreateListRevoke(t *testing.T) {
 
 	// Another human's list does not see it, and their revoke of it 404s (the
 	// store scopes both to the caller's principal).
-	other := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleMember)
+	other := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleUser)
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/me/tokens", other, ""); strings.Contains(w.Body.String(), created.ID.String()) {
 		t.Errorf("another human's list leaks the token: %s", w.Body.String())
 	}
@@ -469,7 +469,7 @@ func TestAPITokens_CreateListRevoke(t *testing.T) {
 // admin's outstanding tokens) and for a departed owner's credential.
 func TestAPITokens_AdminInventoryAndRevokeAny(t *testing.T) {
 	srv, _, _ := apiTokenTestServer(t)
-	memberSess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleMember)
+	memberSess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleUser)
 	adminSess := ssoSession(t, tokenAdminSub, tokenAdminEmail, oidc.RoleAdmin)
 	raw, created := mintToken(t, srv, memberSess, "member-ci")
 
@@ -518,7 +518,7 @@ func TestAPITokens_MintRequiresAVerifiedHuman(t *testing.T) {
 // slot, so the cap counts LIVE tokens, not rows.
 func TestAPITokens_PerPrincipalCap(t *testing.T) {
 	srv, _, _ := apiTokenTestServer(t)
-	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleMember)
+	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleUser)
 	var first types.APIToken
 	for i := 0; i < apiTokenMaxPerPrincipal; i++ {
 		_, created := mintToken(t, srv, sess, "t")

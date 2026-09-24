@@ -114,7 +114,7 @@ export function AddWorkspaceDialog({
   // carries no operator gate — only local_dir's root constraint below is
   // role-aware.
   //
-  // 0.7 §B: this is `!operator`, NOT `role === "member"`. The constraint
+  // 0.7 §B: this is `!operator`, NOT `role === "user"`. The constraint
   // follows the workspace-OWNERSHIP namespace — secretOwnerFromRequest stays
   // on isOperator deliberately — so a SECURITY ADMIN's workspaces are
   // owner-stamped like a member's, get a real member_local_dir_root from /me

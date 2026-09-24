@@ -35,7 +35,7 @@ var terminalRunStates = map[string]bool{
 // decidable for 24h — long enough for an `always` approve to be replayed into
 // the workspace allowlist for a sandbox that no longer existed.
 //
-// A FIFTH writer added anywhere in internal/api or cmd/wardynd reds this test,
+// A new writer added anywhere in internal/api or cmd/wardynd reds this test,
 // which is the point: the author must say which treatment it gets before the
 // transition can ship.
 var terminalWriterCensus = map[string]string{
@@ -68,6 +68,10 @@ var terminalWriterCensus = map[string]string{
 	// that is false at three call sites, and would let a PENDING approval sit in
 	// the queue for 24h and expire as "nobody answered".
 	"failAndRevoke": "calls cancelRunApprovals when from==RunRunning; exempt below it",
+	// (5) The lease (#568): a run whose end passed and could not be kept, or
+	// whose ended-run grace ran out. CASes RUNNING->STOPPED, then
+	// finalizeRunTail.
+	"stopEndedRun": "CASes, then finalizeRunTail",
 }
 
 // TestTerminalRunStateWriterCensus scans every non-test .go file in internal/api

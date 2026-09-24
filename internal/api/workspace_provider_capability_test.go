@@ -136,7 +136,7 @@ func providerWorkspaceDoor(name string, fire func(t *testing.T, srv *Server, st 
 		name: name,
 		sub:  ownerMemberSub,
 		member: func(t *testing.T) *http.Cookie {
-			return ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+			return ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 		},
 		operator: func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
@@ -312,7 +312,7 @@ func TestCapabilityWorkspaceProviderUnclaimedHostIsANoOp(t *testing.T) {
 // half-onboards a workspace, or leaves a re-pointed source behind, is worse than
 // no gate at all.
 func TestCapabilityWorkspaceProviderRefusalCostsNoState(t *testing.T) {
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	const wsBody = `{"name":"app","sources":[{"type":"repo","source":"` + capProviderRepo + `"}]}`
 
 	t.Run("POST /workspaces writes nothing", func(t *testing.T) {

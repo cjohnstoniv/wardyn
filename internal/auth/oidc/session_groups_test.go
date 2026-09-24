@@ -197,10 +197,11 @@ func TestSessionGroupsCapKeepsTheCookieUsable(t *testing.T) {
 	sess := writoidc.Session{
 		Sub: "sub-with-a-long-opaque-idp-identifier-0123456789",
 		// Roughly the longest email a real deployment produces.
-		Email:  "firstname.lastname@a-fairly-long-corporate-domain.example.com",
-		Role:   writoidc.RoleMember,
-		Expiry: time.Now().Add(time.Hour),
-		Groups: got,
+		Email:    "firstname.lastname@a-fairly-long-corporate-domain.example.com",
+		Role:     writoidc.RoleUser,
+		UserType: "standard",
+		Expiry:   time.Now().Add(time.Hour),
+		Groups:   got,
 	}
 	env := newIdPEnv(t)
 	cookie, err := writoidc.EncodeSessionForTest(env.newAuth(t, nil), sess)
@@ -277,7 +278,7 @@ func TestPreCodecBumpCookieReDerives(t *testing.T) {
 	// Byte-for-byte a pre-0.7 payload: no "v" key, and no "groups" either (this
 	// is what a 0.5 binary actually wrote).
 	payload := []byte(fmt.Sprintf(`{"sub":"sub-legacy","email":"legacy@example.com","role":%q,"expiry":%q}`,
-		writoidc.RoleMember, time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)))
+		writoidc.RoleUser, time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)))
 	if strings.Contains(string(payload), `"v"`) {
 		t.Fatal("fixture is not a pre-codec-bump payload")
 	}
@@ -290,8 +291,8 @@ func TestPreCodecBumpCookieReDerives(t *testing.T) {
 	// A CURRENT-version payload that simply omits "groups" must still decode to
 	// NIL: the bump versions the payload, it does not collapse the nil-vs-empty
 	// distinction internal/api turns into groups_snapshot_stale.
-	current := []byte(fmt.Sprintf(`{"v":%d,"sub":"sub-current","email":"c@example.com","role":%q,"expiry":%q}`,
-		writoidc.SessionCodecVersion, writoidc.RoleMember,
+	current := []byte(fmt.Sprintf(`{"v":%d,"sub":"sub-current","email":"c@example.com","role":%q,"ut":"standard","expiry":%q}`,
+		writoidc.SessionCodecVersion, writoidc.RoleUser,
 		time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)))
 	sub, groups, ok := sessionThroughMiddleware(t, auth, writoidc.EncodeRawSessionForTest(auth, current))
 	if !ok || sub != "sub-current" {
@@ -327,7 +328,7 @@ func TestTruncationBitSurvivesTheCookie(t *testing.T) {
 	auth := env.newAuth(t, nil)
 	kept := writoidc.SessionGroupsForTest(nil, claim)
 	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
-		Sub: "sub-many-groups", Email: "many@example.com", Role: writoidc.RoleMember,
+		Sub: "sub-many-groups", Email: "many@example.com", Role: writoidc.RoleUser, UserType: "standard",
 		Expiry: time.Now().Add(time.Hour), Groups: kept, GroupsTruncated: true,
 	})
 	if err != nil {
@@ -359,7 +360,7 @@ func TestEmptyGroupsSurviveTheCookieAsNonNil(t *testing.T) {
 	auth := env.newAuth(t, nil)
 
 	cookie, err := writoidc.EncodeSessionForTest(auth, writoidc.Session{
-		Sub: "sub-empty", Email: "e@example.com", Role: writoidc.RoleMember,
+		Sub: "sub-empty", Email: "e@example.com", Role: writoidc.RoleUser, UserType: "standard",
 		Expiry: time.Now().Add(time.Hour), Groups: []string{},
 	})
 	if err != nil {
@@ -383,7 +384,7 @@ func TestEmptyGroupsSurviveTheCookieAsNonNil(t *testing.T) {
 // same two claims deriveRole consumes, and reaches the request context intact.
 func TestCallbackStampsSessionGroups(t *testing.T) {
 	env := newIdPEnv(t)
-	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleMember}, "", nil)
+	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", nil)
 
 	w, sess := doRoleCallback(t, env, auth, "bob@corp.example",
 		[]string{"Wardyn.Contractors"}, []string{"eng-team", "ENG-TEAM"})

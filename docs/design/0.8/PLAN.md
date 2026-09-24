@@ -553,6 +553,29 @@ against the delta header; and "push any branch" must not silently disable conten
 **Open question.** `no-thin` on by default when rules are set → **yes**, off when they are nil; a
 fourth switch would create a posture where rules are set and silently uninspectable.
 
+**Measured: the tree-entry ceiling ([#254](https://github.com/cjohnstoniv/wardyn/issues/254)).**
+The inspector's `maxTreeNodes` is set against what real pushes charge. Each range `tip~N..tip` of
+a default branch (2026-09-23) was packed the way `git push` sends it — `git pack-objects --revs
+--delta-base-offset`, no thin pack — and replayed through the walker with every ceiling lifted.
+No range held a shallow-clone boundary. "Before" charges every comparison each time a commit makes
+it; "after" charges a comparison (path, old tree, new tree) once, which is what the walker does now.
+
+| Repository | Shape | Commits replayed | Entries per carried tree entry, before → after | Commits at which each ceiling refuses: `maxInflatedBytes` / `maxTreeNodes` before / after |
+|---|---|---|---|---|
+| this repository | Go and TypeScript application | 41 – 3,642 (whole history) | 2.5–5.3 → 2.4–3.5 | ~320 / ~570 / ~1,150 |
+| kubernetes/kubernetes | wide; deep `vendor/` and `staging/` | 25 – 1,007 | 2.7–9.0 → 2.6–4.1 | ~235 / ~680 / ~1,300 |
+| spring-projects/spring-framework | one class per directory; merge-heavy | 18 – 4,731 | 3.4–16.7 → 2.2–2.8 | ~2,040 / ~570 / ~2,270 |
+| torvalds/linux | dense; merge-heavy | 21 – 1,402 | 1.9–3.3 → 1.9–2.5 | ~1,430 / ~990 / ~1,230 |
+
+Charged per visit, every merge paid again for each directory the other side had changed, so a
+merge-heavy history's charge outgrew its commits, and an honest push of about 570 commits was
+refused as uninspectable while inflating a fifth of what `maxInflatedBytes` allows. Charged once per
+comparison, the charge is about two to four entries per tree entry the pack carries, and
+`maxInflatedBytes` bounds those: the densest trees reach the two ceilings within about 15% of each
+other, and trees of larger files reach `maxInflatedBytes` first. The walk costs 0.15–0.75 µs per
+entry, under a second at the ceiling. The ceiling stays at 1,000,000 rather than rising to clear
+the densest trees, because the walk's memos hold a key for every entry it charges.
+
 ### Dependency hygiene — [#88](https://github.com/cjohnstoniv/wardyn/issues/88)
 
 **Delivers.** The open dependency pull requests triaged and landed, three development-time

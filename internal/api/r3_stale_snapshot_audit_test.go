@@ -50,7 +50,7 @@ func TestStaleSnapshotRefusalIsAudited(t *testing.T) {
 		srv, rec := newSrv(t, true)
 		// A member whose group snapshot is NIL — the launch-side spelling of
 		// "the group tier was not evaluated".
-		member := ssoSession(t, "sub-stale-bob", "bob@corp.example", oidc.RoleMember)
+		member := ssoSession(t, "sub-stale-bob", "bob@corp.example", oidc.RoleUser)
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/policies/default", member, "")
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("GET /policies/default = %d, want 403; body=%s", w.Code, w.Body.String())
@@ -96,7 +96,7 @@ func TestStaleSnapshotRefusalIsAudited(t *testing.T) {
 	// pre-upgrade session rather than signal.
 	t.Run("a deployment with no group-tier assignment writes no denial", func(t *testing.T) {
 		srv, rec := newSrv(t, false)
-		member := ssoSession(t, "sub-ok-bob", "ok@corp.example", oidc.RoleMember)
+		member := ssoSession(t, "sub-ok-bob", "ok@corp.example", oidc.RoleUser)
 		before := len(rec.events)
 		if w := doSSO(t, srv, http.MethodGet, "/api/v1/policies/default", member, ""); w.Code == http.StatusForbidden {
 			t.Fatalf("a member on a deployment with no group-tier assignment was refused; body=%s", w.Body.String())

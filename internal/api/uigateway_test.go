@@ -310,7 +310,7 @@ func (h *uiHarness) openSession() *http.Cookie {
 	h.t.Helper()
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusFound {
 		h.t.Fatalf("enter: %d %s", rec.Code, rec.Body.String())
@@ -409,7 +409,7 @@ func TestUIGateway_ConsoleOriginHasNoRelayRoutes(t *testing.T) {
 // oracle to distinguish the cases.
 func TestUIGateway_EnterRejectsBadTickets(t *testing.T) {
 	h := newUIHarness(t, okBackend())
-	used := h.ticket(h.run.ID, h.owner, oidc.RoleMember)
+	used := h.ticket(h.run.ID, h.owner, oidc.RoleUser)
 	if rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {used}}); rec.Code != http.StatusFound {
 		t.Fatalf("first redemption: %d", rec.Code)
 	}
@@ -420,7 +420,7 @@ func TestUIGateway_EnterRejectsBadTickets(t *testing.T) {
 		"no ticket":                     {"run": {h.run.ID.String()}, "app": {"code"}},
 		"garbage ticket":                {"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {"deadbeef"}},
 		"reused ticket":                 {"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {used}},
-		"ticket minted for another run": {"run": {otherRun.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)}},
+		"ticket minted for another run": {"run": {otherRun.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)}},
 	}
 	for name, q := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -439,7 +439,7 @@ func TestUIGateway_EnterRejectsNonOwnerTicket(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, "mallory", oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, "mallory", oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("non-owner ticket: %d %s", rec.Code, rec.Body.String())
@@ -462,7 +462,7 @@ func TestUIGateway_EnterRequiresDeclaredApp(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"secretsrv"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("undeclared app: %d", rec.Code)
@@ -477,7 +477,7 @@ func TestUIGateway_EnterRequiresDeclaredApp(t *testing.T) {
 	h.store.putRun(bare)
 	rec = h.enter(url.Values{
 		"run": {bare.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(bare.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(bare.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("run with no effective policy: %d", rec.Code)
@@ -493,10 +493,53 @@ func TestUIGateway_EnterRequiresRunningRun(t *testing.T) {
 	h.store.putRun(stopped)
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("stopped run: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestUIGateway_EnterRefusesAKeptRun: a run the lease ended is RUNNING with
+// its agent stopped, so /enter must refuse it with a plain 409 rather than
+// minting a cookie and redirecting into a relay that dies on its first dial
+// (matching the attach gates' TestAttach_RefusesAKeptRun).
+func TestUIGateway_EnterRefusesAKeptRun(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	kept := h.run
+	endedAt := time.Now()
+	kept.LostAt, kept.LostReason = &endedAt, types.LostEnded
+	h.store.putRun(kept)
+
+	rec := h.enter(url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("kept run: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == uiCookieName {
+			t.Fatal("a kept run must not get a relay cookie")
+		}
+	}
+}
+
+// TestUIGateway_RelayRefusesAKeptRun: the per-connection dial gate re-checks
+// the run on EVERY new connection (not just at enter), so a session opened
+// before the run ended must stop working once it is kept, the same as a
+// stopped run.
+func TestUIGateway_RelayRefusesAKeptRun(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	good := h.openSession()
+
+	kept := h.run
+	endedAt := time.Now()
+	kept.LostAt, kept.LostReason = &endedAt, types.LostEnded
+	h.store.putRun(kept)
+
+	if rec := h.relay("/ide", good, nil); rec.Code != http.StatusConflict {
+		t.Fatalf("kept run: %d %s, want 409", rec.Code, rec.Body.String())
 	}
 }
 
@@ -510,7 +553,7 @@ func TestUIGateway_EnterSetsRunScopedCookie(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusFound {
 		t.Fatalf("enter: %d %s", rec.Code, rec.Body.String())
@@ -547,7 +590,7 @@ func TestUIGateway_HostModeBindsEnterToTheRunsOrigin(t *testing.T) {
 	h.srv.cfg.UIOriginTemplate = "https://run-{run}.ui.example.com"
 	q := url.Values{
 		"run": {h.run.ID.String()}, "app": {"code"},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	}
 	req := httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil)
 	req.Host = "run-" + uuid.New().String() + ".ui.example.com"
@@ -557,7 +600,7 @@ func TestUIGateway_HostModeBindsEnterToTheRunsOrigin(t *testing.T) {
 		t.Fatalf("enter on another run's host: %d %s", rec.Code, rec.Body.String())
 	}
 
-	q.Set("ticket", h.ticket(h.run.ID, h.owner, oidc.RoleMember))
+	q.Set("ticket", h.ticket(h.run.ID, h.owner, oidc.RoleUser))
 	req = httptest.NewRequest(http.MethodGet, uiEnterPath+"?"+q.Encode(), nil)
 	req.Host = "run-" + h.run.ID.String() + ".ui.example.com"
 	rec = httptest.NewRecorder()

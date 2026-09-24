@@ -585,7 +585,7 @@ func TestListSSHKeys_Decodes(t *testing.T) {
 		}
 		checkAuth(t, r)
 		writeJSON(w, http.StatusOK, []client.SSHPublicKey{
-			{Fingerprint: "SHA256:abc", Principal: "alice@example.com", Name: "laptop", PublicKey: "ssh-ed25519 AAAA... laptop", Role: "member", CreatedAt: created},
+			{Fingerprint: "SHA256:abc", Principal: "alice@example.com", Name: "laptop", PublicKey: "ssh-ed25519 AAAA... laptop", Role: "user", CreatedAt: created},
 		})
 	}))
 	defer srv.Close()
@@ -594,7 +594,7 @@ func TestListSSHKeys_Decodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) != 1 || got[0].Fingerprint != "SHA256:abc" || got[0].Name != "laptop" || got[0].Role != "member" {
+	if len(got) != 1 || got[0].Fingerprint != "SHA256:abc" || got[0].Name != "laptop" || got[0].Role != "user" {
 		t.Errorf("got %+v, want one decoded key", got)
 	}
 	if !got[0].CreatedAt.Equal(created) {
@@ -621,7 +621,7 @@ func TestAddSSHKey_RequestBodyExactShapeAndDecodes(t *testing.T) {
 		}
 		writeJSON(w, http.StatusCreated, client.SSHPublicKey{
 			Fingerprint: "SHA256:abc", Principal: "alice@example.com", Name: "laptop",
-			PublicKey: "ssh-ed25519 AAAA... laptop", Role: "member",
+			PublicKey: "ssh-ed25519 AAAA... laptop", Role: "user",
 		})
 	}))
 	defer srv.Close()

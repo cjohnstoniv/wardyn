@@ -378,7 +378,7 @@ func TestADOEntraLane_CleartextThroughPlainLaneIsRefused(t *testing.T) {
 	raw, err := runner.BuildProxyConfig(runID, runner.ProxyConfig{
 		RunToken: "run-token", ControlPlaneURL: cp.URL, Policy: policy, Injection: lane.injections,
 		MITMCACertPEM: string(certPEM), MITMCAKeyPEM: string(keyPEM), MITMHosts: lane.mitmHosts,
-		ADOGrants: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCA.caPEM,
+		ADOGrant: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCA.caPEM,
 	}, port)
 	if err != nil {
 		t.Fatalf("BuildProxyConfig: %v", err)

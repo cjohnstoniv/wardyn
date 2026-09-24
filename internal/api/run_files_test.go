@@ -243,7 +243,7 @@ func TestRunFiles_ForeignRun404(t *testing.T) {
 	})
 
 	member := func(ctx context.Context) context.Context {
-		return withOIDCRole(withOIDCHuman(ctx, "sub-someone-else@corp.example"), oidc.RoleMember)
+		return withOIDCRole(withOIDCHuman(ctx, "sub-someone-else@corp.example"), oidc.RoleUser)
 	}
 	w := doRunFiles(srv, run.ID, member)
 	if w.Code != http.StatusNotFound {

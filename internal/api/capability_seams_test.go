@@ -119,7 +119,7 @@ func TestDecide_EgressHostCapability(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newScopeFixture(t)
 			withCaps(f.srv, f.store, tc.grants, tc.enf)
-			member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember)
+			member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser)
 			id := f.seedEgress(t, host)
 
 			code, body := approveAs(t, f.srv, member, id)
@@ -165,7 +165,7 @@ func TestDecide_EgressHostCapabilityRunsAfterOwnership(t *testing.T) {
 	withCaps(f.srv, f.store,
 		[]types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capEgressHost, capWildcard, types.CapabilityDeny)},
 		map[string]bool{capEgressHost: true})
-	member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser)
 
 	// An egress approval on somebody else's run.
 	foreignRun := uuid.New()
@@ -244,7 +244,7 @@ func capPolicyServer(t *testing.T, grants []types.CapabilityGrant, enf map[strin
 func memberRequest(t *testing.T) *http.Request {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
-	return r.WithContext(withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleMember), nil))
+	return r.WithContext(withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleUser), nil))
 }
 
 // resolveInline runs the member's inline policy through the real chokepoint and
@@ -598,7 +598,7 @@ func TestDenyMemberRequest_WorkspaceRefusedOnBothDoors(t *testing.T) {
 	h.srv.cfg.OIDC = &oidc.Authenticator{}
 	h.srv.cfg.Store = &capStore{Store: newAuthzStore(), enf: map[string]bool{capWorkspace: true}}
 	h.srv.router = h.srv.routes()
-	member := ssoSession(t, capSub, capEmail, oidc.RoleMember)
+	member := ssoSession(t, capSub, capEmail, oidc.RoleUser)
 	body := `{"agent":"claude-code","workspace_id":"` + uuid.New().String() + `"}`
 
 	for _, path := range []string{"/api/v1/runs", "/api/v1/runs/preflight"} {
@@ -781,7 +781,7 @@ func TestListSecrets_MemberNarrowing(t *testing.T) {
 		h.srv.router = h.srv.routes()
 		return h.srv
 	}
-	member := ssoSession(t, capSub, capEmail, oidc.RoleMember)
+	member := ssoSession(t, capSub, capEmail, oidc.RoleUser)
 	admin := ssoSession(t, "sub-admin-secrets", "admin@corp.example", oidc.RoleAdmin)
 
 	t.Run("no grants and no switch: the whole ceiling-paired list, capSecret unenforced", func(t *testing.T) {
@@ -840,7 +840,7 @@ func TestMeCapabilities_HidesCreatedBy(t *testing.T) {
 	h.srv.router = h.srv.routes()
 
 	w := doSSO(t, h.srv, http.MethodGet, "/api/v1/me/capabilities",
-		ssoSession(t, capSub, capEmail, oidc.RoleMember), "")
+		ssoSession(t, capSub, capEmail, oidc.RoleUser), "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /me/capabilities = %d: %s", w.Code, w.Body.String())
 	}

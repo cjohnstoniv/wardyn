@@ -63,9 +63,9 @@ func f2BuildOverageIDToken(t *testing.T, e *idpEnv, sub, email string) string {
 
 func TestF2_GroupsOverageMarkerStampsTruncated(t *testing.T) {
 	env := newIdPEnv(t)
-	// A member-role map so the login is admitted with RoleMember (an admin
+	// A member-role map so the login is admitted with RoleUser (an admin
 	// would short-circuit the ceiling anyway and prove nothing).
-	auth := env.newRoleAuth(t, map[string]string{"eng-team": "member"}, "member", nil)
+	auth := env.newRoleAuth(t, map[string]string{"eng-team": "user"}, "user", nil)
 
 	// Entra overage shape: NO "groups" key at all, a _claim_names/_claim_sources
 	// pointer pair instead.

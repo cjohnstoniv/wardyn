@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -229,9 +230,7 @@ func TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease(t *testing.T) {
 	noop := func(egress.Decision, string, *egress.ScanSummary) {}
 	body := `{"payload":"a body whose bytes stay live until the caller is done with them"}`
 
-	orig := maxRetainedScanBytes
-	maxRetainedScanBytes = len(body) // room for exactly ONE of these at a time
-	t.Cleanup(func() { maxRetainedScanBytes = orig })
+	shrinkRetainedBudget(t, len(body)) // room for exactly ONE of these at a time
 
 	req := httptest.NewRequest(http.MethodPost, "http://connector.test/a", strings.NewReader(body))
 	reader, _, release, blocked := p.scanBufferedBody(httptest.NewRecorder(), req,
@@ -239,10 +238,10 @@ func TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease(t *testing.T) {
 	if blocked || reader == nil {
 		t.Fatalf("a clean in-cap body must be returned for forwarding (blocked=%v reader=%v)", blocked, reader)
 	}
-	if got := scanRetained.inUse(); got != len(body) {
-		t.Fatalf("bytes charged after scanBufferedBody returned = %d, want %d — the buffer is still "+
-			"reachable (the caller has not streamed it upstream yet), so it must still be charged; "+
-			"releasing at return is what let N requests retain N x 32 MiB with no slot held", got, len(body))
+	if scanRetained.TryAcquire(1) {
+		t.Fatalf("the %d-byte budget has room after scanBufferedBody returned — the buffer is still "+
+			"reachable (the caller has not streamed it upstream yet), so all %d bytes must still be charged; "+
+			"releasing at return is what let N requests retain N x 32 MiB with no slot held", len(body), len(body))
 	}
 
 	// While it is charged, a second body that would exceed the budget cannot be
@@ -264,8 +263,8 @@ func TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease(t *testing.T) {
 
 	// Released, the budget is free again and the next body proceeds.
 	release()
-	if got := scanRetained.inUse(); got != 0 {
-		t.Fatalf("bytes still charged after release() = %d, want 0", got)
+	if !retainedBudgetEmpty() {
+		t.Fatal("bytes still charged after release(), want 0")
 	}
 	req3 := httptest.NewRequest(http.MethodPost, "http://connector.test/c", strings.NewReader(body))
 	_, _, release3, blocked3 := p.scanBufferedBody(httptest.NewRecorder(), req3,
@@ -274,5 +273,81 @@ func TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease(t *testing.T) {
 	if blocked3 {
 		t.Fatal("a body must be admitted once the previous one released its bytes — the budget bounds " +
 			"memory, it must not become a one-shot")
+	}
+}
+
+// shrinkRetainedBudget swaps in a budget of n bytes for one test, so the
+// lifetime claims can be exercised without allocating tens of MiB.
+func shrinkRetainedBudget(t *testing.T, n int) {
+	t.Helper()
+	origLimit, origSem := maxRetainedScanBytes, scanRetained
+	maxRetainedScanBytes, scanRetained = n, semaphore.NewWeighted(int64(n))
+	t.Cleanup(func() { maxRetainedScanBytes, scanRetained = origLimit, origSem })
+}
+
+// retainedBudgetEmpty reports whether nothing is charged to scanRetained.
+func retainedBudgetEmpty() bool {
+	if !scanRetained.TryAcquire(int64(maxRetainedScanBytes)) {
+		return false
+	}
+	scanRetained.Release(int64(maxRetainedScanBytes))
+	return true
+}
+
+// TestRetainScanBufferWaitsCancelsAndAdmitsOversize pins the byte budget's
+// three behaviours: a charge that does not fit waits for a release, the wait
+// is bounded by ctx and fails closed, and a body larger than the whole budget
+// is admitted once the budget is empty instead of waiting forever. It also pins
+// that a charge with room succeeds under an expired ctx — the ctx bounds the
+// wait, and it may have run out while a slow body was being read.
+func TestRetainScanBufferWaitsCancelsAndAdmitsOversize(t *testing.T) {
+	shrinkRetainedBudget(t, 100)
+
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	first, ok := retainScanBuffer(expired, 60)
+	if !ok {
+		t.Fatal("a charge with room was refused because its ctx had expired — only a wait is ctx-bounded")
+	}
+
+	if _, ok := retainScanBuffer(expired, 60); ok {
+		t.Fatal("a charge that does not fit was admitted over the budget")
+	}
+
+	got := make(chan bool, 1)
+	go func() {
+		_, ok := retainScanBuffer(context.Background(), 60)
+		got <- ok
+	}()
+	select {
+	case <-got:
+		t.Fatal("a charge that does not fit returned before any bytes were released")
+	case <-time.After(50 * time.Millisecond):
+	}
+	first()
+	first() // idempotent: a second call must not over-credit the budget
+	if ok := <-got; !ok {
+		t.Fatal("a waiting charge was not admitted after the bytes it waited on were released")
+	}
+	if scanRetained.TryAcquire(41) {
+		t.Fatal("release() credited the budget twice")
+	}
+
+	// 60 bytes are still charged: an oversize body waits for them, then fits.
+	short, cancelShort := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelShort()
+	if _, ok := retainScanBuffer(short, 500); ok {
+		t.Fatal("an oversize body was admitted beside bytes already charged")
+	}
+	scanRetained.Release(60)
+	bounded, cancelBounded := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelBounded()
+	release, ok := retainScanBuffer(bounded, 500)
+	if !ok {
+		t.Fatal("an oversize body was refused on an empty budget — it would wait forever on room only it could free")
+	}
+	release()
+	if !retainedBudgetEmpty() {
+		t.Fatal("releasing an oversize body left bytes charged")
 	}
 }

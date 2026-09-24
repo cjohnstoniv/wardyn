@@ -212,7 +212,7 @@ func TestGetDefaultPolicyRedactsForMembers(t *testing.T) {
 		return got, w.Body.String()
 	}
 
-	member, raw := read(t, ssoSession(t, "sub-pol-member", "dev@corp.example", oidc.RoleMember))
+	member, raw := read(t, ssoSession(t, "sub-pol-member", "dev@corp.example", oidc.RoleUser))
 	for _, leak := range []string{"/home/operator/.claude", "prod-anthropic-key", "deploy-key", "gh-known-hosts"} {
 		if strings.Contains(raw, leak) {
 			t.Errorf("member read leaked %q: %s", leak, raw)

@@ -250,7 +250,7 @@ func drivePreviewShareServer(t *testing.T, st *driveStore, homes ...string) *Ser
 // identity, group snapshot, and the snapshot's completeness bit.
 func driveMemberCtx(groups []string, truncated bool) context.Context {
 	return withOIDCGroupsTruncated(
-		withOIDCGroups(operatorCtx("sub-drive-bob", "bob@corp.example", oidc.RoleMember), groups),
+		withOIDCGroups(operatorCtx("sub-drive-bob", "bob@corp.example", oidc.RoleUser), groups),
 		truncated)
 }
 
@@ -303,7 +303,7 @@ func TestResolveUserDrive(t *testing.T) {
 			t.Errorf("error = %v, want the store failure wrapped", err)
 		}
 		w := httptest.NewRecorder()
-		writeDriveError(w, err)
+		writeDriveError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("writeDriveError(store failure) = %d, want 500", w.Code)
 		}
@@ -365,7 +365,7 @@ func TestResolveUserDrive(t *testing.T) {
 					t.Errorf("error = %v, want a store failure rather than the stale-snapshot refusal", err)
 				}
 				w := httptest.NewRecorder()
-				writeDriveError(w, err)
+				writeDriveError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 				if w.Code != http.StatusInternalServerError {
 					t.Errorf("writeDriveError(group-tier read failure) = %d, want 500", w.Code)
 				}
@@ -434,7 +434,7 @@ func TestResolveUserDrive(t *testing.T) {
 			t.Fatalf("err = %v, want errGroupsSnapshotStale", err)
 		}
 		w := httptest.NewRecorder()
-		writeDriveError(w, err)
+		writeDriveError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusForbidden {
 			t.Errorf("writeDriveError(stale) = %d, want 403", w.Code)
 		}
@@ -609,13 +609,13 @@ func TestResolveUserDrive(t *testing.T) {
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 		// A caller carrying a sub and NO email claim: email_local has nothing to
 		// truncate, so the home cannot be derived at all.
-		noEmail := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleMember), []string{"eng"})
+		noEmail := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleUser), []string{"eng"})
 		_, err := driveServer(st).resolveUserDrive(noEmail, 0)
 		if !errors.Is(err, errDriveUnmountable) {
 			t.Fatalf("err = %v, want errDriveUnmountable", err)
 		}
 		w := httptest.NewRecorder()
-		writeDriveError(w, err)
+		writeDriveError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusUnprocessableEntity {
 			t.Errorf("writeDriveError(unmountable) = %d, want 422 — the caller is authorized, there is simply nothing to mount", w.Code)
 		}
@@ -640,7 +640,7 @@ func TestResolveUserDrive(t *testing.T) {
 			t.Errorf("err = %v, want the frozen REFUSED_BACKEND shape", err)
 		}
 		w := httptest.NewRecorder()
-		writeDriveError(w, err)
+		writeDriveError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusUnprocessableEntity {
 			t.Errorf("writeDriveError = %d, want 422", w.Code)
 		}
@@ -799,7 +799,7 @@ func TestResolveUserDrive(t *testing.T) {
 		})
 		st := &driveStore{drive: d, tier: types.CapabilitySubjectUser,
 			grant: grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Enabled = false })}
-		noEmail := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleMember), []string{"eng"})
+		noEmail := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleUser), []string{"eng"})
 		got, err := driveServer(st).resolveUserDrive(noEmail, 0)
 		if err != nil {
 			t.Fatalf("resolve = %v, want the paused answer rather than an unmountable refusal", err)
@@ -1647,7 +1647,7 @@ func TestPreviewDoorTakesTheUnusableGroupTier(t *testing.T) {
 	srv := driveServer(newStore())
 	// A member whose group snapshot is NIL — the launch-side spelling of "the
 	// group tier was not evaluated", which is what an empty preview `groups` is.
-	ctx := withOIDCGroups(operatorCtx("sub-drive-bob", "bob@corp.example", oidc.RoleMember), nil)
+	ctx := withOIDCGroups(operatorCtx("sub-drive-bob", "bob@corp.example", oidc.RoleUser), nil)
 	if _, err := srv.effectiveCeiling(ctx); !errors.Is(err, errGroupsSnapshotStale) {
 		t.Fatalf("the launch ceiling for the same claims = %v, want errGroupsSnapshotStale — "+
 			"the preview must not be answering a question the launch refuses", err)
@@ -1775,7 +1775,7 @@ func TestPreviewUnmountableDriveCountsNoRefusal(t *testing.T) {
 	// counts exactly once, and its body is byte-identical to the preview's.
 	srv2, _ := driveShareServer(newStore(), []string{root})
 	before2 := driveRefusedMetric(t, srv2)
-	ctx := withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleMember), nil)
+	ctx := withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleUser), nil)
 	mount, ok, lw := driveSeed(t, srv2, driveRunRequest(true, nil), governanceCeiling{}, ctx)
 	if ok || mount != nil {
 		t.Fatalf("the launch door mounted a drive whose home directory is not on the share: %+v", mount)

@@ -95,7 +95,7 @@ func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
 
 	// Member: the exfil pairing is dropped, and Review is told about it.
 	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs/preflight",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("member preflight: code=%d, want 200; body=%s", w.Code, w.Body.String())
 	}

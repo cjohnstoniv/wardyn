@@ -609,7 +609,7 @@ func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 	const body = `{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
-		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember), body)
+		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser), body)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("member create with llm_cred = %d, want 403: %s", w.Code, w.Body.String())
 	}
@@ -642,7 +642,7 @@ func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 	// A member creating a workspace WITHOUT the field is unaffected — the gate
 	// names one field, not the member.
 	w = doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
-		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember), `{"name":"plain"}`)
+		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser), `{"name":"plain"}`)
 	if w.Code != http.StatusCreated {
 		t.Errorf("member create without llm_cred = %d, want 201: %s", w.Code, w.Body.String())
 	}

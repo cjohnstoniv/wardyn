@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -836,13 +837,15 @@ func TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor(t *testing.T) {
 
 	// Shared: the admin's page stays, and "again" is dropped for the one arm
 	// where nothing ever fired here.
+	sharedRemedyFirst := fmt.Sprintf(llmMechanismRemedySharedFmt, "")
+	sharedRemedy := fmt.Sprintf(llmMechanismRemedySharedFmt, " again")
 	sharedNothing := llmMechanismRefusal(sharedRow, "", false, "")
-	if !strings.Contains(sharedNothing, llmMechanismRemedySharedFirst) || strings.Contains(sharedNothing, "sign in again") {
-		t.Errorf("shared not-configured refusal = %q, want %q with no \"again\"", sharedNothing, llmMechanismRemedySharedFirst)
+	if !strings.Contains(sharedNothing, sharedRemedyFirst) || strings.Contains(sharedNothing, "sign in again") {
+		t.Errorf("shared not-configured refusal = %q, want %q with no \"again\"", sharedNothing, sharedRemedyFirst)
 	}
 	sharedWrongLane := llmMechanismRefusal(sharedRow, types.AgentMechanismAnthropicAPIKey, true, "")
-	if !strings.Contains(sharedWrongLane, llmMechanismRemedyShared) {
-		t.Errorf("shared wrong-lane refusal = %q, want %q", sharedWrongLane, llmMechanismRemedyShared)
+	if !strings.Contains(sharedWrongLane, sharedRemedy) {
+		t.Errorf("shared wrong-lane refusal = %q, want %q", sharedWrongLane, sharedRemedy)
 	}
 
 	// The stored-identity refusal carries the same clause: the blob it names is
@@ -861,15 +864,15 @@ func TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor(t *testing.T) {
 	if !strings.Contains(pin, llmMechanismRemedyPerUser) {
 		t.Errorf("per_user pin refusal = %q, want %q", pin, llmMechanismRemedyPerUser)
 	}
-	if !strings.Contains(pinContradictionRefusal(sc, b, false), llmMechanismRemedyShared) {
-		t.Errorf("shared pin refusal = %q, want %q", pinContradictionRefusal(sc, b, false), llmMechanismRemedyShared)
+	if !strings.Contains(pinContradictionRefusal(sc, b, false), sharedRemedy) {
+		t.Errorf("shared pin refusal = %q, want %q", pinContradictionRefusal(sc, b, false), sharedRemedy)
 	}
 
 	// And the spent-renewal sentence — the one the field report quoted.
 	if !strings.Contains(awsSSORefreshSpentRefusal(true), llmMechanismRemedyPerUser) {
 		t.Errorf("per_user spent refusal = %q, want %q", awsSSORefreshSpentRefusal(true), llmMechanismRemedyPerUser)
 	}
-	if !strings.Contains(awsSSORefreshSpentRefusal(false), llmMechanismRemedyShared) {
-		t.Errorf("shared spent refusal = %q, want %q", awsSSORefreshSpentRefusal(false), llmMechanismRemedyShared)
+	if !strings.Contains(awsSSORefreshSpentRefusal(false), sharedRemedy) {
+		t.Errorf("shared spent refusal = %q, want %q", awsSSORefreshSpentRefusal(false), sharedRemedy)
 	}
 }

@@ -144,7 +144,7 @@ func truncProbeInsertLegacyRow(t *testing.T, pool *pgxpool.Pool, groups []string
 	_, err := pool.Exec(context.Background(), `
 		INSERT INTO api_tokens (id, principal, email, role, groups, name, token_sha256, created_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		uuid.New(), truncProbeSub, truncProbeSub+"@corp.example", oidc.RoleMember,
+		uuid.New(), truncProbeSub, truncProbeSub+"@corp.example", oidc.RoleUser,
 		gj, "legacy-0.6", hex.EncodeToString(sum[:]), time.Now().UTC())
 	if err != nil {
 		t.Fatalf("insert legacy row: %v", err)
@@ -311,7 +311,7 @@ func TestPG_APIToken_TruncatedSnapshot_CapabilityDenyEvaporates(t *testing.T) {
 	legacyRaw := apiTokenPrefix + "legacy-" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	if _, err := pg.CreateAPIToken(ctx, types.APIToken{
 		ID: uuid.New(), Principal: truncProbeSub, Email: truncProbeSub + "@corp.example",
-		Role: oidc.RoleMember, Groups: []string{truncProbeGroupKept}, GroupsTruncated: nil,
+		Role: oidc.RoleUser, Groups: []string{truncProbeGroupKept}, GroupsTruncated: nil,
 		Name: "legacy", CreatedAt: time.Now().UTC(),
 	}, legacyRaw); err != nil {
 		t.Fatalf("seed legacy token: %v", err)

@@ -41,7 +41,7 @@ func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
 	// panic, not the logged error handleGetRun tolerates). The store is otherwise
 	// the same one.
 	srv := newSupersedeFixture(t, nil, gr).srv
-	mine := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	mine := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", mine, `{"provider":"aws"}`)
 	if w.Code != http.StatusOK {
@@ -88,7 +88,7 @@ func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
 	// The ownership rule is the same one on the same route: somebody else's
 	// sign-in is a 404, not a 403 — which is also the ONE way a healthy daemon
 	// makes getRun fail for the pane (a roster edit mid-wait).
-	theirs := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleMember)
+	theirs := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleUser)
 	r := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+launched.RunID, theirs, "")
 	if r.Code != http.StatusNotFound {
 		t.Fatalf("foreign read: code = %d, want 404; body=%s", r.Code, r.Body.String())

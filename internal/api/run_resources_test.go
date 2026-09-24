@@ -243,13 +243,13 @@ func TestRunResources_ForeignRun404(t *testing.T) {
 	})
 	id := seedResourcesRun(ast, "owner-sub")
 
-	mallory := ssoSession(t, "mallory-sub", "mallory@corp.example", oidc.RoleMember)
+	mallory := ssoSession(t, "mallory-sub", "mallory@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", mallory, "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("non-owning member: code = %d, want 404; body=%s", w.Code, w.Body.String())
 	}
 
-	owner := ssoSession(t, "owner-sub", "owner@corp.example", oidc.RoleMember)
+	owner := ssoSession(t, "owner-sub", "owner@corp.example", oidc.RoleUser)
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", owner, ""); w.Code != http.StatusOK {
 		t.Fatalf("owning member: code = %d, want 200 (contrast case — the run itself is reachable); body=%s", w.Code, w.Body.String())
 	}

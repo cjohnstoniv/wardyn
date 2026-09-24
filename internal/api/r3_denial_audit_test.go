@@ -35,7 +35,7 @@ func denialRows(events []types.AuditEvent) []types.AuditEvent {
 func TestInHandlerMemberDenialsAreAudited(t *testing.T) {
 	member := func(t *testing.T) *http.Cookie {
 		t.Helper()
-		return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleMember)
+		return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleUser)
 	}
 
 	t.Run("a member naming another namespace with ?owner=", func(t *testing.T) {
@@ -99,7 +99,7 @@ func TestInHandlerMemberDenialsAreAudited(t *testing.T) {
 		f := newScopeFixture(t)
 		id := f.seedEgress(t, "registry.npmjs.org")
 		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve",
-			ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember),
+			ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser),
 			decideBody(t, types.ScopeAlways, nil))
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("member picking always = %d, want 403; body=%s", w.Code, w.Body.String())

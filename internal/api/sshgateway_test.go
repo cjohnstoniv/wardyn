@@ -452,6 +452,26 @@ func sshDial(t *testing.T, h *sshTestHarness, username string, clientPriv ed2551
 
 // tests
 
+// TestSSHGateway_FreshRunRefusesAKeptRun: sshFreshRun re-checks the run on
+// every channel open; a run the lease ended is RUNNING with a live sandbox
+// ref but nothing to attach to, so it must be refused the same as the two
+// attach gates (TestAttach_RefusesAKeptRun) rather than accepting a channel
+// that dies on its first ExecStream.
+func TestSSHGateway_FreshRunRefusesAKeptRun(t *testing.T) {
+	st := newSSHMemStore()
+	runID := uuid.New()
+	endedAt := time.Now()
+	st.putRun(types.AgentRun{
+		ID: runID, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
+		LostAt: &endedAt, LostReason: types.LostEnded,
+	})
+	srv := New(Config{Store: st, Runner: &sshFakeRunner{}})
+
+	if run, msg := srv.sshFreshRun(context.Background(), runID); msg == "" || !strings.Contains(msg, "run has ended") {
+		t.Fatalf("kept run: run=%+v msg=%q, want a \"run has ended\" refusal", run, msg)
+	}
+}
+
 // TestSSHGateway_AuthRejectAccept covers auth reject/accept: an unregistered
 // key is rejected, a registered key authenticating for a run it does NOT own
 // is rejected (owner-only), and the owner's registered key is accepted —
@@ -566,7 +586,7 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 		Fingerprint:   ssh.FingerprintSHA256(memberPub),
 		Principal:     "mallory@example.com",
 		PublicKey:     string(ssh.MarshalAuthorizedKey(memberPub)),
-		Role:          oidc.RoleMember,
+		Role:          oidc.RoleUser,
 		RoleCheckedAt: &now,
 	})
 
@@ -688,7 +708,7 @@ func TestSSHGateway_OverrideRoleIsBoundedStale(t *testing.T) {
 		Fingerprint:   ssh.FingerprintSHA256(promotedPub),
 		Principal:     "newadmin@example.com",
 		PublicKey:     string(ssh.MarshalAuthorizedKey(promotedPub)),
-		Role:          oidc.RoleMember,
+		Role:          oidc.RoleUser,
 		RoleCheckedAt: &fresh,
 	})
 

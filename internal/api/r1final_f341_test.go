@@ -53,7 +53,7 @@ func f341Server(t *testing.T, sec *memSecrets, toks []types.APIToken) (*harness,
 func f341Alice() []types.APIToken {
 	return []types.APIToken{{
 		ID: uuid.New(), Principal: "alice", Email: "alice@corp.example",
-		Role: string(oidc.RoleMember), CreatedAt: time.Now().UTC(),
+		Role: string(oidc.RoleUser), CreatedAt: time.Now().UTC(),
 	}}
 }
 
@@ -221,7 +221,7 @@ func TestF341_CrossNamespaceDeleteThatRemovedNothingIsReported(t *testing.T) {
 	}
 
 	// The member's own idempotent delete is untouched: 204, no oracle.
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key", alice, ""); w.Code != http.StatusNoContent {
 		t.Fatalf("member's own DELETE of a never-set name = %d, want the idempotent 204: %s", w.Code, w.Body.String())
 	}

@@ -210,7 +210,7 @@ func TestSSHKeysREST_AdminTokenRejectedWhenOIDCConfigured(t *testing.T) {
 	}
 
 	// A real SSO human's own POST still works and lands under THEIR principal.
-	cookie := ssoSession(t, "alice-sub", "alice@example.com", oidc.RoleMember)
+	cookie := ssoSession(t, "alice-sub", "alice@example.com", oidc.RoleUser)
 	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/ssh-keys", cookie, body)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("SSO human POST: code = %d, want 201; body=%s", w.Code, w.Body.String())
@@ -246,7 +246,7 @@ func TestSSHKeysREST_RoleStampedAtRegistration(t *testing.T) {
 		name, sub, email, sessionRole, body, wantRole string
 	}{
 		{"admin session stamps admin", "root-sub", "root@example.com", oidc.RoleAdmin, adminKey, oidc.RoleAdmin},
-		{"member session stamps member", "mallory-sub", "mallory@example.com", oidc.RoleMember, memberKey, oidc.RoleMember},
+		{"member session stamps member", "mallory-sub", "mallory@example.com", oidc.RoleUser, memberKey, oidc.RoleUser},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := doSSO(t, srv, http.MethodPost, "/api/v1/me/ssh-keys", ssoSession(t, tc.sub, tc.email, tc.sessionRole), tc.body)

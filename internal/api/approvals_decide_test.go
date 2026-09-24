@@ -180,7 +180,7 @@ func TestDecideScope_BodyValidation(t *testing.T) {
 // 404s are built to erase.
 func TestDecideScope_MemberGateRunsBeforeScopeRules(t *testing.T) {
 	f := newScopeFixture(t)
-	member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser)
 
 	// A credential approval on a run this member does NOT own.
 	foreignRun := uuid.New()
@@ -210,7 +210,7 @@ func TestDecideScope_MemberGateRunsBeforeScopeRules(t *testing.T) {
 // operatorOnly gate on PUT /workspaces/{id}/approved-egress.
 func TestDecideScope_AlwaysIsOperatorOnly(t *testing.T) {
 	f := newScopeFixture(t)
-	member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser)
 
 	id := f.seedEgress(t, "registry.npmjs.org")
 	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve",

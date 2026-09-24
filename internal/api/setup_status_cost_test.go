@@ -381,7 +381,7 @@ func TestSetupStatus_RecheckForcesAReDetectForOperatorsOnly(t *testing.T) {
 	// A MEMBER's recheck is ignored: inside the TTL a plain poll would not sweep
 	// either, so a second call here proves the param, not the clock.
 	memberReq := httptest.NewRequest(http.MethodGet, "/api/v1/setup/status?recheck=1", nil)
-	ctx := withOIDCRole(withOIDCHuman(memberReq.Context(), "sub-bob"), oidc.RoleMember)
+	ctx := withOIDCRole(withOIDCHuman(memberReq.Context(), "sub-bob"), oidc.RoleUser)
 	srv.handleSetupStatus(httptest.NewRecorder(), memberReq.WithContext(ctx))
 	if n := calls.Load(); n != 1 {
 		t.Errorf("a member's ?recheck=1 swept the host (calls = %d, want 1)", n)
