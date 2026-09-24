@@ -20,8 +20,8 @@ import (
 // credential mint — the tests most in need of the race detector in the tree.
 // No gate ran them under it:
 //
-//   - the race passes in ci.yml's build job — test-report, test-report-docker
-//     and test-report-k8s, all three run by `make cover-check` — strip the DSN
+//   - the race passes — test-report, test-report-docker and test-report-k8s,
+//     all three run by `make cover-check` and by ci.yml's go legs — strip the DSN
 //     (`WARDYN_TEST_PG= ./scripts/test-report.sh <suite> -race ...`), so every
 //     WARDYN_TEST_PG-gated test is skipped there;
 //   - `make test-report-pg`, the only target that SETS the DSN, shells out to
@@ -77,9 +77,51 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 		t.Errorf("cover-check no longer depends on all three race suites:\n%s", body)
 	}
 
-	// ...and CI runs cover-check, or none of those race passes gate anything.
-	if build := ciJobBlock(t, string(wf), "build"); !strings.Contains(build, "run: make cover-check") {
-		t.Errorf("ci.yml's build job never runs `make cover-check`, so no race pass gates a PR:\n%s", build)
+	// ...and CI runs all three (one `go` matrix leg each) and the required
+	// `build` job enforces the floor over their profiles, or none of those race
+	// passes gate anything.
+	goJob := ciJobBlock(t, string(wf), "go")
+	for _, target := range []string{"test-report", "test-report-docker", "test-report-k8s"} {
+		if !strings.Contains(goJob, "target: "+target+"\n") {
+			t.Errorf("ci.yml's go job has no leg running `make %s`, so that race pass gates no PR:\n%s", target, goJob)
+		}
+	}
+	// Only an explicit docs-only classification ('false') swaps the suites for
+	// the guard packages, so a missing or failed classification runs them. The
+	// executing line swallows no failure (an exact line, so no `|| true`), and
+	// no step may continue on error: a leg whose profile did not upload has not
+	// done its job, since build unions those profiles.
+	const fullSuites = "        if: matrix.suite == 'lint' || needs.changes.outputs.code != 'false'\n" +
+		"        run: make ${{ matrix.target }}\n"
+	if !strings.Contains(goJob, fullSuites) {
+		t.Errorf("ci.yml's go job no longer runs `make ${{ matrix.target }}` unless the change is explicitly docs-only:\n%s", goJob)
+	}
+	if strings.Contains(goJob, "continue-on-error:") {
+		t.Errorf("a step in ci.yml's go job continues on error, so a failed suite or a missing profile can pass:\n%s", goJob)
+	}
+	// The docs-only replacement is a gate too: it runs only on an explicit
+	// 'false', its `go test` line is pinned whole (so nothing can be appended
+	// to swallow a failure), and a tagless leg that finds no guard package
+	// fails instead of passing empty.
+	for _, want := range []string{
+		"\n        if: matrix.suite != 'lint' && needs.changes.outputs.code == 'false'\n",
+		"\n" + `          WARDYN_TEST_PG='' go test -count=1 ${TAGS:+-tags "$TAGS"} $pkgs` + "\n",
+		"\n" + `            [ -n "$TAGS" ] || { echo "::error::no doc-reading guard test found; the discovery pattern regressed"; exit 1; }` + "\n",
+	} {
+		if !strings.Contains(goJob, want) {
+			t.Errorf("ci.yml's go job no longer carries the docs-only guard step's line %q:\n%s", want, goJob)
+		}
+	}
+	build := ciJobBlock(t, string(wf), "build")
+	for _, want := range []string{
+		"needs: [changes, go]",
+		"LEGS: ${{ needs.go.result }}",
+		"        if: needs.changes.outputs.code != 'false'\n        run: make cover-union\n",
+	} {
+		if !strings.Contains(build, want) {
+			t.Errorf("ci.yml's build job must need every go leg and run `make cover-union` over their "+
+				"profiles unless the change is explicitly docs-only; missing %q:\n%s", want, build)
+		}
 	}
 
 	// (c) CI actually runs it, in the job that has a Postgres service and sets
