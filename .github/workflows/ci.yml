@@ -185,12 +185,13 @@ jobs:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: ui/pnpm-lock.yaml
+      # ESLint needs no browser; PUPPETEER_SKIP_DOWNLOAD skips the mermaid-cli
+      # chromium download.
       - name: make ${{ matrix.target }}
         if: matrix.suite == 'lint' || needs.changes.outputs.code != 'false'
-        # ESLint needs no browser; skip the mermaid-cli chromium download.
+        run: make ${{ matrix.target }}
         env:
           PUPPETEER_SKIP_DOWNLOAD: '1'
-        run: make ${{ matrix.target }}
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
       # files built under its tag (their packages run with -tags; the rest ran in
