@@ -29,7 +29,7 @@ func TestValidDefaultRole(t *testing.T) {
 		want bool
 	}{
 		{oidc.RoleAdmin, true},
-		{oidc.RoleMember, true},
+		{oidc.RoleUser, true},
 		{oidc.RoleSecurityAdmin, false},
 		{"junk", false},
 		{"", false},
@@ -59,6 +59,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
 	adminToken := ""
+	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
 	return &bootFlags{
 		recordingSel:            &recordingSel,
 		recordingDir:            &recordingDir,
@@ -84,6 +85,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 		scanAIAdvisor:           &scanAIAdvisor,
 		sshListen:               &sshListen,
 		uiListen:                &uiListen,
+		controlURL:              &controlURL,
 	}
 }
 
@@ -119,7 +121,7 @@ func TestBuildOptionalFeatures_DefaultRoleBootRefusal(t *testing.T) {
 		{"security_admin refused", oidc.RoleSecurityAdmin, true},
 		{"junk value refused", "junk", true},
 		{"admin boots clean", oidc.RoleAdmin, false},
-		{"member boots clean", oidc.RoleMember, false},
+		{"user boots clean", oidc.RoleUser, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f := defaultRoleBootFlags(httpSrv.URL, tt.role)
@@ -184,7 +186,7 @@ func TestChartMapHasNoAdminPath(t *testing.T) {
 		},
 		{
 			name:    "no security_admin grant at all: no WARN",
-			roleMap: map[string]string{"eng-team": oidc.RoleMember},
+			roleMap: map[string]string{"eng-team": oidc.RoleUser},
 			want:    false,
 		},
 		{
