@@ -209,17 +209,13 @@ export function RunDetailScreen() {
           // on THIS tick's own fresh state (not a stale last-known ref), so
           // the exact tick a run turns terminal is the one that catches it.
           if (r.value && isTerminalRunState(r.value.state)) {
-            // Best-effort, same as the outer allSettled above: this pane
-            // supplements the cockpit, so one rejected listAudit call must
-            // not go unhandled — it just leaves endingAudit at its last-good
-            // value.
+            // Best-effort like the allSettled above: a rejected listAudit
+            // leaves endingAudit at its last-good value, never unhandled.
             void Promise.all([
               auditApi.listAudit(id, "run.complete"),
               auditApi.listAudit(id, "run.kill"),
               auditApi.listAudit(id, "run.autostop"),
-            ])
-              .then((lists) => setEndingAudit(lists.flat()))
-              .catch(() => {});
+            ]).then((lists) => setEndingAudit(lists.flat())).catch(() => {});
           }
           setStatus("ready");
         })
