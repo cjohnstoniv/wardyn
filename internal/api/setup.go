@@ -467,7 +467,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// winning signal (not a change to llmProvenance's own priority order) so a
 	// Bedrock-only operator still sees "LLM access: ok" without touching the
 	// existing CLI/secret-name signals or their tests.
-	bedrock := s.setupBedrock(ctx, present, ssoScope)
+	bedrock := s.setupBedrock(ctx, present, siteCfg, ssoScope)
 	if llmDetail == "" && bedrock.Ready {
 		llmDetail = fmt.Sprintf(
 			"AWS Bedrock is configured (region %s, model %s); Claude runs authenticate via %s.",

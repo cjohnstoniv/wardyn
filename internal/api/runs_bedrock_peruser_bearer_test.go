@@ -227,13 +227,13 @@ func TestSetupBedrock_PerUser_BearerPresentIsTheCallersOwn(t *testing.T) {
 
 	t.Run("member without their own bearer", func(t *testing.T) {
 		s := bearerScopedServer(t, perUserOperatorBearer, "")
-		if b := s.setupBedrock(context.Background(), operatorPresent, memberScope()); b.BearerPresent {
+		if b := s.setupBedrock(context.Background(), operatorPresent, types.SiteConfig{}, memberScope()); b.BearerPresent {
 			t.Fatalf("BearerPresent=true off the OPERATOR's key — setup would grade ready for a member who has none")
 		}
 	})
 	t.Run("member with their own bearer", func(t *testing.T) {
 		s := bearerScopedServer(t, "", perUserMemberBearer)
-		b := s.setupBedrock(context.Background(), map[string]bool{}, memberScope())
+		b := s.setupBedrock(context.Background(), map[string]bool{}, types.SiteConfig{}, memberScope())
 		if !b.BearerPresent {
 			t.Fatalf("BearerPresent=false over a bearer this member's runs really authenticate with")
 		}
@@ -243,7 +243,7 @@ func TestSetupBedrock_PerUser_BearerPresentIsTheCallersOwn(t *testing.T) {
 	})
 	t.Run("the operator's own shared read is unchanged", func(t *testing.T) {
 		s := bearerScopedServer(t, perUserOperatorBearer, "")
-		if b := s.setupBedrock(context.Background(), operatorPresent, awsSSOScope{}); !b.BearerPresent {
+		if b := s.setupBedrock(context.Background(), operatorPresent, types.SiteConfig{}, awsSSOScope{}); !b.BearerPresent {
 			t.Fatalf("BearerPresent=false for the operator under a shared scope — pre-#153 behaviour changed")
 		}
 	})

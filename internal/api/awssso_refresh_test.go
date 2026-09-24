@@ -679,7 +679,7 @@ func TestAWSSSORefresh_AdvisoryNeverRedeems(t *testing.T) {
 // setupBedrockSSOPresent is a one-line read of the wizard's SSO term.
 func setupBedrockSSOPresent(t *testing.T, s *Server) bool {
 	t.Helper()
-	return s.setupBedrock(context.Background(), nil, awsSSOScope{}).SSOPresent
+	return s.setupBedrock(context.Background(), nil, types.SiteConfig{}, awsSSOScope{}).SSOPresent
 }
 
 // TestSetupHarnessCreds_RenewableHonoursTheRegistration is the surface the

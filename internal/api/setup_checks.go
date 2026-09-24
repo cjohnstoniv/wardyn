@@ -242,10 +242,24 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 // from the plan, byte-checked by TestBedrockProviderCheck_* /
 // TestLLMProviderCheck_*.
 const (
-	// DRAFT (M2 canon pending)
+	// DRAFT (M2 canon pending) — the SSO row's wording; unchanged (#320).
 	bedrockPerUserDetail = "Bedrock is configured for this deployment, but YOUR runs will not use it until you sign in to AWS yourself — this agent's roster row gives each person their own session."
-	// DRAFT (M2 canon pending)
+	// DRAFT (M2 canon pending) — the bearer twin of bedrockPerUserDetail (#153,
+	// #320): under a per_user row whose roster mechanism is bedrock_bearer,
+	// signing in to AWS is not the remedy — storing a bedrock-api-key of their
+	// own is, so this says that instead.
+	bedrockPerUserBearerDetail = "Bedrock is configured for this deployment, but YOUR runs will not use it until you store your own Bedrock API key — this agent's roster row gives each person their own credential."
+	// DRAFT (M2 canon pending) — the SSO row's wording; unchanged (#320).
 	bedrockPerUserMissingCredential = "a credential — your own AWS sign-in (Settings → Model provider → \"Sign in to AWS\"); this deployment gives each person their own, so a read-only ~/.aws mount, a bedrock-api-key bearer secret and aws-access-key-id + aws-secret-access-key cannot carry your runs"
+	// DRAFT (M2 canon pending) — the bearer twin of bedrockPerUserMissingCredential
+	// (#153, #320). Under a per_user row whose roster mechanism is
+	// bedrock_bearer the bearer is exactly what carries a member's runs, so this
+	// says storing one is the remedy instead of naming it among the things that
+	// cannot — the sentence bedrockPerUserMissingCredential told a bearer caller,
+	// which was backwards.
+	bedrockPerUserMissingCredentialBearer = "a credential — your own Bedrock API key bearer (set it with `wardyn secret set bedrock-api-key`); " +
+		"this deployment gives each person their own, so storing one is what carries your runs — an AWS sign-in, a read-only ~/.aws mount " +
+		"and aws-access-key-id + aws-secret-access-key cannot"
 	// DRAFT (M2 canon pending)
 	bedrockMechanismDetail = "Bedrock is configured for this deployment and model access here is per person. This request arrived on the shared admin token, which is not a person, so this row cannot say whose sign-in is missing."
 	// DRAFT (M2 canon pending)
@@ -432,12 +446,22 @@ func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
 	}
 	credentialMissing := !bedrock.CredsPresent && !bedrock.AWSMount && !bedrock.BearerPresent && !bedrock.SSOPresent
 	if bedrock.PerUser {
+		// PerUserBearer branches BOTH the Detail and the missing-credential
+		// clause: the roster row's own mechanism decides what a member's real
+		// remedy is (sign in to AWS vs store a bearer), and naming the wrong one
+		// is exactly the bug #320 fixes.
+		detail := bedrockPerUserDetail
+		missingCredential := bedrockPerUserMissingCredential
+		if bedrock.PerUserBearer {
+			detail = bedrockPerUserBearerDetail
+			missingCredential = bedrockPerUserMissingCredentialBearer
+		}
 		if credentialMissing {
-			missing = append(missing, bedrockPerUserMissingCredential)
+			missing = append(missing, missingCredential)
 		}
 		return SetupCheck{
 			ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
-			Detail: bedrockPerUserDetail,
+			Detail: detail,
 			Fix:    "Still needed: " + strings.Join(missing, ", ") + ".",
 		}, true
 	}

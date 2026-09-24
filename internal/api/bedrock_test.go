@@ -358,13 +358,13 @@ func TestSetupBedrock_SSOLaneMatchesLaunchGate(t *testing.T) {
 	}
 	// Region+model and NO credential at all stays unready — the SSO term must not
 	// become a blanket "ready" for every operator.
-	if b := newServer().setupBedrock(context.Background(), nil, awsSSOScope{}); b.Ready {
+	if b := newServer().setupBedrock(context.Background(), nil, types.SiteConfig{}, awsSSOScope{}); b.Ready {
 		t.Fatal("setupBedrock: Ready = true with region+model and no credential source; want false")
 	}
 
 	live := newServer()
 	putAWSSSOBlob(t, live, awsSSOTestFixedNow.Add(time.Hour))
-	b := live.setupBedrock(context.Background(), nil, awsSSOScope{})
+	b := live.setupBedrock(context.Background(), nil, types.SiteConfig{}, awsSSOScope{})
 	if !b.SSOPresent || !b.Ready {
 		t.Fatalf("captured non-expired SSO: SSOPresent = %v, Ready = %v; want true/true", b.SSOPresent, b.Ready)
 	}
@@ -381,7 +381,7 @@ func TestSetupBedrock_SSOLaneMatchesLaunchGate(t *testing.T) {
 	// renewable-or-live predicate — that agreement is what this test exists for.
 	renewable := newServer()
 	putAWSSSOBlob(t, renewable, awsSSOTestFixedNow.Add(-time.Minute)) // access token expired
-	rb := renewable.setupBedrock(context.Background(), nil, awsSSOScope{})
+	rb := renewable.setupBedrock(context.Background(), nil, types.SiteConfig{}, awsSSOScope{})
 	if !rb.SSOPresent || !rb.Ready {
 		t.Fatalf("EXPIRED but renewable SSO: SSOPresent = %v, Ready = %v; want true/true", rb.SSOPresent, rb.Ready)
 	}
@@ -394,7 +394,7 @@ func TestSetupBedrock_SSOLaneMatchesLaunchGate(t *testing.T) {
 	deadBlob := putAWSSSOBlob(t, dead, awsSSOTestFixedNow.Add(-time.Minute))
 	deadBlob.RefreshToken = "" // legacy sso_start_url profile: nothing to renew
 	storeSSOBlob(t, dead, deadBlob)
-	db := dead.setupBedrock(context.Background(), nil, awsSSOScope{})
+	db := dead.setupBedrock(context.Background(), nil, types.SiteConfig{}, awsSSOScope{})
 	if db.SSOPresent || db.Ready {
 		t.Fatalf("EXPIRED, unrenewable SSO: SSOPresent = %v, Ready = %v; want false/false", db.SSOPresent, db.Ready)
 	}
@@ -419,7 +419,7 @@ func TestSetupBedrock_SpentSSOReadsDead(t *testing.T) {
 	blob := putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(-time.Minute)) // access token expired, refresh token present
 	s.markAWSSSOTokenSpent(context.Background(), awsSSOTokenFingerprint(blob.RefreshToken), "")
 
-	b := s.setupBedrock(context.Background(), nil, awsSSOScope{})
+	b := s.setupBedrock(context.Background(), nil, types.SiteConfig{}, awsSSOScope{})
 	if b.SSOPresent || !b.SSOExpired {
 		t.Fatalf("spent shared session: SSOPresent = %v, SSOExpired = %v; want false/true — renewable(now) alone must not win over a known-spent token", b.SSOPresent, b.SSOExpired)
 	}

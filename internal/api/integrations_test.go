@@ -498,7 +498,7 @@ func integrationsTestConfig(t *testing.T, sc types.SiteConfig, secrets map[strin
 // touching at every one of this file's call sites.
 func effectiveIntegrationsFor(s *Server, ctx context.Context) []integrationRow {
 	present := s.presentSecretNames(ctx)
-	return s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present, awsSSOScope{}))
+	return s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present, types.SiteConfig{}, awsSSOScope{}))
 }
 
 func findRow(rows []integrationRow, id string) (integrationRow, bool) {
