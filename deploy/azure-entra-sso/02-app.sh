@@ -27,6 +27,9 @@ command -v uuidgen >/dev/null 2>&1 || { echo "uuidgen not found on PATH" >&2; ex
 DISPLAY_NAME="wardyn-sso-validation"
 HTTP_PORT="${HTTP_PORT:-8480}"
 REDIRECT_URI="http://localhost:${HTTP_PORT}/auth/callback"
+# The per-user Azure DevOps sign-in (docs/adoption/azure-devops-entra.md)
+# redirects to its own callback on the same app registration.
+ADO_REDIRECT_URI="http://localhost:${HTTP_PORT}/api/v1/scm/azure-devops/callback"
 
 [[ "$(az account show --query tenantId -o tsv)" == "${TENANT_ID}" ]] || {
   echo "current az session is not on tenant ${TENANT_ID} — run: az login --tenant ${TENANT_ID} --allow-no-subscriptions" >&2
@@ -46,9 +49,9 @@ if [[ -n "${EXISTING_APP_ID}" && "${EXISTING_APP_ID}" != "null" ]]; then
   MEMBER_ROLE_ID="$(az ad app show --id "${CLIENT_ID}" --query "appRoles[?value=='Wardyn.Member']|[0].id" -o tsv)"
   [[ -n "${ADMIN_ROLE_ID}" && "${ADMIN_ROLE_ID}" != "None" ]] || { echo "app '${DISPLAY_NAME}' (${CLIENT_ID}) has no Wardyn.Admin App Role — delete it in the portal and re-run, or add the role by hand" >&2; exit 1; }
   [[ -n "${MEMBER_ROLE_ID}" && "${MEMBER_ROLE_ID}" != "None" ]] || { echo "app '${DISPLAY_NAME}' (${CLIENT_ID}) has no Wardyn.Member App Role — delete it in the portal and re-run, or add the role by hand" >&2; exit 1; }
-  echo "==> az ad app update --web-redirect-uris ${REDIRECT_URI} (HTTP_PORT may have"
+  echo "==> az ad app update --web-redirect-uris ${REDIRECT_URI} ${ADO_REDIRECT_URI} (HTTP_PORT may have"
   echo "    changed since this app was created — a stale redirect URI is AADSTS50011)"
-  az ad app update --id "${CLIENT_ID}" --web-redirect-uris "${REDIRECT_URI}"
+  az ad app update --id "${CLIENT_ID}" --web-redirect-uris "${REDIRECT_URI}" "${ADO_REDIRECT_URI}"
 else
   ADMIN_ROLE_ID="$(uuidgen)"
   MEMBER_ROLE_ID="$(uuidgen)"
@@ -76,7 +79,7 @@ else
 EOF
   echo "==> az ad app create --display-name ${DISPLAY_NAME}"
   CLIENT_ID="$(az ad app create --display-name "${DISPLAY_NAME}" \
-    --web-redirect-uris "${REDIRECT_URI}" \
+    --web-redirect-uris "${REDIRECT_URI}" "${ADO_REDIRECT_URI}" \
     --app-roles @"${ROLES_JSON}" \
     --query appId -o tsv)"
 fi
@@ -97,6 +100,31 @@ az rest --method PATCH \
       "saml2Token": []
     }
   }'
+
+# Azure DevOps delegated permissions for an `entra` provider row whose ceiling
+# is read + code_write + pr (docs/adoption/azure-devops-entra.md, "The app
+# registration"). The Azure DevOps service principal exists in a tenant only
+# once an Azure DevOps organisation is connected to it; without one this step
+# is skipped and the Azure DevOps lane cannot be tested on this tenant.
+ADO_API="499b84ac-1321-427f-aa17-267ca6975798"
+ADO_SCOPES=(vso.analytics vso.build vso.code vso.graph vso.identity vso.memberentitlementmanagement
+  vso.packaging vso.profile vso.project vso.release vso.securefiles_read vso.serviceendpoint vso.test
+  vso.variablegroups_read vso.wiki vso.work vso.code_write)
+if az ad sp show --id "${ADO_API}" >/dev/null 2>&1; then
+  ADO_PERMS=()
+  for s in "${ADO_SCOPES[@]}"; do
+    id="$(az ad sp show --id "${ADO_API}" --query "oauth2PermissionScopes[?value=='${s}'].id | [0]" -o tsv)"
+    [[ -n "${id}" && "${id}" != "None" ]] || { echo "Azure DevOps publishes no delegated scope ${s}" >&2; exit 1; }
+    ADO_PERMS+=("${id}=Scope")
+  done
+  echo "==> az ad app permission add (Azure DevOps: ${ADO_SCOPES[*]})"
+  az ad app permission add --id "${CLIENT_ID}" --api "${ADO_API}" --api-permissions "${ADO_PERMS[@]}"
+  echo "    Grant admin consent once (or let each person consent at their first Azure DevOps sign-in):"
+  echo "    az ad app permission admin-consent --id ${CLIENT_ID}"
+else
+  echo "==> no Azure DevOps service principal in this tenant — connect an Azure DevOps organisation"
+  echo "    to it (Organization settings -> Microsoft Entra) and re-run to add the Azure DevOps permissions"
+fi
 
 if az ad sp show --id "${CLIENT_ID}" >/dev/null 2>&1; then
   echo "==> service principal already exists — reusing it"

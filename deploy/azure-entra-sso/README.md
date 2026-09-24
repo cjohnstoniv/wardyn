@@ -88,7 +88,7 @@ continuing on a tenant device-code sign-in will still fail against. Writes
 ## Step 2 — app, people, values
 
 ```sh
-deploy/azure-entra-sso/02-app.sh     # app registration, App Roles, SP, secret
+deploy/azure-entra-sso/02-app.sh     # app registration, App Roles, SP, secret, Azure DevOps permissions
 deploy/azure-entra-sso/03-people.sh  # 3 users, 2 groups, role assignments
 deploy/azure-entra-sso/04-values.sh  # renders values-entra.yaml from .env.local
 ```
