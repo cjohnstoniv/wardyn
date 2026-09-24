@@ -42,6 +42,34 @@ func TestNew_FailsClosedWhenLoginFails(t *testing.T) {
 	}
 }
 
+// A mistyped mount, or a KV engine not yet enabled, fails boot rather than
+// the first write.
+func TestNew_RefusesAMountThatDoesNotExist(t *testing.T) {
+	f := newFakeVault(t)
+	f.jwts["sa-jwt"] = "wardyn"
+	_, err := New(t.Context(), Config{Addr: f.srv.URL, Auth: AuthKubernetes, AuthMount: "kubernetes", Role: "wardyn",
+		K8sTokenFile: writeFile(t, "sa-jwt"), Mount: "typo", Prefix: "p", MaxVersions: 1})
+	if err == nil || !strings.Contains(err.Error(), `WARDYN_VAULT_KV_MOUNT "typo"`) {
+		t.Fatalf("New with an unserved mount = %v; want a boot refusal naming the mount", err)
+	}
+}
+
+// Vault answers 404 "no handler for route" to a write or a DELETE under a
+// mount that does not exist. That must fail, never read as stored or removed.
+func TestPutAndDelete_FailOnAMountVaultDoesNotServe(t *testing.T) {
+	f := newFakeVault(t)
+	s := newFakeStore(t, f)
+	s.mount = "typo" // the mount went away after boot
+	if ref, err := s.Put(t.Context(), "", "wardyn-signing-key", "", []byte("pem"), false); err == nil {
+		t.Fatalf("Put under an unserved mount = (%q, nil); want an error", ref)
+	} else if !strings.Contains(err.Error(), `mount "typo"`) {
+		t.Fatalf("Put error does not name the mount: %v", err)
+	}
+	if err := s.Delete(t.Context(), "", "k", ""); err == nil {
+		t.Fatal("Delete under an unserved mount succeeded")
+	}
+}
+
 func TestKubernetesLogin_SendsRoleJWTAndNamespace(t *testing.T) {
 	f := newFakeVault(t)
 	f.namespace = "team-a"
@@ -78,6 +106,8 @@ func TestTokenFile_RereadOn403(t *testing.T) {
 	}
 }
 
+// The fake expires a token at its TTL, so a renewal that comes too late meets
+// a 403 and never counts.
 func TestKeepAlive_RenewsBeforeExpiry(t *testing.T) {
 	f := newFakeVault(t)
 	f.ttl = 1
@@ -85,14 +115,17 @@ func TestKeepAlive_RenewsBeforeExpiry(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		f.mu.Lock()
-		n := f.renews
+		n, login, renew := f.renews, f.loginAt, f.firstRenew
 		f.mu.Unlock()
 		if n > 0 {
+			if gap := renew.Sub(login); gap >= time.Second {
+				t.Fatalf("renew-self came %v after login, past the 1s TTL", gap)
+			}
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("renew-self was never called for a 1s token")
+	t.Fatal("renew-self never reached Vault while the 1s token was live")
 }
 
 // The transient/definitive split (design rule 21): 429, 5xx, sealed and the

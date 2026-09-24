@@ -56,7 +56,7 @@ func (m *memKEK) Unwrap(_ context.Context, w []byte, bind map[string]string) ([]
 func TestBuildSecretStore_KeyServiceNeedsNoAgeKey(t *testing.T) {
 	pool := envelopeDB(t)
 	k := newMemKEK()
-	s, err := buildSecretStore(t.Context(), pool, "", "", storeClients{kek: k, kekWrites: true})
+	s, err := buildSecretStore(t.Context(), pool, "", "", storeClients{kek: k, kekWrites: true}, &capturingRecorder{})
 	if err != nil {
 		t.Fatalf("boot with a key service and no age key: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestBuildSecretStore_KeyServiceNeedsNoAgeKey(t *testing.T) {
 		t.Fatalf("durable=%v keyService=%q; want durable, described", secretsDurable("", s), keyService(s))
 	}
 	// Read-only, the key service does not make an install durable on its own.
-	ro, err := buildSecretStore(t.Context(), envelopeDB(t), "", "", storeClients{kek: k})
+	ro, err := buildSecretStore(t.Context(), envelopeDB(t), "", "", storeClients{kek: k}, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,14 +83,14 @@ func TestBuildSecretStore_KeyServiceNeedsNoAgeKey(t *testing.T) {
 func TestBuildSecretStore_KeyServiceRefusesWhileLocalRowsRemain(t *testing.T) {
 	pool := envelopeDB(t)
 	id, _ := age.GenerateX25519Identity()
-	local, err := buildSecretStore(t.Context(), pool, id.String(), "", storeClients{})
+	local, err := buildSecretStore(t.Context(), pool, id.String(), "", storeClients{}, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := local.Put(t.Context(), "k", []byte("v")); err != nil {
 		t.Fatal(err)
 	}
-	_, err = buildSecretStore(t.Context(), pool, "", "", storeClients{kek: newMemKEK(), kekWrites: true})
+	_, err = buildSecretStore(t.Context(), pool, "", "", storeClients{kek: newMemKEK(), kekWrites: true}, &capturingRecorder{})
 	if err == nil || !strings.Contains(err.Error(), "wardynd -rewrap") {
 		t.Fatalf("key-service boot over a local row with no age key = %v; want a refusal naming -rewrap", err)
 	}
@@ -109,7 +109,7 @@ func (r *recAudit) Record(_ context.Context, ev types.AuditEvent) error {
 func TestRewrapMode_MovesRowsAndAuditsOnce(t *testing.T) {
 	pool := envelopeDB(t)
 	id, _ := age.GenerateX25519Identity()
-	local, err := buildSecretStore(t.Context(), pool, id.String(), "", storeClients{})
+	local, err := buildSecretStore(t.Context(), pool, id.String(), "", storeClients{}, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestRewrapMode_MovesRowsAndAuditsOnce(t *testing.T) {
 		}
 	}
 	k := newMemKEK()
-	s, err := buildSecretStore(t.Context(), pool, id.String(), "", storeClients{kek: k, kekWrites: true})
+	s, err := newSecretStore(t.Context(), pool, id.String(), "", storeClients{kek: k, kekWrites: true}, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestRewrapMode_MovesRowsAndAuditsOnce(t *testing.T) {
 	if data["count"] != float64(2) || data["kek_id"] != k.ID() || strings.Contains(string(rec.evs[0].Data), `"a"`) {
 		t.Fatalf("secret.rewrap data = %s", rec.evs[0].Data)
 	}
-	if _, err := buildSecretStore(t.Context(), pool, "", "", storeClients{kek: k, kekWrites: true}); err != nil {
+	if _, err := buildSecretStore(t.Context(), pool, "", "", storeClients{kek: k, kekWrites: true}, &capturingRecorder{}); err != nil {
 		t.Fatalf("boot with no age key after -rewrap: %v", err)
 	}
 }

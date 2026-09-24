@@ -311,7 +311,7 @@ export function RunsScreen() {
   // anything client-side.
   const role = useRole();
   const description =
-    role === "member" ? `Your runs · ${runs.length}` : "Every run, live — each confined behind its own barrier.";
+    role === "user" ? `Your runs · ${runs.length}` : "Every run, live — each confined behind its own barrier.";
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
@@ -442,13 +442,13 @@ export function RunsScreen() {
         /* X3-F4: RunsFirstRun is the OPERATOR's funnel — a host-barrier readout
            a member's redacted status renders blank, over steps their role cannot
            reach. Same board, the member's own answer.
-           `!== "admin"`, never `=== "member"`. The redaction that makes
+           `!== "admin"`, never `=== "user"`. The redaction that makes
            the funnel blank is keyed on isOperator (internal/api/setup.go), which
            is SUPER-admin only — so a security admin's status arrives redacted
            too, and through the two-valued form this tier read every withheld
            field as a fact. Same three-valued shape as setupGateActive and
            GettingStarted, and for the same stated reason. The count line above
-           stays `=== "member"`: handleListRuns scopes by creator on
+           stays `=== "user"`: handleListRuns scopes by creator on
            isSecurityOperator, so a security admin really does see every run. */
         <RunsMemberEmpty />
       ) : trueEmpty ? (

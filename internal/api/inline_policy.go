@@ -166,7 +166,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// store error and 403s an unanswerable group snapshot (see effectiveCeiling).
 	ceiling, ceilErr := s.effectiveCeiling(ctx)
 	if ceilErr != nil {
-		writeCeilingError(w, ceilErr)
+		writeCeilingError(w, r, ceilErr)
 		return types.RunPolicySpec{}, nil, nil, false
 	}
 
@@ -490,8 +490,10 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 	// below walks spec.AllowedDomains, which is the REQUEST BODY's list —
 	// uncapped and un-deduplicated on this path — so a per-value resolution
 	// would let a member's own body decide how many sequential Postgres round
-	// trips the handler performs. See capBatch.
-	cap := s.newCapBatch(ctx)
+	// trips the handler performs. See capBatch. Installed as the resolution's
+	// memo, so any one-value door asked further down shares this snapshot.
+	ctx = withCapBatch(ctx)
+	cap := s.capBatchFor(ctx)
 
 	// One resolution per DISTINCT host, not per entry. The list is the request
 	// body's, and nothing on this path de-duplicates it: validatePolicySpec has

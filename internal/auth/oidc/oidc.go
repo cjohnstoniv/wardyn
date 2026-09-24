@@ -101,19 +101,19 @@ type Config struct {
 	AllowedEmailDomains []string
 	// RoleMap maps a case-insensitive claim/email value — an Entra App Role
 	// from the ID token's "roles" claim, a "groups" claim entry, or the user's
-	// email — to a Wardyn role, RoleAdmin or RoleMember. Parsed from
+	// email — to a Wardyn role, RoleAdmin or RoleUser. Parsed from
 	// WARDYN_OIDC_ROLE_MAP by ParseRoleMap ("value=role" CSV pairs, e.g.
-	// "Wardyn.Admin=admin,eng-team=member,alice@corp.com=admin"); ParseRoleMap
+	// "Wardyn.Admin=admin,eng-team=user,alice@corp.com=admin"); ParseRoleMap
 	// is also where a bad role value is rejected, so every entry here is
 	// already valid. Precedence when more than one entry matches: ANY match
-	// resolving to RoleAdmin wins over one resolving to RoleMember, regardless
+	// resolving to RoleAdmin wins over one resolving to RoleUser, regardless
 	// of which claim produced it (see deriveRole). Empty (the default) disables
 	// role derivation entirely: every signed-in human keeps today's pre-0.5
 	// behavior (RoleAdmin) — opt-in and upgrade-safe.
 	RoleMap map[string]string
 	// DefaultRole is the role a signed-in human gets when RoleMap is non-empty
 	// but nothing in their roles/groups/email matched an entry: RoleAdmin,
-	// RoleMember, or "" (the default) to DENY the login instead, with a message
+	// RoleUser, or "" (the default) to DENY the login instead, with a message
 	// telling them to ask their operator for a WARDYN_OIDC_ROLE_MAP entry.
 	// Ignored when RoleMap is empty (see RoleMap's own empty-map behavior).
 	DefaultRole string
@@ -238,6 +238,12 @@ type Session struct {
 	Name   string    `json:"name,omitempty"`
 	Role   string    `json:"role"`
 	Expiry time.Time `json:"expiry"`
+	// UserType is the id of the person's user type, stamped beside the tier
+	// at sign-in. Everyone carries the built-in "standard" type until the role
+	// map can name custom ones. Added by codec version 2, which also renamed
+	// the non-admin tier from "member" to "user": a version-1 cookie is not a
+	// session, so nobody holds a tier word this binary no longer knows.
+	UserType string `json:"ut"`
 	// IssuedAt (D16) is when CallbackHandler minted this cookie — the value
 	// SessionRevocations.IsSessionRevoked compares against a revoke cutoff.
 	// omitempty, unlike Groups below: an absent key decodes to the zero
@@ -304,7 +310,7 @@ type Session struct {
 	// It is a CLAMP INPUT and nothing else. Role above stays the
 	// sign-in-derived truth — never rewritten — and contextWithPrincipal is the
 	// single place the two meet: the EFFECTIVE role published on the context is
-	// RoleMember while this is set. That split is what makes toggling OFF safe:
+	// RoleUser while this is set. That split is what makes toggling OFF safe:
 	// the stamped role is read back off the cookie rather than re-derived from
 	// the Groups snapshot above, which is a SNAPSHOT and may be truncated, so a
 	// re-derivation could answer "member" and strand an admin outside their own

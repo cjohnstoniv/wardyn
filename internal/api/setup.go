@@ -12,6 +12,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
@@ -541,7 +542,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
 	// conditional check gates on its own applicability).
 	oidcConfigured := s.cfg.OIDC != nil
-	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured)); ok {
+	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured), oidcConfigured && s.cfg.OIDC.HasOperatorEmails()); ok {
 		checks = append(checks, chk)
 	}
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
@@ -835,7 +836,7 @@ func claudeLoginSignal(providers []SetupProvider) (bool, string) {
 func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, scope awsSSOScope) ([]SetupHarness, string, SetupModelAccess) {
 	var out []SetupHarness
 	managedDetail := ""
-	if blob, ok, err := s.readManagedBlob(ctx, "anthropic"); err == nil && ok {
+	if blob, ok, err := s.readManagedBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), "anthropic"); err == nil && ok {
 		out = append(out, SetupHarness{
 			Provider: "anthropic", Captured: true,
 			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
@@ -847,7 +848,7 @@ func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, sco
 	// Scoped: under a per_user row this is the CALLER's own captured session, not
 	// the operator's — the whole point of per_user, and the reason the probe
 	// below can speak for this person rather than for the deployment.
-	blob, found, err := s.readAWSSSOBlob(ctx, scope)
+	blob, found, err := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), scope)
 	if err != nil {
 		// A wedged store is not a credential fact. readHarnessBlob propagates
 		// every non-ErrNotFound error precisely so a rotated age key or a PG blip

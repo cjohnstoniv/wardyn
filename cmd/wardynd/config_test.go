@@ -842,6 +842,7 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
+	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
 	return &bootFlags{
 		recordingSel:            &recordingSel,
 		recordingDir:            &recordingDir,
@@ -871,6 +872,7 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 		scanAIAdvisor: &scanAIAdvisor,
 		sshListen:     &sshListen,
 		uiListen:      &uiListen,
+		controlURL:    &controlURL,
 	}
 }
 

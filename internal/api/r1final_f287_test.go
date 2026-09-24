@@ -33,7 +33,7 @@ import (
 func f287Sessions(t *testing.T) map[string]*http.Cookie {
 	t.Helper()
 	return map[string]*http.Cookie{
-		"plain member":   ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember),
+		"plain member":   ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser),
 		"security admin": ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin),
 	}
 }
@@ -92,7 +92,7 @@ func TestF287_BuildKeepsWhatTheMemberNeeds(t *testing.T) {
 	srv, st := newTopologyWorkspaceServer(t, "")
 	st.ws.ImageRef = built
 	st.ws.BuiltProfileHash = "" // force the honest "none" arm, which names the AUTHORED image
-	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/workspaces/"+st.ws.ID.String()+"/build", member, "")
 	if w.Code != http.StatusOK {
@@ -117,7 +117,7 @@ func TestF287_OwnerAndSuperStillSeeEverything(t *testing.T) {
 		ownedBy string
 		session *http.Cookie
 	}{
-		{"the workspace's owner", owner, ssoSession(t, owner, "owner@corp.example", oidc.RoleMember)},
+		{"the workspace's owner", owner, ssoSession(t, owner, "owner@corp.example", oidc.RoleUser)},
 		{"a super admin", "", ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

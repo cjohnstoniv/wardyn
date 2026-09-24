@@ -14,23 +14,26 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeVault is an in-process Vault: the KV v2 data/ and metadata/ routes
 // (custom_metadata, cas, cas_required, max_versions, LIST), Kubernetes login,
-// token lookup-self and renew-self, a namespace check, and forced status
-// codes. A call to destroy/ or undelete/ fails the test: the policy wardynd
-// is documented to need has no such stanza.
+// token lookup-self and renew-self (a token with a TTL expires unless renewed),
+// GET <mount>/config, a namespace check, and forced status codes. A call to
+// destroy/ or undelete/ fails the test: the policy wardynd is documented to
+// need has no such stanza.
 type fakeVault struct {
 	t   *testing.T
 	srv *httptest.Server
 
 	mu          sync.Mutex
 	mount       string
-	namespace   string            // required X-Vault-Namespace, "" = none
-	tokens      map[string]bool   // live tokens
-	jwts        map[string]string // projected SA token -> role it may log in as
-	ttl         int               // lease/ttl handed out, seconds
+	namespace   string               // required X-Vault-Namespace, "" = none
+	tokens      map[string]bool      // live tokens
+	expires     map[string]time.Time // a token's expiry, when it has a TTL
+	jwts        map[string]string    // projected SA token -> role it may log in as
+	ttl         int                  // lease/ttl handed out, seconds
 	casRequired bool
 	revoked     bool // the policy is gone: every data/ and metadata/ call is denied
 	kv          map[string]*kvEntry
@@ -38,6 +41,8 @@ type fakeVault struct {
 	calls       []string
 	logins      int
 	renews      int
+	loginAt     time.Time // the last login
+	firstRenew  time.Time // the first renew-self
 	nextToken   int
 	transit     fakeTransit
 }
@@ -50,7 +55,7 @@ type kvEntry struct {
 }
 
 func newFakeVault(t *testing.T) *fakeVault {
-	f := &fakeVault{t: t, mount: "wardyn", tokens: map[string]bool{}, jwts: map[string]string{}, kv: map[string]*kvEntry{}}
+	f := &fakeVault{t: t, mount: "wardyn", tokens: map[string]bool{}, expires: map[string]time.Time{}, jwts: map[string]string{}, kv: map[string]*kvEntry{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -60,6 +65,9 @@ func (f *fakeVault) issue() string {
 	f.nextToken++
 	tok := "tok-" + strconv.Itoa(f.nextToken)
 	f.tokens[tok] = true
+	if f.ttl > 0 {
+		f.expires[tok] = time.Now().Add(time.Duration(f.ttl) * time.Second)
+	}
 	return tok
 }
 
@@ -109,7 +117,8 @@ func (f *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 		f.login(w, body)
 		return
 	}
-	if !f.tokens[r.Header.Get("X-Vault-Token")] {
+	tok := r.Header.Get("X-Vault-Token")
+	if exp, ok := f.expires[tok]; !f.tokens[tok] || ok && time.Now().After(exp) {
 		fail(w, http.StatusForbidden, "permission denied")
 		return
 	}
@@ -118,7 +127,13 @@ func (f *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, map[string]any{"data": map[string]any{"ttl": f.ttl, "renewable": f.ttl > 0}})
 	case path == "auth/token/renew-self":
 		f.renews++
+		if f.firstRenew.IsZero() {
+			f.firstRenew = time.Now()
+		}
+		f.expires[tok] = time.Now().Add(time.Duration(f.ttl) * time.Second)
 		reply(w, 200, map[string]any{"auth": map[string]any{"client_token": r.Header.Get("X-Vault-Token"), "lease_duration": f.ttl, "renewable": true}})
+	case path == f.mount+"/config" && r.Method == http.MethodGet:
+		reply(w, 200, map[string]any{"data": map[string]any{"max_versions": 0, "cas_required": f.casRequired}})
 	case strings.HasPrefix(path, f.mount+"/destroy/"), strings.HasPrefix(path, f.mount+"/undelete/"):
 		f.t.Errorf("wardynd called %s %s: the documented policy has no destroy/ or undelete/ stanza", r.Method, path)
 		fail(w, http.StatusForbidden, "permission denied")
@@ -143,6 +158,7 @@ func (f *fakeVault) login(w http.ResponseWriter, body map[string]any) {
 		return
 	}
 	f.logins++
+	f.loginAt = time.Now()
 	reply(w, 200, map[string]any{"auth": map[string]any{"client_token": f.issue(), "lease_duration": f.ttl, "renewable": f.ttl > 0,
 		"metadata": map[string]string{"role": role}}})
 }
@@ -208,7 +224,7 @@ func (f *fakeVault) metadata(w http.ResponseWriter, r *http.Request, p string, b
 		for v, d := range e.versions {
 			dt := ""
 			if d == nil {
-				dt = "2026-01-01T00:00:00Z"
+				dt = time.Now().UTC().Format(time.RFC3339)
 			}
 			versions[strconv.Itoa(v)] = map[string]any{"deletion_time": dt, "destroyed": false}
 		}
