@@ -30,9 +30,102 @@ concurrency:
 # a runner for six hours. Each value is at least twice the job's measured
 # maximum, with a ten-minute floor (docs/CI.md); raise it with the measurement.
 jobs:
-  build:
+  # ── which jobs a change can affect (#932) ─────────────────────────────────
+  # Classifies the changed paths once. Two outputs, each 'true' or 'false':
+  #   code    — something outside the docs changed (docs/**, threatmodel/**, *.md)
+  #   backend — something outside the docs AND outside ui/** changed
+  # Push, merge_group and train/* pull requests are always 'true': they run
+  # everything. The rules fail closed: a path in no class counts as backend, so
+  # a new directory runs every job until someone decides otherwise. The Go
+  # suites (`go`, `build`) do NOT consult this at all: dozens of guard tests read
+  # the docs, the CHANGELOG, ui/src and the workflows, so no change class is
+  # safe to skip them for (docs/CI.md, "Incremental CI").
+  #
+  # A job that consumes these outputs must also run when this job FAILED
+  # (`!cancelled()`) and compare with != 'false', so a missing output runs the
+  # work instead of skipping it. REQUIRED jobs never skip at the job level:
+  # they run and skip their steps, so their check still reports success.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      backend: ${{ steps.classify.outputs.backend }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # On a pull_request HEAD is GitHub's merge commit and HEAD^1 the base
+          # tip, so HEAD^1..HEAD is exactly what this PR changes in the tree CI tests.
+          fetch-depth: 2
+      - name: Classify the changed paths
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ] || [[ "$HEAD_REF" == train/* ]]; then
+            echo "$EVENT${HEAD_REF:+ from $HEAD_REF}: running everything"
+            printf 'code=true\nbackend=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # An assignment, not `< <(git diff …)`: set -e ignores a failing
+          # process substitution, which would read an unreadable diff as
+          # "nothing changed" and skip everything.
+          changed="$(git diff --name-only --no-renames HEAD^1 HEAD)"
+          code=false backend=false
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+              docs/*|threatmodel/*|*.md) class=docs ;;
+              ui/*) class=ui; code=true ;;
+              *) class=backend; code=true; backend=true ;;
+            esac
+            echo "$class  $f"
+          done <<< "$changed"
+          echo "code=$code backend=$backend"
+          printf 'code=%s\nbackend=%s\n' "$code" "$backend" >> "$GITHUB_OUTPUT"
+
+  # ── Go: build, lint and the three tag-set suites, in parallel (#932) ──────
+  # One leg per tag set, plus one for build + tidy + lint, each on its own
+  # runner. `build` below is the required check: it waits for every leg and
+  # enforces the coverage floor on the union of the three profiles.
+  #
+  # Each suite runs under the race detector and writes a coverage profile: one
+  # pass per tag set covers both, where a separate `make build-docker` +
+  # `make test-race` used to repeat the same three tag sets a second and third
+  # time (#467). The tagless build alone cannot compile the container-hardening
+  # driver, internal/envbuild, or the k8s confinement substrate, so a
+  # tagless-only floor scored code that is not what ships. The kill/dispatch
+  # FSM's concurrent tests (kill_dispatch_race_test.go) are only meaningful
+  # under -race.
+  #
+  # These are the PR-time docker-tagged AND k8s-tagged suites (fakeDocker /
+  # fake clientset; WARDYN_TEST_DOCKER and WARDYN_TEST_K8S deliberately unset,
+  # so the real-daemon/real-cluster cases skip cleanly). nightly.yml's
+  # docker-tagged-live sets WARDYN_TEST_DOCKER=1 against a live daemon;
+  # conformance-k8s below is the k8s equivalent (WARDYN_TEST_K8S=1 against a
+  # live kind cluster).
+  go:
+    name: go (${{ matrix.suite }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `make lint` = go vet (all three tag sets) + the golangci-lint
+          # function-size/complexity gate (.golangci.yml) + the file-size gate
+          # and the other static gates — single-sourced in the Makefile.
+          # tidy-check: go.mod/go.sum must stay tidy (go mod tidy -diff).
+          - suite: lint
+            target: build tidy-check lint
+          - suite: unit
+            target: test-report
+          - suite: docker
+            target: test-report-docker
+          - suite: k8s
+            target: test-report-k8s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -64,64 +157,20 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-build-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
           restore-keys: |
-            go-build-${{ hashFiles('go.sum', 'Makefile') }}-
-            go-build-
-      - name: Build
-        run: make build
-      # go.mod/go.sum must stay tidy — `go mod tidy` is a no-op or CI fails.
-      - name: Check go.mod/go.sum are tidy
-        run: make tidy-check
-      # `make lint` = go vet (both tag sets) + the golangci-lint function-size/
-      # complexity gate (.golangci.yml: funlen/gocyclo/gocognit/lll) + the
-      # file-size gate (scripts/check-file-size.sh). Single-sourced in the
-      # Makefile — the tool version pin lives there (GOLANGCI_LINT_VERSION).
-      - name: Lint (vet + size/complexity gates)
-        run: make lint
-      # Runs the suite under ALL THREE tag sets, under the race detector, and
-      # enforces the floor on the union of the three coverage profiles. The
-      # tagless build alone cannot compile the container-hardening driver,
-      # internal/envbuild, or the k8s confinement substrate, so a tagless-only
-      # floor scored code that is not what ships, and a build of those tag sets
-      # with no test riding along proved nothing extra. The kill/dispatch FSM's
-      # concurrent tests (kill_dispatch_race_test.go) are only meaningful under
-      # -race; the rest of the tree rides along — one pass per tag set covers
-      # both coverage and race, where a separate `make build-docker` +
-      # `make test-race` used to repeat the same three tag sets a second and
-      # third time (six full Go passes for what is now three; test-race is kept
-      # as a Makefile alias for local use).
-      #
-      # cover-check == test-report + test-report-docker + test-report-k8s, so
-      # this IS the PR-time docker-tagged AND k8s-tagged suites (fakeDocker /
-      # fake clientset; WARDYN_TEST_DOCKER and WARDYN_TEST_K8S deliberately
-      # unset, so the real-daemon/real-cluster cases skip cleanly). A separate
-      # test-docker-tagged job used to run `make test-report-docker` a second
-      # time on its own runner — same command, same env, reports already
-      # inside the upload below. Removed as a true duplicate; nightly.yml's
-      # docker-tagged-live is the one that is NOT a duplicate (it sets
-      # WARDYN_TEST_DOCKER=1 against a live daemon); conformance-k8s below is
-      # the k8s equivalent (WARDYN_TEST_K8S=1 against a live kind cluster).
-      - name: Test all three tag sets (detailed reports + coverage + race detector) and enforce the union coverage floor
-        run: make cover-check
-      # Covers every Go suite this job produced: unit/, docker/ (the -tags docker
-      # suite, via cover-check) and union/ (the coverage floor's merged profile).
-      - name: Upload Go test reports
-        id: upload_go_test_reports
-        if: always()
-        # A storage-side error must not fail a job whose tests passed: a 403 from
-        # the artifact service reddened a REQUIRED check with all 175 UI test files
-        # green, and only a manual re-run cleared it (#372). The step below says so
-        # loudly, because a run that is green with no reports attached is the one
-        # case where you need them.
-        continue-on-error: true
+            go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-
+            go-${{ matrix.suite }}-
+      - name: make ${{ matrix.target }}
+        run: make ${{ matrix.target }}
+      # No continue-on-error, unlike the other report uploads: `build` unions
+      # these profiles, so a leg whose profile did not upload has not done its job.
+      - name: Upload the suite's reports and coverage profile
+        if: always() && matrix.suite != 'lint'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: go-test-reports
-          path: test/reports/go/**
-      - name: Say so if go-test-reports did not upload
-        if: always() && steps.upload_go_test_reports.outcome == 'failure'
-        run: echo "::warning title=Reports missing::go-test-reports did not upload; this job's result stands on its tests, but the reports are not attached to this run."
+          name: go-test-reports-${{ matrix.suite }}
+          path: test/reports/go/${{ matrix.suite }}/**
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -130,7 +179,60 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
             ~/.cache/golangci-lint
-          key: go-build-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+          key: go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-${{ steps.cache-date.outputs.date }}
+
+  # The required check. Branch protection requires a context named `build`, and
+  # this is it: green only when every `go` leg passed AND the union of the three
+  # coverage profiles clears the floor. `!cancelled()` so a failed leg still
+  # runs this job, which then fails on the first step; with the default
+  # `success()` it would be SKIPPED, and a skipped required check can read as
+  # passing.
+  build:
+    needs: go
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Every go leg passed
+        env:
+          LEGS: ${{ needs.go.result }}
+        run: |
+          [ "$LEGS" = success ] || { echo "::error::a go leg did not pass (result: $LEGS); see the go (…) checks"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Download the three suites' profiles
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: go-test-reports-*
+          path: test/reports/go
+      # download-artifact puts each artifact in a directory named after it; the
+      # union reads test/reports/go/<suite>/, where `make cover-check` writes it.
+      - name: Put each profile where the union reads it
+        run: for s in unit docker k8s; do mv "test/reports/go/go-test-reports-$s" "test/reports/go/$s"; done
+      # The same floor and union `make cover-check` enforces locally, over the
+      # profiles the legs produced (scripts/cover-union.sh documents what counts).
+      - name: Enforce the union coverage floor
+        id: union
+        run: make cover-union
+      - name: Upload the union coverage report
+        id: upload_go_union_report
+        if: always() && steps.union.outcome != 'skipped'
+        # A storage-side error must not fail a job whose tests passed: a 403 from
+        # the artifact service reddened a REQUIRED check with all 175 UI test files
+        # green, and only a manual re-run cleared it (#372). The step below says so
+        # loudly, because a run that is green with no reports attached is the one
+        # case where you need them.
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: go-test-reports-union
+          path: test/reports/go/union/**
+      - name: Say so if go-test-reports-union did not upload
+        if: always() && steps.upload_go_union_report.outcome == 'failure'
+        run: echo "::warning title=Reports missing::go-test-reports-union did not upload; this job's result stands on its tests, but the reports are not attached to this run."
 
   # ── docs: mermaid diagram gate ────────────────────────────────────────────
   # Validate every fenced mermaid diagram in the public docs (syntax + label-
@@ -255,6 +357,8 @@ jobs:
   # a check and repeats the setup, and the per-spec reseed costs about a second
   # (docs/CI.md has the measurements).
   ui-e2e:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -331,14 +435,19 @@ jobs:
   # The Helm chart is one of the two blessed deploy paths; lint + template-render
   # it so it can never regress to "renders nothing" again (was a CRITICAL gap).
   helm:
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.backend != 'false'
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        if: needs.changes.outputs.backend != 'false'
         with:
           version: latest
       - name: helm lint + template (must render load-bearing objects)
+        if: needs.changes.outputs.backend != 'false'
         run: make helm-lint
 
   # ── deploy: kind Helm install-test (proves the chart actually boots) ──────
@@ -357,6 +466,8 @@ jobs:
   # that stays in the workflow — repo convention keeps the actual gate logic
   # single-sourced in `make`.
   helm-install-test:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -364,8 +475,25 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: latest
+      # Layer cache in the GitHub Actions cache, one scope per image (#932),
+      # written only from a push to main like the Go caches (#470): a PR reads
+      # main's layers and adds no entries of its own. use: false keeps any plain
+      # `docker build` later in this job on the default builder, loading into
+      # the daemon as before.
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        id: buildx
+        with:
+          use: false
       - name: Build wardynd image (local only — publishing is publish-image.yml)
-        run: docker build -f deploy/compose/Dockerfile.wardynd -t wardyn/wardynd:kind-test .
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: deploy/compose/Dockerfile.wardynd
+          tags: wardyn/wardynd:kind-test
+          load: true
+          cache-from: type=gha,scope=wardynd
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardynd' || '' }}
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: wardyn-test
@@ -416,6 +544,8 @@ jobs:
   # chart's actual RBAC verbs are never runtime-constrained here (review
   # round 2, M8: the step name below used to imply otherwise).
   conformance-k8s:
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # 35, not 25: the Makefile recipe's own `-timeout` is 25m since the eviction case
     # gained its second fill target AND a margin for the rest of the suite
@@ -425,14 +555,18 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: needs.changes.outputs.backend != 'false'
         with:
           go-version-file: go.mod
           cache: false
       - name: Go build cache key date (one cache generation per job per day)
+        if: needs.changes.outputs.backend != 'false'
         id: cache-date
         run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
+        if: needs.changes.outputs.backend != 'false'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -443,30 +577,50 @@ jobs:
           restore-keys: |
             go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-
             go-conformance-k8s-
+      # Cached image build: see helm-install-test's build step.
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        id: buildx
+        if: needs.changes.outputs.backend != 'false'
+        with:
+          use: false
       - name: Build wardyn-proxy image (local only — publishing is publish-image.yml)
-        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:kind-test .
+        if: needs.changes.outputs.backend != 'false'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: deploy/compose/Dockerfile.proxy
+          tags: wardyn/wardyn-proxy:kind-test
+          load: true
+          cache-from: type=gha,scope=wardyn-proxy
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
       # H1 (review round 2): the conformance agent image MUST carry
       # wardyn-rec (k8s's SessionRecording is unconditionally true, no
       # docker-style opt-out) — a bare busybox took the never-records path
       # and the gate never proved recording works. See the Makefile target's
       # own doc and deploy/kind/Dockerfile.conformance-agent.
       - name: Build the conformance agent image (busybox:1.36 + wardyn-rec)
+        if: needs.changes.outputs.backend != 'false'
         run: make build-conformance-agent-image CONFORMANCE_AGENT_IMAGE=wardyn/conformance-agent:kind-test
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        if: needs.changes.outputs.backend != 'false'
         with:
           cluster_name: wardyn-conformance-k8s
           config: deploy/kind/conformance-kind-config.yaml
           wait: 90s
       - name: Load images into kind (no registry pull)
+        if: needs.changes.outputs.backend != 'false'
         run: |
           kind load docker-image wardyn/wardyn-proxy:kind-test --name wardyn-conformance-k8s
           kind load docker-image wardyn/conformance-agent:kind-test --name wardyn-conformance-k8s
       - name: Install Calico (single-file, version-pinned manifest — NetworkPolicy enforcement)
+        if: needs.changes.outputs.backend != 'false'
         run: |
           kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
           kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
           kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
       - name: Label a PSS-restricted namespace for runs
+        if: needs.changes.outputs.backend != 'false'
         run: |
           kubectl create namespace wardyn-conformance
           kubectl label namespace wardyn-conformance \
@@ -476,6 +630,7 @@ jobs:
           # (kind-action's default at the time this job was written) — bump
           # together if that ever changes (review round 2, L5).
       - name: Repoint KUBECONFIG at the node's internal IP (see the job comment above)
+        if: needs.changes.outputs.backend != 'false'
         run: |
           NODE_IP=$(kubectl get nodes wardyn-conformance-k8s-control-plane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
           kind get kubeconfig --name wardyn-conformance-k8s --internal \
@@ -483,6 +638,7 @@ jobs:
             > "$RUNNER_TEMP/kubeconfig-internal.yaml"
           echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig-internal.yaml" >> "$GITHUB_ENV"
       - name: Run k8s conformance (make target — WARDYN_TEST_K8S=1; canary + exec + recording live, RBAC render-asserted elsewhere)
+        if: needs.changes.outputs.backend != 'false'
         env:
           WARDYN_TEST_K8S: "1"
           WARDYN_K8S_NAMESPACE: wardyn-conformance
@@ -530,6 +686,8 @@ jobs:
   # (install.sh, the plist) executes — those are macOS/launchd-only and stay
   # covered by scripts/test-desktop-profile.sh's static checks above.
   desktop-envelope:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -646,8 +804,8 @@ jobs:
   # Docker conformance against the live daemon (WARDYN_TEST_DOCKER=1). The
   # driver-agnostic honesty stub (`make test-conformance-stub` → the untagged
   # test/conformance/none_test.go) is NOT a separate leg here: that file carries
-  # no build tag, so the build job's `make cover-check` already runs it under
-  # all three tag sets (coverage + race, see the build job above) — a separate
+  # no build tag, so the `go` job's three suites already run it under all
+  # three tag sets (coverage + race, see the go job above) — a separate
   # CI run here would be a pure duplicate. The stub target stays in the
   # Makefile for local use.
   #
@@ -662,20 +820,26 @@ jobs:
   # knob would be worse: the one measurement that proves a stock boot parks no
   # first-use approval would silently never run.
   conformance:
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # Two image builds (one of them a bookworm + node + `npm install -g` layer)
     # in front of a suite whose own `go test -timeout` is 20m.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: needs.changes.outputs.backend != 'false'
         with:
           go-version-file: go.mod
           cache: false
       - name: Go build cache key date (one cache generation per job per day)
+        if: needs.changes.outputs.backend != 'false'
         id: cache-date
         run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
+        if: needs.changes.outputs.backend != 'false'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -687,12 +851,38 @@ jobs:
             go-conformance-docker-${{ hashFiles('go.sum', 'Makefile') }}-
             go-conformance-docker-
       - name: Docker smoke check
+        if: needs.changes.outputs.backend != 'false'
         run: docker run --rm hello-world
+      # Cached image build: see helm-install-test's build step.
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        id: buildx
+        if: needs.changes.outputs.backend != 'false'
+        with:
+          use: false
       - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
-        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
+        if: needs.changes.outputs.backend != 'false'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: deploy/compose/Dockerfile.proxy
+          tags: wardyn/wardyn-proxy:local
+          load: true
+          cache-from: type=gha,scope=wardyn-proxy
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
       - name: Build agent-claude-code image (local only — the boot under measurement)
-        run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
+        if: needs.changes.outputs.backend != 'false'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: deploy/images/claude-code/Dockerfile
+          tags: wardyn/agent-claude-code:local
+          load: true
+          cache-from: type=gha,scope=agent-claude-code
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=agent-claude-code' || '' }}
       - name: Run conformance tests (docker)
+        if: needs.changes.outputs.backend != 'false'
         env:
           WARDYN_TEST_DOCKER: "1"
         run: make test-conformance-docker
@@ -718,6 +908,8 @@ jobs:
   # requires a host-native dockerd — it cannot pass against a VM-based daemon like
   # Docker Desktop, where the container cannot reach the host loopback in any mode.
   envbuild-integration:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -764,6 +956,8 @@ jobs:
   # before (a HIGH finding) — only the nightly `integration-pg` job exercised
   # it. Mirrors that job's postgres service (postgres:17, matching compose/prod).
   test-pg:
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -779,14 +973,18 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.backend != 'false'
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        if: needs.changes.outputs.backend != 'false'
         with:
           go-version-file: go.mod
           cache: false
       - name: Go build cache key date (one cache generation per job per day)
+        if: needs.changes.outputs.backend != 'false'
         id: cache-date
         run: echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
       - name: Restore Go build cache
+        if: needs.changes.outputs.backend != 'false'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -805,6 +1003,7 @@ jobs:
       # over the JSON event stream, in case a guard is ever added that does not
       # consult the marker.
       - name: Postgres-gated integration suite (with reports)
+        if: needs.changes.outputs.backend != 'false'
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
           WARDYN_TEST_PG_SUPERUSER: "1"
@@ -816,12 +1015,13 @@ jobs:
       # need of the detector and the ones no gate was pointing it at. This step
       # is that gate (F137).
       - name: PG concurrency proofs (race detector)
+        if: needs.changes.outputs.backend != 'false'
         env:
           WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
         run: make test-race-pg
       - name: Upload PG test reports
         id: upload_pg_test_reports
-        if: always()
+        if: always() && needs.changes.outputs.backend != 'false'
         # A storage-side error must not fail a job whose tests passed: a 403 from
         # the artifact service reddened a REQUIRED check with all 175 UI test files
         # green, and only a manual re-run cleared it (#372). The step below says so

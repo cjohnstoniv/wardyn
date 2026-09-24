@@ -20,8 +20,8 @@ import (
 // credential mint — the tests most in need of the race detector in the tree.
 // No gate ran them under it:
 //
-//   - the race passes in ci.yml's build job — test-report, test-report-docker
-//     and test-report-k8s, all three run by `make cover-check` — strip the DSN
+//   - the race passes — test-report, test-report-docker and test-report-k8s,
+//     all three run by `make cover-check` and by ci.yml's go legs — strip the DSN
 //     (`WARDYN_TEST_PG= ./scripts/test-report.sh <suite> -race ...`), so every
 //     WARDYN_TEST_PG-gated test is skipped there;
 //   - `make test-report-pg`, the only target that SETS the DSN, shells out to
@@ -77,9 +77,18 @@ func TestPGConcurrencyProofsRunUnderRace(t *testing.T) {
 		t.Errorf("cover-check no longer depends on all three race suites:\n%s", body)
 	}
 
-	// ...and CI runs cover-check, or none of those race passes gate anything.
-	if build := ciJobBlock(t, string(wf), "build"); !strings.Contains(build, "run: make cover-check") {
-		t.Errorf("ci.yml's build job never runs `make cover-check`, so no race pass gates a PR:\n%s", build)
+	// ...and CI runs all three (one `go` matrix leg each) and the required
+	// `build` job enforces the floor over their profiles, or none of those race
+	// passes gate anything.
+	goJob := ciJobBlock(t, string(wf), "go")
+	for _, target := range []string{"test-report", "test-report-docker", "test-report-k8s"} {
+		if !strings.Contains(goJob, "target: "+target+"\n") {
+			t.Errorf("ci.yml's go job has no leg running `make %s`, so that race pass gates no PR:\n%s", target, goJob)
+		}
+	}
+	if build := ciJobBlock(t, string(wf), "build"); !strings.Contains(build, "run: make cover-union") ||
+		!strings.Contains(build, "needs: go") {
+		t.Errorf("ci.yml's build job must need the go legs and run `make cover-union` over their profiles:\n%s", build)
 	}
 
 	// (c) CI actually runs it, in the job that has a Postgres service and sets

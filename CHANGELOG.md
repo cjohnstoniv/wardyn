@@ -105,6 +105,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **CI does less per pull request (#932).** The three Go tag-set suites and lint run as parallel
+  `go (…)` legs, and the required `build` check unions their coverage profiles (`make cover-union`).
+  A docs-only or ui-only pull request skips the conformance, Postgres, envbuild and Helm work, and
+  a docs-only one skips `ui-e2e` too. The Go suites never skip, because their guards read the docs.
+  Required checks still report success when their steps are skipped. Three image builds reuse
+  main's Docker layer cache (docs/CI.md, "Incremental CI").
 - **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
   is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
   set; an admin list alone reads ok. While it warns, every admin also sees a banner above every

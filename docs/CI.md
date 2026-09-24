@@ -414,6 +414,79 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 `make ci`, the local merge gate, prints the same kind of table for its own
 targets when it finishes or stops.
 
+### Incremental CI
+
+Three mechanisms (#932), on top of the per-job Go cache (#470) and the single
+race + coverage pass per tag set (#467):
+
+1. **Tag sets in parallel.** The `go` matrix job runs `go (lint)` (`make build tidy-check lint`),
+   `go (unit)`, `go (docker)` and `go (k8s)` (`make test-report`, `-docker`, `-k8s`) on four
+   runners instead of one after another. Each test leg uploads its reports as
+   `go-test-reports-<suite>`. `build` waits for all four, downloads the three profiles and
+   runs `make cover-union`, the same `COVER_MIN` floor over the same union that
+   `make cover-check` enforces locally.
+2. **Skip what a change cannot affect.** The `changes` job classifies the pull request's
+   changed paths (`git diff --name-only --no-renames HEAD^1 HEAD` on GitHub's merge commit,
+   so a moved file counts at both its old and its new path):
+
+   | Class | Paths | Skipped |
+   |---|---|---|
+   | docs | `docs/**`, `threatmodel/**`, any `*.md` | `ui-e2e`, `desktop-envelope`, plus everything the ui class skips |
+   | ui | `ui/**` | `conformance`, `conformance-k8s`, `test-pg`, `envbuild-integration`, `helm`, `helm-install-test` |
+   | backend | everything else, including Go, `deploy/**`, `scripts/**` and `.github/**` | nothing |
+
+   A job is skipped only when every changed path falls in a class that skips it, so a
+   docs-plus-ui change skips only the ui column. A path that matches no pattern counts as
+   backend, so a new directory runs everything until someone classifies it. A push, a merge
+   queue run and a pull request from a `train/*` branch always run everything.
+   The Go jobs (`go`, `build`) never skip, whatever changed. Dozens of Go test files read
+   the docs, the CHANGELOG, `ui/src` or the workflows (the citation, CHANGELOG-freeze,
+   RELEASING job-list and copy-parity guards among them), so skipping Go on a docs-only
+   change would let a docs change break the guards that check docs.
+3. **Docker layer cache.** `helm-install-test` (wardynd), `conformance-k8s` (wardyn-proxy) and
+   `conformance` (wardyn-proxy, agent-claude-code) build through `docker/build-push-action`
+   with `cache-from: type=gha,scope=<image>`. `cache-to` (`mode=max`) is written only from a
+   push to `main`, like the Go caches, so pull requests read main's layers and add no cache
+   entries of their own. Not cached: `trivy` (a cached `apt-get` layer would scan older
+   packages than the release builds, which changes what the gate says), `desktop-envelope`
+   (`docker compose build`), the conformance agent image (`make build-conformance-agent-image`)
+   and `trivy`'s `agent-vscode`/`agent-novnc` rows, which build `FROM` a local image that a
+   buildx builder cannot see.
+
+**Required checks and skipped jobs.** GitHub reports a job skipped by a job-level `if:` as
+"skipped". Branch protection can count that as passing, which is the risk: a required check
+that is skipped because `changes` *failed* would pass without running anything. So no
+required job is skipped at the job level:
+
+- `test-pg`, `conformance`, `conformance-k8s` and `helm` always run (`if: !cancelled()`) and
+  put `if: needs.changes.outputs.backend != 'false'` on every step. When a change cannot affect
+  them the job still reports success after a few seconds with its steps skipped. The
+  comparison is `!= 'false'`, so a failed or missing classification runs the work.
+- `build` needs every `go` leg and runs with `if: !cancelled()`. Its first step fails unless
+  every leg passed, so the `build` context is green only when all four legs and the union floor
+  are.
+- Non-required jobs (`ui-e2e`, `desktop-envelope`, `helm-install-test`, `envbuild-integration`)
+  skip at the job level and free their runner. They too use `!cancelled()` and `!= 'false'`.
+- Every other required context (`ui`, `compose`, `dco`, `notices`, `gates (…)`, `trivy (…)`)
+  does not read the classification and runs on every change.
+
+**Before and after.** "Before" is main's last green run before this change, 35918188245
+(a push: every job ran). Wall time runs from the first job's start to the last job's end.
+The 7.3 minutes the run queued before any job started are not included. `build` itself queued
+26.5 minutes for a runner. On this repository, runner slots and not job length set the wall
+time (see above), so the "after" rows are measured, not predicted.
+
+| Run | `build` | `conformance-k8s` | `ui-e2e` | `test-pg` | Wall |
+|---|---|---|---|---|---|
+| Before: 35918188245, push to main | 22.0 min | 13.1 min | 8.0 min | 6.2 min | 41.1 min |
+| After: docs-only pull request | to be measured on the first runs | | | | |
+| After: ui-only pull request | to be measured on the first runs | | | | |
+| After: one-Go-package pull request | to be measured on the first runs | | | | |
+| After: train pull request (everything) | to be measured on the first runs | | | | |
+
+After this change `build` is only the aggregator. Its time is the longest `go (…)` leg plus
+about a minute. Each leg keeps the old `build` timeout of 40 minutes until it is measured.
+
 ## Driving an existing control plane instead
 
 If you already run wardynd somewhere, skip `ci-run.sh` and use the CLI
