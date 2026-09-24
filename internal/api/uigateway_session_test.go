@@ -129,7 +129,7 @@ func uiEnterApp(t *testing.T, h *uiHarness, app string) (*http.Cookie, string) {
 	t.Helper()
 	rec := h.enter(url.Values{
 		"run": {h.run.ID.String()}, "app": {app},
-		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleMember)},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
 	})
 	if rec.Code != http.StatusFound {
 		t.Fatalf("enter %q: %d %s", app, rec.Code, rec.Body.String())
@@ -279,7 +279,7 @@ func TestUIGateway_PreIssuedAtCookieFailsClosed(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	old := signUISessionPayload(h.srv.cfg.UISessionKey, fmt.Sprintf(
 		`{"r":%q,"a":"code","p":%d,"s":%q,"o":%q,"e":%d}`,
-		h.run.ID, uiTestPort, h.owner, oidc.RoleMember, time.Now().Add(time.Hour).Unix()))
+		h.run.ID, uiTestPort, h.owner, oidc.RoleUser, time.Now().Add(time.Hour).Unix()))
 	rec := uiGet(h, uiRunPrefix+h.run.ID.String()+"/code/ide",
 		&http.Cookie{Name: uiCookieName, Value: old})
 	if rec.Code != http.StatusForbidden {

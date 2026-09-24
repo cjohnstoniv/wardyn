@@ -96,6 +96,14 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 		return res, nil, scmSite, grade, bedrock, true
 	}
 	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade, bedrock), ceiling.Profile.Name)
+	// Here rather than in the ladder: whether the managed settings land depends
+	// on the ENFORCED class's substrate, which only this function holds. No
+	// agent process on an exec run to say it about.
+	if ok && req.TaskMode != "exec" {
+		if msg := s.managedSettingsUndeliveredWarning(r.Context(), req.Agent, level, enforced); msg != "" {
+			warnings = append(warnings, msg)
+		}
+	}
 	return res, warnings, scmSite, grade, bedrock, ok
 }
 

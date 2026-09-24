@@ -155,6 +155,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
 		RunnerTarget: s.cfg.RunnerTarget,
 	}
+	s.captureRunLimits(&run, gov.ceiling)
 	if set != nil {
 		set(&run)
 	}
@@ -667,7 +668,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// No workspace/operator integration bound: fall back to the operator
 		// ceiling's convention subscription mount, else a brokered api-key grant
 		// (today's behavior for an unbound workspace).
-		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true, s.anthropicGatewayHost()); m {
+		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true, s.anthropicGatewayHostPort()); m {
 			subMounted = true
 		} else {
 			s.ensureLLMGrant(&policy, "claude-code", s.presentSecretNames(ctx), false)

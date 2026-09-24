@@ -403,7 +403,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// differently from run-create for the same cause. Everything else keeps
 		// today's 500.
 		if errors.Is(lerr, errGroupsSnapshotStale) {
-			writeCeilingError(w, lerr)
+			writeCeilingError(w, r, lerr)
 			return
 		}
 		writeServerError(w, r, "launch record run", lerr)

@@ -300,7 +300,7 @@ func TestDispatch_TheMemberCannotReadTheShareHostPathFromTheirOwnRun(t *testing.
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 
-	member := ssoSession(t, memberSub, "alice@corp.example", oidc.RoleMember)
+	member := ssoSession(t, memberSub, "alice@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/audit?run_id="+spec.RunID.String(), member, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /audit as the run's creator = %d: %s", w.Code, w.Body.String())
