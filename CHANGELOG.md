@@ -16,6 +16,35 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The key is now `ado_grant` (one grant). The older `ado_grants` list still loads when it holds
   one entry; a list with more than one, or one set beside `ado_grant`, fails the sidecar's
   startup (#452).
+- **The ephemeral-age-key boot refusal names the rows no key can recover (#755).** With
+  `WARDYN_AGE_KEY` unset over age-sealed rows, wardynd told the operator to set the key the rows
+  were written with — but rows written under an earlier ephemeral key have no such key. The
+  refusal now says those rows are unrecoverable and gives the statement that deletes them. The
+  console's "Secret store durability" row now says what is stored under the ephemeral key is lost
+  at the next restart and that the next boot refuses to start, and the Helm values comment for
+  `secrets.ageKeyFromSecret` says no key set afterwards recovers the rows.
+- **Live kind SSO walk: two timing flakes (#804).** Case L in `sso-member-recovery.spec.ts` read
+  the run's audit trail exactly once for `run.exec:success`, which under load could still be racing
+  the dispatch it was asserting on; it now polls the trail (bounded by the same `SANDBOX_UP` ceiling
+  dispatch itself races against) instead of reading it once. Separately, `scripts/kind-sso-walk.sh`
+  now calls `run-ui-e2e.sh` once per spec file instead of once for all three — Playwright clears
+  `ui/test-results` at the start of every `playwright test` process, so a failing spec's own
+  screenshots and traces were being wiped by the very next spec before the walk ever got to look —
+  and copies a failed spec's `ui/test-results` into the walk's evidence directory immediately after
+  that spec runs, before anything downstream can destroy them.
+- **Settings no longer says "Stored as \<name\>" beside a secret that isn't stored (#355).** Every
+  credential lane (Anthropic/OpenAI API keys, Bedrock bearer key, git PAT, SSH key — all built on
+  the shared `SecretLane`) showed that caption next to an empty, unsaved Save button, reading as
+  "already saved" when nothing was. It now shows only once the lane actually reads as stored; the
+  unsaved form carries no name.
+- **The Corporate-network setup step no longer reverts a save made elsewhere (#492).** Its
+  `PUT /site-config` (Host proxy / Egress redirection) sent no `If-Match`, so a save here could
+  silently spread a stale GET over `scm_hosts`, `egress_redirects`, or the People step's own
+  sign-in-help fields if they'd changed in another tab since this step last loaded. It now sends
+  the last GET's ETag, same as the sign-in-help card, and a stale write is refused (412) rather
+  than accepted: the step reloads the current document (and a fresh ETag) and tells the operator
+  their change wasn't saved, without touching what they were still typing (a redirect being
+  added or edited stays in its form until a save lands).
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
@@ -45,6 +74,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "run not found" (the sandbox-side, run-token-authenticated doors) are now commented with why: the
   caller's own presented token names the missing run, so a lookup miss is that token's authority
   gone, not a path a member could probe (#189).
+- `push_rules.deny_paths` entries with leading or trailing whitespace, or that are not valid
+  UTF-8, are now refused at write time (`400`) instead of stored as a deny rule that matches
+  almost nothing. The git broker reads them the same way, so a policy that bypassed write-time
+  validation with one has every push refused rather than the entry ignored (#271).
+- A push of a few hundred commits from a merge-heavy history is no longer refused as
+  uninspectable while far below every size limit. Push content rules charged each merge again for
+  every directory the other side had changed, so such a push crossed the inspector's tree-entry
+  ceiling at about 570 commits. Each comparison is now charged once, and the ceiling is justified
+  against measured real history (#254). An honest push that still crosses one of
+  `internal/gitpack`'s own ceilings (object count, inflated bytes, tree entries, changed paths) now
+  refuses with `413`/`brokered:git:push-too-large` instead of `415`/`brokered:git:push-uninspectable`,
+  since it names the same fix as an oversized push: fewer commits at a time.
 - **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
   that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
   explaining there is no per-person connection to show. The capability card's consent door now
@@ -134,6 +175,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tests read the docs, with plain `go test` (no race detector, no coverage union).
   Required checks still report success when their steps are skipped. Three image builds reuse
   main's Docker layer cache (docs/CI.md, "Incremental CI").
+- **Docs caught up with `POST /runs` answering before dispatch completes (#121, #118).** `POST /runs`
+  answers when the run row exists; every refusal is still synchronous with no run created; a
+  dispatch failure ends FAILED with a failure hint; a restart mid-dispatch is reaped after the
+  undispatched grace period with the reconciler's reason; and 0.7 CLI, SDK and curl callers need no
+  change — status code, body and `--wait` are unmoved, `state` reads PENDING, and `image` is absent
+  on the create reply.
 - **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
   is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
   set; an admin list alone reads ok. While it warns, every admin also sees a banner above every
