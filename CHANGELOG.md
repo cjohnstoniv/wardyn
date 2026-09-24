@@ -37,6 +37,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the shared `SecretLane`) showed that caption next to an empty, unsaved Save button, reading as
   "already saved" when nothing was. It now shows only once the lane actually reads as stored; the
   unsaved form carries no name.
+- **The Corporate-network setup step no longer reverts a save made elsewhere (#492).** Its
+  `PUT /site-config` (Host proxy / Egress redirection) sent no `If-Match`, so a save here could
+  silently spread a stale GET over `scm_hosts`, `egress_redirects`, or the People step's own
+  sign-in-help fields if they'd changed in another tab since this step last loaded. It now sends
+  the last GET's ETag, same as the sign-in-help card, and a stale write is refused (412) rather
+  than accepted: the step reloads the current document (and a fresh ETag) and tells the operator
+  their change wasn't saved, without touching what they were still typing (a redirect being
+  added or edited stays in its form until a save lands).
 - **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
   enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
   complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
