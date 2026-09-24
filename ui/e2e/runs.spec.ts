@@ -14,6 +14,8 @@ import { STATES } from "../src/app/components/wardyn/states";
 import {
   CHIP_IMAGE_PULL_FAILED,
   CHIP_SETTING_UP,
+  CHIP_WAITING_FOR_MACHINE,
+  PENDING_NO_DETAIL,
   STARTING_CONTAINER_CREATING,
   STUCK_IMAGE_PULL,
 } from "../src/app/components/screens/run-status-detail";
@@ -566,6 +568,46 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport (
 
     // NEVER hidden — the chip may truncate, but it must still be on screen.
     await expect(page.getByTitle(hint)).toBeVisible();
+  });
+});
+
+// #125 — PENDING's own first tick, before the substrate has sent anything at
+// all: statusChip widens from STARTING-only to STARTING || PENDING, and an
+// empty status_detail on a PENDING run gets PENDING_NO_DETAIL instead of
+// rendering nothing. Route-spliced on fixture 0 (seeded PENDING) the same
+// shape the STARTING cases above use — anchored on the run's own id
+// (**/api/v1/runs/*, a single path segment), never a bare `/\/runs\/.+/`
+// against the page URL, which also matches /runs/new.
+test.describe("Run header — PENDING's own queued sentence (#125)", () => {
+  test("shows the queued sentence with no status_detail, and a real stage line replaces it", async ({ page }) => {
+    let stage: { status_detail: string; status_reason: string } | null = null;
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 0") {
+        json.status_detail = stage?.status_detail ?? "";
+        json.status_reason = stage?.status_reason ?? "";
+      }
+      await route.fulfill({ response, json });
+    });
+    await openRuns(page);
+    await page.getByText("e2e fixture 0").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+
+    const header = page.getByTestId("run-summary-header");
+    await expect(header.getByText("Pending", { exact: true })).toBeVisible();
+    // SF-25: the mock (packet-4.html state 3) has only the reused Pending
+    // badge plus this sentence as a visible line — no separate "Queued" info
+    // chip, which would say the badge's own fact a second time.
+    await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toBeVisible();
+    await expect(header.getByText("Queued", { exact: true })).toHaveCount(0);
+
+    // The next poll tick (DETAIL_POLL_MS) picks up a real stage line, which
+    // supersedes the queued sentence.
+    stage = { status_detail: "pod: Unschedulable: no room", status_reason: "Unschedulable" };
+    await expect(header.getByText(CHIP_WAITING_FOR_MACHINE)).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByText(PENDING_NO_DETAIL, { exact: true })).toHaveCount(0);
   });
 });
 

@@ -24,6 +24,7 @@ import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import {
   CHIP_SETTING_UP,
   CHIP_WAITING_FOR_MACHINE,
+  PENDING_NO_DETAIL,
   STARTING_CONTAINER_CREATING,
 } from "./run-status-detail";
 
@@ -454,6 +455,76 @@ describe("SummaryHeader — the startup reason (finding 6)", () => {
     );
     expect(screen.queryByText(CHIP_SETTING_UP)).toBeNull();
     expect(screen.queryByText(STARTING_CONTAINER_CREATING)).toBeNull();
+  });
+});
+
+// #125 — PENDING's own first tick, before the substrate has sent anything:
+// statusChip widened from STARTING-only to STARTING || PENDING, and an empty
+// status_detail on PENDING gets its own sentence rather than rendering nothing.
+describe("SummaryHeader — PENDING's own queued sentence (#125)", () => {
+  const pending = (extra: Partial<AgentRun>): AgentRun => ({
+    ...runningInteractive,
+    state: "PENDING",
+    interactive: false,
+    ...extra,
+  });
+
+  // SF-25: the mock (packet-4.html state 3) has only the reused Pending
+  // badge plus the visible sentence — no separate "Queued" info chip, which
+  // would say the badge's own fact a second time.
+  it("shows only the Pending badge, no separate info chip, for a PENDING run with no status_detail yet", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={pending({ status_detail: "" })} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.queryByText("Queued")).toBeNull();
+  });
+
+  // SF-25: a tooltip alone cannot be read on a touch device — the mock
+  // (packet-4.html state 3) shows the sentence as a visible line under the
+  // header, byte-exact, not only on the chip's `title`.
+  it("also renders the queued sentence as a visible line under the header, not only on the chip's title", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={pending({ status_detail: "" })} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(PENDING_NO_DETAIL)).toBeInTheDocument();
+  });
+
+  it("a real stage line replaces the queued sentence the moment one lands", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={pending({ status_detail: "pod: Unschedulable: no room", status_reason: "Unschedulable" })}
+          terminal={false}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(PENDING_NO_DETAIL)).toBeNull();
+    expect(screen.getByText(CHIP_WAITING_FOR_MACHINE)).toBeInTheDocument();
+  });
+
+  // review defect 3: PENDING_NO_DETAIL is a PENDING-only fact — STARTING's own
+  // empty-detail case was already correctly silent before #125 (no ordinary
+  // wait worth naming before the pod is even scheduled) and must stay that
+  // way; the widened `run.state === "STARTING" || "PENDING"` gate must not
+  // have smuggled the queued sentence into the STARTING arm too.
+  it("never shows the queued sentence for a STARTING run with no status_detail — that stays silent", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={{ ...runningInteractive, state: "STARTING", interactive: false, status_detail: "" }}
+          terminal={false}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(PENDING_NO_DETAIL)).toBeNull();
+    expect(screen.getByTestId("run-summary-header")).not.toHaveTextContent(PENDING_NO_DETAIL);
   });
 });
 

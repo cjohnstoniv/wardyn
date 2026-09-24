@@ -189,3 +189,18 @@ export const RUN_COCKPIT = {
   shortcutExitFocus: "exit focus",
 } as const;
 
+// #125 — the run page's own launch-advisory block. A launch that answers 2xx
+// always navigates here in the same tick (use-launch.ts), carrying any
+// advisory `warnings[]` as router state; this is where they land, in the New
+// Run rail's own advisory-block shape. LAUNCH_WARNING_TITLE is deliberately
+// NOT re-declared here — it is AGENTS.LAUNCH_WARNING_TITLE
+// (workspace-providers-copy.ts), reused verbatim so the two surfaces can never
+// spell "launched with a warning" two different ways.
+export const RUN_DETAIL = {
+  // Router state dies on reload — this says so, rather than letting the note
+  // simply vanish with no explanation. The durable record stays the
+  // run.create audit row's own clamp warnings (see the Audit tab).
+  LAUNCH_WARNING_EPHEMERAL: "This note goes when you reload. The run's audit trail keeps it.",
+  LAUNCH_WARNING_DISMISS: "Dismiss",
+} as const;
+

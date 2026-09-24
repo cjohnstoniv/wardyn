@@ -33,7 +33,7 @@
 // §7.1 is REUSED canon (PROVIDERS.*, APPROVAL_BANNER_LABEL.*, APPROVAL_SCOPE_LABEL.*,
 // APPROVAL_SCOPE_HINT.*, APPROVAL.CANCELLED_BODY, CAPABILITY.*, MEMBER_GETTING_STARTED.*,
 // AGENTS.MODEL_ACCESS_EXPIRING_ACTION, OPERATOR_ONLY_REASON, PEOPLE.CANCEL,
-// PROVIDERS.LAUNCH_WARNING_TITLE, AGENTS.OPEN_RUN_CTA) — imported by the consuming
+// PROVIDERS.LAUNCH_WARNING_TITLE) — imported by the consuming
 // screens from its own home, never re-exported or re-frozen here. §7.1's second table
 // (server-composed refusals: ADO_400.*, ADO_422.*, ADO_REFUSE.*, ADO_PAT.*) is also
 // deliberately absent — those are rendered from the wire, verbatim, one Go constants

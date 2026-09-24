@@ -22,7 +22,12 @@ import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy"
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
-import { isTerminalStatusReason, statusDetailChip, statusDetailSentence } from "./run-status-detail";
+import {
+  isTerminalStatusReason,
+  PENDING_NO_DETAIL,
+  statusDetailChip,
+  statusDetailSentence,
+} from "./run-status-detail";
 
 
 // Exported for the failure block (run-detail/failure-block.tsx), which states
@@ -114,12 +119,31 @@ export function SummaryHeader({
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
   const shortId = run.id.replace(/^run_/, "");
   // "" whenever there is nothing to say. The SERVER has already blanked
-  // status_detail for every run that is not STARTING (except a FAILED one whose
-  // reason IS the failure) — and the header gates on STARTING anyway, because a
-  // FAILED run's header already says why in the failure_hint chip below, and two
-  // chips narrating one ending is how a bar this crowded loses the one that
-  // matters.
-  const statusChip = run.state === "STARTING" ? statusDetailChip(run.status_detail, run.status_reason) : "";
+  // status_detail for every run that is not STARTING (PENDING included —
+  // projectStatusDetail's `default` branch in runs_status_detail.go blanks it
+  // for PENDING exactly like every other non-STARTING state) except a FAILED
+  // one whose reason IS the failure — and the header gates on STARTING/PENDING
+  // anyway, because a FAILED run's header already says why in the failure_hint
+  // chip below, and two chips narrating one ending is how a bar this crowded
+  // loses the one that matters.
+  //
+  // #125: PENDING's own first tick carries no status_detail at all — the
+  // ordinary derivation below would render nothing — so that ONE case reaches
+  // for PENDING_NO_DETAIL instead. The moment status_detail carries a real
+  // stage line (today, only ever once the run has moved to STARTING) this
+  // falls through to the ordinary STARTING/PENDING derivation, which
+  // supersedes it.
+  const pendingQueued = run.state === "PENDING" && !run.status_detail?.trim();
+  // SF-25: PENDING's own first tick gets no header chip at all — the mock
+  // (packet-4.html state 3) has only the reused Pending badge (RunStateBadge,
+  // above) plus PENDING_NO_DETAIL as a visible line below the bar (the
+  // `pendingQueued` block near the end of this component); a same-page
+  // "Queued" info chip would say the badge's own fact a second time.
+  const statusChip = pendingQueued
+    ? ""
+    : run.state === "STARTING" || run.state === "PENDING"
+      ? statusDetailChip(run.status_detail, run.status_reason)
+      : "";
 
   // This is a stable e2e hook, scoping "Interactive"/"Fence" text
   // assertions to this bar rather than the whole page (both strings are
@@ -140,6 +164,7 @@ export function SummaryHeader({
   // (min-h, not h, below xl) only on widths narrower than this console's
   // primary target.
   return (
+    <>
     <div
       data-testid="run-summary-header"
       // overflow-hidden — the single-line xl+ row still floors near
@@ -409,5 +434,15 @@ export function SummaryHeader({
         />
       </div>
     </div>
+    {/* SF-25: the mock (packet-4.html state 3) has no header chip for this
+        case at all — only the reused Pending badge above and this sentence,
+        byte-exact to PENDING_NO_DETAIL, as a visible line a touch device can
+        actually read (there is no tooltip to open). */}
+    {pendingQueued && (
+      <p data-testid="run-summary-secondary" className="border-b border-border bg-card px-4 py-1.5 text-body text-muted-foreground">
+        {PENDING_NO_DETAIL}
+      </p>
+    )}
+    </>
   );
 }

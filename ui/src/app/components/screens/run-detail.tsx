@@ -91,6 +91,7 @@ import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { RunCanvas } from "./run-detail/canvas";
 import { RunFailureBlock } from "./run-detail/failure-block";
 import { LoginSandboxNote } from "./run-detail/login-sandbox-note";
+import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
 import { TerminalPane } from "./run-detail/terminal-notice";
 import { sessionOptionLabel, RECORDING_MISSING_SESSION_TITLE, RECORDING_MISSING_SESSION_BODY } from "./run-detail/recording-tab-copy";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
@@ -426,6 +427,8 @@ export function RunDetailScreen() {
             onKill={kill}
             onClone={onClone}
           />
+
+          <LaunchWarningsNote />
 
           <RunDetailCommandBar
             tabs={

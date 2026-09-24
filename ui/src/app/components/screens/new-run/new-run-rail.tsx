@@ -83,14 +83,6 @@ interface RunRailProps {
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
     credentialRefused: boolean;
-    /** The 201's advisory `warnings[]`, once Launch has actually fired
-     *  (§5c.8) — rendered here, inline, instead of a toast. */
-    warnings: string[];
-    /** Set once a run launched with warnings: the screen stays put and this
-     *  replaces Launch, so the member opens the run when they have read them.
-     *  Null on every other state. A timed redirect races every other
-     *  navigation off the screen, so this must replace Launch instead. */
-    onOpenRun: (() => void) | null;
   };
   preflight: {
     error: string | null;
@@ -595,49 +587,31 @@ export function RunRail({
         </p>
       )}
 
-      {/* §5c.8: the 201's advisory warnings, inline — the toast this replaced
-          was gone the instant the run navigated away. */}
-      {launch.warnings.length > 0 && (
-        <div className="mt-3 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-warning">
-          <p className="font-medium text-foreground">{AGENTS.LAUNCH_WARNING_TITLE}</p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4">
-            {launch.warnings.map((w, i) => (
-              <li key={i}>{w}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {/* Preflight lives on the Policy panel, next to the document it checks —
           one button, not two competing ones. Its result stays here, beside
           Launch, because "what would be clamped" is the last thing read before
-          committing. */}
+          committing. #125: a 2xx launch (warnings or not) navigates straight to
+          the run in the same tick, so there is no longer a held state for this
+          button to become — any advisory warnings render on the run page
+          instead (run-detail/launch-warnings-note.tsx). */}
       <div className="mt-4 flex gap-2">
-        {launch.onOpenRun ? (
-          // The run is launched — Launch has nothing left to do, and the one
-          // teal here becomes the way on. Nothing navigates until it is clicked.
-          <Button type="button" className="flex-1" onClick={launch.onOpenRun}>
-            {AGENTS.OPEN_RUN_CTA}
-          </Button>
-        ) : (
-          <Button
-            ref={launchRef}
-            type="button"
-            className="flex-1"
-            disabled={launch.disabled || !!launch.problem}
-            onClick={() => {
-              autoOpened.current = false;
-              launch.onLaunch();
-            }}
-          >
-            {/* The icon slot always renders (never just on launching) so the
-                has-[>svg] padding rule and the icon+gap width never change —
-                toggling `invisible` cannot shift "Launch run" sideways the way
-                mounting/unmounting the icon would. */}
-            <Loader2 className={launch.spinning ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
-            Launch run
-          </Button>
-        )}
+        <Button
+          ref={launchRef}
+          type="button"
+          className="flex-1"
+          disabled={launch.disabled || !!launch.problem}
+          onClick={() => {
+            autoOpened.current = false;
+            launch.onLaunch();
+          }}
+        >
+          {/* The icon slot always renders (never just on launching) so the
+              has-[>svg] padding rule and the icon+gap width never change —
+              toggling `invisible` cannot shift "Launch run" sideways the way
+              mounting/unmounting the icon would. */}
+          <Loader2 className={launch.spinning ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
+          Launch run
+        </Button>
       </div>
       {/* A disabled button that doesn't say why is a dead end: without
           client-side validation, an empty form would launch and the server's
