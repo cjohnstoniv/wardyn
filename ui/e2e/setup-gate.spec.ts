@@ -50,14 +50,9 @@ async function nudgeUntil(page: Page, done: () => Promise<boolean>, timeoutMs = 
 
 async function mockGatedStatus(
   page: Page,
-  overrides: { onboarded?: boolean; sso?: boolean; nonBlockingFail?: boolean; holdAfterFirst?: boolean } = {},
+  overrides: { onboarded?: boolean; sso?: boolean; nonBlockingFail?: boolean } = {},
 ): Promise<void> {
-  let reads = 0;
   await page.route("**/api/v1/setup/status*", async (route) => {
-    // #806: answer the read that decides the gate, then never answer another —
-    // so nothing downstream can wait on a second round trip and still pass.
-    reads += 1;
-    if (overrides.holdAfterFirst && reads > 1) return;
     const response = await route.fetch();
     const json = await response.json();
     json.onboarding_complete = overrides.onboarded ?? false;
@@ -140,22 +135,6 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await expect(page.getByText("Getting started").first()).toBeVisible();
   });
 
-  test("a gated redirect paints the funnel from the status that fired the gate, not a second read (#806)", async ({
-    page,
-  }) => {
-    // The CI flake had the rail absent for the whole expect window after the
-    // redirect. One serialized leg that could do that: SetupScreen showed
-    // "Checking Wardyn's setup…" until its OWN /setup/status read answered.
-    // Every read after the gate's is held here, so the rail can only appear
-    // from the status the console already had.
-    await mockGatedStatus(page, { holdAfterFirst: true });
-    await skipHero(page);
-    await page.goto("/");
-    await page.waitForURL(/\/setup/);
-    await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
-  });
-
   test("the funnel can leave itself: People → Open Permissions lands on /permissions", async ({
     page,
   }) => {
@@ -200,6 +179,30 @@ test.describe("setup gate — forced on access, never a prison", () => {
     // site access lands a gated install in Getting Started.
     await page.goto("/runs");
     await page.waitForURL(/\/setup/);
+  });
+
+  test("a gated redirect paints the funnel from the status that fired the gate, not a second read (#806)", async ({
+    page,
+  }) => {
+    // SetupScreen used to show "Checking Wardyn's setup…" with no rail until its
+    // OWN /setup/status read answered: a second round trip, serialized after the
+    // one that fired the gate. Every read after the gate's is held here, so the
+    // rail can only appear from the status the console already had. (The
+    // setup-gate CI flake family that raised #806 traced to the gate's redirect
+    // race instead, #469.)
+    await mockGatedStatus(page);
+    let reads = 0;
+    // Registered last, so it sees every read first; the first falls through to
+    // mockGatedStatus, every later one is never answered.
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      reads += 1;
+      if (reads === 1) await route.fallback();
+    });
+    await skipHero(page);
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
   });
 
   test("negative control: an ONBOARDED install with the same warn is never gated", async ({

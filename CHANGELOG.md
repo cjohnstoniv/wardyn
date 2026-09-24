@@ -13,9 +13,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The Getting Started funnel paints from the setup status the console already holds (#806).**
   A gated install redirected into `/setup` used to show "Checking Wardyn's setup…" with no step
   rail until the funnel's own second `/setup/status` read answered. The funnel now starts from the
-  status that sent it there and refreshes behind it, so a slow second read no longer hides the rail
-  (the shape of `setup-gate.spec.ts`'s CI flake). `runs.spec.ts`'s search tests retry the fill
-  itself, since a reload of the board can detach the input a fill lands on.
+  status that sent it there and refreshes behind it, so a slow second read no longer hides the rail.
+  `runs.spec.ts`'s search tests retry the fill itself, since a reload of the board can detach the
+  input a fill lands on.
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
