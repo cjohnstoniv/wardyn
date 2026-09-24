@@ -270,7 +270,7 @@ func f1Do(t *testing.T, f *scopeFixture, c f1Caller, path, body string) *httptes
 	case "security_admin":
 		return doSSO(t, f.srv, http.MethodPost, path, ssoSession(t, c.sub, c.sub+"@corp.example", oidc.RoleSecurityAdmin), body)
 	default: // member_owner / member_other
-		return doSSO(t, f.srv, http.MethodPost, path, ssoSession(t, c.sub, c.sub+"@corp.example", oidc.RoleMember), body)
+		return doSSO(t, f.srv, http.MethodPost, path, ssoSession(t, c.sub, c.sub+"@corp.example", oidc.RoleUser), body)
 	}
 }
 

@@ -168,7 +168,7 @@ describe("GettingStarted (member direct navigation — B4 HIGH-4)", () => {
   it("a member sees their own Getting Started, not the admin welcome hero", async () => {
     render(
       <MemoryRouter>
-        <RoleProvider role="member">
+        <RoleProvider role="user">
           <GettingStarted onDone={() => {}} />
         </RoleProvider>
       </MemoryRouter>,
@@ -178,7 +178,7 @@ describe("GettingStarted (member direct navigation — B4 HIGH-4)", () => {
     expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
   });
 
-  // R4/F034: the guard was two-valued (`role === "member"`) after role became
+  // R4/F034: the guard was two-valued (`role === "user"`) after role became
   // three-valued, so a security admin fell THROUGH to the deployer funnel —
   // built from a SetupStatus the server redacts for them
   // (redactSetupStatusForMember zeroes Checks/Providers/Secrets,

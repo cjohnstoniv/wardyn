@@ -35,7 +35,7 @@ import (
 // TestF335_ForeignMemberWorkspaceNotLaunchable is door 1.
 func TestF335_ForeignMemberWorkspaceNotLaunchable(t *testing.T) {
 	for _, tc := range []struct{ name, sub, email, role string }{
-		{"plain member", ownerOtherSub, "other@corp.example", oidc.RoleMember},
+		{"plain member", ownerOtherSub, "other@corp.example", oidc.RoleUser},
 		{"security admin", "sub-sec-admin", "sec@corp.example", oidc.RoleSecurityAdmin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,7 +80,7 @@ func TestF335_ForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
 	}
 	req := createRunRequest{Agent: "claude-code"}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).
-		WithContext(operatorCtx(ownerOtherSub, "other@corp.example", oidc.RoleMember))
+		WithContext(operatorCtx(ownerOtherSub, "other@corp.example", oidc.RoleUser))
 	w := httptest.NewRecorder()
 
 	if _, ok := srv.seedAndAdmitWorkspace(r.Context(), w, r, &spec, &req, true); ok {
@@ -107,7 +107,7 @@ func TestF335_OwnAndOperatorWorkspacesStillLaunch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root, project := memberProjectRoot(t)
 			srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
-			member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+			member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 			createMemberRun(t, srv, fr, member, memberOwnedWorkspace(st, tc.owner, project))
 		})
 	}
