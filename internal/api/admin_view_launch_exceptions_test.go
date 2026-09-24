@@ -119,16 +119,58 @@ func TestSiteConfigProbes_LaunchFromAdminView(t *testing.T) {
 	}
 }
 
-// TestHarnessLogin_LaunchesFromAdminView: the shared harness-login launch
-// (humanOrAdminAuth; authorizeHarnessLogin's isOperator arm, admin only — the
-// design's QM-10 "the shared harness login stays admin until MP-4b") still
-// launches for an admin sitting in the Admin view.
+// TestHarnessLogin_LaunchesFromAdminView: harness login (humanOrAdminAuth;
+// authorizeHarnessLogin's isOperator arm) still launches for an admin sitting
+// in the Admin view, under both rosters. The shared row is the design's QM-10
+// case — "the shared harness login stays admin until MP-4b" — where the admin
+// connects the org's one credential; the per_user row is the admin capturing
+// their OWN session, as anyone else does.
 func TestHarnessLogin_LaunchesFromAdminView(t *testing.T) {
-	srv, _ := perUserLoginSrvWithRunner(t, &fakeRunner{}, perUserAWSRow())
-	cookie := memberModeSSOSession(t, "sub-admin-view-harness-login", "av-login@corp.example", oidc.RoleAdmin, false)
+	for _, tc := range []struct {
+		name string
+		row  types.AgentProvider
+		body string
+	}{
+		{"shared row", types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO}, `{"provider":"anthropic"}`},
+		{"per_user row", perUserAWSRow(), `{"provider":"aws"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := perUserLoginSrvWithRunner(t, &fakeRunner{}, tc.row)
+			cookie := memberModeSSOSession(t, "sub-admin-view-harness-login", "av-login@corp.example", oidc.RoleAdmin, false)
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", cookie, `{"provider":"aws"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (reached past S1, not refused by it); body=%s", w.Code, w.Body.String())
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", cookie, tc.body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (reached past S1, not refused by it); body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestLocalMode_LaunchesNeverAdminView: local mode is its own branch of
+// humanOrAdminAuth (it injects Config.LocalOperator and publishes no OIDC
+// human), so the admin-token row of TestAdminViewLaunchRefused does not cover
+// it. Both S1 doors answer local mode what they answer the admin token.
+func TestLocalMode_LaunchesNeverAdminView(t *testing.T) {
+	for _, door := range []struct {
+		path string
+		ok   int
+	}{
+		{"/api/v1/runs", http.StatusCreated},
+		{"/api/v1/runs/preflight", http.StatusOK},
+	} {
+		t.Run(door.path, func(t *testing.T) {
+			srv, _, _ := govEscapeFixture(t, &capStore{})
+			cfg := srv.cfg
+			cfg.OIDC = nil
+			cfg.LocalMode = true
+			cfg.LocalOperator = "local:test"
+			cfg.LocalLoopback = true
+			// do() sends a loopback Host and peer and, with no bearer, no
+			// Authorization header — the local surface's own request.
+			w := do(t, New(cfg), http.MethodPost, door.path, "", `{"agent":"claude-code","task":"t"}`)
+			if w.Code != door.ok {
+				t.Fatalf("status = %d, want %d (local mode is never the Admin view); body=%s", w.Code, door.ok, w.Body.String())
+			}
+		})
 	}
 }

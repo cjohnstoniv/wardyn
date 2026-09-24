@@ -539,16 +539,14 @@ test.describe("the restored path is checked against the re-authenticated role (M
   // operator-only now; this pins the OTHER admin tier through the same
   // captured-path door the "neg" case above proves for a plain admin.
   test("a security admin re-authenticating over their own captured /admin/drives path is restored, not bounced to Runs", async ({ page }) => {
-    const asSecurityAdmin = () =>
-      page.route("**/api/v1/me", async (route) => {
-        const response = await route.fetch();
-        const json = await response.json();
-        json.role = "security_admin";
-        json.operator = false;
-        json.security_operator = true;
-        await route.fulfill({ response, json });
-      });
-    await asSecurityAdmin();
+    await page.route("**/api/v1/me", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.role = "security_admin";
+      json.operator = false;
+      json.security_operator = true;
+      await route.fulfill({ response, json });
+    });
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
@@ -560,8 +558,8 @@ test.describe("the restored path is checked against the re-authenticated role (M
     );
     await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
 
+    // Drops only the 401 handler: the /me splice above still answers the re-auth.
     await page.unroute("**/api/v1/**");
-    await asSecurityAdmin();
     await signInToken(page).fill(GOOD_TOKEN);
     await useTokenButton(page).click();
 
