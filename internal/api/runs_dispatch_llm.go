@@ -570,7 +570,7 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 	secret, snapshot := bedrockAPIKeySecret, any(bedrockBearerSnapshotOf(t.bedrock.bearerNamespace))
 	if c := t.provider; c != nil {
 		// A chosen provider's key: its owner's own, under the provider's UID,
-		// resolved by resolveProviderBedrockKeyInjection.
+		// resolved by resolveProviderKeyInjection.
 		secret = providerSecretName(c.provider.UID, providerKeyPart)
 		snapshot = providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner}
 	}

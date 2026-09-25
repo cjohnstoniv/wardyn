@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"net/http"
 	"strings"
 	"time"
@@ -39,20 +40,36 @@ const (
 // address in the meantime.
 const providerKeyRecheck = 15 * time.Minute
 
+// providerKeyDestination is where the record says p's key goes for agent, and
+// how it rides: the key and endpoint arm's lane, or a Bedrock key provider's
+// own data-plane host as a bearer. ok=false for any other kind — a
+// wardyn-provider-<uid>-key name is never resolved for a provider with no key.
+func providerKeyDestination(p types.ModelProvider, agent string) (host, header, format string, ok bool) {
+	if p.Kind == types.ModelProviderBedrockBearer {
+		return providerBedrockRuntimeHost(p), "Authorization", "Bearer %s", true
+	}
+	lane, ok := providerKeyLaneFor(p, agent)
+	return lane.host, lane.header, lane.format, ok
+}
+
 // resolveProviderKeyInjection is the wardyn-provider-<uid>-key arm of
-// handleInternalInjection: a person's own key or token for a key or endpoint
-// model provider. handled=false means the grant names another secret.
+// handleInternalInjection, for every kind a person brings a key or token to:
+// the key and endpoint kinds and a Bedrock key (bedrock_bearer) share the one
+// secret name, so they share this one sink — two sinks keyed by the same name
+// would let the first refuse the other's grant. handled=false means the grant
+// names another secret.
 //
-// It resolves only a grant dispatch authored (authorProviderKeyInjection):
-// the grant's snapshot must name the key it carries and the run's OWN subject
-// — the run token, not the grant, is authority for who that is — and the key
-// is read from that namespace strictly (ownSecret), never through the
-// operator fallback the generic arm below takes.
+// It resolves only a grant dispatch authored (authorProviderKeyInjection, or
+// authorBedrockBearerInjection on a provider run): the grant's snapshot must
+// name the key it carries and the run's OWN subject — the run token, not the
+// grant, is authority for who that is — and the key is read from that
+// namespace strictly (ownSecret), never through the operator fallback the
+// generic arm below takes.
 //
 // It trusts the provider record, never the grant, for where the key goes: the
 // provider is re-read by UID on every resolve and must still be the run's
-// choice, on, serving its agent; the host, header and format it derives must
-// equal the grant's. Every miss fails closed.
+// choice, on, serving its agent and of a kind with a key; the host, header and
+// format it derives must equal the grant's. Every miss fails closed.
 func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Request,
 	claims *identity.Claims, minted broker.Minted, grantID uuid.UUID,
 ) bool {
@@ -64,7 +81,7 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 	rctx, row := secretstore.SiteAudited(ctx)
 	fail := func(status int, reason, body string) bool {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", name, "failure", mustJSON(withStoreRow(map[string]any{"reason": reason, "grant_id": grantID}, row))))
+			"secret.read", name, "failure", mustJSON(withStoreRow(map[string]any{"reason": reason, "grant_id": grantID, "source": "provider"}, row))))
 		writeError(w, status, body)
 		return true
 	}
@@ -85,22 +102,22 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 		return fail(http.StatusServiceUnavailable, "providers_unreadable", providerKeyRecordUnreadable)
 	}
 	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
-	if !found || p.UID != rec.ProviderUID || p.Disabled || !providerKindDispatched[p.Kind] {
+	if !found || p.UID != rec.ProviderUID || p.Disabled || !p.Serves(run.Agent) {
 		return fail(http.StatusForbidden, "provider_changed", providerKeyChanged)
 	}
-	lane, ok := providerKeyLaneFor(p, run.Agent)
-	if !ok || !hostEqual(minted.Injection.Host, lane.host) ||
-		minted.Injection.Header != lane.header || minted.Injection.Format != lane.format {
+	host, header, format, ok := providerKeyDestination(p, run.Agent)
+	if !ok || !hostEqual(minted.Injection.Host, host) ||
+		minted.Injection.Header != header || minted.Injection.Format != format {
 		return fail(http.StatusForbidden, "provider_changed", providerKeyChanged)
 	}
 	secret, found, err := s.ownSecret(rctx, rec.OwnerSubject, name)
 	switch {
 	case err != nil:
 		return fail(http.StatusServiceUnavailable, "store_unreadable", providerKeyUnreadable)
-	case !found || len(secret) == 0:
+	case !found || len(bytes.TrimSpace(secret)) == 0:
 		return fail(http.StatusFailedDependency, "own_key_absent", providerKeyAbsent)
 	}
-	formatted := formatInjectionValue(lane.format, secret)
+	formatted := formatInjectionValue(format, secret)
 	if s.cfg.MaskRegistry != nil {
 		s.cfg.MaskRegistry.Add(claims.RunID, secret)
 		if formatted != string(secret) {
@@ -109,11 +126,11 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", name, "success", mustJSON(withStoreRow(map[string]any{
-			"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI,
+			"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "source": "provider",
 			"owner": rec.OwnerSubject, "provider": p.ID, "provider_uid": rec.ProviderUID,
 		}, row))))
 	writeJSON(w, http.StatusOK, injectionResponse{
-		Host: lane.host, Header: lane.header, Value: formatted, JTI: minted.JTI,
+		Host: host, Header: header, Value: formatted, JTI: minted.JTI,
 		ExpiresAt: time.Now().Add(providerKeyRecheck).UnixMilli(),
 	})
 	return true

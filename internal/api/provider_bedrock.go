@@ -14,33 +14,23 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
-
-	"github.com/cjohnstoniv/wardyn/internal/broker"
-	"github.com/cjohnstoniv/wardyn/internal/identity"
-	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // DRAFT (M2 canon pending). The states and remedies of the run refusal
-// (mpRunRefusal) for a chosen Bedrock provider, plus the sinks' refusals.
+// (mpRunRefusal) for a chosen Bedrock provider.
 const (
-	mpBRNotSignedIn   = "you are not signed in to AWS for it"
-	mpBRNoStore       = "this install has no secret store to hold your AWS credential"
-	mpBRNotPerson     = "the admin token is a shared credential rather than a person, so it has no AWS credential of its own"
-	mpBRUnset         = "it has no region or model set for %s"
-	mpBRPinned        = "your AWS sign-in is for account %s and role %s, and it pins account %s and role %s"
-	mpBRPortal        = "your AWS sign-in is for a different AWS access portal than the one it names"
-	mpBRRenewing      = "renewing your AWS sign-in did not complete, because AWS did not answer the token request"
-	mpBRRemedyRetry   = "your sign-in is still good; launch again in a moment."
-	mpBRReadFailed    = "Wardyn couldn't read your AWS credential for model provider %s just now — nothing was started. Try again in a moment."
-	mpBRSinkRecorded  = "a model provider's Bedrock key is injected only through the grant Wardyn authors when a run launches on that provider, which records whose key it is; this grant carries no such record"
-	mpBRSinkChanged   = "this run's model provider was removed, turned off or changed after the run started, so its AWS credential is no longer injected"
-	mpBRSinkHost      = "a model provider's Bedrock key may only be injected to that provider's own Bedrock host"
-	mpBRSinkUnreadKey = "Wardyn couldn't read your Bedrock key for this run's model provider just now"
+	mpBRNotSignedIn = "you are not signed in to AWS for it"
+	mpBRNoStore     = "this install has no secret store to hold your AWS credential"
+	mpBRNotPerson   = "the admin token is a shared credential rather than a person, so it has no AWS credential of its own"
+	mpBRUnset       = "it has no region or model set for %s"
+	mpBRPinned      = "your AWS sign-in is for account %s and role %s, and it pins account %s and role %s"
+	mpBRPortal      = "your AWS sign-in is for a different AWS access portal than the one it names"
+	mpBRRenewing    = "renewing your AWS sign-in did not complete, because AWS did not answer the token request"
+	mpBRRemedyRetry = "your sign-in is still good; launch again in a moment."
+	mpBRReadFailed  = "Wardyn couldn't read your AWS credential for model provider %s just now — nothing was started. Try again in a moment."
 )
 
 // awsScope is the credential scope of a chosen Bedrock provider: always the
@@ -198,97 +188,11 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 	return t
 }
 
-// providerKeyUID returns the provider UID a wardyn-provider-<uid>-key name
-// names.
-func providerKeyUID(name string) (string, bool) {
-	uid, ok := strings.CutPrefix(name, providerSecretPrefix)
-	if !ok {
-		return "", false
-	}
-	uid, ok = strings.CutSuffix(uid, "-"+providerKeyPart)
-	return uid, ok && uid != ""
-}
-
 // runBedrockProvider re-reads the provider run chose and reports it when it
 // is still the one uid names, of kind, on and serving the run's agent.
 func runBedrockProvider(sc types.SiteConfig, run types.AgentRun, uid string, kind types.ModelProviderKind) (types.ModelProvider, bool) {
 	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
 	return p, found && uid != "" && p.UID == uid && p.Kind == kind && !p.Disabled && p.Serves(run.Agent)
-}
-
-// resolveProviderBedrockKeyInjection is the wardyn-provider-<uid>-key arm of
-// handleInternalInjection. handled=false means the grant names another secret.
-// It takes nothing from the grant but the name and its record: the provider is
-// re-read by UID and must still be the run's own bedrock_bearer provider, on
-// and serving its agent; the host is that provider's Bedrock host; the owner is
-// the run token's subject, whose own namespace alone is read (ownSecret —
-// never the operator fallback). A key for any other kind has no arm on this
-// build and is refused. Every miss fails closed.
-func (s *Server) resolveProviderBedrockKeyInjection(w http.ResponseWriter, r *http.Request,
-	claims *identity.Claims, minted broker.Minted, grantID uuid.UUID,
-) bool {
-	name := minted.Injection.SecretName
-	uid, ok := providerKeyUID(name)
-	if !ok {
-		return false
-	}
-	ctx := r.Context()
-	// This site records its own secret.read, so its one store read is marked
-	// SiteAudited and each record carries the row it read (withStoreRow).
-	rctx, row := secretstore.SiteAudited(ctx)
-	fail := func(status int, reason, body string) bool {
-		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", name, "failure",
-			mustJSON(withStoreRow(map[string]any{"reason": reason, "grant_id": grantID, "source": "provider"}, row))))
-		writeError(w, status, body)
-		return true
-	}
-	var rec providerGrantSnapshot
-	if !s.grantSnapshot(ctx, claims.RunID, grantID, &rec) || rec.ProviderUID != uid || rec.OwnerSubject == "" {
-		return fail(http.StatusForbidden, "missing_scope_snapshot", mpBRSinkRecorded)
-	}
-	// The run token, not the grant, is authority for whose run this is.
-	if rec.OwnerSubject != claims.Sub {
-		return fail(http.StatusForbidden, "owner_mismatch", mpBRSinkRecorded)
-	}
-	run, err := s.cfg.Store.GetRun(ctx, claims.RunID)
-	if err != nil {
-		return fail(http.StatusServiceUnavailable, "run_unreadable", credentialReauthRunUnreadableBody)
-	}
-	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil {
-		return fail(http.StatusServiceUnavailable, "providers_unreadable", mpRunUnreadable)
-	}
-	p, live := runBedrockProvider(sc, run, uid, types.ModelProviderBedrockBearer)
-	if !live {
-		return fail(http.StatusForbidden, "provider_changed", mpBRSinkChanged)
-	}
-	if !hostEqual(minted.Injection.Host, providerBedrockRuntimeHost(p)) {
-		return fail(http.StatusForbidden, "host-not-provider", mpBRSinkHost)
-	}
-	key, found, err := s.ownSecret(rctx, claims.Sub, name)
-	switch {
-	case err != nil:
-		return fail(http.StatusServiceUnavailable, "store_unreadable", mpBRSinkUnreadKey)
-	case !found || len(bytes.TrimSpace(key)) == 0:
-		return fail(http.StatusFailedDependency, "own_key_absent", connectDenial(p.ID, mpRunNoKey).msg)
-	}
-	// One correct wire shape, whatever the grant says.
-	formatted := formatInjectionValue("Bearer %s", key)
-	if s.cfg.MaskRegistry != nil {
-		s.cfg.MaskRegistry.Add(claims.RunID, key)
-		s.cfg.MaskRegistry.Add(claims.RunID, []byte(formatted))
-	}
-	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"secret.read", name, "success",
-		mustJSON(withStoreRow(map[string]any{
-			"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI,
-			"source": "provider", "provider": p.ID, "owner": claims.Sub,
-		}, row))))
-	writeJSON(w, http.StatusOK, injectionResponse{
-		Host: minted.Injection.Host, Header: "Authorization", Value: formatted, JTI: minted.JTI,
-	})
-	return true
 }
 
 // providerSSOScopeAt is the provider arm of resolveAWSSSOInjection's scope

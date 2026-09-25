@@ -189,12 +189,6 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if s.resolveProviderSubscriptionInjection(w, r, claims, minted, grantID) {
 		return
 	}
-	// A PER-PERSON BEDROCK KEY: wardyn-provider-<uid>-key resolves only from
-	// the run owner's own namespace, for the Bedrock provider the run chose,
-	// to that provider's own host — see resolveProviderBedrockKeyInjection.
-	if s.resolveProviderBedrockKeyInjection(w, r, claims, minted, grantID) {
-		return
-	}
 
 	// SUBSCRIPTION / MANAGED path: the two Anthropic OAuth sentinels — see
 	// resolveSubscriptionSentinelInjection.
@@ -250,11 +244,11 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// A person's own model-provider key, and bedrock-api-key (the ONE stored
-	// name whose namespace the ROSTER decides), never take the owner-fallback
-	// read below: each resolves from the namespace dispatch recorded on its own
-	// grant, or not at all — see resolveProviderKeyInjection and
-	// resolveBedrockBearerInjection.
+	// A person's own model-provider key — for a key, endpoint or Bedrock key
+	// provider alike — and bedrock-api-key (the ONE stored name whose namespace
+	// the ROSTER decides) never take the owner-fallback read below: each
+	// resolves from the namespace dispatch recorded on its own grant, or not at
+	// all — see resolveProviderKeyInjection and resolveBedrockBearerInjection.
 	if s.resolveProviderKeyInjection(w, r, claims, minted, grantID) ||
 		s.resolveBedrockBearerInjection(w, r, claims, minted, grantID) {
 		return
