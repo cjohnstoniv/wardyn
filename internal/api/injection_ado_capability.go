@@ -443,7 +443,10 @@ func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.Approval
 	}, ev); err != nil {
 		return ap
 	}
-	s.metrics.credentialReauthResolved(s.cfg.Now().Sub(ap.RequestedAt))
+	// No metrics.credentialReauthResolved here (#971): wardyn_credential_reauth_total
+	// and its wait-seconds summary are the AWS SSO re-auth population alone, and
+	// an Azure DevOps sign-in or consent request is credential_reauth too but not
+	// that. The audit row above is the trail for this lane.
 	if fresh, gerr := s.cfg.Approvals.Get(ctx, ap.ID); gerr == nil {
 		return fresh
 	}

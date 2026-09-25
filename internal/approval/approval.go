@@ -205,13 +205,20 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 	return n, err
 }
 
-// ExpireStaleByKind is ExpireStale plus a per-KIND tally of what it moved.
+// ExpireStaleByKind is ExpireStale plus a tally of what it moved, keyed by
+// TallyKey — not the bare Kind: a credential_reauth row is either an Azure
+// DevOps sign-in/consent or an AWS SSO re-auth, and CancelForRun's own tally
+// (and wardyn_credential_reauth_total{outcome="cancelled"}) already key on the
+// same split. Keying this tally on the bare Kind would fold both lanes into
+// one "credential_reauth" bucket, and a caller counting a metric whose HELP
+// promises the AWS SSO population alone (the sweeper, cmd/wardynd) would
+// silently count Azure DevOps sign-ins too.
 //
 // The tally is incremented HERE, where the state actually changes, not at a
 // later resolve that happens to meet a terminal row — that would count
 // retries rather than outcomes. A separate function rather than a changed
 // signature: every existing caller asks the question it always asked.
-func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (int, map[types.ApprovalKind]int, error) {
+func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (int, map[string]int, error) {
 	now := time.Now().UTC()
 	cutoff := now.Add(-olderThan)
 
@@ -221,7 +228,7 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 	}
 
 	expired := 0
-	byKind := map[types.ApprovalKind]int{}
+	byKind := map[string]int{}
 	// Collected, not returned on the first failure: ListApprovals is ordered
 	// (ORDER BY requested_at DESC in the store) and the sweeper re-lists in the
 	// same order every tick, so returning early would strand every approval
@@ -249,7 +256,7 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 			continue
 		}
 		expired++
-		byKind[ap.Kind]++
+		byKind[TallyKey(ap)]++
 
 		auditData, _ := json.Marshal(map[string]any{
 			"approval_id": ap.ID,

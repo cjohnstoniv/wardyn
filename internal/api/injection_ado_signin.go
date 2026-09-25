@@ -169,7 +169,10 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 				"approval_id": created.ID, "owner": sn.OwnerSubject, "provider": adoApprovalLane,
 				"reason": string(class), "detail": adoSignInRaisedNote,
 			})))
-		s.metrics.credentialReauthRecorded(credentialReauthOutcomeRequested)
+		// No metrics.credentialReauthRecorded here (#971):
+		// wardyn_credential_reauth_total's HELP promises the AWS SSO re-auth
+		// population alone, and an Azure DevOps sign-in is credential_reauth
+		// too but not that. The audit row above is the trail for this lane.
 	}
 	writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 	return true
