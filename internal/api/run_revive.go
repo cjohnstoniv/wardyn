@@ -156,7 +156,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "mint run identity: "+err.Error())
 	}
-	cfg.RunToken, cfg.ControlPlaneURL = id.Token, s.cfg.ControlPlaneURL
+	cfg.RunToken, cfg.ControlPlaneURL, cfg.ControlPlaneCAPEM = id.Token, s.cfg.ControlPlaneURL, s.cfg.ControlPlaneCAPEM
 	cfgJSON, err := json.Marshal(cfg)
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "encode proxy config: "+err.Error())

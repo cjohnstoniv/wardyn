@@ -74,7 +74,7 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 		t.Fatalf("CreateGrant: %v", err)
 	}
 	cfg, err := runner.BuildProxyConfig(run.ID, runner.ProxyConfig{
-		RunToken: "old", ControlPlaneURL: "http://old-wardynd:8080",
+		RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081",
 		Policy:    types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}},
 		Injection: []runner.InjectionGrant{{GrantID: g.ID, Rule: egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", Format: "%s"}}},
 	}, runner.ProxyListenPort)
@@ -83,6 +83,7 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 	}
 	rn := &pgReviveRunner{fakeRunner: &fakeRunner{}, cfg: cfg}
 	h.srv.cfg.Runner = rn
+	h.srv.cfg.ControlPlaneURL = "http://127.0.0.1:8080"
 
 	path := "/api/v1/runs/" + run.ID.String()
 	session := ssoSession(t, owner, ownerEmail, oidc.RoleUser)

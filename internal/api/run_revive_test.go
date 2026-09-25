@@ -112,7 +112,7 @@ func newReviveFixture(t *testing.T) *reviveFixture {
 	f.rs = &reviveStore{lostStore: f.ls, profiles: []types.GovernanceProfile{f.profile}}
 	cfg, err := runner.BuildProxyConfig(f.run.ID, runner.ProxyConfig{
 		RunToken:        "old-token",
-		ControlPlaneURL: "http://old-wardynd:8080",
+		ControlPlaneURL: "http://127.0.0.1:8081",
 		Policy:          types.RunPolicySpec{AllowedDomains: []string{"api.openai.com", "api.anthropic.com"}},
 		Injection: []runner.InjectionGrant{
 			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.openai.com", Header: "Authorization", Format: "Bearer %s"}},
@@ -128,7 +128,7 @@ func newReviveFixture(t *testing.T) *reviveFixture {
 	f.rr = &reviveRunner{lostRunner: f.lr, cfg: cfg}
 	f.srv.cfg.Store = f.rs
 	f.srv.cfg.Runner = f.rr
-	f.srv.cfg.ControlPlaneURL = "http://wardynd:8080"
+	f.srv.cfg.ControlPlaneURL = "http://127.0.0.1:8080"
 	f.ls.lapsed = true
 	f.sweepTokens(t)
 	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostOutage {
@@ -185,7 +185,7 @@ func TestReviveRun_TheOwnersCeilingNotTheCallers(t *testing.T) {
 	if _, ok := cfg.PATGrants["git.example"]; !ok || len(cfg.Injection) != 1 {
 		t.Errorf("PAT grants %v, injections %v; want the lanes to allowed hosts kept", cfg.PATGrants, cfg.Injection)
 	}
-	if cfg.RunToken == "old-token" || cfg.RunToken == "" || cfg.ControlPlaneURL != "http://wardynd:8080" {
+	if cfg.RunToken == "old-token" || cfg.RunToken == "" || cfg.ControlPlaneURL != "http://127.0.0.1:8080" {
 		t.Errorf("run token %q, control plane %q; want a fresh token and the current control plane", cfg.RunToken, cfg.ControlPlaneURL)
 	}
 	claims, err := f.srv.cfg.Identity.Verify(context.Background(), cfg.RunToken, internalAudience)
