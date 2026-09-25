@@ -73,4 +73,22 @@ func TestInternalDecisionTouchesRun(t *testing.T) {
 	if len(st.touched) != 3 || st.touched[1] != runID || st.touched[2] != otherID {
 		t.Fatalf("TouchRun calls = %v, want aged re-touch then the other run", st.touched)
 	}
+
+	// credential:reauth-timeout is the proxy's OWN signal that a re-auth hold's
+	// wait ran out with nobody there (RL-5) — not real agent activity. Touching
+	// on it would fight the hold-aware idle reaper (store.openHoldSQL): the run
+	// would look freshly active at the exact moment its open request stopped
+	// being open. It must never touch, even well past the debounce window and
+	// even as a DENY (which every other rule_source's DENY still touches).
+	srv.lastTouchMu.Lock()
+	srv.lastTouch[runID] = srv.lastTouch[runID].Add(-2 * touchDebounce)
+	srv.lastTouchMu.Unlock()
+	timeout := `{"request":{"host":"portal.sso.us-east-1.amazonaws.com","method":"CONNECT"},` +
+		`"decision":"deny","rule_source":"credential:reauth-timeout"}`
+	if w := do(t, srv, http.MethodPost, path, tok, timeout); w.Code != http.StatusAccepted {
+		t.Fatalf("reauth-timeout decision code = %d, want 202", w.Code)
+	}
+	if len(st.touched) != 3 {
+		t.Fatalf("TouchRun calls after a credential:reauth-timeout decision = %v, want no new touch (still 3)", st.touched)
+	}
 }

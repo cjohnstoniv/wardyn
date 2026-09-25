@@ -143,8 +143,9 @@ func defaultRenewerTuning() renewerTuning {
 //
 // Giving up is ONE log line and nothing else. The sidecar has no audit writer,
 // and the control plane owns the audit story for this case (internalAuth's
-// run.identity.expired row) — the run keeps running on a dead identity, visibly,
-// rather than quietly hammering a door that will not open.
+// run.identity.expired row) — the sidecar keeps running on a dead identity,
+// visibly, rather than quietly hammering a door that will not open, until the
+// control plane's lapsed-token sweep removes it (internal/api/run_lost.go).
 //
 // renews once immediately at startup rather than decoding the token's
 // exp to schedule the first tick. It costs one extra mint per run and, in

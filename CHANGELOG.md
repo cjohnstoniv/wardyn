@@ -87,6 +87,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `CreateUserType` now refuses (`409`) an id any of those three tables still names, so the id stays
   dead until an operator clears the orphan rows themselves, rather than quietly inheriting whatever
   a later type of the same id is given to (#610).
+- **Reviving a run, and moving its end later, now re-check its owner's authority instead of keeping
+  the run alive on what it was granted at launch.** A revive (the run's page or an admin's "Restart
+  with current limits") and a later end or No end are refused, naming the capability, when the owner
+  no longer holds the run's agent, one of its workspaces or the git provider of one of its repos;
+  an extension is also refused when the governance profile the run was created under is gone. A
+  revive is also refused when the model credential its proxy would inject has been erased or its
+  integration disabled, and the revived proxy takes the upstream proxy, trusted CA and model
+  gateways from the current configuration rather than its old rendered copy. When anyone but the
+  owner asks, the owner is known by sub alone: any deny row covering the value refuses, and only
+  `all` rows or allow rows for the owner's sub count, not the owner's admin role. So under an
+  enforced kind, an admin-owned run can be revived, restarted or extended only by its owner, or
+  with an allow row for the owner's sub. Each refusal is audited `denied` with the owner as
+  `subject` (#679).
+- **The idle reaper is now hold-aware: it no longer stops a run out from under an open
+  push/egress/ADO/credential/tool-call request that is still within its wait.** The idle-stop
+  CAS (`UpdateRunStateIfIdle`) now also checks for a PENDING approval whose own
+  `min(requested_at + wait, ends_at)` has not yet passed, and refuses the transition while one
+  is open — closing the same race window the existing touched-after-snapshot guard closes, since
+  a request can be raised between the reaper's scan and the stop. A re-auth hold's own timeout
+  decision (`credential:reauth-timeout`) no longer resets the run's idle clock, since it is the
+  proxy reporting that nobody answered, not real agent activity (#570).
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
@@ -944,7 +965,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `expires_at` = min(requested_at + the run's wait, the run's end), and the approval sweep expires a
   request at that time as well as at the deployment cutoff. Migration
   `0072_agent_runs_run_limits` adds the four `agent_runs` columns; zero limits keep today's
-  behaviour. Nothing yet lets a user change the end or the wait (#569).
+  behaviour.
 - **A run stops at its end and is kept (#568).** When a run's `ends_at` passes, it is stopped and
   kept: its pending approvals are cancelled (`run_ended`), its broker credentials revoked, its agent
   container stopped but not removed, and its proxy sidecar removed, so it has no network. It stays
@@ -957,6 +978,78 @@ and does not yet follow semantic versioning (interfaces are not stable).
   10 minutes before the end; `run.ended` and `run.ended.expired` record the end and the grace running
   out. Migration `0073_agent_runs_lease` adds `lost_at`, `lost_reason`, `ending_soon_for` and
   `ending_soon_sec`.
+- **A person changes their run's end and wait (#569).** `PATCH /api/v1/runs/{id}` takes
+  `ends_at` (a time, or `null` for No end) and `wait_budget_sec`, for the run's owner or a super
+  admin. Extending the end within the run's captured max (measured from now) is always allowed;
+  shortening it, setting No end (where `allow_no_end`) and changing the wait need the run's captured
+  `user_changes_limits` and otherwise answer 403. An over-ask is capped at the limit and the response
+  names it (`capped`, `latest_end`, `max_wait_sec`). A security admin is bounded like anyone and
+  reaches only their own runs; a super admin is bounded by the deployment alone. A finished or ended
+  run answers 409. Audited as `run.end.set` and `run.wait_budget.set`, refusals as `denied`.
+- **Runner Freeze/Thaw: the agent container can be paused and resumed in place (#571).**
+  `runner.Freezer` is an optional `Runner` capability (`FreezeSandbox`/`ThawSandbox`), implemented
+  today by the Docker driver as `ContainerPause`/`ContainerUnpause` on the agent only — the proxy
+  sidecar is never paused, so it keeps renewing its token and answering egress decisions while the
+  agent is frozen. Both are idempotent on a missing or already-in-that-state sandbox.
+  `runner.Capabilities.Freeze` (and its substrate-level counterpart, `substrate.ClassSupport.Freeze`)
+  reports support PER CONFINEMENT CLASS, keyed on the runtime the class actually runs on: only a
+  class on `runc` (the one runtime this is verified against) is `true`; a daemon whose default
+  runtime is not `runc`, an operator pin away from it, and `runsc`/Kata-backed classes report
+  `false` until that pause path is verified. Kubernetes does not implement `Freezer`; a router in
+  front of one answers `ErrFreezeUnsupported`. No wiring yet decides when to pause a run — that is
+  #572.
+- **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
+  agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
+  suspend) is no longer failed and deleted: it is kept, `RUNNING` with `lost_reason: "reboot"`, its
+  agent stopped, its proxy stopped, its pending approvals cancelled (`run_lost`) and its broker
+  credentials revoked. A run whose token has not been renewed for over an hour and five minutes (the
+  control plane was down past the proxy's renew window, after which the proxy gives up renewing but
+  used to keep forwarding allowlisted egress on a dead identity, unaudited) is now found at boot and
+  on every sweep: an interactive one is kept with `lost_reason: "outage"`, its proxy stopped so it
+  has no egress while its agent keeps running; a headless one is failed and torn down. A lost run is
+  kept until its end plus `WARDYN_ENDED_RUN_GRACE` (`run.lost.expired`), or until it is killed when
+  it has no end; an outage run's agent is stopped once its end passes. Anything that cannot be kept
+  fails closed and is torn down (an outage run as `FAILED`): a headless run, one past its end and
+  grace, a substrate that cannot keep a sandbox (Kubernetes), or a proxy that cannot be stopped. Every renew now stamps
+  the run and hands out its token only once the stamp lands; a kept (ended or lost) run's renew
+  answers 403. Audited as `run.lost`. Migration `0076_agent_runs_token_renewed` adds
+  `token_renewed_at`, starting every existing run with a fresh stamp so none is read as lapsed at
+  upgrade.
+- **A run lost to a control-plane outage can be revived, and an admin can restart standing runs
+  with current limits (#575).** `POST /api/v1/runs/{id}/revive` (the run's owner, or a super
+  admin) gives a run lost to an `outage`, whose agent is still running, a new proxy sidecar: the
+  old one's own config is read back from the stopped container, a fresh run token is minted for
+  the owner, and the owner's CURRENT governance profile (the one captured at create) is
+  re-asserted over the frozen policy — its denies are added and every injection or brokered PAT
+  host they deny is dropped. It is never the caller's ceiling, so an admin's click cannot strip a
+  member's limits, and the policy is never re-resolved. The new proxy takes the old one's address
+  on the run's network and the current proxy image; the per-run MITM CA carries over and is copied
+  nowhere else. A revive is refused, with nothing changed, when the captured profile no longer
+  exists, when the profile now denies a host the run's git broker needs (the agent's grant id
+  cannot be withdrawn from a running sandbox), for a run lost to a `reboot` or `ended`, or past
+  its end. A proxy that cannot be replaced leaves the run lost (`outage`) again with no proxy,
+  except that a live run whose old proxy was never touched (its image cannot be pulled, say) keeps it.
+  Audited as `run.revive` with the actor and the owner as `subject`. Admins get the same path in
+  bulk: `POST /api/v1/admin/runs/restart` ("Restart with current limits") and
+  `GET /api/v1/admin/runs/proxy-window`, which lists the live runs whose proxy was started by a
+  release older than wardynd N−1 (or by one it cannot place). A lost run's proxy is now stopped
+  and kept rather than removed, since its env is where the config a revive reads back rests;
+  teardown removes it with the rest of the sandbox. A new contract test pins the internal API the
+  previous minor's proxy calls. Kubernetes cannot revive (the agent pins the proxy pod's IP).
+  Migration `0077_agent_runs_proxy_release` adds `proxy_release`.
+- **A run lost to a reboot can be revived, and Claude Code continues its conversation (#576).**
+  `POST /api/v1/runs/{id}/revive` now also takes a run lost to a `reboot` (Docker): it gets the
+  same new proxy (a fresh run token, the owner's current profile denies), and only then is its
+  kept agent container started again (`docker start`), so the agent's first request goes through
+  the rewritten config. Docker refuses to start the agent unless its new proxy is running. An
+  agent that cannot be started leaves the run lost (`reboot`) again with its agent and proxy
+  stopped; audited as `run.revive` `from: reboot` with `agent_started`. The admin bulk restart
+  stays proxy-only and reports a rebooted run instead of starting it. Image side, a container
+  that has booted before takes `agent-run --revive`: the same prep over the kept files, and the
+  run's seed is never started again. Claude Code continues its last conversation
+  (`claude --continue`) when the run landed the human in the agent; codex-cli starts a fresh
+  session on the first attach; the aws-sso image re-runs its sign-in after this boot's prep.
+  Images built before this change re-seed a revived run. Running programs are not restored.
 - **The Console view switch, and per-view chrome (#634).** Beside the wordmark, an admin with both
   views gets an **Admin view** | **User view** switch. On SSO it asks the unsaved-changes guard
   first, flips the session's existing clamp (`POST /me/member-mode`), tells the other tabs, and

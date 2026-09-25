@@ -20,7 +20,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
-	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -55,7 +54,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// Debounced: a chatty agent can emit many decisions a second, and each touch
 	// is an UPDATE on the same agent_runs row; the reaper thresholds are minutes,
 	// so one touch per touchDebounce per run loses nothing.
-	if s.cfg.Store != nil && s.shouldTouch(runID) {
+	if s.cfg.Store != nil && s.shouldTouch(runID, dl.RuleSource) {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 
@@ -914,11 +913,35 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusForbidden, "run is terminal")
 		return
 	}
+	// A kept run (ended or lost) has no proxy on purpose; only a revive gives
+	// it one, with a token of its own. Nothing may carry its identity forward.
+	if runIsKept(run) {
+		s.auditRenewDenied(r, claims, "run_lost:"+string(run.LostReason))
+		writeError(w, http.StatusForbidden, "run is lost")
+		return
+	}
 
 	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
 		return
+	}
+	// The stamp is what the lapsed-token sweep reads (run_lost.go), so it is
+	// written after the mint and the token is handed out only once it lands: a
+	// stamp can then never be older than the token the proxy holds. A failed
+	// stamp is retryable, like a store blip on the read above; a run marked
+	// lost since that read is refused.
+	if loser, ok := s.cfg.Store.(store.RunLoser); ok {
+		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID)
+		if serr != nil {
+			writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "stamp run token renewed", serr))
+			return
+		}
+		if !stamped {
+			s.auditRenewDenied(r, claims, "run_lost")
+			writeError(w, http.StatusForbidden, "run is lost")
+			return
+		}
 	}
 
 	// Honest trail: the provider records its own identity.mint for the new token;
@@ -958,32 +981,4 @@ func decisionOutcome(d egress.Decision) string {
 		return "denied"
 	}
 	return "success"
-}
-
-// touchDebounce bounds how often the decision ingest refreshes a run's
-// updated_at, turning a chatty agent's burst into one UPDATE per window. The
-// reaper adds the same constant as threshold slack (lifecycle.TouchDebounce),
-// so the debounce can never make an active run look idle.
-const touchDebounce = lifecycle.TouchDebounce
-
-// shouldTouch reports whether runID's last touch is older than touchDebounce,
-// recording now when it is. The map is pruned wholesale past a bound instead of
-// per-run bookkeeping — worst case is one extra UPDATE per live run after a
-// prune, which the debounce exists to make harmless.
-// ponytail: in-process only; per-replica debounce is fine because the singleton
-// control plane is a documented constraint (docs/OPERATIONS.md).
-func (s *Server) shouldTouch(runID uuid.UUID) bool {
-	now := time.Now()
-	s.lastTouchMu.Lock()
-	defer s.lastTouchMu.Unlock()
-	if last, ok := s.lastTouch[runID]; ok && now.Sub(last) < touchDebounce {
-		return false
-	}
-	if s.lastTouch == nil {
-		s.lastTouch = make(map[uuid.UUID]time.Time)
-	} else if len(s.lastTouch) > 4096 {
-		clear(s.lastTouch)
-	}
-	s.lastTouch[runID] = now
-	return true
 }

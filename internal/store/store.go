@@ -29,6 +29,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // ErrNotFound is returned when a Get* call finds no row.
@@ -203,8 +204,9 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 }
 
 // UpdateRunStateIfIdle is UpdateRunStateIf plus an idleness guard: it transitions
-// a run from fromState to toState ONLY when the row is still in fromState AND its
-// updated_at has NOT advanced past notAfter (the snapshot the caller observed).
+// a run from fromState to toState ONLY when the row is still in fromState, its
+// updated_at has NOT advanced past notAfter (the snapshot the caller observed),
+// AND the run has no open request within its wait (RL-5, hold-aware idle stop).
 // This closes the reaper's idleness TOCTOU: the idle scan reads updated_at in a
 // snapshot, but an active `wardyn attach` TouchRun (which bumps updated_at while
 // leaving state=RUNNING) can land between snapshot and stop. Guarding only on
@@ -212,9 +214,23 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 // Passing the snapshot's updated_at as notAfter makes a run touched after the
 // snapshot no-op the stop (rows-affected 0 => false), so the reaper leaves it be
 // and retries on the next tick. Returns (true, nil) when the transition applied.
+//
+// The hold-aware clause is the SAME guard, at the SAME chokepoint: a run parked
+// on a PENDING push/egress/ADO/tool_call request is not idle just because
+// nobody has touched it — the design's "idle stop never fires while a request
+// is open within its wait" (long-holds-design.md §2.1). It is enforced here,
+// inside the CAS itself, rather than as an earlier skip in the reaper's scan
+// loop: a request can be raised in the window between the reaper's snapshot and
+// this UPDATE executing, and only a check inside the same atomic statement sees
+// it. openHoldSQL mirrors approvalExpiresAtSQL's min(requested_at+wait, ends_at)
+// in the opposite correlation direction (agent_runs is already the outer query
+// here); a NULL result (no run-scoped bound — wait_budget_sec 0 and ends_at
+// NULL) means the request is open until the deployment's own approval-expiry
+// ceiling reaps it, which is approval.ExpireStale's job, not the idle reaper's.
 func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error) {
 	tag, err := s.Pool.Exec(ctx,
-		`UPDATE agent_runs SET state=$1, updated_at=now() WHERE id=$2 AND state=$3 AND updated_at <= $4`,
+		`UPDATE agent_runs SET state=$1, updated_at=now()
+		 WHERE id=$2 AND state=$3 AND updated_at <= $4 AND NOT (`+openHoldSQL+`)`,
 		string(toState), id, string(fromState), notAfter,
 	)
 	if err != nil {
@@ -222,6 +238,20 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 	}
 	return tag.RowsAffected() > 0, nil
 }
+
+// openHoldSQL is TRUE when agent_runs (the outer query's row) has a PENDING
+// approval that has not yet reached its own min(requested_at+wait, ends_at)
+// expiry — an "open request within its wait" (long-holds-design.md §2.1). It
+// is a boolean expression, not a full statement, so UpdateRunStateIfIdle can
+// splice it straight into a WHERE clause under NOT().
+const openHoldSQL = `EXISTS (
+		SELECT 1 FROM approvals a
+		WHERE a.run_id = agent_runs.id AND a.state = 'PENDING'
+		  AND (
+			LEAST(a.requested_at + make_interval(secs => NULLIF(agent_runs.wait_budget_sec, 0)), agent_runs.ends_at) IS NULL
+			OR LEAST(a.requested_at + make_interval(secs => NULLIF(agent_runs.wait_budget_sec, 0)), agent_runs.ends_at) > now()
+		  )
+	)`
 
 // execRun is the one body the scoped single-column agent_runs writers below
 // share: Exec, wrap a driver error as "store: <verb>", and translate "no row
@@ -241,10 +271,14 @@ func (s PG) execRun(ctx context.Context, verb, query string, args ...any) error 
 	return nil
 }
 
-// SetSandboxRef records the runner reference (container ID / pod name).
+// SetSandboxRef records the runner reference (container ID / pod name). A
+// non-empty ref also records this release as the one that started the run's
+// proxy (proxy_release, migration 0077).
 func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
 	return s.execRun(ctx, "set sandbox ref",
-		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now() WHERE id=$2`, ref, id)
+		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now(),
+		   proxy_release = CASE WHEN $1 <> '' THEN $3 ELSE proxy_release END
+		 WHERE id=$2`, ref, id, version.Version)
 }
 
 // SetRunImage scoped-writes ONLY the resolved-image provenance column. Called

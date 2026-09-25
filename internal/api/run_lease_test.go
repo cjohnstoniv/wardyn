@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -24,7 +26,42 @@ type leaseStore struct {
 	*dispatchTestStore
 	warnFor *time.Time
 	warnSec int
-	casErr  error // returned once by UpdateRunStateIf
+	// The owner re-check's reads (run_owner_authority.go): capability rows and
+	// switches, the site config and the run's credential grants.
+	caps       []types.CapabilityGrant
+	enf        map[string]bool
+	site       types.SiteConfig
+	siteErr    error
+	credGrants []types.CredentialGrant
+	casErr     error // returned once by UpdateRunStateIf
+	grantsErr  error // ListCapabilityGrants fails closed with this, never an implicit allow
+}
+
+func (s *leaseStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	if s.grantsErr != nil {
+		return nil, s.grantsErr
+	}
+	return slices.Clone(s.caps), nil
+}
+
+func (s *leaseStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+	return (&capStore{grants: s.caps}).ListCapabilityGrantsFor(ctx, users, groups)
+}
+
+func (s *leaseStore) ListGroupDenyGrants(ctx context.Context, kind string) ([]types.CapabilityGrant, error) {
+	return (&capStore{grants: s.caps}).ListGroupDenyGrants(ctx, kind)
+}
+
+func (s *leaseStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return maps.Clone(s.enf), nil
+}
+
+func (s *leaseStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.site, s.siteErr
+}
+
+func (s *leaseStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	return s.credGrants, nil
 }
 
 func (s *leaseStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
@@ -66,6 +103,18 @@ func (s *leaseStore) MarkRunEndingSoon(_ context.Context, _ uuid.UUID, endsAt ti
 		return false, nil
 	}
 	s.warnFor, s.warnSec = &endsAt, sec
+	return true, nil
+}
+
+func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.run.EndsAt
+	sameEnd := (fromEnd == nil && cur == nil) || (fromEnd != nil && cur != nil && fromEnd.Equal(*cur))
+	if !sameEnd || fromWait != s.run.WaitBudgetSec || s.run.LostReason == types.LostEnded || s.state.IsTerminal() {
+		return false, nil
+	}
+	s.run.EndsAt, s.run.WaitBudgetSec = toEnd, toWait
 	return true, nil
 }
 
@@ -114,6 +163,19 @@ func (c *countingIdentity) RevokeRun(ctx context.Context, runID uuid.UUID) error
 	c.revokes++
 	c.mu.Unlock()
 	return c.Provider.RevokeRun(ctx, runID)
+}
+
+// RevokeJTI forwards to the wrapped provider (O2): countingIdentity embeds
+// identity.Provider, whose four-method interface does not carry RevokeJTI, so
+// without this passthrough a revive under this fixture would silently skip
+// revoking the retiring token — the jtiRevoker assertion in run_revive.go
+// would just fail closed-but-quiet, not error.
+func (c *countingIdentity) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error {
+	jr, ok := c.Provider.(jtiRevoker)
+	if !ok {
+		return nil
+	}
+	return jr.RevokeJTI(ctx, jti, runID)
 }
 
 func (c *countingIdentity) count() int {
