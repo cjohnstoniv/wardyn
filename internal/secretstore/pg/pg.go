@@ -380,26 +380,61 @@ func (s *Store) open(ctx context.Context, e envelope) ([]byte, error) {
 // deleting a member's row leaves the operator's readable, and a member can
 // never reach another member's row to delete it in the first place.
 func (s *Store) Delete(ctx context.Context, name string) error {
-	if err := s.deleteExternal(ctx, name); err != nil {
+	ctx, cancel := s.bounded(ctx)
+	defer cancel()
+	ref := rowRef(s.owner, name)
+	tx, err := beginReadCommitted(ctx, s.pool)
+	if err != nil {
+		return fmt.Errorf("pg secretstore: delete %s: begin: %w", ref, err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := s.deleteLocked(ctx, tx, s.owner, name); err != nil {
 		return err
 	}
-	if _, err := s.pool.Exec(ctx, `DELETE FROM secrets WHERE owned_by=$1 AND name=$2`, s.owner, name); err != nil {
-		return fmt.Errorf("pg secretstore: delete %s: %w", rowRef(s.owner, name), err)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("pg secretstore: delete %s: commit: %w", ref, err)
 	}
 	return nil
 }
 
 // DeleteEverywhere removes every owner's row of each name — see
 // secretstore.Store.DeleteEverywhere. Deliberately NOT scoped to s.owner.
+//
+// One transaction, all or nothing: the first row that cannot be deleted rolls
+// every row back (a value already removed leaves its row a dangling pointer,
+// a refusal a retry clears). Rows are locked one at a time in (owned_by, name)
+// order, so two DeleteEverywhere calls take their locks in the same order and
+// cannot deadlock. The listing takes no row lock: Put takes a row's advisory
+// lock before the row itself, and holding the row before its advisory lock
+// here would close a cycle with it.
 func (s *Store) DeleteEverywhere(ctx context.Context, names []string) (int, error) {
-	if err := s.deleteExternalEverywhere(ctx, names); err != nil {
-		return 0, err
+	tx, err := beginReadCommitted(ctx, s.pool)
+	if err != nil {
+		return 0, fmt.Errorf("pg secretstore: delete everywhere: begin: %w", err)
 	}
-	tag, err := s.pool.Exec(ctx, `DELETE FROM secrets WHERE name = ANY($1)`, names)
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	rows, err := tx.Query(ctx, `SELECT owned_by, name FROM secrets WHERE name = ANY($1) ORDER BY owned_by, name`, names)
 	if err != nil {
 		return 0, fmt.Errorf("pg secretstore: delete everywhere: %w", err)
 	}
-	return int(tag.RowsAffected()), nil
+	all, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Owner, Name string }])
+	if err != nil {
+		return 0, fmt.Errorf("pg secretstore: delete everywhere: %w", err)
+	}
+	n := 0
+	for _, r := range all {
+		ok, err := s.deleteLocked(ctx, tx, r.Owner, r.Name)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			n++
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("pg secretstore: delete everywhere: commit: %w", err)
+	}
+	return n, nil
 }
 
 // Holders returns every owner of each name's rows — see

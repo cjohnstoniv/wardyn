@@ -179,54 +179,43 @@ func (s *Store) currentRef(ctx context.Context, tx pgx.Tx, name string) (string,
 	return "", nil
 }
 
-// deleteExternal removes the external value behind this view's own pointer
-// row, if it has one, before the caller deletes the row. A pointer into a
-// store this wardynd cannot reach is refused: removing only the row would
-// leave the value behind with nothing pointing at it.
-func (s *Store) deleteExternal(ctx context.Context, name string) error {
+// deleteLocked deletes one row inside tx and reports whether there was one. It
+// takes the row's store-mode write lock first — the lock putExternal holds —
+// so a concurrent Put of the row waits for tx and lands after it, never
+// between the value's removal and the row's (a live value no row points to).
+// A pointer row loses its external value before the row; a pointer into a
+// store this wardynd cannot reach is refused, since removing only the row
+// would leave the value behind with nothing pointing at it. On any error the
+// caller rolls tx back, and the row stays.
+func (s *Store) deleteLocked(ctx context.Context, tx pgx.Tx, owner, name string) (bool, error) {
+	ref := rowRef(owner, name)
+	if err := lockRow(ctx, tx, owner, name); err != nil {
+		return false, fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
+	}
+	var version int16
 	var kekID string
-	err := s.pool.QueryRow(ctx,
-		`SELECT kek_id FROM secrets WHERE owned_by=$1 AND name=$2 AND enc_version=$3`,
-		s.owner, name, extVersion,
-	).Scan(&kekID)
+	err := tx.QueryRow(ctx,
+		`SELECT enc_version, kek_id FROM secrets WHERE owned_by=$1 AND name=$2 FOR UPDATE`, owner, name,
+	).Scan(&version, &kekID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		return false, nil
 	}
-	ref := rowRef(s.owner, name)
 	if err != nil {
-		return fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
+		return false, fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
 	}
-	store, loc := splitRef(kekID)
-	if !s.reachable(store) {
-		return fmt.Errorf("pg secretstore: delete %s: it is stored in %q, which this wardynd is not configured to reach; deleting only the row would leave the value behind", ref, store)
-	}
-	if err := s.ext.Delete(ctx, s.owner, name, loc); err != nil {
-		return fmt.Errorf("pg secretstore: delete %s from %s (the row is kept): %w", ref, store, err)
-	}
-	return nil
-}
-
-// deleteExternalEverywhere is deleteExternal for every owner's pointer row of
-// each name, before DeleteEverywhere removes the rows: the first failure
-// refuses the whole delete, so no row goes while its value stays behind.
-func (s *Store) deleteExternalEverywhere(ctx context.Context, names []string) error {
-	rows, err := s.pool.Query(ctx,
-		`SELECT owned_by, name FROM secrets WHERE name = ANY($1) AND enc_version=$2`, names, extVersion)
-	if err != nil {
-		return fmt.Errorf("pg secretstore: delete everywhere: %w", err)
-	}
-	ptrs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Owner, Name string }])
-	if err != nil {
-		return fmt.Errorf("pg secretstore: delete everywhere: %w", err)
-	}
-	for _, p := range ptrs {
-		view := *s
-		view.owner = p.Owner
-		if err := view.deleteExternal(ctx, p.Name); err != nil {
-			return err
+	if version == extVersion {
+		store, loc := splitRef(kekID)
+		if !s.reachable(store) {
+			return false, fmt.Errorf("pg secretstore: delete %s: it is stored in %q, which this wardynd is not configured to reach; deleting only the row would leave the value behind", ref, store)
+		}
+		if err := s.ext.Delete(ctx, owner, name, loc); err != nil {
+			return false, fmt.Errorf("pg secretstore: delete %s from %s (the row is kept): %w", ref, store, err)
 		}
 	}
-	return nil
+	if _, err := tx.Exec(ctx, `DELETE FROM secrets WHERE owned_by=$1 AND name=$2`, owner, name); err != nil {
+		return false, fmt.Errorf("pg secretstore: delete %s: %w", ref, err)
+	}
+	return true, nil
 }
 
 // MigrateLocal is the -migrate-secrets target that seals rows locally.
