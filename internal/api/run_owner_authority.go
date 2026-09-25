@@ -128,12 +128,12 @@ func (s *Server) ownerProviderRows(ctx context.Context, repos []string) ([]types
 // restricted by "Available to" counts as enforced and only an allow naming it
 // lets the owner in (capBatch.decide's step 3).
 //
-// userType is the run's stamp (AgentRun.UserType), never the owner's type as
-// it stands now: no per-sub assignment is stored, since a type comes from the
-// session like groups do, so the stamp is the strictest answer available. A
-// stamp naming a type that no longer exists refuses, failing closed as
-// callerSubjects does; the built-in type always exists and is not read back.
-// An empty stamp (a run created before migration 0080) counts no type rows.
+// userType is the run's stamp (AgentRun.UserType), the type the owner
+// resolved as at create. The owner's current type is not re-checked, just as
+// the captured governance profile is not re-resolved. A stamp naming a type
+// that no longer exists refuses, failing closed as callerSubjects does; the
+// built-in type always exists and is not read back. An empty stamp (a run
+// created before migration 0080) counts no type rows.
 func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, value string) (bool, error) {
 	if s.cfg.Store == nil {
 		return true, nil
