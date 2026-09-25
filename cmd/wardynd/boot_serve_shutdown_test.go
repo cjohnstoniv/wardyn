@@ -14,10 +14,11 @@ import (
 // is sized for (internal/api TestShutdownGraceCoversTheBudget): stop accepting
 // requests, then wait for the detached work handlers left behind, then flush.
 // Without the WaitBackground call a SIGTERM drops a superseded sign-in's
-// teardown and a run launch in flight; an early return on a timed-out HTTP
-// drain (or WaitBackground moved back inside the Shutdown-error branch) drops
-// them just the same. Walks serveAndShutdown's AST rather than matching
-// source text, so a reformat can't silently defeat the pin.
+// teardown and a run launch in flight; a return on the path between the
+// Shutdown call and WaitBackground, or WaitBackground moved back inside a
+// branch that only runs on Shutdown's error, drops them just the same. Walks
+// serveAndShutdown's AST rather than matching source text, so a reformat
+// can't silently defeat the pin.
 func TestServeShutdownOrder(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "boot_serve.go", nil, 0)
@@ -35,32 +36,10 @@ func TestServeShutdownOrder(t *testing.T) {
 		callWait     = "srv.WaitBackground"
 		callFlush    = "srv.FlushAuthFailedStreak"
 	)
-	wantOrder := []string{callShutdown, callWait, callFlush}
 
-	var (
-		gotOrder      []string
-		waitSeen      bool
-		guardStack    []bool // true while inside an if whose Init/Cond calls Shutdown
-		sawEarlyGuard bool   // such an if, with a return in its body, seen before WaitBackground
-	)
-
+	// firstPos records each pinned call's first-seen source position.
+	firstPos := map[string]token.Pos{}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if n == nil {
-			if len(guardStack) > 0 {
-				guardStack = guardStack[:len(guardStack)-1]
-			}
-			return true
-		}
-
-		if ifs, ok := n.(*ast.IfStmt); ok {
-			guardsShutdown := callsSelector(ifs.Init, "Shutdown") || callsSelector(ifs.Cond, "Shutdown")
-			guardStack = append(guardStack, guardsShutdown)
-			if guardsShutdown && !waitSeen && containsReturn(ifs.Body) {
-				sawEarlyGuard = true
-			}
-			return true
-		}
-
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -71,40 +50,83 @@ func TestServeShutdownOrder(t *testing.T) {
 		}
 		switch name {
 		case callShutdown, callWait, callFlush:
-			gotOrder = append(gotOrder, name)
-			if name == callWait {
-				waitSeen = true
-				for _, guarded := range guardStack {
-					if guarded {
-						t.Fatalf("serveAndShutdown calls %s nested inside an if that tests httpSrv.Shutdown's error — it must run unconditionally", callWait)
-					}
+			if _, seen := firstPos[name]; !seen {
+				firstPos[name] = call.Pos()
+			}
+		}
+		return true
+	})
+
+	prev := token.Pos(-1)
+	for _, want := range []string{callShutdown, callWait, callFlush} {
+		pos, ok := firstPos[want]
+		if !ok {
+			t.Fatalf("serveAndShutdown no longer calls %s", want)
+		}
+		if pos < prev {
+			t.Fatalf("serveAndShutdown calls %s before the step that must precede it", want)
+		}
+		prev = pos
+	}
+	shutdownPos, waitPos := firstPos[callShutdown], firstPos[callWait]
+
+	// N1: a return anywhere between the Shutdown call and WaitBackground drops
+	// WaitBackground on that path exactly like the pre-fix early return did —
+	// regardless of nesting depth or which variable holds the error.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		if ret.Pos() > shutdownPos && ret.Pos() < waitPos {
+			t.Fatalf("serveAndShutdown returns (at %s) between %s and %s — a timed-out HTTP drain must still wait for background work (see internal/api TestShutdownGraceCoversTheBudget)",
+				fset.Position(ret.Pos()), callShutdown, callWait)
+		}
+		return true
+	})
+
+	// shutdownVars collects every identifier assigned directly from the
+	// httpSrv.Shutdown call (shutErr := httpSrv.Shutdown(shutCtx), including
+	// inside an if's Init), so the nesting check below recognizes a guard on
+	// it by variable reference, not only by re-calling Shutdown inline.
+	shutdownVars := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, rhs := range assign.Rhs {
+			call, ok := rhs.(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			if name, ok := selectorName(call); !ok || name != callShutdown {
+				continue
+			}
+			if i < len(assign.Lhs) {
+				if id, ok := assign.Lhs[i].(*ast.Ident); ok {
+					shutdownVars[id.Name] = true
 				}
 			}
 		}
 		return true
 	})
 
-	if sawEarlyGuard {
-		t.Fatalf("serveAndShutdown returns from an httpSrv.Shutdown error before %s runs — a timed-out HTTP drain must still wait for background work (see internal/api TestShutdownGraceCoversTheBudget)", callWait)
-	}
-
-	firstIndex := map[string]int{}
-	for i, name := range gotOrder {
-		if _, ok := firstIndex[name]; !ok {
-			firstIndex[name] = i
-		}
-	}
-	prev := -1
-	for _, want := range wantOrder {
-		idx, ok := firstIndex[want]
+	// N2: WaitBackground must never run only on a branch gated by Shutdown's
+	// error — an if whose Init or Cond calls httpSrv.Shutdown directly, or
+	// tests the variable Shutdown's result was assigned to, must not contain
+	// the WaitBackground call in its body.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
 		if !ok {
-			t.Fatalf("serveAndShutdown no longer calls %s", want)
+			return true
 		}
-		if idx < prev {
-			t.Fatalf("serveAndShutdown calls %s before the step that must precede it", want)
+		guards := refsShutdown(ifs.Init, callShutdown, shutdownVars) || refsShutdown(ifs.Cond, callShutdown, shutdownVars)
+		if guards && ifs.Body != nil && waitPos >= ifs.Body.Pos() && waitPos <= ifs.Body.End() {
+			t.Fatalf("serveAndShutdown calls %s nested inside an if that guards on %s's error — it must run unconditionally", callWait, callShutdown)
 		}
-		prev = idx
-	}
+		return true
+	})
 }
 
 func findFuncDecl(file *ast.File, name string) *ast.FuncDecl {
@@ -131,34 +153,25 @@ func selectorName(call *ast.CallExpr) (string, bool) {
 	return recv.Name + "." + sel.Sel.Name, true
 }
 
-// callsSelector reports whether n (an *ast.IfStmt's Init or Cond, either of
-// which may be nil) contains a call to a method named methodName.
-func callsSelector(n ast.Node, methodName string) bool {
+// refsShutdown reports whether n (an *ast.IfStmt's Init or Cond, either of
+// which may be nil) calls calleeName directly, or references one of vars —
+// the identifiers calleeName's result was assigned to elsewhere in the
+// function.
+func refsShutdown(n ast.Node, calleeName string, vars map[string]bool) bool {
 	if n == nil {
 		return false
 	}
 	found := false
 	ast.Inspect(n, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == methodName {
+		switch v := n.(type) {
+		case *ast.CallExpr:
+			if name, ok := selectorName(v); ok && name == calleeName {
 				found = true
 			}
-		}
-		return true
-	})
-	return found
-}
-
-// containsReturn reports whether body has a return statement reachable
-// without crossing into a nested closure.
-func containsReturn(body *ast.BlockStmt) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		switch n.(type) {
-		case *ast.ReturnStmt:
-			found = true
-		case *ast.FuncLit:
-			return false
+		case *ast.Ident:
+			if vars[v.Name] {
+				found = true
+			}
 		}
 		return true
 	})
