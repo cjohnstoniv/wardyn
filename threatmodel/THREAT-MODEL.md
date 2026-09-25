@@ -430,8 +430,8 @@ lane — is §5.1a's disclosed TOCTOU residual; the guard itself still runs ther
 
 ### 4.3 Capability grants (v0.6) — the mechanism
 
-Nine closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
-and it grew by two in v0.7, one in v0.7.2 and two in 0.8. Eight NARROW what a
+Ten closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
+and it grew by two in v0.7, one in v0.7.2 and three in 0.8. Nine NARROW what a
 member could already do:
 `egress_host` (the hosts on their inline policy, and which host they may decide an
 `egress_domain` approval for), `secret` (which secret names an inline policy may
@@ -449,8 +449,10 @@ server-side clones, Scan and Build) and — v0.8 — `feature` (whether a member
 add an SSH key or mint an API token at all: values `ssh_key` and `api_token`, a
 closed set refused at write time otherwise, one check at each mint door; mint
 only, so an existing key or token outlives a later deny until it is removed or
-revoked). The last three request-level kinds are
-enforced at `denyMemberRequest`. `workspace_provider` is deliberately a bound on
+revoked) and `policy` (which stored policy a member may select, `req.PolicyID`;
+the choice only, since the selected row is still clamped to their ceiling).
+`workspace`, `agent`, `integration` and `policy` are enforced at
+`denyMemberRequest`, on launch and preflight alike. `workspace_provider` is deliberately a bound on
 the PROVIDER ROW and not on the repository: admission here is URL-prefix
 matching, not a repo ACL, and the row is the unit an admin writes down (the
 traversable spellings a prefix comparison would otherwise admit are refused at the

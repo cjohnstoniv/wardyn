@@ -75,6 +75,11 @@
     "sentence": "fmt.Sprintf(mpsNotGranted, p.ID)"
   },
   {
+    "reason": "capKinds[capPolicy].reason",
+    "target": "\"runs.policy\"",
+    "sentence": "\"Stored policy \" + req.PolicyID.String() + \" isn't available to you. Ask your admin, or launch without policy_id.\""
+  },
+  {
     "reason": "capKinds[capWorkspaceProvider].reason",
     "target": "target",
     "sentence": "fmt.Sprintf(capProvider403, row.Kind)"

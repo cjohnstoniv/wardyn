@@ -17,13 +17,13 @@ import (
 
 // the closed kind set
 //
-// Nine kinds, and this slice is the ONLY place the set is written down —
+// Ten kinds, and this slice is the ONLY place the set is written down —
 // migration 0042 deliberately puts no CHECK on capability_grants.capability, so
-// a tenth kind is a constant here plus its enforcement call site, with no DDL.
+// an eleventh kind is a constant here plus its enforcement call site, with no DDL.
 // The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
 // mirrors these ids and must not drift.
 //
-// Eight of the nine NARROW what a member may already do; capImage WIDENS (a
+// Nine of the ten NARROW what a member may already do; capImage WIDENS (a
 // member cannot name a custom image at all today). Both directions resolve
 // through the one resolver below (capBatch.decide) — the difference is the
 // kind's row in capKinds.
@@ -126,6 +126,20 @@ const (
 	// removed or revoked; the kind decides what may be ADDED, never re-checks
 	// what is there.
 	capFeature = "feature"
+	// capPolicy NARROWS: it bounds which stored policy a person may select for
+	// their own run — req.PolicyID, and nothing else. Values are the policy
+	// row's uuid (canonical string), plus `*`.
+	//
+	// Narrowing, on capAgent's rule: any signed-in person could already select
+	// any stored row, so the unenforced default stays ALLOWED and a deployment
+	// that never writes a policy row is unchanged. A DENY row bites at once.
+	//
+	// It gates the CHOICE, never the content: the selected row is still bounded
+	// by the caller's ceiling in resolveRunPolicy, and a run that names no
+	// policy is not gated at all (its spec is the caller's own ceiling). Checked
+	// before resolvePolicy reads the row, so an ungranted id is refused the same
+	// way whether or not the row exists.
+	capPolicy = "policy"
 )
 
 // The closed value set of capFeature. canonicalGrantValue refuses any other
@@ -138,7 +152,7 @@ const (
 var featureValues = []string{featureSSHKey, featureAPIToken}
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
-var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capModelProvider, capFeature}
+var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capModelProvider, capFeature, capPolicy}
 
 // capKindsVersion numbers the kind table, and GET /me/capabilities returns it so
 // a client holding a copy of the set (the console's CAPABILITY_KINDS) can tell
@@ -147,11 +161,11 @@ var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage,
 // TestCapKindsVersionPinsTheTable fails on a table change that forgets to.
 const capKindsVersion = 3
 
-// validCapabilityKind reports whether kind is one of the nine. The API write
+// validCapabilityKind reports whether kind is one of the ten. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
 func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }
 
-// capWildcard matches every value of its kind. Spelled the same for all nine so
+// capWildcard matches every value of its kind. Spelled the same for all ten so
 // an admin does not have to learn a per-kind syntax for "all of them".
 const capWildcard = "*"
 
@@ -288,6 +302,7 @@ var capKinds = map[string]capKind{
 	capWorkspaceProvider: {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspaceProvider},
 	capModelProvider:     {direction: capNarrowing, restrictable: true, gatesAdminPins: true, reason: authz.ReasonCapabilityModelProvider},
 	capFeature:           {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityFeature},
+	capPolicy:            {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityPolicy},
 }
 
 // the wrappers

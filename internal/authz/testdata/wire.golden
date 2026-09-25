@@ -16,6 +16,7 @@ reason capability_agent
 reason capability_egress_host
 reason capability_feature
 reason capability_integration
+reason capability_policy
 reason capability_secret
 reason capability_workspace
 reason capability_workspace_provider

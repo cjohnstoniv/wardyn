@@ -241,7 +241,7 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //     suffix test), and a mid-label or URL-shaped value stored as a row that can
 //     never match — a deny that protects nothing.
 //
-//   - workspace: uuid.Parse, stored as .String(). The resolver compares
+//   - workspace and policy: uuid.Parse, stored as .String(). The resolver compares
 //     capValueMatches' `grantValue == want` against uuid.UUID.String(), which is
 //     always canonical lowercase-hyphenated, so all four alternative spellings
 //     uuid.Parse accepts were stored 201-Created, rendered as an active DENY,
@@ -294,10 +294,10 @@ func canonicalGrantValue(capability, value string) (string, error) {
 		if err := proxy.ValidDomainEntry(v); err != nil {
 			return "", fmt.Errorf("value: %w", err)
 		}
-	case capWorkspace:
+	case capWorkspace, capPolicy:
 		id, err := uuid.Parse(v)
 		if err != nil {
-			return "", fmt.Errorf("value: %q is not a workspace id — a workspace capability names a workspace by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v)
+			return "", fmt.Errorf("value: %q is not a %s id — a %s capability names one by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v, capability, capability)
 		}
 		return id.String(), nil
 	case capFeature:

@@ -26,6 +26,7 @@ const (
 	ReasonCapabilityEgressHost           Reason = "capability_egress_host"
 	ReasonCapabilityFeature              Reason = "capability_feature"
 	ReasonCapabilityIntegration          Reason = "capability_integration"
+	ReasonCapabilityPolicy               Reason = "capability_policy"
 	ReasonCapabilitySecret               Reason = "capability_secret"
 	ReasonCapabilityWorkspace            Reason = "capability_workspace"
 	ReasonCapabilityWorkspaceProvider    Reason = "capability_workspace_provider"
@@ -73,6 +74,7 @@ var refusals = map[Reason]Refusal{
 	ReasonCapabilityEgressHost:           {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityFeature:              {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityIntegration:          {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityPolicy:               {Effect: EffectDeny, Audit: true},
 	ReasonCapabilitySecret:               {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityWorkspace:            {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityWorkspaceProvider:    {Effect: EffectDeny, Audit: true},

@@ -276,8 +276,9 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	storedWarns = append(storedWarns, envWarns...)
 	// The central escape: a stored policy row is admin-authored CONTENT,
 	// but ANY signed-in caller may put one on their own run (policy_id is
-	// ungated, and it has to stay that way — gating it removes a legitimate
-	// feature and pushes members onto hand-authored inline specs). So a member
+	// open until an admin enforces the `policy` kind, and it has to stay that
+	// way by default — gating it removes a legitimate feature and pushes
+	// members onto hand-authored inline specs). So a member
 	// selecting a wide row got a wide run, entirely past the clamp their own
 	// inline_policy would have hit. One rule falls out: member-selected content
 	// is bounded by the member's ceiling whether it arrived as a body or as a

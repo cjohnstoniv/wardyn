@@ -23,7 +23,7 @@
 // The closed set, in the order the admin screen renders them. Mirrors the Go
 // slice in internal/api/capabilities.go — a new kind is a Go constant plus a
 // row here, no DDL.
-export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider", "model_provider", "feature"] as const;
+export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider", "model_provider", "feature", "policy"] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
 // Whether granting this kind takes power away from members ("narrows" — the
@@ -157,6 +157,18 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     unenforced: "Members can add SSH keys and mint API tokens.",
     enforced:
       "A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked.",
+    direction: "narrows",
+  },
+  // Staged in docs/design/permissioning-prompt.md §7.1 as DRAFT (#613).
+  policy: {
+    // DRAFT (canon pending)
+    label: "Stored policies",
+    blurb: "Which stored policies a member may select for a run of their own.",
+    valueLabel: "Policy",
+    valueHint: "The policy's id. Use * for every policy.",
+    unenforced: "Members can select any stored policy for a run they launch.",
+    enforced:
+      "A member can only select policies granted to them. A run naming another one is refused at launch, with the reason. A run with no policy is never refused for it.",
     direction: "narrows",
   },
 };

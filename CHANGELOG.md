@@ -774,6 +774,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   ones that already exist keep working until removed or revoked. Your SSH keys disables Add key
   and shows the same sentence. Any other grant value is refused (`400`).
 
+- **Stored policies are a capability kind (#613).** `policy` (value: a stored policy's id, or `*`)
+  bounds which stored policy a person may select with `policy_id`. It narrows: until an admin
+  enforces it on the Permissions page nothing changes, and a deny bites at once. A refused
+  selection is a `403` on `POST /runs` and preflight alike, with an `authz.denied` row (reason
+  `capability_policy`, target `runs.policy`), whether or not the id names a row. A run that names
+  no policy is never gated, and a super admin is exempt; a security admin is bounded like anyone.
+  Grant values are folded to the canonical uuid, and anything else is refused (`400`).
+
 - **A user type is a subject (#610).** Migration `0076_user_type_subject` lets a capability
   grant, a governance assignment and a drive grant name `subject_type: "user_type"` with a type's
   id. A grant on a type is one more subject beside user and group: an allow lets that type's
