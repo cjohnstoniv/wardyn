@@ -95,6 +95,10 @@ vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unkno
 const listAuditMock = vi.fn();
 vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) } }));
 
+// S-13: serverConfirmsCapture is the pure predicate the component's
+// confirmCapture wires to getSetupStatus — covered directly so every branch
+// (harness row, model_access state, and the anthropic flow's narrower rule)
+// is pinned without going through a rendered pane.
 describe("serverConfirmsCapture", () => {
   function status(overrides: Partial<SetupStatus>): SetupStatus {
     return {

@@ -119,6 +119,8 @@ describe("HarnessLoginPane — the consent gate", () => {
     render(<HarnessLoginPane provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
     expect(screen.getByLabelText(/aws access portal start url/i)).toBeInTheDocument();
     expect(screen.getByText(/verification page/i)).toHaveTextContent(`“${SIGNIN_PROGRESS.OPEN("AWS")}” opens it`);
+    // The gate is the only thing on screen — nothing launches on mount.
+    expect(harnessLoginMock).not.toHaveBeenCalled();
   });
 
   // #628: nothing opens on Start any more, so the intro and blurb promise the
