@@ -72,8 +72,8 @@ func readSiteConfigJSON(t *testing.T, pool *pgxpool.Pool) map[string]any {
 	return out
 }
 
-// TestMigration0030_TransformsLegacyArtifactOverrides is the primary data-shape
-// regression: a two-ecosystem legacy document (one with a token, one without,
+// TestMigration0030_TransformsLegacyArtifactOverrides pins the primary data
+// shape: a two-ecosystem legacy document (one with a token, one without,
 // sharing no host) becomes a two-element egress_redirects array with the
 // correct From-per-ecosystem URL, the token folded onto the right entry (and
 // omitted, not null, where there wasn't one), sorted by ecosystem key, while

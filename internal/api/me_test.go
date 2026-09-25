@@ -60,7 +60,7 @@ func TestHandleMe_MemberPollPerformsNoSiteConfigRead(t *testing.T) {
 	t.Run("a member's poll reads no roster", func(t *testing.T) {
 		srv, st := newSrv(t)
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/me",
-			ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), "")
+			ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET /me = %d, want 200: %s", w.Code, w.Body.String())
 		}
@@ -101,10 +101,9 @@ func TestHandleMe_MemberPollPerformsNoSiteConfigRead(t *testing.T) {
 	})
 }
 
-// W31-S1-7: /me used to say nothing about when an SSO session would die, so
-// the console had no way to warn ahead of the silent 401 the expiry causes.
-// handleMe now includes session_expires_at when (and only when) a verified
-// OIDC session is on the context.
+// handleMe includes session_expires_at when (and only when) a verified OIDC
+// session is on the context, so the console can warn ahead of the silent
+// 401 an SSO session's expiry causes.
 func TestHandleMe_SessionExpiry(t *testing.T) {
 	s := &Server{}
 
@@ -158,7 +157,7 @@ func TestHandleMe_MemberLocalDirRoot(t *testing.T) {
 	memberCtx := func() (context.Context, string) {
 		sub := "sub-bob"
 		ctx := withOIDCHuman(context.Background(), sub)
-		ctx = withOIDCRole(ctx, oidc.RoleMember)
+		ctx = withOIDCRole(ctx, oidc.RoleUser)
 		return ctx, sub
 	}
 
@@ -239,7 +238,7 @@ func TestHandleMe_PublishesNameAndEmailBesidePrincipal(t *testing.T) {
 		ctx := withOIDCHuman(r.Context(), "gsv-member-0001")
 		ctx = withOIDCEmail(ctx, "alice.smith@corp.example")
 		ctx = withOIDCName(ctx, "Alice Smith")
-		ctx = withOIDCRole(ctx, oidc.RoleMember)
+		ctx = withOIDCRole(ctx, oidc.RoleUser)
 		r = r.WithContext(ctx)
 
 		w := httptest.NewRecorder()

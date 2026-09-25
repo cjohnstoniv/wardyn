@@ -12,15 +12,16 @@ import (
 	"time"
 )
 
-// TestAWSSSORefresh_AStillValidTokenNeverQueuesBehindAStalledRenewal is B2-F6.
+// TestAWSSSORefresh_AStillValidTokenNeverQueuesBehindAStalledRenewal pins that
+// a stalled renewal cannot block a still-valid token.
 //
 // Dispatch is synchronous with POST /runs and needsRefresh fires a whole skew
 // window (10 min) ahead of expiry, so the common case is several people
 // launching runs against a token that still works. Against an unresponsive
 // SSO-OIDC endpoint the in-flight renewal costs 2 x awsSSORefreshTimeout + the
-// retry delay before it gives up and serves the token it holds — and every
-// other create queued behind the owner lock used to pay that same bill again,
-// serially, inside its own create request.
+// retry delay before it gives up and serves the token it holds — and no other
+// create queued behind the owner lock may pay that same bill again, serially,
+// inside its own create request.
 //
 // The fake endpoint PARKS the first renewal, so the assertion is about
 // concurrency and not about a wall clock: the second dispatch must come back

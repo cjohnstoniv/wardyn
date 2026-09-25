@@ -91,7 +91,7 @@ func fakeCA(t *testing.T) *certAuthority {
 	return ca
 }
 
-// TestMITMLLMHost_GatedOnIntent is the security-review regression (LOW): a per-run
+// TestMITMLLMHost_GatedOnIntent: a per-run
 // CA can be minted purely for artifact-token injection, so the built-in LLM hosts
 // must be TLS-MITM'd ONLY when LLM MITM is actually intended for the run (mitmLLM)
 // — never merely because a CA exists. Corp artifact hosts stay unaffected (they go
@@ -123,8 +123,8 @@ func TestMITMLLMHost_GatedOnIntent(t *testing.T) {
 	}
 }
 
-// TestIsCorpMITMHost_ReservedLLMHostsExcludedEvenWhenListed is the bug-egress-2
-// regression: handleConnect dispatches the corp-artifact MITM branch (guarded by
+// TestIsCorpMITMHost_ReservedLLMHostsExcludedEvenWhenListed: handleConnect
+// dispatches the corp-artifact MITM branch (guarded by
 // isCorpMITMHost) BEFORE it ever reaches the isLLMHost/mitmLLMHost intent gate, so
 // isCorpMITMHost is the only thing standing between a misconfigured/admin-authored
 // mitmHosts entry naming a reserved LLM hostname and that entry silently routing

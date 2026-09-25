@@ -62,15 +62,15 @@ func TestExamplePoliciesValidate(t *testing.T) {
 	}
 }
 
-// TestCIClaudeLLMExample_MeetsCINonNegotiables pins W16-S1-6: docs/CI.md's
-// "Model access for harness mode" section points readers at a model-access
-// example for CI. The old pointer (examples/policies/claude-llm.json) is a DEV
-// policy that violates every one of the SAME doc's own CI non-negotiables one
-// section up ("Writing a CI policy") — deny_with_review instead of
-// always_deny, a requires_approval:true grant, and an unbounded (0)
-// auto_stop_after_sec. examples/policies/ci-claude-llm.json is ci.json's CI
-// baseline plus exactly the api.anthropic.com egress entry and api_key grant
-// model access needs — a copy-paste-safe CI example, not a dev ceiling.
+// TestCIClaudeLLMExample_MeetsCINonNegotiables pins docs/CI.md's "Model access
+// for harness mode" pointer to a CI-safe example.
+// examples/policies/claude-llm.json is a dev policy that violates every one of
+// the same doc's own CI non-negotiables one section up ("Writing a CI policy")
+// — deny_with_review instead of always_deny, a requires_approval:true grant,
+// and an unbounded (0) auto_stop_after_sec — so it must not be the pointer.
+// examples/policies/ci-claude-llm.json is ci.json's CI baseline plus exactly
+// the api.anthropic.com egress entry and api_key grant model access needs — a
+// copy-paste-safe CI example, not a dev ceiling.
 func TestCIClaudeLLMExample_MeetsCINonNegotiables(t *testing.T) {
 	spec, err := LoadPolicySpec("../../examples/policies/ci-claude-llm.json")
 	if err != nil {

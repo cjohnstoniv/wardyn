@@ -38,11 +38,23 @@ type fakeRunner struct {
 	// matrix tests need a runner that advertises less than all three classes, e.g.
 	// a Kata-only [CC1, CC3]); nil keeps every existing caller's [CC1, CC2, CC3].
 	capsClasses []types.ConfinementClass
+	// noManagedFiles makes Capabilities withhold ManagedFiles: a substrate
+	// without the root-owned delivery contract.
+	noManagedFiles bool
+	// capsErr makes Capabilities fail; capsResolved is its Resolved map (an
+	// "oci/krun" label marks an exec-less substrate); execErr makes Exec fail —
+	// on an exec-less runner, where the driver delivers or refuses managed files.
+	capsErr      error
+	capsResolved map[types.ConfinementClass]string
+	execErr      error
 }
 
 func (f *fakeRunner) Name() string { return "fake" }
 
 func (f *fakeRunner) Capabilities(context.Context) (runner.Capabilities, error) {
+	if f.capsErr != nil {
+		return runner.Capabilities{}, f.capsErr
+	}
 	classes := f.capsClasses
 	if classes == nil {
 		classes = []types.ConfinementClass{types.CC1, types.CC2, types.CC3}
@@ -57,6 +69,9 @@ func (f *fakeRunner) Capabilities(context.Context) (runner.Capabilities, error) 
 		// double that under-declares would refuse runs its own CreateSandbox
 		// would have served.
 		UserDrives: true,
+		// Same reason: CreateSandbox accepts a spec carrying managed files.
+		ManagedFiles: !f.noManagedFiles,
+		Resolved:     f.capsResolved,
 	}, nil
 }
 
@@ -75,6 +90,9 @@ func (f *fakeRunner) Exec(context.Context, string, []string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.execCalls++
+	if f.execErr != nil {
+		return "", f.execErr
+	}
 	return "fake-exec-id", nil
 }
 
