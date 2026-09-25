@@ -346,7 +346,7 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 // TestMembersDocStatesTheThreeKeyDriveContract (F169) pins the member-facing
 // doc to the shape GET /me actually returns.
 //
-// MEMBERS.md calls /me "the ground truth" and described the two-state contract
+// USERS.md calls /me "the ground truth" and described the two-state contract
 // the 0.7 fix superseded: user_drive null == nothing allocated. The fix exists
 // because null meant four different things, so the doc taught an external
 // consumer the exact wrong inference the fix was written to prevent — read
@@ -365,22 +365,22 @@ func TestMembersDocStatesTheThreeKeyDriveContract(t *testing.T) {
 	me := methodBody(t, readSrc(t, "internal", "api", "me.go"), "handleMe")
 	for _, key := range []string{`body["user_drive"]`, `body["user_drive_denied_by_profile"]`, `body["user_drive_unavailable"]`} {
 		if !strings.Contains(me, key) {
-			t.Errorf("GET /me no longer writes %s — MEMBERS.md documents a three-key contract", key)
+			t.Errorf("GET /me no longer writes %s — USERS.md documents a three-key contract", key)
 		}
 	}
 
-	doc := readDoc(t, "docs/MEMBERS.md")
-	mustNotSay(t, doc, "docs/MEMBERS.md",
+	doc := readDoc(t, "docs/USERS.md")
+	mustNotSay(t, doc, "docs/USERS.md",
 		"`GET /me` carries `user_drive` (`null` when none is allocated to you) and is the ground truth for what you have.",
 	)
-	mustSay(t, doc, "docs/MEMBERS.md",
+	mustSay(t, doc, "docs/USERS.md",
 		"`user_drive_denied_by_profile`",
 		"`user_drive_unavailable`",
 		"no longer means",
 	)
 	for _, tok := range tokens {
 		if !strings.Contains(doc, "`"+tok+"`") {
-			t.Errorf("docs/MEMBERS.md never names the `user_drive_unavailable` value %q, so a member or an external consumer cannot tell that state from 'you have no allocation'", tok)
+			t.Errorf("docs/USERS.md never names the `user_drive_unavailable` value %q, so a member or an external consumer cannot tell that state from 'you have no allocation'", tok)
 		}
 	}
 }

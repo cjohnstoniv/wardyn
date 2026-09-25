@@ -138,7 +138,7 @@ shipped behavior; none is scheduled.
 - **Team mode as a packaged, sealed multi-user product** — as opposed to the
   RBAC that ships IN the control plane today (see
   [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Multi-user: who can change what",
-  and [docs/MEMBERS.md](docs/MEMBERS.md) for what a member themself can do).
+  and [docs/USERS.md](docs/USERS.md) for what a member themself can do).
   Admin/member roles and owner scoping are real and shipped (v0.5), and v0.6
   added capability grants over a user, an IdP group, or everyone (see
   CHANGELOG.md's `[0.6.0]` entry) — which is authorization detail on top of
@@ -239,7 +239,7 @@ shipped behavior; none is scheduled.
   0.8/0.8.1 issue tracks any of these. Self-service reset, per-user
   uid/Kerberos/cifs `multiuser`, and a same-drive concurrent-run collision
   warning are current, documented non-goals, not gaps —
-  [docs/MEMBERS.md](docs/MEMBERS.md) ("there is no self-service reset: a drive
+  [docs/USERS.md](docs/USERS.md) ("there is no self-service reset: a drive
   you have poisoned is reclaimed by your admin with a documented command, so
   ask") and [docs/design/user-drives-prompt.md](docs/design/user-drives-prompt.md)'s
   "Do not design" list ("No Reset", "No share credentials, no per-user uid, no

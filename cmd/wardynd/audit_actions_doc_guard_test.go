@@ -330,7 +330,7 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 
 // TestAuditActionsDocCitesSymbolsNotLineNumbers holds docs/AUDIT-ACTIONS.md to
 // the rule its neighbours already enforce on Go comments, threatmodel/*.md and
-// docs/MEMBERS.md (TestCommentsCiteSymbolsNotLineNumbers,
+// docs/USERS.md (TestCommentsCiteSymbolsNotLineNumbers,
 // TestSecurityDocsCiteSymbolsNotLineNumbers,
 // TestMembersDocCitesSymbolsNotLineNumbers): a claim about code is pinned to a
 // SYMBOL, never to a line number.

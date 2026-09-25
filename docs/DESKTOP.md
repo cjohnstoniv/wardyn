@@ -195,7 +195,7 @@ It works today on a **developer checkout** (`make agent-images` then
 
 ## The member-mode profile (topology m′)
 
-> The developer's own page for this profile is MEMBERS.md; this section
+> The developer's own page for this profile is USERS.md; this section
 > is the operator's.
 
 Everything above describes **topology a′: the developer is the operator**. It is
@@ -482,7 +482,7 @@ member writes their OWN `PUT /secrets/<name>` row (no admin action), and an
 inline `api_key` grant naming a model-provider host (the anthropic.com/
 openai.com convention, or a configured internal gateway) that pairs with a
 secret the member OWNS is admitted with no operator eligible-grant pairing
-at all — see [MEMBERS.md § Your model key](MEMBERS.md#your-model-key). The
+at all — see [USERS.md § Your model key](USERS.md#your-model-key). The
 secret-exfil guard `filterUserGrants` exists for is unaffected: the arm
 requires PROVABLE ownership (a names-only `Store.For(<member>).List`, never a
 value read, never another member's row) and a model-provider host the run's

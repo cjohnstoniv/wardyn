@@ -610,7 +610,7 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 // paints a banner naming an admin role they do not hold) and POST /me/ssh-keys
 // and POST /me/tokens both 409'd "Exit member mode…", breaking the member
 // Getting Started's own "Connect your tools · Add SSH key" card and
-// docs/MEMBERS.md's SSH path. There is no UI affordance for this — the menu
+// docs/USERS.md's SSH path. There is no UI affordance for this — the menu
 // item is gated on operator||securityOperator — so the only way in is a
 // hand-rolled POST, which is why it is LOW and not why it is acceptable.
 func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
@@ -643,7 +643,7 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 	}
 	// The doors that 409 INSIDE the mode stay open. A 409 on either would break
 	// the member Getting Started's own "Connect your tools · Add SSH key" card
-	// and docs/MEMBERS.md's SSH path.
+	// and docs/USERS.md's SSH path.
 	tok := doSSO(t, srv, http.MethodPost, "/api/v1/me/tokens", after, `{"name":"after-the-no-op"}`)
 	if tok.Code == http.StatusConflict {
 		t.Errorf("POST /me/tokens = 409 for a member who never entered the mode: %s", tok.Body.String())
