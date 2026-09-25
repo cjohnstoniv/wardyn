@@ -534,6 +534,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `model-provider-signin.ts` (`POST`/`PUT /model-providers/{id}/sign-in`, #534). No screen reads
   them yet — the types and clients alone.
 
+- **The model-provider editor for the key and endpoint kinds, with "Use with" (#537).** An admin
+  adds an Anthropic API key, OpenAI API key or custom-endpoint provider, picks the agents it serves
+  (an agent the kind can't drive is disabled with its reason) and sets each agent's model and, for
+  an endpoint, its path. There is no key or token field: each person adds their own. Removing a
+  provider is blocked while it is an agent's default, and a save that changes where it sends
+  requests says how many people's credentials that deletes before it saves. The server's refusal
+  shows verbatim under "This provider can't be saved as written". Settings opens it until the
+  Model providers list (#536) lands (`settings/model-provider-editor.tsx`).
+
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away

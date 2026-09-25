@@ -41,6 +41,7 @@ import { ModelProviderCard } from "./connection-cards";
 import { UserDrivesCard } from "../setup/user-drives-card";
 import { ProvidersCard } from "../setup/providers-card";
 import { AdoConnectionCard } from "./ado-connection";
+import { ModelProvidersEntry } from "./model-providers-entry";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -258,6 +259,8 @@ export function SettingsScreen() {
             siteConfig={siteConfig}
             onChanged={load}
           />
+          {/* #537's provider editor, reached from here until #536's list. */}
+          {adminReads && <ModelProvidersEntry harnesses={status.harnesses} />}
           {/* The Providers card replaces Git host: the git credential
               lanes moved into a provider row on /providers, and this card is
               the same shared component the funnel's `providers` step body
