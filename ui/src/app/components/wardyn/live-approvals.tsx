@@ -839,7 +839,9 @@ function ReauthRow({
   /** This strip's own run — the switch link's target on the admin's own row
    *  (§below) needs no `useLocation()`: it is always this exact run's user
    *  twin, `/runs/{id}`, whatever admin subpath this strip happens to be
-   *  mounted under. */
+   *  mounted under. (The row itself does read `window.location` directly,
+   *  for `viewOfPath` below — never the `useLocation()` hook, since this row
+   *  is mounted without a router in its suites.) */
   runId: string;
   adminView?: boolean;
 }) {
