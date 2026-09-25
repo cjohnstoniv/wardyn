@@ -1,0 +1,312 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Available to states</title>
+<!--
+  "Available to" mock, the control's states (#923) · static, for owner review.
+  The four editors #923 names share ONE control (availability-control.tsx, PR #919), so its
+  states are drawn once, here, with a stored policy as the fixture. editors.html shows where
+  the control sits in each editor and what differs per family.
+  Every PRODUCT string is canon.html's row, byte for byte. Rows tagged Packet UT-A are the
+  approved user-types packet A (2026-09-23); rows tagged New wait on index.html's decisions;
+  Wire rows are server sentences rendered verbatim.
+
+  SCAFFOLD vs PRODUCT: the sticky bar, the `.tag` state labels, the `.varlabel` strips and
+  these comments are review scaffolding. Everything inside a `.frame` is the product.
+  The control has no teal button of its own: it writes on each change (#919), so the editor
+  around it keeps its one teal action.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Available to — the control's states (#923)</h1>
+    <div class="sub">One control, the same on all four editors. Fixture: the stored policy "Read-only research". Static: nothing here is wired.</div>
+  </div>
+  <nav><a href="index.html">Packet</a><a href="editors.html">The four editors</a><a class="cur" href="states.html">States</a><a href="canon.html">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- ===== S1 DEFAULT ===== -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>State 1</span><b>Default: Everyone. Every stored policy, model provider and integration that exists today starts here (design §2.6). Images start at Admins only instead (editors.html, decision 2).</b></div>
+  <div class="frame"><div class="pad">
+    <div class="avail">
+      <label>Available to</label>
+      <div class="radio">
+        <span><i class="on"></i>Everyone</span>
+        <span><i></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+      </div>
+      <div class="adder">
+        <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+        <div class="ctl ph">Add a type, group or person…</div>
+        <button class="btn sm" type="button" disabled>Add</button>
+      </div>
+      <p class="hint">Security admins can change this list from the type editor too. The policy itself is edited only by super admins.</p>
+    </div>
+  </div></div>
+</section>
+
+<!-- ===== S2 SUBSET ===== -->
+<section class="state">
+  <div class="tag"><span>State 2</span><b>A subset of user types (plus a group and a person). The list is written first; choosing Only these then turns it on. Each change writes at once, never through the editor's Save.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>List written, still Everyone</b>. Adding does nothing until Only these is chosen, because everyone can already use it.</div>
+    <div class="pad">
+      <div class="avail">
+        <label>Available to</label>
+        <div class="radio">
+          <span><i class="on"></i>Everyone</span>
+          <span><i></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+        </div>
+        <div class="aud">
+          <span class="chip info">Developer<button class="x" type="button" aria-label="Remove Developer">×</button></span>
+          <span class="chip info">Portfolio manager<button class="x" type="button" aria-label="Remove Portfolio manager">×</button></span>
+        </div>
+        <div class="adder">
+          <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+          <div class="ctl ph">Add a type, group or person…</div>
+          <button class="btn sm" type="button" disabled>Add</button>
+        </div>
+        <p class="hint">Security admins can change this list from the type editor too. The policy itself is edited only by super admins.</p>
+      </div>
+    </div>
+    <div class="varlabel"><b>Only these</b>: two user types, a directory group and one person</div>
+    <div class="pad">
+      <div class="avail">
+        <label>Available to</label>
+        <div class="radio">
+          <span><i></i>Everyone</span>
+          <span><i class="on"></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+        </div>
+        <div class="aud">
+          <span class="chip info">Developer<button class="x" type="button" aria-label="Remove Developer">×</button></span>
+          <span class="chip info">Portfolio manager<button class="x" type="button" aria-label="Remove Portfolio manager">×</button></span>
+          <span class="chip info">Data engineering (group)<button class="x" type="button" aria-label="Remove Data engineering (group)">×</button></span>
+          <span class="chip info">alice@corp.com<button class="x" type="button" aria-label="Remove alice@corp.com">×</button></span>
+        </div>
+        <div class="adder">
+          <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+          <div class="ctl ph">Add a type, group or person…</div>
+          <button class="btn sm" type="button" disabled>Add</button>
+        </div>
+        <p class="hint">Security admins can change this list from the type editor too. The policy itself is edited only by super admins.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== S3 NONE ===== -->
+<section class="state">
+  <div class="tag"><span>State 3</span><b>None selected. There is no "available to nobody" state. Choosing Only these with nobody listed is refused by the server; its sentence is shown as sent, and the choice stays on Everyone.</b></div>
+  <div class="frame"><div class="pad">
+    <div class="avail">
+      <label>Available to</label>
+      <div class="radio">
+        <span><i class="on"></i>Everyone</span>
+        <span><i></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+      </div>
+      <p class="err">Add at least one person, group or user type before choosing Only, or nobody could use this.</p>
+      <div class="adder">
+        <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+        <div class="ctl ph">Add a type, group or person…</div>
+        <button class="btn sm" type="button" disabled>Add</button>
+      </div>
+      <p class="hint">Security admins can change this list from the type editor too. The policy itself is edited only by super admins.</p>
+    </div>
+  </div></div>
+</section>
+
+<!-- ===== S4 LAST LOCKED ===== -->
+<section class="state">
+  <div class="tag"><span>State 4</span><b>The last one on the list. While Only these is on, its × is disabled, with the reason as its tooltip and as a line under the list. Removing it would leave the resource for nobody, and the server's remove route doesn't check for that.</b></div>
+  <div class="frame"><div class="pad">
+    <div class="avail">
+      <label>Available to</label>
+      <div class="radio">
+        <span><i></i>Everyone</span>
+        <span><i class="on"></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+      </div>
+      <div class="aud">
+        <span class="chip info">Developer<button class="x" type="button" disabled aria-label="Remove Developer" title="Choose Everyone before removing the last one, or nobody could use this.">×</button></span>
+      </div>
+      <p class="hint">Choose Everyone before removing the last one, or nobody could use this.</p>
+      <div class="adder">
+        <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+        <div class="ctl ph">Add a type, group or person…</div>
+        <button class="btn sm" type="button" disabled>Add</button>
+      </div>
+      <p class="hint">Security admins can change this list from the type editor too. The policy itself is edited only by super admins.</p>
+    </div>
+  </div></div>
+</section>
+
+<!-- ===== S5 REMOVING A TYPE ===== -->
+<section class="state">
+  <div class="tag"><span>State 5</span><b>Taking a type off a resource its people are using. It writes at once and asks for no confirmation: the change can be undone, and runs already going keep what they have. What changes is the next launch.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Before</b>: Portfolio managers have runs going on this policy. The admin presses × on Portfolio manager.</div>
+    <div class="pad">
+      <div class="avail">
+        <label>Available to</label>
+        <div class="radio">
+          <span><i></i>Everyone</span>
+          <span><i class="on"></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+        </div>
+        <div class="aud">
+          <span class="chip info">Developer<button class="x" type="button" aria-label="Remove Developer">×</button></span>
+          <span class="chip info">Portfolio manager<button class="x focus" type="button" aria-label="Remove Portfolio manager">×</button></span>
+        </div>
+      </div>
+    </div>
+    <div class="varlabel"><b>After</b>: one chip left, so its × locks (state 4)</div>
+    <div class="pad">
+      <div class="avail">
+        <label>Available to</label>
+        <div class="radio">
+          <span><i></i>Everyone</span>
+          <span><i class="on"></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+        </div>
+        <div class="aud">
+          <span class="chip info">Developer<button class="x" type="button" disabled aria-label="Remove Developer" title="Choose Everyone before removing the last one, or nobody could use this.">×</button></span>
+        </div>
+        <p class="hint">Choose Everyone before removing the last one, or nobody could use this.</p>
+      </div>
+    </div>
+    <div class="varlabel"><b>What follows</b>: the same fact seen from the type editor (UT-7a), and a Portfolio manager's next launch (#922, #736)</div>
+    <div class="pad">
+      <div class="cases">
+        <div class="rv">
+          <h4>Portfolio manager · What this type gets</h4>
+          <div class="grant grey" style="margin-top:6px"><span class="chip neutral">Not available</span>Read-only research · <span class="who">only Developer</span></div>
+        </div>
+        <div>
+          <p class="secsub" style="margin-top:0">New Run no longer offers the policy (the server's list leaves it out). Named anyway, by id from the CLI or the API, the server refuses with its sentence, shown as sent:</p>
+          <p class="alert">Read-only research isn't available to you as a Portfolio manager. Ask your admin.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== S6 IN FLIGHT ===== -->
+<section class="state">
+  <div class="tag"><span>State 6</span><b>A change in flight. The whole control is disabled at once; the spinner shows on Add after ~200ms with no label swap (CONSOLE-RULES §7). A radio change or a × shows the disabled state only.</b></div>
+  <div class="frame"><div class="pad">
+    <div class="avail busy">
+      <label>Available to</label>
+      <div class="radio">
+        <span><i class="on"></i>Everyone</span>
+        <span><i></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+      </div>
+      <div class="aud">
+        <span class="chip info">Developer<button class="x" type="button" disabled aria-label="Remove Developer">×</button></span>
+      </div>
+      <div class="adder">
+        <div class="seg"><span class="sel off">User type</span><span class="off">Group</span><span class="off">User</span></div>
+        <div class="ctl">portfolio-manager</div>
+        <button class="btn sm" type="button" disabled><span class="spin" aria-hidden="true"></span>Add</button>
+      </div>
+      <p class="hint">Security admins can change this list from the type editor too. The policy itself is edited only by super admins.</p>
+    </div>
+  </div></div>
+</section>
+
+<!-- ===== S7 REFUSALS ===== -->
+<section class="state">
+  <div class="tag"><span>State 7</span><b>An add the server refuses. The sentence is shown as sent, inline under the adder, and what was typed stays. Below it: the control when its read fails. It retries on the next open, and the editor around it still works.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Add refused</b>: a user type id that doesn't exist</div>
+    <div class="pad">
+      <div class="avail">
+        <label>Available to</label>
+        <div class="radio">
+          <span><i class="on"></i>Everyone</span>
+          <span><i></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+        </div>
+        <div class="adder">
+          <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+          <div class="ctl">analyst</div>
+          <button class="btn sm" type="button">Add</button>
+        </div>
+        <p class="err">The user type "analyst" doesn't exist. Create it under User types first.</p>
+        <p class="hint">Security admins can change this list from the type editor too. The policy itself is edited only by super admins.</p>
+      </div>
+    </div>
+    <div class="varlabel"><b>Couldn't load</b>: one line where the control would be</div>
+    <div class="pad"><p class="hint" style="font-size:11.5px;color:var(--muted-foreground)">Available to — couldn't load.</p></div>
+  </div>
+</section>
+
+<!-- ===== S8 WHO SEES IT ===== -->
+<section class="state">
+  <div class="tag"><span>State 8</span><b>Who sees the control. Only security admins and super admins, the people who can change it. Of the four editors, only the stored policy sheet opens for anyone else. A security admin can change the list but not the policy.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>A security admin</b>: the control works; Edit policy is disabled with today's reason</div>
+    <div class="sheetwrap">
+      <div class="sheetp">
+        <div class="sh"><h3>Read-only research</h3></div>
+        <div class="sb">
+          <div class="dfs">
+            <div class="df"><div class="k">Policy ID</div><div class="v mono">pol-7f3a2c</div></div>
+            <div class="df"><div class="k">Barrier</div><div class="v"><span class="chip neutral">Wall</span></div></div>
+          </div>
+          <div class="avail">
+            <label>Available to</label>
+            <div class="radio">
+              <span><i></i>Everyone</span>
+              <span><i class="on"></i><span>Only these <span class="hint">— people not listed can't choose this policy for a run. Runs already going aren't affected.</span></span></span>
+            </div>
+            <div class="aud">
+              <span class="chip info">Developer<button class="x" type="button" aria-label="Remove Developer">×</button></span>
+              <span class="chip info">Portfolio manager<button class="x" type="button" aria-label="Remove Portfolio manager">×</button></span>
+            </div>
+            <div class="adder">
+              <div class="seg"><span class="sel">User type</span><span>Group</span><span>User</span></div>
+              <div class="ctl ph">Add a type, group or person…</div>
+              <button class="btn sm" type="button" disabled>Add</button>
+            </div>
+            <p class="hint">Security admins can change this list from the type editor too. The policy itself is edited only by super admins.</p>
+          </div>
+          <div class="sacts"><span class="chip neutral">Requires the admin role.</span><button class="btn sm" type="button" disabled>Edit policy</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Anyone else</b>: the same sheet with no Available to at all. Not a read-only copy, not an error. They only see policies they can use.</div>
+    <div class="sheetwrap">
+      <div class="sheetp">
+        <div class="sh"><h3>Read-only research</h3></div>
+        <div class="sb">
+          <div class="dfs">
+            <div class="df"><div class="k">Policy ID</div><div class="v mono">pol-7f3a2c</div></div>
+            <div class="df"><div class="k">Barrier</div><div class="v"><span class="chip neutral">Wall</span></div></div>
+          </div>
+          <div class="rawjson">▸ View raw JSON</div>
+          <div class="sacts"><span class="chip neutral">Requires the admin role.</span><button class="btn sm" type="button" disabled>Edit policy</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>
