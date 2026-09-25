@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -226,18 +227,22 @@ type capKind struct {
 	// member's own choice. False for all seven — "a capability bounds what a
 	// member chose, never what an admin pre-authorized" (capIntegration).
 	gatesAdminPins bool
+	// reason is the authz.denied reason a refusal of this kind carries. The
+	// widening kind's refusal is the BYOI one: image is refused as a member
+	// bringing their own image, whichever door asked.
+	reason authz.Reason
 }
 
 // capKinds is the table, keyed by exactly the names in capabilityKinds
 // (TestCapKindTableIsTheClosedSet).
 var capKinds = map[string]capKind{
-	capEgressHost:        {direction: capNarrowing, hostSet: true},
-	capSecret:            {direction: capNarrowing},
-	capWorkspace:         {direction: capNarrowing, restrictable: true},
-	capImage:             {direction: capWidening, restrictable: true},
-	capAgent:             {direction: capNarrowing, restrictable: true},
-	capIntegration:       {direction: capNarrowing, restrictable: true},
-	capWorkspaceProvider: {direction: capNarrowing, restrictable: true},
+	capEgressHost:        {direction: capNarrowing, hostSet: true, reason: authz.ReasonCapabilityEgressHost},
+	capSecret:            {direction: capNarrowing, reason: authz.ReasonCapabilitySecret},
+	capWorkspace:         {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspace},
+	capImage:             {direction: capWidening, restrictable: true, reason: authz.ReasonBYOIMember},
+	capAgent:             {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityAgent},
+	capIntegration:       {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityIntegration},
+	capWorkspaceProvider: {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspaceProvider},
 }
 
 // the wrappers

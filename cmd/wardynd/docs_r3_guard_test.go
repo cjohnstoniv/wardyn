@@ -190,9 +190,9 @@ func bedrockReservedSecretNames(t *testing.T) []string {
 // cause. The targets are derived from the emit sites, so the next cause that
 // lands undocumented fails here.
 func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
-	targets := denyMemberFieldTargets(t, "governance_profile")
+	targets := refusalTargets(t, "ReasonGovernanceProfile")
 	if len(targets) < 5 {
-		t.Fatalf("found %d denyMemberField targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
+		t.Fatalf("found %d authz.Deny targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
 	}
 	row := opsTableRow(t, readDoc(t, "docs/OPERATIONS.md"), "governance_profile")
 	for _, target := range targets {
@@ -202,16 +202,17 @@ func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
 	}
 }
 
-// denyMemberFieldTargets returns every `target` internal/api denies with the
-// given authz.denied reason, read off the emit sites.
-func denyMemberFieldTargets(t *testing.T, reason string) []string {
+// refusalTargets returns every `target` internal/api denies with the given
+// authz.denied reason (its internal/authz constant name), read off the emit
+// sites.
+func refusalTargets(t *testing.T, reasonConst string) []string {
 	t.Helper()
 	dir := filepath.Join(repoRoot(t), "internal", "api")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read internal/api: %v", err)
 	}
-	re := regexp.MustCompile(`denyMemberField\(w, r, "([a-z_.]+)", "` + regexp.QuoteMeta(reason) + `"`)
+	re := regexp.MustCompile(`authz\.Deny\(authz\.` + regexp.QuoteMeta(reasonConst) + `,\s*"([a-z_.]+)"`)
 	var out []string
 	for _, e := range entries {
 		name := e.Name()
