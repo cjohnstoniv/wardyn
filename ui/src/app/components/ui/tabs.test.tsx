@@ -20,7 +20,8 @@ function classesFor(component: string): string[] {
   return m[1].split(/\s+/);
 }
 
-describe("TabsList — F7-F11: the stray flex line-drift", () => {
+describe("TabsList — the stray flex line-drift", () => {
+  // ticket: F7-F11
   it("carries inline-flex, not a redundant bare `flex` token", () => {
     const classes = classesFor("TabsList");
     expect(classes).toContain("inline-flex");
@@ -28,7 +29,8 @@ describe("TabsList — F7-F11: the stray flex line-drift", () => {
   });
 });
 
-describe("TabsContent — F7-F10: outline-none with no replacement focus ring", () => {
+describe("TabsContent — outline-none with no replacement focus ring", () => {
+  // ticket: F7-F10
   it("carries a focus-visible ring — outline-none alone drops the ONLY visible focus indicator", () => {
     const classes = classesFor("TabsContent");
     expect(classes).toContain("outline-none");

@@ -45,12 +45,12 @@ func (s *partialScanStore) SetSourceScanResultUnfenced(_ context.Context, id uui
 	return s.sources[id], nil
 }
 
-// TestScanAttachedSources_FailureAuditsWhatAlreadySucceeded is the
-// bug-workspace-2 regression: scanAttachedSources used to return the moment
-// source i failed its stat, with no audit event recording that sources
-// 0..i-1 already scanned inline first (their side effect — the stat, the
-// profile write — already landed regardless). The failure audit must name
-// the failing source AND list what already succeeded before it.
+// TestScanAttachedSources_FailureAuditsWhatAlreadySucceeded: when source i
+// fails its stat, scanAttachedSources must not return without an audit
+// event recording that sources 0..i-1 already scanned inline first (their
+// side effect — the stat, the profile write — already landed regardless).
+// The failure audit must name the failing source and list what already
+// succeeded before it.
 func TestScanAttachedSources_FailureAuditsWhatAlreadySucceeded(t *testing.T) {
 	h := newHarness(t)
 	goodDir := t.TempDir()

@@ -294,7 +294,9 @@ func (s *Server) storeADOEntraBlob(ctx context.Context, owner, rowID string, blo
 	if err != nil {
 		return fmt.Errorf("marshal azure devops sign-in blob: %w", err)
 	}
-	return s.cfg.Secrets.For(owner).Put(ctx, adoEntraSecretName(rowID), raw)
+	err = s.cfg.Secrets.For(owner).Put(ctx, adoEntraSecretName(rowID), raw)
+	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, adoEntraSecretName(rowID))
+	return err
 }
 
 // ── redemption ──────────────────────────────────────────────────────────────
@@ -384,7 +386,7 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	unlock := s.adoEntra.lock(owner, cfg.RowID)
 	defer unlock()
 
-	blob, found, err := s.readADOEntraBlob(ctx, owner, cfg.RowID)
+	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, cfg.RowID)
 	if err != nil {
 		return ADOEntraAccess{}, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
 	}
@@ -417,7 +419,7 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	s.cfg.MaskRegistry.AddGlobal([]byte(resp.AccessToken))
 	s.cfg.MaskRegistry.AddGlobal([]byte(resp.RefreshToken))
 
-	granted := adoEntraSplitScope(resp.Scope)
+	granted := strings.Fields(resp.Scope)
 	if len(granted) == 0 {
 		// An authority that reports no granted scope has told us nothing about
 		// what this token may do, and since the granted set is routinely WIDER
@@ -584,11 +586,12 @@ func classifyADOEntraError(code, desc string) error {
 	}
 }
 
-// adoEntraSplitScope splits an OAuth scope string on whitespace.
-func adoEntraSplitScope(raw string) []string {
-	return strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == '\r' || r == '\n'
-	})
+// adoCaptureScopes is what a capture stores from a token response's granted
+// scope string: the row's ceiling intersected with what was granted, in the
+// ceiling's order. Both capture doors (the console login and the dedicated
+// sign-in) record the same fact through this one helper.
+func adoCaptureScopes(granted string, ceiling []string) []string {
+	return intersect(ceiling, strings.Fields(granted))
 }
 
 // auditADOCapture emits the one audit action the sign-in owns. outcome is

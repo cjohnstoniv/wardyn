@@ -37,11 +37,10 @@ func revoked(list []uuid.UUID, id uuid.UUID) bool {
 	return false
 }
 
-// TestKillRun_LosesCASDoesNotRevoke is the C002 regression: the kill cascade used
-// to revoke identity + broker credentials BEFORE its terminal CAS, so a kill that
-// then LOST the CAS to a concurrent dispatch forward-transition had already stripped
-// the credentials of a run that stays live — a zombie behind a silent 409. The CAS
-// now runs first; on a loss the kill 409s WITHOUT revoking.
+// TestKillRun_LosesCASDoesNotRevoke: the kill cascade runs its terminal CAS before
+// revoking identity + broker credentials, so a kill that loses the CAS to a
+// concurrent dispatch forward-transition 409s without revoking. Revoking first would
+// strip the credentials of a run that stays live — a zombie behind a silent 409.
 func TestKillRun_LosesCASDoesNotRevoke(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
@@ -62,7 +61,7 @@ func TestKillRun_LosesCASDoesNotRevoke(t *testing.T) {
 	}
 }
 
-// TestFailAndRevoke_RevokesOnlyWhenTransitionWins is the C003 regression: every
+// TestFailAndRevoke_RevokesOnlyWhenTransitionWins: every
 // create/dispatch FAILED transition must revoke the run's minted credentials (not
 // just flip state) — but only when THIS transition actually won, so a concurrent
 // kill that already moved the run is not double-handled.

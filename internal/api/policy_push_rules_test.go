@@ -60,10 +60,31 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 			"push_rules.deny_paths[1]: \"infra/../x\" has an empty"},
 		{"deny_paths entry that is only a separator", spec(&types.PushRulesSpec{DenyPaths: []string{"/"}}),
 			"push_rules.deny_paths[0]: \"/\" has an empty"},
+		// #271: refused by DenyPathSegments too, so the broker fails closed on
+		// a policy that bypassed this door.
+		{"deny_paths entry with leading whitespace", spec(&types.PushRulesSpec{DenyPaths: []string{" infra/**"}}),
+			"push_rules.deny_paths[0]: \" infra/**\" has leading or trailing whitespace"},
+		{"deny_paths entry with trailing whitespace", spec(&types.PushRulesSpec{DenyPaths: []string{"infra/** "}}),
+			"push_rules.deny_paths[0]: \"infra/** \" has leading or trailing whitespace"},
+		{"deny_paths entry that is not valid UTF-8", spec(&types.PushRulesSpec{DenyPaths: []string{"deploy/\xff\xfe"}}),
+			"push_rules.deny_paths[0]: \"deploy/\\xff\\xfe\" is not valid UTF-8"},
 		{"max_inspect_pack_mib negative", spec(&types.PushRulesSpec{MaxInspectPackMiB: -1}),
 			"push_rules.max_inspect_pack_mib must be between"},
 		{"max_inspect_pack_mib above the cap", spec(&types.PushRulesSpec{MaxInspectPackMiB: maxPushRulesInspectPackMiB + 1}),
 			"push_rules.max_inspect_pack_mib must be between"},
+		// require_review_paths shares deny_paths' language and limits.
+		{"empty require_review_paths entry", spec(&types.PushRulesSpec{RequireReviewPaths: []string{""}}),
+			"push_rules.require_review_paths[0]: empty entry"},
+		{"require_review_paths entry too long", spec(&types.PushRulesSpec{RequireReviewPaths: []string{strings.Repeat("a", maxPushRulesPathBytes+1)}}),
+			"push_rules.require_review_paths[0]: exceeds"},
+		{"require_review_paths entry carries a control character", spec(&types.PushRulesSpec{RequireReviewPaths: []string{"ci/\x01"}}),
+			"push_rules.require_review_paths[0]: control character"},
+		{"require_review_paths entry with a .. segment", spec(&types.PushRulesSpec{RequireReviewPaths: []string{"ok/**", "a/../b"}}),
+			"push_rules.require_review_paths[1]: \"a/../b\" has an empty"},
+		{"hold_seconds negative", spec(&types.PushRulesSpec{HoldSeconds: -1}),
+			"push_rules.hold_seconds must be between 0 and 600"},
+		{"hold_seconds above the proxy's hold ceiling", spec(&types.PushRulesSpec{HoldSeconds: maxPushRulesHoldSeconds + 1}),
+			"push_rules.hold_seconds must be between 0 and 600"},
 	}
 	for _, tc := range refused {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,6 +105,8 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 		spec(&types.PushRulesSpec{DenyPaths: []string{".github/workflows/**", "infra/**"}, MaxInspectPackMiB: 8}),
 		spec(&types.PushRulesSpec{DenyPaths: []string{"infra/", "/infra/**"}}), // trailing and leading separators read, not refused
 		spec(&types.PushRulesSpec{MaxInspectPackMiB: maxPushRulesInspectPackMiB}),
+		spec(&types.PushRulesSpec{RequireReviewPaths: []string{".github/workflows/**"}, HoldSeconds: maxPushRulesHoldSeconds}),
+		spec(&types.PushRulesSpec{DenyPaths: []string{"secrets/**"}, RequireReviewPaths: []string{"infra/"}}),
 	} {
 		if err := validatePolicySpec(ok); err != nil {
 			t.Errorf("rejected a policy inside the bounds %+v: %v", ok, err)

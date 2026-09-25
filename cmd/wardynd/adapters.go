@@ -309,8 +309,11 @@ func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.Approval
 func (s *approvalService) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
 	return s.st.ListApprovals(ctx, state)
 }
-func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
+func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	return approval.CancelForRun(ctx, s.st, runID, reason)
+}
+func (s *approvalService) ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error {
+	return approval.ExpireOne(ctx, s.st, id, actor, reason)
 }
 func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	return s.st.CountApprovalsForRun(ctx, runID)
@@ -558,13 +561,16 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// the reaper's subtraction is finally two readings of ONE clock — wardynd's
 	// own was the skew that stopped actively-attached runs (B8-F2).
 	//
+	// A KEPT run (lost_at set: its lease ended it) is not idle, it is stopped;
+	// the ended-run grace decides when its files go, not auto_stop_after_sec.
+	//
 	// An EMPTY scan returns the zero time, which the reaper reads as "no clock":
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
 		SELECT id, updated_at, auto_stop_after_sec, now()
 		FROM agent_runs
-		WHERE state = $1`
+		WHERE state = $1 AND lost_at IS NULL`
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("wardynd: list running with policy: %w", err)

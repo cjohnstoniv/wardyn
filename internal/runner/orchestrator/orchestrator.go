@@ -376,6 +376,21 @@ func (o *Orchestrator) StopSandbox(ctx context.Context, ref string) error {
 	return err
 }
 
+// EndSandbox forwards the lease end to ref's substrate when it can keep a
+// stopped sandbox. The route is kept: the sandbox still exists, and a later
+// Stop/Kill must still find its substrate.
+func (o *Orchestrator) EndSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	ender, ok := s.(runner.SandboxEnder)
+	if !ok {
+		return runner.ErrEndUnsupported
+	}
+	return ender.EndSandbox(ctx, ref)
+}
+
 func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {
 	s, err := o.subForRef(ctx, ref)
 	if err != nil {

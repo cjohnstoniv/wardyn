@@ -317,6 +317,9 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	if err := validateUpstreamProxyNoProxy(cfg.UpstreamProxyNoProxy); err != nil {
 		return err
 	}
+	if err := validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL); err != nil {
+		return err
+	}
 	// The workspace-provider block, when the body carries one: ONE validator for
 	// both write doors (this one and PUT /workspace-providers), so an
 	// MDM-delivered document can never store a block the providers endpoint
@@ -335,7 +338,11 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	// admitting a row needs the boot agent-image map, which is server state this
 	// deliberately pure function has no access to. Both doors run it, so the
 	// "one validator, two doors" property is the same.
-	return validateWorkspaceProviders(cfg.WorkspaceProviders, false)
+	if err := validateWorkspaceProviders(cfg.WorkspaceProviders, false); err != nil {
+		return err
+	}
+	// model_providers needs no server state, so its one validator runs here.
+	return validateModelProviders(cfg.ModelProviders)
 }
 
 // validateInternalHosts enforces SiteConfig.InternalHosts's write-time
@@ -568,7 +575,10 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // Add a key here when you add one to types.SiteConfig, and
 // TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName fails until you
 // have decided which side of this line it sits on.
-var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers"}
+var siteConfigFieldsAfter066 = []string{
+	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
+	"model_providers", "sign_in_help_text", "sign_in_help_url",
+}
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
 // body did not MENTION, for the fields an older client cannot know about.
@@ -608,6 +618,22 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	// legacy open mode, which is the OPPOSITE of what the admin wrote down.
 	if !present["agent_providers"] {
 		cfg.AgentProviders = existing.AgentProviders
+	}
+	// model_providers on the same terms. A body that names the block gets its
+	// server-owned UIDs from the stored one instead; a carried-forward block
+	// already holds them, and is the store's own value, so it is not touched.
+	if !present["model_providers"] {
+		cfg.ModelProviders = existing.ModelProviders
+	} else {
+		assignModelProviderUIDs(cfg.ModelProviders, existing.ModelProviders)
+	}
+	// The sign-in help pair, for the same MDM reason: a boot-time re-apply of a
+	// file written before these keys existed must not erase the admin's text.
+	if !present["sign_in_help_text"] {
+		cfg.SignInHelpText = existing.SignInHelpText
+	}
+	if !present["sign_in_help_url"] {
+		cfg.SignInHelpURL = existing.SignInHelpURL
 	}
 	// effective_scm_hosts is NOT carried forward: it is server-owned and
 	// PROJECTED on read (handleGetSiteConfig), never stored, so there is nothing
@@ -691,6 +717,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// lowercase-host/no-trailing-slash form.
 	cfg.WorkspaceProviders = normalizeWorkspaceProviders(cfg.WorkspaceProviders)
 	cfg.AgentProviders = normalizeAgentProviders(cfg.AgentProviders)
+	cfg.ModelProviders = normalizeModelProviders(cfg.ModelProviders)
 	// ScmHosts / EgressRedirects[].{From,To} / UpstreamProxyURL on the
 	// same terms — see normalizeSiteConfigTopology's doc.
 	normalizeSiteConfigTopology(&cfg)
@@ -748,6 +775,12 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
+	// After the carry-forward: the roster's defaults are checked against the
+	// providers this document will actually hold, whichever side was named.
+	if err := validateDefaultProviders(cfg.AgentProviders, cfg.ModelProviders); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		return
+	}
 	// Narrowing is never silent on this door either, and this is the door where
 	// it matters most: a laptop re-applies /etc/wardyn/site-config.json on EVERY
 	// boot, so an MDM-tightened base URL lands here, not on the providers page,
@@ -799,9 +832,18 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		// ENABLED rows, so a roster narrowed by an MDM push is reviewable
 		// from the audit log alone.
 		"agent_providers": enabledAgentProviderCount(saved),
+		// The sign-in help pair (#484), in the clear: /healthz publishes both
+		// to anyone, so the log can hold what every signed-out reader sees.
+		"sign_in_help_text": saved.SignInHelpText,
+		"sign_in_help_url":  saved.SignInHelpURL,
 	}
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
+	}
+	// Only once a provider block exists, so a deployment without one writes the
+	// row it always wrote.
+	if saved.ModelProviders != nil {
+		datum["model_providers"] = enabledModelProviderCount(saved)
 	}
 	// Only when the body NAMED the block — see the count above.
 	if narrowed != nil {

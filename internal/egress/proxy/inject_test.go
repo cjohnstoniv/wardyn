@@ -182,7 +182,7 @@ func TestLoadConfigDefaultsAndValidation(t *testing.T) {
 	dir := t.TempDir()
 	good := Config{
 		RunID:           uuid.New(),
-		ControlPlaneURL: "http://wardynd:8080",
+		ControlPlaneURL: "http://127.0.0.1:8080",
 		RunToken:        "tok",
 		Policy:          types.RunPolicySpec{AllowedDomains: []string{"api.test"}},
 	}
@@ -228,7 +228,7 @@ func TestLoadConfigDefaultsAndValidation(t *testing.T) {
 	}
 
 	// Explicit Listen/DecisionBufferSize override the defaults.
-	explicit := `{"run_id":"` + uuid.New().String() + `","control_plane_url":"http://wardynd:8080","run_token":"t","listen":"127.0.0.1:9999","decision_buffer_size":7}`
+	explicit := `{"run_id":"` + uuid.New().String() + `","control_plane_url":"http://127.0.0.1:8080","run_token":"t","listen":"127.0.0.1:9999","decision_buffer_size":7}`
 	ec, err := LoadConfigBytes([]byte(explicit))
 	if err != nil {
 		t.Fatalf("LoadConfigBytes explicit: %v", err)
@@ -405,7 +405,7 @@ func TestRequireTLSRefusalPreemptsInspection(t *testing.T) {
 	}
 }
 
-// NO HOLD AT BOOT. buildInjector runs under the proxy's 30s startupCtx, seconds
+// No hold at boot. buildInjector runs under the proxy's 30s startupCtx, seconds
 // after dispatch refreshed the credential synchronously — a dead credential
 // THERE is a race measured in seconds, not a person who needs to sign in, and a
 // hold would fight the startup canary. A 423 at boot must fail closed exactly

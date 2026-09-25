@@ -21,8 +21,8 @@ import (
 // four-column row. Anchoring is the whole point: policy json names are bare
 // snake_case (`resources`, `mode`, `source`, `target`), so ENV.md's
 // strings.Contains check — safe only because WARDYN_* is a collision-free
-// namespace — would go green off incidental prose here. That is the false-green
-// class v0.4.3 removed; do not reintroduce it.
+// namespace — would go green off incidental prose here. Do not reintroduce that
+// false-green class.
 //
 // The column count is what separates a field row from the doc's VALUE tables
 // (the three first_use_approval modes, the five grant kinds), whose first cell

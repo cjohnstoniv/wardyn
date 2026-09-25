@@ -60,7 +60,7 @@ export function FilesChangedWidget({ runId, live }: { runId: string; live: boole
   );
 
   React.useEffect(() => {
-    load(true);
+    void load(true);
   }, [load]);
   usePoll(() => load(false), POLL_MS, !live);
 

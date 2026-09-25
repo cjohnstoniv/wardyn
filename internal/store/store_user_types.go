@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// User types (migration 0069_user_types). Round-trips rows; every write is
+// User types (migration 0071_user_types). Round-trips rows; every write is
 // validated at the API boundary (internal/api/user_types.go).
 package store
 
