@@ -469,7 +469,7 @@ func heldPrefix(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID, lastSeq int6
 		return 0, nil
 	}
 	// Text comparison on both keys, matching audit_events_device_origin_idx
-	// (migration 0077): mergeDeviceOrigin wrote them as a uuid string and a
+	// (migration 0078): mergeDeviceOrigin wrote them as a uuid string and a
 	// JSON integer, whose ->> text is exactly FormatInt's.
 	res, err := tx.Query(ctx, `
 		SELECT DISTINCT ON (data->'device_origin'->>'seq') data->'device_origin'->>'seq', data->'device_origin'->>'row_hash'

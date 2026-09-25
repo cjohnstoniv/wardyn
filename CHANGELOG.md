@@ -1304,7 +1304,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `WARDYN_ORG_URL` set, wardynd enrols once with `WARDYN_ORG_ENROLMENT_TOKEN`, keeps the device
   credential in its secret store under the reserved name `wardyn-org-device-credential`, and pushes its
   own chained audit rows upward from a durable cursor. A revocation (the organisation answering
-  401/410) is recorded in `org_federation.revoked_at` (migration `0076_org_federation_revoked`), so a
+  401/410) is recorded in `org_federation.revoked_at` (migration `0077_org_federation_revoked`), so a
   restart comes back still refusing every run-creating path with a 503 until the laptop is re-enrolled
   with a fresh token. `/healthz` gains `org_federation {enrolled, lag}` on a hybrid laptop only, and
   `/metrics` gains `wardyn_org_federation_lag`. New audit actions: `device.local.enrol`,
@@ -1361,10 +1361,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the whole batch on any mismatch, and accepts a genesis row as a recorded chain reset. Storage and the
   store seam only — no routes, CLI or forwarder yet. A row at or before the device's recorded cursor is
   skipped as a re-send only when it carries the hash of the row the organisation holds at that seq
-  (looked up through migration `0077_audit_events_device_origin_idx`), so a laptop table reset that
+  (looked up through migration `0078_audit_events_device_origin_idx`), so a laptop table reset that
   restarts its seq (`TRUNCATE … RESTART IDENTITY`, a restore) is a recorded `device.audit.chain_reset`
   with every new row ingested, never rows dropped as duplicates; a re-chained rewrite of a held row is
-  refused 422. Upgrading: migration 0077 builds its index inside the migration transaction, so audit
+  refused 422. Upgrading: migration 0078 builds its index inside the migration transaction, so audit
   writes pause while it scans `audit_events` (seconds per million rows); raise `WARDYN_MIGRATE_TIMEOUT`
   for a very large audit table.
 
