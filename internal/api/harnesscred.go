@@ -425,7 +425,7 @@ func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
 		}
 		st, owner = st.For(scope.owner), scope.owner
 	}
-	s.deleteDeadCredential(ctx, st, owner, harnessCredSecretName(awsSSOProvider), awsSSOProvider)
+	s.deleteDeadCredential(ctx, st, owner, scope.ssoSecret(), awsSSOProvider)
 }
 
 // Login run launch
