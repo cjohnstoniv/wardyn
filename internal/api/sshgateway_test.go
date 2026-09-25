@@ -137,6 +137,12 @@ func (s *sshMemStore) ListGroupDenyGrants(context.Context, string) ([]types.Capa
 	return nil, nil
 }
 
+// No "Available to" restriction (#612): capFeature is restrictable, so the
+// resolver reads the set before it decides.
+func (s *sshMemStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return nil, nil
+}
+
 // sshFakeRunner is Attach/ExecStream-capable (the brief's explicit "fake
 // ExecStream/Attach" ask); the rest of runner.Runner is unused by this test
 // and errors loudly if reached. execFn/attachFn are set per (sub)test to
