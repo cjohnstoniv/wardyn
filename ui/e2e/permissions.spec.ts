@@ -5,7 +5,7 @@
 
 import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute } from "./fixtures";
 import { CAPABILITY_KINDS, KIND, PERM, PERM_DRAFT } from "../src/app/lib/permissions-copy";
-import { SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 
 // ---------------------------------------------------------------------------
 // Permissions screen e2e (lane: permissions, port 8088, db wardyn_e2e).
@@ -29,7 +29,7 @@ const WHO = "alice@corp.example";
 
 test.describe("permissions — the admin surface, end to end", () => {
   test("a fresh install: nothing enforced, no grants, and it says so", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await expect(page.getByRole("heading", { name: PERM.TITLE, level: 1 })).toBeVisible();
@@ -52,7 +52,7 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 
   test("adding a grant lands the row — amber, and advisory until the kind is enforced", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     // By ROLE + exact name: getByLabel is a substring match, and "Host" is
@@ -72,7 +72,7 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 
   test("enforcing a kind confirms first, then flips the chip and the consequence", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }).click();
@@ -95,7 +95,7 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 
   test("stop enforcing says denies still apply, and puts the off-state back", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }).click();
@@ -108,7 +108,7 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 
   test("removing the grant names who loses it, then empties the table", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("button", { name: `${PERM.REMOVE} ${KIND.egress_host.label} ${HOST}` }).click();
@@ -121,7 +121,7 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 
   test("enforcing with nothing granted is the lockout guard, and it is unmissable", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace.label}` }).click();
@@ -145,7 +145,7 @@ test.describe("permissions — the seventh kind (workspace_provider) round-trips
   const GRANTEE = "bob@corp.example";
 
   test("granting a provider id lands the row under its own value column", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("textbox", { name: PERM.FIELD_WHO, exact: true }).fill(GRANTEE);
@@ -166,7 +166,7 @@ test.describe("permissions — the seventh kind (workspace_provider) round-trips
   test("enforcing workspace_provider flips its own chip and consequence, independent of the others", async ({
     page,
   }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace_provider.label}` }).click();
@@ -184,7 +184,7 @@ test.describe("permissions — the seventh kind (workspace_provider) round-trips
   });
 
   test("removing the grant returns workspace_provider to its unenforced consequence", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     // Stop enforcing first (the lockout guard refuses a grantless enforced
@@ -212,7 +212,7 @@ test.describe("permissions — a snapshot, and a count, that never arrived", () 
     page,
   }) => {
     await page.route("**/api/v1/permissions", (route) => route.fulfill({ status: 503, body: "{}" }));
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     // The screen is honest about not knowing: a retry, not a posture.
@@ -238,7 +238,7 @@ test.describe("permissions — a snapshot, and a count, that never arrived", () 
       (url) => url.pathname.endsWith("/api/v1/runs") && url.searchParams.get("limit") !== "1",
       (route) => route.fulfill({ status: 403, body: "{}" }),
     );
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }).click();
@@ -254,7 +254,8 @@ test.describe("permissions — a snapshot, and a count, that never arrived", () 
 // (canonicalGrantValue refuses or rewrites it on the way in), so this
 // route-intercepts GET /permissions — the same idiom the block above uses —
 // rather than writing one for real.
-test.describe("permissions — an inert grant renders neutral, never live (F4-F5)", () => {
+test.describe("permissions — an inert grant renders neutral, never live", () => {
+  // ticket: F4-F5
   test("a grant flagged inert renders the neutral Inert chip, never Allow/Deny", async ({ page }) => {
     await page.route("**/api/v1/permissions", (route) =>
       route.fulfill({
@@ -278,7 +279,7 @@ test.describe("permissions — an inert grant renders neutral, never live (F4-F5
         }),
       }),
     );
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
 
     const table = page.getByRole("table");
@@ -288,34 +289,28 @@ test.describe("permissions — an inert grant renders neutral, never live (F4-F5
   });
 });
 
-// X3-F5 — /permissions is a securityOps route hidden from a member's nav, so a
-// member reaches it only by typing the URL, where the 403 was rendered as "We
-// couldn't reach the Wardyn control plane" over a Retry that 403s forever. The
-// harness bearer is always an admin server-side (fixtures.ts), so the refusal
-// is the thing spliced here — what is real is the console's own three-way.
+// X3-F5 — /admin/permissions is a securityOps route hidden from a member's
+// nav, so a member reaches it only by typing the URL. M-1b: Permissions moved
+// under /admin/*, so the screen's own 403/500 render this test used to pin is
+// now unreachable — the admin-view gate refuses a member before anything is
+// fetched (admin-member-modes-design.md §2.3's refusal-page row). The harness
+// bearer is always an admin server-side (fixtures.ts); what's real here is
+// the console's own view gate, not the server's 403.
 test.describe("Permissions — a member by URL is told the tier, not an outage", () => {
-  test("a 403 names the role and offers no Retry; a 500 still does", async ({ page }) => {
+  test("the admin-view refusal, before /api/v1/permissions is ever asked", async ({ page }) => {
     await mockMemberRole(page);
-    await page.route("**/api/v1/permissions", (route) =>
-      route.request().method() === "GET"
-        ? route.fulfill({ status: 403, contentType: "application/json", body: '{"error":"forbidden"}' })
-        : route.continue(),
-    );
+    let fetched = false;
+    await page.route("**/api/v1/permissions", async (route) => {
+      fetched = true;
+      await route.fallback();
+    });
     await gotoConsole(page);
-    await navToRoute(page, "/permissions");
+    await navToRoute(page, "/admin/permissions");
 
-    await expect(page.getByText(SECURITY_ONLY_REASON).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
     await expect(page.getByRole("button", { name: /retry/i })).toHaveCount(0);
-
-    await page.unrouteAll({ behavior: "ignoreErrors" });
-    await mockMemberRole(page);
-    await page.route("**/api/v1/permissions", (route) =>
-      route.request().method() === "GET"
-        ? route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' })
-        : route.continue(),
-    );
-    await page.goto("/permissions");
-    await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible();
+    expect(fetched).toBe(false);
   });
 });
 
@@ -335,14 +330,15 @@ test.describe("Permissions — a member by URL is told the tier, not an outage",
 // itself authorizes security_operator — that's authz_test.go's classSecurity
 // rows for POST /permissions/grants, DELETE /permissions/grants/{id}, and PUT
 // /permissions/enforcement.
-test.describe("Permissions — a security admin actually uses the write surface, not just sees the link (X2-F13)", () => {
+test.describe("Permissions — a security admin actually uses the write surface, not just sees the link", () => {
+  // ticket: X2-F13
   test.describe.configure({ mode: "serial" });
   const SEC_WHO = "carol@corp.example";
   const SEC_HOST = "*.security-admin-e2e.example";
 
   test("adds a grant and enforces the kind as security_admin, then cleans up", async ({ page }) => {
     await mockSecurityAdminRole(page);
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Permissions");
     await expect(page.getByRole("heading", { name: PERM.TITLE, level: 1 })).toBeVisible();
 

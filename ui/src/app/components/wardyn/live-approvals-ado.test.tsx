@@ -14,10 +14,12 @@ import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
+import { makeApproval } from "../../../test/factories";
 import { OperatorProvider } from "./operator-context";
 import { ModelAccessProvider } from "./model-access-context";
 import type { AdoCardRun } from "./ado-capability-card";
 import { SECURITY_ONLY_REASON } from "./copy";
+import { ADO } from "../../lib/ado-entra-copy";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -36,7 +38,7 @@ import { LiveApprovals } from "./live-approvals";
 const OWNER: AdoCardRun = { created_by: "dana@acme.example", state: "RUNNING" };
 
 function escalationRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
-  return {
+  return makeApproval({
     id: "esc-1",
     run_id: "r1",
     grant_id: "grant_1",
@@ -55,11 +57,11 @@ function escalationRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
     state: "PENDING",
     requested_at: new Date().toISOString(),
     ...over,
-  } as ApprovalRequest;
+  });
 }
 
 function consentRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
-  return {
+  return makeApproval({
     id: "consent-1",
     run_id: "r1",
     kind: "credential_reauth",
@@ -73,7 +75,7 @@ function consentRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
     state: "PENDING",
     requested_at: new Date().toISOString(),
     ...over,
-  } as ApprovalRequest;
+  });
 }
 
 function mount(opts: { operator?: boolean; securityOperator?: boolean; principal?: string; run?: AdoCardRun | null } = {}) {
@@ -102,7 +104,8 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
   // assumption that every LiveApprovals mount gates on run ownership the way
   // run-detail.tsx's GET /runs/{id} does. It does not: a viewer who is
   // neither the run's owner nor a security operator sees "Not yours".
-  it("F2: a viewer who is neither the run's owner nor a security operator sees 'Not yours to decide'", async () => {
+  it("a viewer who is neither the run's owner nor a security operator sees 'Not yours to decide'", async () => {
+    // ticket: F2
     listApprovalsMock.mockResolvedValue([escalationRow()]);
     mount({ principal: "someone-else@acme.example", securityOperator: false });
     const card = await screen.findByTestId("ado-capability-card");
@@ -127,7 +130,8 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
 
   // F2 test gap (round 2) — the strip's own SECURITY_ONLY_REASON hint must
   // not show when the viewer CAN in fact decide this row (their own run).
-  it("F2: the strip header does NOT show SECURITY_ONLY_REASON to the run's own owner", async () => {
+  it("the strip header does NOT show SECURITY_ONLY_REASON to the run's own owner", async () => {
+    // ticket: F2
     listApprovalsMock.mockResolvedValue([escalationRow()]);
     mount({ principal: "dana@acme.example" });
     await screen.findByTestId("ado-capability-card");
@@ -140,7 +144,8 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
   // proves this viewer may decide it. Before this fix, run=null showed the
   // owner "Couldn't load this run — try again." and the SECURITY_ONLY_REASON
   // hint, over a row their own list scoping already proved was theirs.
-  it("N4: run=null still renders decidable for a plain viewer — no run-fetch error, no admin-only header", async () => {
+  it("run=null still renders decidable for a plain viewer — no run-fetch error, no admin-only header", async () => {
+    // ticket: N4
     listApprovalsMock.mockResolvedValue([escalationRow()]);
     mount({ principal: "dana@acme.example", run: null });
     const card = await screen.findByTestId("ado-capability-card");
@@ -151,7 +156,7 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
 
   it("an ordinary tool_call row (no Azure DevOps lane) still renders the strip's plain one-liner", async () => {
     listApprovalsMock.mockResolvedValue([
-      { id: "t1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "bash", cmd: "rm -rf build/" }, state: "PENDING", requested_at: new Date().toISOString() } as ApprovalRequest,
+      makeApproval({ id: "t1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "bash", cmd: "rm -rf build/" }, state: "PENDING", requested_at: new Date().toISOString() }),
     ]);
     mount({ principal: "dana@acme.example" });
     await screen.findByTestId("live-approval-row");
@@ -161,7 +166,8 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
   // F3 (round-2 fix) — the consent state's heading must not claim AWS, and
   // the owner gets the door.
   describe("the Entra-consent row", () => {
-    it("F3: the strip heading names Azure DevOps, never AWS, when every pending row is a consent request", async () => {
+    it("the strip heading names Azure DevOps, never AWS, when every pending row is a consent request", async () => {
+      // ticket: F3
       listApprovalsMock.mockResolvedValue([consentRow()]);
       mount({ principal: "dana@acme.example" });
       await screen.findByTestId("ado-consent-card");
@@ -169,12 +175,15 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
       expect(screen.queryByText(/AWS sign-in needed/)).not.toBeInTheDocument();
     });
 
-    it("F3: the owner gets the consent chip and the door", async () => {
+    it("the owner gets the consent chip and the door, to the Account card's anchor (#458)", async () => {
+      // ticket: F3
       listApprovalsMock.mockResolvedValue([consentRow()]);
       mount({ principal: "dana@acme.example" });
       const card = await screen.findByTestId("ado-consent-card");
       expect(within(card).getByText("Needs your Microsoft consent")).toBeInTheDocument();
-      expect(within(card).getByRole("link", { name: "Allow and continue" })).toBeInTheDocument();
+      const cta = within(card).getByRole("link", { name: ADO.REQ_CONSENT_CTA });
+      expect(cta).toBeInTheDocument();
+      expect(cta).toHaveAttribute("href", "/account#azure-devops");
     });
   });
 });
