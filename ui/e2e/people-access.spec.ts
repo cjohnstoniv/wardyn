@@ -672,7 +672,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
       });
     });
 
-    await page.goto("/setup?step=environment");
+    await page.goto("/admin/setup?step=environment");
     const title = page.getByText(ADMIN_ACCESS_BANNER.TITLE, { exact: true });
     await expect(title).toBeVisible();
     await expect(page.getByText(ADMIN_ACCESS_BANNER.BODY, { exact: true })).toBeVisible();
