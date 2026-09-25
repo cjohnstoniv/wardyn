@@ -48,7 +48,7 @@ Supporting evidence a reviewer can check independently:
   `THIRD-PARTY-NOTICES.md` under "In-tree components derived from third-party
   projects": the shadcn/ui console primitives and a vendored copy of
   asciinema-player used by the demo lane.
-- `gitleaks` over the full history reports no committed secrets — it runs in CI on
+- `gitleaks` over the pushed commit's full history reports no committed secrets — it runs in CI on
   every push (`make gitleaks`), so this is a standing gate rather than a one-time
   sweep, and no commit count is quoted here because that number moves every day.
 

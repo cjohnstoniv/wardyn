@@ -62,19 +62,13 @@ func canonicalWorkspaceSource(src types.WorkspaceSource) types.WorkspaceSource {
 // workspaceSourceContentEqual compares everything about a WorkspaceSource
 // EXCEPT Overrides: content — Type/Path/Source/Ref/Target/Writable — is what
 // "sourcesChanged" (handleUpdateWorkspace) means by "everything reviewed
-// against the old sources is stale". A plain Overrides edit changes which
-// requirement rows apply, never what's mounted, so it must not itself reset
-// ApprovedEgress/Requirements/RecordResults — and types.WorkspaceSource's
-// Overrides map makes the type non-comparable, so slices.Equal (which needs
-// `comparable`) can no longer compare a []WorkspaceSource directly.
-//
-// Identity is compared canonically. Re-PUTting the identical composition with
-// a differently-cased repo slug, a ".git" suffix or a mixed-case clone-URL
-// host must not read as a CONTENT CHANGE: that would throw away
-// ApprovedEgress, Requirements and RecordResults and delete the built image,
-// with a 200 and no signal that it happened. The library already treats those
-// spellings as ONE source, so the reviewed state hangs off exactly one of
-// them.
+// against the old sources is stale". An Overrides edit changes which
+// requirement rows apply, never what's mounted, so it must not reset
+// ApprovedEgress/Requirements/RecordResults (and the Overrides map makes the
+// type non-comparable for slices.Equal). Identity is compared canonically: a
+// re-PUT differing only in slug case, a ".git" suffix or clone-URL host case
+// must not read as a CONTENT CHANGE, which would silently discard the reviewed
+// state and delete the built image; the library treats those as ONE source.
 func workspaceSourceContentEqual(a, b types.WorkspaceSource) bool {
 	a, b = canonicalWorkspaceSource(a), canonicalWorkspaceSource(b)
 	return a.Type == b.Type && a.Path == b.Path && a.Source == b.Source &&
@@ -88,13 +82,10 @@ func workspaceSourceContentEqual(a, b types.WorkspaceSource) bool {
 // runs_dispatch_gitbroker.go — never as a plain allowlist host) plus the
 // control plane's own host.
 //
-// ONE set, TWO callers: handleSetApprovedEgress 400s the WHOLE list
-// when any entry is in it, and handleObservedEgress is the panel that PRODUCES
-// the list an operator promotes. They disagreed — the producer offered
-// github.com as a candidate and the validator then refused the entire
-// promotion, so one dead suggestion broke the promote button for every real
-// host beside it. A producer and its validator that answer the same question
-// differently is the bug; sharing the answer is the fix.
+// ONE set, TWO callers: handleSetApprovedEgress 400s the WHOLE list when any
+// entry is in it, and handleObservedEgress PRODUCES the candidates an operator
+// promotes. They must agree, or one dead suggestion breaks the promote for
+// every real host beside it.
 func (s *Server) deadApprovedEgressHosts() map[string]struct{} {
 	dead := map[string]struct{}{}
 	add := func(hosts []string) {

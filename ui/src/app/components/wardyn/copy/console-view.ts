@@ -4,10 +4,30 @@
  */
 
 // The Admin view / User view pages (packet M-A, approved 2026-09-23; frozen
-// strings verbatim from modes-a.html). The switch, eyebrow and tab-title
-// strings arrive with the switch itself (M-2).
+// strings verbatim from modes-a.html).
 export const CONSOLE_VIEW = {
+  GROUP: "Console view",
+  ADMIN: "Admin view",
+  USER: "User view",
   SWITCH_FAILED: "Could not switch — try again.",
+  // The Admin view's sidebar eyebrow. The User view's "User view · {type} ▾"
+  // arrives with the type picker (UT-13 / UT-7a).
+  EYEBROW_ADMIN: "Admin view",
+  TITLE_ADMIN: "Wardyn admin",
+  TITLE_USER: "Wardyn",
+} as const;
+
+export const NAV = {
+  YOUR_ACCOUNT: "Your account",
+} as const;
+
+// The no-credential preview (0.7.5), now entered from the Permissions header.
+// Its band is the one kept: sign-in is refused there, which is abnormal.
+export const USER_PREVIEW = {
+  MENU_NEW: "Preview as a new user",
+  BANNER:
+    "Viewing as a new user — not signed in to AWS; signing in is refused until you exit; your usual role is paused for this session",
+  EXIT: "Exit preview",
 } as const;
 
 // A user on /admin/*. Nothing behind it is fetched; the server refuses every

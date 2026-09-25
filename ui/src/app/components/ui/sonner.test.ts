@@ -15,7 +15,8 @@ import { fileURLToPath } from "node:url";
 // Source-scan, the same discipline theme-contrast.test.ts / tabs.test.tsx use
 // for a "use client" wrapper whose only job is to set props on a vendored
 // primitive — no Radix/portal rendering ceremony needed to pin two prop values.
-describe("Toaster — closeButton + a longer default duration (F7-F13)", () => {
+describe("Toaster — closeButton + a longer default duration", () => {
+  // ticket: F7-F13
   const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "sonner.tsx"), "utf8");
 
   it("defaults closeButton to true (a manual-dismiss affordance, not auto-dismiss-only)", () => {

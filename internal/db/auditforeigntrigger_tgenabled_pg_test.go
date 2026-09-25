@@ -42,7 +42,7 @@ func TestPG_BootRefusesAForeignBeforeInsertTriggerInEveryFiringState(t *testing.
 		state string
 		alter string
 	}{
-		{"O", ""}, // control: already covered elsewhere, kept so a regression in the common case reddens here too
+		{"O", ""}, // control: already covered elsewhere, kept so a break in the common case reddens here too
 		{"A", `ALTER TABLE audit_events ENABLE ALWAYS TRIGGER adv3_forge`},
 		{"R", `ALTER TABLE audit_events ENABLE REPLICA TRIGGER adv3_forge`},
 	} {

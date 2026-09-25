@@ -8,6 +8,7 @@ import { Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "../ui/button";
 import { health } from "../../lib/api/health";
 import { useRoleResolved } from "./operator-context";
+import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
 import {
   CONSOLE_VIEW,
   VIEW_ADMIN_TOKEN,
@@ -43,9 +44,9 @@ export function viewAccess(me: { method: string; role: string; memberMode: boole
   if (me.method === "local") return "url";
   if (me.method === "sso") {
     if (me.memberMode) return "session-user";
-    return me.role === "member" ? "user-only" : "session-admin";
+    return me.role === "user" ? "user-only" : "session-admin";
   }
-  if (me.role === "member") return "user-only";
+  if (me.role === "user") return "user-only";
   return me.sso ? "admin-only" : "url";
 }
 
@@ -59,8 +60,9 @@ export function useViewAccess(): ViewAccess {
   return React.useContext(ViewAccessContext);
 }
 
-// The User-view pages the rules act on (§2.3). Every other user-side path is a
-// pre-split route that M-1b deletes; until then it is left exactly as it was.
+// The User-view pages the rules act on (§2.3). Every other user-side path was
+// a pre-split route; M-1b deleted them, so it now falls to the ordinary
+// catch-all like any other unmatched path.
 const TWIN = /^\/(runs(\/(?!new$)[^/]+)?|approvals|workspaces(\/[^/]+)?|secrets)$/;
 const USER_ONLY = /^\/(runs\/new|account|setup)$/;
 
@@ -96,11 +98,59 @@ export function viewLanding(base: "/setup" | "/runs", access: ViewAccess): strin
   return base;
 }
 
-// The one way a view changes on SSO: flip the session's clamp, then reload the
-// whole console, because every screen on it was fetched under the other role.
-// M-2's switch and its cross-view links call this too.
-export async function switchView(to: ConsoleView, target: string): Promise<void> {
-  await health.setMemberMode(to === "user");
+// The view a page is in for this principal: an SSO session's clamp decides it,
+// a single-operator install's URL does (D1), and a one-view principal has one.
+export function currentView(access: ViewAccess, pathView: ConsoleView): ConsoleView {
+  if (access === "url") return pathView;
+  return access === "session-admin" || access === "admin-only" ? "admin" : "user";
+}
+
+export function viewHome(view: ConsoleView): string {
+  return view === "admin" ? "/admin" : "/runs";
+}
+
+// Where a tab lands once its session is found in the other view (§2.4): the
+// same object in that view when it has a twin, else that view's home. `rest`
+// is the search and hash, kept on a twin as ViewGate's own redirect keeps them.
+export function viewTarget(to: ConsoleView, path: string, rest = ""): string {
+  const p = screenPath(path);
+  if (!TWIN.test(p)) return viewHome(to);
+  return `${to === "admin" ? `/admin${p}` : p}${rest}`;
+}
+
+// The fast path for other tabs (§2.4). One instance per page, used for both
+// sending and listening: a channel never delivers to the instance that posted,
+// so the switching tab does not also answer its own message.
+export const VIEW_CHANNEL = "wardyn-console-view";
+let channel: BroadcastChannel | null = null;
+export function viewChannel(): BroadcastChannel | null {
+  if (!channel && typeof BroadcastChannel !== "undefined") channel = new BroadcastChannel(VIEW_CHANNEL);
+  return channel;
+}
+
+// The one way a view changes on SSO: flip the session's clamp, tell the other
+// tabs, then reload the whole console, because every screen on it was fetched
+// under the other role. The switch, the interstitials and the preview call it;
+// the unsaved guard has already been asked by then, so the reload must not ask
+// again (a "Stay" there would leave the session and the page in two views).
+let switching = false;
+/** True while this tab is switching itself, so its own re-sync stays out of the
+ *  way of the reload it is about to make. */
+export function isSwitching(): boolean {
+  return switching;
+}
+
+export async function switchView(to: ConsoleView, target: string, noCredential = false): Promise<void> {
+  releaseUnloadGuard(true);
+  switching = true;
+  try {
+    await health.setMemberMode(to === "user", noCredential);
+  } catch (e) {
+    releaseUnloadGuard(false);
+    switching = false;
+    throw e;
+  }
+  viewChannel()?.postMessage(to);
   window.location.assign(target);
 }
 
