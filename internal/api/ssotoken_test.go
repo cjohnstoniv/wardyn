@@ -105,7 +105,7 @@ var validSSOBody = `{
 	"region": "us-west-2",
 	"account_id": "123456789012",
 	"role_name": "WardynBedrockRole",
-	"expires_at": "` + testutil.FutureRFC3339(24) + `"
+	"expires_at": "` + testutil.FutureRFC3339(24*30) + `"
 }`
 
 // TestUploadSSOToken_HappyPath: a well-formed SSO token blob is stored under
@@ -158,7 +158,7 @@ func TestUploadSSOToken_HappyPath(t *testing.T) {
 // AWS-side replacement for the Anthropic prefix guard.
 func TestUploadSSOToken_InvalidBlobRejected(t *testing.T) {
 	srv, sec, tok, runID := newSSOUploadSrv(t)
-	incomplete := `{"access_token":"tok-only","region":"us-west-2","expires_at":"` + testutil.FutureRFC3339(24) + `"}`
+	incomplete := `{"access_token":"tok-only","region":"us-west-2","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`
 
 	w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, incomplete)
 	if w.Code != http.StatusBadRequest {
@@ -183,7 +183,7 @@ func TestUploadSSOToken_HalfResolvedCaptureRejected(t *testing.T) {
 		"access_token": "aws-sso-access-token-value",
 		"start_url": "https://my-sso.awsapps.com/start",
 		"region": "us-west-2",
-		"expires_at": "` + testutil.FutureRFC3339(24) + `"
+		"expires_at": "` + testutil.FutureRFC3339(24*30) + `"
 	}`
 
 	w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, halfResolved)
@@ -209,7 +209,7 @@ func TestUploadSSOToken_MaliciousStartURLRejected(t *testing.T) {
 		"access_token": "aws-sso-access-token-value",
 		"start_url": "https://my-sso.awsapps.com/start\n[profile evil]\nregion=us-east-1",
 		"region": "us-west-2",
-		"expires_at": "` + testutil.FutureRFC3339(24) + `"
+		"expires_at": "` + testutil.FutureRFC3339(24*30) + `"
 	}`
 
 	w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, malicious)
@@ -231,7 +231,7 @@ func TestUploadSSOToken_MaliciousStartURLRejected(t *testing.T) {
 // sso_start_url, so an injected duplicate sso_start_url via region would win
 // under last-key-wins parsing and silently defeat the StartURL guard.
 func TestUploadSSOToken_ControlCharsInAccountOrRoleRejected(t *testing.T) {
-	expiresAt := testutil.FutureRFC3339(24)
+	expiresAt := testutil.FutureRFC3339(24 * 30)
 	cases := map[string]string{
 		"account_id": `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2","expires_at":"` + expiresAt + `","account_id":"123456789012\n[profile evil]"}`,
 		"role_name":  `{"access_token":"tok","start_url":"https://my-sso.awsapps.com/start","region":"us-west-2","expires_at":"` + expiresAt + `","role_name":"AdminRole\n[profile evil]"}`,

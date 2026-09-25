@@ -16,6 +16,14 @@ import "time"
 // reasons that have nothing to do with the code under test. Negative hours
 // give a timestamp already in the past, for a fixture that needs to already
 // be expired.
+//
+// A fixture meant to read as "valid" (not merely unexpired) needs more than a
+// positive value here: it must clear both modelAccessExpiringWindow (24h,
+// internal/api/modelaccess.go) and the AWS SSO refresh skew
+// (awsSSORefreshSkew, internal/api/awssso_refresh.go) ahead of it, or grading
+// logic keyed on either window will call it "expiring", not "live". 24 is
+// enough for a plain "not yet expired" fixture; an AWS SSO blob meant as live
+// needs comfortably more — 24*30 is what this codebase uses.
 func FutureRFC3339(hours int) string {
 	return time.Now().UTC().Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
 }

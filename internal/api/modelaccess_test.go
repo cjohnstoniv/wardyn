@@ -421,6 +421,25 @@ func TestAWSSSOCredentialState_TheFiveStates(t *testing.T) {
 	}
 }
 
+// TestAWSSSOCredentialState_FixtureBlobReadsLive pins the bug the review
+// found: ssoBlobFor/ssoBlobBody carry no refresh_token, so their blob's state
+// depends entirely on ExpiresAt clearing modelAccessExpiringWindow (24h,
+// see awssoCredentialState's default arm). A fixture minted only
+// testutil.FutureRFC3339(24) ahead is exactly AT that window and grades
+// `expiring`, not `live` — the fixture READ "not yet expired", not "live",
+// which is why every AWS SSO blob site now mints 24*30 hours out (see
+// internal/testutil/clock.go's doc comment). This parses the real blob JSON
+// ssoBlobFor produces, the same way production code would.
+func TestAWSSSOCredentialState_FixtureBlobReadsLive(t *testing.T) {
+	var b awsSSOBlob
+	if err := json.Unmarshal([]byte(ssoBlobFor("123456789012", "WardynBedrockRole")), &b); err != nil {
+		t.Fatalf("unmarshal fixture blob: %v", err)
+	}
+	if got := awsSSOCredentialState(b, true, true, false, time.Now()); got != modelAccessLive {
+		t.Errorf("state = %q, want %q — the fixture must clear modelAccessExpiringWindow", got, modelAccessLive)
+	}
+}
+
 // TestAWSSSOCredentialState_SpentBoundary: a spent refresh token must grade
 // dead once the access token is inside the refresh skew (dispatch would
 // already refuse this run), and `expiring` — never `live` — while it is still

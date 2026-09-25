@@ -53,7 +53,7 @@ func TestRun_NeverInvokesAWSCLIForAccountRoleLookup(t *testing.T) {
 	portal := awsssofake.New()
 	t.Cleanup(portal.Close)
 	token := portal.AccessToken()
-	cache := `{"accessToken":"` + token + `","startUrl":"https://x.awsapps.com/start","region":"us-east-1","expiresAt":"` + testutil.FutureRFC3339(24) + `"}`
+	cache := `{"accessToken":"` + token + `","startUrl":"https://x.awsapps.com/start","region":"us-east-1","expiresAt":"` + testutil.FutureRFC3339(24*30) + `"}`
 	if err := os.WriteFile(filepath.Join(cacheDir, "abc123.json"), []byte(cache), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -167,13 +167,13 @@ func TestNewestSSOToken(t *testing.T) {
 	// A role-credential cache file — must be skipped even though it's newest.
 	write(t, dir, "role.json", `{"accessKeyId":"AKIA...","secretAccessKey":"x","sessionToken":"y"}`)
 	// An older SSO token file.
-	oldPath := write(t, dir, "old-token.json", `{"accessToken":"old-tok","startUrl":"https://old.awsapps.com/start","region":"us-east-1","expiresAt":"`+testutil.FutureRFC3339(24)+`"}`)
+	oldPath := write(t, dir, "old-token.json", `{"accessToken":"old-tok","startUrl":"https://old.awsapps.com/start","region":"us-east-1","expiresAt":"`+testutil.FutureRFC3339(24*30)+`"}`)
 	old := time.Now().Add(-time.Hour)
 	if err := os.Chtimes(oldPath, old, old); err != nil {
 		t.Fatal(err)
 	}
 	// The newest SSO token file — this is the one that must be selected.
-	write(t, dir, "new-token.json", `{"accessToken":"new-tok","startUrl":"https://new.awsapps.com/start","region":"us-west-2","expiresAt":"`+testutil.FutureRFC3339(24)+`"}`)
+	write(t, dir, "new-token.json", `{"accessToken":"new-tok","startUrl":"https://new.awsapps.com/start","region":"us-west-2","expiresAt":"`+testutil.FutureRFC3339(24*30)+`"}`)
 	// Garbage that isn't even valid JSON — must be skipped, not fatal.
 	write(t, dir, "garbage.json", `not json`)
 
@@ -544,7 +544,7 @@ func runHelperAgainst(t *testing.T, portal *awsssofake.Server, upload http.Handl
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cache := `{"accessToken":"` + portal.AccessToken() + `","startUrl":"https://x.awsapps.com/start","region":"us-east-1","expiresAt":"` + testutil.FutureRFC3339(24) + `"}`
+	cache := `{"accessToken":"` + portal.AccessToken() + `","startUrl":"https://x.awsapps.com/start","region":"us-east-1","expiresAt":"` + testutil.FutureRFC3339(24*30) + `"}`
 	if err := os.WriteFile(filepath.Join(cacheDir, "abc123.json"), []byte(cache), 0o600); err != nil {
 		t.Fatal(err)
 	}

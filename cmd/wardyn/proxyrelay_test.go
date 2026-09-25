@@ -231,6 +231,7 @@ func TestProxyRelay_WarningGoesToStderrNotStdout(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	cmd.SetContext(ctx)
 	cmd.SetArgs([]string{listenPort, proxyPort})
 
