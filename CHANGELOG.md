@@ -10,6 +10,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Review states where a chosen model provider's credential lives (#983).** A run that chose a
+  model provider got no `model_credential` from `POST /runs/preflight`, so the New Run rail said
+  "Resolved at launch." even after Preflight, and the CC3 confinement advisory never fired for an
+  AWS sign-in provider. The chosen provider's kind now sets the facts at both doors: mechanism
+  (the kind), `per_user`, and `sandbox` for `bedrock_sso` or `proxy` for every other kind. A
+  `bedrock_sso` provider run below CC3 now carries the advisory warning and the `run.create` row's
+  `credential_confinement: below_floor`, as the legacy AWS SSO lane already did.
 - **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
   map being set was previously enough to hide the "Who is an admin" setup row and the shell
   banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
