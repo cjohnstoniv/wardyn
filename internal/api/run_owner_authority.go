@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -48,14 +49,14 @@ type ownerRefusal struct {
 // ownerCapabilityRefusal re-checks the run's launch-door capabilities for its
 // owner. callerIsOwner says ctx carries the owner's own session, which
 // resolves exactly as it did at launch (their email and group snapshot
-// included). Otherwise the owner is known only by the sub on the run row:
-// any deny row of the kind covering the value refuses, since the owner's
-// email and groups cannot be ruled out, and only allow rows for that sub or
-// everyone count. Nor can the owner's role be known by sub, so an owner who
-// launched as an admin (exempt at the launch gate) is held to the same rows:
-// under an enforced kind another admin's revive, restart or extension of
-// their run needs an allow row for the owner's sub or everyone. The owner's
-// own session passes.
+// included). Otherwise the owner is known only by the sub and the user type
+// stamped on the run row: any deny row of the kind covering the value
+// refuses, since the owner's email and groups cannot be ruled out, and only
+// allow rows for that sub, that type or everyone count. Nor can the owner's
+// role be known by sub, so an owner who launched as an admin (exempt at the
+// launch gate) is held to the same rows: under an enforced kind another
+// admin's revive, restart or extension of their run needs an allow row for
+// the owner's sub, type or everyone. The owner's own session passes.
 func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun, callerIsOwner bool, repos []string) (*ownerRefusal, error) {
 	if callerIsOwner && s.isOperator(ctx) {
 		return nil, nil
@@ -85,7 +86,7 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 		if callerIsOwner {
 			allowed, err = s.capSeamAllowed(ctx, d.kind, d.value)
 		} else {
-			allowed, err = s.capAllowedForSub(ctx, run.CreatedBy, d.kind, d.value)
+			allowed, err = s.capAllowedForSub(ctx, run.CreatedBy, run.UserType, d.kind, d.value)
 		}
 		if err != nil {
 			return nil, err
@@ -122,13 +123,29 @@ func (s *Server) ownerProviderRows(ctx context.Context, repos []string) ([]types
 	return rows, nil
 }
 
-// capAllowedForSub is capSeamAllowed for an owner known only by sub. A store
-// that cannot answer is an error, never an allow. A value restricted by
-// "Available to" counts as enforced and only an allow naming it lets the owner
-// in (capBatch.decide's step 3).
-func (s *Server) capAllowedForSub(ctx context.Context, sub, kind, value string) (bool, error) {
+// capAllowedForSub is capSeamAllowed for an owner known only by sub and
+// userType. A store that cannot answer is an error, never an allow. A value
+// restricted by "Available to" counts as enforced and only an allow naming it
+// lets the owner in (capBatch.decide's step 3).
+//
+// userType is the run's stamp (AgentRun.UserType), never the owner's type as
+// it stands now: no per-sub assignment is stored, since a type comes from the
+// session like groups do, so the stamp is the strictest answer available. A
+// stamp naming a type that no longer exists refuses, failing closed as
+// callerSubjects does; the built-in type always exists and is not read back.
+// An empty stamp (a run created before migration 0080) counts no type rows.
+func (s *Server) capAllowedForSub(ctx context.Context, sub, userType, kind, value string) (bool, error) {
 	if s.cfg.Store == nil {
 		return true, nil
+	}
+	if userType != "" && userType != types.UserTypeStandard {
+		_, err := s.cfg.Store.GetUserType(ctx, userType)
+		if errors.Is(err, store.ErrNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("api: resolve user type %q: %w", userType, err)
+		}
 	}
 	grants, err := s.cfg.Store.ListCapabilityGrants(ctx)
 	if err != nil {
@@ -153,7 +170,8 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, kind, value string) 
 		}
 		if capValueMatches(kind, g.Value, value) &&
 			(!restricted || strings.TrimSpace(g.Value) == strings.TrimSpace(value)) &&
-			(g.SubjectType == types.CapabilitySubjectAll || (g.SubjectType == types.CapabilitySubjectUser && g.Subject == sub)) {
+			(g.SubjectType == types.CapabilitySubjectAll || (g.SubjectType == types.CapabilitySubjectUser && g.Subject == sub) ||
+				(g.SubjectType == types.CapabilitySubjectUserType && g.Subject == userType)) {
 			allow = true
 		}
 	}

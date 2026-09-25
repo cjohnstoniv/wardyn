@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -207,6 +208,54 @@ func TestRevive_HonoursAvailableTo(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// userTypeReviveStore is the revive fixture's store with the user types
+// GetUserType finds.
+type userTypeReviveStore struct {
+	*reviveStore
+	userTypes []string
+}
+
+func (s userTypeReviveStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	if slices.Contains(s.userTypes, id) {
+		return types.UserType{ID: id}, nil
+	}
+	return types.UserType{}, store.ErrNotFound
+}
+
+// TestRevive_AnAdminCountsTheOwnersStampedUserType (#1019): an admin's revive
+// knows the owner by sub and by the user type stamped on the run, so an allow
+// row for that type lets the owner's restricted value in. Another type, a
+// stamp naming a type deleted since, or no stamp (a pre-0080 run) is refused.
+func TestRevive_AnAdminCountsTheOwnersStampedUserType(t *testing.T) {
+	for _, tc := range []struct {
+		name, stamp string
+		want        int
+	}{
+		{"owner stamped the allowed type", "contractor", http.StatusOK},
+		{"owner stamped another type", "partner", http.StatusForbidden},
+		{"stamped type deleted", "contractor-old", http.StatusForbidden},
+		{"no stamp", "", http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			f.srv.cfg.Store = userTypeReviveStore{reviveStore: f.rs, userTypes: []string{"contractor", "partner"}}
+			f.st.run.UserType = tc.stamp
+			f.st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, "contractor", capAgent, "claude-code", types.CapabilityAllow)}
+			if tc.stamp == "contractor-old" {
+				f.st.caps[0].Subject = tc.stamp
+			}
+			f.st.enf = map[string]bool{capAgent: true}
+			f.st.restricted = map[string]map[string]bool{capAgent: {"claude-code": true}}
+			if code, body := f.reviveAs(t, false); code != tc.want {
+				t.Fatalf("admin revive = %d %s, want %d", code, body, tc.want)
+			}
+			if tc.want == http.StatusForbidden {
+				f.assertReviveRefused(t, "capability_"+capAgent)
+			}
+		})
 	}
 }
 
