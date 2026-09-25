@@ -3,11 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The provider editor (#537, MP-19a) for the key and endpoint kinds: the kind
-// step, the form, "Use with", and Remove. Drawn by
-// docs/design/model-providers-mock/provider-editor.html; every string is
-// lib/model-providers-copy.ts's. Configuration only — there is no key or token
-// field: each person adds their own.
+// The provider editor: #537 (MP-19a) built the kind step, the form, "Use
+// with", and Remove for the key and endpoint kinds; #538 (MP-19b) adds Amazon
+// Bedrock (E3 — the "How people sign in" SSO/Bearer choice, and, SSO only, the
+// AWS IAM Identity Center block) and Claude subscription (E4 — disabled with
+// its reason on the kind step until the sign-in image resolves). Drawn by
+// docs/design/model-providers-mock/provider-editor.html and, for #538,
+// mp-packet-B.html's own E1–E9 (owner-approved 2026-09-22); every string is
+// lib/model-providers-copy.ts's. Configuration only — there is no key,
+// token or sign-in field: each person adds or signs in with their own.
 //
 // A self-contained dialog: the host (Settings → Model providers, #536) hands
 // it the GET /model-providers snapshot it rendered from, and re-reads after
@@ -20,6 +24,7 @@ import { modelProviders, type ModelProvidersList } from "../../../lib/api/model-
 import { getErrorMessage } from "../../../lib/format";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR, PROVIDERS } from "../../../lib/model-providers-copy";
 import type { ModelProvider } from "../../../lib/types/site";
+import { AGENTS, AGENTS_DRAFT } from "../../../lib/workspace-providers-copy";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -38,12 +43,15 @@ import { Mono } from "../../wardyn/code-block";
 import { Field } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
+import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import {
   EDITOR_KINDS,
   addressChanged,
   draftFrom,
+  editorProvidesLine,
   incompatibleReason,
+  isBedrock,
   isEndpoint,
   newDraft,
   providerFrom,
@@ -62,6 +70,12 @@ export interface ModelProviderEditorProps {
   harnesses: HarnessRow[];
   // The agents whose roster default this provider is (E8).
   defaultFor?: string[];
+  // Whether the Claude sign-in image resolves right now (/setup/status's
+  // claude_signin_image check) — E4's kind-step gate (QB-5). Defaults true
+  // (fail open): an older host or a status read still in flight never blocks
+  // the option on a false negative — the server's own E4 refusal at Save is
+  // the real gate this only previews.
+  subscriptionAvailable?: boolean;
   onClose: () => void;
   // A write landed (or the admin chose to reload after a 412): close and re-read.
   onSaved: () => void;
@@ -69,7 +83,15 @@ export interface ModelProviderEditorProps {
 
 type Confirm = "address" | "remove" | null;
 
-export function ModelProviderEditor({ list, editing, harnesses, defaultFor = [], onClose, onSaved }: ModelProviderEditorProps) {
+export function ModelProviderEditor({
+  list,
+  editing,
+  harnesses,
+  defaultFor = [],
+  subscriptionAvailable = true,
+  onClose,
+  onSaved,
+}: ModelProviderEditorProps) {
   const [draft, setDraft] = React.useState<ProviderDraft | null>(() => (editing ? draftFrom(editing, harnesses) : null));
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
@@ -139,13 +161,15 @@ export function ModelProviderEditor({ list, editing, harnesses, defaultFor = [],
             <DialogTitle>{title}</DialogTitle>
             {editing && <Chip tone="neutral">{MODEL_PROVIDERS.KIND[editing.kind]}</Chip>}
           </div>
-          {draft && (
-            <DialogDescription>{keyKind ? PROVIDER_EDITOR.PROVIDES_KEY : PROVIDER_EDITOR.PROVIDES_TOKEN}</DialogDescription>
-          )}
+          {draft && <DialogDescription>{editorProvidesLine(draft.kind)}</DialogDescription>}
         </DialogHeader>
 
         {!draft ? (
-          <KindStep onPick={(kind) => setDraft(newDraft(kind, harnesses))} onCancel={onClose} />
+          <KindStep
+            onPick={(kind) => setDraft(newDraft(kind, harnesses))}
+            onCancel={onClose}
+            subscriptionAvailable={subscriptionAvailable}
+          />
         ) : (
           <form className="space-y-4" onSubmit={onSubmit}>
             <ProviderFields draft={draft} setDraft={setDraft} harnesses={harnesses} />
@@ -211,8 +235,18 @@ export function ModelProviderEditor({ list, editing, harnesses, defaultFor = [],
   );
 }
 
-// The kind step: picking a kind moves on — there is no Next.
-function KindStep({ onPick, onCancel }: { onPick: (kind: (typeof EDITOR_KINDS)[number]) => void; onCancel: () => void }) {
+// The kind step: picking a kind moves on — there is no Next. Claude
+// subscription is disabled with the sign-in image's own reason rather than
+// hidden (QB-5) when it doesn't resolve yet.
+function KindStep({
+  onPick,
+  onCancel,
+  subscriptionAvailable,
+}: {
+  onPick: (kind: (typeof EDITOR_KINDS)[number]) => void;
+  onCancel: () => void;
+  subscriptionAvailable: boolean;
+}) {
   return (
     <div className="space-y-4">
       <div role="group" aria-labelledby="mp-kind-title" className="space-y-2">
@@ -220,16 +254,21 @@ function KindStep({ onPick, onCancel }: { onPick: (kind: (typeof EDITOR_KINDS)[n
           {PROVIDER_EDITOR.KIND_TITLE}
         </p>
         <div className="overflow-hidden rounded-lg border border-border">
-          {EDITOR_KINDS.map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              onClick={() => onPick(kind)}
-              className="block w-full border-b border-border px-3 py-2 text-left text-body last:border-b-0 hover:bg-accent"
-            >
-              {MODEL_PROVIDERS.KIND[kind]}
-            </button>
-          ))}
+          {EDITOR_KINDS.map((kind) => {
+            const disabled = kind === "anthropic_subscription" && !subscriptionAvailable;
+            return (
+              <button
+                key={kind}
+                type="button"
+                disabled={disabled}
+                onClick={() => onPick(kind)}
+                className="block w-full border-b border-border px-3 py-2 text-left text-body last:border-b-0 hover:enabled:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {MODEL_PROVIDERS.KIND[kind]}
+                {disabled && <p className="mt-0.5 text-xs font-normal text-muted-foreground">{PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING}</p>}
+              </button>
+            );
+          })}
         </div>
       </div>
       <div className="flex justify-end">
@@ -252,15 +291,102 @@ function ProviderFields({
 }) {
   const set = (patch: Partial<ProviderDraft>) => setDraft((d) => d && { ...d, ...patch });
   const endpoint = isEndpoint(draft.kind);
+  const bedrock = isBedrock(draft.kind);
+  const sso = draft.kind === "bedrock_sso";
+  const routeThrough = draft.kind === "anthropic_api_key" || draft.kind === "openai_api_key";
   const host = vendorHost(draft.kind);
   const [before, after] = PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host).split(host);
   const rows = Object.keys(draft.harnesses).map((id) => harnesses.find((h) => h.id === id) ?? { id, display: id });
+  // E3's "How people sign in" toggle — the ONE field that reaches bedrock_bearer
+  // (never a kind-step option of its own). agents-tab.tsx's FIELD_SOURCE toggle
+  // is the same segmented-radio-group idiom (role="radiogroup" Buttons over
+  // useRovingRadio, not a native radiogroup — CONSOLE-RULES' precedent for a
+  // two-option choice with the mock's segmented look).
+  const signInGroup = useRovingRadio(2, sso ? 0 : 1, (i) => set({ kind: i === 0 ? "bedrock_sso" : "bedrock_bearer" }));
 
   return (
     <>
+      {bedrock && (
+        <Field label={PROVIDER_EDITOR.HOW_PEOPLE_SIGN_IN}>
+          <div role="radiogroup" aria-label={PROVIDER_EDITOR.HOW_PEOPLE_SIGN_IN} className="flex gap-2" {...signInGroup.containerProps}>
+            <Button
+              type="button"
+              role="radio"
+              aria-checked={sso}
+              size="sm"
+              variant={sso ? "secondary" : "outline"}
+              tabIndex={signInGroup.itemProps(0).tabIndex}
+              ref={signInGroup.itemProps(0).radioRef}
+              onClick={() => set({ kind: "bedrock_sso" })}
+            >
+              {AGENTS.MECHANISM_BEDROCK_SSO}
+            </Button>
+            <Button
+              type="button"
+              role="radio"
+              aria-checked={!sso}
+              size="sm"
+              variant={!sso ? "secondary" : "outline"}
+              tabIndex={signInGroup.itemProps(1).tabIndex}
+              ref={signInGroup.itemProps(1).radioRef}
+              onClick={() => set({ kind: "bedrock_bearer" })}
+            >
+              {AGENTS.MECHANISM_BEDROCK_BEARER}
+            </Button>
+          </div>
+        </Field>
+      )}
+
       <Field label={PROVIDER_EDITOR.NAME} htmlFor="mp-name" hint={PROVIDER_EDITOR.NAME_HINT}>
         <Input id="mp-name" value={draft.name} onChange={(e) => set({ name: e.target.value })} />
       </Field>
+
+      {bedrock && (
+        <>
+          <p className="text-xs font-medium text-foreground">{PROVIDER_EDITOR.IDC_GROUP}</p>
+          <Field label={PROVIDER_EDITOR.REGION} htmlFor="mp-region" required={bedrock}>
+            <Input
+              id="mp-region"
+              required={bedrock}
+              className="font-mono"
+              placeholder="us-east-1"
+              value={draft.region}
+              onChange={(e) => set({ region: e.target.value })}
+            />
+          </Field>
+          {sso && (
+            <>
+              <Field label={AGENTS.FIELD_SSO_START_URL} htmlFor="mp-sso-start-url" required={sso}>
+                <Input
+                  id="mp-sso-start-url"
+                  required={sso}
+                  className="font-mono"
+                  placeholder="https://"
+                  value={draft.ssoStartUrl}
+                  onChange={(e) => set({ ssoStartUrl: e.target.value })}
+                />
+              </Field>
+              <Field label={AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID} htmlFor="mp-sso-account-id">
+                <Input
+                  id="mp-sso-account-id"
+                  className="font-mono"
+                  value={draft.ssoAccountId}
+                  onChange={(e) => set({ ssoAccountId: e.target.value })}
+                />
+              </Field>
+              <Field label={AGENTS_DRAFT.FIELD_SSO_ROLE_NAME} htmlFor="mp-sso-role-name" hint={PROVIDER_EDITOR.SSO_SETUP_HINT}>
+                <Input
+                  id="mp-sso-role-name"
+                  className="font-mono"
+                  value={draft.ssoRoleName}
+                  onChange={(e) => set({ ssoRoleName: e.target.value })}
+                />
+              </Field>
+            </>
+          )}
+        </>
+      )}
+
       {endpoint ? (
         <>
           <Field label={PROVIDER_EDITOR.BASE_URL} htmlFor="mp-base-url" hint={PROVIDER_EDITOR.BASE_URL_HINT} required>
@@ -283,25 +409,27 @@ function ProviderFields({
           </div>
         </>
       ) : (
-        <Field
-          label={PROVIDER_EDITOR.ROUTE_THROUGH}
-          htmlFor="mp-base-url"
-          hint={
-            <>
-              {before}
-              <Mono>{host}</Mono>
-              {after}
-            </>
-          }
-        >
-          <Input
-            id="mp-base-url"
-            className="font-mono"
-            placeholder="https://"
-            value={draft.baseUrl}
-            onChange={(e) => set({ baseUrl: e.target.value })}
-          />
-        </Field>
+        routeThrough && (
+          <Field
+            label={PROVIDER_EDITOR.ROUTE_THROUGH}
+            htmlFor="mp-base-url"
+            hint={
+              <>
+                {before}
+                <Mono>{host}</Mono>
+                {after}
+              </>
+            }
+          >
+            <Input
+              id="mp-base-url"
+              className="font-mono"
+              placeholder="https://"
+              value={draft.baseUrl}
+              onChange={(e) => set({ baseUrl: e.target.value })}
+            />
+          </Field>
+        )
       )}
 
       <fieldset className="space-y-2">
@@ -335,15 +463,21 @@ function HarnessBlock({
 }) {
   const row = draft.harnesses[harness.id];
   const endpoint = isEndpoint(draft.kind);
+  const bedrock = isBedrock(draft.kind);
   const reason = incompatibleReason(draft.kind, harness.id);
   const needsPath = endpoint && row.ticked && !row.path.trim();
-  const [open, setOpen] = React.useState(needsPath);
+  // Model is required on a Bedrock provider (mp400ModelNeed) — E3's colfoot:
+  // "Model is required for Bedrock, so that harness's settings are open until
+  // it is filled" (QB-2), the same rule already applied to an endpoint's Path.
+  const needsModel = bedrock && row.ticked && !row.model.trim();
+  const [open, setOpen] = React.useState(needsPath || needsModel);
   React.useEffect(() => {
-    if (needsPath) setOpen(true);
-  }, [needsPath]);
+    if (needsPath || needsModel) setOpen(true);
+  }, [needsPath, needsModel]);
   const expanded = row.ticked && open;
   const base = `mp-h-${harness.id}`;
   const pathHint = harness.id === "codex-cli" ? PROVIDER_EDITOR.PATH_HINT_CODEX : PROVIDER_EDITOR.PATH_HINT_CLAUDE;
+  const modelHint = bedrock ? PROVIDER_EDITOR.MODEL_HINT_BEDROCK : PROVIDER_EDITOR.MODEL_HINT;
 
   return (
     <div className="rounded-lg border border-border">
@@ -367,9 +501,9 @@ function HarnessBlock({
             aria-label={harness.display}
             aria-expanded={expanded}
             aria-controls={`${base}-body`}
-            // A required, empty Path stays open: collapsing would unmount the
-            // input its `required` check lives on.
-            disabled={needsPath}
+            // A required, empty Path or Model stays open: collapsing would
+            // unmount the input its `required` check lives on.
+            disabled={needsPath || needsModel}
             onClick={() => setOpen(!expanded)}
             className="text-muted-foreground disabled:opacity-50"
           >
@@ -379,8 +513,14 @@ function HarnessBlock({
       </div>
       {expanded && (
         <div id={`${base}-body`} className={endpoint ? "grid gap-4 border-t border-border p-3 sm:grid-cols-2" : "border-t border-border p-3"}>
-          <Field label={PROVIDER_EDITOR.MODEL} htmlFor={`${base}-model`} hint={PROVIDER_EDITOR.MODEL_HINT}>
-            <Input id={`${base}-model`} className="font-mono" value={row.model} onChange={(e) => onChange({ model: e.target.value })} />
+          <Field label={PROVIDER_EDITOR.MODEL} htmlFor={`${base}-model`} hint={modelHint} required={bedrock}>
+            <Input
+              id={`${base}-model`}
+              required={bedrock}
+              className="font-mono"
+              value={row.model}
+              onChange={(e) => onChange({ model: e.target.value })}
+            />
           </Field>
           {endpoint && (
             <Field label={PROVIDER_EDITOR.PATH} htmlFor={`${base}-path`} hint={pathHint} required>

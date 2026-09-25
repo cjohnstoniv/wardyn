@@ -1,4 +1,4 @@
-# Wardyn for members
+# Wardyn for users
 
 Someone else runs this control plane. You sign in, and you run governed
 sandboxes inside the ceiling your admin set. There is nothing to install.

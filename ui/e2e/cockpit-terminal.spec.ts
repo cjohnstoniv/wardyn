@@ -181,31 +181,47 @@ test.describe("Run cockpit terminal", () => {
     await expect(pane.getByText(TERMINAL.RECONNECTING_LINE(1, 4))).toHaveCount(0);
   });
 
-  test("a take-over closes and reconnects exactly once — it does not re-dial", async ({ page }) => {
+  // The server's evict-and-reconnect path is a take-over by a principal with NO
+  // queued observer socket: handleAttachTakeover frees the slot and answers
+  // promoted:false. In the console that is a panel that was itself displaced
+  // (close 1008), so its socket is already gone and doTakeover reclaims with a
+  // fresh attach. An OPEN read-only panel never gets promoted:false: its own
+  // queued socket is what the server promotes in place (#507, the next test).
+  test("a displaced panel's take-over reconnects exactly once — it does not re-dial", async ({ page }) => {
     const { id: runId } = await findRunningFixture(page);
     await stubInteractiveRun(page, runId);
     await stubAttachTicket(page, runId);
-    await stubTakeover(page, runId);
+    // The server's full answer for a taker with no socket to promote.
+    await page.route(`**/api/v1/runs/${runId}/attach/takeover`, (route) =>
+      route.fulfill({
+        json: { taken_over: true, previous_holder: "bob@e2e.example", previous_source: "web", promoted: false },
+      }),
+    );
     // The no-re-dial window below is a page.clock jump, not a real sleep.
     await page.clock.install();
 
+    let firstWs: WebSocketRoute | null = null;
     const { opens } = await stubAttachSocket(page, (n, ws) => {
-      if (n === 1) ws.send(attachModeFrame(true, { principal: "bob@e2e.example" }));
-      else ws.send(attachModeFrame(false, { principal: "me@e2e.example" }));
+      if (n === 1) firstWs = ws;
+      ws.send(attachModeFrame(false, { principal: "me@e2e.example" }));
     });
 
     await gotoConsole(page);
     await navToRoute(page, `/runs/${runId}`);
     const pane = page.getByTestId("run-terminal-pane");
     await expect(pane.locator(".xterm-screen").first()).toBeVisible();
-    await expect(pane.getByRole("button", { name: RUN_COCKPIT.takeOver })).toBeVisible();
+    await expect(pane.getByText(RUN_COCKPIT.driving)).toBeVisible();
+
+    // bob takes the terminal from us: the server closes our socket 1008 with
+    // the reason the UI matches, and the panel does not reconnect on its own.
+    await firstWs!.close({ code: 1008, reason: "taken over by bob@e2e.example" });
+    await expect(pane.getByText(RUN_COCKPIT.displacedHint("bob@e2e.example"))).toBeVisible();
+    expect(opens()).toBe(1);
 
     await pane.getByRole("button", { name: RUN_COCKPIT.takeOver }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: RUN_COCKPIT.takeOver }).click();
 
-    // Take-over evicts, then RECLAIMS (attach-terminal.tsx's doTakeover): our
-    // own socket closes 1000 and reconnects deliberately — exactly ONE
-    // further open, not a loop.
+    // promoted:false, so doTakeover RECLAIMS: exactly ONE further open.
     await expect
       .poll(() => opens(), { timeout: 10_000, message: "the reclaim never opened its one further socket" })
       .toBe(2);

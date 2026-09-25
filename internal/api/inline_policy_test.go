@@ -1028,7 +1028,7 @@ func TestIntegrations_MemberList_OwnKeyListed(t *testing.T) {
 }
 
 // TestIntegrations_MemberSelectsOwnKey_NoWarning: the "Model access" lane a
-// member is told to use (MEMBERS.md "Your model key") — POST /runs with
+// member is told to use (USERS.md "Your model key") — POST /runs with
 // integration_id "anthropic_api_key" and NO hand-authored grant — folds the
 // member's own key when the operator holds no row of that name, so the run
 // has model access and no warning fires. Negative control: the same request

@@ -202,7 +202,10 @@ export function effectiveWorkspaceRequirements(ws: Workspace): WorkspaceRequirem
 export interface Workspace {
   id: string;
   name: string;
-  kind: WorkspaceKind;
+  // "" means multi-source: the server (internal/types/workspace.go's Kind
+  // doc comment) leaves this mirror zero whenever len(Sources) != 1, since a
+  // multi-source workspace has no single "the" kind. Readers must handle it.
+  kind: WorkspaceKind | "";
   // Host directory path (local_dir) or repo slug/clone URL (repo).
   source: string;
   // repo only: branch/tag/commit to clone. Optional.

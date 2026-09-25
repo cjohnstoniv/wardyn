@@ -99,3 +99,28 @@ line is `MODEL_PROVIDERS.PROVIDES.KEY` (each person adds their own Bedrock API k
 | `MODEL_PROVIDERS.KIND.bedrock_bearer` | second line, only when the name differs | Amazon Bedrock |
 | `MODEL_PROVIDERS.FETCH_FAILED_TITLE` | the list's read failed | Couldn't load model providers |
 | `MODEL_PROVIDERS.FETCH_FAILED_BODY` | the list's read failed | Something went wrong reaching the server. The providers already saved still apply — this list just can't show them right now. |
+
+## Frozen strings — the Bedrock and Claude subscription kinds (#538)
+
+`mp-packet-B.html`'s own "Frozen strings" table (owner-approved 2026-09-22 as packet MP-B), for E3
+and E4 — the two rows `docs/design/model-providers-mock/canon.html` Table 1 left as "#538 builds it".
+The agent reasons reused, `INTEGRATIONS.X_BEDROCK_CODEX` and `INTEGRATIONS.X_SUB_CODEX`, are
+`lib/integrations.ts`'s own; the AWS sign-in labels reused, `AGENTS.FIELD_SSO_START_URL`,
+`AGENTS.MECHANISM_BEDROCK_SSO`, `AGENTS.MECHANISM_BEDROCK_BEARER`, `AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID`
+and `AGENTS_DRAFT.FIELD_SSO_ROLE_NAME`, are `lib/workspace-providers-copy.ts`'s own.
+
+`PROVIDER_EDITOR.REGION` — the packet's frozen table calls the four Bedrock labels (including
+"Region") "Reused" as a group, but no shipped `Region` Field constant existed to pin against, only
+the word in `connection-cards.tsx`'s legacy-Bedrock prose. Flagged in the #538 report; **the owner
+approved `Region` as canon on 2026-09-25** (PR #1038 review). It is canon from that date, the same
+as every other row below.
+
+| Key | Renders at | Frozen string |
+|---|---|---|
+| `PROVIDER_EDITOR.HOW_PEOPLE_SIGN_IN` | E3 | How people sign in |
+| `PROVIDER_EDITOR.PROVIDES_SSO` | E3 | Each person signs in with one click. You set up your organisation's IAM Identity Center connection once, below. |
+| `PROVIDER_EDITOR.IDC_GROUP` | E3, heading over the four AWS fields | AWS IAM Identity Center |
+| `PROVIDER_EDITOR.REGION` | E3 | Region |
+| `PROVIDER_EDITOR.SSO_SETUP_HINT` | E3, under Pinned IAM role name | These make each person's sign-in one click. |
+| `PROVIDER_EDITOR.MODEL_HINT_BEDROCK` | E3, under a ticked agent | An inference profile id. |
+| `PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING` | kind step (disabled reason) and E4 | Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image. |

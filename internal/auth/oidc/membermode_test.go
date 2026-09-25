@@ -250,7 +250,7 @@ func (f *memberModeRevocations) RevokeAll(context.Context) error         { retur
 // naming an admin role they do not hold, and BOTH mint doors — which key on
 // MemberModeFromContext, not on the stamped tier — 409 their own SSH key and
 // API token; the member Getting Started's "Connect your tools · Add SSH key"
-// card and docs/MEMBERS.md's SSH path would both break until they found the
+// card and docs/USERS.md's SSH path would both break until they found the
 // Exit.
 //
 // No cookie at all, rather than a cookie with the flag cleared: re-signing a

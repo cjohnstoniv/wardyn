@@ -923,7 +923,7 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 // stops at dispatch.
 //
 // The shape is an upgraded 0.7.5 install that never wrote a roster — legacy open
-// mode, which CHANGELOG and docs/MEMBERS.md both name as supported, and which
+// mode, which CHANGELOG and docs/USERS.md both name as supported, and which
 // awsSSOScopeFor answers with the operator namespace. Dispatch authors Phase B
 // for it (TestDispatchWiring_SwitchOnAuthorsThePhaseBLane dispatches with
 // SiteConfig{} and asserts the grant, the MITM entry and the CA). Then every

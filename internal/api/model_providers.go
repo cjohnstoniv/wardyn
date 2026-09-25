@@ -200,7 +200,9 @@ func assignModelProviderUIDs(block, stored *types.ModelProviders) {
 
 // validateModelProviders is the ONE write-boundary gate every door runs. A nil
 // block is valid (today's behaviour), so the unconfigured case costs nothing.
-func validateModelProviders(p *types.ModelProviders) error {
+// allowTestEndpoints is Config.AllowTestEndpoints, the only server state it
+// reads (validateProviderBedrock's base URL).
+func validateModelProviders(p *types.ModelProviders, allowTestEndpoints bool) error {
 	if p == nil {
 		return nil
 	}
@@ -220,11 +222,14 @@ func validateModelProviders(p *types.ModelProviders) error {
 			return fmt.Errorf(mp400Name, mp.ID, maxModelProviderName)
 		}
 		for _, check := range []func(types.ModelProvider) error{
-			validateProviderAddress, validateProviderAuth, validateProviderBedrock, validateProviderHarnesses,
+			validateProviderAddress, validateProviderAuth, validateProviderHarnesses,
 		} {
 			if err := check(mp); err != nil {
 				return err
 			}
+		}
+		if err := validateProviderBedrock(mp, allowTestEndpoints); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -314,8 +319,10 @@ func validateHeaderScheme(id, where, header, format string) error {
 
 // validateProviderBedrock: a Bedrock kind needs a region (it names the hosts a
 // run reaches); bedrock_sso alone needs the start URL and may carry the pin,
-// held to the same grammars the agent roster's own pin is.
-func validateProviderBedrock(mp types.ModelProvider) error {
+// held to the same grammars the agent roster's own pin is. The base URL takes
+// ValidateBedrockBaseURL's rule — the seven gateway rules, plain http:// only
+// under WARDYN_ALLOW_TEST_ENDPOINTS — with this door's own refusal wording.
+func validateProviderBedrock(mp types.ModelProvider, allowTestEndpoints bool) error {
 	b := mp.Bedrock
 	if !mp.Kind.IsBedrock() {
 		if b != nil {
@@ -330,7 +337,7 @@ func validateProviderBedrock(mp types.ModelProvider) error {
 		return fmt.Errorf(mp400Region, mp.ID, b.Region)
 	}
 	if b.BaseURL != "" {
-		if _, err := validateOneLLMGateway(bedrockRuntimeHost(b.Region), b.BaseURL, false); err != nil {
+		if _, err := validateOneLLMGateway(bedrockRuntimeHost(b.Region), b.BaseURL, allowTestEndpoints); err != nil {
 			return fmt.Errorf(mp400BRBaseURL, mp.ID, err)
 		}
 	}

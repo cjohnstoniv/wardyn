@@ -434,6 +434,9 @@ type Config struct {
 	// reason as BedrockBaseURL: a runtime-writable spelling would let an
 	// admin re-point a credential exchange with no restart and no boot log.
 	AWSSSOEndpointOverride string
+	// AllowTestEndpoints is WARDYN_ALLOW_TEST_ENDPOINTS: the only thing that lets
+	// a model provider's bedrock.base_url be plain http:// (validateProviderBedrock).
+	AllowTestEndpoints bool
 
 	// AWSSSOProxyInject is the kill switch for proxy-side SSO token injection
 	// (WARDYN_AWS_SSO_PROXY_INJECT,

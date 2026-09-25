@@ -1246,7 +1246,7 @@ record-demo: ## Record the demo video (DESTRUCTIVE: resets the stack; ARGS: --no
 # login). Enter / headless = containerized; a packaged one-command multi-user (team)
 # setup does not exist, but admin/member RBAC + SSO shipped in v0.5 — see
 # docs/OPERATIONS.md §Multi-user and deploy/compose/README.md for the admin's recipe,
-# or docs/MEMBERS.md if you're joining a deployment someone else runs. A failed image
+# or docs/USERS.md if you're joining a deployment someone else runs. A failed image
 # pull (offline host, a mirror with no pnpm) falls back to building from this checkout
 # automatically — WARDYN_BUILD_LOCAL=1 forces that path; see
 # docs/adoption/make-setup-requires-ui-stage-on-pnpm-less-mirror.md.

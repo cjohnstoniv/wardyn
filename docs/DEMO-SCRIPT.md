@@ -807,7 +807,8 @@ code, and exits non-zero if any of it fails. The list below is the walkthrough's
      `example.com` after the `approval.decide outcome=approved
      decision_scope=once` — the re-raise is the entire point of that demo, so
      its absence means the demo silently taught the wrong lesson.
-   - On the onboarded workspace (`wardyn workspace get <id>` or its detail
-     page's Allowed hosts card), `example.com` present in `approved_egress` —
-     the permanent grant the proof run at the end of Act 5 depends on.
+   - On the onboarded workspace (`wardyn workspace get <id> --json` or its
+     detail page's Allowed hosts card), `example.com` present in
+     `approved_egress` — the permanent grant the proof run at the end of
+     Act 5 depends on.
 4. Check the captions are legible at the resolution you are publishing at.

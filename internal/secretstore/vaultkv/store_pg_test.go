@@ -290,6 +290,84 @@ func TestStoreMode_DeleteEverywhereRemovesEveryOwnersValue(t *testing.T) {
 	}
 }
 
+// The half-way shape: one owner's external delete goes through before a
+// second owner's is refused. The call still errors and every row survives —
+// including the first owner's, now a dangling pointer — that dangling
+// pointer reads as a definitive refusal, never ErrNotFound (rule 17), and a
+// retry once the fault clears finishes the job.
+func TestStoreMode_DeleteEverywhereHalfway(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	s := storeMode(t, pool, newFakeStore(t, f), nil)
+	ctx := t.Context()
+	for _, owner := range []string{"alice", "bob"} {
+		if err := s.For(owner).Put(ctx, "k", []byte("v-"+owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Vault refuses every call naming bob's path. deleteExternalEverywhere's
+	// SELECT carries no ORDER BY, so this produces the half-way shape (one
+	// owner through, one refused) only if Postgres visits alice's row before
+	// bob's — true in practice for a freshly inserted 2-row match, though not
+	// guaranteed by the query itself; the assertions below don't assume WHICH
+	// owner that is, only that exactly one of them is.
+	f.mu.Lock()
+	f.denyPath = "people/" + strings.ToLower(b32.EncodeToString([]byte("bob"))) + "/"
+	f.mu.Unlock()
+
+	if _, err := s.DeleteEverywhere(ctx, []string{"k"}); err == nil {
+		t.Fatal("DeleteEverywhere succeeded with bob's delete refused")
+	}
+	alicePath := "ns1/people/" + strings.ToLower(b32.EncodeToString([]byte("alice"))) + "/k"
+	bobPath := "ns1/people/" + strings.ToLower(b32.EncodeToString([]byte("bob"))) + "/k"
+	f.mu.Lock()
+	_, aliceLive := f.kv[alicePath]
+	_, bobLive := f.kv[bobPath]
+	f.mu.Unlock()
+	if aliceLive == bobLive {
+		t.Fatalf("alice live=%v, bob live=%v; want exactly one owner's value removed (the half-way shape)", aliceLive, bobLive)
+	}
+	deletedOwner, keptOwner, keptValue := "alice", "bob", "v-bob"
+	if aliceLive {
+		deletedOwner, keptOwner, keptValue = "bob", "alice", "v-alice"
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM secrets WHERE name='k'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("%d rows survive the failed DeleteEverywhere, want 2", n)
+	}
+
+	// The fault only ever named bob's DELETE; clear it before reading back, so
+	// the Gets below check the row/value state, not the fault itself.
+	f.mu.Lock()
+	f.denyPath = ""
+	f.mu.Unlock()
+
+	// deletedOwner's row is now a dangling pointer: a definitive refusal,
+	// never ErrNotFound, so loadOrCreateSecret can never mint a boot key over it.
+	if _, err := s.For(deletedOwner).Get(ctx, "k"); err == nil || errors.Is(err, secretstore.ErrNotFound) {
+		t.Fatalf("Get on %s's dangling pointer = %v; want a refusal that is NOT ErrNotFound", deletedOwner, err)
+	}
+	// keptOwner's value is untouched.
+	if v, err := s.For(keptOwner).Get(ctx, "k"); err != nil || string(v) != keptValue {
+		t.Fatalf("Get on %s = (%q, %v); want the value intact", keptOwner, v, err)
+	}
+
+	// A retry with the fault cleared completes and leaves no rows.
+	if n, err := s.DeleteEverywhere(ctx, []string{"k"}); err != nil || n != 2 {
+		t.Fatalf("retried DeleteEverywhere = (%d, %v), want (2, nil)", n, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.kv) != 0 {
+		t.Fatalf("DeleteEverywhere left %d paths in Vault", len(f.kv))
+	}
+}
+
 // Rule 22: migrate both ways, idempotent, nothing left behind.
 func TestMigrate_BothWaysLeavesNothingBehind(t *testing.T) {
 	pool := throwawayDB(t)

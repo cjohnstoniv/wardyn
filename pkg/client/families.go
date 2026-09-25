@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/google/uuid"
 
@@ -355,6 +356,16 @@ func (c *Client) AddSSHKey(ctx context.Context, name, publicKey string) (types.S
 	err := c.do(ctx, http.MethodPost, "/api/v1/me/ssh-keys",
 		map[string]string{"name": name, "public_key": publicKey}, &out)
 	return out, err
+}
+
+// DeleteSSHKey removes one of the caller's own registered SSH gateway keys.
+// fp is ssh.FingerprintSHA256's raw form, which routinely contains '/' — it
+// is percent-encoded here, matching the server's decode
+// (handleDeleteSSHKey). Deleting a fingerprint registered by someone else
+// (or one that never existed) 404s the same way — no existence leak across
+// principals. DELETE /api/v1/me/ssh-keys/{fingerprint}.
+func (c *Client) DeleteSSHKey(ctx context.Context, fp string) error {
+	return c.do(ctx, http.MethodDelete, "/api/v1/me/ssh-keys/"+url.PathEscape(fp), nil, nil)
 }
 
 // RunFileStat is one changed file in a RunFiles listing.

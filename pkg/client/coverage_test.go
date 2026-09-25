@@ -80,7 +80,7 @@ func routeFamilies() map[string][]string {
 		"identity":    {"Me"},
 		"health":      {"Healthz"},
 		"sessions":    {"RevokeSessions"},
-		"ssh-keys":    {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey"},
+		"ssh-keys":    {"ListSSHKeys", "ListSSHKeysPage", "AddSSHKey", "DeleteSSHKey"},
 		"devices":     {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},
 	}
 }

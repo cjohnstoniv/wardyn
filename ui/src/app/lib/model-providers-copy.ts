@@ -5,24 +5,43 @@
 
 import type { ModelProviderKind } from "./types/site";
 
-// #536 — Settings → Model providers (the admin list), and #537 — its provider
-// editor, byte-for-byte from docs/design/model-providers-canon.md (approved
-// mock packet MP-A, and the #537 packet of 2026-09-25). A pure-data module so
+// #536 — Settings → Model providers (the admin list), #537 — the key and
+// endpoint kinds' editor, and #538 — the Bedrock and Claude subscription
+// kinds, byte-for-byte from docs/design/model-providers-canon.md (approved
+// mock packet MP-A, the #537 packet of 2026-09-25, and #538's own section
+// transcribed from mp-packet-B.html's frozen strings). A pure-data module so
 // Playwright specs can import it; connection-cards.tsx cannot be (it pulls in
-// xterm's CSS). The editor's Codex/Claude "can't drive it" reasons are
-// lib/integrations.ts's INTEGRATIONS.X_* rows, reused verbatim.
+// xterm's CSS). The editor's Codex/Claude/Bedrock "can't drive it" reasons are
+// lib/integrations.ts's INTEGRATIONS.X_* rows, reused verbatim; its AWS
+// sign-in labels are lib/workspace-providers-copy.ts's AGENTS/AGENTS_DRAFT.
 
 // Reused as the Model provider card's lede (connection-cards.tsx S.MODEL_LEDE).
 export const MODEL_LEDE = "Agent runs need one. Governed commands don't.";
 
-// The provider editor (#537). PROVIDES_CLAUDE is packet B's line; the list
-// reuses it for a Claude subscription row because §5.1 gives none (packet
-// MP-A, A3).
+// The provider editor (#537, #538). PROVIDES_CLAUDE is packet B's line; the
+// list reuses it for a Claude subscription row because §5.1 gives none
+// (packet MP-A, A3).
 export const PROVIDER_EDITOR = {
   PROVIDES_CLAUDE: "Each person signs in with their own Claude subscription.",
   KIND_TITLE: "What kind of model provider?",
   PROVIDES_KEY: "Each person adds their own key.",
   PROVIDES_TOKEN: "Each person adds their own token. You set how it is sent.",
+  // #538 (Bedrock and Claude subscription kinds) — from mp-packet-B.html's own
+  // frozen strings table (owner-approved 2026-09-22), transcribed into
+  // docs/design/model-providers-canon.md's #538 section.
+  HOW_PEOPLE_SIGN_IN: "How people sign in",
+  PROVIDES_SSO:
+    "Each person signs in with one click. You set up your organisation's IAM Identity Center connection once, below.",
+  IDC_GROUP: "AWS IAM Identity Center",
+  // Flagged in the #538 report: not in any shipped copy module (the packet
+  // calls it "Reused" without naming a source; connection-cards.tsx labels
+  // the same legacy Bedrock setting "Region" in prose, but no Field constant
+  // existed to pin against). Owner-approved as canon 2026-09-25 (PR #1038).
+  REGION: "Region",
+  SSO_SETUP_HINT: "These make each person's sign-in one click.",
+  MODEL_HINT_BEDROCK: "An inference profile id.",
+  CLAUDE_IMAGE_MISSING:
+    "Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image.",
   NAME: "Name",
   NAME_HINT: "What people see when they choose it.",
   ROUTE_THROUGH: "Route through a gateway (optional)",

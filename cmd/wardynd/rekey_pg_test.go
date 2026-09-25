@@ -21,9 +21,11 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 )
 
@@ -74,41 +76,88 @@ var rotateSeed = []struct{ owner, name, value string }{
 	{"alice", "github-pat", "ghp_not_a_real_token_0000000000"},
 }
 
-func seedRotateStore(t *testing.T, pool *pgxpool.Pool, id age.Identity) {
+// seedRotateStore fills the store the way a running install does: a
+// pre-envelope row the boot converts, the boot's own signing key (sealed under
+// the platform purpose's key), and rotateSeed's rows (the credential purpose's).
+func seedRotateStore(t *testing.T, pool *pgxpool.Pool, id *age.X25519Identity) {
 	t.Helper()
+	ctx := context.Background()
+	seedV0Row(t, pool, id, "legacy-pre-envelope-token", []byte("legacy-not-a-real-value"))
+	booted, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatalf("boot the store to seed it: %v", err)
+	}
+	if _, err := loadOrCreateSigningKey(ctx, booted); err != nil {
+		t.Fatalf("seed the boot signing key: %v", err)
+	}
 	st, err := secretstorepg.New(pool, id)
 	if err != nil {
 		t.Fatalf("secretstorepg.New: %v", err)
 	}
 	for _, r := range rotateSeed {
-		if err := st.For(r.owner).Put(context.Background(), r.name, []byte(r.value)); err != nil {
+		if err := st.For(r.owner).Put(ctx, r.name, []byte(r.value)); err != nil {
 			t.Fatalf("seed %s/%s: %v", r.owner, r.name, err)
 		}
 	}
 }
 
-// assertStoreReadsUnder fails unless every seeded row reads back verbatim under
-// want and under neither of the identities in reject.
-func assertStoreReadsUnder(t *testing.T, pool *pgxpool.Pool, want age.Identity, reject age.Identity) {
+// storeRow is one row of `secrets` by its key.
+type storeRow struct{ owner, name string }
+
+// readEveryRow opens every row of `secrets` under id and returns its value by
+// row. A row id cannot open fails the test, so the result is the whole table.
+func readEveryRow(t *testing.T, pool *pgxpool.Pool, id age.Identity) map[storeRow]string {
 	t.Helper()
 	ctx := context.Background()
-	good, err := secretstorepg.New(pool, want)
+	st, err := secretstorepg.New(pool, id)
 	if err != nil {
-		t.Fatalf("secretstorepg.New(want): %v", err)
+		t.Fatalf("secretstorepg.New: %v", err)
+	}
+	rows, err := pool.Query(ctx, `SELECT owned_by, name FROM secrets`)
+	if err != nil {
+		t.Fatalf("list secrets: %v", err)
+	}
+	keys, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (storeRow, error) {
+		var k storeRow
+		err := r.Scan(&k.owner, &k.name)
+		return k, err
+	})
+	if err != nil {
+		t.Fatalf("scan secrets: %v", err)
+	}
+	out := make(map[storeRow]string, len(keys))
+	for _, k := range keys {
+		v, err := st.For(k.owner).Get(ctx, k.name)
+		if err != nil {
+			t.Errorf("%s/%s does not decrypt under the expected identity: %v", k.owner, k.name, err)
+			continue
+		}
+		out[k] = string(v)
+	}
+	return out
+}
+
+// assertEveryRowReadsUnder fails unless the table holds exactly the rows of
+// before, each opening under want to the value it held before, and none
+// opening under reject.
+func assertEveryRowReadsUnder(t *testing.T, pool *pgxpool.Pool, before map[storeRow]string, want, reject age.Identity) {
+	t.Helper()
+	after := readEveryRow(t, pool, want)
+	if len(after) != len(before) {
+		t.Errorf("%d rows open under the expected identity, want all %d", len(after), len(before))
+	}
+	for k, v := range before {
+		if got, ok := after[k]; ok && got != v {
+			t.Errorf("%s/%s changed value across the rotation", k.owner, k.name)
+		}
 	}
 	bad, err := secretstorepg.New(pool, reject)
 	if err != nil {
 		t.Fatalf("secretstorepg.New(reject): %v", err)
 	}
-	for _, r := range rotateSeed {
-		got, gerr := good.For(r.owner).Get(ctx, r.name)
-		if gerr != nil {
-			t.Errorf("%s/%s does not decrypt under the expected identity: %v", r.owner, r.name, gerr)
-		} else if string(got) != r.value {
-			t.Errorf("%s/%s = %q, want %q", r.owner, r.name, got, r.value)
-		}
-		if _, berr := bad.For(r.owner).Get(ctx, r.name); berr == nil {
-			t.Errorf("%s/%s still decrypts under the identity it must no longer answer to", r.owner, r.name)
+	for k := range before {
+		if _, err := bad.For(k.owner).Get(context.Background(), k.name); err == nil {
+			t.Errorf("%s/%s still decrypts under the identity it must no longer answer to", k.owner, k.name)
 		}
 	}
 }
@@ -144,6 +193,10 @@ func TestRotateAgeKeyMode_EndToEnd(t *testing.T) {
 	dsn, pool := rotateDatabase(t)
 	oldID := newIdentity(t)
 	seedRotateStore(t, pool, oldID)
+	before := readEveryRow(t, pool, oldID)
+	if len(before) != len(rotateSeed)+2 {
+		t.Fatalf("seeded %d rows, want the converted row, the signing key and %d more", len(before), len(rotateSeed))
+	}
 
 	keyPath := t.TempDir() + "/age.key"
 	if err := os.WriteFile(keyPath, []byte("# created by age-keygen\n"+oldID.String()+"\n"), 0o600); err != nil {
@@ -165,7 +218,7 @@ func TestRotateAgeKeyMode_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse the rotated key: %v", err)
 	}
-	assertStoreReadsUnder(t, pool, newID, oldID)
+	assertEveryRowReadsUnder(t, pool, before, newID, oldID)
 
 	for path, want := range map[string]string{keyPath: newKey, keyPath + ".bak": oldID.String()} {
 		st, err := os.Stat(path)
@@ -201,12 +254,12 @@ func TestRotateAgeKeyMode_EndToEnd(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.data), &data); err != nil {
 		t.Fatalf("decode secret.rekey data %q: %v", r.data, err)
 	}
-	if len(data) != 2 || data["secrets"] != float64(len(rotateSeed)) || data["public_recipient"] != newID.Recipient().String() {
-		t.Errorf("secret.rekey data = %s, want exactly {secrets: %d, public_recipient: the new recipient}", r.data, len(rotateSeed))
+	if len(data) != 2 || data["secrets"] != float64(len(before)) || data["public_recipient"] != newID.Recipient().String() {
+		t.Errorf("secret.rekey data = %s, want exactly {secrets: %d, public_recipient: the new recipient}", r.data, len(before))
 	}
-	for _, s := range rotateSeed {
-		if strings.Contains(r.data, s.name) || strings.Contains(r.target, s.name) {
-			t.Errorf("secret.rekey row names the secret %q; it must carry the count only", s.name)
+	for k := range before {
+		if strings.Contains(r.data, k.name) || strings.Contains(r.target, k.name) {
+			t.Errorf("secret.rekey row names the secret %q; it must carry the count only", k.name)
 		}
 	}
 }
@@ -219,6 +272,7 @@ func TestRotateAgeKeyMode_RefusesWhileTheRekeyLockIsHeld(t *testing.T) {
 	dsn, pool := rotateDatabase(t)
 	oldID := newIdentity(t)
 	seedRotateStore(t, pool, oldID)
+	before := readEveryRow(t, pool, oldID)
 
 	keyPath := t.TempDir() + "/age.key"
 	if err := os.WriteFile(keyPath, []byte(oldID.String()+"\n"), 0o600); err != nil {
@@ -248,8 +302,71 @@ func TestRotateAgeKeyMode_RefusesWhileTheRekeyLockIsHeld(t *testing.T) {
 			t.Errorf("a refused rotation left %s behind (stat err = %v)", leftover, serr)
 		}
 	}
-	assertStoreReadsUnder(t, pool, oldID, newIdentity(t))
+	assertEveryRowReadsUnder(t, pool, before, oldID, newIdentity(t))
 	if rows := rekeyAuditRows(t, pool); len(rows) != 0 {
 		t.Errorf("a refused rotation wrote %d secret.rekey rows, want 0", len(rows))
+	}
+}
+
+// ageKeyFromFile resolves WARDYN_AGE_KEY through its WARDYN_AGE_KEY_FILE twin
+// the way boot does, from the one list of _FILE settings.
+func ageKeyFromFile(t *testing.T, f *bootFlags) {
+	t.Helper()
+	for _, s := range secretFileSettings(f) {
+		if s.fileVar == "WARDYN_AGE_KEY_FILE" {
+			if err := resolveSecretFiles([]secretFileSetting{s}); err != nil {
+				t.Fatalf("resolve WARDYN_AGE_KEY_FILE: %v", err)
+			}
+			return
+		}
+	}
+	t.Fatal("WARDYN_AGE_KEY_FILE is not a _FILE setting")
+}
+
+// TestRotateAgeKeyMode_FromAMountedKeyFile is the OPERATIONS.md runbook for a
+// file-mounted key: `WARDYN_AGE_KEY_FILE=/tmp/age.key wardynd -rotate-age-key
+// /tmp/age.key`. The old key comes in through the _FILE twin, the rotation
+// replaces that same file, and the next boot's _FILE read hands back the new
+// key: every row opens under it, the old key opens none, and a boot on it
+// reads the signing key it had before.
+func TestRotateAgeKeyMode_FromAMountedKeyFile(t *testing.T) {
+	dsn, pool := rotateDatabase(t)
+	oldID := newIdentity(t)
+	seedRotateStore(t, pool, oldID)
+	before := readEveryRow(t, pool, oldID)
+
+	keyPath := t.TempDir() + "/age.key"
+	if err := os.WriteFile(keyPath, []byte(oldID.String()+"\n"), 0o600); err != nil {
+		t.Fatalf("write the mounted key copy: %v", err)
+	}
+	t.Setenv("WARDYN_AGE_KEY_FILE", keyPath)
+
+	f := rekeyFlags(dsn, "pg", "")
+	ageKeyFromFile(t, f)
+	if *f.ageKey != oldID.String() {
+		t.Fatal("WARDYN_AGE_KEY_FILE did not resolve to the current key")
+	}
+	if err := rotateAgeKeyMode(f, keyPath); err != nil {
+		t.Fatalf("rotateAgeKeyMode: %v", err)
+	}
+
+	next := rekeyFlags(dsn, "pg", "")
+	ageKeyFromFile(t, next)
+	newID, err := age.ParseX25519Identity(*next.ageKey)
+	if err != nil {
+		t.Fatalf("the rotated key file does not resolve to an age identity through WARDYN_AGE_KEY_FILE: %v", err)
+	}
+	if newID.String() == oldID.String() {
+		t.Fatal("WARDYN_AGE_KEY_FILE still resolves to the old key after the rotation")
+	}
+	assertEveryRowReadsUnder(t, pool, before, newID, oldID)
+
+	booted, err := buildSecretStore(context.Background(), pool, *next.ageKey, nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatalf("boot on the rotated key: %v", err)
+	}
+	raw, err := booted.Get(secretstore.WithPurpose(context.Background(), secretstore.PurposeBoot), secretSigningKey)
+	if err != nil || string(raw) != before[storeRow{"", secretSigningKey}] {
+		t.Fatalf("the boot on the rotated key read the signing key as (%d bytes, %v), want the key it had before", len(raw), err)
 	}
 }

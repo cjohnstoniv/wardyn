@@ -32,9 +32,9 @@ import (
 // What this guard reads (its scope is part of its correctness): the migration
 // that creates api_tokens, internal/store/store_apitokens.go, this package's
 // boot_deps.go, docs/OPERATIONS.md and threatmodel/THREAT-MODEL.md. What it does
-// NOT read: the CLI's help strings, the console's token screen, docs/MEMBERS.md
+// NOT read: the CLI's help strings, the console's token screen, docs/USERS.md
 // and docs/SSH.md. Those were checked by hand when this was written and make no
-// competing claim about token staleness (MEMBERS.md says only that tokens are
+// competing claim about token staleness (USERS.md says only that tokens are
 // independently revocable, which stays true) — but a claim added there later is
 // outside this net.
 func TestAPITokenStampResidualIsPublished(t *testing.T) {

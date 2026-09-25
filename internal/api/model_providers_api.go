@@ -103,7 +103,7 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	block := normalizeModelProviders(&body)
-	if err := validateModelProviders(block); err != nil {
+	if err := validateModelProviders(block, s.cfg.AllowTestEndpoints); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid model providers: "+err.Error())
 		return
 	}

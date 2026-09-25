@@ -334,16 +334,13 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	// (sshLaneWidePastPathRows) and warns loudly rather than failing silently.
 	// The console door (handlePutWorkspaceProviders) keeps the hard refusal.
 	//
-	// The SIBLING agent_providers block is validated by its own gate at each of
-	// those two doors instead of here (validateAgentProviders, agent_providers.go):
-	// admitting a row needs the boot agent-image map, which is server state this
-	// deliberately pure function has no access to. Both doors run it, so the
-	// "one validator, two doors" property is the same.
-	if err := validateWorkspaceProviders(cfg.WorkspaceProviders, false); err != nil {
-		return err
-	}
-	// model_providers needs no server state, so its one validator runs here.
-	return validateModelProviders(cfg.ModelProviders)
+	// The SIBLING agent_providers and model_providers blocks are validated by
+	// their own gates at each of their two doors instead of here
+	// (validateAgentProviders, validateModelProviders): admitting a row needs
+	// server state this deliberately pure function has no access to — the boot
+	// agent-image map, and WARDYN_ALLOW_TEST_ENDPOINTS for a Bedrock base URL.
+	// Both doors run each, so the "one validator, two doors" property is the same.
+	return validateWorkspaceProviders(cfg.WorkspaceProviders, false)
 }
 
 // validateInternalHosts enforces SiteConfig.InternalHosts's write-time
@@ -727,6 +724,10 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateSiteConfig(cfg); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		return
+	}
+	if err := validateModelProviders(cfg.ModelProviders, s.cfg.AllowTestEndpoints); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}

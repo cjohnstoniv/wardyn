@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,7 +95,7 @@ func TestWaitReady_403DoesNotSpin(t *testing.T) {
 			start := time.Now()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			_, err := waitForRunReady(ctx, c, runID, timeout, false)
+			_, err := waitForRunReady(ctx, io.Discard, c, runID, timeout, false)
 			elapsed := time.Since(start)
 
 			if err == nil {
@@ -144,7 +145,7 @@ func TestWaitReady_409StillWaits(t *testing.T) {
 	srv, counts := countingReadyServer(t, runID, http.StatusConflict, `{"error":"run has no sandbox to read (state=RUNNING)"}`)
 	c := &sdk.Client{BaseURL: srv.URL}
 
-	_, err := waitForRunReady(context.Background(), c, runID, 30*time.Millisecond, false)
+	_, err := waitForRunReady(context.Background(), io.Discard, c, runID, 30*time.Millisecond, false)
 	var ee *exitError
 	if !errors.As(err, &ee) || ee.code != 124 {
 		t.Fatalf("err = %v, want exit 124 (a 409 is transient and must run to the deadline)", err)
@@ -190,7 +191,7 @@ func TestWaitReady_TransientFilesStatusesAreRetried(t *testing.T) {
 			// have to drive waitForRunReady's own clock, which means a seam in
 			// production code for a test-only concern — not worth it while the
 			// margin is this wide, but that is the fix if this ever flakes again.
-			_, err := waitForRunReady(context.Background(), c, runID, 500*time.Millisecond, false)
+			_, err := waitForRunReady(context.Background(), io.Discard, c, runID, 500*time.Millisecond, false)
 			var ee *exitError
 			if !errors.As(err, &ee) || ee.code != 124 {
 				t.Fatalf("err = %v, want exit 124: a %d is transient and must be retried to the deadline", err, tc.status)
@@ -217,7 +218,7 @@ func TestWaitReady_RedirectFailsFast(t *testing.T) {
 	srv, counts := countingReadyServer(t, runID, http.StatusFound, ``)
 	c := &sdk.Client{BaseURL: srv.URL}
 
-	_, err := waitForRunReady(context.Background(), c, runID, 5*time.Second, false)
+	_, err := waitForRunReady(context.Background(), io.Discard, c, runID, 5*time.Second, false)
 	if err == nil || !strings.Contains(err.Error(), "cannot read its workspace") {
 		t.Fatalf("err = %v, want the permanent 'cannot read its workspace' wrapper", err)
 	}

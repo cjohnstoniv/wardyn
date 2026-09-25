@@ -61,9 +61,9 @@ func deviceCmd(client clientFn) *cobra.Command {
 				if devices == nil {
 					devices = []sdk.Device{}
 				}
-				return emitJSON(devices)
+				return emitJSON(cmd.OutOrStdout(), devices)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tNAME\tENROLLED BY\tCREATED\tLAST SEEN\tACKED SEQ\tSTATUS")
 			for _, d := range devices {
 				lastSeen, status := "never", "active"
@@ -112,9 +112,9 @@ func deviceCmd(client clientFn) *cobra.Command {
 				if tokens == nil {
 					tokens = []sdk.DeviceEnrolmentToken{}
 				}
-				return emitJSON(tokens)
+				return emitJSON(cmd.OutOrStdout(), tokens)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tDEVICE NAME\tMINTED BY\tCREATED\tEXPIRES")
 			for _, t := range tokens {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.DeviceName, t.MintedBy,

@@ -91,7 +91,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		// dispatch records on its own grant (resolveBedrockBearerInjection), which
 		// this owner-then-operator read cannot honour — on a per_user member's run
 		// it would put the OPERATOR's key into that run's corpus.
-		if sinkReservedSecret(name) || name == bedrockAPIKeySecret {
+		if nameSinkReservedSecret(name) || name == bedrockAPIKeySecret {
 			reserved = append(reserved, name)
 			continue
 		}
@@ -175,7 +175,7 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 		switch {
 		case err != nil:
 			skip = "scope invalid: " + err.Error()
-		case sinkReservedSecret(secretName):
+		case nameSinkReservedSecret(secretName):
 			skip = "references a reserved platform-internal secret name"
 		case secretName == bedrockAPIKeySecret:
 			// The bearer is proxy-injected and never resident, and its namespace

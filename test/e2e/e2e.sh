@@ -395,15 +395,30 @@ CC_AGENT_CTR="wardyn-agent-${CC_RUN_ID}"
 # (i) sandbox RUNNING. dispatch sets RUNNING before the fire-and-forget Exec, so
 # even a fast-failing agent task leaves the run RUNNING (v0 has no completion
 # watcher). The image resolved via WARDYN_AGENT_IMAGES must be the demo tag.
-CC_STATE="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${CC_RUN_ID}" \
-  | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
+# Poll up to ~60s: dispatch is async (create returns before the container is
+# actually up), so a single read immediately after create races STARTING every
+# time — that race, not a real failure, was issue #965's first FAIL.
+CC_STATE=""
+for _ in $(seq 1 30); do
+  CC_STATE="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${CC_RUN_ID}" \
+    | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
+  [[ "${CC_STATE}" == "RUNNING" ]] && break
+  sleep 2
+done
 if [[ "${CC_STATE}" == "RUNNING" ]]; then ok "(i) claude-code run dispatched to RUNNING (real agent sandbox up)";
 else bad "(i) claude-code run state=${CC_STATE}, expected RUNNING"; fi
 
 # (i) the run.exec audit event (the driver Exec'd /usr/local/bin/agent-run).
+# Same dispatch race as the state check above: poll instead of a single read
+# immediately after create (issue #965's second FAIL).
 log "(i) run.exec audited for the real agent launch"
-EXEC_AUDIT="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${CC_RUN_ID}" \
-  | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="run.exec"))')"
+EXEC_AUDIT=0
+for _ in $(seq 1 30); do
+  EXEC_AUDIT="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${CC_RUN_ID}" \
+    | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="run.exec"))')"
+  [[ "${EXEC_AUDIT}" -ge 1 ]] && break
+  sleep 2
+done
 EXEC_OK="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${CC_RUN_ID}" \
   | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="run.exec" and e["outcome"]=="success"))')"
 if [[ "${EXEC_AUDIT}" -ge 1 ]]; then ok "(i) run.exec audit event present (${EXEC_AUDIT}; success=${EXEC_OK})";
@@ -434,7 +449,11 @@ else
   # is still running in the sandbox, and what the agent last printed. On a CI
   # runner none of this survives the job.
   note "(i) run state: $(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${CC_RUN_ID}" | python3 -c 'import sys,json;r=json.load(sys.stdin);print(r.get("state"),"exit_code=",r.get("exit_code"))' 2>&1 || true)"
-  note "(i) processes in the agent: $(docker exec "${CC_AGENT_CTR}" sh -c 'ps -eo pid,etime,args 2>/dev/null | head -15' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
+  # ps is absent from the claude-code image (confirmed on nightly 36136351071:
+  # "processes in the agent:" came back empty, not an error) — walk /proc instead.
+  note "(i) processes in the agent: $(docker exec "${CC_AGENT_CTR}" sh -c 'for f in /proc/[0-9]*/cmdline; do p=$(basename "$(dirname "$f")"); printf "%s:[" "$p"; tr "\0" " " < "$f" 2>/dev/null; printf "] "; done' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
+  note "(i) agent container state: $(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' "${CC_AGENT_CTR}" 2>&1 || echo '<inspect failed>')"
+  note "(i) agent container logs (tail 40): $(docker logs --tail 40 "${CC_AGENT_CTR}" 2>&1 | tr '\n' '|' || echo '<logs failed>')"
   note "(i) recorder staging: $(docker exec "${CC_AGENT_CTR}" sh -c 'ls -la /var/log/wardyn /tmp/wardyn-rec 2>&1 | head -12' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
   hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${CC_RUN_ID}&limit=50" \
     | python3 -c 'import sys,json
