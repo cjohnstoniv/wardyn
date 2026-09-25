@@ -547,6 +547,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   about every 10 minutes too. Review's model-access row no longer says an AWS sign-in never
   reaches the sandbox, and a record session on a subscription or Bedrock provider says so rather
   than `api-key`.
+- **Under a model-provider block, an `env_secret` grant cannot set a model credential (#551, owner
+  ruling 2026-09-25).** A run's model credential comes only from its provider, so a grant that
+  would set a variable a model credential rides in, or one a provider arm sets —
+  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID` and each arm's own base-URL, model, region and
+  config variables — is refused at create and Review (a 422 carrying `provider` and `kind` when one
+  was chosen and a sentence naming the grant and the variable; no `reason`, since no sign-in
+  repairs it), and dispatch refuses the run again before anything is authored (`run.create`
+  failure, with `variable` and `grant`). Previously such a grant could put an operator's key in the
+  sandbox env of a subscription or Bedrock run. Every other `env_secret` grant is placed as before;
+  with no provider block nothing changes.
 
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0076_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to

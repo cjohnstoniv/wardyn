@@ -126,12 +126,12 @@ func providerSubscriptionBase(p types.ModelProvider) string {
 func (s *Server) providerSubscriptionTransport(run types.AgentRun,
 	sandboxEnv map[string]string, c chosenProvider,
 ) llmTransport {
-	sandboxEnv["ANTHROPIC_BASE_URL"] = providerSubscriptionBase(c.provider)
-	sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
-	sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
+	sandboxEnv[envAnthropicBaseURL] = providerSubscriptionBase(c.provider)
+	sandboxEnv[envClaudeConfigDir] = "/home/agent/.claude-run"
+	sandboxEnv[envClaudeManagedCreds] = managedSentinelCredsB64()
 	for _, h := range c.provider.Harnesses {
 		if h.Harness == run.Agent && h.Model != "" {
-			sandboxEnv["ANTHROPIC_MODEL"] = h.Model
+			sandboxEnv[envAnthropicModel] = h.Model
 		}
 	}
 	return llmTransport{modelRun: true, provider: &c}

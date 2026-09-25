@@ -190,7 +190,7 @@ func (k joinKind) joinLegacy(withLaneHost bool) (legacy []runner.InjectionGrant,
 }
 
 // joinDispatch runs the real LLM phase for k under sc on a fresh harness.
-func joinDispatch(t *testing.T, k joinKind, sc joinScenario) (dispatchLLMPlan, bool, *subStore, *harness, types.RunPolicySpec, map[string]string, []runner.InjectionGrant, runner.InjectionGrant) {
+func joinDispatch(t *testing.T, k joinKind, sc joinScenario, grants ...types.GrantSpec) (dispatchLLMPlan, bool, *subStore, *harness, types.RunPolicySpec, map[string]string, []runner.InjectionGrant, runner.InjectionGrant) {
 	t.Helper()
 	p := k.record(sc)
 	h, st, sec := subHarness(t, p)
@@ -218,7 +218,7 @@ func joinDispatch(t *testing.T, k joinKind, sc joinScenario) (dispatchLLMPlan, b
 		h.srv.cfg.Secrets = wedgedSecrets{err: errors.New("age: no identity matched")}
 	}
 	legacy, unrelated := k.joinLegacy(sc.chosen)
-	policy := types.RunPolicySpec{WorkspaceMounts: []types.WorkspaceMount{{Source: "/home/op/.claude", Target: claudeCredTarget}}}
+	policy := types.RunPolicySpec{EligibleGrants: grants, WorkspaceMounts: []types.WorkspaceMount{{Source: "/home/op/.claude", Target: claudeCredTarget}}}
 	env := map[string]string{}
 	plan, ok := h.srv.resolveLLMInjections(context.Background(), st.run, dispatchParams{}, &policy, env,
 		append([]runner.InjectionGrant{unrelated}, legacy...), joinProxyURL, artifactRedirectPlan{}, false, st.site, !sc.siteErr,
@@ -437,7 +437,7 @@ func joinCreate(t *testing.T, k joinKind, sc joinScenario, path, body string) *h
 			t.Fatal(err)
 		}
 		w := httptest.NewRecorder()
-		if _, ok := srv.enforceRunModelProvider(w, httptest.NewRequest(http.MethodPost, path, nil), req, nil); ok {
+		if _, ok := srv.enforceRunModelProvider(w, httptest.NewRequest(http.MethodPost, path, nil), req, types.RunPolicySpec{}, nil); ok {
 			t.Fatal("an unreadable provider block admitted the run")
 		}
 		return w

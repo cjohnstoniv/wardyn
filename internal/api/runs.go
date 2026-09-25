@@ -252,7 +252,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// mpChoice.provider, on every "today's path" return (no block, or a block
 	// serving no provider for this agent), so ModelProviderID freezes "" there,
 	// same as a legacy row.
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, wsRefs)
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
 	if !ok {
 		return
 	}

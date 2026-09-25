@@ -158,8 +158,11 @@ func writeProviderRefusal(w http.ResponseWriter, id string, kind types.ModelProv
 // again (providerLiveness, one check per kind): the caller's own credential for
 // it must be there, so a run on a deployment that configured providers never
 // reaches dispatch with a choice it cannot honour. Every refusal naming a
-// provider is written by writeProviderRefusal. Writes its own refusal and
-// returns ok=false once it has.
+// provider is written by writeProviderRefusal. So is an env_secret grant in
+// spec (the run's folded policy) that would set a model-credential variable
+// (modelEnvSecretGrant): under a governing block a run's model credential
+// comes only from its provider. Writes its own refusal and returns ok=false
+// once it has.
 //
 // The returned runProviderChoice is launch's (runs.go) only source for
 // AgentRun.ModelProviderID and the run.create audit snapshot (#527); Review
@@ -168,7 +171,9 @@ func writeProviderRefusal(w http.ResponseWriter, id string, kind types.ModelProv
 // that serves no provider for this agent (governs=true: no model credential
 // at all). Neither is a choice, and callers must not treat a zero
 // provider.ID as one.
-func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest, wsRefs []types.Workspace) (runProviderChoice, bool) {
+func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest,
+	spec types.RunPolicySpec, wsRefs []types.Workspace,
+) (runProviderChoice, bool) {
 	ctx := r.Context()
 	if req.ModelProvider != "" && !modelProviderIDPattern.MatchString(req.ModelProvider) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(mpRunBadID, req.ModelProvider))
@@ -247,6 +252,10 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 			writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, d.msg, d.credential)
 			return runProviderChoice{}, false
 		}
+	}
+	if name, secretName, found := modelEnvSecretGrant(spec); found {
+		writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunModelEnvSecret, secretName, name), false)
+		return runProviderChoice{}, false
 	}
 	choice.governs = true
 	return choice, true

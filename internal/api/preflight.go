@@ -309,7 +309,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// run row to freeze the choice onto; it keeps it only for the model-access
 	// row below, which under a provider block is the provider's verdict, and
 	// for the model credential the autonomy gate grades with.
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, wsRefs)
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
 	if !ok {
 		return
 	}

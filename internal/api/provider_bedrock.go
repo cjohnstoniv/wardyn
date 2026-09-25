@@ -173,7 +173,7 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 	if mp.Kind == types.ModelProviderBedrockBearer {
 		// A non-empty sentinel so claude-code uses bearer auth; the proxy
 		// sets the owner's key on the wire.
-		env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
+		env[envBedrockBearer] = "wardyn-proxy-injected"
 		auth = bedrockAuth{env: env, egressHosts: hosts, bearer: true, bearerNamespace: c.awsScope()}
 	} else {
 		auth = s.bedrockSSOAuth(blob, env, hosts)

@@ -296,7 +296,7 @@ func TestRunModelProviderDoors(t *testing.T) {
 		srv.cfg.Store = siteErrStore{srv.cfg.Store.(*integStore)}
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
-		if _, ok := srv.enforceRunModelProvider(w, r, createRunRequest{Agent: "claude-code", Task: "t"}, nil); ok {
+		if _, ok := srv.enforceRunModelProvider(w, r, createRunRequest{Agent: "claude-code", Task: "t"}, types.RunPolicySpec{}, nil); ok {
 			t.Fatal("an unreadable provider block admitted the run")
 		}
 		var body errorBody

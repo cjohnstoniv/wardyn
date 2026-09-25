@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -260,7 +261,17 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 	siteCfg types.SiteConfig, siteCfgOK bool,
 ) (llmTransport, []runner.InjectionGrant, providerDispatch, bool) {
 	if !siteCfgOK {
-		s.refuseProviderDispatch(ctx, run, "", providerDenial{msg: mpRunUnreadable})
+		s.refuseProviderDispatch(ctx, run, "", providerDenial{msg: mpRunUnreadable}, nil)
+		return llmTransport{}, injections, providerDispatch{}, false
+	}
+	// The create door's env_secret refusal again, for a policy that reached
+	// dispatch another way (a record session, a stored policy edited since):
+	// resolveEnvSecretGrants must never place a model credential beside the
+	// provider's, so the run is refused before anything is authored.
+	if name, secretName, found := modelEnvSecretGrant(*policy); found {
+		p, _ := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID)
+		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunModelEnvSecret, secretName, name)},
+			map[string]any{"variable": name, "grant": secretName})
 		return llmTransport{}, injections, providerDispatch{}, false
 	}
 	// The host-mount subscription path: a policy blessed with the operator's
@@ -274,7 +285,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, p 
 		var kind types.ModelProviderKind
 		var d providerDenial
 		if lane, kind, d = s.providerLaneForRun(ctx, run, siteCfg); d.msg != "" {
-			s.refuseProviderDispatch(ctx, run, kind, d)
+			s.refuseProviderDispatch(ctx, run, kind, d, nil)
 			return llmTransport{}, injections, providerDispatch{}, false
 		}
 	}
@@ -343,10 +354,12 @@ func (s *Server) providerLaneForRun(ctx context.Context, run types.AgentRun, sit
 // or a provider id that does not exist), is recorded twice, as `kind` and as
 // the legacy `mechanism` field; a credential refusal adds `reason:
 // model_credential`, the class the console's audit reader (runEndingFromAudit)
-// grades a credential ending by.
-func (s *Server) refuseProviderDispatch(ctx context.Context, run types.AgentRun, kind types.ModelProviderKind, d providerDenial) {
+// grades a credential ending by. extra adds what else the refusal names (an
+// env_secret refusal's `variable` and `grant`).
+func (s *Server) refuseProviderDispatch(ctx context.Context, run types.AgentRun, kind types.ModelProviderKind, d providerDenial, extra map[string]any) {
 	s.failAndRevoke(ctx, run.ID, types.RunStarting, d.msg)
 	data := map[string]any{"error": d.msg, "provider": run.ModelProviderID}
+	maps.Copy(data, extra)
 	if kind != "" {
 		data["kind"], data["mechanism"] = kind, string(kind)
 	}
@@ -432,13 +445,13 @@ func (s *Server) applyProviderEnv(ctx context.Context, run types.AgentRun, lane 
 	}
 	switch run.Agent {
 	case "claude-code":
-		sandboxEnv["ANTHROPIC_API_KEY"] = "wardyn-proxy-injected"
+		sandboxEnv[envAnthropicAPIKey] = "wardyn-proxy-injected"
 		if model := cmp.Or(lane.key.model, s.cfg.AgentAnthropicModel); model != "" {
-			sandboxEnv["ANTHROPIC_MODEL"] = model
+			sandboxEnv[envAnthropicModel] = model
 		}
 	case "codex-cli":
-		sandboxEnv["OPENAI_BASE_URL"] = proxyURL + "/wardyn/llm/openai"
-		sandboxEnv["OPENAI_API_KEY"] = "wardyn-proxy-injected"
+		sandboxEnv[envOpenAIBaseURL] = proxyURL + "/wardyn/llm/openai"
+		sandboxEnv[envOpenAIAPIKey] = "wardyn-proxy-injected"
 	}
 	return llmTransport{modelRun: true, provider: lane.chosen}
 }
@@ -459,12 +472,12 @@ func (s *Server) authorProviderKeyInjection(ctx context.Context, run types.Agent
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600},
 	}); err != nil {
-		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not author the model provider credential injection: " + err.Error()})
+		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not author the model provider credential injection: " + err.Error()}, nil)
 		return runner.InjectionGrant{}, false
 	}
 	rule, err := injectionRuleFromScope(scope)
 	if err != nil {
-		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not compile the model provider credential injection: " + err.Error()})
+		s.refuseProviderDispatch(ctx, run, lane.provider.Kind, providerDenial{msg: "could not compile the model provider credential injection: " + err.Error()}, nil)
 		return runner.InjectionGrant{}, false
 	}
 	return runner.InjectionGrant{GrantID: grantID, Rule: rule}, true

@@ -230,7 +230,8 @@ type refusalSentence struct {
 }
 
 // TestRefusalSentencesGolden pins every refusal body this package writes
-// through authz.Deny and denyMemberCapability to testdata/refusal_sentences.json.
+// through authz.Deny, denyMemberCapability and writeProviderRefusal to
+// testdata/refusal_sentences.json.
 // A sentence the console renders verbatim is a contract; changing one is a
 // reviewed golden diff, never a drive-by.
 func TestRefusalSentencesGolden(t *testing.T) {
@@ -260,6 +261,11 @@ func TestRefusalSentencesGolden(t *testing.T) {
 			case strings.HasSuffix(fn, ".denyMemberCapability") && len(call.Args) == 6:
 				got = append(got, refusalSentence{"capKinds[" + types.ExprString(call.Args[2]) + "].reason",
 					types.ExprString(call.Args[4]), types.ExprString(call.Args[5])})
+			case fn == "writeProviderRefusal" && len(call.Args) == 5:
+				// The model-provider 422 (#532) is no authz row, but the console
+				// renders its sentence all the same; its reason is the credential flag.
+				got = append(got, refusalSentence{"model_provider (credential: " + types.ExprString(call.Args[4]) + ")",
+					types.ExprString(call.Args[1]), types.ExprString(call.Args[3])})
 			}
 			return true
 		})
