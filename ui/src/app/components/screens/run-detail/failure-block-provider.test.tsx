@@ -25,6 +25,7 @@ import { CONNECTIONS, KEY_DOOR } from "../../wardyn/copy/door";
 import { CONSOLE_VIEW } from "../../wardyn/copy/console-view";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { MODEL_PROVIDERS, providerStatus } from "../../../lib/test-fixtures";
+import { aheadByHours } from "../../../lib/test-clock";
 import { WithDoor } from "../../../../test/door-harness";
 
 const { bedrock, claude, gateway, anthropicKey } = MODEL_PROVIDERS;
@@ -46,7 +47,7 @@ function failedRun(hint: string, createdBy = "bob@acme.example"): AgentRun {
 function trail(provider: string, kind: string, credential = true): AuditEvent[] {
   const data: Record<string, unknown> = { error: "…", provider, kind, mechanism: kind };
   if (credential) data.reason = "model_credential";
-  return [{ id: "e1", time: "2026-09-25T10:00:00Z", actor_type: "system", actor: "wardynd", action: "run.create", outcome: "failure", data }];
+  return [{ id: "e1", time: aheadByHours(-1), actor_type: "system", actor: "wardynd", action: "run.create", outcome: "failure", data }];
 }
 
 function renderBlock(opts: {

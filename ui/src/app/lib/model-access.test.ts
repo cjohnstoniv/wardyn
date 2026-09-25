@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { MODEL_ACCESS_AGENT, modelAccessDoor, providerAttention, resolveDoor } from "./model-access";
 import { AGENTS, modelAccessActionLine } from "./workspace-providers-copy";
 import { absoluteTime } from "./format";
+import { aheadByHours } from "./test-clock";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "./test-fixtures";
 import type { SetupHarnessTool, SetupModelAccess, SetupStatus } from "./types";
 
@@ -248,7 +249,7 @@ describe("providerAttention — what raises the strip (§5.5)", () => {
       { provider: bedrock, state: "expired_signin" },
     ]);
     expect(ids(status)).toEqual(["bedrock-prod"]);
-    const expiring = providerStatus([{ provider: bedrock, state: "expiring", deadline: "2030-01-01T00:00:00Z" }]);
+    const expiring = providerStatus([{ provider: bedrock, state: "expiring", deadline: aheadByHours(2) }]);
     expect(ids(expiring)).toEqual(["bedrock-prod"]);
   });
 
