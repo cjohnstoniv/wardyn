@@ -245,7 +245,7 @@ func TestSecondHuman_LocalModeRefusesTheSwitch(t *testing.T) {
 		})
 	}
 
-	// SCOPED TO THE SWITCH. With it unset, local mode decides exactly as before
+	// Scoped to the switch. With it unset, local mode decides exactly as before
 	// — the refusal must not become a local-mode-wide outage.
 	t.Run("switch off: local mode decides normally", func(t *testing.T) {
 		srv, _, apID := localSecondHumanFixture(t, "local:alice")
@@ -254,7 +254,7 @@ func TestSecondHuman_LocalModeRefusesTheSwitch(t *testing.T) {
 		}
 	})
 
-	// SCOPED TO EGRESS. The switch governs egress_domain decisions only, so a
+	// Scoped to egress. The switch governs egress_domain decisions only, so a
 	// credential approval in local mode is untouched even with it on — the
 	// refusal sits after the kind check for exactly this reason.
 	t.Run("credential approval is untouched", func(t *testing.T) {
@@ -283,7 +283,7 @@ func TestSecondHuman_LocalModeRefusesTheSwitch(t *testing.T) {
 // decision must 503 rather than pass, because "without the run we cannot prove
 // the decider is not its creator".
 //
-// WHO CAN REACH IT, established by execution before this test was written,
+// Who can reach it, established by execution before this test was written,
 // because an untested fail-closed branch is exactly where a fixture that cannot
 // reach it hides:
 //
@@ -366,7 +366,7 @@ func TestSecondHuman_FailsClosedWhenTheRunCannotBeRead(t *testing.T) {
 // and "closed" here would mean refusing every decision on a run nobody authored,
 // which no second human can ever unblock.
 //
-// WHAT THIS DOES NOT DO, stated because the finding asked for the
+// What this does not do, stated because the finding asked for the
 // `run.CreatedBy == ""` CLAUSE to be pinned and it cannot be. That clause only
 // changes the answer when the DECIDER's principal is also "" — otherwise
 // `run.CreatedBy != principal` is already true for an empty creator and the

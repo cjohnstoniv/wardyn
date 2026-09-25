@@ -49,12 +49,10 @@ func TestRoleSnapshotClaimsMatchTheRefreshThatShipped(t *testing.T) {
 		}
 	})
 
-	// The inverted claims, banned by their exact wording because that wording
-	// is what shipped. #152/#277 widened the OnLogin re-stamp to cover the
-	// GROUP snapshot too (store.RefreshAPITokenIdentity), so "frozen at
-	// mint"/"signing in again does not refresh it" is now as false for groups
-	// as it always was for role — the distinction accessStaleSnapshotToken
-	// used to draw between the two halves is gone, and every ban below
+	// The inverted claims, banned by their exact wording. The OnLogin
+	// re-stamp covers the group snapshot as well as the role
+	// (store.RefreshAPITokenIdentity), so "frozen at mint"/"signing in again
+	// does not refresh it" is false for both halves, and every ban below
 	// applies to either.
 	t.Run("no source claim contradicts the refresh", func(t *testing.T) {
 		banned := []struct{ frag, why string }{

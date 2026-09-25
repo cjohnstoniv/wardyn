@@ -10,11 +10,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestPG_TokenUserTypeBackfillsStandard applies 0071 over tokens minted before
+// TestPG_TokenUserTypeBackfillsStandard applies 0076 over tokens minted before
 // user types existed: each carries the built-in type afterwards, and an empty
 // stamp is refused from then on.
 func TestPG_TokenUserTypeBackfillsStandard(t *testing.T) {
-	pool, schema := partialSchemaPool(t, "0071")
+	pool, schema := partialSchemaPool(t, "0076")
 	ctx := context.Background()
 
 	userTok, adminTok := uuid.New(), uuid.New()
@@ -29,7 +29,7 @@ func TestPG_TokenUserTypeBackfillsStandard(t *testing.T) {
 	}
 
 	if err := Migrate(ctx, pool); err != nil {
-		t.Fatalf("Migrate applying 0071+ over 0.7 tokens: %v", err)
+		t.Fatalf("Migrate applying 0076+ over 0.7 tokens: %v", err)
 	}
 
 	for _, id := range []uuid.UUID{userTok, adminTok} {

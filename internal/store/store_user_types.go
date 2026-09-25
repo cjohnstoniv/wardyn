@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// User types (migration 0069_user_types). Round-trips rows; every write is
+// User types (migration 0071_user_types). Round-trips rows; every write is
 // validated at the API boundary (internal/api/user_types.go).
 package store
 
@@ -28,7 +28,7 @@ const userTypeRowRefs = `(
 	(SELECT count(*) FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1))`
 
 // userTypeTokenStamps counts the unrevoked API tokens stamped with user type
-// $1 (migration 0071). A snapshot column, so no foreign key holds the type:
+// $1 (migration 0076). A snapshot column, so no foreign key holds the type:
 // this count, in the handler's 409 and in the DELETE's own predicate, does.
 const userTypeTokenStamps = `(SELECT count(*) FROM api_tokens WHERE user_type = $1 AND revoked_at IS NULL)`
 

@@ -551,7 +551,7 @@ func (p *Proxy) liftInternalHost(host string, ip net.IP) bool {
 // internal-host declaration must never let a run reach the proxy's own network
 // neighbors.
 //
-// TRUST BOUNDARY (F002): this is the CLAMP on both admin-authored exceptions to
+// TRUST BOUNDARY: this is the CLAMP on both admin-authored exceptions to
 // the private-IP guard — liftInternalHost and trustsExactLiteralIP — and on the
 // gateway's own vet (vetTrustedHost). Its inputs are captured best-effort at
 // startup, and when that capture FAILED an empty clamp silently answered "no"

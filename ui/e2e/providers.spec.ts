@@ -15,20 +15,13 @@ import {
 } from "./fixtures";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
 import { OPERATOR_ONLY_REASON, UNSAVED_GUARD } from "../src/app/components/wardyn/copy";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_SLOW_START } from "../src/app/components/screens/settings/login-start-wait";
-// U-15: the starting sentence is a constant in a CSS-free module now — this
-// spec used to re-type its opening clause, so a reworded wait could move on
-// screen while the assertion went on passing.
-import { LOGIN_SANDBOX_STARTING } from "../src/app/components/screens/settings/login-pane-copy";
-// auth-tab-handle.ts is a pure TS module (no React, no xterm.css) — safe for
-// Playwright's Node-side spec collection, unlike the pane itself.
-import { AUTH_TAB_BLOCKED_NOTE } from "../src/app/components/screens/settings/auth-tab-handle";
-import type { BrowserContext, Page } from "@playwright/test";
-
-// review-1 S3: the AWS device-authorization URL this spec's REAL-terminal
-// cases navigate the auto-opened tab to — inside extractDeviceVerificationUrl's
-// own host allowlist (harness-login-pane.tsx), unlike the kind walk's fake.
-const DEVICE_VERIFICATION_URL = "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH";
+// U-15: the door's wait copy is a constant in a CSS-free module — this spec
+// used to re-type it, so a reworded wait could move on screen while the
+// assertion went on passing.
+import { SIGNIN_PROGRESS } from "../src/app/components/screens/settings/login-pane-copy";
+import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
 // Workspace providers e2e (0.7.2) — lane: providers, port 8088, db wardyn_e2e.
@@ -65,7 +58,7 @@ const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 // funnel/Settings-card test below already does, via the card's own link.
 async function gotoProviders(page: Page): Promise<void> {
   await gotoConsole(page);
-  await navToRoute(page, "/settings");
+  await navToRoute(page, "/admin/settings");
   const card = page.getByTestId("providers-card");
   await expect(card).toBeVisible();
   await card.getByText(PROVIDERS.CARD_OPEN).click();
@@ -126,7 +119,7 @@ test.describe("providers — legacy open mode, with no rows at all", () => {
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toHaveCount(0);
 
     // Settings card: zero enabled rows reads CARD_EMPTY, never a bare "0".
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("providers-card");
     await expect(card).toBeVisible();
     await expect(card.getByText(PROVIDERS.CARD_LEAD)).toBeVisible();
@@ -277,12 +270,23 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // Save providers is STILL on screen — the draft is still there to save.
     await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeVisible();
 
-    // #217 — the changed field, as readable text (never the whole draft as
-    // JSON): the banner shows it before Copy is even pressed, then Copy
-    // confirms with a toast once it is.
-    await expect(page.getByText(/base_urls.*acme.*→.*acme.*corp\.example/s)).toBeVisible();
+    // #460 (Q460-3) — reversed from #217's "changed fields only" rule: the
+    // banner shows the WHOLE document (the edited row included), and Copy my
+    // changes puts exactly that on the clipboard, never just the diff. The
+    // <pre> is the banner's own preview — the same text also appears in the
+    // (still-mounted) textarea and the row's collapsed summary, so this is
+    // scoped to it rather than page.getByText, which would hit all three.
+    const documentPreview = page.locator("pre");
+    await expect(documentPreview).toContainText("https://github.com/acme");
+    await expect(documentPreview).toContainText("https://git.corp.example/team");
     await page.getByRole("button", { name: PROVIDERS_DRAFT.CONFLICT_COPY }).click();
     await expect(page.getByText(PROVIDERS_DRAFT.CONFLICT_COPIED_TOAST)).toBeVisible();
+    const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    const clipboardDraft = JSON.parse(clipboardText);
+    const githubRow = (clipboardDraft.git as { base_urls?: string[] }[]).find((g) =>
+      (g.base_urls ?? []).includes("https://github.com/acme"),
+    );
+    expect(githubRow?.base_urls).toEqual(["https://github.com/acme", "https://git.corp.example/team"]);
 
     // Discard mine and reload is still there, now beside Copy, not the only
     // exit.
@@ -306,7 +310,10 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await expect(row).toBeVisible();
     await row.locator("textarea").fill("https://github.com/acme\nhttps://git.corp.example/team");
     // The dirty marker beside Save — the same fact the guard is armed on.
-    await expect(page.getByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toBeVisible();
+    // #460 added the same "Unsaved changes" chip in three more places
+    // (PageHeader, Git tab, Storage tab), so this targets the beside-Save
+    // marker by its own testid rather than the now-ambiguous text.
+    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_DRAFT.UNSAVED_MARKER);
 
     await sidebarLink(page, "Settings").click();
     const dialog = page.getByRole("alertdialog");
@@ -331,7 +338,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // The unmounted draft never reached the server — the next test's read of
     // the stored document must see the ORIGINAL row, not this edit.
     await page.reload();
-    await navToRoute(page, "/providers");
+    await navToRoute(page, "/admin/providers");
     const reloaded = page.getByTestId("provider-row-github");
     await expect(reloaded).toBeVisible();
     await expect(reloaded.locator("textarea")).toHaveValue("https://github.com/acme");
@@ -352,7 +359,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // The GET still succeeds for real (the harness's bearer stays admin),
     // so the route itself renders.
     await gotoConsole(page);
-    await navToRoute(page, "/providers");
+    await navToRoute(page, "/admin/providers");
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
     const saveBtn = page.getByRole("button", { name: PROVIDERS.SAVE_CTA });
     await expect(saveBtn).toBeVisible();
@@ -371,7 +378,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await expect(stepBtn).toBeVisible();
     await expect(stepBtn).toContainText(PROVIDERS.STEP_BADGE_READY(enabledCount));
 
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("providers-card");
     await expect(card).toBeVisible();
     await expect(card.getByText(PROVIDERS.CARD_PROVIDERS(enabledCount))).toBeVisible();
@@ -388,7 +395,7 @@ test.describe("providers — the door is SUPER's alone", () => {
     // for !operator) — a security admin's OWN authority over providers is
     // nothing (unlike drives, there is no governance-profile door for this
     // registry), so neither of the two entry points offers it.
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await expect(page.getByTestId("providers-card")).toHaveCount(0);
 
     // Reaching /providers directly: GET is operatorOnly, so a real security
@@ -399,7 +406,7 @@ test.describe("providers — the door is SUPER's alone", () => {
       if (route.request().method() !== "GET") return route.fallback();
       await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "forbidden" }) });
     });
-    await navToRoute(page, "/providers");
+    await navToRoute(page, "/admin/providers");
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
     // No form of any kind — no tabs, no Save, no rows.
@@ -408,21 +415,29 @@ test.describe("providers — the door is SUPER's alone", () => {
     await expect(page.getByRole("button", { name: PROVIDERS.GIT_TITLE })).toHaveCount(0);
   });
 
-  test("a member sees no nav, no card, and a 403 door if they reach the URL directly", async ({ page }) => {
+  // M-1b: /providers is deleted — only /admin/providers exists now, so a
+  // member reaching it directly hits the admin-view REFUSAL page
+  // (console-view.tsx) before anything is fetched, not the screen's own
+  // inline OPERATOR_ONLY_REASON (that still covers the security-admin case
+  // above, whose SSO tier passes the view gate but not the server's operator
+  // check).
+  test("a member sees no nav, no card, and the admin-view refusal page if they reach the URL directly", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
 
     // A member has no Settings screen at all (MEMBER_NAV_PATHS never lists
     // it, app-shell.tsx), so there is no card to check there — the negative
     // worth pinning is the route itself.
+    let fetched = false;
     await page.route("**/api/v1/workspace-providers", async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      await route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "forbidden" }) });
+      fetched = true;
+      await route.fallback();
     });
-    await navToRoute(page, "/providers");
-    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
-    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
-    await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
+    await navToRoute(page, "/admin/providers");
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
+    await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toHaveCount(0);
+    expect(fetched).toBe(false);
   });
 });
 
@@ -493,14 +508,14 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("Connected for a live caller", async ({ page }) => {
     await splicePerUserBedrock(page, "live");
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await expect(page.locator("#lane-bedrock")).toContainText("Connected");
   });
 
   test("not-Connected + Sign in with SSO for an expired caller", async ({ page }) => {
     await splicePerUserBedrock(page, "expired_signin");
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     const bedrockLane = page.locator("#lane-bedrock");
     await expect(bedrockLane).not.toContainText("Connected");
     await bedrockLane.click();
@@ -517,7 +532,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("not_applicable: NOT connected, no borrowed badge — neutral per-person detail instead", async ({ page }) => {
     await splicePerUserBedrock(page, "not_applicable");
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     const bedrockLane = page.locator("#lane-bedrock");
     await expect(bedrockLane).not.toContainText("Connected");
     await bedrockLane.click();
@@ -536,7 +551,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("not_applicable: the Sign in with SSO door is ABSENT, not merely disabled", async ({ page }) => {
     await splicePerUserBedrock(page, "not_applicable");
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.locator("#lane-bedrock").click();
     await expect(page.getByRole("button", { name: "Sign in with SSO" })).toHaveCount(0);
   });
@@ -546,7 +561,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("opening the dialog shows the managed-portal note, never the dead start-URL prompt", async ({ page }) => {
     await splicePerUserBedrock(page, "live");
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -558,7 +573,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   // row) is UNCHANGED — it still asks for the org's access portal URL.
   test("unspliced control: the ordinary Settings sign-in still prompts for the start URL", async ({ page }) => {
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     // U2-01 (blind round 2, lens-U2): this daemon is the finding's own
     // reproduction — scripts/e2e-backend.sh sets WARDYN_BEDROCK_REGION and
     // WARDYN_BEDROCK_MODEL and NO credential of any kind (no bearer key, no
@@ -595,229 +610,21 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     });
 
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await page.getByRole("button", { name: /start login/i }).click();
 
     const starting = page.getByTestId("login-sandbox-starting");
     await expect(starting).toBeVisible();
-    await expect(starting).toContainText(LOGIN_SANDBOX_STARTING);
+    await expect(starting).toContainText(SIGNIN_PROGRESS.STEP_START);
     await starting.getByRole("button", { name: /cancel/i }).click();
     await expect.poll(() => kills, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
   });
 
-  // Finding 7a (0.7.5 field report, this lane's own spec): the verification
-  // tab never opened because it was opened from a PTY callback, never a user
-  // gesture. These cases pin the CLICK-side half — a page opens on the click
-  // itself, needing no PTY output at all (`-runner none` keeps this daemon's
-  // login run PENDING forever, so the PTY-dependent half — the tab actually
-  // NAVIGATING to a real device-authorization URL, a repeated URL line, focus
-  // restoration after a real capture — has no real terminal to drive it here
-  // and is recorded as a gap in TEST-GAPS, not silently skipped).
-  test.describe("the verification tab opens on the click (Finding 7a)", () => {
-    async function openStartingPane(page: Page, runId: string): Promise<void> {
-      await splicePerUserBedrock(page, "live");
-      await page.route("**/api/v1/setup/harness-login", async (route) =>
-        route.fulfill({ json: { run_id: runId, state: "PENDING" } }),
-      );
-      await page.route(`**/api/v1/runs/${runId}`, async (route) =>
-        route.fulfill({ json: { id: runId, task: "harness login", state: "PENDING", interactive: true } }),
-      );
-      await gotoConsole(page);
-      await navToRoute(page, "/settings");
-      await page.locator("#lane-bedrock").click();
-      await page.getByRole("button", { name: "Sign in with SSO" }).click();
-    }
-
-    // review-1 S3: a REAL terminal, on the `-runner none` backend. The run
-    // read answers RUNNING (never PENDING) and the attach-ticket POST answers
-    // a ticket (member-getting-started.spec.ts:228's own precedent), then
-    // `page.routeWebSocket` stands in for the daemon's attach socket — the
-    // SAME two frame shapes AttachTerminal itself reads (attach-terminal.tsx):
-    // a text attach-mode frame, then a binary PTY chunk. This is what makes
-    // the click-opened tab's NAVIGATE half (not just its open) provable here.
-    async function attachWithRealTerminal(page: Page, context: BrowserContext, runId: string): Promise<void> {
-      await splicePerUserBedrock(page, "live");
-      await page.route("**/api/v1/setup/harness-login", async (route) =>
-        route.fulfill({ json: { run_id: runId, state: "PENDING" } }),
-      );
-      await page.route(`**/api/v1/runs/${runId}`, async (route) =>
-        route.fulfill({ json: { id: runId, task: "harness login", state: "RUNNING", interactive: true } }),
-      );
-      await page.route(`**/api/v1/runs/${runId}/attach-ticket`, async (route) =>
-        route.fulfill({ json: { ticket: "e2e-ticket" } }),
-      );
-      await page.routeWebSocket(/\/api\/v1\/runs\/[^/]+\/attach/, (ws) => {
-        ws.send(JSON.stringify({ type: "attach-mode", read_only: false }));
-        ws.send(Buffer.from(`${DEVICE_VERIFICATION_URL}\n`));
-      });
-      // Context-level (not page-level) so the NEW tab the click opens is
-      // covered too — the whole point of this stub.
-      await context.route(`${DEVICE_VERIFICATION_URL.split("?")[0]}**`, (route) =>
-        route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }),
-      );
-      await gotoConsole(page);
-      await navToRoute(page, "/settings");
-      await page.locator("#lane-bedrock").click();
-      await page.getByRole("button", { name: "Sign in with SSO" }).click();
-    }
-
-    test("clicking Start opens a page — before the launch POST even resolves", async ({ page, context }) => {
-      await splicePerUserBedrock(page, "live");
-      // The launch POST never resolves: if the tab-open were hoisted below an
-      // `await`, this proves it by never opening at all.
-      await page.route("**/api/v1/setup/harness-login", () => {});
-      await gotoConsole(page);
-      await navToRoute(page, "/settings");
-      await page.locator("#lane-bedrock").click();
-      await page.getByRole("button", { name: "Sign in with SSO" }).click();
-
-      const pagePromise = context.waitForEvent("page");
-      await page.getByRole("button", { name: /start login/i }).click();
-      const tab = await pagePromise;
-      await expect(tab).toHaveTitle("Wardyn — waiting for the sign-in page");
-      await tab.close();
-    });
-
-    // review-1 S6 (rewritten — the original body never checked the link or
-    // the note its own name claimed): a REAL terminal, so the pane actually
-    // reaches `attached` with a verification URL on screen, and `tabBlocked`
-    // is genuinely true (window.open blocked even on the click).
-    test("a browser that blocks the popup still offers the header link, with a note explaining why", async ({
-      page,
-      context,
-    }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f011";
-      // Simulate a strict popup policy: window.open answers null, exactly the
-      // contract openAuthTab() already handles.
-      await page.addInitScript(() => {
-        window.open = () => null;
-      });
-      await attachWithRealTerminal(page, context, runId);
-      await page.getByRole("button", { name: /start login/i }).click();
-
-      await expect(page.getByTestId("auth-url-link")).toBeVisible();
-      await expect(page.getByTestId("auth-url-link")).toHaveAttribute("href", DEVICE_VERIFICATION_URL);
-      await expect(page.getByTestId("auth-tab-blocked-note")).toHaveText(AUTH_TAB_BLOCKED_NOTE);
-    });
-
-    // review-1 S6 (rewritten — the original body never clicked Cancel; it
-    // closed the tab itself). "launching" renders no Cancel button at all
-    // (nothing to click yet) — the real Cancel path a person can reach is
-    // from "starting", once the POST has resolved; this is the case the
-    // original name was reaching for.
-    test("Cancel closes the tab it opened, once the sandbox is starting", async ({ page, context }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f012";
-      await openStartingPane(page, runId);
-
-      const pagePromise = context.waitForEvent("page");
-      await page.getByRole("button", { name: /start login/i }).click();
-      const tab = await pagePromise;
-      expect(tab.isClosed()).toBe(false);
-
-      // expect.poll, not tab.waitForEvent("close") — the click's own JS
-      // handler (cancel() -> closeAuthTab() -> tab.close()) can close the
-      // tab SYNCHRONOUSLY inside the click, before a `waitForEvent` call
-      // placed after it ever gets to attach its listener; polling current
-      // state can't miss an event that already happened.
-      await page.getByTestId("login-sandbox-starting").getByRole("button", { name: /cancel/i }).click();
-      await expect.poll(() => tab.isClosed()).toBe(true);
-    });
-
-    // review-1 S3: the route-intercepted navigation — the extractor's own
-    // host allowlist matches this URL (unlike the kind walk's fake), so this
-    // is what proves the tab NAVIGATES, not merely that it opens.
-    test("the verification URL navigates the tab already open", async ({ page, context }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f014";
-      await attachWithRealTerminal(page, context, runId);
-
-      const pagePromise = context.waitForEvent("page");
-      await page.getByRole("button", { name: /start login/i }).click();
-      const tab = await pagePromise;
-
-      await expect(tab).toHaveURL(new RegExp(`user_code=ABCD-EFGH`));
-      await expect(page.getByTestId("auth-url-link")).toHaveAttribute("href", DEVICE_VERIFICATION_URL);
-    });
-
-    // review-1 S3: a repeated URL line (the sandbox's own tmux session can
-    // reprint its banner on a reconnect) must navigate the SAME tab once,
-    // never open a second one and never throw.
-    test("a repeated URL line navigates once — no second tab, no page error", async ({ page, context }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f015";
-      await splicePerUserBedrock(page, "live");
-      await page.route("**/api/v1/setup/harness-login", async (route) =>
-        route.fulfill({ json: { run_id: runId, state: "PENDING" } }),
-      );
-      await page.route(`**/api/v1/runs/${runId}`, async (route) =>
-        route.fulfill({ json: { id: runId, task: "harness login", state: "RUNNING", interactive: true } }),
-      );
-      await page.route(`**/api/v1/runs/${runId}/attach-ticket`, async (route) =>
-        route.fulfill({ json: { ticket: "e2e-ticket" } }),
-      );
-      await page.routeWebSocket(/\/api\/v1\/runs\/[^/]+\/attach/, (ws) => {
-        ws.send(JSON.stringify({ type: "attach-mode", read_only: false }));
-        ws.send(Buffer.from(`${DEVICE_VERIFICATION_URL}\n`));
-        // The SAME line again — the marker for "the sandbox reprinted itself",
-        // not a second, different URL.
-        ws.send(Buffer.from(`${DEVICE_VERIFICATION_URL}\n`));
-      });
-      await context.route(`${DEVICE_VERIFICATION_URL.split("?")[0]}**`, (route) =>
-        route.fulfill({ contentType: "text/html", body: "<title>stub</title>" }),
-      );
-      const pageErrors: Error[] = [];
-      page.on("pageerror", (e) => pageErrors.push(e));
-      await gotoConsole(page);
-      await navToRoute(page, "/settings");
-      await page.locator("#lane-bedrock").click();
-      await page.getByRole("button", { name: "Sign in with SSO" }).click();
-
-      const newPages: Page[] = [];
-      context.on("page", (p) => newPages.push(p));
-      await page.getByRole("button", { name: /start login/i }).click();
-      await expect(page.getByTestId("auth-url-link")).toBeVisible();
-      // Give the second (duplicate) WS frame time to be processed.
-      await page.waitForTimeout(200);
-
-      expect(newPages).toHaveLength(1);
-      expect(pageErrors).toHaveLength(0);
-    });
-
-    // review-1 B2, S3: once the tab has navigated cross-origin, close() is
-    // BEST-EFFORT (the browser refuses it — the same tab-nabbing bound that
-    // makes severing `opener` correct). Cancel must not crash the console
-    // over a tab it can no longer close; the dialog still closes cleanly.
-    test("Cancel after the tab has navigated is a harmless best-effort close", async ({ page, context }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f016";
-      await attachWithRealTerminal(page, context, runId);
-
-      const pagePromise = context.waitForEvent("page");
-      await page.getByRole("button", { name: /start login/i }).click();
-      const tab = await pagePromise;
-      await expect(tab).toHaveURL(new RegExp("user_code=ABCD-EFGH"));
-
-      await page.getByRole("button", { name: /cancel/i }).click();
-      await expect(page.getByRole("dialog")).toHaveCount(0);
-    });
-
-    // A person who closes the auto-opened tab by hand must never crash the
-    // pane on the NEXT thing that tries to touch it (a later navigate/close
-    // call) — auth-tab-handle.ts's own try/catch is pinned in vitest; this is
-    // the live-browser half: the console keeps working afterwards.
-    test("a user-closed tab does not break the pane — Cancel still works", async ({ page, context }) => {
-      const runId = "3f1b7c26-0000-4000-8000-00000000f013";
-      await openStartingPane(page, runId);
-      const pagePromise = context.waitForEvent("page");
-      await page.getByRole("button", { name: /start login/i }).click();
-      const tab = await pagePromise;
-      await tab.close();
-
-      await expect(page.getByTestId("login-sandbox-starting")).toBeVisible();
-      await page.getByTestId("login-sandbox-starting").getByRole("button", { name: /cancel/i }).click();
-      await expect(page.getByRole("dialog")).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "Sign in with SSO" })).toBeVisible();
-    });
-  });
+  // Finding 7a's click-side cases — the tab opening, navigating, blocked and
+  // cancelled — moved to signin-door-aws.spec.ts with #628, which opens the
+  // tab from the door's own Open button instead of on Start.
 
   // Finding 6 (0.7.4 field report): the wait's OTHER end. A first pull of the
   // aws-sso image measured 131s on the reporting estate — healthy reads
@@ -843,13 +650,14 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     );
 
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await page.getByRole("button", { name: /start login/i }).click();
 
     const starting = page.getByTestId("login-sandbox-starting");
-    await expect(starting).toContainText(LOGIN_SANDBOX_STARTING);
+    await expect(starting).toContainText(SIGNIN_PROGRESS.STEP_START);
+    await expect(starting).not.toContainText(LOGIN_SANDBOX_SLOW_START);
 
     await page.clock.fastForward("01:10");
     await expect(starting).toContainText(LOGIN_SANDBOX_SLOW_START);
@@ -868,7 +676,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("spliced control: an explicit shared row also still prompts for the start URL", async ({ page }) => {
     await spliceBedrockRow(page, "shared", null);
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
@@ -966,7 +774,7 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
   test("editable on a per_user bearer row", async ({ page }) => {
     await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/account");
     await page.locator("#lane-bedrock").click();
     await expect(page.getByLabel("Bedrock bearer key")).toBeEditable();
   });
@@ -974,7 +782,7 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
   test("still disabled on a shared row", async ({ page }) => {
     await mockMemberBedrockRowRedacted(page, "shared", "bedrock_bearer", false);
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/account");
     await page.locator("#lane-bedrock").click();
     await expect(page.getByLabel("Bedrock bearer key")).toBeDisabled();
   });
@@ -986,7 +794,7 @@ test.describe("providers — #337: a member's own Bedrock bearer field under a p
   test("Save leads to Replace and Disconnect for a member, reading the redacted body", async ({ page }) => {
     await mockMemberBedrockRowRedacted(page, "per_user", "bedrock_bearer", false);
     await gotoConsole(page);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/account");
     await page.locator("#lane-bedrock").click();
 
     const field = page.getByLabel("Bedrock bearer key");

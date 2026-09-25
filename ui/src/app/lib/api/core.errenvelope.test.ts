@@ -41,7 +41,8 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
     expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "" });
   });
 
-  it('{"error":"…","reason":"git_credential","org":"…"} -> an HttpError carrying the org (F1)', async () => {
+  it('{"error":"…","reason":"git_credential","org":"…"} -> an HttpError carrying the org', async () => {
+    // ticket: F1
     const res = new Response(
       JSON.stringify({ error: "not connected", reason: "git_credential", org: "https://dev.azure.com/contoso" }),
       { status: 422 },

@@ -360,17 +360,16 @@ export function SecretLane({
             Cancel
           </Button>
         )}
-        <span className="text-meta text-muted-foreground">
-          {stored ? (
-            <>
-              Replaces <Mono>{secretName}</Mono>
-            </>
-          ) : (
-            <>
-              Stored as <Mono>{secretName}</Mono>
-            </>
-          )}
-        </span>
+        {/* #355: this branch also renders the UNSTORED form (stored=false —
+            the early return above only covers stored && !editing), where
+            nothing is stored yet. "Stored as <name>" here read as "already
+            stored" beside an empty Save button. Only the Replace flow
+            (stored && editing) has a name worth naming ahead of Save. */}
+        {stored && (
+          <span className="text-meta text-muted-foreground">
+            Replaces <Mono>{secretName}</Mono>
+          </span>
+        )}
       </div>
     </div>
   );

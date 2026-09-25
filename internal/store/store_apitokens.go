@@ -54,7 +54,7 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	// created_at AFTER the cutoff and survive it, so "revoke every session for
 	// this human" would silently not.
 	//
-	// The age, not now(), because plain now() would re-open F143: the API stamps
+	// The age, not now(), because plain now() would break admission-time stamping: the API stamps
 	// t.CreatedAt at request ADMISSION, before it reads the body, precisely so a
 	// caller who holds a mint request open across POST /sessions/revoke cannot
 	// land a created_at after the cutoff. now() - age keeps that and adds the
@@ -98,7 +98,7 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 // `revoked_at IS NULL` is in the WHERE, not checked by the caller, and that is
 // the security shape: a revoked token, an unknown token and a token whose hash
 // does not match all fail IDENTICALLY with ErrNotFound, so the boundary is not
-// an oracle for "this token used to exist".
+// an oracle for "this token once existed".
 func (s PG) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, error) {
 	const q = `
 		SELECT ` + apiTokenCols + `
@@ -155,7 +155,7 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 // memberships moved on keeps authorizing against the groups they held at mint
 // time until they mint a fresh token. The role half was bound this way in
 // migration 0046; this widens the token lane's counterpart to cover groups
-// too, and migration 0071 the user type.
+// too, and migration 0076 the user type.
 //
 // truncated is bound EXACTLY as the caller passes it, never defaulted or
 // inferred here: it must come straight from the login's own session-

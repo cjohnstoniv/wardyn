@@ -56,22 +56,22 @@ func r3bCaptureStdout(t *testing.T, fn func()) string {
 	return out
 }
 
-// TestR3BListCmdsWarnOnTruncation is F265's CLI half: a list command against a
-// page the server flagged truncated printed the rows, exited 0, wrote nothing to
-// stderr and left no marker in --json — indistinguishable from a complete list.
-// `wardyn audit` has warned on exactly this signal since W16-S1-2; the four list
-// families named in the finding now do the same.
+// TestListCmdsWarnOnTruncation is the CLI half of list truncation: a list
+// command against a page the server flagged truncated must not print the rows,
+// exit 0, write nothing to stderr and leave no marker in --json — that is
+// indistinguishable from a complete list. `wardyn audit` warns on exactly this
+// signal, and the four list families do the same.
 //
-// ALL FOUR, because the first pass covered two. `policy list` and `workspace
-// list` kept calling the plain SDK wrappers, so the truncation bit the server
-// set was discarded before the CLI could see it and neither command had an
-// --offset to page with — the same defect, unfixed, on a binary whose sibling
-// commands were fixed. A table with two of the four entries is what let that
-// read as done.
+// All four, because two is easy to mistake for done. `policy list` and
+// `workspace list` must call the truncation-aware SDK wrappers too, or the
+// truncation bit the server sets is discarded before the CLI can see it and
+// neither command has an --offset to page with. A table with two of the four
+// entries would read as done with half the defect left in place.
 //
 // STDERR is asserted, and stdout is asserted NOT to carry it: --json output
 // must keep the plain array shape existing scripts parse.
-func TestR3BListCmdsWarnOnTruncation(t *testing.T) {
+func TestListCmdsWarnOnTruncation(t *testing.T) {
+	// ticket: R3B
 	for _, tc := range []struct {
 		name string
 		args []string

@@ -23,7 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fake ──────────────────────────────────────────────────────────────────
+// fake
 
 // tokenMemStore is a minimal in-memory store.Store for the api-token tests,
 // following the sshMemStore/notFoundStore convention in this package (every
@@ -136,7 +136,7 @@ func (s *tokenMemStore) RevokeAPIToken(_ context.Context, id uuid.UUID, principa
 	return t, nil
 }
 
-// ─── harness ───────────────────────────────────────────────────────────────
+// harness
 
 const (
 	tokenAdminSub   = "sub-admin"
@@ -175,7 +175,7 @@ func mintToken(t *testing.T, srv *Server, sess *http.Cookie, name string) (strin
 	return created.Token, created
 }
 
-// ─── the auth branch ───────────────────────────────────────────────────────
+// the auth branch
 
 // TestAPITokenAuth_ContextParityWithSession is the load-bearing test of this
 // feature: a request authenticated by a token must publish the IDENTICAL
@@ -289,7 +289,7 @@ func TestAPITokenAuth_NilGroupsStaySnapshotUnavailable(t *testing.T) {
 // TestAPITokenAuth_RevokedIsRefused: a revoked token authenticates nothing. The
 // refusal is a 401 identical to the one an unknown token gets — the store
 // collapses both to ErrNotFound, so the boundary is not an oracle for "this
-// token used to exist".
+// token once existed".
 func TestAPITokenAuth_RevokedIsRefused(t *testing.T) {
 	srv, _, _ := apiTokenTestServer(t)
 	sess := ssoSession(t, tokenMemberSub, tokenMemberMail, oidc.RoleUser)
@@ -354,7 +354,7 @@ func TestAPITokenAuth_AdminTokenStillWorks(t *testing.T) {
 	}
 }
 
-// ─── RBAC: the token can never out-rank its human ──────────────────────────
+// RBAC: the token can never out-rank its human
 
 // TestAPIToken_CannotReachAdminRouteUnlessAdminPrincipal is the RBAC pin the
 // brief names: a token is exactly as powerful as the human it belongs to. A
@@ -404,7 +404,7 @@ func TestAPIToken_CannotReachAdminRouteUnlessAdminPrincipal(t *testing.T) {
 	}
 }
 
-// ─── self-service CRUD ─────────────────────────────────────────────────────
+// self-service CRUD
 
 func TestAPITokens_CreateListRevoke(t *testing.T) {
 	srv, _, h := apiTokenTestServer(t)

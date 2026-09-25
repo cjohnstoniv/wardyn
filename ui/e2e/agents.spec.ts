@@ -49,9 +49,9 @@ const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
 async function gotoAgentsTab(page: Page): Promise<void> {
   await gotoConsole(page);
-  await navToRoute(page, "/settings");
+  await navToRoute(page, "/admin/settings");
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
-  await expect(page).toHaveURL(/\/providers$/);
+  await expect(page).toHaveURL(/\/admin\/providers$/);
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
@@ -235,11 +235,20 @@ test.describe("agents — a 201 carrying warnings holds the screen (no timer)", 
 // harness can trigger), so both arms are spliced.
 test.describe("agents — the roster-unknown and empty-roster states withhold Save", () => {
   test("an absent `harnesses` field renders FETCH_FAILED_* with no Save", async ({ page }) => {
+    // Cache-and-serve, not route.fetch()+refulfill per match: gotoAgentsTab's
+    // walk (landing redirect, then settings-screen and providers-screen each
+    // mounting) hits /setup/status more than once, and a real round trip PER
+    // match raced Playwright disposing an in-flight route's response at
+    // teardown ("apiResponse.json: Response has been disposed").
+    let cached: Record<string, unknown> | null = null;
     await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      delete json.harnesses;
-      await route.fulfill({ response, json });
+      if (!cached) {
+        const response = await route.fetch();
+        const json = await response.json();
+        delete json.harnesses;
+        cached = json;
+      }
+      await route.fulfill({ json: cached! });
     });
     await gotoAgentsTab(page);
     await expect(page.getByText(PROVIDERS.FETCH_FAILED_TITLE)).toBeVisible();
@@ -247,11 +256,16 @@ test.describe("agents — the roster-unknown and empty-roster states withhold Sa
   });
 
   test("a genuinely empty roster ([]) shows the lead, no rows, and no Save", async ({ page }) => {
+    // Cache-and-serve (same reason as the FETCH_FAILED case above).
+    let cached: Record<string, unknown> | null = null;
     await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.harnesses = [];
-      await route.fulfill({ response, json });
+      if (!cached) {
+        const response = await route.fetch();
+        const json = await response.json();
+        json.harnesses = [];
+        cached = json;
+      }
+      await route.fulfill({ json: cached! });
     });
     await gotoAgentsTab(page);
     await expect(page.getByText(AGENTS.AGENTS_LEAD)).toBeVisible();
@@ -279,22 +293,29 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
       page,
     }) => {
       await mockMemberRole(page);
+      // Cache-and-serve, not route.fetch()+refulfill per match: the landing
+      // redirect and the setup screen's own mount both hit /setup/status (same
+      // reason as the FETCH_FAILED/empty-roster cases above).
+      let cached: Record<string, unknown> | null = null;
       await page.route("**/api/v1/setup/status*", async (route) => {
-        const response = await route.fetch();
-        const json = await response.json();
-        json.model_access = { state: c.state };
-        // U-1 (W6 blind lens): the roster row rides the splice now. `live` and
-        // `expiring` are PER-PERSON labels, and the server emits the same two
-        // states for a SHARED row's admin credential — where the chip row says
-        // "Provided by your admin", because that is whose credential it is. The
-        // six labels this case walks are the per_user lane's, so the fixture is
-        // the per_user lane.
-        json.harnesses = (json.harnesses ?? []).map((h: { id: string }) =>
-          h.id === "claude-code"
-            ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
-            : h,
-        );
-        await route.fulfill({ response, json });
+        if (!cached) {
+          const response = await route.fetch();
+          const json = await response.json();
+          json.model_access = { state: c.state };
+          // U-1 (W6 blind lens): the roster row rides the splice now. `live` and
+          // `expiring` are PER-PERSON labels, and the server emits the same two
+          // states for a SHARED row's admin credential — where the chip row says
+          // "Provided by your admin", because that is whose credential it is. The
+          // six labels this case walks are the per_user lane's, so the fixture is
+          // the per_user lane.
+          json.harnesses = (json.harnesses ?? []).map((h: { id: string }) =>
+            h.id === "claude-code"
+              ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
+              : h,
+          );
+          cached = json;
+        }
+        await route.fulfill({ json: cached! });
       });
       await gotoConsole(page);
       await navToRoute(page, "/setup");
