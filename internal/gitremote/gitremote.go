@@ -309,7 +309,7 @@ func parseRemoteURL(url string) (host, ownerRepo string) {
 		s = s[strings.Index(s, "://")+3:]
 		// LastIndexByte, not IndexByte: userinfo ends at the LAST "@" (git and
 		// net/url both read it that way), so "ssh://a@b@github.com/o/r" is
-		// github.com — it used to parse as the host "b@github.com" (B11a-F9).
+		// github.com — IndexByte alone would take "b@github.com" as the host.
 		if at := strings.LastIndexByte(s, '@'); at >= 0 {
 			s = s[at+1:]
 		}

@@ -104,6 +104,10 @@ type forgeRepo struct {
 	// listings caches tree listings by tree id; a content address, so one
 	// cache serves every base.
 	listings map[string]map[string]ghTreeEntry
+	// vouched and settled memoize the history questions, which the review
+	// rules ask again after the deny rules: one push, one set of answers.
+	vouched map[string]string
+	settled *gitpack.Result
 }
 
 // ghTreeEntry is one entry of GitHub's git/trees listing.
@@ -173,6 +177,9 @@ func (f *forgeRepo) settle(ctx context.Context, res gitpack.Result) (gitpack.Res
 	if f == nil {
 		return res, ""
 	}
+	if f.settled != nil {
+		return *f.settled, ""
+	}
 	settled, err := res.Settle(func(c string) (bool, error) {
 		root, err := f.vouch(ctx, c, res.Commands)
 		return root != "", err
@@ -180,12 +187,27 @@ func (f *forgeRepo) settle(ctx context.Context, res gitpack.Result) (gitpack.Res
 	if err != nil {
 		return res, f.unread(whyUnsettled, err)
 	}
+	f.settled = &settled
 	return settled, ""
 }
 
 // vouch returns base's root tree when a branch this push updates, or the
 // default branch, contains base; "" when none does.
 func (f *forgeRepo) vouch(ctx context.Context, base string, cmds []gitpack.Command) (string, error) {
+	if root, ok := f.vouched[base]; ok {
+		return root, nil
+	}
+	root, err := f.vouchOnce(ctx, base, cmds)
+	if err == nil {
+		if f.vouched == nil {
+			f.vouched = map[string]string{}
+		}
+		f.vouched[base] = root
+	}
+	return root, err
+}
+
+func (f *forgeRepo) vouchOnce(ctx context.Context, base string, cmds []gitpack.Command) (string, error) {
 	for _, c := range cmds {
 		branch, ok := strings.CutPrefix(c.Ref, "refs/heads/")
 		if !ok || strings.Trim(c.Old, "0") == "" { // a create names no branch the forge has yet

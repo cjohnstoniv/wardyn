@@ -15,11 +15,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestLLM404DetailIsSelfExplaining: the brokered-LLM 404 used to say "no LLM
-// credential is brokered for api.anthropic.com" — a host the reader can do
+// TestLLM404DetailIsSelfExplaining: the brokered-LLM 404 must not stop at "no
+// LLM credential is brokered for api.anthropic.com" — a host the reader can do
 // nothing with, and no word about whether waiting for an approval would help.
-// It now carries the control plane's own reason when there is one, and ALWAYS
-// the below-policy clause, because an agent that retries a missing model
+// It carries the control plane's own reason when there is one, and always the
+// below-policy clause, because an agent that retries a missing model
 // credential retries forever.
 func TestLLM404DetailIsSelfExplaining(t *testing.T) {
 	generic := llm404Detail("")

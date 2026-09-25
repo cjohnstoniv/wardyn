@@ -1,22 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F7 PROBE (lane F7-redirect-probe-sni-literal-ip) — NOT part of the tree.
-//
-// Intended destination: internal/egress/proxy/literal_ip_f7_probe_test.go
-// (package proxy — reaches newProxy, egressTarget, evaluate, newCertAuthority,
-// leafFor and the genTestCA/publicResolver helpers already in this package's
-// tests).
-//
-// Run (no Postgres, no network):
-//
-//   cp local/review-0.7/deep/F7-redirect-probe-sni-literal-ip/literal_ip_f7_probe_test.go internal/egress/proxy/
-//   nice -n 10 GOMAXPROCS=8 go test -p 4 ./internal/egress/proxy -run 'TestF7_' -count=1 -v
-//   rm internal/egress/proxy/literal_ip_f7_probe_test.go
-//
-// Both tests are EXPECTED RED at fa910735 — they are the data-path halves of
-// hypotheses H-5 and H-6 in ../F7-redirect-probe-sni-literal-ip.md. A green
-// run means the finding was fixed; update the doc.
+// The literal-IP data path: a redirect to a literal-IP mirror. These reach
+// newProxy, egressTarget, evaluate, newCertAuthority, leafFor and the
+// genTestCA/publicResolver helpers already in this package's tests, and need
+// no Postgres or network.
 
 package proxy
 
@@ -29,10 +17,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestF7_LeafForLiteralIP_VerifiesAsIPSAN: a token-carrying redirect whose To
+// TestLeafForLiteralIP_VerifiesAsIPSAN: a token-carrying redirect whose To
 // is a literal IP puts "10.40.2.11:443" on mitmHosts (planArtifactRedirect in
 // artifact_redirect.go) and handleConnect TLS-terminates the sandbox's
 // CONNECT 10.40.2.11:443 with leafFor("10.40.2.11") (Proxy.handleConnect ->
@@ -42,7 +31,9 @@ import (
 // literal-IP mirror is therefore dead on the data path, while test-redirect
 // (which never MITMs: grants nil, handleTestSiteConfigRedirect in
 // site_config_probe.go) reports "reached".
-func TestF7_LeafForLiteralIP_VerifiesAsIPSAN(t *testing.T) {
+func TestLeafForLiteralIP_VerifiesAsIPSAN(t *testing.T) {
+	// ticket: F7
+	testfloor.Mark(t, "unit")
 	certPEM, keyPEM := genTestCA(t)
 	ca, err := newCertAuthority(certPEM, keyPEM)
 	if err != nil {
@@ -64,7 +55,7 @@ func TestF7_LeafForLiteralIP_VerifiesAsIPSAN(t *testing.T) {
 	}
 }
 
-// TestF7_LiteralIPTrust_RefusesOwnSubnetAndControlPlane: the InternalHosts
+// TestLiteralIPTrust_RefusesOwnSubnetAndControlPlane: the InternalHosts
 // lift refuses an address on the proxy's own interface subnets or its
 // control-plane host (liftInternalHost -> onOwnSubnetOrControlPlane, both in
 // egress_target.go) so a declaration can never reach the sidecar's
@@ -74,7 +65,9 @@ func TestF7_LeafForLiteralIP_VerifiesAsIPSAN(t *testing.T) {
 // never that exclusion. An exact allowlist entry for a neighbour's address
 // (the shape an egress-redirect To writes via substituteArtifactEgress, or
 // the probe run's []string{toHost}) is trusted straight through.
-func TestF7_LiteralIPTrust_RefusesOwnSubnetAndControlPlane(t *testing.T) {
+func TestLiteralIPTrust_RefusesOwnSubnetAndControlPlane(t *testing.T) {
+	// ticket: F7
+	testfloor.Mark(t, "unit")
 	_, ownSubnet, _ := net.ParseCIDR("172.18.0.0/16")
 	controlPlane := net.ParseIP("172.18.0.2")
 	neighbour := "172.18.0.5" // e.g. postgres on wardyn-internal

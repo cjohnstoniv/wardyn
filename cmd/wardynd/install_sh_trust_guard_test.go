@@ -68,8 +68,8 @@ func readInstallSh(t *testing.T) string {
 }
 
 // adminTokenComplaints returns every way `code` fails to close H1/H2 — the two
-// independent ways the admin-token mint used to yield a value that is not a
-// secret. Pure so the counterfactual below can feed it a mutated script.
+// independent ways an admin-token mint can yield a value that is not a secret.
+// Pure so the counterfactual below can feed it a mutated script.
 func adminTokenComplaints(code string) []string {
 	var out []string
 	tokLine := regexp.MustCompile(`(?m)^\s*TOKEN=\$\(.*$`).FindString(code)
@@ -166,11 +166,10 @@ func TestInstallSh_EnvWrittenUnderRestrictiveUmask(t *testing.T) {
 }
 
 // TestInstallShGuards_AreNotSatisfiedByComments is the permanent counterfactual
-// for the two guards above (F10 regression class REG1-001/REG1-002/TEST1-C1):
-// each case DELETES the one executable line that closes a settled finding,
-// leaves every comment that discusses it in place, and requires the guard to
-// notice. Before the comment-stripping fix all three mutations left the Go
-// guards green while scripts/test-install-sh-trust.sh went red.
+// for the two guards above: each case deletes the one executable line that
+// closes a settled finding, leaves every comment that discusses it in place,
+// and requires the guard to notice. A guard that does not strip comments stays
+// green on all three mutations while scripts/test-install-sh-trust.sh goes red.
 func TestInstallShGuards_AreNotSatisfiedByComments(t *testing.T) {
 	raw := rawInstallSh(t)
 	for _, tc := range []struct {

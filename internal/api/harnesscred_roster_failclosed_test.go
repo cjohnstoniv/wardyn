@@ -16,8 +16,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// siteConfigErrStore answers every roster read with a transient failure — the
-// store blip authorizeHarnessLogin used to swallow.
+// siteConfigErrStore answers every roster read with a transient failure — a
+// store blip authorizeHarnessLogin must not swallow.
 type siteConfigErrStore struct{ *integStore }
 
 func (siteConfigErrStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
