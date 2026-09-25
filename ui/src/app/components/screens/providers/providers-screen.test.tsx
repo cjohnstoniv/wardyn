@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
+import { IMAGES } from "../../../lib/availability-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { UnsavedGuardProvider } from "../../../lib/use-unsaved-guard";
@@ -55,6 +56,10 @@ vi.mock("../../../lib/api/drives", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/drives")>("../../../lib/api/drives");
   return { ...actual, drives: { ...actual.drives, getDrives: () => Promise.resolve({ drives: [], grants: [], host_roots_configured: false, runner_target: "" }) } };
 });
+
+vi.mock("../../../lib/api/base-images", () => ({
+  baseImages: { list: () => Promise.resolve([]), add: vi.fn() },
+}));
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
@@ -143,6 +148,28 @@ describe("ProvidersScreen", () => {
     const teal = screen.getAllByRole("button").filter((b) => b.className.split(/\s+/).includes("bg-primary"));
     expect(teal.length).toBe(1);
     expect(teal[0]).toHaveTextContent(PROVIDERS.SAVE_CTA);
+  });
+
+  // #923 decision 1: Images is the fourth tab, after Agents; its one teal is
+  // its own Add image, so Save providers is withheld while it is open.
+  it("the Images tab comes after Agents and carries its own one teal, Add image", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e2c"',
+    });
+    renderScreen();
+    await screen.findByTestId("provider-row-github");
+    const tabs = [PROVIDERS.GIT_TITLE, PROVIDERS.STORAGE_TAB, AGENTS.AGENTS_TITLE, IMAGES.TAB].map((name) =>
+      screen.getByRole("button", { name }),
+    );
+    for (let i = 1; i < tabs.length; i++) {
+      expect(tabs[i - 1].compareDocumentPosition(tabs[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+
+    await userEvent.click(tabs[3]);
+    expect(await screen.findByText(IMAGES.EMPTY_TITLE)).toBeInTheDocument();
+    const teal = screen.getAllByRole("button").filter((b) => b.className.split(/\s+/).includes("bg-primary"));
+    expect(teal.map((b) => b.textContent)).toEqual([IMAGES.ADD_CTA]);
   });
 
   it("saves the whole document and shows the saved toast", async () => {

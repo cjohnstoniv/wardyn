@@ -825,8 +825,8 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
     const row = page.getByTestId("provider-row-github");
     await expect(row).toBeVisible();
 
-    await expect(row.getByRole("button", { name: AVAILABILITY.EVERYONE })).toHaveAttribute("aria-pressed", "true");
-    await row.getByRole("button", { name: AVAILABILITY.ONLY }).click();
+    await expect(row.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
 
     // The server's own availabilityOnlyEmptyMsg (permissions_availability.go),
     // rendered verbatim — never a console reword.
@@ -834,7 +834,7 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
       row.getByText("Add at least one person, group or user type before choosing Only, or nobody could use this."),
     ).toBeVisible();
     // The failed PUT never flipped the segment — it still reads Everyone.
-    await expect(row.getByRole("button", { name: AVAILABILITY.EVERYONE })).toHaveAttribute("aria-pressed", "true");
+    await expect(row.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
   });
 
   test("adding a user type lands the chip, turns Only on, and both survive a reload", async ({ page }) => {
@@ -848,16 +848,16 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
     // an id nobody created.
     await row.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("standard");
     await row.getByRole("button", { name: AVAILABILITY.ADD_CTA }).click();
-    await expect(row.getByText(/standard/)).toBeVisible();
+    await expect(row.getByText(/standard/i)).toBeVisible();
 
-    await row.getByRole("button", { name: AVAILABILITY.ONLY }).click();
-    await expect(row.getByRole("button", { name: AVAILABILITY.ONLY })).toHaveAttribute("aria-pressed", "true");
+    await row.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    await expect(row.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
 
     await page.reload();
     const reloaded = page.getByTestId("provider-row-github");
     await expect(reloaded).toBeVisible();
-    await expect(reloaded.getByRole("button", { name: AVAILABILITY.ONLY })).toHaveAttribute("aria-pressed", "true");
-    await expect(reloaded.getByText(/standard/)).toBeVisible();
+    await expect(reloaded.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
+    await expect(reloaded.getByText(/standard/i)).toBeVisible();
     // The mock's two provider lines, and the last audience locked while Only is on.
     await expect(reloaded.getByText(AVAILABILITY.PROVIDER_ONLY_HINT)).toBeVisible();
     await expect(reloaded.getByText(AVAILABILITY.PROVIDER_NOTE)).toBeVisible();
@@ -875,9 +875,9 @@ test.describe("providers — the git provider row's Available to control (UT-7b)
 
     // Clean up: back to Everyone, then remove the audience — this row's
     // availability must not leak into a later run of this same suite.
-    await reloaded.getByRole("button", { name: AVAILABILITY.EVERYONE }).click();
-    await expect(reloaded.getByRole("button", { name: AVAILABILITY.EVERYONE })).toHaveAttribute("aria-pressed", "true");
+    await reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE }).click();
+    await expect(reloaded.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
     await reloaded.getByRole("button", { name: /Remove.*standard/i }).click();
-    await expect(reloaded.getByText(/standard/)).toHaveCount(0);
+    await expect(reloaded.getByText(/standard/i)).toHaveCount(0);
   });
 });
