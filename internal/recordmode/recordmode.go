@@ -502,7 +502,7 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 		// mis-sold by its own name. The sink refuses off-posture anyway; this stops
 		// the grant being written down at all.
 		if gs.Kind == types.GrantAPIKey && grantNamesOAuthSentinel(gs) {
-			warnings = append(warnings, fmt.Sprintf("minted grant %s injects a shared subscription OAuth sentinel; omitted from eligible_grants (a stored profile must not carry one operator's live credential)", id))
+			warnings = append(warnings, fmt.Sprintf("minted grant %s injects a subscription OAuth sentinel; omitted from eligible_grants (a stored profile must not carry a live subscription credential)", id))
 			continue
 		}
 		spec.EligibleGrants = append(spec.EligibleGrants, gs)
@@ -611,8 +611,9 @@ func sortedUUIDs(set map[uuid.UUID]bool) []uuid.UUID {
 
 // grantNamesOAuthSentinel reports whether an api_key grant's scope names one of
 // the SENTINEL secret names that resolve to a live Anthropic OAuth token rather
-// than to a stored secret (see types.SubscriptionOAuthSecret / ManagedOAuthSecret
-// and the injection sink in internal/api/injection.go).
+// than to a stored secret (see types.SubscriptionOAuthSecret / ManagedOAuthSecret,
+// a person's own wardyn-provider-<uid>-oauth, and the injection sink in
+// internal/api/injection.go).
 //
 // Unparseable scope reads as "yes": a grant whose scope we cannot inspect is not
 // a grant to write into a durable least-privilege profile.
@@ -623,5 +624,6 @@ func grantNamesOAuthSentinel(gs types.GrantSpec) bool {
 	if err := json.Unmarshal(gs.Scope, &scope); err != nil {
 		return true
 	}
-	return scope.SecretName == types.SubscriptionOAuthSecret || scope.SecretName == types.ManagedOAuthSecret
+	return scope.SecretName == types.SubscriptionOAuthSecret || scope.SecretName == types.ManagedOAuthSecret ||
+		strings.HasPrefix(scope.SecretName, types.ModelProviderSecretPrefix) && strings.HasSuffix(scope.SecretName, "-oauth")
 }

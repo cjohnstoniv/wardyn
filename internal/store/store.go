@@ -123,7 +123,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	}
 	q := `
 		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
 		RETURNING ` + runCols
 
 	limitsJSON, err := json.Marshal(r.RunLimits)
@@ -135,7 +135,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs, string(r.AutonomyLevel),
-		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID,
+		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID,
 	)
 	return scanRun(row)
 }
@@ -324,7 +324,7 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // (SetRunFailureHint) rather than by CreateRun is visible as exactly that, and
 // a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
-	`ends_at, wait_budget_sec, run_limits, governance_profile_id`
+	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id`
 const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason`
 
 // scanRun is the ONE reader for runCols, which is now the ONE spelling of the
@@ -342,7 +342,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.PolicyID, &cc, &state,
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
 		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &autonomyLevel,
-		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID,
+		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID, &r.ModelProviderID,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

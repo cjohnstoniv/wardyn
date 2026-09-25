@@ -39,10 +39,10 @@ import (
 //
 // It is NOT "this needs fixing" — nearly every warn/fail row does — and NOT a
 // severity ranking. Two families must never carry it. Rows graded through the
-// CALLER's own credential rather than the install: llmProviderCheck's and
-// bedrockProviderCheck's per_user arms, and awsSSOCredentialRow, which grades
-// the caller's own AWS SSO session. Confiscating the console over a fact about
-// one person is exactly what this flag exists to prevent. And advisory
+// CALLER's own credential rather than the install: llmProviderCheck's per_user
+// and provider arms, bedrockProviderCheck's per_user arm, providerAccessCheck and
+// awsSSOCredentialRow (the caller's own AWS SSO session). Confiscating the console
+// over a fact about one person is exactly what this flag exists to prevent. And advisory
 // install rows, whose grade belongs on every surface that renders them but
 // whose fix is nobody's emergency: the SCM safest-path ladder, an ephemeral age
 // key, TLS cookie posture, an acknowledged egress canary. (harnessCredential-
@@ -314,8 +314,8 @@ const (
 // detail, "" when there is none). INFO when there is NO model provider at
 // all — it is OPTIONAL, needed only for agent-harness runs, so "no model" is
 // a deliberate non-blocking state, never a gap the operator must clear. WARN
-// is reserved for the per_user arm below: there a provider IS declared and
-// THIS person's half of it is missing, which is a real, actionable gap.
+// is reserved for the per_user and provider arms below: there a provider IS
+// declared and THIS person's half of it is missing, a real, actionable gap.
 //
 // bedrock is read ONLY when llmDetail is "" — llmProvenance's own winning
 // signal always outranks it (unchanged), and the "no provider configured"
@@ -324,7 +324,8 @@ const (
 // fact than "nothing is configured" (a cross-row contradiction:
 // bedrock_provider says Bedrock IS configured two rows down), so it gets its
 // own per-principal sentence instead of the generic optional-provider one.
-func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
+// access (provider_access) is read last: granted providers aren't "nothing configured".
+func llmProviderCheck(llmDetail string, bedrock SetupBedrock, access []SetupProviderAccess) SetupCheck {
 	if llmDetail != "" {
 		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "ok", Detail: llmDetail}
 	}
@@ -336,6 +337,9 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 			ID: "llm_provider", Label: "LLM access", Status: "warn",
 			Detail: llmProviderPerUserDetail, Fix: llmProviderPerUserFix,
 		}
+	}
+	if chk, ok := providerAccessLLMCheck(access); ok {
+		return chk
 	}
 	return SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",

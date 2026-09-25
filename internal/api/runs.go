@@ -244,8 +244,22 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Ahead of the autonomy gate because that gate grades THIS resolution: the
 	// Bedrock model credential is handed to the run at dispatch, and a secrets
 	// axis graded without it froze the level a rung too high (#504).
-	var modelCred modelCredentialFacts
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
+	// The model-provider choice first: with a provider block, it is the run's
+	// provider that decides its lane, and one this build cannot dispatch yet is
+	// refused here rather than handed to the lane chain below. mpChoice is
+	// this run's ONLY source for ModelProviderID below and for the run.create
+	// audit snapshot (#527) — mpChoice.chosen is false, with a zero
+	// mpChoice.provider, on every "today's path" return (no block, or a block
+	// serving no provider for this agent), so ModelProviderID freezes "" there,
+	// same as a legacy row.
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, wsRefs)
+	if !ok {
+		return
+	}
+	// A chosen provider's arm alone credentials the run, so the roster's
+	// declared-mechanism gate, which grades the legacy lanes, does not apply.
+	modelCred := mpChoice.modelCredential()
+	if !mpChoice.chosen && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
 		return
 	}
 
@@ -307,6 +321,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// freezing them on the row would mirror a computation into a column
 		// nothing reads back.
 		AutonomyLevel: autonomy.Level,
+		// The id alone — mpChoice.provider.Kind rides on the audit snapshot
+		// below instead (AgentRun.ModelProviderID's own doc explains why).
+		// mpChoice.provider.ID is "" when mpChoice.chosen is false.
+		ModelProviderID: mpChoice.provider.ID,
 	}
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
@@ -386,10 +404,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Mechanism)
 
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor))))
+		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice))))
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
-	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject)...)
+	if !mpChoice.chosen {
+		warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject)...)
+	}
 
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
@@ -580,8 +600,16 @@ func (s *Server) noModelAccessWarning(ctx context.Context, req createRunRequest,
 // credential is delivered to the sandbox at DISPATCH, after `enforced` is
 // already resolved, so it is never an eligible grant and never on the run row
 // either; this event is its only provenance record too.
+//
+// mp (#527): the run's own model-provider choice, {id, kind} — the run row
+// freezes the id alone (AgentRun.ModelProviderID), so this event is the only
+// provenance for the KIND at the moment of choice, since a provider's kind
+// can change later (a kind change mints a fresh UID, #521) and the row would
+// then read a kind the id no longer has. Omitted entirely when mp.chosen is
+// false — no provider block, or a block serving no provider for this agent —
+// same as every other conditional field above.
 func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced types.ConfinementClass, reqCC types.ConfinementClass, jti string,
-	clampWarnings []string, autonomy types.AutonomyResolution, belowFloor bool,
+	clampWarnings []string, autonomy types.AutonomyResolution, belowFloor bool, mp runProviderChoice,
 ) map[string]any {
 	confinementSource := "defaulted"
 	if reqCC != "" {
@@ -643,6 +671,9 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		// everything else — no SSO-delivered credential, or one whose enforced
 		// confinement already meets CC3.
 		data["credential_confinement"] = credentialConfinementBelowFloor
+	}
+	if mp.chosen {
+		data["model_provider"] = map[string]any{"id": mp.provider.ID, "kind": mp.provider.Kind}
 	}
 	return data
 }

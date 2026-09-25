@@ -256,6 +256,40 @@ func TestStoreMode_DeleteRemovesTheStoreBeforeTheRow(t *testing.T) {
 	}
 }
 
+// DeleteEverywhere removes every owner's value from the store, not only the
+// rows, and a store failure keeps every row.
+func TestStoreMode_DeleteEverywhereRemovesEveryOwnersValue(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	s := storeMode(t, pool, newFakeStore(t, f), nil)
+	ctx := t.Context()
+	for _, owner := range []string{"", "alice", "bob"} {
+		if err := s.For(owner).Put(ctx, "k", []byte("v-"+owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.mu.Lock()
+	f.force = []int{403, 403}
+	f.mu.Unlock()
+	if _, err := s.DeleteEverywhere(ctx, []string{"k"}); err == nil {
+		t.Fatal("DeleteEverywhere succeeded with Vault refusing")
+	}
+	if v, err := s.For("bob").Get(ctx, "k"); err != nil || string(v) != "v-bob" {
+		t.Fatalf("after a failed DeleteEverywhere, Get = (%q, %v); want the value intact", v, err)
+	}
+	f.mu.Lock()
+	f.force = nil
+	f.mu.Unlock()
+	if n, err := s.DeleteEverywhere(ctx, []string{"k"}); err != nil || n != 3 {
+		t.Fatalf("DeleteEverywhere = (%d, %v), want 3 rows removed", n, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.kv) != 0 {
+		t.Fatalf("DeleteEverywhere left %d paths in Vault", len(f.kv))
+	}
+}
+
 // Rule 22: migrate both ways, idempotent, nothing left behind.
 func TestMigrate_BothWaysLeavesNothingBehind(t *testing.T) {
 	pool := throwawayDB(t)

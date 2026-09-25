@@ -102,6 +102,8 @@ func (s *Server) routes() chi.Router {
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
 			//       (agent_providers.go)
+			//   mountModelProviderRoutes            split: 2 operatorOnly,
+			//       4 authenticated (model_providers_api.go)
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
 			//   mountSecretRoutes (routes.go) split: the /secrets
@@ -482,11 +484,10 @@ func (s *Server) routes() chi.Router {
 			// (.golangci.yml, 150 non-comment lines): a new route family here has
 			// to free its line by extracting an existing block first.
 			s.mountSiteConfigProbeRoutes(securityOps)
-			// Workspace providers — see mountWorkspaceProviderRoutes, and
-			// the agent roster beside it (agent_providers.go). Both MOUNTS,
-			// attached with no blank line, for the ratchet reason just above.
-			s.mountWorkspaceProviderRoutes(operatorOnly)
-			s.mountAgentProviderRoutes(operatorOnly)
+			// Workspace providers, the agent roster and the model providers it
+			// defaults to — see mountProviderRoutes. One MOUNT, attached with no
+			// blank line, for the ratchet reason just above.
+			s.mountProviderRoutes(r, operatorOnly)
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /

@@ -439,6 +439,21 @@ func TestRunCmd_ImageAndTaskModeInBody(t *testing.T) {
 	}
 }
 
+func TestRunCmd_ModelProviderInBody(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{ID: uuid.New(), State: types.RunPending})
+	if err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+		"--agent", "claude-code", "--task", "t", "--model-provider", "corp-gateway"); err != nil {
+		t.Fatalf("run command returned error: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(srv.last().body, &body); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if body["model_provider"] != "corp-gateway" {
+		t.Errorf("run body model_provider = %v, want corp-gateway", body["model_provider"])
+	}
+}
+
 func TestRunCmd_WaitInteractiveConflict(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
 

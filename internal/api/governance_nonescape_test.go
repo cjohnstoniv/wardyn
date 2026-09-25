@@ -75,6 +75,16 @@ func (s *govEscapeStore) ListWorkspaces(context.Context) ([]types.Workspace, err
 	defer s.mu.Unlock()
 	return s.workspaces, nil
 }
+func (s *govEscapeStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ws := range s.workspaces {
+		if ws.ID == id {
+			return ws, nil
+		}
+	}
+	return types.Workspace{}, store.ErrNotFound
+}
 func (s *govEscapeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

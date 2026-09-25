@@ -412,6 +412,133 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A run chooses its model provider (#526).** `model_provider` on `POST /runs` and
+  `/runs/preflight`, and `wardyn run --model-provider`, name the provider a run uses; unset, it is
+  the primary workspace's pin (`llm_cred.provider_ref`, new beside `integration_ref`), else the
+  agent's default, else the one provider serving the agent. A named provider that is missing, off,
+  not serving the agent or not granted is refused naming it, never swapped for another — a
+  disabled default too, even with one other candidate left — and so is a choice between several
+  with no default. With a provider block, every chosen provider is refused for now ("provider
+  dispatch for that kind is not yet available on this build") until its kind's dispatch lands; a
+  block serving no provider for the agent leaves the run on today's path, and `model_provider`
+  with no block, or on a run that calls no model, is refused rather than ignored. New capability
+  kind `model_provider` bounds the request, the pin and the default alike (reason
+  `capability_model_provider`, target `runs.model_provider`); unlike `integration`, a workspace
+  pin is not exempt. A run launched on a workspace by id (`workspace_id`, the CLI's `--workspace`)
+  chooses like any other.
+
+- **A run on a Claude subscription model provider uses its owner's own sign-in (#529).** A run
+  that chose an `anthropic_subscription` provider is dispatched on that provider alone: the run
+  owner's own Claude sign-in (`wardyn-provider-<uid>-oauth`, read strictly from their own
+  namespace, never the operator's) is injected proxy-side on `api.anthropic.com` or the provider's
+  route-through host, the sandbox holding only an inert sentinel; the host `~/.claude` mount, the
+  operator's managed token, Bedrock and the operator's API key never credential it. It works on
+  Kubernetes and with SSO: the shared-subscription posture refusal now applies only to the two
+  legacy shared sentinels. Create, Review and dispatch refuse, naming the provider, a run whose
+  owner is not signed in to Claude for it, whose install cannot hold or build a sign-in (no secret
+  store, or the Claude sign-in image does not resolve), or whose caller is the admin token under
+  SSO; dispatch also refuses a provider since deleted, turned off, or no longer serving the agent.
+  The injection sink re-reads the provider by UID on every resolve and serves only the run token's
+  own subject, the provider's own host, and a run still on that provider. A stored, inline or
+  recorded grant naming a sign-in sentinel is dropped at dispatch (`run.injection.dropped`, reason
+  `provider_signin_not_dispatch_authored`), and Record Mode leaves one out of a profile. Nobody can
+  sign in to a provider yet (#533), so until then such runs are refused at create.
+- **A run on a Bedrock model provider uses its owner's own AWS credential (#530).** A run that
+  chose a `bedrock_sso` or `bedrock_bearer` provider reaches Bedrock with the region, model and
+  base URL the provider names (never the boot `WARDYN_BEDROCK_*` values), on its owner's own AWS
+  sign-in (`wardyn-provider-<uid>-sso`) or own Bedrock API key (`wardyn-provider-<uid>-key`), read
+  strictly from their own namespace. The kind names the one lane: the operator's bearer, captured
+  session, host `~/.aws` mount and static SigV4 keys never credential it, and every other model
+  injection the run carries (the legacy sentinels, anything bound for `api.anthropic.com`) is
+  dropped (`run.injection.dropped`, reason `not_the_chosen_provider`). An AWS sign-in must match
+  the provider's access portal and, when set, its pinned account and role. Create, Review and
+  dispatch refuse, naming the provider, a run whose owner has not added their key or is not signed
+  in to AWS for it. The injection sinks re-read the provider on every resolve and serve only the
+  run token's own subject, on the provider's own host, while the run is still on that provider,
+  and the roster's Bedrock key and session never resolve on such a run. A lapsed provider sign-in
+  fails the run's next model call rather than holding it, until provider sign-in lands (#533).
+  The "not yet available" refusal is lifted for both Bedrock kinds.
+
+- **`GET /setup/status` reports every granted model provider's connection state (#533).**
+  `provider_access: [{provider, state, action, deadline}]` generalises the single hardcoded
+  AWS-SSO answer `model_access` gave (`model_access` itself is unchanged, and stays until MP-4) to
+  every provider a person is granted: one row per provider in `model_providers`, graded against
+  that caller's own credential and never another's. States are `live`, `expiring`,
+  `expired_signin`, `not_configured` and `not_applicable` — no key probe: a typed key or token
+  grades on presence alone. A per-person Claude subscription grades `expiring` past the same age
+  heuristic the compose-mode managed token already uses (no machine-readable expiry on a
+  setup-token); a Bedrock SSO provider reuses the five-state AWS-SSO vocabulary over a
+  provider-scoped read, and a live, renewable session for an account or role the provider's own pin
+  no longer allows grades `expired_signin`, naming both pairs, rather than reading `live` for an
+  identity dispatch would refuse; so does a session from another AWS access portal than the
+  provider now names. The shared admin bearer token under OIDC reads `not_applicable` for every
+  provider kind, having no credential of its own to grade. Each row is a state name, an
+  already-composed sentence and a deadline instant — never a secret name or start URL; the
+  pin-mismatch sentence is the one place the pinned account and role appear, members included, as
+  `model_access`'s already does. The setup checklist follows it: the "LLM access" row answers from
+  these rows instead of reading "No model/harness provider configured" beside them, and each
+  granted provider gets its own `llm_provider:<id>` row whose fix is that provider's action. The
+  legacy checklist rows stay until MP-4.
+- **Sign-in doors keyed by model provider (#534).** `POST /model-providers/{id}/sign-in` launches a
+  person's own sign-in for a `bedrock_sso` or `anthropic_subscription` provider, seeded from the
+  provider record alone (its access portal, region and account/role pin — never the request or the
+  boot `WARDYN_BEDROCK_*` values). The capture lands only in the signer's own namespace under the
+  provider's own name (`wardyn-provider-<uid>-sso` / `-oauth`), never the roster's shared name or the
+  operator's: an AWS sign-in through the sandbox's own upload, bound to the provider as it read at
+  launch and refused (`provider_changed`) if the provider was removed, re-created or given any other
+  address (rule 8's) while it was open; a Claude sign-in through `PUT` on the same path with the
+  printed setup-token, bound to a sign-in run the caller launched for that provider and refused the
+  same way after an address change. An unpinned AWS sign-in binds to the account of the model the
+  caller may run on the provider, and is refused before launch when those models name two accounts.
+  A person has one open sign-in sandbox per kind across all providers: starting an AWS sign-in for a
+  second provider ends the first one's, whose capture is then refused. The door answers only while a
+  model-provider block exists, and `POST /setup/harness-login` now answers only while none does. The
+  caller must be granted the provider and an agent it serves; the admin token under SSO cannot sign
+  in. A run whose provider AWS session lapses mid-run is now held for its owner to sign in again,
+  as roster runs are: the hold's `requested_scope` names the provider (`provider`, `provider_uid`),
+  and only its owner's sign-in for that provider answers it. `harness.login.started`,
+  `harness.credential.captured` and `credential.reauth.*` gain `model_provider`.
+
+- **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
+  `0076_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to
+  at create time, so every `scanRun`-bound reader — `GetRun`, `ListRuns`, the run detail and list
+  endpoints — sees it back. The run.create audit event gains a `model_provider: {id, kind}`
+  snapshot: the row freezes the id alone, because a provider's kind can change later (a kind change
+  mints a fresh UID, #521) and the row would then read a kind the id no longer has. Empty for a run
+  under no provider block, or one whose block serves no provider for the agent — today's path,
+  unchanged.
+
+- **Each person's own model-provider credential, strictly namespaced (#525).** `PUT` and
+  `DELETE /model-providers/{id}/credential` store and remove the caller's own key or token for a
+  key or endpoint provider, under `wardyn-provider-<uid>-key` in their own namespace — admins
+  included, never the operator's; the admin token under OIDC holds none. Only a provider serving an
+  agent the caller may launch is offered. The `wardyn-provider-` names are reserved at the generic
+  secrets API and the broker, and the sign-in captures (`-oauth`, `-sso`) at every sink too.
+  Changing a provider's address or header scheme, changing its kind, or removing it deletes every
+  person's credential for it in every namespace before the save, on `PUT /model-providers` and
+  `PUT /site-config` alike; the count is audited as `per_user_credentials_invalidated`. New audit
+  actions `model_provider.credential.write` / `.delete` record `{provider, owner}`, never the value.
+
+- **The Claude sign-in image is a checked prerequisite for `anthropic_subscription` model
+  providers (#524).** "Resolves" is now two things, not one: `WARDYN_AGENT_IMAGES["claude-code"]`
+  must be pinned, and, when the wired Runner can confirm its local image store (the Docker
+  substrate), the pinned ref must actually be present — a pin alone was not proof of a build, since
+  the compose/run-host defaults already bake one in unconditionally. `PUT /model-providers` and
+  `PUT /site-config` refuse a write that adds an `anthropic_subscription` provider that is on until
+  both hold (turning a stored one back on counts as adding it) — one that is off, or already stored
+  on, is never refused, so the off switch and every other save keep working if the image later goes
+  missing — and `GET /setup/status` carries the state as
+  its own `claude_signin_image` row (never blocking — the kind is optional). See `docs/OPERATIONS.md`
+  § Claude sign-in image.
+
+- **Console TS mirror of the model-provider server surface (#535).** `lib/types/setup.ts` gains
+  `SetupProviderAccess` and `SetupStatus.provider_access` (#533's wire shape), and three new API
+  clients mirror the doors the console's provider screens build on: `model-providers.ts`
+  (`GET`/`PUT /model-providers`, ETag/If-Match, #521/#523), `model-provider-credentials.ts`
+  (`PUT`/`DELETE /model-providers/{id}/credential`, write-only, #525) and
+  `model-provider-signin.ts` (`POST`/`PUT /model-providers/{id}/sign-in`, #534). No screen reads
+  them yet — the types and clients alone.
+
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away

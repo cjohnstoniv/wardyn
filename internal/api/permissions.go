@@ -286,13 +286,15 @@ func canonicalGrantValue(capability, value string) (string, error) {
 			return "", fmt.Errorf("value: %q is not a workspace id — a workspace capability names a workspace by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v)
 		}
 		return id.String(), nil
-	case capSecret, capIntegration, capWorkspaceProvider:
+	case capSecret, capIntegration, capWorkspaceProvider, capModelProvider:
 		grammar, what := secretNameRE, "secret name"
 		switch capability {
 		case capIntegration:
 			grammar, what = integrationRefRE, "integration id"
 		case capWorkspaceProvider:
 			grammar, what = integrationRefRE, "git provider id"
+		case capModelProvider:
+			grammar, what = modelProviderIDPattern, "model provider id"
 		}
 		if !oidc.ASCIIOnly(v) {
 			return "", fmt.Errorf("value: %q is not a %s — one is written in lowercase ASCII, so this value can never match a stored row", v, what)

@@ -38,10 +38,16 @@ const managedTokenCacheTTL = 60 * time.Second
 // a disconnect evicts it (Server.evictManagedToken), so a replaced or deleted
 // token is not served for the rest of the minute on this replica.
 type managedCredProvider struct {
-	store    secretstore.Store
 	provider string
+	// store is the boot provider's operator-wide managed credential (the raw,
+	// unscoped store) — not per-principal. Unset on a per-person provider,
+	// which reads its owner's own row name through srv's strict read instead
+	// (ownerSubscriptionToken).
+	store       secretstore.Store
+	srv         *Server
+	owner, name string
 
-	mu       sync.Mutex // also single-flights the fill
+	mu      sync.Mutex // also single-flights the fill
 	cached   subscription.Token
 	cachedAt time.Time
 }
@@ -53,7 +59,7 @@ func NewManagedCredProvider(store secretstore.Store, provider string) subscripti
 	if store == nil {
 		return nil
 	}
-	return &managedCredProvider{store: store, provider: provider}
+	return &managedCredProvider{provider: provider, store: store}
 }
 
 func (p *managedCredProvider) read(ctx context.Context) (subscription.Token, error) {
@@ -71,18 +77,29 @@ func (p *managedCredProvider) read(ctx context.Context) (subscription.Token, err
 	return tok, nil
 }
 
-func (p *managedCredProvider) fetch(ctx context.Context) (subscription.Token, error) {
-	// p.store is the operator-wide managed credential (NewManagedCredProvider's
-	// caller passes the raw, unscoped store) — not per-principal.
-	raw, err := p.store.Get(ctx, harnessCredSecretName(p.provider))
-	if errors.Is(err, secretstore.ErrNotFound) {
-		return subscription.Token{}, fmt.Errorf("no managed %s credential connected", p.provider)
+// get reads the stored blob; found=false is "not connected". The boot
+// provider reads the operator's row, a per-person one its owner's own row.
+func (p *managedCredProvider) get(ctx context.Context) (raw []byte, found bool, err error) {
+	if p.srv != nil {
+		return p.srv.ownSecret(ctx, p.owner, p.name)
 	}
+	raw, err = p.store.Get(ctx, harnessCredSecretName(p.provider))
+	if errors.Is(err, secretstore.ErrNotFound) {
+		return nil, false, nil
+	}
+	return raw, err == nil, err
+}
+
+func (p *managedCredProvider) fetch(ctx context.Context) (subscription.Token, error) {
+	raw, found, err := p.get(ctx)
 	if err != nil {
 		// A store-layer failure (decrypt/age-key mismatch, backend down) is NOT
 		// "not connected" — surface it distinctly so the sink fails closed on a
 		// real error rather than silently reading as "unconfigured".
 		return subscription.Token{}, fmt.Errorf("read managed %s credential: %w", p.provider, err)
+	}
+	if !found {
+		return subscription.Token{}, fmt.Errorf("no managed %s credential connected", p.provider)
 	}
 	var blob managedCredBlob
 	if uerr := json.Unmarshal(raw, &blob); uerr != nil {

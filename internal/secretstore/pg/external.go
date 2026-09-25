@@ -206,6 +206,29 @@ func (s *Store) deleteExternal(ctx context.Context, name string) error {
 	return nil
 }
 
+// deleteExternalEverywhere is deleteExternal for every owner's pointer row of
+// each name, before DeleteEverywhere removes the rows: the first failure
+// refuses the whole delete, so no row goes while its value stays behind.
+func (s *Store) deleteExternalEverywhere(ctx context.Context, names []string) error {
+	rows, err := s.pool.Query(ctx,
+		`SELECT owned_by, name FROM secrets WHERE name = ANY($1) AND enc_version=$2`, names, extVersion)
+	if err != nil {
+		return fmt.Errorf("pg secretstore: delete everywhere: %w", err)
+	}
+	ptrs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Owner, Name string }])
+	if err != nil {
+		return fmt.Errorf("pg secretstore: delete everywhere: %w", err)
+	}
+	for _, p := range ptrs {
+		view := *s
+		view.owner = p.Owner
+		if err := view.deleteExternal(ctx, p.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // MigrateLocal is the -migrate-secrets target that seals rows locally.
 const MigrateLocal = "local"
 

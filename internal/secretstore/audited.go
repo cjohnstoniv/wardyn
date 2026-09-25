@@ -150,6 +150,10 @@ func (a *audited) Delete(ctx context.Context, name string) error { return a.inne
 
 func (a *audited) List(ctx context.Context) ([]string, error) { return a.inner.List(ctx) }
 
+func (a *audited) DeleteEverywhere(ctx context.Context, names []string) (int, error) {
+	return a.inner.DeleteEverywhere(ctx, names)
+}
+
 // StoresExternally forwards the wrapped store's description of the external
 // store its writes go to (the pg store in store mode), or "": metadata for the
 // setup row, never a value.

@@ -137,6 +137,21 @@ type SetupStatus struct {
 	// redactSetupStatusForMember does not zero it — a bare count carries no
 	// PEM content, host name, or other detail members are barred from.
 	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
+	// ModelProviders is the model providers THIS PRINCIPAL may use, in the
+	// member-safe shape (SetupModelProvider) — the same for every tier, so the
+	// member redaction has nothing to strip. Absent with no provider block,
+	// which is today.
+	ModelProviders []SetupModelProvider `json:"model_providers,omitempty"`
+	// ProviderAccess is THIS PRINCIPAL's connection state for every provider in
+	// ModelProviders (MP-12) — one row per provider, generalising the single
+	// AWS-SSO-only answer ModelAccess gives. Getting started and the setup
+	// checklist read this instead of grading one hardcoded lane, so a person
+	// granted several providers sees all of them. Kept for members: a state
+	// name, an already-composed action sentence, and a deadline instant — no
+	// secret names, no start URL. The pin-mismatch action is the one place the
+	// pinned account and role appear (SetupProviderAccess's doc). Absent with
+	// no provider block.
+	ProviderAccess []SetupProviderAccess `json:"provider_access,omitempty"`
 }
 
 // SetupHarness is a Wardyn-managed subscription credential's readiness. Derived
@@ -495,16 +510,16 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// listing, a CLI sweep + subscription peek, and an AWS-SSO-blob age decrypt.
 	integrations := s.integrationsWithCapabilitiesUsing(ctx, present, providers, bedrock)
 	llmReady := computeLLMReady(llmDetail, integrations)
+	modelProviders, providerAccess, providerChecks := s.setupModelProviderState(ctx, siteCfg, runIdentitySubject(ctx, principalFromRequest(r)))
 
 	// checks: the rows the wizard renders. "info" is used for permanent /
 	// non-fixable or purely-optional conditions so the user is never shown a red
-	// they cannot clear.
-	checks := []SetupCheck{
-		runnerCheck(rnr),
-		agentImageCheck(s.cfg.AgentImages),
-		envBuilderCheck(s.cfg.ImageBuilder != nil),
-		llmProviderCheck(llmDetail, bedrock),
-	}
+	// they cannot clear. Each granted provider's own row follows LLM access.
+	checks := append([]SetupCheck{
+		runnerCheck(rnr), agentImageCheck(s.cfg.AgentImages),
+		claudeSignInImageCheck(ctx, s.cfg.AgentImages, s.cfg.Runner),
+		envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(llmDetail, bedrock, providerAccess),
+	}, providerChecks...)
 	// confinement_floor: the operator's configured floor vs what this runner
 	// can actually enforce — see confinementFloorCheck.
 	if chk, ok := confinementFloorCheck(rnr, s.cfg.DefaultPolicy.MinConfinementClass); ok {
@@ -630,13 +645,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Harness:            harnessCreds,
 		// Integrations reuses the single integrationsWithCapabilitiesUsing call
 		// hoisted above (PLATFORM-API-7 optimization + HIGH-4 llm_ready reuse).
-		// Both lists hold only what this caller may use (capVisible);
-		// llmReady above stays the deployment fact it documents.
+		// Every list holds only what this caller may use (capVisible; model providers
+		// on the roster line, funlen ratchet); llmReady stays the deployment fact.
 		Integrations: capVisible(ctx, s, capIntegration, integrations, setupIntegrationID),
-		Harnesses:    capVisible(ctx, s, capAgent, setupHarnessTools(siteCfg, s.cfg.AgentImages), setupHarnessToolID),
-		LLMReady:     llmReady,
-		ModelAccess:  modelAccess,
-		SCMAccess:    s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
+		Harnesses:    capVisible(ctx, s, capAgent, setupHarnessTools(siteCfg, s.cfg.AgentImages), setupHarnessToolID), ModelProviders: modelProviders, ProviderAccess: providerAccess,
+		LLMReady:    llmReady,
+		ModelAccess: modelAccess,
+		SCMAccess:   s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),

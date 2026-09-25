@@ -305,8 +305,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// The autonomy gate below grades the same resolution, which is why this
 	// sits ahead of it — in launch's order.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	var modelCred modelCredentialFacts
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
+	// The model-provider choice, where launch makes it (runs.go). Review has no
+	// run row to freeze the choice onto, so it discards it — Review's job is
+	// only to answer the refusal launch would.
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, wsRefs)
+	if !ok {
+		return
+	}
+	modelCred := mpChoice.modelCredential()
+	if !mpChoice.chosen && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
 		return
 	}
 
