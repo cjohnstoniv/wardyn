@@ -687,6 +687,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   Started everywhere else, `/setup` included. The links into the funnel (the Host card's **Corporate
   proxy & egress**, the confinement-posture banner's action and the empty Runs board's guided tour)
   now open `/admin/setup`.
+- **The Wall tier (CC2) is exercised on a real gVisor runtime (#702).** A new nightly job,
+  `gvisor-cc2-live`, installs a pinned, sha512-checked `runsc` on the runner and runs the docker
+  conformance suite and the live task e2e with `WARDYN_TEST_REQUIRE_CLASS=CC2`, which fails the lane
+  if the runtime did not register rather than letting it pass on runc. On Kubernetes,
+  `TestCreateSandbox_PinsTheRuntimeClassPerTier` pins that a CC2/CC3 agent pod carries its pinned
+  RuntimeClass, and that an unpinned, missing, weaker or since-changed RuntimeClass is refused
+  before any pod, Secret or NetworkPolicy is created.
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away
