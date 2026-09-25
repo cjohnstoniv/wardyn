@@ -855,13 +855,13 @@ function ReauthRow({
     // row is mounted without a router in its suites.
     view: viewOfPath(window.location.pathname),
   });
+  // M-7 narrows who is offered a door, and so which sentence the row reads.
+  const mayAct = adminView && !audience.shared ? false : audience.canAct;
   // A hold whose provider this person has no door for any more gets its hint
-  // alone, never a button that opens nothing (#543).
+  // alone, never a button that opens nothing (#543) — the sentence stays
+  // `mayAct`'s, as /approvals' card keeps it.
   const { status } = useShellSetupStatus();
-  const canAct =
-    !(adminView && !audience.shared) &&
-    audience.canAct &&
-    (!audience.provider || !!resolveDoor(status, { provider: audience.provider }, "user"));
+  const canAct = mayAct && (!audience.provider || !!resolveDoor(status, { provider: audience.provider }, "user"));
   const ownRow = adminView && !audience.shared && audience.mine;
   // Nobody should claim the door for a control they are not rendering.
   useClaimModelAccessDoor(canAct);
@@ -873,7 +873,7 @@ function ReauthRow({
           {REAUTH_ROW.label}
         </Mono>
         <span className="text-meta font-normal normal-case text-muted-foreground">
-          {reauthRowHint(canAct === audience.canAct ? audience : { ...audience, canAct })}
+          {reauthRowHint(mayAct === audience.canAct ? audience : { ...audience, canAct: mayAct })}
         </span>
       </div>
       {canAct && (
