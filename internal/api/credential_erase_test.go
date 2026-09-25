@@ -158,7 +158,7 @@ func (s *sweepSecrets) DeleteExpired(context.Context) ([]secretstore.Expired, er
 // some behind, and a store without the sweep is a no-op.
 func TestSweepExpiredCredentials_AuditsEachDeletion(t *testing.T) {
 	h := newHarness(t)
-	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
 	h.srv.cfg.Secrets = &sweepSecrets{memSecrets: &memSecrets{m: map[string][]byte{}},
 		gone: []secretstore.Expired{{Owner: "bob", Name: "wardyn-harness-aws-oauth", ExpiresAt: at}},
 		err:  errors.New("one row was kept")}
@@ -169,7 +169,7 @@ func TestSweepExpiredCredentials_AuditsEachDeletion(t *testing.T) {
 	var data map[string]any
 	_ = json.Unmarshal(ev.Data, &data)
 	if ev.Target != "wardyn-harness-aws-oauth" || data["secret_owner"] != "bob" || data["reason"] != "expired" ||
-		data["expires_at"] != "2026-09-01T00:00:00Z" || ev.ActorType != types.ActorSystem {
+		data["expires_at"] != at.Format(time.RFC3339) || ev.ActorType != types.ActorSystem {
 		t.Fatalf("credential.expired_deleted row = %+v %s", ev, ev.Data)
 	}
 

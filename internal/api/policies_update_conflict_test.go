@@ -29,10 +29,10 @@ func (s renameConflictPolicyStore) UpdatePolicy(context.Context, uuid.UUID, stri
 	return types.RunPolicy{}, store.ErrConflict
 }
 
-// TestUpdatePolicyDuplicateName is B1-F5. Creating a policy under a name that
-// is taken has answered 409 since W20-S1-3; RENAMING one onto a taken name fell
-// through to handleUpdatePolicy's blanket 500, which leaks the raw Postgres
-// constraint text and tells the admin nothing they can act on.
+// TestUpdatePolicyDuplicateName: renaming a policy onto a taken name must
+// answer 409, like creating one under that name does — not fall through to
+// handleUpdatePolicy's blanket 500, which leaks the raw Postgres constraint
+// text and tells the admin nothing they can act on.
 func TestUpdatePolicyDuplicateName(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, renameConflictPolicyStore{}))

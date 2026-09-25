@@ -13,8 +13,8 @@ import (
 // seam impl, so a blank import (cmd/wardynd) makes "pg" selectable.
 func init() {
 	secretstore.Register("pg", func(d secretstore.Deps) (secretstore.Store, error) {
-		s, err := New(d.Pool, d.AgeIdentity)
-		if err != nil {
+		s := &Store{pool: d.Pool}
+		if err := s.setLocalKeys(d.AgeIdentity, d.PlatformIdentity); err != nil {
 			return nil, err
 		}
 		// A configured external store is read-only here: pointer rows written
@@ -36,11 +36,9 @@ func RegisterExternal(name string) {
 		}
 		s := &Store{pool: d.Pool, ext: d.External, writeExt: true, extTimeout: d.ExternalTimeout}
 		if d.AgeIdentity != nil {
-			k, err := localKEK(d.AgeIdentity)
-			if err != nil {
+			if err := s.setLocalKeys(d.AgeIdentity, d.PlatformIdentity); err != nil {
 				return nil, err
 			}
-			s.kek = k
 		}
 		return s, nil
 	})

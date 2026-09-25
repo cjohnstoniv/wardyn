@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -804,5 +805,55 @@ func TestAWSSSORefresh_TransientFailureServesAStillValidToken(t *testing.T) {
 	}
 	if got := s.metrics.ssoRefreshOutcomes[ssoRefreshOutcomeTransportError]; got != 1 {
 		t.Errorf("wardyn_sso_refresh_total{outcome=transport_error} = %d, want 1 (the access token was still valid)", got)
+	}
+}
+
+// flakySpentStore is a spent-mark store whose FIRST read fails and whose later
+// reads report the persisted mark — a transient error on the first probe after
+// a restart.
+type flakySpentStore struct {
+	store.Store
+	reads int
+}
+
+func (f *flakySpentStore) AWSSSOTokenSpent(context.Context, string) (bool, error) {
+	f.reads++
+	if f.reads == 1 {
+		return false, errors.New("conn reset by peer")
+	}
+	return true, nil
+}
+
+func (f *flakySpentStore) MarkAWSSSOTokenSpent(context.Context, string, string, time.Time) error {
+	return nil
+}
+
+func (f *flakySpentStore) PruneAWSSSOSpentTokens(context.Context, time.Time) (int, error) {
+	return 0, nil
+}
+
+// A failed read of the persisted spent mark is not an answer, so it is not
+// memoized: the next check reads the row again and finds the mark. Caching the
+// failure as spent=false masked a known-dead token as renewable for the whole
+// process lifetime (#505 F4).
+func TestAWSSSOTokenSpent_AFailedReadIsNotMemoized(t *testing.T) {
+	st := &flakySpentStore{}
+	s := &Server{cfg: Config{Store: st, BaseCtx: context.Background()}}
+	fp := awsSSOTokenFingerprint("rt-known-dead")
+
+	if s.awsSSOTokenSpent(fp) {
+		t.Fatal("the failed first read answered spent; it answers not-spent for that one call")
+	}
+	if _, cached := s.ssoRefreshSpent[fp]; cached {
+		t.Fatal("the failed read was memoized — the persisted mark is masked until the next restart")
+	}
+	if !s.awsSSOTokenSpent(fp) {
+		t.Fatal("the second check did not read the persisted mark; a transient error hid a spent token")
+	}
+	if st.reads != 2 {
+		t.Fatalf("store reads = %d, want 2 (the failure, then the definitive answer)", st.reads)
+	}
+	if !s.awsSSOTokenSpent(fp) || st.reads != 2 {
+		t.Fatalf("the definitive answer must be memoized; reads = %d", st.reads)
 	}
 }

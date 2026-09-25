@@ -328,6 +328,11 @@ const AWSSSOSpentTokenRetention = 90 * 24 * time.Hour
 // of one fingerprint since this process started) costs one best-effort row
 // read; every check after that — including every check in a process that has
 // never restarted — is answered from the map alone.
+//
+// Only a DEFINITIVE answer is memoized. A failed read answers not-spent for
+// this one call and is asked again on the next: caching it would mask a
+// persisted mark for the whole process lifetime, which is the restart hole
+// #149 closed, reopened by one transient store error (#505).
 func (s *Server) awsSSOTokenSpent(fingerprint string) bool {
 	s.ssoRefreshMu.Lock()
 	if spent, known := s.ssoRefreshSpent[fingerprint]; known {
@@ -336,7 +341,10 @@ func (s *Server) awsSSOTokenSpent(fingerprint string) bool {
 	}
 	s.ssoRefreshMu.Unlock()
 
-	spent := s.readAWSSSOTokenSpentRow(fingerprint)
+	spent, err := s.readAWSSSOTokenSpentRow(fingerprint)
+	if err != nil {
+		return false
+	}
 
 	s.ssoRefreshMu.Lock()
 	if s.ssoRefreshSpent == nil {
@@ -355,15 +363,16 @@ func (s *Server) awsSSOTokenSpent(fingerprint string) bool {
 // the memoized answer must be the same fact regardless of which caller's
 // request happens to trigger the one read that fills the cache.
 //
-// Fails OPEN (not spent) on no store, no capability, or a read error — the
-// same answer an empty map already gave for every fingerprint before this
-// existed. The only cost of a false negative is one wasted CreateToken round
-// trip: a genuinely spent token still comes back invalid_grant/expired_token,
-// which re-marks it (in the map immediately, and in this table best-effort).
-func (s *Server) readAWSSSOTokenSpentRow(fingerprint string) bool {
+// Answers not-spent on no store or no capability — a definitive answer, since
+// such a store can hold no mark — and returns a read error to the caller,
+// which answers not-spent for that call without memoizing it. The only cost of
+// that false negative is one wasted CreateToken round trip: a genuinely spent
+// token still comes back invalid_grant/expired_token, which re-marks it (in the
+// map immediately, and in this table best-effort).
+func (s *Server) readAWSSSOTokenSpentRow(fingerprint string) (bool, error) {
 	st, ok := s.cfg.Store.(store.AWSSSOSpentTokenStore)
 	if !ok {
-		return false
+		return false, nil
 	}
 	ctx := s.cfg.BaseCtx
 	if ctx == nil {
@@ -371,11 +380,11 @@ func (s *Server) readAWSSSOTokenSpentRow(fingerprint string) bool {
 	}
 	spent, err := st.AWSSSOTokenSpent(ctx, fingerprint)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: reading the persisted AWS SSO spent-token mark failed; treating it as not spent for this process",
+		slog.WarnContext(ctx, "wardynd: reading the persisted AWS SSO spent-token mark failed; treating it as not spent for this check only",
 			slog.Any("err", err))
-		return false
+		return false, err
 	}
-	return spent
+	return spent, nil
 }
 
 // markAWSSSOTokenSpent marks fingerprint spent in the in-memory map (which

@@ -271,7 +271,8 @@ func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, n
 
 func (s *Store) atTarget(target string, e envelope) bool {
 	if target == MigrateLocal {
-		return e.version == encVersion && e.kekID == s.kek.ID()
+		// Any local row: moving between local keys is -rewrap's, not this.
+		return e.version == encVersion
 	}
 	store, _ := splitRef(e.kekID)
 	return e.version == extVersion && store == target
@@ -327,11 +328,12 @@ func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRe
 		return true, false, nil
 	}
 
-	wrapped, ct, err := seal(ctx, s.kek, owner, name, plain)
+	k := s.writer(owner, name)
+	wrapped, ct, err := seal(ctx, k, owner, name, plain)
 	if err != nil {
 		return false, false, err
 	}
-	if err := flipRow(ctx, tx, owner, name, encVersion, s.kek.ID(), wrapped, ct); err != nil {
+	if err := flipRow(ctx, tx, owner, name, encVersion, k.ID(), wrapped, ct); err != nil {
 		return false, false, err
 	}
 	store, loc := splitRef(e.kekID)
@@ -405,9 +407,13 @@ func (s *Store) Reconcile(ctx context.Context) (ReconcileReport, error) {
 			continue
 		}
 		rep.Checked++
-		// A row points at loc whether or not its value is live: a soft-deleted
+		// A row claims the path its owner and name DERIVE, never the one it
+		// records: a forged pointer cannot hide another value from the orphan
+		// list. It claims it whether or not the value is live: a soft-deleted
 		// value behind a row is dangling, not an orphan as well.
-		pointed[secretstore.RefObject(loc)] = true
+		if want, err := s.ext.Ref(e.ownedBy, e.name, loc); err == nil {
+			pointed[want] = true
+		}
 		err := s.ext.Check(ctx, e.ownedBy, e.name, loc)
 		switch {
 		case errors.Is(err, secretstore.ErrUnavailable):

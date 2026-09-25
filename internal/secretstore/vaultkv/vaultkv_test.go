@@ -42,6 +42,34 @@ func TestNew_FailsClosedWhenLoginFails(t *testing.T) {
 	}
 }
 
+// A mistyped mount, or a KV engine not yet enabled, fails boot rather than
+// the first write.
+func TestNew_RefusesAMountThatDoesNotExist(t *testing.T) {
+	f := newFakeVault(t)
+	f.jwts["sa-jwt"] = "wardyn"
+	_, err := New(t.Context(), Config{Addr: f.srv.URL, Auth: AuthKubernetes, AuthMount: "kubernetes", Role: "wardyn",
+		K8sTokenFile: writeFile(t, "sa-jwt"), Mount: "typo", Prefix: "p", MaxVersions: 1})
+	if err == nil || !strings.Contains(err.Error(), `WARDYN_VAULT_KV_MOUNT "typo"`) {
+		t.Fatalf("New with an unserved mount = %v; want a boot refusal naming the mount", err)
+	}
+}
+
+// Vault answers 404 "no handler for route" to a write or a DELETE under a
+// mount that does not exist. That must fail, never read as stored or removed.
+func TestPutAndDelete_FailOnAMountVaultDoesNotServe(t *testing.T) {
+	f := newFakeVault(t)
+	s := newFakeStore(t, f)
+	s.mount = "typo" // the mount went away after boot
+	if ref, err := s.Put(t.Context(), "", "wardyn-signing-key", "", []byte("pem"), false); err == nil {
+		t.Fatalf("Put under an unserved mount = (%q, nil); want an error", ref)
+	} else if !strings.Contains(err.Error(), `mount "typo"`) {
+		t.Fatalf("Put error does not name the mount: %v", err)
+	}
+	if err := s.Delete(t.Context(), "", "k", ""); err == nil {
+		t.Fatal("Delete under an unserved mount succeeded")
+	}
+}
+
 func TestKubernetesLogin_SendsRoleJWTAndNamespace(t *testing.T) {
 	f := newFakeVault(t)
 	f.namespace = "team-a"
@@ -78,6 +106,8 @@ func TestTokenFile_RereadOn403(t *testing.T) {
 	}
 }
 
+// The fake expires a token at its TTL, so a renewal that comes too late meets
+// a 403 and never counts.
 func TestKeepAlive_RenewsBeforeExpiry(t *testing.T) {
 	f := newFakeVault(t)
 	f.ttl = 1
@@ -85,14 +115,17 @@ func TestKeepAlive_RenewsBeforeExpiry(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		f.mu.Lock()
-		n := f.renews
+		n, login, renew := f.renews, f.loginAt, f.firstRenew
 		f.mu.Unlock()
 		if n > 0 {
+			if gap := renew.Sub(login); gap >= time.Second {
+				t.Fatalf("renew-self came %v after login, past the 1s TTL", gap)
+			}
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("renew-self was never called for a 1s token")
+	t.Fatal("renew-self never reached Vault while the 1s token was live")
 }
 
 // The transient/definitive split (design rule 21): 429, 5xx, sealed and the
@@ -387,5 +420,62 @@ func TestDelete_UsesTheDerivedPathNeverTheRef(t *testing.T) {
 	}
 	if v, err := s.Get(t.Context(), "bob", "pat", bobRef); err != nil || string(v) != "bob-secret" {
 		t.Fatalf("a delete of alice's row with bob's ref removed bob's value: (%q, %v)", v, err)
+	}
+}
+
+// TestTwoRoles_PlatformPathsUseOnlyThePlatformToken is the recommended
+// configuration (design §2.13 b) against a Vault enforcing the documented
+// two-role policy: every boot-key call — write, read, check, delete, walk —
+// goes out with the platform role's token and every credential call with the
+// other, so neither token ever needs (or is shown to) the other's paths.
+func TestTwoRoles_PlatformPathsUseOnlyThePlatformToken(t *testing.T) {
+	f := newFakeVault(t)
+	f.jwts["sa-jwt"] = "wardyn-credentials"
+	f.platformRole = "wardyn-platform"
+	s, err := New(t.Context(), Config{
+		Addr: f.srv.URL, Auth: AuthKubernetes, AuthMount: "kubernetes", Role: "wardyn-credentials", RolePlatform: "wardyn-platform",
+		K8sTokenFile: writeFile(t, "sa-jwt\n"), Mount: f.mount, Prefix: "ns1", MaxVersions: 1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	s.c.backoff, s.platform.backoff = 0, 0
+	ctx := t.Context()
+	rows := []struct{ owner, name string }{{"", "wardyn-signing-key"}, {"", "github-app-key"}, {"alice", "anthropic-api-key"}}
+	for _, r := range rows {
+		ref, err := s.Put(ctx, r.owner, r.name, "", []byte("v-"+r.name), false)
+		if err != nil {
+			t.Fatalf("Put %s/%s: %v", r.owner, r.name, err)
+		}
+		if got, err := s.Get(ctx, r.owner, r.name, ref); err != nil || string(got) != "v-"+r.name {
+			t.Fatalf("Get %s/%s = (%q, %v)", r.owner, r.name, got, err)
+		}
+		if err := s.Check(ctx, r.owner, r.name, ref); err != nil {
+			t.Fatalf("Check %s/%s: %v", r.owner, r.name, err)
+		}
+	}
+	entries, err := s.Walk(ctx)
+	if err != nil || len(entries) != len(rows) {
+		t.Fatalf("Walk = (%v, %v), want all %d values", entries, err, len(rows))
+	}
+	for _, r := range rows {
+		if err := s.Delete(ctx, r.owner, r.name, ""); err != nil {
+			t.Fatalf("Delete %s/%s: %v", r.owner, r.name, err)
+		}
+	}
+	if f.logins != 2 {
+		t.Errorf("logins = %d, want one per role", f.logins)
+	}
+}
+
+func TestTwoRoles_RefusedWhereTheySeparateNothing(t *testing.T) {
+	for label, cfg := range map[string]Config{
+		"token-file auth": {Auth: AuthTokenFile, TokenFile: "/dev/null", RolePlatform: "wardyn-platform"},
+		"the same role":   {Auth: AuthKubernetes, Role: "wardyn", RolePlatform: "wardyn"},
+	} {
+		cfg.Addr, cfg.Mount, cfg.Prefix, cfg.MaxVersions = "https://vault.example:8200", "wardyn", "ns1", 1
+		if _, err := New(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "WARDYN_VAULT_ROLE_PLATFORM") {
+			t.Errorf("%s: New = %v, want a refusal naming WARDYN_VAULT_ROLE_PLATFORM", label, err)
+		}
 	}
 }

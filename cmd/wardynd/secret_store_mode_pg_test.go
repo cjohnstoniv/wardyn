@@ -24,6 +24,7 @@ import (
 	"filippo.io/age"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
 )
 
@@ -51,6 +52,7 @@ func (m *memExternal) Get(_ context.Context, owner, name, ref string) ([]byte, e
 	}
 	return v, nil
 }
+func (m *memExternal) Ref(owner, name, _ string) (string, error) { return m.key(owner, name), nil }
 func (m *memExternal) Check(ctx context.Context, owner, name, ref string) error {
 	_, err := m.Get(ctx, owner, name, ref)
 	return err
@@ -66,7 +68,7 @@ func (m *memExternal) Walk(context.Context) ([]secretstore.ExternalEntry, error)
 func TestBuildSecretStore_StoreModeBootsWithNoAgeKey(t *testing.T) {
 	pool := envelopeDB(t)
 	ext := &memExternal{vals: map[string][]byte{}}
-	s, err := buildSecretStore(t.Context(), pool, "", vaultkv.Name, ext, 0)
+	s, err := buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, ext, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatalf("store-mode boot with no age key: %v", err)
 	}
@@ -77,13 +79,20 @@ func TestBuildSecretStore_StoreModeBootsWithNoAgeKey(t *testing.T) {
 	if len(ext.vals) != 1 {
 		t.Fatalf("the signing key did not land in the external store (%d values)", len(ext.vals))
 	}
-	s2, err := buildSecretStore(t.Context(), pool, "", vaultkv.Name, ext, 0)
+	rec := &capturingRecorder{}
+	s2, err := buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, ext, 0, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, err := loadOrCreateSigningKey(t.Context(), s2)
 	if err != nil || !first.Equal(second) {
 		t.Fatalf("second boot = (%v); want the same signing key back", err)
+	}
+	// Store mode is audited like local mode: the read from Vault is one
+	// secret.read naming the store.
+	if len(rec.got) != 1 || rec.got[0].Action != "secret.read" || !strings.Contains(string(rec.got[0].Data), `"store":"vaultkv"`) ||
+		!strings.Contains(string(rec.got[0].Data), `"purpose":"boot"`) {
+		t.Fatalf("store-mode boot read recorded %+v; want one secret.read with store vaultkv and purpose boot", rec.got)
 	}
 	if got := storesExternally(s2); got != "Vault at test" {
 		t.Fatalf("storesExternally = %q", got)
@@ -93,14 +102,14 @@ func TestBuildSecretStore_StoreModeBootsWithNoAgeKey(t *testing.T) {
 func TestBuildSecretStore_StoreModeRefusesWhileLocalRowsRemain(t *testing.T) {
 	pool := envelopeDB(t)
 	id, _ := age.GenerateX25519Identity()
-	local, err := buildSecretStore(t.Context(), pool, id.String(), "", nil, 0)
+	local, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := local.Put(t.Context(), "k", []byte("v")); err != nil {
 		t.Fatal(err)
 	}
-	_, err = buildSecretStore(t.Context(), pool, "", vaultkv.Name, &memExternal{vals: map[string][]byte{}}, 0)
+	_, err = buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, &memExternal{vals: map[string][]byte{}}, 0, &capturingRecorder{})
 	if err == nil || !strings.Contains(err.Error(), "-migrate-secrets") {
 		t.Fatalf("store-mode boot over a local row with no age key = %v; want a refusal naming -migrate-secrets", err)
 	}
@@ -110,7 +119,7 @@ func TestBuildSecretStore_StoreModeRefusesWhileLocalRowsRemain(t *testing.T) {
 func TestLoadOrCreateSecret_NeverMintsOverAGoneExternalValue(t *testing.T) {
 	pool := envelopeDB(t)
 	ext := &memExternal{vals: map[string][]byte{}}
-	s, err := buildSecretStore(t.Context(), pool, "", vaultkv.Name, ext, 0)
+	s, err := buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, ext, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +155,8 @@ func (v *miniVault) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case p == "auth/token/lookup-self":
 		out = map[string]any{"data": map[string]any{"ttl": 0}}
+	case p == "wardyn/config":
+		out = map[string]any{"data": map[string]any{"max_versions": 0}}
 	case r.Method == http.MethodPost && route == "metadata":
 		v.meta[rel] = body["custom_metadata"]
 	case r.Method == http.MethodPost && route == "data":
@@ -181,7 +192,7 @@ func TestLoadOrCreateSecret_NeverMintsOverAValueNotInWardynsFormat(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := buildSecretStore(t.Context(), pool, "", vaultkv.Name, ext, 0)
+	s, err := buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, ext, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,15 +213,100 @@ func TestLoadOrCreateSecret_NeverMintsOverAValueNotInWardynsFormat(t *testing.T)
 	}
 }
 
-// The boot keys live under platform/ (design §2.13): the shared list must
-// name every one of them.
-func TestBootKeysAreThePlatformSet(t *testing.T) {
-	for _, n := range []string{secretSigningKey, secretSessionKey, secretUISessionKey, secretSSHHostKey} {
-		if !secretstore.PlatformNames[n] {
-			t.Errorf("boot key %q is not in secretstore.PlatformNames", n)
+// failingExternal refuses every write.
+type failingExternal struct{ memExternal }
+
+func (*failingExternal) Put(context.Context, string, string, string, []byte, bool) (string, error) {
+	return "", fmt.Errorf("vault POST wardyn/data/x: 404")
+}
+
+// An aborted migration is audited, not only a successful one: secret.migrate
+// with outcome failure and the rows committed before the abort.
+func TestMigrateMode_AuditsAnAbort(t *testing.T) {
+	pool := envelopeDB(t)
+	id, _ := age.GenerateX25519Identity()
+	ext := &failingExternal{memExternal{vals: map[string][]byte{}}}
+	s, err := newSecretStore(t.Context(), pool, id.String(), nil, "", ext, 0, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(t.Context(), "k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	rec := &fakeAuditRecorder{}
+	if err := migrateMode(t.Context(), s.(*secretstorepg.Store), rec, vaultkv.Name); err == nil {
+		t.Fatal("migrateMode succeeded with every write refused")
+	}
+	if rec.last.Action != "secret.migrate" || rec.last.Outcome != "failure" || !strings.Contains(string(rec.last.Data), `"count":0`) {
+		t.Fatalf("last audit row = %s %s %s; want secret.migrate failure with count 0", rec.last.Action, rec.last.Outcome, rec.last.Data)
+	}
+}
+
+// A migration that succeeds records one secret.read per value it moved, with
+// purpose migrate and never the value, then one secret.migrate with the count.
+func TestMigrateMode_AuditsEveryReadThenTheMove(t *testing.T) {
+	pool := envelopeDB(t)
+	id, _ := age.GenerateX25519Identity()
+	ext := &memExternal{vals: map[string][]byte{}}
+	s, err := newSecretStore(t.Context(), pool, id.String(), nil, "", ext, 0, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{}
+	for _, w := range []struct{ owner, name, value string }{
+		{"", "k1", "value-one"}, {"", "k2", "value-two"}, {"alice", "k1", "value-alice"},
+	} {
+		if err := s.For(w.owner).Put(t.Context(), w.name, []byte(w.value)); err != nil {
+			t.Fatal(err)
+		}
+		values[w.owner+"/"+w.name] = w.value
+	}
+	rec := &capturingRecorder{}
+	if err := migrateMode(t.Context(), s.(*secretstorepg.Store), rec, vaultkv.Name); err != nil {
+		t.Fatalf("migrateMode: %v", err)
+	}
+	if len(rec.got) != 4 {
+		t.Fatalf("migration recorded %d audit rows, want 3 secret.read + 1 secret.migrate: %+v", len(rec.got), rec.got)
+	}
+	for _, ev := range rec.got[:3] {
+		var d map[string]any
+		if ev.Action != "secret.read" || ev.Outcome != "success" || json.Unmarshal(ev.Data, &d) != nil || d["purpose"] != "migrate" {
+			t.Fatalf("read row = %s %s %s, want a secret.read success with purpose migrate", ev.Action, ev.Outcome, ev.Data)
+		}
+		for _, v := range values {
+			if strings.Contains(string(ev.Data), v) || strings.Contains(ev.Target, v) {
+				t.Fatalf("read row carries the value %q: %s", v, ev.Data)
+			}
 		}
 	}
-	if len(secretstore.PlatformNames) != 4 {
-		t.Errorf("secretstore.PlatformNames has %d names, want the four boot keys", len(secretstore.PlatformNames))
+	last := rec.got[3]
+	var d map[string]any
+	if last.Action != "secret.migrate" || last.Outcome != "success" || json.Unmarshal(last.Data, &d) != nil ||
+		d["count"] != float64(3) || d["from"] != "pg" || d["to"] != vaultkv.Name {
+		t.Fatalf("last row = %s %s %s, want secret.migrate success, count 3, from pg, to vaultkv", last.Action, last.Outcome, last.Data)
+	}
+	if len(ext.vals) != 3 {
+		t.Fatalf("%d values reached the external store, want 3", len(ext.vals))
+	}
+}
+
+// -reconcile lists every owner and name in the store, so it leaves one
+// audit row with its counts.
+func TestReconcileMode_Audits(t *testing.T) {
+	pool := envelopeDB(t)
+	ext := &memExternal{vals: map[string][]byte{}}
+	s, err := newSecretStore(t.Context(), pool, "", nil, vaultkv.Name, ext, 0, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(t.Context(), "k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	rec := &fakeAuditRecorder{}
+	if err := reconcileMode(t.Context(), s.(*secretstorepg.Store), rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.calls != 1 || rec.last.Action != "secret.reconcile" || rec.last.Outcome != "success" || !strings.Contains(string(rec.last.Data), `"checked":1`) {
+		t.Fatalf("audit = %d rows, last %s %s %s; want one secret.reconcile success with checked 1", rec.calls, rec.last.Action, rec.last.Outcome, rec.last.Data)
 	}
 }

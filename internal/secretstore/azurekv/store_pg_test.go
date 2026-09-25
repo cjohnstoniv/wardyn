@@ -411,6 +411,35 @@ func TestMigrate_ToLocalWithPurgeWithheldReportsWhatItLeft(t *testing.T) {
 	}
 }
 
+// A row's claim on a value comes from the stem its owner and name derive, so
+// a pointer forged to another row's secret hides nothing from the orphan list.
+func TestReconcile_AForgedPointerDoesNotHideAnOrphan(t *testing.T) {
+	pool := throwawayDB(t)
+	ext := newFakeStore(t, newFakeKV(t))
+	s := storeMode(t, pool, ext, nil)
+	ctx := t.Context()
+	if err := s.For("alice").Put(ctx, "pat", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	bobRef, err := ext.Put(ctx, "bob", "orphan", "", []byte("v"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE secrets SET kek_id=$1 WHERE owned_by='alice' AND name='pat'`, Name+":"+bobRef); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Dangling) != 1 || !strings.Contains(rep.Dangling[0], `owned_by="alice"`) {
+		t.Fatalf("dangling = %v; want alice's forged row", rep.Dangling)
+	}
+	if len(rep.Orphans) != 2 {
+		t.Fatalf("orphans = %+v; want bob's value and alice's own, which the forged row no longer names", rep.Orphans)
+	}
+}
+
 func TestReconcile_ReportsBothSidesAndDeletesNothing(t *testing.T) {
 	pool := throwawayDB(t)
 	f := newFakeKV(t)

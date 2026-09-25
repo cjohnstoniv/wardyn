@@ -98,12 +98,12 @@ func TestSecretOwnerFromRequest(t *testing.T) {
 		},
 		{
 			"sso session, member role: the caller's own sub",
-			mkReq(operatorCtx("sub-member-1", "m1@corp.example", oidc.RoleMember), ""),
+			mkReq(operatorCtx("sub-member-1", "m1@corp.example", oidc.RoleUser), ""),
 			"sub-member-1",
 		},
 		{
 			"wdn_ token, same sub+role as the SSO session above: the identical sub",
-			mkReq(withHumanIdentity(context.Background(), "sub-member-1", "m1@corp.example", oidc.RoleMember, nil, false), ""),
+			mkReq(withHumanIdentity(context.Background(), "sub-member-1", "m1@corp.example", oidc.RoleUser, nil, false), ""),
 			"sub-member-1",
 		},
 	}
@@ -122,7 +122,7 @@ func TestSecretOwnerFromRequest(t *testing.T) {
 func TestPutSecret_MemberStampsOwner_AuditSecretOwner(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{}}
 	h, srv := secretsRBACServer(t, sec)
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key", alice, `{"value":"sk-ant-member-owned-value"}`)
 	if w.Code != http.StatusNoContent {
@@ -151,8 +151,8 @@ func TestPutSecret_MemberStampsOwner_AuditSecretOwner(t *testing.T) {
 func TestDeleteSecret_MemberOtherOwner_204ByteIdenticalToMissing(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{}}
 	_, srv := secretsRBACServer(t, sec)
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
-	bob := ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
+	bob := ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser)
 
 	if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/shared-name", bob, `{"value":"bob-owns-this-value"}`); w.Code != http.StatusNoContent {
 		t.Fatalf("seed bob's row: %d %s", w.Code, w.Body.String())
@@ -189,7 +189,7 @@ func TestListSecrets_MemberOmitsOthersAndUnpairedOperatorNames(t *testing.T) {
 		t.Fatalf("seed bob's row: %v", err)
 	}
 
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/secrets", alice, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /secrets = %d: %s", w.Code, w.Body.String())
@@ -213,7 +213,7 @@ func TestListSecrets_MemberOmitsOthersAndUnpairedOperatorNames(t *testing.T) {
 // the routes that accept it, with a constant 403 for a non-operator.
 func TestListSecrets_AdminOwnerParam_Member403(t *testing.T) {
 	_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/secrets?owner=bob", alice, ""); w.Code != http.StatusForbidden {
 		t.Fatalf("GET /secrets?owner=bob as a member = %d, want 403: %s", w.Code, w.Body.String())
@@ -247,7 +247,7 @@ func TestPutSecret_MemberBedrockNames_403(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			sec := &memSecrets{m: map[string][]byte{}}
 			_, srv := secretsRBACServer(t, sec)
-			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 			w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+name, alice, `{"value":"some-long-enough-value-000000"}`)
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("member PUT %s = %d, want 403: %s", name, w.Code, w.Body.String())
@@ -277,7 +277,7 @@ func TestPutSecret_MemberBedrockNames_403(t *testing.T) {
 func TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{}}
 	_, srv := secretsRBACServer(t, sec)
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+bedrockAPIKeySecret, alice, `{"value":"alice-own-bedrock-bearer-000000"}`)
 	if w.Code != http.StatusNoContent {
@@ -377,7 +377,7 @@ func TestPutSecret_OwnerParamIsRefused(t *testing.T) {
 	t.Run("a member naming ?owner= is refused before any write", func(t *testing.T) {
 		sec := &memSecrets{m: map[string][]byte{}}
 		_, srv := secretsRBACServer(t, sec)
-		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 		w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=bob", alice, `{"value":"sk-ant-bobs-key-value-0000"}`)
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("member PUT ?owner=bob = %d, want 403: %s", w.Code, w.Body.String())
@@ -398,7 +398,7 @@ func TestDeleteSecret_MemberBedrockNames_403(t *testing.T) {
 	for _, name := range memberRefusedAWSNames {
 		t.Run(name, func(t *testing.T) {
 			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
-			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 			if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+name, alice, ""); w.Code != http.StatusForbidden {
 				t.Fatalf("member DELETE %s = %d, want 403: %s", name, w.Code, w.Body.String())
 			}
@@ -485,7 +485,7 @@ func TestSecretCountCap(t *testing.T) {
 		// secret (For(owner).List is own-rows-only).
 		sec := fill(secretsMaxPerOwner)
 		_, srv := secretsRBACServer(t, sec)
-		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 		if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/mine", alice, value); w.Code != http.StatusNoContent {
 			t.Fatalf("member PUT with a FULL operator namespace = %d, want 204: %s", w.Code, w.Body.String())
 		}
@@ -522,7 +522,7 @@ func TestReservedSecret_HarnessBlobSealedByPattern(t *testing.T) {
 	}
 }
 
-// ─── group C: the member seam's two ends ─────────────────────────────────────
+// group C: the member seam's two ends
 
 // TestListSecrets_CrossUserReadIsAudited pins the ASYMMETRY, which is the
 // finding rather than "a read was unlogged". `?owner=` is admin-only, and every
@@ -597,7 +597,7 @@ func TestListSecrets_CrossUserReadIsAudited(t *testing.T) {
 func TestListSecrets_OwnNamespaceReadIsNotAudited(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{}}
 	h, srv := secretsRBACServer(t, sec)
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/secrets", alice, ""); w.Code != http.StatusOK {
 		t.Fatalf("member GET /secrets = %d, want 200: %s", w.Code, w.Body.String())
@@ -682,7 +682,7 @@ func TestDeleteSecret_UnknownBareOwnerIsMarkedInTheAudit(t *testing.T) {
 
 	// (3) A MEMBER'S OWN DELETE is their own namespace by construction — never
 	// marked, whatever the directory happens to hold.
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key", alice, ""); w.Code != http.StatusNoContent {
 		t.Fatalf("member DELETE = %d, want 204: %s", w.Code, w.Body.String())
 	}

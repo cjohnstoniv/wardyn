@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/azurekv"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
@@ -24,10 +25,14 @@ import (
 )
 
 // maintenanceMode runs the one-shot maintenance mode the flags select, if any
-// (-rotate-age-key, -migrate-secrets, -reconcile), and reports whether one ran.
+// (-rotate-age-key, -rewrap, -migrate-secrets, -reconcile), and reports whether
+// one ran.
 func maintenanceMode(f *bootFlags) (bool, error) {
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
 		return true, rotateAgeKeyMode(f, p)
+	}
+	if *f.rewrap {
+		return true, rewrapMode(f)
 	}
 	if *f.migrateSecrets || *f.reconcile {
 		return true, secretStoreMaintenance(f)
@@ -62,7 +67,18 @@ func secretStoreMaintenance(f *bootFlags) error {
 	if fan != nil {
 		defer func() { _ = fan.Close() }()
 	}
-	s, err := openSecretStore(ctx, pool, f)
+	// The store bare (newSecretStore), not audited: neither mode reads through
+	// Get. Migrate's reads are recorded one by one (migrateMode), and
+	// Reconcile reads store metadata only, never a value.
+	platform, err := readPlatformKey(*f.platformKeyFile, *f.ageKey)
+	if err != nil {
+		return err
+	}
+	ext, err := buildExternalStore(ctx, f.vault, f.azure, *f.trustedCAFile)
+	if err != nil {
+		return err
+	}
+	s, err := newSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, ext, *f.vault.timeout, rec)
 	if err != nil {
 		return err
 	}
@@ -71,7 +87,7 @@ func secretStoreMaintenance(f *bootFlags) error {
 		return fmt.Errorf("refusing to run: secret store %q has no pointer rows to migrate or reconcile", s.Name())
 	}
 	if *f.reconcile {
-		return reconcileMode(ctx, ps)
+		return reconcileMode(ctx, ps, rec)
 	}
 	return migrateMode(ctx, ps, rec, strings.TrimSpace(*f.migrateTo))
 }
@@ -86,30 +102,42 @@ func migrateMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recorde
 	default:
 		return fmt.Errorf("refusing to migrate: -to must be %q, %q or %q, not %q", vaultkv.Name, azurekv.Name, secretstorepg.MigrateLocal, to)
 	}
-	res, err := ps.Migrate(ctx, to, func(owner, name string) {
+	// Migrate opens every value it moves without a Get, so its context carries
+	// the purpose the read guard requires, and each read is recorded here.
+	mctx := secretstore.WithPurpose(ctx, secretstore.PurposeMigrate)
+	res, err := ps.Migrate(mctx, to, func(owner, name string) {
 		// One secret.read per value read on the way (design §2.3a.9).
-		emitMaintenanceAudit(ctx, rec, "secret.read", name, map[string]any{"purpose": "migrate", "owner": owner, "to": to})
+		emitMaintenanceAudit(ctx, rec, migrateActor, "secret.read", name, "success", map[string]any{"purpose": string(secretstore.PurposeMigrate), "owner": owner, "to": to})
 	})
-	if res.Moved > 0 || err == nil {
-		data := map[string]any{"from": from, "to": to, "count": res.Moved}
-		if res.SoftDeleted > 0 {
-			data["soft_deleted"] = res.SoftDeleted
-		}
-		emitMaintenanceAudit(ctx, rec, "secret.migrate", to, data)
-	}
+	data := map[string]any{"from": from, "to": to, "count": res.Moved}
 	if res.SoftDeleted > 0 {
+		data["soft_deleted"] = res.SoftDeleted
 		slog.Warn("wardynd: old copies were deleted but not purged; the organisation can recover them until the vault's retention ends (`wardynd -reconcile` lists them)",
 			slog.String("store", from), slog.Int("soft_deleted", res.SoftDeleted))
 	}
 	if err != nil {
+		// Every abort is recorded, with how many rows were committed before it;
+		// the error itself (which names the row) goes to the operator only.
+		data["reason"] = "aborted"
+		emitMaintenanceAudit(ctx, rec, migrateActor, "secret.migrate", to, "failure", data)
 		return err
 	}
+	emitMaintenanceAudit(ctx, rec, migrateActor, "secret.migrate", to, "success", data)
 	slog.Info("wardynd: stored secrets migrated", slog.String("to", to), slog.Int("moved", res.Moved), slog.Int("soft_deleted", res.SoftDeleted))
 	return nil
 }
 
-func reconcileMode(ctx context.Context, ps *secretstorepg.Store) error {
+func reconcileMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recorder) error {
 	rep, err := ps.Reconcile(ctx)
+	data := map[string]any{"checked": rep.Checked, "dangling": len(rep.Dangling), "orphans": len(rep.Orphans)}
+	outcome := "success"
+	switch {
+	case err != nil:
+		outcome, data["reason"] = "failure", "aborted"
+	case len(rep.Dangling)+len(rep.Orphans) > 0:
+		outcome, data["reason"] = "failure", "drift"
+	}
+	emitMaintenanceAudit(ctx, rec, "wardyn/reconcile", "secret.reconcile", vaultkv.Name, outcome, data)
 	if err != nil {
 		return err
 	}
@@ -133,18 +161,20 @@ func reconcileMode(ctx context.Context, ps *secretstorepg.Store) error {
 	return nil
 }
 
+const migrateActor = "wardyn/migrate-secrets"
+
 // emitMaintenanceAudit writes one audit row from a maintenance mode. Data
 // carries names, owners and counts, never a value.
-func emitMaintenanceAudit(ctx context.Context, rec audit.Recorder, action, target string, data map[string]any) {
+func emitMaintenanceAudit(ctx context.Context, rec audit.Recorder, actor, action, target, outcome string, data map[string]any) {
 	raw, _ := json.Marshal(data)
 	ev := types.AuditEvent{
 		ID:        uuid.New(),
 		Time:      time.Now().UTC(),
 		ActorType: types.ActorSystem,
-		Actor:     "wardyn/migrate-secrets",
+		Actor:     actor,
 		Action:    action,
 		Target:    target,
-		Outcome:   "success",
+		Outcome:   outcome,
 		Data:      json.RawMessage(raw),
 	}
 	if err := rec.Record(ctx, ev); err != nil {

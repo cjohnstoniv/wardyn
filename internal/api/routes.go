@@ -50,7 +50,9 @@ func (s *Server) routes() chi.Router {
 	// here: it is POST /api/v1/auth/logout below, inside humanOrAdminAuth.
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
-		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandler)
+		// A sign-in refused over its user type (ambiguous or unknown) is an
+		// auth.failed row; the oidc package stays audit-agnostic.
+		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.auditSignInDenied))
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -87,7 +89,8 @@ func (s *Server) routes() chi.Router {
 			//   direct registrations in this body   (both groups)
 			//   mountPermissionRoutes  (this file)  securityOps
 			//   mountAccountRoutes     (this file)  securityOps
-			//   adminRoutes            (this file)  one per group
+			//   adminRoutes            (this file)  one per group, plus
+			//       mountUserTypeRoutes (user_types.go) securityOps
 			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
@@ -101,7 +104,8 @@ func (s *Server) routes() chi.Router {
 			//       (agent_providers.go)
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
-			//   the credential erase (this body)    securityOps
+			//   mountSecretRoutes (routes.go) split: the /secrets
+			//       self-service routes on r, the credential erase securityOps
 			operatorOnly := r.With(s.requireOperator)
 			// securityOps is the second admin tier: admin OR security_admin, via
 			// requireSecurityOperator / isSecurityOperator (http.go). What the tier
@@ -430,27 +434,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/workspaces/{id}/env-as-code", s.handleGetEnvAsCode)
 			operatorOnly.Post("/workspaces/{id}/env-as-code/write", s.handleWriteEnvAsCode)
 
-			// Secret management: write/delete/list only. Values are NEVER
-			// readable through the API (read paths are the broker and the
-			// internal injection-resolve endpoint, both audited).
-			//
-			// WRITE/DELETE are self-service (migration `0050`), not
-			// admin-only: any signed-in human manages their OWN row
-			// (handlePutSecret/handleDeleteSecret scope by
-			// secretOwnerFromRequest) — an operator's own row is the ""
-			// namespace, exactly today's behavior. A member can never reach
-			// another member's row (Store.For(owner) never resolves it) or
-			// the four Bedrock/SigV4 names (still operator-only). Admin
-			// cross-principal reads/deletes go through ?owner=; a PUT refuses it
-			// (K7-A). The LIST stays viewer-readable — names only, never values.
-			// Erasing a person's credentials is on the security tier: it only
-			// removes reach, and returns no credential material.
-			if s.cfg.Secrets != nil {
-				r.Put("/secrets/{name}", s.handlePutSecret)
-				r.Delete("/secrets/{name}", s.handleDeleteSecret)
-				r.Get("/secrets", s.handleListSecrets)
-				securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
-			}
+			s.mountSecretRoutes(r, securityOps)
 
 			// Site config: the operator-wide, admin-authored baseline every run
 			// inherits (upstream proxy secret ref, per-ecosystem artifact-registry
@@ -631,6 +615,9 @@ func (s *Server) routes() chi.Router {
 			r.Post("/internal/decisions", s.handlePostDecision)
 			r.Post("/internal/approvals", s.handleInternalRequestApproval)
 			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
+			// wardyn-toolgate's own give-up signal (#811): closes the row it
+			// raised instead of leaving it PENDING for the sweep.
+			r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 			r.Post("/internal/credentials/mint", s.handleInternalMint)
 
 			// Token renew: POST /api/v1/internal/token/renew
@@ -739,6 +726,29 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	r.Post("/me/member-mode", s.handleSetMemberMode)
 }
 
+// mountSecretRoutes mounts secret management: write/delete/list only. Values
+// are NEVER readable through the API (read paths are the broker and the
+// internal injection-resolve endpoint, both audited).
+//
+// WRITE/DELETE are self-service (migration `0050`), not admin-only: any
+// signed-in human manages their OWN row (handlePutSecret/handleDeleteSecret
+// scope by secretOwnerFromRequest) — an operator's own row is the ""
+// namespace, exactly today's behavior. A member can never reach another
+// member's row (Store.For(owner) never resolves it) or the four Bedrock/SigV4
+// names (still operator-only). Admin cross-principal reads/deletes go through
+// ?owner=; a PUT refuses it (K7-A). The LIST stays viewer-readable — names
+// only, never values. Erasing a person's credentials is on the security tier:
+// it only removes reach, and returns no credential material.
+func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
+	if s.cfg.Secrets == nil {
+		return
+	}
+	r.Put("/secrets/{name}", s.handlePutSecret)
+	r.Delete("/secrets/{name}", s.handleDeleteSecret)
+	r.Get("/secrets", s.handleListSecrets)
+	securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
+}
+
 // mountPermissionRoutes registers the capability-grant family: which of the
 // powers a MEMBER already has may they actually use. GET returns the whole
 // grant table + enforcement map in one call (the console Permissions screen's
@@ -780,6 +790,10 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	// User types (migration 0071_user_types): defining a type is the same
+	// security-tier duty as authoring a governance profile; deciding who IS a
+	// type stays on the operatorOnly /access routes.
+	s.mountUserTypeRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the

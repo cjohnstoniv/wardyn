@@ -70,7 +70,7 @@ func NameFromContext(ctx context.Context) string {
 // verified, or "" when there is no SSO session.
 //
 // Effective, not stamped: a session in "view as member" mode (Session.MemberMode)
-// answers RoleMember here whatever its cookie says, because contextWithPrincipal
+// answers RoleUser here whatever its cookie says, because contextWithPrincipal
 // clamps it at the single origin. Nothing outside this package ever sees the
 // stamped role, which is the point — see MemberModeFromContext below.
 // This package only DERIVES and CARRIES the role — see CallbackHandler /
@@ -82,8 +82,17 @@ func RoleFromContext(ctx context.Context) string {
 	return r
 }
 
+// UserTypeFromContext returns the user type id stamped on the session
+// Middleware verified at sign-in, or "" when there is no SSO session. It is
+// published verbatim, beside the tier: "view as member" clamps the tier and
+// leaves the type alone.
+func UserTypeFromContext(ctx context.Context) string {
+	t, _ := ctx.Value(userTypeCtxKey{}).(string)
+	return t
+}
+
 // ExpiryFromContext returns when the session Middleware verified will expire,
-// or the zero time when there is no SSO session. W31-S1-7: there is no
+// or the zero time when there is no SSO session. There is no
 // refresh — the session dies outright at this instant — so the console
 // surfaces it as an advance warning instead of a surprise 401 that wipes
 // mid-work state back to the sign-in gate.
@@ -130,10 +139,10 @@ func GroupsTruncatedFromContext(ctx context.Context) bool {
 // RoleFromContext ALREADY answers member when this is true, so authorization
 // needs this predicate for nothing: every tier decision keeps reading the role.
 // It exists for the two things the clamped role cannot say on its own — the
-// console's banner ("your usual role is paused"), and the seams that must
-// refuse rather than clamp, namely the credential MINT doors, where a
-// member-stamped credential would be re-stamped admin at the next login and
-// outlive the mode (internal/api/membermode.go).
+// console's banner ("your usual role is paused"), and the credential doors:
+// the API-token mint refuses, because a member-stamped token would be
+// re-stamped admin at the next login and outlive the mode; an SSH key is
+// accepted but stored capped, so no login re-stamps it (internal/api/sshkeys.go).
 func MemberModeFromContext(ctx context.Context) bool {
 	m, _ := ctx.Value(memberModeCtxKey{}).(bool)
 	return m
@@ -185,9 +194,10 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	// re-deriving it from a group snapshot that may be truncated.
 	role := sess.Role
 	if sess.MemberMode {
-		role = RoleMember
+		role = RoleUser
 	}
 	ctx = context.WithValue(ctx, roleCtxKey{}, role)
+	ctx = context.WithValue(ctx, userTypeCtxKey{}, sess.UserType)
 	ctx = context.WithValue(ctx, memberModeCtxKey{}, sess.MemberMode)
 	// The preview posture, ANDed with the mode rather than copied: a cookie
 	// hand-built with "mmnc" and no "mm" is inert, so the bit is never a
@@ -212,6 +222,10 @@ type nameCtxKey struct{}
 // roleCtxKey is the context key for the session's derived role.
 // Unexported: use RoleFromContext.
 type roleCtxKey struct{}
+
+// userTypeCtxKey is the context key for the session's user type.
+// Unexported: use UserTypeFromContext.
+type userTypeCtxKey struct{}
 
 // groupsCtxKey is the context key for the session's login-time group snapshot.
 // Unexported: use GroupsFromContext.

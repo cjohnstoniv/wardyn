@@ -149,6 +149,38 @@ func TestADOSignIn_CountsTowardMaxReauthHolds(t *testing.T) {
 	}
 }
 
+// A raise that cannot even ask (the approval store errors) used to answer 503
+// with no audit trace at all — it and its capability and consent siblings
+// bypassed fail(). #204 routes it through fail() like every other refusal, so it now
+// leaves the same secret.read failure row and carries reason on the wire.
+func TestADOSignIn_RaiseFailureIsAudited(t *testing.T) {
+	f := newADOSignInFixture(t)
+	f.approvals.requestErr = errors.New("approvals store unavailable")
+	f.fake.SetInvalidGrant(true)
+	f.at(time.Now().Add(time.Minute))
+
+	w := f.resolveQ(t, "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d body %s, want 503", w.Code, w.Body.String())
+	}
+	rows := f.audit.find("secret.read")
+	if len(rows) != 1 || rows[0].Outcome != "failure" {
+		t.Fatalf("secret.read rows = %+v, want exactly one failure", rows)
+	}
+	var d map[string]any
+	_ = json.Unmarshal(rows[0].Data, &d)
+	if d["reason"] != "raise_failed" {
+		t.Errorf("audit reason = %v, want raise_failed", d["reason"])
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != "raise_failed" {
+		t.Errorf("wire reason = %q, want raise_failed", body.Reason)
+	}
+}
+
 // Consent rows are credential_reauth too, but they have their own cap
 // (maxADOCapabilityHoldsPerRun): a run that asked for consent maxReauthHolds
 // times can still be asked to sign in.
@@ -248,7 +280,7 @@ func TestADOSignIn_BootFailsWithAHintAndDeletesTheSignIn(t *testing.T) {
 		t.Fatalf("credential.expired_deleted rows = %+v, want one success row", del)
 	}
 
-	access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject)
+	access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject)
 	if len(access) != 1 || access[0].State != modelAccessNotConfigured {
 		t.Fatalf("scm-access = %+v, want not connected", access)
 	}
@@ -266,7 +298,7 @@ func TestADOSignIn_BootFailsWithAHintAndDeletesTheSignIn(t *testing.T) {
 	if w := f.capture(t, f.subject); w.Code != http.StatusFound {
 		t.Fatalf("re-sign-in: %d %s", w.Code, w.Body.String())
 	}
-	if access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject); access[0].State != modelAccessLive {
+	if access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject); access[0].State != modelAccessLive {
 		t.Fatalf("after a fresh sign-in scm-access = %+v, want live", access)
 	}
 }
@@ -299,7 +331,7 @@ func TestADOSignIn_WidenedCeiling(t *testing.T) {
 	if w := f.resolveQ(t, "?phase=boot"); w.Code != http.StatusOK {
 		t.Fatalf("a run on the old baseline no longer boots: %d %s", w.Code, w.Body.String())
 	}
-	if access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject); len(access) != 1 ||
+	if access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject); len(access) != 1 ||
 		access[0].State != modelAccessLive {
 		t.Fatalf("scm-access = %+v, want live while the baseline is covered", access)
 	}
@@ -316,7 +348,7 @@ func TestADOSignIn_WidenedCeiling(t *testing.T) {
 	// The baseline outgrows the sign-in: re-consent state, and the gate says so.
 	row.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapRead, adoscope.CapBuildExecute}
 	f.st.site = adoSite(row)
-	access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject)
+	access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject)
 	if len(access) != 1 || access[0].State != modelAccessExpiredSignin || access[0].Cause != scmAccessCauseConsentNeeded {
 		t.Fatalf("scm-access = %+v, want expired_signin / consent_needed", access)
 	}

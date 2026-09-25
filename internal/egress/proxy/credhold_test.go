@@ -25,12 +25,16 @@ import (
 // always ends.
 
 // fakeApprovalReader answers a scripted sequence of (state, status) pairs,
-// repeating the last one forever.
+// repeating the last one forever. Optionally, notifyAfter closes notifyCh
+// once the poll at that 1-based index has been answered, so a test can wait
+// for a specific poll instead of sleeping a guessed wall-clock duration.
 type fakeApprovalReader struct {
-	mu     sync.Mutex
-	steps  []approvalStep
-	reads  int
-	lastID uuid.UUID
+	mu          sync.Mutex
+	steps       []approvalStep
+	reads       int
+	lastID      uuid.UUID
+	notifyAfter int
+	notifyCh    chan struct{}
 }
 
 type approvalStep struct {
@@ -49,6 +53,9 @@ func (f *fakeApprovalReader) readApproval(_ context.Context, id uuid.UUID) (type
 		i = len(f.steps) - 1
 	}
 	s := f.steps[i]
+	if f.notifyCh != nil && f.reads == f.notifyAfter {
+		close(f.notifyCh)
+	}
 	return s.state, s.status, s.err
 }
 
@@ -170,7 +177,7 @@ func shortBudget(t *testing.T, v string) {
 	t.Setenv(envCredentialReauthTimeout, v)
 }
 
-// THE HAPPY PATH: 423, two PENDING polls, APPROVED, exactly ONE re-resolve, and
+// The happy path: 423, two PENDING polls, APPROVED, exactly one re-resolve, and
 // the header the SDK needed.
 func TestResolveInjectionHolding_HoldsThenResolvesOnce(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
@@ -198,15 +205,14 @@ func TestResolveInjectionHolding_HoldsThenResolvesOnce(t *testing.T) {
 	}
 }
 
-// THE REGRESSION THAT KEEPS EVERY OTHER GRANT UNTOUCHED: a non-423 error
-// returns immediately, with no hold, no poll and no second resolve.
+// The case that keeps every other grant untouched: a non-423 error returns
+// immediately, with no hold, no poll and no second resolve.
 func TestResolveInjectionHolding_NonLockedErrorIsUnchanged(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
 	// The budget is set even though this test must never reach it: without it a
-	// REGRESSION here (a 424 mistaken for a 423) parks for the 600 s default and
+	// mistake here (a 424 mistaken for a 423) parks for the 600 s default and
 	// reds as a ten-minute test-binary panic instead of an assertion. The clamp's
-	// floor makes the same regression fail in ~11 s with the message below
-	// (general N-new-2).
+	// floor makes the same mistake fail in ~11 s with the message below.
 	shortBudget(t, "10s")
 	is := &injectionServer{approvalID: uuid.New()}
 	is.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -296,7 +302,7 @@ func TestResolveCtx_ACallerThatHangsUpIsReleasedAndTheHoldContinues(t *testing.T
 	if elapsed > 2*time.Second {
 		t.Errorf("the caller took %v to be released, want ~its own 300ms deadline", elapsed)
 	}
-	// THE HOLD IS STILL RUNNING: the workflow owns its deadline, not the caller.
+	// The hold is still running: the workflow owns its deadline, not the caller.
 	inj.reauth.mu.Lock()
 	wf := inj.reauth.workflows[is.approvalID]
 	inj.reauth.mu.Unlock()
@@ -446,7 +452,7 @@ func TestResolveInjectionHolding_SixtyFourResolversShareOneWorkflow(t *testing.T
 	if counted != 1 {
 		t.Errorf("counted workflows = %d, want 1 for 64 resolvers of ONE lapse", counted)
 	}
-	// THE ASSERTION THE FIRST SHAPE LACKED (general B1): the injection URL is a
+	// The assertion the first shape lacked (general B1): the injection URL is a
 	// MINT — each resolve writes a credential.mint audit row — so "one workflow"
 	// is only true if 64 callers made exactly TWO calls between them: the 423
 	// that opened the hold, and the ONE re-resolve that ended it.
@@ -458,7 +464,7 @@ func TestResolveInjectionHolding_SixtyFourResolversShareOneWorkflow(t *testing.T
 	}
 }
 
-// A LATE ARRIVAL, after the workflow's terminal result, does not open a second
+// A late arrival, after the workflow's terminal result, does not open a second
 // hold for the same lapse: it re-resolves and takes whatever the control plane
 // now says (here: another 423, which is a NEW, separately counted workflow).
 func TestResolveInjectionHolding_LateArrivalStartsANewCountedWorkflow(t *testing.T) {
@@ -686,7 +692,7 @@ func waitForWorkflowDeadline(t *testing.T, coord *reauthCoordinator) time.Time {
 	return time.Time{}
 }
 
-// THE LEADER DISCONNECTS. Codex #2's clause, and the one the first shape got
+// The leader disconnects. Codex #2's clause, and the one the first shape got
 // exactly backwards: the caller that happened to arrive first ended the
 // workflow with a timeout that had not happened, handing every follower a
 // terminal 401 and writing a credential:reauth-timeout deny row for a hold that
@@ -757,7 +763,7 @@ func TestResolveCtx_LeaderDisconnectLeavesTheWorkflowAndItsDeadlineAlone(t *test
 	}
 }
 
-// A LATE ARRIVAL AFTER THE EXPIRY gets that terminal result at once: no second
+// A late arrival after the expiry gets that terminal result at once: no second
 // hold, no second count, and — because the decision row is claimed once — no
 // second deny row. With the measured ~30 s SDK cadence this is the difference
 // between one recorded expiry and one per retry for ten minutes.
@@ -833,7 +839,7 @@ func TestResolveCtx_ANewApprovalIDStartsASecondCountedWorkflow(t *testing.T) {
 	}
 }
 
-// TWO STACKED JOINERS, and the SECOND hangs up. Adopted verbatim from
+// Two stacked joiners, and the second hangs up. Adopted verbatim from
 // REVIEW-2-security's appendix (SHOULD-2), because the brief's own
 // counterfactual did not discriminate: with a fake that answers 423 once, the
 // follower in every other test re-resolves into a direct 200 and never joins

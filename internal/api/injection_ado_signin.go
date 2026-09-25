@@ -156,8 +156,11 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 		ID: raisedID, RunID: claims.RunID, Kind: types.ApprovalCredentialReauth, RequestedScope: raw,
 	})
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, adoSignInRaiseFailedBody)
-		return true
+		// Routed through fail (#204): every other refusal in this lane leaves a
+		// secret.read failure row; this raise and the capability and consent
+		// raises (injection_ado_capability.go) used to be the exceptions.
+		return fail(http.StatusServiceUnavailable, "raise_failed", adoSignInRaiseFailedBody,
+			map[string]any{"owner": sn.OwnerSubject})
 	}
 	if created.ID == raisedID {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",

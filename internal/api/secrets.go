@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -46,6 +47,7 @@ var reservedSecretNames = map[string]bool{
 	"wardyn-session-key":    true,
 	"wardyn-ssh-host-key":   true,
 	"wardyn-ui-session-key": true,
+	"wardyn-internal-ca":    true,
 }
 
 // reservedSecret reports whether name is a platform-internal / managed-credential
@@ -366,26 +368,22 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 
 // denyMemberOwnerParam answers a non-operator naming ?owner=: a constant 403,
 // audited.
+//
+// Audited, because this is a member reaching for ANOTHER human's credential
+// namespace and the row is the only trace it happened. docs/AUDIT-ACTIONS.md's
+// contract is "every member denial that isn't a plain foreign-resource 404",
+// and a middleware-gated admin route already writes exactly this row for the
+// same member — an in-handler gate that stays silent makes the audit trail
+// depend on WHERE the refusal happens to live.
+//
+// SHAPE-IDENTICAL to the middleware's and to getWorkspaceAuthorized's
+// in-handler twin: reason from the closed vocabulary, target the path, method
+// in the data — and the member-mode marker, which is why the row comes from
+// refuse (authz.Datum) rather than a hand-rolled map. It names no namespace:
+// the refusal is constant and runs before any lookup, so neither the response
+// nor the row can say whether the principal ?owner= asked about exists.
 func (s *Server) denyMemberOwnerParam(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusForbidden, "?owner= is admin-only")
-	// Audited, because this is a member reaching for ANOTHER human's
-	// credential namespace and the row is the only trace it happened.
-	// docs/AUDIT-ACTIONS.md's contract is "every member denial that isn't a
-	// plain foreign-resource 404", and a middleware-gated admin route
-	// already writes exactly this row for the same member — an in-handler
-	// gate that stays silent makes the audit trail depend on WHERE the
-	// refusal happens to live.
-	//
-	// SHAPE-IDENTICAL to the middleware's and to getWorkspaceAuthorized's
-	// in-handler twin: reason from the closed vocabulary, target the path,
-	// method in the data — and the member-mode marker, which
-	// is why all four sites build the datum through the one
-	// authzDeniedDatum (membermode.go) rather than hand-rolling the map.
-	// It names no namespace: the refusal is constant and runs before any
-	// lookup, so neither the response nor the row can say whether the
-	// principal ?owner= asked about exists.
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
+	s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, r.URL.Path, "?owner= is admin-only"))
 }
 
 // secretOwnerUnresolvedMsg is the refusal for an ?owner= email form that pairs
@@ -608,7 +606,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 			// internal identifier for a condition a member cannot clear without
 			// being told how. Same 403 as before; a plain store failure still
 			// 500s under this seam's own prefix.
-			writeCeilingErrorPrefixed(w, "list secrets: ", err)
+			writeCeilingErrorPrefixed(w, r, "list secrets: ", err)
 			return
 		}
 	}
