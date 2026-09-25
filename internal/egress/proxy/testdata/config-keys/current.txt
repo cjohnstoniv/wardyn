@@ -1,7 +1,7 @@
-ado_grants
-ado_grants.capabilities
-ado_grants.hosts
-ado_grants.organization
+ado_grant
+ado_grant.capabilities
+ado_grant.hosts
+ado_grant.organization
 control_plane_ca_pem
 control_plane_url
 decision_buffer_size
@@ -63,7 +63,9 @@ policy.max_holds
 policy.min_confinement_class
 policy.push_rules
 policy.push_rules.deny_paths
+policy.push_rules.hold_seconds
 policy.push_rules.max_inspect_pack_mib
+policy.push_rules.require_review_paths
 policy.resources
 policy.resources.cpu_millis
 policy.resources.disk_mib
@@ -87,5 +89,6 @@ policy.workspace_repos.target
 run_id
 run_token
 trusted_ca_pem
+unattended
 upstream_proxy_no_proxy
 upstream_proxy_url

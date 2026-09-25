@@ -15,6 +15,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -89,6 +91,15 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	base := runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "https://wardynd:8443", ControlPlaneCAPEM: "ca"}
 	pushRules := base
 	pushRules.Policy.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/"}}
+	reviewHold := base
+	reviewHold.Policy.PushRules = &types.PushRulesSpec{RequireReviewPaths: []string{"infra/"}, HoldSeconds: 60}
+	reviewHold.Unattended = true
+	unattended := base
+	unattended.Unattended = true
+	// The previous proxy knows the grant as ado_grants; its strict decoder
+	// refuses ado_grant rather than running with the Azure DevOps gate off.
+	adoGrant := base
+	adoGrant.ADOGrant = &proxy.ADOGrantConfig{Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapRead}, Hosts: []string{"dev.azure.com"}}
 
 	for _, tc := range []struct {
 		name string
@@ -97,6 +108,11 @@ func TestPreviousProxyRefusesWhatItCannotHonour(t *testing.T) {
 	}{
 		{"required fields only", base, ""},
 		{"push rules", pushRules, "policy.push_rules"},
+		{"review hold on an unattended run", reviewHold, "policy.push_rules"},
+		// Dispatch sets unattended only beside review paths, which the case
+		// above refuses; alone the key is refused too.
+		{"unattended", unattended, "unattended"},
+		{"azure devops grant", adoGrant, "ado_grant"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw, err := runner.BuildProxyConfig(uuid.New(), tc.pc, runner.ProxyListenPort)
