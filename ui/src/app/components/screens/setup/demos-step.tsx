@@ -108,7 +108,7 @@ export default function DemoDetail({
             {operator ? (
               <>
                 Configure one under{" "}
-                <Link to="/settings" className="font-medium underline underline-offset-2">
+                <Link to="/admin/settings" className="font-medium underline underline-offset-2">
                   Settings
                 </Link>{" "}
                 (App id + private key), then come back.

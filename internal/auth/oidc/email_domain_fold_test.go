@@ -51,7 +51,7 @@ func TestEmailDomainFoldEscalation(t *testing.T) {
 		// ASCIIOnly) is the predicate, matching CanonicalGroupSubject.
 		{"control character in the domain", "user@korp.com\x00", []string{"korp.com"}, false},
 
-		// NOT AN ESCALATION — every one of these must keep signing in.
+		// Not an escalation — every one of these must keep signing in.
 		{"exact ASCII match", "alice@korp.com", []string{"korp.com"}, true},
 		{"ASCII case-insensitivity still holds (claim side)", "alice@KORP.com", []string{"korp.com"}, true},
 		{"ASCII case-insensitivity still holds (list side)", "alice@korp.com", []string{"KORP.COM"}, true},

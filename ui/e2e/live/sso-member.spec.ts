@@ -46,7 +46,7 @@
  */
 
 import { expect, test } from "@playwright/test";
-import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
+import { CONSOLE_VIEW } from "../../src/app/components/wardyn/copy/console-view";
 import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../../src/app/components/wardyn/copy";
 // 0.7.6 lanes ui-model-access-door and ui-new-run-model-access, handed over by
 // constant name in local/v076/canon/*-docs.md. Both modules are plain constant
@@ -190,11 +190,11 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   await page.goto("/setup");
   await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
-  // …and on /settings a MEMBER keeps it, deliberately: that card's AWS button
+  // …and on /account a MEMBER keeps it, deliberately: that card's AWS button
   // is admin-only, so hiding the strip there would strand exactly the person a
   // refusal sends to the page (the suppression is operator-only —
   // model-access-banner.tsx's `suppressed`).
-  await page.goto("/settings");
+  await page.goto("/account");
   await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
   await dexSignOut(page);
 });
@@ -361,34 +361,26 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   expect((await seen()).role_name).toBe(CONTRA_ROLE);
 });
 
-test("member-mode: an admin drops to member mode, is refused, and comes back", async ({ page }) => {
-  // Owner ask (ii) / P2, lane `member-mode`, merged — flipped from test.fixme in
-  // W5. A session flag an ADMIN sets on themselves, so operator authority is
-  // genuinely gone for the duration — not a UI pretence.
-  //
-  // The three strings are the merged lane's own DRAFT constants, imported
-  // rather than quoted: the W6 member lens made the banner tier-neutral after
-  // this case was written, and a quoted copy asserted the retired wording. A
-  // regex loose enough to match both drafts would have asserted nothing.
-  const MENU_ITEM = MEMBER_MODE.MENU;
-  const BANNER = MEMBER_MODE.BANNER;
-  const EXIT = MEMBER_MODE.EXIT;
+test("the view switch: an admin drops to the User view, is refused, and comes back", async ({ page }) => {
+  // M-2 (#634): the switch is the 0.7.4 member-mode clamp, promoted from the
+  // avatar menu to the top bar. A session flag an ADMIN sets on themselves, so
+  // operator authority is genuinely gone for the duration — not a UI pretence.
+  const views = () => page.getByRole("group", { name: CONSOLE_VIEW.GROUP });
+  const segment = (name: string) => views().getByRole("button", { name });
 
   await dexSignIn(page, ADMIN_EMAIL);
   const adminWho = await me(page);
   expect(adminWho.operator).toBe(true);
+  // D2: a fresh session lands in the Admin view.
+  await expect(segment(CONSOLE_VIEW.ADMIN)).toHaveAttribute("aria-pressed", "true");
 
-  // Entering reloads at the root (MemberModeMenuItem's default onEntered): the
-  // session cookie changed and every screen's cached data was fetched as an
-  // admin. Wait for that navigation rather than racing it.
-  await page.locator("header").getByRole("button").last().click();
-  await page.getByRole("menuitem", { name: MENU_ITEM }).click();
-  // The banner FIRST, not /me: it is only on the page the reload produced, so
-  // waiting for it is what makes every `page.evaluate` below run against the
-  // reloaded document instead of racing the navigation that is tearing the old
-  // one down. It is also the assertion that matters most — the mode is VISIBLE
-  // from inside it, which is the one thing that makes it not a trap.
-  await expect(page.getByText(BANNER)).toBeVisible({ timeout: 60_000 });
+  // Switching reloads the console into the User view's home: the session cookie
+  // changed and every screen's cached data was fetched as an admin. The pressed
+  // segment is only on the page the reload produced, so waiting for it is what
+  // makes every `page.evaluate` below run against the reloaded document.
+  await segment(CONSOLE_VIEW.USER).click();
+  await expect(page).toHaveURL(/\/runs$/, { timeout: 60_000 });
+  await expect(segment(CONSOLE_VIEW.USER)).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
 
   await expect.poll(async () => (await me(page)).operator, { timeout: 30_000 }).toBe(false);
   expect((await me(page)).user_view).toBe(true);
@@ -425,16 +417,12 @@ test("member-mode: an admin drops to member mode, is refused, and comes back", a
     }, owner);
   expect(
     await probe(adminWho.principal ?? ""),
-    "member mode did not bind server-side — the flag is decoration",
+    "the User view did not bind server-side — the flag is decoration",
   ).toBe(403);
 
-  // The way OUT is the banner's own button, on every screen — not the account
-  // menu, which correctly stops offering the control once the mode is on
-  // (both of MemberModeMenuItem's predicates are false from inside).
-  await page.getByRole("button", { name: EXIT }).click();
-  // Same reason as the entry: exiting reloads, so wait for the banner to be
-  // GONE before asking /me anything.
-  await expect(page.getByText(BANNER)).toBeHidden({ timeout: 60_000 });
+  // The way back is the other segment, on every screen.
+  await segment(CONSOLE_VIEW.ADMIN).click();
+  await expect(page).toHaveURL(/\/admin\//, { timeout: 60_000 });
   await expect.poll(async () => (await me(page)).operator, { timeout: 30_000 }).toBe(true);
 
   // …and the authority genuinely came back: the same probe now succeeds. A mode
@@ -443,4 +431,26 @@ test("member-mode: an admin drops to member mode, is refused, and comes back", a
     await probe(adminWho.principal ?? ""),
     "the admin did not get their operator authority back on exit",
   ).toBe(204);
+});
+
+test("the view switch: another tab follows the session into the same view", async ({ page, context }) => {
+  // §2.4: the view is the session's, so a second tab must not keep painting the
+  // other one. The BroadcastChannel is the fast path; focus, the minute poll and
+  // any 403 are the backstops.
+  const segment = (p: typeof page, name: string) =>
+    p.getByRole("group", { name: CONSOLE_VIEW.GROUP }).getByRole("button", { name });
+
+  await dexSignIn(page, ADMIN_EMAIL);
+  const other = await context.newPage();
+  await other.goto("/admin/runs");
+  await expect(segment(other, CONSOLE_VIEW.ADMIN)).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
+
+  await segment(page, CONSOLE_VIEW.USER).click();
+  // /admin/runs has a twin, so the other tab lands on the same object.
+  await expect(other).toHaveURL(/\/runs$/, { timeout: 60_000 });
+  await expect(other).not.toHaveURL(/\/admin\//);
+  await expect(segment(other, CONSOLE_VIEW.USER)).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
+
+  await segment(other, CONSOLE_VIEW.ADMIN).click();
+  await expect(page).toHaveURL(/\/admin\//, { timeout: 60_000 });
 });

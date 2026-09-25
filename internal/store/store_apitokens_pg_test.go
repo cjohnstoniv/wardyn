@@ -57,7 +57,7 @@ func TestPG_APITokens_LookupTouchRevoke(t *testing.T) {
 		t.Errorf("created = %+v, want last_used_at and revoked_at NULL", created)
 	}
 
-	// HASH AT REST. Read the column back raw, because a Create/Get round trip
+	// Hash at rest. Read the column back raw, because a Create/Get round trip
 	// stays green even if hashToken (store_ephemeral.go) becomes the identity
 	// function and the table starts holding usable bearer credentials. This is
 	// the only assertion that looks at the stored bytes, and it pins the helper
@@ -109,7 +109,7 @@ func TestPG_APITokens_LookupTouchRevoke(t *testing.T) {
 		t.Fatalf("revoked = %+v, want revoked_at set", revoked)
 	}
 	// A revoked token authenticates nothing, and its refusal is the SAME
-	// ErrNotFound an unknown token gets — no oracle for "this used to exist".
+	// ErrNotFound an unknown token gets — no oracle for "this once existed".
 	if _, err := st.GetAPITokenByRaw(ctx, raw); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("lookup of a revoked token: err = %v, want ErrNotFound", err)
 	}
@@ -188,15 +188,14 @@ func TestPG_APITokens_NilGroupsStayNull(t *testing.T) {
 	}
 }
 
-// TestPG_APITokens_RefreshIdentityAtLogin pins the bound the token lane did not
-// have. The role and groups are stamped at mint and only two statements ever
-// touched this table — last_used_at and revoked_at — so demoting a human from
-// admin, or a group membership change, left every outstanding wdn_ token of
-// theirs authenticating as who they used to be until someone separately
-// remembered to revoke it, and 0.7 widened that stamp to carry security_admin.
-// The sibling credential got exactly this bound in migration 0046
-// (RefreshSSHKeyRoles, fired from the same OnLogin hook); this is its twin,
-// widened by #152 from role-only to role+groups+groups_truncated together.
+// TestPG_APITokens_RefreshIdentityAtLogin pins the login bound on the token
+// lane. The role and groups are stamped at mint, so without a re-stamp,
+// demoting a human from admin or changing a group membership would leave
+// every outstanding wdn_ token of theirs authenticating as who they were
+// until someone separately remembered to revoke it — and the stamp carries
+// security_admin. The sibling credential has exactly this bound (migration
+// 0046, RefreshSSHKeyRoles, fired from the same OnLogin hook); this is its
+// twin, re-stamping role+groups+groups_truncated together.
 //
 // Four properties, each a way the UPDATE could be wrong:
 //   - it re-stamps EVERY token the principal holds, not just one;

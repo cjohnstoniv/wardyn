@@ -15,7 +15,7 @@
 // The whole design of this seam is one table, and each row is a decision that
 // could have gone the other way:
 //
-//	the profile's door is shut       403 + authz.denied   denyUserField
+//	the profile's door is shut       403 + authz.denied   refuse
 //	the group snapshot is unreadable 403 groups_snapshot_stale
 //	everything else                  422, NO audit        denyUserRunQuota
 //
@@ -73,6 +73,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -182,7 +183,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 	// silently, while a 500 tells them to try again.
 	resolved, err := s.resolveUserDrive(r.Context(), ceiling.Limits.MaxDriveSizeMiB)
 	if err != nil {
-		writeDriveError(w, err)
+		writeDriveError(w, r, err)
 		return nil, false
 	}
 	if resolved == nil {
@@ -256,7 +257,7 @@ func driveDeniedByProfileMsg(profile string) string {
 }
 
 // denyUserDrive is the DOOR at the enforcement site: 403 with an authz.denied
-// row, target `runs.drive`, reason `governance_profile` — the denyUserField
+// row, target `runs.drive`, reason `governance_profile` — the refuse
 // shape the two other profile refusals take, and no new value in the closed
 // reason enum.
 func (s *Server) denyUserDrive(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
@@ -266,7 +267,7 @@ func (s *Server) denyUserDrive(w http.ResponseWriter, r *http.Request, ceiling g
 	}
 	// The mock round's frozen member copy, reproduced byte-exact: the console
 	// never rewords a server refusal, so this line is where that string ships.
-	return s.denyUserField(w, r, "runs.drive", "governance_profile", driveDeniedByProfileMsg(profile))
+	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.drive", driveDeniedByProfileMsg(profile)))
 }
 
 // driveIsMountableHere is the pair of refusals that are about the DEPLOYMENT

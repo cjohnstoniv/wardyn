@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the store double ─────────────────────────────────────────────────────────
+// the store double
 
 // noGovernanceStore is store.Store with the two governance-resolver reads AND
 // the two user-drive-resolver reads answered as "this deployment has adopted
@@ -132,6 +132,10 @@ func (noGovernanceStore) GetCapabilityEnforcement(context.Context) (map[string]b
 	return map[string]bool{}, nil
 }
 
+func (noGovernanceStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 // ListGroupDenyGrants answers no group-deny rows — capUnresolvableGroupDeny's
 // narrow read for a caller whose group snapshot is stale/unanswerable; an
 // empty deployment has no rows to miss (#338).
@@ -214,6 +218,13 @@ type capStore struct {
 	// userTypes are the custom types GetUserType finds beside the seeded
 	// built-in one; a stamped type absent from both is a deleted type.
 	userTypes []types.UserType
+
+	// restricted is capability_restrictions: kind -> restricted values.
+	restricted map[string]map[string]bool
+	// restrictErr fails ListCapabilityRestrictions alone, distinct from the
+	// general s.err every other method checks — so a test can fail JUST the
+	// restriction read and see whether that alone can turn into an allow.
+	restrictErr error
 }
 
 func (s *capStore) ResolveUserDrive(context.Context, []string, []string, string) (
@@ -260,9 +271,9 @@ func (s *capStore) HasGroupTierAssignments(context.Context) (bool, error) {
 	return s.govHasGroupTier, nil
 }
 
-// ListCapabilityGrants is the WHOLE fake table — the ADMIN LISTING, and now
-// nothing else. The resolver used to reach it on every unanswerable-snapshot
-// check; the counter is what keeps it from creeping back. Embedding store.Store
+// ListCapabilityGrants is the whole fake table — the admin listing, and nothing
+// else. The resolver must not reach it on an unanswerable-snapshot check; the
+// counter is what keeps it from creeping back. Embedding store.Store
 // makes an unimplemented method a nil-pointer panic rather than a silent
 // answer, which is why this one is spelled out here rather than left to the
 // embed.
@@ -328,7 +339,38 @@ func (s *capStore) GetCapabilityEnforcement(context.Context) (map[string]bool, e
 	return s.enf, nil
 }
 
-// ─── fixtures ─────────────────────────────────────────────────────────────────
+func (s *capStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	if s.restrictErr != nil {
+		return nil, s.restrictErr
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.restricted == nil {
+		return map[string]map[string]bool{}, nil
+	}
+	return s.restricted, nil
+}
+
+func (s *capStore) SetCapabilityRestriction(_ context.Context, kind, value string, restricted bool, _ string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.restricted == nil {
+		s.restricted = map[string]map[string]bool{}
+	}
+	if s.restricted[kind] == nil {
+		s.restricted[kind] = map[string]bool{}
+	}
+	if restricted {
+		s.restricted[kind][value] = true
+	} else {
+		delete(s.restricted[kind], value)
+	}
+	return nil
+}
+
+// fixtures
 
 const (
 	capSub   = "sub-bob"
@@ -350,7 +392,7 @@ func grant(st types.CapabilitySubjectType, subject, kind, value string, effect t
 
 func capServer(st store.Store) *Server { return &Server{cfg: Config{Store: st}} }
 
-// ─── the matrix ───────────────────────────────────────────────────────────────
+// the matrix
 
 // TestCapAllowedMatrix walks the precedence rules capAllowed documents. Each
 // row names the real-world outcome, because every one of them is either a
@@ -608,7 +650,7 @@ func TestCapAllowedEnforcementReadIsSkippedOnAllow(t *testing.T) {
 	}
 }
 
-// ─── subjects ─────────────────────────────────────────────────────────────────
+// subjects
 
 // TestCapabilitySubjects: both identities are offered, lowercased, and never
 // duplicated — an admin who wrote the grant against the email must get the same
@@ -650,7 +692,7 @@ func TestCapabilitySubjectsStaleSnapshot(t *testing.T) {
 	}
 }
 
-// ─── the closed kind set ──────────────────────────────────────────────────────
+// the closed kind set
 
 // TestCapabilityKindsAreTheClosedSet: with no CHECK in the schema, this slice
 // IS the validation, so it has to stay in step with the console's own list

@@ -221,12 +221,12 @@ export function CorpNetworkStep({
     registerActions({
       probe: () => {
         setTab("proxy");
-        runTestRef.current();
+        void runTestRef.current();
       },
       probeCustom: () => {
         setTab("proxy");
         const draft = draftRef.current.trim();
-        if (draft) runTestRef.current(draft);
+        if (draft) void runTestRef.current(draft);
       },
       openEgress: () => setTab("egress"),
       testRedirects: () => {
@@ -235,7 +235,7 @@ export function CorpNetworkStep({
       },
     });
     return () => registerActions(null);
-  }, [registerActions]);
+  }, [registerActions, setTab]);
 
   // One Test button per screen (the mock's stepTest): while the gate row
   // below is offering the action, the panel's own button is suppressed.
@@ -285,7 +285,7 @@ export function CorpNetworkStep({
             onTest: () => runTest(),
             onTestCustom: () => {
               const draft = gate.customDraft.trim();
-              if (draft) runTest(draft);
+              if (draft) void runTest(draft);
             },
             probeLine,
             customReject,

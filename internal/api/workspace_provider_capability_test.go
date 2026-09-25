@@ -99,7 +99,7 @@ func assertNotRefused(t *testing.T, w *httptest.ResponseRecorder, why string) {
 	}
 }
 
-// ─── the doors ────────────────────────────────────────────────────────────────
+// the doors
 
 // providerDoor is one way a repository reaches a clone. fire drives ONE request
 // through it under the given capability rows and site config, as the given
@@ -231,7 +231,7 @@ func TestCapabilityWorkspaceProviderAtEveryDoor(t *testing.T) {
 				assertNotRefused(t, w, "a member holding the row's id may bring work from it")
 			})
 
-			// THE UPGRADE PIN: no provider rows is legacy open mode, and must be
+			// The upgrade pin: no provider rows is legacy open mode, and must be
 			// byte-identical to 0.7.1.
 			t.Run("no provider rows: not refused", func(t *testing.T) {
 				_, w := door.fire(t, &capStore{enf: capProviderEnforced()}, types.SiteConfig{}, door.member(t))

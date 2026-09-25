@@ -252,6 +252,13 @@ type Store interface {
 	// PutCapabilityEnforcement replaces the WHOLE map (a capability the caller
 	// omits loses its row) and returns the stored result.
 	PutCapabilityEnforcement(ctx context.Context, enabled map[string]bool) (map[string]bool, error)
+	// ListCapabilityRestrictions returns the restricted values ("Available to:
+	// Only...", migration 0078) as kind -> set of values; an absent value is
+	// not restricted. Never nil.
+	ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error)
+	// SetCapabilityRestriction turns one value's restriction on or off
+	// (idempotent either way).
+	SetCapabilityRestriction(ctx context.Context, capability, value string, restricted bool, by string) error
 
 	// Console-managed role mappings (migration 0051, store_role_mappings.go):
 	// the store half of internal/auth/oidc's RoleMappingSource, read once per
@@ -274,7 +281,7 @@ type Store interface {
 	// screen and the OIDC login-time merge's whole data need.
 	ListRoleMappings(ctx context.Context) ([]types.RoleMapping, error)
 
-	// User types (migration 0069_user_types). CreateUserType and
+	// User types (migration 0071_user_types). CreateUserType and
 	// UpdateUserType return ErrConflict on a taken id or name; DeleteUserType
 	// returns ErrConflict while the type is built in or still named by a
 	// subject row (UserTypeReferences counts those).

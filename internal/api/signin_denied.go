@@ -15,7 +15,7 @@ import (
 // the reason enum stays readable from this package alone.
 const (
 	authFailedUserTypeAmbiguous = "user_type_ambiguous"
-	authFailedUserTypeUnknown   = "user_type_unknown"
+	authFailedUserTypeUnknown   = oidc.DenialUserTypeUnknown
 )
 
 // auditSignInDenied records a sign-in the callback refused over its user type

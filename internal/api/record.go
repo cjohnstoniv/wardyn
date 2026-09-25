@@ -371,6 +371,12 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		if s.writeAdmissionLaunchRefusal(w, r, lerr) {
 			return
 		}
+		// The same gate could not read the sign-in state: the 503 every
+		// other door answers, not the 422 below and not a bare 500.
+		if errors.Is(lerr, errGitCredentialUnreadable) {
+			writeGitCredentialUnreadable(w, r, lerr)
+			return
+		}
 		// The per-user Azure DevOps gate (#386 review follow-up N4): admitted,
 		// but this person hasn't connected — the same 422 shape the New Run
 		// door and the Build/Scan steps answer with (gitCredentialErrorBody).
@@ -403,7 +409,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// differently from run-create for the same cause. Everything else keeps
 		// today's 500.
 		if errors.Is(lerr, errGroupsSnapshotStale) {
-			writeCeilingError(w, lerr)
+			writeCeilingError(w, r, lerr)
 			return
 		}
 		writeServerError(w, r, "launch record run", lerr)

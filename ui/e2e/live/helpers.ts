@@ -22,7 +22,7 @@
 import { expect, type Page, type APIRequestContext } from "@playwright/test";
 // From the CSS-free copy module, NEVER from harness-login-pane: that module
 // reaches xterm.css, which Playwright's Node loader cannot load ("No tests found").
-import { SELFRUN_MARKER } from "../../src/app/components/screens/settings/login-pane-copy";
+import { SELFRUN_MARKER, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
 
 // ── the walk's inputs (scripts/kind-sso-walk.sh exports every one) ──────────
 export const ADMIN_TOKEN = process.env.WARDYN_LIVE_ADMIN_TOKEN || "";
@@ -348,15 +348,30 @@ export async function makeMemberActionable(request: APIRequestContext): Promise<
  * The pane launches the login sandbox on open. The start URL is roster-managed
  * here (the admin set sso_start_url), so the pane goes straight to "Start login"
  * rather than asking for one.
+ *
+ * #628: Start opens NO tab any more — the door narrates the start in its own
+ * steps, and the provider tab opens only from its Open button, which this walk
+ * never needs (the on-cluster fake pre-approves every device code). So every
+ * sign-in the walk drives asserts both halves: the steps are on screen, and
+ * no page — least of all an about:blank placeholder — opened on the click.
  */
 export async function openLoginPane(page: Page): Promise<void> {
   await page.goto("/setup");
   const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
   await expect(cta).toBeVisible({ timeout: 60_000 });
   await cta.click();
-  const start = page.getByRole("button", { name: "Start login" });
-  if (await start.isVisible().catch(() => false)) {
-    await start.click();
+  const opened: Page[] = [];
+  const onPage = (p: Page) => opened.push(p);
+  page.context().on("page", onPage);
+  try {
+    const start = page.getByRole("button", { name: "Start login" });
+    if (await start.isVisible().catch(() => false)) {
+      await start.click();
+    }
+    await expect(page.getByTestId("signin-progress").first()).toContainText(SIGNIN_PROGRESS.STEP_START);
+    expect(opened.map((p) => p.url()), "Start login opened a tab").toEqual([]);
+  } finally {
+    page.context().off("page", onPage);
   }
 }
 

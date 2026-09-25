@@ -59,7 +59,7 @@ func auditReasons(t *testing.T, srv *Server, action string) []string {
 	return out
 }
 
-// ─── D1: deciding an egress approval ──────────────────────────────────────────
+// D1: deciding an egress approval
 
 // approveAs POSTs the plain (scope-less) approve the console sends.
 func approveAs(t *testing.T, srv *Server, sess *http.Cookie, id uuid.UUID) (int, string) {
@@ -224,7 +224,7 @@ func TestDecide_EgressHostCapabilityExemptsOperators(t *testing.T) {
 	}
 }
 
-// ─── D2: a member's own inline policy ─────────────────────────────────────────
+// D2: a member's own inline policy
 
 // capPolicyServer is a member-facing create-run resolution: the secrets harness
 // (so an api_key grant's secret actually exists) with capability rows behind it.
@@ -393,8 +393,8 @@ func TestInlinePolicy_SecretNarrowing(t *testing.T) {
 }
 
 // TestInlinePolicy_DropsAreAggregatedPerReason: a spec that loses many things
-// produces ONE event per reason, not one per thing, and the pre-existing
-// ceiling drop (which used to be a warning and nothing else) is now among them.
+// produces one event per reason, not one per thing, and the ceiling drop is
+// among them rather than a bare warning.
 func TestInlinePolicy_DropsAreAggregatedPerReason(t *testing.T) {
 	h := capPolicyServer(t, nil, map[string]bool{capEgressHost: true, capSecret: true})
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
@@ -445,7 +445,7 @@ func TestInlinePolicy_PreflightDoesNotAudit(t *testing.T) {
 	}
 }
 
-// ─── D3: the request fields a member does not freely choose ───────────────────
+// D3: the request fields a member does not freely choose
 
 // denyRequest runs the request-level gate directly and returns whether it
 // refused, plus the status it wrote. The HTTP wiring on both doors (create and
@@ -736,7 +736,7 @@ func TestDenyMemberRequest_OperatorsAreExempt(t *testing.T) {
 	}
 }
 
-// ─── D4: what a member sees on the secrets list ───────────────────────────────
+// D4: what a member sees on the secrets list
 
 // listSecretNames reads GET /secrets as the given session.
 func listSecretNames(t *testing.T, srv *Server, sess *http.Cookie) []string {
@@ -825,7 +825,7 @@ func TestListSecrets_MemberNarrowing(t *testing.T) {
 	})
 }
 
-// ─── D5: what a member is told about their own grants ─────────────────────────
+// D5: what a member is told about their own grants
 
 // TestMeCapabilities_HidesCreatedBy: /me/capabilities answers "what do I hold",
 // and the answer does not include which admin signed the row. GET /permissions

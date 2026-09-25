@@ -616,7 +616,7 @@ export function LiveApprovals({
               disabled={busy === denyTarget?.request.id}
               onClick={(e) => {
                 e.preventDefault();
-                confirmDeny();
+                void confirmDeny();
               }}
               className="bg-danger text-danger-foreground hover:bg-danger/90"
             >
@@ -665,6 +665,13 @@ function ScopeMenu({
 }) {
   const [open, setOpen] = React.useState(false);
   const [untilMode, setUntilMode] = React.useState(false);
+  // The sub-view's first control ("← Back") — focused when untilMode opens,
+  // since swapping PopoverContent's children does not move focus on its own
+  // and it would otherwise drop to the page body (#481).
+  const backRef = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    if (untilMode) backRef.current?.focus();
+  }, [untilMode]);
   // The custom datetime-local's picked value, held here until the operator
   // explicitly confirms it — see the "Use this time" button below. A preset
   // click is already one deliberate, atomic action and commits straight
@@ -734,6 +741,7 @@ function ScopeMenu({
         ) : (
           <>
             <button
+              ref={backRef}
               type="button"
               onClick={() => {
                 setUntilMode(false);

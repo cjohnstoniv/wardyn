@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the scan door ────────────────────────────────────────────────────────────
+// the scan door
 
 // scanLaneStore adds the source fence + scan-result writes launchSourceScanRun
 // performs to the governance escape store, so the whole lane can run for real.
@@ -138,7 +138,7 @@ func TestSourceScanLaneResolvesTheActingPrincipalsCeiling(t *testing.T) {
 	})
 }
 
-// ─── the seam itself ──────────────────────────────────────────────────────────
+// the seam itself
 
 // TestDispatchCeilingZeroValueRefusesToLaunch pins the runtime half of the
 // structural guarantee. The compiler forces a lane to pass SOMETHING; this is

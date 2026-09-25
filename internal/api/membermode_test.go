@@ -3,7 +3,7 @@
 
 package api
 
-// The server half of "view as member" (v0.7.4, field-report P2): the toggle
+// The server half of "view as member": the toggle
 // route, the two mint doors it closes, the audit rows it writes, and — the one
 // test that proves the mode is real rather than cosmetic — the whole gated-route
 // walk driven by an ADMIN cookie carrying the flag.
@@ -439,19 +439,18 @@ func TestMemberMode_SecurityAdminSurfaceDeniedToo(t *testing.T) {
 	}
 }
 
-// TestMemberMode_RefusesTokenAndKeyMint: the two doors that must REFUSE rather
-// than clamp. OnLogin re-stamps every API token and SSH key of a principal to
-// their freshly derived role at the next sign-in (store.RefreshAPITokenRoles,
-// the ssh-key stamp refresh), so a credential minted "as a member" would
-// silently become admin — a credential that outlives the mode is the one thing
-// this feature must not leave behind.
-func TestMemberMode_RefusesTokenAndKeyMint(t *testing.T) {
+// TestMemberMode_RefusesTokenMint: the door that must REFUSE rather than
+// clamp. OnLogin re-stamps every API token of a principal to their freshly
+// derived role at the next sign-in (store.RefreshAPITokenIdentity), so a token
+// minted "as a member" would silently become admin — a credential that outlives
+// the mode is the one thing this feature must not leave behind. The SSH-key
+// door stores a capped key instead (TestSSHKeys_UserViewAddIsCapped).
+func TestMemberMode_RefusesTokenMint(t *testing.T) {
 	srv, _ := memberModeServer(t)
 	on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
 
 	for _, tc := range []struct{ name, path, body string }{
 		{"api token", "/api/v1/me/tokens", `{"name":"minted-in-member-mode"}`},
-		{"ssh key", "/api/v1/me/ssh-keys", `{"public_key":"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIbdmX7dazl2gKzTjv0xfDCp4wTapmeoUaItm/kYMQz9 who@host"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := doSSO(t, srv, http.MethodPost, tc.path, on, tc.body)
@@ -465,15 +464,14 @@ func TestMemberMode_RefusesTokenAndKeyMint(t *testing.T) {
 	}
 }
 
-// TestMemberMode_ExistingAPITokenKeepsItsOwnRole is ceiling 4, made executable
-// (R-05). The mode is per-SESSION: a `wdn_` token the human already holds
+// TestMemberMode_ExistingAPITokenKeepsItsOwnRole is ceiling 4, made
+// executable. The mode is per-session: a `wdn_` token the human already holds
 // replays its own DB-stamped role (apitokens.go), so it still reaches
 // operator-only routes while the very same human's browser cookie is clamped.
 // The 409 mint doors stop NEW credentials; they cannot reach into old ones.
 //
-// This is a REGRESSION PIN as much as a ceiling: it is the shape of the bug
-// where somebody "fixes" the ceiling by teaching the token lane to read the
-// session, which would clamp a CLI caller by the state of an unrelated browser.
+// It also pins against the tempting wrong fix: teaching the token lane to read
+// the session would clamp a CLI caller by the state of an unrelated browser.
 func TestMemberMode_ExistingAPITokenKeepsItsOwnRole(t *testing.T) {
 	h := newHarness(t)
 	st := newTokenMemStore()
@@ -513,18 +511,18 @@ func sessionCookieFrom(t *testing.T, cookies []*http.Cookie) *http.Cookie {
 	return nil
 }
 
-// TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker is W6-1, the two
-// admin-tier refusals the marker was missing.
+// TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker pins the marker on the
+// two in-handler admin-tier refusals.
 //
-// TestMemberMode_AuditRowsNameTheAdmin above pins FOUR sites and the doc
-// comment on authzDeniedDatum names those four as "every admin-tier refusal".
-// Two more emitters hand-rolled their own Data map and so carried no marker at
-// all: resolveAlwaysTarget's rule 6 (`always` is security-admin-only) and
-// denyUserField (the `workspaces.llm_cred` arm is `admin_surface`). Both are
-// reachable INSIDE the mode by an admin doing exactly what the member Getting
-// Started card invites — deciding their own run's held egress, creating a
-// workspace — so a reviewer filtering the denial stream read an admin's own
-// member walk as a member incident, the one outcome the field exists to prevent.
+// TestMemberMode_AuditRowsNameTheAdmin above pins four sites, and the doc
+// comment on internal/authz.Datum names those four as "every admin-tier
+// refusal". Two more emitters are pinned here: resolveAlwaysTarget's rule 6
+// (`always` is security-admin-only) and workspaces.go's `workspaces.llm_cred`
+// arm (`admin_surface`). Both are reachable INSIDE the view by an admin doing
+// exactly what the member Getting Started card invites — deciding their own
+// run's held egress, creating a workspace — so a reviewer filtering the denial
+// stream must not read an admin's own user walk as a member incident, the one
+// outcome the marker exists to prevent.
 //
 // `method` rides along for the same reason: a marker on a row whose shape
 // differs from the middleware's is still a row the same filter cannot group.
@@ -559,7 +557,7 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 		}
 	})
 
-	// denyUserField, reached from handleCreateWorkspace's llm_cred arm:
+	// refuse, reached from handleCreateWorkspace's llm_cred arm:
 	// secretOwnerFromRequest returns the caller's principal once the role is
 	// clamped, so the member arm fires for a member-mode admin.
 	t.Run("workspace create llm_cred", func(t *testing.T) {
@@ -603,7 +601,7 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 	})
 }
 
-// TestMemberMode_RealMemberTogglingOnChangesNothing is W6-4's other half, at
+// TestMemberMode_RealMemberTogglingOnChangesNothing is other half, at
 // the layer the defect is actually felt: the mint doors and /me.
 //
 // handleSetUserView's only guard is "is there an SSO human", and its comment

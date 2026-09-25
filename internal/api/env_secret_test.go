@@ -185,6 +185,10 @@ func (s *envSecretCeilingStore) GetCapabilityEnforcement(context.Context) (map[s
 	return nil, nil
 }
 
+func (s *envSecretCeilingStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 // TestEnvSecretPosture_BindsWithoutAGovernanceAssignment is the pin for the
 // admin-only posture at the seam that decides a real run, not at
 // filterUserGrants' front door.
@@ -196,7 +200,7 @@ func (s *envSecretCeilingStore) GetCapabilityEnforcement(context.Context) (map[s
 // selecting a stored row (or taking the deployment default) kept the grant
 // verbatim and resolveEnvSecretGrants wrote the operator's raw secret value into
 // their sandbox env. THREAT-MODEL.md §5.1a, docs/ENV.md's
-// WARDYN_ALLOW_MEMBER_ENV_SECRET row and docs/POLICIES.md's env_secret row all
+// WARDYN_ALLOW_USER_ENV_SECRET row and docs/POLICIES.md's env_secret row all
 // state the control without qualification.
 //
 // Four arms over the two axes that gate it — assignment (the bug) and the route
@@ -472,5 +476,15 @@ func TestDispatchEnvSplit_BedrockCredentialsLeaveEnv(t *testing.T) {
 				t.Errorf("non-secret env was disturbed by the split: %v", sandboxEnv)
 			}
 		})
+	}
+}
+
+// TestEnvAllowMemberEnvSecret_Name pins the name this package reads to the new
+// spelling cmd/wardynd's deprecated-alias table (env_aliases_test.go) copies
+// WARDYN_ALLOW_MEMBER_ENV_SECRET into; a drift here would leave the alias
+// setting a variable nothing reads.
+func TestEnvAllowMemberEnvSecret_Name(t *testing.T) {
+	if envAllowMemberEnvSecret != "WARDYN_ALLOW_USER_ENV_SECRET" {
+		t.Errorf("envAllowMemberEnvSecret = %q, want WARDYN_ALLOW_USER_ENV_SECRET", envAllowMemberEnvSecret)
 	}
 }

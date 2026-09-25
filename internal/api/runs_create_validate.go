@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -425,9 +426,11 @@ func (s *Server) denyUserRequest(w http.ResponseWriter, r *http.Request, req cre
 	if s.isOperator(r.Context()) {
 		return governanceCeiling{}, false
 	}
+	// One capability snapshot for every field below (capBatch's ctx memo).
+	r = r.WithContext(withCapBatch(r.Context()))
 	if req.DevcontainerRepo != "" {
-		return governanceCeiling{}, s.denyUserField(w, r, "runs.image", "byoi_user",
-			"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image")
+		return governanceCeiling{}, s.refuse(w, r, authz.Deny(authz.ReasonBYOIUser, "runs.image",
+			"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image"))
 	}
 	if req.Image != "" {
 		granted, err := s.capGranted(r.Context(), capImage, req.Image)
@@ -436,9 +439,9 @@ func (s *Server) denyUserRequest(w http.ResponseWriter, r *http.Request, req cre
 			return governanceCeiling{}, true
 		}
 		if !granted {
-			return governanceCeiling{}, s.denyUserField(w, r, "runs.image", "byoi_user",
+			return governanceCeiling{}, s.refuse(w, r, authz.Deny(authz.ReasonBYOIUser, "runs.image",
 				"image "+req.Image+" is not granted to you — ask an admin to grant the exact image ref, "+
-					"or launch with the agent's convention image or an onboarded workspace's base image")
+					"or launch with the agent's convention image or an onboarded workspace's base image"))
 		}
 	}
 	if req.WorkspaceID != nil && s.denyUserCapability(w, r, capWorkspace, req.WorkspaceID.String(), "runs.workspace",
@@ -461,7 +464,7 @@ func (s *Server) denyUserRequest(w http.ResponseWriter, r *http.Request, req cre
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
 	if err != nil {
-		writeCeilingError(w, err)
+		writeCeilingError(w, r, err)
 		return governanceCeiling{}, true
 	}
 	if s.denyUserGovernance(w, r, req, ceiling) {
@@ -488,7 +491,7 @@ func (s *Server) denyUserCapability(w http.ResponseWriter, r *http.Request, kind
 	if allowed {
 		return false
 	}
-	return s.denyUserField(w, r, target, "capability_"+kind, msg)
+	return s.refuse(w, r, authz.Deny(capKinds[kind].reason, target, msg))
 }
 
 // denyUserGovernance is denyUserRequest's governance half: the request
@@ -513,16 +516,24 @@ func (s *Server) denyUserGovernance(w http.ResponseWriter, r *http.Request, req 
 	// bind. A profile that wants supervised tool use has to be able to close the
 	// door that routes around the gate entirely.
 	if ceiling.Limits.DenyTaskModeExec && req.TaskMode == "exec" {
-		return s.denyUserField(w, r, "runs.task_mode", "governance_profile", fmt.Sprintf(
-			"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.", name))
+		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.task_mode", fmt.Sprintf(
+			"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.", name)))
+	}
+	// The same door through an interactive run: a task with interactive_start
+	// unset or "shell" is run by the image as `bash -lc` at boot, before anyone
+	// attaches. Same predicate as the autonomy gate and dispatch, so the limit
+	// and the seed cannot disagree; `!= "agent"` keeps an unknown value refused.
+	if ceiling.Limits.DenyTaskModeExec && req.InteractiveStart != "agent" && interactiveBootSeed(requestIsInteractive(req), req.Task) != "" {
+		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive_start", fmt.Sprintf(
+			"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.", name)))
 	}
 	// Post-coercion, and that is the whole gate. req.Interactive is still the RAW
 	// field here — this function runs before the empty-task→interactive coercion
 	// — so reading it directly would be evaded by simply omitting the task, which
 	// is the one request shape a deny_interactive profile most needs to refuse.
 	if ceiling.Limits.DenyInteractive && requestIsInteractive(req) {
-		return s.denyUserField(w, r, "runs.interactive", "governance_profile", fmt.Sprintf(
-			"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", name))
+		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive", fmt.Sprintf(
+			"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", name)))
 	}
 	if s.denyUserRunQuota(w, r, ceiling) {
 		return true
@@ -535,8 +546,8 @@ func (s *Server) denyUserGovernance(w http.ResponseWriter, r *http.Request, req 
 	// rationale above is explicitly false for it — which is why this refusal is NOT
 	// scoped to the derivation's non-interactive lane the way the codex one is.
 	if req.SeedAutoTools {
-		return s.denyUserField(w, r, "runs.seed_auto_tools", "governance_profile", fmt.Sprintf(
-			"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.", name))
+		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.seed_auto_tools", fmt.Sprintf(
+			"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.", name)))
 	}
 	// Scoped to exactly the case where effectiveToolApprovals WOULD derive
 	// hold: codex-cli has no external tool-approval contract, so a derived hold
@@ -544,8 +555,8 @@ func (s *Server) denyUserGovernance(w http.ResponseWriter, r *http.Request, req 
 	// above (:152) exists to reject — the same contradiction, arriving through a
 	// field the caller never set.
 	if req.Agent == "codex-cli" && !requestIsInteractive(req) {
-		return s.denyUserField(w, r, "runs.agent", "governance_profile", fmt.Sprintf(
-			"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.", name))
+		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.agent", fmt.Sprintf(
+			"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.", name)))
 	}
 	return false
 }
@@ -585,10 +596,9 @@ func (s *Server) denyUserRunQuota(w http.ResponseWriter, r *http.Request, ceilin
 	if active < limit {
 		return false
 	}
-	writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(
+	return s.refuse(w, r, authz.Deny(authz.ReasonRunQuota, "runs.quota", fmt.Sprintf(
 		"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.",
-		limit, ceiling.Profile.Name, active))
-	return true
+		limit, ceiling.Profile.Name, active)))
 }
 
 // denyUserSeededImage closes a gap: a MEMBER-OWNED
@@ -626,26 +636,9 @@ func (s *Server) denyUserSeededImage(w http.ResponseWriter, r *http.Request, see
 	// The SAME refusal the explicit --image branch raises (target, reason and
 	// shape), because it is the same capability answered about the same value —
 	// only the door differs, and the message says which one.
-	return s.denyUserField(w, r, "runs.image", "byoi_user",
+	return s.refuse(w, r, authz.Deny(authz.ReasonBYOIUser, "runs.image",
 		"image "+image+" comes from your own workspace's base image and is not granted to you — "+
-			"ask an admin to grant the exact image ref, or launch with the agent's convention image")
-}
-
-// denyUserField writes one member refusal — the 403 and its audit row — and
-// returns true so a caller can `return s.denyUserField(...)`. One helper so a
-// new gate cannot ship the error without the audit event.
-//
-// The datum comes from authzDeniedDatum (membermode.go) rather than a map
-// written here, which buys two things at once: the user_view MARKER rides
-// every refusal this helper writes — including the `workspaces.llm_cred`
-// admin-tier arm, which an admin in member mode reaches by creating a workspace
-// — and the row carries `method`, so it is shape-identical to the middleware's
-// and a denial-stream filter can group the two without a special case.
-func (s *Server) denyUserField(w http.ResponseWriter, r *http.Request, target, reason, msg string) bool {
-	writeError(w, http.StatusForbidden, msg)
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"authz.denied", target, "denied", mustJSON(authzDeniedDatum(r.Context(), reason, r.Method))))
-	return true
+			"ask an admin to grant the exact image ref, or launch with the agent's convention image"))
 }
 
 // validateImageBuildRequest enforces the image/devcontainer_repo XOR + the
