@@ -1315,6 +1315,45 @@ func TestSecretRmCmd(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
+// ssh-key delete (#206 slice a: the gap ssh-key had no delete)
+// --------------------------------------------------------------------------
+
+func TestSSHKeyDeleteCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusNoContent, nil)
+
+	var buf strings.Builder
+	root := rootCmd()
+	root.SetArgs([]string{"ssh-key", "delete", "SHA256:abcdef1234567890", "--url", srv.URL, "--token", "tok"})
+	root.SetIn(strings.NewReader(""))
+	root.SetOut(&buf)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("ssh-key delete returned error: %v", err)
+	}
+	got := srv.last()
+	want := "/api/v1/me/ssh-keys/SHA256:abcdef1234567890"
+	if got.method != http.MethodDelete || got.path != want {
+		t.Errorf("got %s %s, want DELETE %s", got.method, got.path, want)
+	}
+	if want := "ssh key \"SHA256:abcdef1234567890\" deleted\n"; buf.String() != want {
+		t.Errorf("stdout = %q, want %q", buf.String(), want)
+	}
+}
+
+func TestSSHKeyRmCmd_Alias(t *testing.T) {
+	srv := newCmdServer(t, http.StatusNoContent, nil)
+
+	if err := execCmd(t, "ssh-key", "rm", "SHA256:abcdef1234567890", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("ssh-key rm returned error: %v", err)
+	}
+	got := srv.last()
+	want := "/api/v1/me/ssh-keys/SHA256:abcdef1234567890"
+	if got.method != http.MethodDelete || got.path != want {
+		t.Errorf("got %s %s, want DELETE %s", got.method, got.path, want)
+	}
+}
+
+// --------------------------------------------------------------------------
 // policy commands (list/get/delete; create/update via -f file)
 // --------------------------------------------------------------------------
 

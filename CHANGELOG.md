@@ -590,6 +590,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
+  remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
+  `secret delete`'s pattern.
+
 - **Settings → Model providers lists the org's model providers (#536).** In the Admin view,
   `/admin/settings` shows one row per provider: its name, its kind, what each person provides,
   which agents use it, "Default for …" where an agent has several to choose from, and how many
