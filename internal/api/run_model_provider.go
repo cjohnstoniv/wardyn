@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -188,7 +190,7 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		writeServerError(w, r, "resolve capability", err)
 		return runProviderChoice{}, false
 	case choice.notGranted:
-		s.denyMemberField(w, r, "runs.model_provider", "capability_model_provider", choice.refusal)
+		s.refuse(w, r, authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal))
 		return runProviderChoice{}, false
 	case choice.refusal != "":
 		writeError(w, http.StatusUnprocessableEntity, choice.refusal)
@@ -199,7 +201,7 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	case choice.chosen && choice.provider.Kind == types.ModelProviderAnthropicSubscription:
 		// The liveness dispatch re-checks, answered here too so a person who
 		// is not signed in is told before a run exists.
-		refusal, err := s.providerSubscriptionRefusal(ctx, choice.provider, runIdentitySubject(ctx, principalFromRequest(r)))
+		refusal, err := s.providerSubscriptionRefusal(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), choice.provider, runIdentitySubject(ctx, principalFromRequest(r)))
 		if err != nil {
 			writeServerError(w, r, "read model provider credential", err)
 			return runProviderChoice{}, false

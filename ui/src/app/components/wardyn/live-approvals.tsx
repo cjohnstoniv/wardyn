@@ -32,6 +32,7 @@ import {
 } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { ADO } from "../../lib/ado-entra-copy";
+import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
@@ -190,6 +191,11 @@ export function LiveApprovals({
   const principal = usePrincipal();
   const [pending, setPending] = React.useState<ApprovalRequest[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
+  // Which of the busy row's two actions is in flight (#458) — `busy` alone
+  // (a row id) is shared with every non-ADO row's own decide(), which never
+  // needed the distinction; only the ADO card's split Approve/Deny does. See
+  // AdoCapabilityCard's own `busy` doc for why a single boolean isn't enough.
+  const [busyAction, setBusyAction] = React.useState<"approve" | "deny" | null>(null);
   // A misclick on Deny (any scope) can't silently poison a host the operator
   // meant to keep — a confirm stop, mirroring DeleteConfirmDialog's pattern.
   // Approve's DEFAULT scope stays a single click: it is the low-risk,
@@ -324,7 +330,7 @@ export function LiveApprovals({
       }
       await refresh();
     } catch (e) {
-      toast.error(approve ? "Approve failed" : "Deny failed", {
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(e),
       });
     } finally {
@@ -338,14 +344,16 @@ export function LiveApprovals({
   // ado-capability-card.tsx), never decisionArgs()'s omit-for-"run" shape.
   const decideAdo = async (a: ApprovalRequest, approve: boolean, opts: [DecisionOptions]) => {
     setBusy(a.id);
+    setBusyAction(approve ? "approve" : "deny");
     try {
       if (approve) await api.approve(a.id, reasonApprove, ...opts);
       else await api.deny(a.id, reasonDeny, ...opts);
       await refresh();
     } catch (e) {
-      toast.error(approve ? "Approve failed" : "Deny failed", { description: getErrorMessage(e) });
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(e) });
     } finally {
       setBusy(null);
+      setBusyAction(null);
     }
   };
 
@@ -465,7 +473,7 @@ export function LiveApprovals({
               // proves this viewer may decide it, `run` or no `run`. See the
               // card's own doc for what this does and does not change.
               ownershipScopedList
-              busy={busy === a.id}
+              busy={busy === a.id ? busyAction : null}
               onApprove={(opts: [DecisionOptions]) => decideAdo(a, true, opts)}
               onDeny={(opts: [DecisionOptions]) => decideAdo(a, false, opts)}
             />
@@ -608,7 +616,7 @@ export function LiveApprovals({
               disabled={busy === denyTarget?.request.id}
               onClick={(e) => {
                 e.preventDefault();
-                confirmDeny();
+                void confirmDeny();
               }}
               className="bg-danger text-danger-foreground hover:bg-danger/90"
             >
@@ -657,6 +665,13 @@ function ScopeMenu({
 }) {
   const [open, setOpen] = React.useState(false);
   const [untilMode, setUntilMode] = React.useState(false);
+  // The sub-view's first control ("← Back") — focused when untilMode opens,
+  // since swapping PopoverContent's children does not move focus on its own
+  // and it would otherwise drop to the page body (#481).
+  const backRef = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    if (untilMode) backRef.current?.focus();
+  }, [untilMode]);
   // The custom datetime-local's picked value, held here until the operator
   // explicitly confirms it — see the "Use this time" button below. A preset
   // click is already one deliberate, atomic action and commits straight
@@ -726,6 +741,7 @@ function ScopeMenu({
         ) : (
           <>
             <button
+              ref={backRef}
               type="button"
               onClick={() => {
                 setUntilMode(false);

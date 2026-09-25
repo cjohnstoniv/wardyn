@@ -25,10 +25,8 @@ import (
 // validateUpstreamProxyNoProxy enforces SiteConfig.UpstreamProxyNoProxy's
 // write-time invariant: every entry is either a CIDR or a host/domain suffix
 // the proxy will actually honour, decided by the PROXY'S OWN rule
-// (proxy.ValidNoProxyEntry) rather than a second copy of it here — a dual
-// matcher over one operator-authored list is the drift bug this codebase
-// already warns about, and here it would drift in the direction of a bypass
-// that silently is not one.
+// (proxy.ValidNoProxyEntry) rather than a second copy that could drift into a
+// bypass that silently is not one.
 //
 // The NO_PROXY "*" wildcard is refused by that rule, deliberately: "bypass
 // everything" is spelled by clearing upstream_proxy_url, and one character

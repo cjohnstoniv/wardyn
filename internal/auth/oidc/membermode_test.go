@@ -4,7 +4,7 @@
 package oidc_test
 
 // The four invariants that keep "view as member" from becoming a privilege
-// primitive (P2, v0.7.4). Driven through the REAL cookie round trip — encode,
+// primitive. Driven through the real cookie round trip — encode,
 // SetMemberMode, Middleware — rather than against the struct, because the whole
 // design rests on what survives a re-encode: the clamp is applied at
 // contextWithPrincipal and the stamped Role is never rewritten, so a test that
@@ -36,6 +36,7 @@ func memberModeSession() writoidc.Session {
 		Email:           "admin@corp.example",
 		Name:            "Ada Admin",
 		Role:            writoidc.RoleAdmin,
+		UserType:        "standard",
 		Expiry:          time.Now().UTC().Add(time.Hour).Truncate(time.Second),
 		IssuedAt:        time.Now().UTC().Add(-10 * time.Minute).Truncate(time.Second),
 		Groups:          []string{"wardyn.admin", "eng"},
@@ -152,8 +153,8 @@ func TestMemberMode_ClampsEffectiveRoleOnly(t *testing.T) {
 	if sub != before.Sub {
 		t.Errorf("PrincipalFromContext = %q, want %q — the actor stays the admin's own sub", sub, before.Sub)
 	}
-	if role != writoidc.RoleMember {
-		t.Errorf("RoleFromContext = %q, want %q", role, writoidc.RoleMember)
+	if role != writoidc.RoleUser {
+		t.Errorf("RoleFromContext = %q, want %q", role, writoidc.RoleUser)
 	}
 	if !mm {
 		t.Error("MemberModeFromContext = false, want true")
@@ -192,20 +193,20 @@ func TestMemberMode_OffRestoresTheStampedRole_NeverReDerives(t *testing.T) {
 	}
 }
 
-// TestMemberMode_PreFlagCookieDecodes: a codec-v1 cookie written before the
-// field existed carries no "mm" key at all and must still be a session, with
-// the flag reading false. This is why the field is omitempty and the codec
-// version is NOT bumped (a bump would 401 every live cookie mid-rollout).
+// TestMemberMode_PreFlagCookieDecodes: a cookie carrying no "mm" key at all
+// must still be a session, with the flag reading false. This is why the field
+// is omitempty and the mode never bumped the codec version.
 func TestMemberMode_PreFlagCookieDecodes(t *testing.T) {
 	a := &writoidc.Authenticator{}
-	// Hand-rolled payload with NO mm key — the byte shape a 0.7.3 binary wrote.
-	payload := []byte(`{"v":1,"sub":"sub-old","email":"old@corp.example","role":"admin",` +
+	// Hand-rolled payload with NO mm key.
+	payload := []byte(`{"v":` + strconv.Itoa(writoidc.SessionCodecVersion) +
+		`,"sub":"sub-old","email":"old@corp.example","role":"admin","ut":"standard",` +
 		`"expiry":"` + time.Now().UTC().Add(time.Hour).Format(time.RFC3339) + `","groups":[]}`)
 	c := writoidc.EncodeRawSessionForTest(a, payload)
 
 	sub, role, mm, authed := principalOf(t, a, c)
 	if !authed {
-		t.Fatal("a pre-flag codec-v1 cookie must still authenticate — no codec bump")
+		t.Fatal("a cookie with no mm key must still authenticate")
 	}
 	if sub != "sub-old" || role != writoidc.RoleAdmin {
 		t.Errorf("sub/role = %q/%q, want sub-old/admin", sub, role)
@@ -242,14 +243,15 @@ func (f *memberModeRevocations) IsSessionRevoked(context.Context, string, string
 func (f *memberModeRevocations) RevokeSub(context.Context, string) error { return nil }
 func (f *memberModeRevocations) RevokeAll(context.Context) error         { return nil }
 
-// TestMemberMode_RealMemberTurningItOnWritesNoCookie is W6-4. The handler's own
+// TestMemberMode_RealMemberTurningItOnWritesNoCookie: the handler's own
 // comment calls a real member toggling ON "a no-op 200 … they are already what
-// they asked to be". It was not a no-op: it stamped mm:1 onto the member's
-// cookie, after which /me answers member_mode:true, the console paints a banner
+// they asked to be", and it must be one. Stamping mm:1 onto the member's
+// cookie would make /me answer member_mode:true, the console paint a banner
 // naming an admin role they do not hold, and BOTH mint doors — which key on
 // MemberModeFromContext, not on the stamped tier — 409 their own SSH key and
-// API token. The member Getting Started's "Connect your tools · Add SSH key"
-// card and docs/MEMBERS.md's SSH path both break until they find the Exit.
+// API token; the member Getting Started's "Connect your tools · Add SSH key"
+// card and docs/MEMBERS.md's SSH path would both break until they found the
+// Exit.
 //
 // No cookie at all, rather than a cookie with the flag cleared: re-signing a
 // member's session to record a decision not to change it is a Set-Cookie
@@ -257,7 +259,7 @@ func (f *memberModeRevocations) RevokeAll(context.Context) error         { retur
 func TestMemberMode_RealMemberTurningItOnWritesNoCookie(t *testing.T) {
 	a := &writoidc.Authenticator{}
 	sess := memberModeSession()
-	sess.Sub, sess.Role = "sub-real-member", writoidc.RoleMember
+	sess.Sub, sess.Role = "sub-real-member", writoidc.RoleUser
 	in, err := writoidc.EncodeSessionForTest(a, sess)
 	if err != nil {
 		t.Fatalf("EncodeSessionForTest: %v", err)
@@ -270,8 +272,8 @@ func TestMemberMode_RealMemberTurningItOnWritesNoCookie(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetMemberMode: %v", err)
 	}
-	if stamped != writoidc.RoleMember {
-		t.Errorf("stamped role = %q, want %q — the return value is the role the caller HOLDS", stamped, writoidc.RoleMember)
+	if stamped != writoidc.RoleUser {
+		t.Errorf("stamped role = %q, want %q — the return value is the role the caller HOLDS", stamped, writoidc.RoleUser)
 	}
 	if got := w.Result().Cookies(); len(got) != 0 {
 		t.Fatalf("SetMemberMode wrote %d cookies for a member turning the mode ON, want 0: %+v", len(got), got)
@@ -412,7 +414,7 @@ func TestMemberMode_NoCredentialNeverSurvivesExit(t *testing.T) {
 func TestMemberMode_NoCredentialWithoutTheModeIsInert(t *testing.T) {
 	a := &writoidc.Authenticator{}
 	payload := []byte(`{"v":` + strconv.Itoa(writoidc.SessionCodecVersion) +
-		`,"sub":"sub-admin-1","email":"admin@corp.example","role":"admin","mmnc":true,` +
+		`,"sub":"sub-admin-1","email":"admin@corp.example","role":"admin","ut":"standard","mmnc":true,` +
 		`"expiry":"` + time.Now().UTC().Add(time.Hour).Format(time.RFC3339) + `","groups":[]}`)
 	c := writoidc.EncodeRawSessionForTest(a, payload)
 

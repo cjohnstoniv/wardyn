@@ -95,7 +95,8 @@ beforeEach(() => {
 
 // F22: the trusted-CA count (WARDYN_TRUSTED_CA_FILE), a bare number with no
 // PEM content or host name — renders unconditionally, never redacted.
-describe("the trusted-CA count (F22)", () => {
+describe("the trusted-CA count", () => {
+  // ticket: F22
   it("renders the pluralised count when the daemon reports one", () => {
     renderStep({ status: baseStatus({ trusted_ca_certs: 3 }) });
     expect(screen.getByText("3 trusted CA certificates")).toBeInTheDocument();
@@ -387,7 +388,8 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
   // id), so a collision would silently shadow one row's probe result with
   // the other's. Index-keying would shift every later row's verdict on
   // removal, so disabling Add on the collision is the smaller fix.
-  it("F3-F5: Add is refused on a `from` collision with an existing redirect, and the reason is shown", async () => {
+  it("Add is refused on a `from` collision with an existing redirect, and the reason is shown", async () => {
+    // ticket: F3-F5
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderEgress();
     await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
@@ -403,7 +405,8 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
 
   // Negative control: a DIFFERENT `from` alongside the same redirects list is
   // never refused — the guard is a collision check, not a general lockout.
-  it("F3-F5 negative control: a non-colliding `from` still enables Add, with no collision message", async () => {
+  it("negative control: a non-colliding `from` still enables Add, with no collision message", async () => {
+    // ticket: F3-F5
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderEgress();
     await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
@@ -422,7 +425,8 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
   // normalizes it, and a client check that misses that hole lets the
   // operator create the exact silently-shadowed duplicate the collision
   // guard above exists to prevent.
-  it("M1: a different-case `from` (same authority once folded) is still a collision", async () => {
+  it("a different-case `from` (same authority once folded) is still a collision", async () => {
+    // ticket: M1
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderEgress();
     await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
@@ -441,7 +445,8 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
   // Negative control: only the AUTHORITY folds — a path-case difference is a
   // genuinely different redirect target (paths are case-sensitive on most
   // servers), so it must NOT collide.
-  it("M1 negative control: a different-case PATH (same authority, different path case) does not collide", async () => {
+  it("negative control: a different-case PATH (same authority, different path case) does not collide", async () => {
+    // ticket: M1
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderEgress();
     await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
@@ -517,7 +522,8 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
   // like the upstream proxy, so every redirect save (add, edit, remove)
   // must carry the "applies to runs started from now" note — a redirect
   // added mid-run must not read as already applied.
-  describe("every redirect save carries the applies-from-now note (B2)", () => {
+  describe("every redirect save carries the applies-from-now note", () => {
+    // ticket: B2
     it("add", async () => {
       const user = userEvent.setup({ pointerEventsCheck: 0 });
       const { saveSiteConfig } = renderStep();

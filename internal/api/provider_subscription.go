@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -108,10 +110,7 @@ func (s *Server) providerSubscriptionRefusal(ctx context.Context, p types.ModelP
 // blob (a managedCredBlob), in place of the one built at boot over the
 // operator's row. Built per resolve, so nothing outlives the request.
 func (s *Server) ownerSubscriptionToken(owner, uid string) subscription.Provider {
-	name := providerSecretName(uid, providerOAuthPart)
-	return &managedCredProvider{provider: "claude", get: func(ctx context.Context) ([]byte, bool, error) {
-		return s.ownSecret(ctx, owner, name)
-	}}
+	return &managedCredProvider{provider: "claude", srv: s, owner: owner, name: providerSecretName(uid, providerOAuthPart)}
 }
 
 // providerSubscriptionBase is where a subscription provider's runs send
@@ -155,7 +154,7 @@ func (s *Server) resolveProviderTransport(ctx context.Context, run types.AgentRu
 	switch mp.Kind {
 	case types.ModelProviderAnthropicSubscription:
 		owner := runIdentitySubject(ctx, run.CreatedBy)
-		refusal, err := s.providerSubscriptionRefusal(ctx, mp, owner)
+		refusal, err := s.providerSubscriptionRefusal(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), mp, owner)
 		if err != nil {
 			return fail(mp.Kind, fmt.Sprintf(mpSubReadFailed, mp.ID))
 		}
@@ -358,7 +357,10 @@ func (s *Server) authorOAuthSentinelGrant(ctx context.Context, run types.AgentRu
 	}); err != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not author the "+g.source+" credential injection: "+err.Error())
+		// The hint is member-visible: a fixed sentence, never the store's text.
+		slog.ErrorContext(ctx, "wardynd: could not record the "+g.source+" credential grant",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not record the "+g.source+" credential grant")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": g.source + " inject grant: " + err.Error()})))
 		return injections, false

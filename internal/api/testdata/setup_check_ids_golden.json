@@ -6,6 +6,7 @@
     "env_builder",
     "host_proxy",
     "llm_provider",
+    "platform_shared",
     "runner",
     "scm_provider"
   ],
@@ -17,6 +18,7 @@
     "env_builder",
     "host_proxy",
     "llm_provider",
+    "platform_shared",
     "runner",
     "scm_provider"
   ],
@@ -27,6 +29,7 @@
     "env_builder",
     "host_proxy",
     "llm_provider",
+    "platform_shared",
     "runner",
     "scm_provider"
   ],
@@ -38,6 +41,7 @@
     "host_proxy",
     "k8s_egress_containment",
     "llm_provider",
+    "platform_shared",
     "runner",
     "scm_provider"
   ],
@@ -48,6 +52,7 @@
     "env_builder",
     "host_proxy",
     "llm_provider",
+    "platform_shared",
     "runner",
     "scm_provider",
     "sso_rbac",
@@ -62,6 +67,7 @@
     "host_proxy",
     "llm_provider",
     "permissions_posture",
+    "platform_shared",
     "runner",
     "scm_provider",
     "site_config"

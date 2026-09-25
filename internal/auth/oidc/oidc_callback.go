@@ -27,7 +27,7 @@ import (
 //     DefaultRole is configured.
 //  6. Creates a signed Wardyn session cookie.
 //
-// W31-S1-5: the USER-actionable denials (5's role-denied, 4's domain/
+// The USER-actionable denials (5's role-denied, 4's domain/
 // unverified-email) redirect to "/?auth_error=<code>" (302) instead of a
 // bare http.Error text page — a login failure otherwise dead-ended the
 // browser on plain text with no way back to the console, and no chance for
@@ -149,7 +149,7 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 	// since each has its own struct.
 	//
 	// TOLERATING THE SHAPE AND REPORTING THE LOSS ARE DIFFERENT JOBS, and the
-	// decode error used to be discarded, which collapsed them. A claim the IdP
+	// decode error must not be discarded, or the two collapse. A claim the IdP
 	// DID send in a shape this build cannot read then arrived at derivation as
 	// nil — byte-for-byte "asked, there were none". The group the human really
 	// holds vanished from the snapshot with the PF-26 partial bit CLEAR, so
@@ -205,6 +205,18 @@ func decodeCallbackClaims(idToken *gooidc.IDToken) (callbackClaims, error) {
 }
 
 func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) {
+	a.callback(w, r, nil)
+}
+
+// CallbackHandlerWithDenials is CallbackHandler that also reports each sign-in
+// refused over a user type (DenialUserTypeAmbiguous, DenialUserTypeUnknown) to
+// onDenied, so internal/api can audit it as auth.failed. This package stays
+// store- and audit-agnostic, as it is for OnLogin.
+func (a *Authenticator) CallbackHandlerWithDenials(onDenied func(r *http.Request, reason string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, onDenied) }
+}
+
+func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserTypeDenied func(*http.Request, string)) {
 	// (1) CSRF and the one-time cookies — consumeCallbackCookies below.
 	nonce, verifier, widened, ok := consumeCallbackCookies(w, r)
 	if !ok {
@@ -243,7 +255,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	if a.httpClient != nil {
 		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
 	}
-	// D12: a transient IdP hiccup on the token endpoint (5xx, timeout) used to
+	// A transient IdP hiccup on the token endpoint (5xx, timeout) must not
 	// hard-fail the whole login on the FIRST blip — retryExchange gives it
 	// tokenExchangeRetries short-backoff attempts before giving up. A
 	// PERMANENT rejection (bad client secret, expired/replayed code —
@@ -310,49 +322,16 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// (5) Role derivation — see Config.RoleMap / deriveRole for precedence.
-	// When RoleMappings (the console's Getting Started -> People store) is
-	// wired, its rows are merged with the chart map FIRST (mergeRoleMaps) — a
-	// store read error denies this login (authErrorRoleCheckUnavailable)
-	// rather than silently falling back to the env-only map, which could
-	// WIDEN access under WARDYN_OIDC_DEFAULT_ROLE=admin. Denying on !ok
-	// (rather than issuing a roleless session) is what keeps decodeSession
-	// simple: every cookie this package ever writes has a non-empty Role.
-	roleMap := a.cfg.RoleMap
-	if a.cfg.RoleMappings != nil {
-		rows, rerr := a.cfg.RoleMappings.ListRoleMappings(r.Context())
-		if rerr != nil {
-			slog.Error("oidc: console role-mapping store unavailable, denying login (fail closed)", "error", rerr)
-			clearCookie(w, sessionCookieName)
-			redirectAuthError(w, r, authErrorRoleCheckUnavailable)
-			return
-		}
-		var shadowed []string
-		roleMap, shadowed = mergeRoleMaps(a.cfg.RoleMap, a.cfg.LegacyAdminEmails, rows)
-		if len(shadowed) > 0 {
-			// shadowed now covers two distinct causes mergeRoleMaps folds
-			// into one list: a chart/operator entry that collides with an
-			// already-saved console row (the API layer refuses CREATING a
-			// new collision, so a later helm upgrade is the only way one
-			// reaches here), or a console row that was itself rejected as
-			// non-canonical/invalid (see mergeRoleMaps). Either way the row
-			// contributed nothing to this login's role derivation.
-			slog.Warn("oidc: one or more console-managed role mappings were shadowed by chart/operator config or rejected as invalid", "shadowed", shadowed)
-		}
-	}
-	// The MERGED map is the only place the console's group->role rows are
-	// visible, and it exists nowhere but here — so this is where the
-	// groups-scope question gets asked about them. One line per process,
-	// never a denial; see warnMergedMapNeedsGroupsScope.
-	a.warnMergedMapNeedsGroupsScope(roleMap, cc.roles, cc.groups)
-	role, matches, ok := deriveRole(cc.roles, cc.groups, cc.email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
-	if !ok {
+	// (5) Role derivation — deriveLogin. A refusal names its auth_error code.
+	d, denied := a.deriveLogin(r, idToken.Subject, cc, onUserTypeDenied)
+	if denied != "" {
 		// L6: a denied login must not leave a PRE-EXISTING session cookie
 		// (from before this re-login attempt) still valid in the browser.
 		clearCookie(w, sessionCookieName)
-		redirectAuthError(w, r, authErrorNoRole)
+		redirectAuthError(w, r, denied)
 		return
 	}
+	role, matches := d.Role, d.Matches
 	// The overage half of role derivation. deriveRole is a pure function of the
 	// claims it was HANDED, and on an overage the claim the role map is keyed on
 	// is simply not in the token — so its "nothing matched, take the default"
@@ -435,6 +414,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 		Email:           cc.email,
 		Name:            cc.name,
 		Role:            role,
+		UserType:        d.UserType,
 		Expiry:          idToken.Expiry,
 		IssuedAt:        time.Now().UTC(), // D16: the cutoff SessionRevocations compares against
 		Groups:          groups,
@@ -451,4 +431,66 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	http.SetCookie(w, cookie)
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// deriveLogin is CallbackHandler's step (5), role and user-type derivation —
+// see Config.RoleMap / deriveRole for precedence. denied is the auth_error
+// code of a refusal, "" when the login may proceed.
+func (a *Authenticator) deriveLogin(r *http.Request, sub string, cc callbackClaims, onUserTypeDenied func(*http.Request, string)) (Derivation, string) {
+	// When RoleMappings (the console's Getting Started -> People store) is
+	// wired, its rows are merged with the chart map FIRST (mergeRoleMaps) — a
+	// store read error denies this login (authErrorRoleCheckUnavailable)
+	// rather than silently falling back to the env-only map, which could
+	// WIDEN access under WARDYN_OIDC_DEFAULT_ROLE=admin. Denying on !ok
+	// (rather than issuing a roleless session) is what keeps decodeSession
+	// simple: every cookie this package ever writes has a non-empty Role.
+	roleMap := a.cfg.RoleMap
+	if a.cfg.RoleMappings != nil {
+		rows, rerr := a.cfg.RoleMappings.ListRoleMappings(r.Context())
+		if rerr != nil {
+			slog.Error("oidc: console role-mapping store unavailable, denying login (fail closed)", "error", rerr)
+			return Derivation{}, authErrorRoleCheckUnavailable
+		}
+		var shadowed []string
+		roleMap, shadowed = mergeRoleMaps(a.cfg.RoleMap, a.cfg.LegacyAdminEmails, rows)
+		if len(shadowed) > 0 {
+			// shadowed now covers two distinct causes mergeRoleMaps folds
+			// into one list: a chart/operator entry that collides with an
+			// already-saved console row (the API layer refuses CREATING a
+			// new collision, so a later helm upgrade is the only way one
+			// reaches here), or a console row that was itself rejected as
+			// non-canonical/invalid (see mergeRoleMaps). Either way the row
+			// contributed nothing to this login's role derivation.
+			slog.Warn("oidc: one or more console-managed role mappings were shadowed by chart/operator config or rejected as invalid", "shadowed", shadowed)
+		}
+	}
+	// The MERGED map is the only place the console's group->role rows are
+	// visible, and it exists nowhere but here — so this is where the
+	// groups-scope question gets asked about them. One line per process,
+	// never a denial; see warnMergedMapNeedsGroupsScope.
+	a.warnMergedMapNeedsGroupsScope(roleMap, cc.roles, cc.groups)
+	// The user types, read once like the rows above and failing closed the
+	// same way: whether a named type exists, and its priority, decide the
+	// session as much as the rows do.
+	userTypes, terr := a.loadUserTypes(r.Context())
+	if terr != nil {
+		slog.Error("oidc: user-type store unavailable, denying login (fail closed)", "error", terr)
+		return Derivation{}, authErrorRoleCheckUnavailable
+	}
+	d := deriveRole(cc.roles, cc.groups, cc.email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole, userTypes)
+	if !d.OK() {
+		if d.Denial != DenialNoRole {
+			slog.Warn("oidc: login denied over the user type the role map names",
+				"sub", sub, "reason", d.Denial, "tied_user_types", d.Tied, "unknown_user_types", d.Unknown)
+			if onUserTypeDenied != nil {
+				onUserTypeDenied(r, d.Denial)
+			}
+		}
+		return d, d.Denial
+	}
+	if len(d.Tied) > 0 || len(d.Unknown) > 0 {
+		slog.Warn("oidc: admin sign-in put on the standard user type; the types the role map names for it tie or don't exist",
+			"sub", sub, "tied_user_types", d.Tied, "unknown_user_types", d.Unknown)
+	}
+	return d, ""
 }

@@ -67,18 +67,18 @@ func TestLease_RunScopedDecisionReMints(t *testing.T) {
 	}
 }
 
-// TestLease_NormalizedLegacyDecisionIsNotALease is THE regression for the
-// raw-vs-Normalize() comparison.
+// TestLease_NormalizedLegacyDecisionIsNotALease pins the raw-vs-Normalize()
+// comparison.
 //
-// Every credential approval ever decided carries an EMPTY decision_scope: the
-// column's NOT NULL DEFAULT, and until the lease shipped api.decide 400'd any
+// Every credential approval decided before the lease existed carries an empty
+// decision_scope: the column's NOT NULL DEFAULT, and api.decide refused any
 // explicit scope on a credential approval. types.ApprovalScope.Normalize()
-// deliberately maps "" to ScopeRun ("those already meant run-scoped"), which is
-// right for egress and catastrophic here — comparing normalized would turn
+// deliberately maps "" to ScopeRun ("those already meant run-scoped"), which
+// is right for egress and catastrophic here — comparing normalized would turn
 // EVERY legacy approval in EVERY deployment into a standing re-mint lease on
-// upgrade, silently deleting the single-use guarantee those decisions were made
-// under. The assertion below pins that: a decision whose Normalize() IS ScopeRun
-// must still fail closed with ErrAlreadyMinted.
+// upgrade, silently deleting the single-use guarantee those decisions were
+// made under. The assertion below pins that: a decision whose Normalize() is
+// ScopeRun must still fail closed with ErrAlreadyMinted.
 func TestLease_NormalizedLegacyDecisionIsNotALease(t *testing.T) {
 	legacy := types.ApprovalScope("")
 	if legacy.Normalize() != types.ScopeRun {
@@ -101,7 +101,7 @@ func TestLease_BoundedByScopeKindAndState(t *testing.T) {
 		t.Fatalf("once-scoped decision: err=%v, want ErrAlreadyMinted", err)
 	}
 
-	// A DIFFERENT KIND with the same run-scoped decision: the lease is git_pat
+	// A different kind with the same run-scoped decision: the lease is git_pat
 	// only. github_token is brokered proxy-side and re-minting it from a sandbox
 	// is exactly what single-use exists to stop.
 	b2, db2, _, _ := newTestBroker(t)

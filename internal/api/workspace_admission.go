@@ -237,7 +237,7 @@ func enabledProviderAddresses(sc types.SiteConfig) []string {
 // admitRepoURL already decided both cases identically (refused); only the
 // sentence differs. Reuses the same two predicates the match rule does.
 func legacyScmHostNamed(sc types.SiteConfig, cloneURL string) bool {
-	t, ok := parseCloneTarget(cloneURL)
+	t, ok := parseCloneTarget(cloneURL, adoServerHosts(sc))
 	if !ok {
 		return false
 	}
@@ -260,7 +260,7 @@ func legacyHostAdmittedHosts(sc types.SiteConfig, repos []string) []string {
 		if !admitRepoURL(sc, cloneURL).LegacyHost {
 			continue
 		}
-		t, ok := parseCloneTarget(cloneURL)
+		t, ok := parseCloneTarget(cloneURL, adoServerHosts(sc))
 		if !ok || seen[t.host] {
 			continue
 		}
@@ -333,7 +333,7 @@ func (s *Server) sshHostLevelWarnings(ctx context.Context, runID uuid.UUID, repo
 	}
 	var warnings []string
 	for _, repo := range repos {
-		t, ok := parseCloneTarget(repoCloneURL(repo))
+		t, ok := parseCloneTarget(repoCloneURL(repo), adoServerHosts(sc))
 		if !ok || !t.ssh {
 			continue
 		}
@@ -566,7 +566,7 @@ func laneRowsForGrantHost(sc types.SiteConfig, host string, repos []string) []ty
 	seen := map[string]bool{}
 	for _, repo := range repos {
 		cloneURL := repoCloneURL(repo)
-		rt, ok := parseCloneTarget(cloneURL)
+		rt, ok := parseCloneTarget(cloneURL, adoServerHosts(sc))
 		if !ok || !hostsMatch(rt, t.host) {
 			continue
 		}

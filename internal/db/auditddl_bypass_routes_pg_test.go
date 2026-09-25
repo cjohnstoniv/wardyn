@@ -96,7 +96,7 @@ func TestPG_AuditDDLBypassRoutesNamesTheRouteThatFired(t *testing.T) {
 		t.Fatalf("AuditDDLProtected = %v, %v; want true, nil — the bool and the routes must be one answer", ok, err)
 	}
 
-	// THE PARAMETER GRANT ALONE, which is the shape the old warning misdescribed.
+	// The parameter grant alone, which is the shape the old warning misdescribed.
 	must(`GRANT SET ON PARAMETER session_replication_role TO ` + app)
 	routes, err = AuditDDLBypassRoutes(ctx, appPool)
 	if err != nil {

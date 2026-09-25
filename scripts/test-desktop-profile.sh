@@ -70,7 +70,7 @@ $(printf '%b' "${missing}")"
 # deploy/compose/docker-compose.yaml, and compose passes a variable into the
 # container ONLY if that file's `environment:` block lists it. An envelope key
 # with no forward is silently inert — the file MDM ships says the posture is on
-# and wardynd never sees it. That is how WARDYN_MEMBER_MODE (every m' laptop
+# and wardynd never sees it. That is how WARDYN_USER_DESKTOP (every m' laptop
 # booting as the plain admin-token tier, every member host mount refused) and
 # WARDYN_EGRESS_SECOND_HUMAN (the four-eyes egress gate OFF where the envelope
 # claims it on) both shipped: two High config-drift findings, one missing
@@ -149,8 +149,8 @@ MPRIME="${DESK_DIR}/wardyn.env.m-prime.example"
 
 
 # (a) It is actually member mode, with SSO. Either half alone is not m'.
-[ "$(env_get "${MPRIME}" WARDYN_MEMBER_MODE)" = "true" ] \
-  || fail "m-prime envelope does not set WARDYN_MEMBER_MODE=true"
+[ "$(env_get "${MPRIME}" WARDYN_USER_DESKTOP)" = "true" ] \
+  || fail "m-prime envelope does not set WARDYN_USER_DESKTOP=true"
 [ "$(env_get "${MPRIME}" WARDYN_LOCAL_MODE)" = "false" ] \
   || fail "m-prime envelope must set WARDYN_LOCAL_MODE=false — a configured issuer plus explicit local mode is refused at boot, and would silently disable the SSO RBAC that makes this profile mean anything"
 [ -n "$(env_get "${MPRIME}" WARDYN_OIDC_ISSUER)" ] \
@@ -159,9 +159,9 @@ MPRIME="${DESK_DIR}/wardyn.env.m-prime.example"
 # (b) The member can actually mount their own project directory. Unset means
 #     "members may not mount host directories at all", which turns off the one
 #     power m' exists to add.
-roots="$(env_get "${MPRIME}" WARDYN_MEMBER_WORKSPACE_ROOTS)"
+roots="$(env_get "${MPRIME}" WARDYN_USER_WORKSPACE_ROOTS)"
 [ -n "${roots}" ] \
-  || fail "m-prime envelope leaves WARDYN_MEMBER_WORKSPACE_ROOTS unset — members may then mount NOTHING, which is the one power m' exists to add"
+  || fail "m-prime envelope leaves WARDYN_USER_WORKSPACE_ROOTS unset — members may then mount NOTHING, which is the one power m' exists to add"
 
 # (c) ...and those roots are NARROW. `/` or a home directory leaves the dotfile
 #     deny-list as the only thing between a member and the operator's ~/.ssh,
@@ -175,11 +175,11 @@ for r in "${_roots[@]}"; do
   [ -n "${r}" ] || continue
   case "${r}" in
     /|/root|/home|/Users|/home/|/Users/|'$HOME'|'~')
-      fail "m-prime WARDYN_MEMBER_WORKSPACE_ROOTS contains '${r}' — a root that wide leaves the dotfile deny-list as the ONLY thing between a member and the operator's credentials. MDM copies this file to every laptop." ;;
+      fail "m-prime WARDYN_USER_WORKSPACE_ROOTS contains '${r}' — a root that wide leaves the dotfile deny-list as the ONLY thing between a member and the operator's credentials. MDM copies this file to every laptop." ;;
   esac
   case "${r}" in
     /*) ;;
-    *) fail "m-prime WARDYN_MEMBER_WORKSPACE_ROOTS entry '${r}' is not an absolute path (docs/ENV.md: CSV of absolute paths)" ;;
+    *) fail "m-prime WARDYN_USER_WORKSPACE_ROOTS entry '${r}' is not an absolute path (docs/ENV.md: CSV of absolute paths)" ;;
   esac
 done
 
@@ -197,6 +197,25 @@ grep -q 'secret\.env' "${MPRIME}" \
 grep -q 'WARDYN_ADMIN_TOKEN' "${MPRIME}" \
   || fail "m-prime envelope never mentions WARDYN_ADMIN_TOKEN at all — an operator following it ships the published demo-admin-token to every laptop"
 
+# (e) The org control-plane hybrid posture (issue #105) is NAMED, so an
+#     operator wiring a device to an org control plane has both var names to
+#     find. grep for the NAME, not env_get: env_get only reads UNCOMMENTED
+#     assignments, and (f) below asserts this one must NOT be uncommented.
+grep -q 'WARDYN_ORG_URL' "${MPRIME}" \
+  || fail "m-prime envelope never mentions WARDYN_ORG_URL — an operator wiring this device to an org control plane has no pointer to the hybrid posture (issue #105, validateHybridPosture in cmd/wardynd/boot_posture.go)"
+grep -q 'WARDYN_ORG_ENROLMENT_TOKEN' "${MPRIME}" \
+  || fail "m-prime envelope never mentions WARDYN_ORG_ENROLMENT_TOKEN — an operator has no pointer to where the device's enrolment token ships (secret.env)"
+
+# (f) ...and it must stay COMMENTED. Section 2b's vars-forwarded loop and
+#     compose's own vars-set check only ever look at UNCOMMENTED `^VAR=`
+#     lines, so an uncommented WARDYN_ORG_URL here would silently make every
+#     laptop that copies this file hybrid — a posture m' does not default to.
+if grep -qE '^WARDYN_ORG_URL=' "${MPRIME}"; then
+  fail "m-prime envelope SETS WARDYN_ORG_URL uncommented — it must stay a commented example, or every fleet that copies this file becomes hybrid by default (issue #105)"
+fi
+if grep -qE '^WARDYN_ORG_ENROLMENT_TOKEN=' "${MPRIME}"; then
+  fail "m-prime envelope SETS WARDYN_ORG_ENROLMENT_TOKEN uncommented in the 0644 wardyn.env — it must ship in /etc/wardyn/secret.env at 0600, and only as a commented pointer here"
+fi
 
 # ── 7b. the listeners the tier's own promise depends on ────────────────────
 # Both listener vars default to EMPTY in the included stack, and empty means
@@ -295,10 +314,15 @@ if command -v systemd-analyze >/dev/null 2>&1; then
   sed "s#__WARDYN_DESKTOP_SH__#${DESK_DIR}/wardyn-desktop.sh#" "${UNIT}" > "${_t}/wardyn.service"
   cp "${TIMER}" "${_t}/wardyn.timer"
   # Filter this HOST's unrelated unit warnings; only our two files' verdict counts.
-  if ! systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -vE 'docker\.socket|legacy directory' | grep -q .; then
+  # CAPTURE, THEN MATCH — never `grep | grep -q` under `pipefail`: `grep -q`
+  # exits on its first match while systemd-analyze/the upstream grep are still
+  # writing, the upstream takes SIGPIPE, and pipefail reports the pipeline
+  # failed even on a clean (matching) verdict.
+  _verify_warnings="$(systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -vE 'docker\.socket|legacy directory' || true)"
+  if ! grep -q . <<<"${_verify_warnings}"; then
     :  # no output => clean
   else
-    systemd-analyze verify "${_t}/wardyn.service" "${_t}/wardyn.timer" 2>&1 | grep -vE 'docker\.socket|legacy directory' >&2
+    printf '%s\n' "${_verify_warnings}" >&2
     rm -rf "${_t}"
     fail "the rendered systemd units do not verify"
   fi
@@ -410,8 +434,8 @@ echo "test-desktop-profile: secret.env trust-boundary invariants PASS"
 # ── F113/F184: the enrolment image is disclosed where it is decided ─────────
 #
 # install.sh's default WARDYN_INSTALL_IMAGE is the CONTINUOUS :latest tag
-# publish-image.yml pushes on every merge and never cosign-signs, and it runs
-# AS ROOT to mint the device's age identity. The envelope pins
+# publish-image.yml pushes after CI passes on main and never cosign-signs, and
+# it runs AS ROOT to mint the device's age identity. The envelope pins
 # WARDYN_WARDYND_IMAGE by digest, so a reader of DESKTOP.md would reasonably
 # assume the whole lane is pinned. scripts/check-image-pins.sh pins the console
 # warning; this pins the doc.

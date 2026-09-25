@@ -21,7 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ── adoAccessState: the pure per-user-row grader ───────────────────────────
+// adoAccessState: the pure per-user-row grader
 
 func TestAdoAccessState(t *testing.T) {
 	cases := []struct {
@@ -57,7 +57,7 @@ func TestScmAccessSourceFor(t *testing.T) {
 	}
 }
 
-// ── fixtures shared by every test below ─────────────────────────────────────
+// fixtures shared by every test below
 
 // scmTestStore is the minimal store.Store the PURE grading functions read:
 // one SiteConfig, nothing else — the embed answers every other method with a
@@ -67,9 +67,22 @@ func TestScmAccessSourceFor(t *testing.T) {
 type scmTestStore struct {
 	store.Store
 	site types.SiteConfig
+	err  error // a failed site-config read, when set
 }
 
-func (s *scmTestStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.site, nil }
+func (s *scmTestStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.site, s.err }
+
+// The capability reads: no grant rows and no switch, so a member caller is
+// offered every row, as a deployment that adopted no grants offers it.
+func (s *scmTestStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *scmTestStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+func (s *scmTestStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
 
 const scmTestRowID = "ado-row-1"
 
@@ -121,12 +134,22 @@ func adoTestEntraSource(context.Context) (ADOEntraConfig, bool, error) {
 	}, true, nil
 }
 
-// ── computeSCMAccessRowsFor / scmAccessValue — row-shaped grading ─────────
+// scmAccessRows is computeSCMAccessRowsFor for a case whose reads succeed.
+func scmAccessRows(t *testing.T, s *Server, ctx context.Context, sc types.SiteConfig, subject string) []SCMAccess {
+	t.Helper()
+	rows, err := s.computeSCMAccessRowsFor(ctx, sc, subject)
+	if err != nil {
+		t.Fatalf("computeSCMAccessRowsFor: %v", err)
+	}
+	return rows
+}
+
+// computeSCMAccessRowsFor / scmAccessValue — row-shaped grading
 
 func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("no Azure DevOps row: empty", func(t *testing.T) {
 		s := newSCMTestServer(t, types.SiteConfig{}, false)
-		rows := s.computeSCMAccessRowsFor(context.Background(), types.SiteConfig{}, "alice")
+		rows := scmAccessRows(t, s, context.Background(), types.SiteConfig{}, "alice")
 		if len(rows) != 0 {
 			t.Fatalf("got %+v, want none", rows)
 		}
@@ -135,7 +158,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("a disabled row is the same as no row", func(t *testing.T) {
 		sc := adoTestSiteConfig(true)
 		s := newSCMTestServer(t, sc, true)
-		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "alice")
+		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
 		if len(rows) != 0 {
 			t.Fatalf("got %+v, want none", rows)
 		}
@@ -144,7 +167,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("a SHARED row (no entra) is never graded (F4) — not shared_expired, not live, nothing", func(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, false)
-		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "alice")
+		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
 		if len(rows) != 0 {
 			t.Fatalf("got %+v, want none — a plain PAT row must report nothing, not shared_expired", rows)
 		}
@@ -154,7 +177,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, false)
 		s.cfg.Secrets.(*memSecrets).m["git-pat-dev-azure-com"] = []byte("x")
-		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "alice")
+		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
 		if len(rows) != 0 {
 			t.Fatalf("got %+v, want none — secret presence must never be graded into a state (F4)", rows)
 		}
@@ -163,7 +186,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("per-user row, never signed in: one row, not_configured, row-is-newer cause", func(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, true)
-		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "alice")
+		rows := scmAccessRows(t, s, context.Background(), sc, "alice")
 		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured || rows[0].Cause != scmAccessCauseRowIsNewer || rows[0].Kind != string(types.GitProviderAzureDevOps) {
 			t.Fatalf("got %+v, want one row state=not_configured cause=row_is_newer kind=azure_devops", rows)
 		}
@@ -179,7 +202,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("store blob: %v", err)
 		}
-		rows := s.computeSCMAccessRowsFor(ctx, sc, "alice")
+		rows := scmAccessRows(t, s, ctx, sc, "alice")
 		if len(rows) != 1 || rows[0].State != modelAccessLive || rows[0].Source != scmAccessSourceOrg {
 			t.Fatalf("got %+v, want one row state=live source=org", rows)
 		}
@@ -195,7 +218,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("store blob: %v", err)
 		}
-		rows := s.computeSCMAccessRowsFor(ctx, sc, "alice")
+		rows := scmAccessRows(t, s, ctx, sc, "alice")
 		if len(rows) != 1 || rows[0].State != modelAccessNotConfigured {
 			t.Fatalf("alice read bob's connection: got %+v", rows)
 		}
@@ -204,7 +227,7 @@ func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("per-user row, a mechanism caller (no OIDC subject): not_applicable", func(t *testing.T) {
 		sc := adoTestSiteConfig(false)
 		s := newSCMTestServer(t, sc, true)
-		rows := s.computeSCMAccessRowsFor(context.Background(), sc, "")
+		rows := scmAccessRows(t, s, context.Background(), sc, "")
 		if len(rows) != 1 || rows[0].State != modelAccessNotApplicable {
 			t.Fatalf("got %+v, want one row state=not_applicable", rows)
 		}
@@ -228,7 +251,7 @@ func TestScmAccessValue(t *testing.T) {
 	})
 }
 
-// ── the wire handler: GET /me/scm-access is an ARRAY (review finding F6) ──
+// the wire handler: GET /me/scm-access is an array (review finding F6)
 
 func TestHandleGetSCMAccess(t *testing.T) {
 	sc := adoTestSiteConfig(false)
@@ -267,7 +290,7 @@ func TestHandleGetSCMAccess_NoRowConfigured_AnswersEmptyArrayNot404(t *testing.T
 	}
 }
 
-// ── the informational, per-run preflight fact (review finding F2) ─────────
+// the informational, per-run preflight fact (review finding F2)
 
 func TestGitCredentialFactForRepos(t *testing.T) {
 	sc := adoTestSiteConfig(false)
@@ -302,7 +325,7 @@ func TestGitCredentialFactForRepos(t *testing.T) {
 	})
 }
 
-// ── the launch door's 422 (review findings F1, F7) ─────────────────────────
+// the launch door's 422 (review findings F1, F7)
 
 func TestGitCredentialRefusal(t *testing.T) {
 	t.Run("per-user row, no captured sign-in: 422 with the org, no row id (F1, N3)", func(t *testing.T) {
@@ -411,9 +434,9 @@ func TestGitCredentialRefusalMatchesCanon(t *testing.T) {
 	}
 }
 
-// ── HTTP-level integration: the gate at every door a repo reaches a run
+// HTTP-level integration: the gate at every door a repo reaches a run
 // through (review finding F5), and the byte-identical requirement for a
-// deployment with no per-user row (review finding F4). ──────────────────────
+// deployment with no per-user row (review finding F4).
 
 // adoRunHarness wires a full Server (real routing, real OIDC session
 // cookies) over ownerStore — the package's own comprehensive Store double
@@ -691,8 +714,8 @@ func TestByteIdentical_NoADORowAtAll(t *testing.T) {
 	}
 }
 
-// ── review follow-up N4: the same gate at the other doors that clone a
-// repo server-side — the Build step, the Scan step, and a record session. ──
+// review follow-up N4: the same gate at the other doors that clone a
+// repo server-side — the Build step, the Scan step, and a record session.
 
 func adoWorkspaceWithADORepo(t *testing.T, st *ownerStore) string {
 	t.Helper()
