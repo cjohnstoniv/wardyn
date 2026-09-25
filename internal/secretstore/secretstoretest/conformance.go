@@ -134,6 +134,9 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) secretstore.Store)
 	t.Run("delete_everywhere_reaches_every_owner_and_only_its_names", func(t *testing.T) {
 		testDeleteEverywhere(t, ctx, newStore, uniq)
 	})
+	t.Run("holders_names_every_owner_and_only_its_names", func(t *testing.T) {
+		testHolders(t, ctx, newStore, uniq)
+	})
 }
 
 // newStoreFunc and uniqFunc name the two closures every owner-scoping case
@@ -276,4 +279,40 @@ func testDeleteEverywhere(t *testing.T, ctx context.Context, newStore newStoreFu
 	if got, err := op.For(a).Get(ctx, other); err != nil || string(got) != "kept" {
 		t.Fatalf("a name DeleteEverywhere was not given = (%q, %v), want kept", got, err)
 	}
+}
+
+// testHolders: called on ONE owner's view, Holders still names the operator
+// and every owner holding each given name; a name nobody holds is absent, a
+// name not given is not read, and a deleted row drops out.
+func testHolders(t *testing.T, ctx context.Context, newStore newStoreFunc, uniq uniqFunc) {
+	op := newStore(t)
+	name, other, nobody := uniq("held"), uniq("held-other"), uniq("held-nobody")
+	a, b := uniq("owner-a"), uniq("owner-b")
+	t.Cleanup(func() { _, _ = op.DeleteEverywhere(ctx, []string{name, other}) })
+	for _, owner := range []string{"", a, b} {
+		if err := op.For(owner).Put(ctx, name, []byte("v")); err != nil {
+			t.Fatalf("For(%q).Put: %v", owner, err)
+		}
+	}
+	if err := op.For(a).Put(ctx, other, []byte("v")); err != nil {
+		t.Fatalf("For(a).Put: %v", err)
+	}
+
+	got, err := op.For(b).Holders(ctx, []string{name, nobody})
+	if want := sortedOf("", a, b); err != nil || len(got) != 1 || !slices.Equal(sortedOf(got[name]...), want) {
+		t.Fatalf("For(b).Holders = (%v, %v), want only %q, held by %q", got, err, name, want)
+	}
+	if err := op.For(a).Delete(ctx, name); err != nil {
+		t.Fatalf("For(a).Delete: %v", err)
+	}
+	got, err = op.Holders(ctx, []string{name, other})
+	if want := sortedOf("", b); err != nil || !slices.Equal(sortedOf(got[name]...), want) || !slices.Equal(got[other], []string{a}) {
+		t.Fatalf("Holders after a's delete = (%v, %v), want %q held by %q and %q by %q", got, err, name, want, other, a)
+	}
+}
+
+func sortedOf(s ...string) []string {
+	s = slices.Clone(s)
+	slices.Sort(s)
+	return s
 }

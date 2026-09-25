@@ -118,6 +118,23 @@ func (s *memSecrets) DeleteEverywhere(_ context.Context, names []string) (int, e
 	return n, nil
 }
 
+func (s *memSecrets) Holders(_ context.Context, names []string) (map[string][]string, error) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
+	out := map[string][]string{}
+	for _, name := range names {
+		if _, ok := s.m[name]; ok {
+			out[name] = append(out[name], "")
+		}
+		for owner, rows := range s.owned {
+			if _, ok := rows[name]; ok {
+				out[name] = append(out[name], owner)
+			}
+		}
+	}
+	return out, nil
+}
+
 // For returns an owner-scoped view sharing the same backing maps as s — see
 // secretstore.Store.For's doc comment for the fallback/isolation contract
 // this mirrors.

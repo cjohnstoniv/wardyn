@@ -88,6 +88,10 @@ func (s *memSecrets) DeleteEverywhere(_ context.Context, names []string) (int, e
 	return n, nil
 }
 
+func (s *memSecrets) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, nil
+}
+
 // For returns an owner-scoped view sharing the same backing maps as s — see
 // secretstore.Store.For's doc comment for the fallback/isolation contract
 // this mirrors.

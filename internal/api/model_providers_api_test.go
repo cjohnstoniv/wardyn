@@ -4,7 +4,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"reflect"
@@ -25,6 +27,74 @@ func TestModelProvidersGet(t *testing.T) {
 	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "{}" || w.Header().Get("ETag") == "" {
 		t.Fatalf("GET = %d %q etag=%q, want 200 {} with an ETag", w.Code, w.Body.String(), w.Header().Get("ETag"))
 	}
+}
+
+// TestModelProvidersGetConnectedPeople (#970): each provider's count of the
+// distinct people holding a credential of their own for it — a key or a
+// sign-in, one person once; never the operator namespace, never another
+// provider's rows — read without moving the ETag, and never by a member.
+func TestModelProvidersGetConnectedPeople(t *testing.T) {
+	site := credentialSite(keyProvider("anthropic", "claude-code"), openAIProvider(), ssoProvider())
+	srv := modelProvidersStatusSrv(t, site, &capStore{})
+	mem := srv.cfg.Secrets.(*memSecrets)
+	ctx := context.Background()
+	name := func(i int, part string) string { return providerSecretName(site.ModelProviders.Providers[i].UID, part) }
+	put := func(owner string, i int, part string) {
+		t.Helper()
+		if err := mem.For(owner).Put(ctx, name(i, part), []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(want map[string]int) string {
+		t.Helper()
+		w := do(t, srv, http.MethodGet, "/api/v1/model-providers", adminToken, "")
+		var body modelProvidersRead
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body.Providers) != 3 {
+			t.Fatalf("GET = %d; body=%s", w.Code, w.Body.String())
+		}
+		if !maps.Equal(body.ConnectedPeople, want) {
+			t.Errorf("connected_people = %v, want %v", body.ConnectedPeople, want)
+		}
+		return w.Header().Get("ETag")
+	}
+
+	etag := read(map[string]int{"anthropic": 0, "openai": 0, "bedrock-prod": 0})
+	put("alice", 0, providerKeyPart)
+	if read(map[string]int{"anthropic": 1, "openai": 0, "bedrock-prod": 0}) != etag {
+		t.Error("a person connecting moved the ETag, which would stale an admin's edit")
+	}
+	put("alice", 0, providerOAuthPart)
+	put("bob", 0, providerKeyPart)
+	put("carol", 0, providerSSOPart)
+	put("dave", 1, providerKeyPart)
+	put("", 0, providerKeyPart) // the operator namespace is nobody
+	read(map[string]int{"anthropic": 3, "openai": 1, "bedrock-prod": 0})
+	if err := mem.For("bob").Delete(ctx, name(0, providerKeyPart)); err != nil {
+		t.Fatal(err)
+	}
+	read(map[string]int{"anthropic": 2, "openai": 1, "bedrock-prod": 0})
+
+	t.Run("a member never reads it", func(t *testing.T) {
+		member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+		if w := doSSO(t, srv, http.MethodGet, "/api/v1/model-providers", member, ""); w.Code != http.StatusForbidden {
+			t.Errorf("member GET = %d, want 403", w.Code)
+		}
+	})
+
+	t.Run("it is never written back", func(t *testing.T) {
+		body := `{"providers":[],"connected_people":{"anthropic":9}}`
+		if w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body); w.Code != http.StatusBadRequest {
+			t.Errorf("PUT with connected_people = %d, want 400", w.Code)
+		}
+	})
+
+	t.Run("a store that cannot answer fails the read", func(t *testing.T) {
+		srv, _ := newSiteConfigHarness(t, &fakeSiteConfigStore{cfg: site})
+		srv.cfg.Secrets = wedgedSecrets{err: errors.New("store down")}
+		if w := do(t, srv, http.MethodGet, "/api/v1/model-providers", adminToken, ""); w.Code != http.StatusInternalServerError {
+			t.Errorf("GET = %d, want 500", w.Code)
+		}
+	})
 }
 
 // TestModelProvidersPut is the write: it persists one sub-object, mints UIDs,

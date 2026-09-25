@@ -12,7 +12,7 @@
 // client, over a different singleton document. The wire types are
 // lib/types/site.ts's ModelProviders/ModelProvider (shared with
 // SiteConfig.model_providers) — imported, not re-declared here.
-import type { ModelProvider, ModelProviders } from "../types/site";
+import type { ModelProvider, ModelProviders, ModelProvidersRead } from "../types/site";
 import { asJson, wfetch } from "./core";
 
 export type { ModelProvider, ModelProviders };
@@ -26,12 +26,20 @@ export interface ModelProvidersSnapshot {
   etag: string | null;
 }
 
+// GET's snapshot adds `connected`: per provider id, how many people hold a
+// credential of their own for it (MODEL_PROVIDERS.CONNECTED(n), #970). Split
+// off `providers` so that document stays safe to PUT back. A PUT's answer
+// carries no count — re-read GET after a save that may have purged some.
+export interface ModelProvidersList extends ModelProvidersSnapshot {
+  connected: Record<string, number>;
+}
+
 export const modelProviders = {
   // GET /api/v1/model-providers — operatorOnly, like GET /agent-providers.
-  async getModelProviders(): Promise<ModelProvidersSnapshot> {
+  async getModelProviders(): Promise<ModelProvidersList> {
     const res = await wfetch("/model-providers");
-    const body = await asJson<ModelProviders>(res);
-    return { providers: body, etag: res.headers.get("ETag") };
+    const { connected_people, ...providers } = await asJson<ModelProvidersRead>(res);
+    return { providers, connected: connected_people ?? {}, etag: res.headers.get("ETag") };
   },
 
   // PUT /api/v1/model-providers — replaces the WHOLE document; there is no
