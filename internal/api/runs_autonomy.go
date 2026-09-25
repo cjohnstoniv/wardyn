@@ -367,6 +367,19 @@ func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, leg
 	}
 	unionADOEntraLane(&out, spec, ado)
 	unionBedrockCredential(&out, bedrock)
+	// KNOWN RESIDUAL (#518 item 3): the resident ~/.claude subscription mount
+	// and the Wardyn-managed setup-token lane are NOT folded in here, so a run
+	// that will dispatch on either one grades `secrets=none` on this axis
+	// rather than `secrets=baseline` — unlike every OTHER model credential
+	// above, which is folded the moment it resolves. Left as a documented gap
+	// rather than a third union (a baseline api_key to api.anthropic.com next
+	// to unionBedrockCredential) because both lanes are the OPERATOR's single
+	// shared credential today: the multi-provider design due next makes
+	// credentials per-person, which is the point at which this posture
+	// actually needs to see WHOSE credential a run is getting, not just that
+	// one exists — folding a placeholder grant now would have to be redone
+	// under that shape anyway. autonomyPostureSpec's own doc explains the
+	// pattern this gap should eventually follow.
 	return out
 }
 

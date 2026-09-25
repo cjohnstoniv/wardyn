@@ -736,6 +736,62 @@ func TestResolveLLMInjections_RefusesBeforeResolvingAnySSOScope(t *testing.T) {
 	}
 }
 
+// TestResolveLLMInjections_AuditsBedrockOnlyOnceBothGatesHold (#518): the
+// run.llm.bedrock "success" row is recorded after enforceConfiguredLLMMechanism
+// and bedrockCredGradeHolds, so a run either gate refuses shows no injection
+// row for a credential it was never handed.
+func TestResolveLLMInjections_AuditsBedrockOnlyOnceBothGatesHold(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sc       types.SiteConfig
+		grade    bedrockCredGrade
+		policy   *types.RunPolicySpec
+		wantRows int
+	}{
+		{"both gates hold", types.SiteConfig{}, bedrockCredUngraded(), nil, 1},
+		{"graded without a Bedrock credential (autonomy_grade_drift)", types.SiteConfig{}, bedrockCredGrade{graded: true}, nil, 0},
+		{"declared mechanism is not Bedrock", agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}),
+			bedrockCredUngraded(), nil, 0},
+		// #518 follow-up: both dispatch gates hold (mechanism + autonomy grade),
+		// but a LATER refusal — enforceInspectableLLM, past where the audit row
+		// used to be recorded — still fails the run closed. Bedrock is always
+		// opaque (enforceInspectableLLM's own doc comment), so
+		// require_inspectable_llm refuses it regardless of intercept_tls. Proves
+		// the row moved past this gate too, not just the two named in the test's
+		// own name.
+		{"a later refusal (enforceInspectableLLM) fires after both gates hold", types.SiteConfig{}, bedrockCredUngraded(),
+			&types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{Mode: "alert", RequireInspectableLLM: true}}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			st := &mechanismGateStore{}
+			cfg := bedrockStaticCfg()
+			cfg.Identity, cfg.Audit, cfg.Store = h.idp, h.audit, st
+			srv := New(cfg)
+			run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", Task: "t", State: types.RunStarting}
+			policy := tc.policy
+			if policy == nil {
+				policy = &types.RunPolicySpec{}
+			}
+
+			_, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, map[string]string{},
+				nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, tc.sc, true, false, tc.grade)
+			if ok != (tc.wantRows == 1) || st.failed == ok {
+				t.Fatalf("admitted = %v, run failed = %v; want admitted = %v", ok, st.failed, tc.wantRows == 1)
+			}
+			rows := 0
+			for _, ev := range h.audit.events {
+				if ev.Action == "run.llm.bedrock" {
+					rows++
+				}
+			}
+			if rows != tc.wantRows {
+				t.Errorf("run.llm.bedrock rows = %d, want %d", rows, tc.wantRows)
+			}
+		})
+	}
+}
+
 // TestEnforceConfiguredLLMMechanism_AuditsTheCredentialReason is Finding 3's
 // server half: the dispatch refusal is a complete sentence with no
 // machine-readable class, so the console could only render it as prose under

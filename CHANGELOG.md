@@ -55,6 +55,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   whichever bystander was next in the FIFO queue. `POST /attach/takeover` now reports whether it
   promoted the caller in place, and a console tab whose socket is still open skips the reconnect on
   that answer (#507).
+- A run refused at dispatch for an Amazon Bedrock model-credential mismatch (`autonomy_grade_drift`)
+  or by the declared-mechanism gate no longer audits a `run.llm.bedrock` "success" row for a
+  credential it was never handed — that row is now recorded only once those gates have let the run
+  through. A roster read that fails at create/Review now refuses the run (500) instead of silently
+  admitting it ungraded, which used to surface later at dispatch with a misleading "the
+  configuration changed between then and now" detail (#518).
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console

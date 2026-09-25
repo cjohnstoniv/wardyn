@@ -75,6 +75,25 @@ type llmTransport struct {
 	// by dispatch's splitSecretEnv, which moves them onto SandboxSpec.SecretEnv
 	// so a substrate does not have to publish them in a readable pod spec.
 	secretEnvKeys []string
+	// bedrockAudit is the run.llm.bedrock row applyBedrockTransport computed but
+	// did NOT record — recording it is deferred to resolveLLMInjections, past
+	// every gate that can still refuse the run (enforceConfiguredLLMMechanism,
+	// bedrockCredGradeHolds, MITM CA provisioning, grant authoring,
+	// enforceInspectableLLM), so a run any of them refuses never gets a
+	// "success" injection row for a credential it was never handed (#518).
+	// Zero value unless bedrockReady.
+	bedrockAudit bedrockTransportAudit
+}
+
+// bedrockTransportAudit is the detail applyBedrockTransport computes about
+// WHICH of the four Bedrock modes (bearer / sso-inject / aws-dir-mount /
+// resident) credentials a run, for the run.llm.bedrock audit row. Carried on
+// llmTransport rather than recorded immediately, so the caller can record it
+// only once the dispatch gates that follow (enforceConfiguredLLMMechanism,
+// bedrockCredGradeHolds) have actually let the run through.
+type bedrockTransportAudit struct {
+	region, model, endpoint, mode, detail string
+	hosts                                 []string
 }
 
 // providerSubscription reports whether this run chose a Claude subscription
@@ -253,7 +272,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 		sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
 		sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
 	} else if t.bedrockReady {
-		t.secretEnvKeys = s.applyBedrockTransport(ctx, run, t.bedrock, policy, sandboxEnv)
+		t.secretEnvKeys, t.bedrockAudit = s.applyBedrockTransport(run, t.bedrock, policy, sandboxEnv)
 	} else {
 		sandboxEnv["ANTHROPIC_API_KEY"] = "wardyn-proxy-injected"
 	}
@@ -313,10 +332,13 @@ func (s *Server) managedSubscriptionLane(agent string, modelRun, harnessLogin, s
 // applyBedrockTransport wires a READY Bedrock posture onto the run: it copies
 // the resolved Bedrock env into the sandbox env, registers any resident SigV4
 // credentials with the mask registry, appends the Bedrock egress hosts to the
-// policy allow-list, and audits which of the four modes (bearer / sso-inject /
-// aws-dir-mount / resident) credentials the run. Extracted verbatim from
+// policy allow-list, and computes which of the four modes (bearer / sso-inject /
+// aws-dir-mount / resident) credentials the run, as a bedrockTransportAudit the
+// caller records once dispatch's gates hold (see bedrockTransportAudit's doc
+// comment — recording here, unconditionally, would audit a "success" injection
+// for a run the gates go on to refuse). Extracted verbatim from
 // resolveLLMTransport's t.bedrockReady branch.
-func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, b bedrockAuth, policy *types.RunPolicySpec, sandboxEnv map[string]string) []string {
+func (s *Server) applyBedrockTransport(run types.AgentRun, b bedrockAuth, policy *types.RunPolicySpec, sandboxEnv map[string]string) ([]string, bedrockTransportAudit) {
 	for k, v := range b.env {
 		sandboxEnv[k] = v
 	}
@@ -372,21 +394,15 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 		detail = "host ~/.aws bind-mounted read-only; the AWS SDK resolves credentials (incl. auto-refreshing SSO) from the mount — no static keys stored, none resident in env"
 		mode = "aws-dir-mount"
 	}
-	data := map[string]any{
-		"region": b.region, "model": b.model, "hosts": b.egressHosts,
+	return secretEnvKeys, bedrockTransportAudit{
+		region: b.region, model: b.model, hosts: b.egressHosts,
 		// The EFFECTIVE data-plane host — a WARDYN_BEDROCK_BASE_URL
 		// (PrivateLink) override's host, else the regional public one — so
 		// the record names where the call actually went rather than leaving
 		// an auditor to infer it from the region.
-		"endpoint": b.runtimeHost,
-		"mode":     mode, "detail": detail,
+		endpoint: b.runtimeHost,
+		mode:     mode, detail: detail,
 	}
-	if run.ModelProviderID != "" {
-		data["provider"] = run.ModelProviderID
-	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
-		run.ID.String(), "success", mustJSON(data)))
-	return secretEnvKeys
 }
 
 // provisionDispatchMITMCA provisions the per-run TLS-MITM CA when any consumer
@@ -778,7 +794,6 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	if !s.bedrockCredGradeHolds(ctx, run, bedrockGrade, llm) {
 		return dispatchLLMPlan{}, false
 	}
-
 	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
 	// when ANY consumer needs one — intercept_tls content inspection,
 	// subscription/managed credential injection, artifact-token injection, or
@@ -864,6 +879,27 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// LLM transport is OPAQUE — see enforceInspectableLLM.
 	if !s.enforceInspectableLLM(ctx, run, policy, llm) {
 		return dispatchLLMPlan{}, false
+	}
+
+	// Only NOW — every gate above held, including the MITM CA provisioning and
+	// grant-authoring steps between here and bedrockCredGradeHolds, any one of
+	// which can still fail closed — is it true that this run actually gets the
+	// Bedrock credential applyBedrockTransport resolved. Recording the
+	// run.llm.bedrock row here, instead of right after bedrockCredGradeHolds
+	// (or inside applyBedrockTransport itself), is what keeps a run ANY later
+	// refusal takes from showing a "success" injection row for a credential it
+	// was never handed (#518).
+	if llm.bedrockReady {
+		data := map[string]any{
+			"region": llm.bedrockAudit.region, "model": llm.bedrockAudit.model, "hosts": llm.bedrockAudit.hosts,
+			"endpoint": llm.bedrockAudit.endpoint,
+			"mode":     llm.bedrockAudit.mode, "detail": llm.bedrockAudit.detail,
+		}
+		if run.ModelProviderID != "" {
+			data["provider"] = run.ModelProviderID
+		}
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
+			run.ID.String(), "success", mustJSON(data)))
 	}
 
 	var unavailable string
