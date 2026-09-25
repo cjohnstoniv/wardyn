@@ -17,13 +17,13 @@ import {
 import type { Workspace, WorkspaceKind, WorkspaceRequirementsMap } from "../../../lib/types";
 import { makeWorkspace } from "../../../../test/factories";
 
-function localDirWorkspace(id: string, requirements: Record<string, unknown> = {}): Workspace {
+function localDirWorkspace(id: string, requirements: WorkspaceRequirementsMap = {}): Workspace {
   return makeWorkspace({
     id,
     name: id,
     kind: "local_dir",
     source: `/home/me/${id}`,
-    requirements: requirements as WorkspaceRequirementsMap,
+    requirements,
   });
 }
 

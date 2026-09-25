@@ -24,7 +24,7 @@ export function makeRun(o: Partial<AgentRun> = {}): AgentRun {
     confinement_class: "CC1",
     state: "RUNNING",
     spiffe_id: "spiffe://wardyn/run-1",
-    runner_target: "local",
+    runner_target: "docker",
     ...o,
   };
 }

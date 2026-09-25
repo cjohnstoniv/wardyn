@@ -357,7 +357,9 @@ describe("a dismissal from outside the pane still ends the login run", () => {
   beforeEach(() => {
     harnessLoginMock.mockReset();
     vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
-    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue(undefined!);
+    // Deliberately absent: these cases exercise the pane's `if (!run) return;`
+    // guard, not a real run shape.
+    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue(undefined as never);
   });
 
   it("ref.cancel() kills the run the pane is holding", async () => {
