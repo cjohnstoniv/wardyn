@@ -185,7 +185,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 			if createJSON {
 				return emitJSON(cmd.OutOrStdout(), ws)
 			}
-			fmt.Printf("created workspace %s (%q, %s, status %s)\n", ws.ID, ws.Name, workspaceComposition(ws), ws.Status)
+			fmt.Fprintf(cmd.OutOrStdout(), "created workspace %s (%q, %s, status %s)\n", ws.ID, ws.Name, workspaceComposition(ws), ws.Status)
 			return nil
 		},
 	}
@@ -264,7 +264,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 			if err := client().DeleteWorkspace(cmd.Context(), id); err != nil {
 				return err
 			}
-			fmt.Printf("workspace %s deleted\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "workspace %s deleted\n", args[0])
 			return nil
 		},
 	}

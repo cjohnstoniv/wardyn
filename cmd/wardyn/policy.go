@@ -109,7 +109,7 @@ func policyCmd(client clientFn) *cobra.Command {
 			if createJSON {
 				return emitJSON(cmd.OutOrStdout(), p)
 			}
-			fmt.Printf("created policy %s (%q, min %s)\n", p.ID, p.Name, p.Spec.MinConfinementClass)
+			fmt.Fprintf(cmd.OutOrStdout(), "created policy %s (%q, min %s)\n", p.ID, p.Name, p.Spec.MinConfinementClass)
 			return nil
 		},
 	}
@@ -140,7 +140,7 @@ func policyCmd(client clientFn) *cobra.Command {
 			if updateJSON {
 				return emitJSON(cmd.OutOrStdout(), p)
 			}
-			fmt.Printf("updated policy %s (%q, min %s)\n", p.ID, p.Name, p.Spec.MinConfinementClass)
+			fmt.Fprintf(cmd.OutOrStdout(), "updated policy %s (%q, min %s)\n", p.ID, p.Name, p.Spec.MinConfinementClass)
 			return nil
 		},
 	}
@@ -161,7 +161,7 @@ func policyCmd(client clientFn) *cobra.Command {
 			if err := client().DeletePolicy(cmd.Context(), id); err != nil {
 				return err
 			}
-			fmt.Printf("policy %s deleted\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "policy %s deleted\n", args[0])
 			return nil
 		},
 	}
@@ -180,7 +180,7 @@ func policyRenderCmd() *cobra.Command {
 		Use:   "render -f <file>",
 		Short: "Convert a JSON or YAML policy spec to canonical JSON (strict: a misspelled field fails here, not at launch)",
 		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			var raw []byte
 			var err error
 			if renderFile == "-" {
@@ -216,7 +216,7 @@ func policyRenderCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Println(string(out))
+			fmt.Fprintln(cmd.OutOrStdout(), string(out))
 			return nil
 		},
 	}

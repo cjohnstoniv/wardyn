@@ -181,22 +181,22 @@ func runCmd(client clientFn) *cobra.Command {
 					return err
 				}
 			} else {
-				fmt.Printf("created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
-				fmt.Printf("  spiffe id: %s\n", run.SPIFFEID)
+				fmt.Fprintf(cmd.OutOrStdout(), "created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
+				fmt.Fprintf(cmd.OutOrStdout(), "  spiffe id: %s\n", run.SPIFFEID)
 				// The image is resolved after the 201 (the build runs server-side),
 				// so it is read back later with `wardyn run get`, never printed here.
 				if interactive {
-					fmt.Printf("  interactive: sandbox is idle; attach with `wardyn attach %s`\n", run.ID)
+					fmt.Fprintf(cmd.OutOrStdout(), "  interactive: sandbox is idle; attach with `wardyn attach %s`\n", run.ID)
 				}
 			}
 			// Advisory server warnings (workspace collision, dropped ssh grant):
 			// the run is live either way, so silence here is a degraded run no
 			// CI artifact records.
 			for _, w := range run.Warnings {
-				fmt.Fprintf(os.Stderr, "  warning: %s\n", w)
+				fmt.Fprintf(cmd.ErrOrStderr(), "  warning: %s\n", w)
 			}
 			if wait {
-				return waitForRun(cmd.Context(), client(), run.ID, timeout)
+				return waitForRun(cmd.Context(), cmd.ErrOrStderr(), client(), run.ID, timeout)
 			}
 			return nil
 		},
@@ -311,9 +311,9 @@ func runGetCmd(client clientFn) *cobra.Command {
 			// user is never left with a bare "FAILED".
 			if run.State == types.RunFailed {
 				if reason := runFailureReason(cmd.Context(), client(), run.ID); reason != "" {
-					fmt.Printf("\nfailed: %s\n", reason)
+					fmt.Fprintf(cmd.OutOrStdout(), "\nfailed: %s\n", reason)
 				} else {
-					fmt.Printf("\nfailed — full detail: wardyn audit %s --json\n", run.ID)
+					fmt.Fprintf(cmd.OutOrStdout(), "\nfailed — full detail: wardyn audit %s --json\n", run.ID)
 				}
 			}
 			return nil
@@ -336,7 +336,7 @@ func runKillCmd(client clientFn) *cobra.Command {
 			if _, err := client().KillRun(cmd.Context(), id); err != nil {
 				return err
 			}
-			fmt.Printf("kill requested for run %s\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "kill requested for run %s\n", args[0])
 			return nil
 		},
 	}
@@ -387,9 +387,9 @@ var waitPollInterval = 2 * time.Second
 // waitForRun polls the run until it is terminal and maps the outcome to the
 // CLI's exit code: COMPLETED→0, FAILED→the agent's real exit code from the
 // run.complete audit event (fallback 1), KILLED/STOPPED/ARCHIVED→2, timeout→124.
-func waitForRun(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout time.Duration) error {
+func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.UUID, timeout time.Duration) error {
 	// Progress goes to stderr so `run --json` keeps stdout to a single object.
-	fmt.Fprintf(os.Stderr, "waiting for run %s (timeout %s)\n", runID, timeout)
+	fmt.Fprintf(errW, "waiting for run %s (timeout %s)\n", runID, timeout)
 	deadline := time.Now().Add(timeout)
 	consecutiveErrs := 0
 	var lastState types.RunState
@@ -413,7 +413,7 @@ func waitForRun(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout tim
 					time.Sleep(waitPollInterval)
 					code = agentExitCode(ctx, c, runID)
 				}
-				fmt.Fprintf(os.Stderr, "run %s finished: state %s, agent exit code %d\n", runID, run.State, code)
+				fmt.Fprintf(errW, "run %s finished: state %s, agent exit code %d\n", runID, run.State, code)
 				switch run.State {
 				case types.RunCompleted:
 					return nil
@@ -425,7 +425,7 @@ func waitForRun(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout tim
 					// failure has no agent exit and would otherwise read as an
 					// opaque "FAILED (agent exit code 1)".
 					if reason := runFailureReason(ctx, c, runID); reason != "" {
-						fmt.Fprintf(os.Stderr, "  reason: %s\n", reason)
+						fmt.Fprintf(errW, "  reason: %s\n", reason)
 					}
 					return &exitError{code: code, err: fmt.Errorf("run %s FAILED (agent exit code %d)", runID, code)}
 				default: // KILLED / STOPPED / ARCHIVED: lifecycle termination, not an agent result
@@ -716,7 +716,7 @@ func approvalDecisionCmd(client clientFn, verb, short string,
 			if err != nil {
 				return err
 			}
-			fmt.Printf("approval %s -> %s\n", ap.ID, ap.State)
+			fmt.Fprintf(cmd.OutOrStdout(), "approval %s -> %s\n", ap.ID, ap.State)
 			return nil
 		},
 	}

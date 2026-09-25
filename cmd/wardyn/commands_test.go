@@ -634,6 +634,28 @@ func TestRunFailureReason(t *testing.T) {
 	}
 }
 
+// TestRunGetCmd_FailedShowsFailureReason pins #200: `run get` on a FAILED run
+// prints its failure reason on the default (non-JSON) surface, through
+// cmd.OutOrStdout() — not just at exit code time, and not only through --wait.
+func TestRunGetCmd_FailedShowsFailureReason(t *testing.T) {
+	runID := uuid.New()
+	srv := waitServer(t, runID, []types.RunState{types.RunFailed}, []types.AuditEvent{
+		{Action: "run.dispatch", Outcome: "failure", Data: json.RawMessage(`{"error":"pull ghcr.io/x/agent-oracle:latest: not found"}`)},
+	})
+
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"run", "get", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("run get returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "failed:") {
+		t.Errorf("run get output missing the \"failed:\" pin, got:\n%s", out.String())
+	}
+}
+
 func TestRunCmd_WaitFailedNoAuditFallsBackTo1(t *testing.T) {
 	setWaitPollInterval(t, time.Millisecond)
 	runID := uuid.New()
