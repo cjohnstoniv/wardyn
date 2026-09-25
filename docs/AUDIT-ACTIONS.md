@@ -590,8 +590,7 @@ one release and move together.
 in the tree (31 non-test call sites) and a compatibility surface
 `docs/OPERATIONS.md`'s "Every denial that isn't a 404" already commits to by
 name, so its rename is its own reviewed change rather than a rider on this
-one. `TestAuditActionsDoc_Grammar` carries it as its one allowlisted
-exception.
+one. `TestAuditActionsDoc_Grammar` carries it in `auditActionGrammarAllow`.
 
 `secret.read`'s refusal `reason` values are now all snake_case. Eleven were
 kebab-case: the four host pins — `host-not-organisation` (per-person Azure

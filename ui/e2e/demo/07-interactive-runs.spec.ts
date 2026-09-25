@@ -489,7 +489,7 @@ test("V07 beat 5 — on the record", async () => {
   await expect(search).toBeVisible({ timeout: 30_000 });
   // S5: the query is the teaching — type it visibly rather than filling silently.
   await search.click();
-  await page.keyboard.type("subscription_inject", { delay: 45 });
+  await page.keyboard.type(INJECT_ACTION.slice("run.".length), { delay: 45 });
   // audit.tsx's ACTION_VERB row for the event — the credential story, named.
   await expect(page.getByText("Injected the subscription credential at the proxy").first()).toBeVisible({
     timeout: 30_000,
