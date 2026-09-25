@@ -796,3 +796,83 @@ type alwaysDupStore struct{ *fakeStore }
 func (d alwaysDupStore) CreateApproval(context.Context, types.ApprovalRequest) (types.ApprovalRequest, error) {
 	return types.ApprovalRequest{}, types.ErrDuplicatePendingApproval
 }
+
+// TestDecide_AuditDataCarriesDecisionExpiresAt: a time-bounded ("until")
+// approval's expiry is part of its audit provenance — the approval.decide row
+// alone must say when the grant lapses. An unbounded decision carries no key.
+func TestDecide_AuditDataCarriesDecisionExpiresAt(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+	until := time.Now().Add(24 * time.Hour).Truncate(time.Second).In(time.FixedZone("x", 3600))
+
+	bounded, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"a.example.com"}`)))
+	if _, err := approval.Decide(ctx, st, bounded.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice", Scope: types.ScopeUntil, ExpiresAt: &until,
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	unbounded, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"b.example.com"}`)))
+	if _, err := approval.Decide(ctx, st, unbounded.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice", Scope: types.ScopeRun,
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if len(st.audit) != 2 {
+		t.Fatalf("audit rows = %d, want 2", len(st.audit))
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal(st.audit[0].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	if got, want := data["decision_expires_at"], until.UTC().Format(time.RFC3339); got != want {
+		t.Errorf("decision_expires_at = %v, want %q (UTC)", got, want)
+	}
+	if got := data["decision_scope"]; got != string(types.ScopeUntil) {
+		t.Errorf("decision_scope = %v, want until", got)
+	}
+	data = nil
+	if err := json.Unmarshal(st.audit[1].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	if _, ok := data["decision_expires_at"]; ok {
+		t.Errorf("an unbounded decision carries decision_expires_at: %s", st.audit[1].Data)
+	}
+}
+
+// TestCancelForRun_AlreadyDecidedRaceIsNotAFailure: a human deciding a row
+// between CancelForRun's list and its CAS wins. The cascade skips that row and
+// carries on — it is neither an error nor counted as cancelled.
+func TestCancelForRun_AlreadyDecidedRaceIsNotAFailure(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{decideErrOn: 1, decideErr: approval.ErrAlreadyDecided}
+	runID := uuid.New()
+	for i := range 2 {
+		_, _ = approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain,
+			json.RawMessage(`{"host":"h`+strconv.Itoa(i)+`.example.com"}`)))
+	}
+
+	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	if err != nil {
+		t.Fatalf("CancelForRun = %v; a row a human already decided must be skipped, not fail the cascade", err)
+	}
+	if n != 1 {
+		t.Fatalf("cancelled = %d, want 1 (the raced row is the human's, not a cancellation)", n)
+	}
+	var evs []types.AuditEvent
+	for _, ev := range st.audit {
+		if ev.Action == "approval.cancelled" {
+			evs = append(evs, ev)
+		}
+	}
+	if len(evs) != 1 || evs[0].Outcome != "success" {
+		t.Fatalf("approval.cancelled rows = %+v, want one success row", evs)
+	}
+	var data struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(evs[0].Data, &data); err != nil || data.Count != 1 {
+		t.Errorf("audit count = %d (%v), want 1", data.Count, err)
+	}
+}
