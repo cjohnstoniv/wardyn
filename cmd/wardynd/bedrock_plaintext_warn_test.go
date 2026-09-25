@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 )
 
-// TestBedrockPlainHTTPIsAudibleAtBoot (W6-S7) pins the runtime signal for the
+// TestBedrockPlainHTTPIsAudibleAtBoot pins the runtime signal for the
 // SECOND relaxation WARDYN_ALLOW_TEST_ENDPOINTS unlocks.
 //
 // Only the AWS SSO override was audible: it WARNs on every boot that carries it

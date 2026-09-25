@@ -27,7 +27,6 @@ const FAIL_SENTENCE_MAX = 300;
 // stripping them here means the 300-char budget is spent on characters the
 // operator actually reads, and the alert renders text rather than control
 // codes. Runs before the cap.
-// eslint-disable-next-line no-control-regex
 const ANSI_ESCAPES = /(?:\][^]*(?:|\\)?|\[[0-9;:?]*[ -/]*[@-~]|[@-Z\\-_])/g;
 
 // With the pane's login terminal forced wide (LOGIN_PTY_COLS), `claude

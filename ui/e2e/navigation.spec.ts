@@ -208,7 +208,8 @@ test.describe("navigation + shell", () => {
   // NAV_ITEMS) off a guess. The auth-flow assertions (the banner, Retry) are
   // auth.spec.ts's; this is the sidebar's own pin, that NOTHING renders
   // rather than the wrong thing rendering.
-  test("B1 — a settled-but-unknown /me renders no nav at all, admin or member", async ({ page }) => {
+  test("a settled-but-unknown /me renders no nav at all, admin or member", async ({ page }) => {
+    // ticket: B1
     await page.route("**/api/v1/me", (route) =>
       route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }),
     );
@@ -296,9 +297,10 @@ test.describe("theme toggle", () => {
   // console. This reads the raw served markup directly — no JS execution at
   // all — so it proves the class ships in the HTML itself, not merely after
   // hydration.
-  test("F7-F4: the served HTML carries class=dark and color-scheme=dark before any JS runs", async ({
+  test("the served HTML carries class=dark and color-scheme=dark before any JS runs", async ({
     page,
   }) => {
+    // ticket: F7-F4
     const res = await page.request.get("/");
     const html = await res.text();
     expect(html).toMatch(/<html[^>]*\bclass="dark"/);
@@ -309,7 +311,8 @@ test.describe("theme toggle", () => {
   // preference once the app takes over — ThemeProvider's effect still runs
   // `classList.toggle("dark", theme === "dark")` on mount and removes the
   // class for a stored "light" value, exactly as before this fix.
-  test("F7-F4 neg: a stored light preference still renders light once the app mounts", async ({ page }) => {
+  test("negative control: a stored light preference still renders light once the app mounts", async ({ page }) => {
+    // ticket: F7-F4
     await page.addInitScript(() => {
       try {
         localStorage.setItem("wardyn-theme", "light");
@@ -349,7 +352,8 @@ test.describe("theme toggle", () => {
 // affordance at all — the last few items (Recordings) were unreachable.
 // ui/sheet.tsx's primitive-level min-h-0 + overflow-y-auto (this lane) is
 // what keeps it reachable here.
-test.describe("mobile navigation drawer (F3-F8/F7-F6)", () => {
+test.describe("mobile navigation drawer", () => {
+  // ticket: F3-F8/F7-F6
   test("667x375: the drawer scrolls — Recordings (near the bottom of the list) is reachable", async ({
     page,
   }) => {
@@ -382,7 +386,8 @@ test.describe("mobile navigation drawer (F3-F8/F7-F6)", () => {
 // with no flex-wrap and a fixed height — the header overflowed sideways on a
 // phone, and the user-menu trigger (the sign-out path) could be pushed off
 // the right edge entirely.
-test.describe("header compaction at phone width (F7-F2)", () => {
+test.describe("header compaction at phone width", () => {
+  // ticket: F7-F2
   test("390x844 /runs: no horizontal overflow, and the user-menu trigger stays in the viewport", async ({ page }) => {
     await gotoConsole(page);
     await page.setViewportSize({ width: 390, height: 844 });
@@ -413,7 +418,8 @@ test.describe("header compaction at phone width (F7-F2)", () => {
 // most valuable real estate for nothing an admin could act on. Both are gone
 // outright (no degraded chip, no replacement); posture now lives on the setup
 // Environment step alone.
-test.describe("the header carries no posture chips (0.7.3 F6)", () => {
+test.describe("the header carries no posture chips", () => {
+  // ticket: 0.7.3 F6
   test("no barrier or NetworkPolicy chip, on an admin session", async ({ page }) => {
     await gotoConsole(page);
     const header = page.getByRole("banner");
@@ -462,7 +468,8 @@ test.describe("error boundary (no spurious fallback)", () => {
 //   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
 //   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
 //   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/navigation.spec.ts
-test.describe("the unreachable banner sees a store outage (R4/F066)", () => {
+test.describe("the unreachable banner sees a store outage", () => {
+  // ticket: R4/F066
   const BANNER = /Control plane unreachable — showing the last data received/i;
 
   test("a live daemon with an unreachable store raises the banner", async ({ page }) => {

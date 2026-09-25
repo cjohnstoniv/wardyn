@@ -93,12 +93,5 @@ export const RUNS_WAIT = {
   // before it resolves, so this stands alone rather than reading as "nothing
   // is held" (the empty-Map default's lie).
   CHECKING: "Checking…",
-  // The card's own sentence once a hold isHeld no longer counts as live (the
-  // 60-minute stale-hold ceiling, lib/types/approvals.ts) — replaces the
-  // per-run reason line, not the group's chip below.
-  STALE_CARD: "Was held — check the run",
-  // The header's uncounted-elsewhere chip for the same fact, at group
-  // granularity: a degraded claim, not silence about what happened here.
-  STALE_GROUP: (n: number) => (n === 1 ? "1 was held" : `${n} were held`),
 } as const;
 

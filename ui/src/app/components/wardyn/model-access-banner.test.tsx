@@ -24,6 +24,7 @@ import { ModelAccessProvider, useClaimModelAccessDoor, useModelAccessDoor } from
 import { OperatorProvider } from "./operator-context";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { absoluteTime } from "../../lib/format";
+import { aheadByHours } from "../../lib/test-clock";
 import { baseStatus } from "../../lib/test-fixtures";
 import type { SetupHarnessTool, SetupModelAccess, SetupStatus } from "../../lib/types";
 
@@ -97,13 +98,6 @@ beforeEach(() => {
   }
 });
 afterEach(() => vi.restoreAllMocks());
-
-// aheadByHours is the deadline fixture for every "lapses in …" case: a stamp
-// the reader's clock will always see as the future. A hardcoded one cannot be —
-// it is a future date only until it isn't.
-function aheadByHours(h: number): string {
-  return new Date(Date.now() + h * 60 * 60 * 1000).toISOString();
-}
 
 describe("the strip says nothing when there is nothing to say", () => {
   it.each([["live"], ["not_applicable"]])("state %s renders no sentence", (state) => {
@@ -334,7 +328,8 @@ describe("'Not now' is per viewer, per browsing context", () => {
   });
 });
 
-describe("before /me answers, the strip says nothing (S2)", () => {
+describe("before /me answers, the strip says nothing", () => {
+  // ticket: S2
   // useOperator()'s default is fail-OPEN, so a MEMBER under a dead shared row
   // would otherwise read the ADMIN's sentence with a button the server refuses
   // — and usePrincipal() is "" in the same window, so a "Not now" there would

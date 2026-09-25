@@ -133,7 +133,7 @@ export function WorkspacesScreen() {
   // header can't claim "Your" without overclaiming exclusivity over rows that
   // are actually shared. See MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER.
   const description =
-    role === "member"
+    role === "user"
       ? MEMBER_WORKSPACE.WORKSPACES_HEADER_MEMBER(workspaces.length)
       : "A repo or directory a run can attach. Runs can only attach what's listed here.";
 
@@ -242,7 +242,7 @@ export function WorkspacesScreen() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        openDetail(w.id);
+                        void openDetail(w.id);
                       }
                     }}
                     className={notAdmitted ? "cursor-pointer opacity-70" : "cursor-pointer"}
@@ -309,7 +309,7 @@ export function WorkspacesScreen() {
           onClose={() => setAddOpen(false)}
           onCreated={(created) => {
             load();
-            openDetail(created.id);
+            void openDetail(created.id);
           }}
         />
       )}

@@ -285,7 +285,7 @@ describe("RunsScreen — Start-a-run route state redirects to the New run page",
 // says so plainly, and that admin copy is unchanged.
 describe("RunsScreen — member vs admin count line", () => {
   it("a member sees \"Your runs · N\"", async () => {
-    renderScreen("member");
+    renderScreen("user");
     expect(await screen.findByText("Your runs · 1")).toBeInTheDocument();
   });
 
@@ -367,7 +367,8 @@ describe("RunsScreen — loading skeleton matches the active density", () => {
 // F1-F7: the table cap must not budget headers GLOBALLY against the data cap
 // (`flat.slice(0, cap + groups.length)`), or a header could land exactly on
 // the cut and render as the LAST row with nothing under it.
-describe("RunsScreen table — the cap never ends on an orphan group header (F1-F7)", () => {
+describe("RunsScreen table — the cap never ends on an orphan group header", () => {
+  // ticket: F1-F7
   it("caps at the data-row count, not the header+data count, and never leaves a trailing header", async () => {
     const inGroup = (id: string, title: string): AgentRun => ({ ...run, id, title, state: "COMPLETED" });
     // Group A alone is exactly the default cap (25) — the classic trigger: a
@@ -390,7 +391,8 @@ describe("RunsScreen table — the cap never ends on an orphan group header (F1-
 // F1-F10: "Refresh now" must not call `load`, which flips status to "loading"
 // and unmounts the WHOLE toolbar (search input, focus and all) for a round
 // trip the board already runs every POLL_MS in the background.
-describe("RunsScreen — Refresh now stays on the background path (F1-F10)", () => {
+describe("RunsScreen — Refresh now stays on the background path", () => {
+  // ticket: F1-F10
   it("never blanks the toolbar into a skeleton while the manual refresh is in flight", async () => {
     // `load` flips status to "loading" SYNCHRONOUSLY, unmounting the whole
     // `status === "ready"` branch — search input, focus, toolbar and board —
@@ -756,7 +758,7 @@ describe("RunsScreen board — an ephemeral run names itself honestly", () => {
 describe("RunsScreen — the member's empty board", () => {
   it("a member with no runs gets the member empty state, not the operator first-run funnel", async () => {
     listRunsMock.mockResolvedValue([]);
-    renderScreen("member");
+    renderScreen("user");
 
     expect(await screen.findByText("Runs you launch appear here")).toBeInTheDocument();
     expect(screen.queryByText("No runs yet")).not.toBeInTheDocument();
@@ -765,11 +767,11 @@ describe("RunsScreen — the member's empty board", () => {
     expect(screen.getByRole("link", { name: /getting started/i })).toHaveAttribute("href", "/setup");
   });
 
-  // The predicate must be `role !== "admin"`, not `role === "member"`.
+  // The predicate must be `role !== "admin"`, not `role === "user"`.
   // /setup/status is redacted on !isOperator (internal/api/setup.go), and
   // isOperator is SUPER-admin only — so a security admin's status arrives with
   // checks [], secrets.present [] and the driver withheld, exactly like a
-  // member's. Through `role === "member"` this tier would fall into the
+  // member's. Through `role === "user"` this tier would fall into the
   // operator funnel and read every withheld field as a fact: "Needs the
   // <name> secret" for secrets that may well exist, over two /setup deep
   // links that land on a Getting Started which ignores ?step. Every sibling

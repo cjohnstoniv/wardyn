@@ -154,11 +154,12 @@ describe("OnboardingScreen (welcome hero)", () => {
 
 // M-6: which Getting Started renders is the VIEW (the URL), not the caller's
 // role — see onboarding-screen.tsx's own header comment for why. B4 HIGH-4's
-// original concern (a member landing honestly on a direct /setup navigation,
+// original concern (a user landing honestly on a direct /setup navigation,
 // never the operator funnel built from a redacted SetupStatus they can't act
 // on) still holds; member-getting-started.test.tsx covers that screen's own
 // sections in full, this suite only proves the routing swap.
-describe("GettingStarted (the view decides the page, not role — M-6)", () => {
+describe("GettingStarted (the view decides the page, not role)", () => {
+  // ticket: M-6, B4 HIGH-4
   beforeEach(() => {
     localStorage.clear();
     getSetupStatusMock.mockReset().mockResolvedValue(status());
@@ -167,7 +168,7 @@ describe("GettingStarted (the view decides the page, not role — M-6)", () => {
   it("/setup shows the User Getting Started, not the admin welcome hero", async () => {
     render(
       <MemoryRouter initialEntries={["/setup"]}>
-        <RoleProvider role="member">
+        <RoleProvider role="user">
           <GettingStarted onDone={() => {}} />
         </RoleProvider>
       </MemoryRouter>,
@@ -177,8 +178,8 @@ describe("GettingStarted (the view decides the page, not role — M-6)", () => {
     expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
   });
 
-  // R4/F034 (pre-M-6, when this read `role`): the guard was two-valued
-  // (`role === "member"`) after role became three-valued, so a security
+  // R4/F034 (pre-M-6, when this read `role` alone): the guard was two-valued
+  // (`role === "user"`) after role became three-valued, so a security
   // admin fell THROUGH to the deployer funnel — built from a SetupStatus the
   // server redacts for them (redactSetupStatusForMember zeroes
   // Checks/Providers/Secrets, internal/api/setup.go), driving mutations that
@@ -244,7 +245,8 @@ describe("GettingStarted (the view decides the page, not role — M-6)", () => {
 
   // X3-F11: "Getting started" lives in the account menu (app-shell.tsx), not
   // the sidebar — NAV_ITEMS has nine entries, none of them this.
-  it('X3-F11: the "revisit anytime" note names the account menu, not the sidebar', () => {
+  it('the "revisit anytime" note names the account menu, not the sidebar', () => {
+    // ticket: X3-F11
     render(
       <MemoryRouter initialEntries={["/admin/setup"]}>
         <GettingStarted onDone={() => {}} status={status()} />

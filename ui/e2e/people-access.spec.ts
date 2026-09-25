@@ -7,6 +7,7 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { PEOPLE_STEP } from "../src/app/components/wardyn/copy";
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../src/app/lib/people-access-copy";
+import { ADMIN_ACCESS_BANNER, SIGNIN_HELP } from "../src/app/lib/access-posture-copy";
 
 // People step's role-mappings editor (0.7 SSO Phase 3, ui/src/app/components/
 // screens/setup/access-panel.tsx). The seeded e2e backend runs with
@@ -132,7 +133,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
             created_by: "admin",
           },
         ],
-        default_role: "member",
+        default_role: "user",
         operator_emails_present: true,
         operator_emails: ["ops@corp.example", "sre@corp.example"],
       }),
@@ -147,9 +148,35 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await expect(page.getByRole("button", { name: `${PEOPLE.DELETE} Wardyn.Admin` })).toHaveCount(0);
 
     const defaults = page.getByTestId("access-defaults");
-    await expect(defaults.getByText(PEOPLE.ROLE_MEMBER)).toBeVisible();
+    // A "user" default is the built-in type, named as one (0.8).
+    await expect(defaults.getByText(PEOPLE.TYPE_STANDARD)).toBeVisible();
     await expect(defaults.getByText("ops@corp.example")).toBeVisible();
     await expect(defaults.getByText("sre@corp.example")).toBeVisible();
+  });
+
+  // UT-2b: a user row's chip is its user type's name, read from GET /access's
+  // user_types — a Portfolio manager row never reads as a bare "User".
+  test("a user row names its user type", async ({ page }) => {
+    await mockSsoStatus(page);
+    await mockAccessGet(
+      page,
+      baseAccessBody({
+        mappings: [
+          { value: "Wardyn.Admin", role: "admin", source: "chart", shadowed: false, shadow_cause: "" },
+          { value: "pm-group", role: "user", user_type: "portfolio-manager", source: "chart", shadowed: false, shadow_cause: "" },
+        ],
+        default_role: "admin",
+        posture: { map_empty: false, before: "admin", after: "admin", changes: false },
+        user_types: [
+          { id: "standard", name: "Standard user", description: "", priority: 0, built_in: true },
+          { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false },
+        ],
+      }),
+    );
+    await gotoPeopleStep(page);
+
+    await expect(page.getByText("pm-group")).toBeVisible();
+    await expect(page.getByText("Portfolio manager")).toBeVisible();
   });
 
   test("(b) a shadowed row carries the right badge for both causes", async ({ page }) => {
@@ -158,11 +185,11 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
       page,
       baseAccessBody({
         mappings: [
-          { value: "Wardyn.Contractors", role: "member", source: "chart", shadowed: false, shadow_cause: "" },
+          { value: "Wardyn.Contractors", role: "user", source: "chart", shadowed: false, shadow_cause: "" },
           {
             id: "c2",
             value: "Wardyn.Contractors",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: true,
             shadow_cause: "chart",
@@ -171,7 +198,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
           {
             id: "c3",
             value: "carol@corp.example",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: true,
             shadow_cause: "operator_allowlist",
@@ -195,7 +222,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
           {
             id: "c4",
             value: "bob@corp.example",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: false,
             shadow_cause: "",
@@ -220,7 +247,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
           {
             id: "c4",
             value: "bob@corp.example",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: false,
             shadow_cause: "",
@@ -401,7 +428,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
           {
             id: "c2",
             value: "eng-team",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: false,
             shadow_cause: "",
@@ -506,7 +533,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
       call++;
       const responses = [
         { role: "admin", ok: true, matched: [{ value: "Wardyn.Admin", role: "admin", source: "chart" }] },
-        { role: "member", ok: true, matched: [] },
+        { role: "user", ok: true, matched: [] },
         { role: "", ok: false, matched: [] },
         { role: "", ok: false, matched: [], error: "role_check_unavailable" },
       ];
@@ -523,7 +550,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
 
     await claims.fill("nobody");
     await run.click();
-    await expect(page.getByText(PREVIEW.RESULT_DEFAULT("member"))).toBeVisible();
+    await expect(page.getByText(PREVIEW.RESULT_DEFAULT("user"))).toBeVisible();
 
     await claims.fill("nobody-else");
     await run.click();
@@ -535,11 +562,12 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
   });
 
   // R4/F033: renderPreviewResult kept the two-role ternary
-  // (`role === "admin" ? "admin" : "member"`) that roleLabel() was introduced
+  // (`role === "admin" ? "admin" : "user"`) that roleLabel() was introduced
   // to kill, so the ONE surface an operator uses to check a mapping before
   // trusting it called a security_admin a member. §7.2's casing rule keeps the
   // in-sentence form lowercase.
-  test("(f2) preview: a security_admin verdict says so — never 'member' (R4/F033)", async ({ page }) => {
+  test("(f2) preview: a security_admin verdict says so — never 'member'", async ({ page }) => {
+    // ticket: R4/F033
     await mockSsoStatus(page);
     await mockAccessGet(page, baseAccessBody({ posture: { map_empty: false, before: "x", after: "y", changes: false } }));
     await page.route("**/api/v1/access/preview", async (route) => {
@@ -559,7 +587,7 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await page.getByRole("button", { name: PREVIEW.RUN_CTA }).click();
 
     await expect(page.getByText(PREVIEW.RESULT_MATCHED("security admin", "sec-team"))).toBeVisible();
-    await expect(page.getByText(PREVIEW.RESULT_MATCHED("member", "sec-team"))).toHaveCount(0);
+    await expect(page.getByText(PREVIEW.RESULT_MATCHED("user", "sec-team"))).toHaveCount(0);
   });
 
   // ---------------------------------------------------------------------
@@ -613,5 +641,81 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     // The editor (AccessPanel) never mounts on the single-user branch at all.
     await expect(page.getByText(PEOPLE.TABLE_TITLE)).toHaveCount(0);
     expect(accessHit).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------
+  // (i) #484 — the everyone-is-an-admin banner round trip: shown to an admin
+  // while /setup/status's sso_rbac row warns, its CTA opens this step, and it
+  // is gone the moment a mapping lands (the step re-reads the SHELL's status).
+  // ---------------------------------------------------------------------
+  test("(i) #484 banner round trip: shows, opens People, clears once a mapping lands", async ({ page }) => {
+    let mapped = false;
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.auth = { ...json.auth, mode: "sso" };
+      const row = mapped
+        ? { id: "sso_rbac", label: "Who is an admin", status: "ok" }
+        : { id: "sso_rbac", label: "Who is an admin", status: "warn", blocking: true };
+      json.checks = [...(json.checks ?? []).filter((c: { id: string }) => c.id !== "sso_rbac"), row];
+      await route.fulfill({ response, json });
+    });
+    await mockAccessGet(page, baseAccessBody({ posture: { map_empty: false, before: "an admin", after: "be denied", changes: false } }));
+    await page.route("**/api/v1/access/mappings", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      mapped = true;
+      const body = route.request().postDataJSON() as { value: string; role: string };
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ id: "new1", value: body.value, role: body.role, created_by: "e2e", created_at: new Date().toISOString() }),
+      });
+    });
+
+    await page.goto("/setup?step=environment");
+    const title = page.getByText(ADMIN_ACCESS_BANNER.TITLE, { exact: true });
+    await expect(title).toBeVisible();
+    await expect(page.getByText(ADMIN_ACCESS_BANNER.BODY, { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: ADMIN_ACCESS_BANNER.ACTION }).click();
+    await expect(page).toHaveURL(/step=people/);
+    await expect(page.getByRole("heading", { name: "Who can sign in" })).toBeVisible();
+
+    await page.getByLabel(PEOPLE.FIELD_VALUE, { exact: true }).fill("Wardyn.Admin");
+    await page.getByRole("button", { name: PEOPLE.ADD_CTA }).click();
+    await expect(title).toHaveCount(0);
+  });
+
+  // (j) #484 — the help card saves through the REAL PUT /site-config (with
+  // If-Match) and /healthz publishes it; the test clears it again so no other
+  // spec sees it.
+  test("(j) #484 the help card saves to site config and /healthz publishes it", async ({ page }) => {
+    await mockSsoStatus(page);
+    await gotoPeopleStep(page);
+    const text = page.getByLabel(SIGNIN_HELP.TEXT_LABEL);
+    const link = page.getByLabel(SIGNIN_HELP.URL_LABEL);
+    const save = page.getByRole("button", { name: SIGNIN_HELP.SAVE });
+    await expect(page.getByText(SIGNIN_HELP.EMPTY_NOTE)).toBeVisible();
+
+    await text.fill(`Ask in #it-helpdesk — it's quick.`);
+    await link.fill("https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc");
+    await expect(page.getByText("33 / 1000")).toBeVisible();
+    await expect(page.getByTestId("sign-in-help").getByRole("link", { name: SIGNIN_HELP.LINK_LABEL })).toBeVisible();
+    await save.click();
+    await expect(save).toBeDisabled();
+
+    const published = await (await page.request.get("/healthz")).json();
+    expect(published.sign_in_help_text).toBe(`Ask in #it-helpdesk — it's quick.`);
+    expect(published.sign_in_help_url).toBe("https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc");
+
+    await page.reload();
+    await expect(text).toHaveValue(`Ask in #it-helpdesk — it's quick.`);
+    await text.fill("");
+    await link.fill("");
+    await save.click();
+    await expect(page.getByText(SIGNIN_HELP.EMPTY_NOTE)).toBeVisible();
+    await expect(save).toBeDisabled();
+    const cleared = await (await page.request.get("/healthz")).json();
+    expect(cleared.sign_in_help_text).toBeUndefined();
+    expect(cleared.sign_in_help_url).toBeUndefined();
   });
 });

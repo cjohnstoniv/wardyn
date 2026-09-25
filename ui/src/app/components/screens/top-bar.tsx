@@ -9,11 +9,12 @@
 // and the isCustom* trust-domain/identity-provider checks stay in
 // app-shell.tsx, which SidebarNav also relies on for its own trust-domain
 // panel.
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ChevronsUpDown, Fingerprint, LogOut, Moon, Plus, Sun } from "lucide-react";
 import { WardynWordmark } from "../wardyn/logo";
 import { Chip } from "../wardyn/primitives";
 import { useTheme } from "../wardyn/theme-provider";
+import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
 import { Button } from "../ui/button";
 import {
   DropdownMenu,
@@ -58,10 +59,14 @@ export function TopBar({
 }) {
   // What the header calls "you": the IdP's display name, else the session
   // email, else the principal itself (an admin token or local mode has
-  // neither). Display only — PrincipalContext below keeps meta.principal.
+  // neither). Display only — usePrincipal() still reads meta.principal.
   const display = meta.name || meta.email || meta.principal;
   const { theme, toggle } = useTheme();
   const { access, view, hasSwitch } = useShellView(meta);
+  // #460 review — every plain <Link> in this header can navigate away from a
+  // dirty editor (app-shell.tsx#SidebarNav's own guardedClick precedent).
+  const navigate = useNavigate();
+  const guardedClick = useGuardedNavClick(navigate);
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
       <MobileNav
@@ -71,6 +76,7 @@ export function TopBar({
       />
       <Link
         to={viewHome(view)}
+        onClick={guardedClick(viewHome(view))}
         className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
       >
         {/* F7-F2: icon-only below sm, so New run + the user menu stay onscreen. */}
@@ -160,8 +166,7 @@ export function TopBar({
                     tone="neutral"
                     className="shrink-0 uppercase tracking-wide"
                   >
-                    {/* The non-admin side is a user (packet B, D6). */}
-                    {meta.role === "member" ? "user" : meta.role}
+                    {meta.role}
                   </Chip>
                 )}
               </div>

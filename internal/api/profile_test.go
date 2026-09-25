@@ -17,7 +17,7 @@ import (
 )
 
 // TestSynthesizeProfile_StampsEbpfGroundtruthCaveat is
-// W20-W20-groundtruth-mapper-4's other call site: a synthesized profile
+// other call site: a synthesized profile
 // (POST /api/v1/runs/{id}/profile) must carry the SAME one-line eBPF sensor
 // coverage note reconcileRecordRun stamps onto RecordTaskResult.Caveats —
 // before this fix, ebpf_groundtruth's per-kind state existed only on the
@@ -57,16 +57,15 @@ func TestSynthesizeProfile_StampsEbpfGroundtruthCaveat(t *testing.T) {
 	}
 }
 
-// TestSynthesizeProfile_ConfinedVerifyRunDoesNotMislabelDenials is the
-// bug-record-2 regression: handleSynthesizeProfile hardcoded confined=false
-// unconditionally on base 17455349, even for a "workspace record" run whose
-// own record_results entry (keyed by RunID — the exact discriminator
-// reconcileRecordRun uses in workspace_run.go) says Confined=true. A CONFINED
-// replay's denials are the advertised containment proof working as designed,
-// not an anomaly — recordmode.Capture's own doc comment — so mislabeling
-// them "during open recording" is misleading security copy about a session
-// that was never open. The fix looks up the matching RecordTaskResult and
-// passes its real Confined flag through.
+// TestSynthesizeProfile_ConfinedVerifyRunDoesNotMislabelDenials:
+// handleSynthesizeProfile must not hardcode confined=false for a "workspace
+// record" run whose own record_results entry (keyed by RunID — the exact
+// discriminator reconcileRecordRun uses in workspace_run.go) says
+// Confined=true. A confined replay's denials are the advertised containment
+// proof working as designed, not an anomaly — recordmode.Capture's own doc
+// comment — so labelling them "during open recording" is misleading security
+// copy about a session that was never open. The handler looks up the matching
+// RecordTaskResult and passes its real Confined flag through.
 func TestSynthesizeProfile_ConfinedVerifyRunDoesNotMislabelDenials(t *testing.T) {
 	h := newHarness(t)
 	runID, wsID := uuid.New(), uuid.New()

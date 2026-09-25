@@ -33,7 +33,7 @@ async function ssoAdminSession(context: BrowserContext, extra: Record<string, un
     const response = await route.fetch();
     const json = await response.json();
     Object.assign(json, { method: "sso", member_mode: session.userView }, extra);
-    if (session.userView) Object.assign(json, { role: "member", operator: false, security_operator: false });
+    if (session.userView) Object.assign(json, { role: "user", operator: false, security_operator: false });
     await route.fulfill({ response, json });
   });
   await context.route("**/api/v1/me/member-mode", async (route) => {
@@ -111,7 +111,7 @@ test.describe("the view switch", () => {
     await page.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).first().click();
     const row = page.getByTestId("provider-row-github");
     await row.locator("textarea").fill("https://github.com/acme\nhttps://git.corp.example/team");
-    await expect(page.getByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toBeVisible();
+    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_DRAFT.UNSAVED_MARKER);
 
     await segment(page, CONSOLE_VIEW.USER).click();
     const dialog = page.getByRole("alertdialog");
@@ -242,7 +242,7 @@ test.describe("the slimmed avatar menu and the preview", () => {
       const json = await response.json();
       Object.assign(json, { method: "sso", member_mode: session.userView, member_preview_available: !session.userView });
       if (session.userView) {
-        Object.assign(json, { role: "member", operator: false, security_operator: false, member_mode_no_credential: true });
+        Object.assign(json, { role: "user", operator: false, security_operator: false, member_mode_no_credential: true });
       }
       await route.fulfill({ response, json });
     });

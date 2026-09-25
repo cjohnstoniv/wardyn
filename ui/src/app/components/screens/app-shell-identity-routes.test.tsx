@@ -106,7 +106,8 @@ function accountTrigger() {
   return buttons[buttons.length - 1];
 }
 
-describe("AppShell — a settled-but-unknown identity gets no route (V1-D3)", () => {
+describe("AppShell — a settled-but-unknown identity gets no route", () => {
+  // ticket: V1-D3
   afterEach(() => vi.unstubAllGlobals());
 
   for (const path of ADMIN_ROUTES) {
@@ -144,7 +145,7 @@ describe("AppShell — a settled-but-unknown identity gets no route (V1-D3)", ()
     stubMe({
       principal: "alice@corp.example",
       method: "sso",
-      role: "member",
+      role: "user",
       operator: false,
       security_operator: false,
     });
@@ -223,7 +224,7 @@ describe("AppShell (roleResolved after a failed /me)", () => {
   // load-bearing ("an older daemon that never sends this field must fail open
   // like every other identity signal here"; operator-context.tsx: 'Never
   // "harden" this default to false either'). Nothing asserted it: flipping all
-  // three to `?? false` / `?? "member"` left the whole suite green, and the one
+  // three to `?? false` / `?? "user"` left the whole suite green, and the one
   // path where the defaults decide what a real human sees is exactly this one —
   // a 5xx, a dropped network, a pre-0.7 daemon. Fail-closed here does not
   // protect anything (the server refuses every write regardless, requireOperator
@@ -279,7 +280,8 @@ describe("AppShell (roleResolved after a failed /me)", () => {
     expect(screen.queryByTestId("probe")).toBeNull();
   });
 
-  it("paints no route at all when /me never answers — the fail-open tier reaches nothing (V1-D3)", async () => {
+  it("paints no route at all when /me never answers — the fail-open tier reaches nothing", async () => {
+    // ticket: V1-D3
     // This pins the tier a failed /me leaves behind: useMeta seeds
     // operator/securityOperator/role with `?? true` / `?? "admin"`, and the
     // direction is load-bearing ("Never harden this default to false either") —
@@ -347,7 +349,7 @@ describe("AppShell (roleResolved after a failed /me)", () => {
   it("keeps the tier fail-OPEN for a daemon whose /me omits the fields entirely", async () => {
     // A pre-0.7 daemon: /me answers 200 with the identity keys it has always
     // sent and none of the three tier keys. Absent must read as open, not as
-    // "member" — the same rule, on the path that actually reaches the `??`.
+    // "user" — the same rule, on the path that actually reaches the `??`.
     vi.stubGlobal(
       "fetch",
       vi.fn((url: RequestInfo | URL) => {
@@ -500,7 +502,7 @@ describe("AppShell (roleResolved after a failed /me)", () => {
               method: "sso",
               operator: false,
               security_operator: false,
-              role: "member",
+              role: "user",
             }),
           });
         }

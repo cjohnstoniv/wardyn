@@ -17,7 +17,6 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { useConsoleMode } from "../../wardyn/console-view";
 import { lsGet, lsSet } from "../../../lib/storage";
-import { markGateFired } from "../setup/setup-gate";
 import { deploymentMode } from "../../../lib/readiness";
 import type { SetupStatus } from "../../../lib/types";
 import { HowItWorksStrip, IntroBlurb } from "./intro";
@@ -77,16 +76,14 @@ export function GettingStarted({
   // field.
   const [seen, setSeen] = React.useState(onboardingSeen());
   const installOnboarded = status?.onboarding_complete ?? false;
-  // Being IN the funnel satisfies the gate's purpose for this load. The gate's
-  // once-per-load flag otherwise arms only when a GATED route renders — but a
-  // load can start directly on /setup (a reload while onboarding, the SSO
-  // callback's return), which sits outside the gate's wrapper; without this,
-  // the first navigation out of such a load re-fires the gate and the funnel's
-  // own "Open Permissions" bounces back to step one. Landing here IS the
-  // forced redirect's destination, so arriving here arms it.
-  React.useEffect(() => {
-    markGateFired();
-  }, []);
+  // Deliberately `!== "admin"`, not `role === "user"`, for the reason
+  // setupGateActive (setup/setup-gate.ts) is written the same way now that role
+  // is three-valued: GET /setup/status is redacted for every non-operator
+  // (handleSetupStatus -> redactSetupStatusForMember zeroes Checks, Providers
+  // and Secrets, internal/api/setup.go), and every mutation the deployer funnel
+  // drives is super-admin-only server-side. A security admin falling through
+  // here would get the operator funnel built from a status they cannot act on
+  // and a wizard whose every button 403s.
   if (view !== "admin" || role !== "admin") {
     // No onDone: this is a page a user returns to, not a funnel step with
     // an exit action — the old MemberSetupNotice's "Go to Runs" button (and
@@ -107,7 +104,7 @@ export function GettingStarted({
       />
     );
   }
-  return <SetupScreen onDone={onDone} />;
+  return <SetupScreen onDone={onDone} initialStatus={status} />;
 }
 
 function ReadinessRow({
