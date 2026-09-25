@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -95,12 +96,17 @@ type reviveFixture struct {
 	rs      *reviveStore
 	rr      *reviveRunner
 	profile types.GovernanceProfile
+	// currentCAPEM is the internal (hoptls) CA the fixture's control plane
+	// hands out NOW, distinct from the CA baked into the run's rendered
+	// (pre-revive) proxy config — a revive must replace it, never keep it.
+	currentCAPEM string
 }
 
 // newReviveFixture is a run lost to an outage: its owner's profile, as
 // captured at create, now denies api.openai.com and pat.example, and its
 // proxy config (stopped, kept) carries an injection and a brokered PAT for
-// those hosts, plus the per-run MITM CA.
+// those hosts, plus the per-run MITM CA and a control-plane URL+CA (hoptls)
+// pair distinct from the deployment's current one.
 func newReviveFixture(t *testing.T) *reviveFixture {
 	t.Helper()
 	f := &reviveFixture{lostFixture: newLostFixture(t)}
@@ -110,10 +116,13 @@ func newReviveFixture(t *testing.T) *reviveFixture {
 	f.st.run.SandboxRef = "wardyn-agent-" + f.st.run.ID.String()
 	f.run = f.st.run
 	f.rs = &reviveStore{lostStore: f.ls, profiles: []types.GovernanceProfile{f.profile}}
+	oldCA := testHopCA(t)
+	currentCA := testHopCA(t)
 	cfg, err := runner.BuildProxyConfig(f.run.ID, runner.ProxyConfig{
-		RunToken:        "old-token",
-		ControlPlaneURL: "http://127.0.0.1:8081",
-		Policy:          types.RunPolicySpec{AllowedDomains: []string{"api.openai.com", "api.anthropic.com"}},
+		RunToken:          "old-token",
+		ControlPlaneURL:   "http://127.0.0.1:8081",
+		ControlPlaneCAPEM: string(oldCA.CertPEM),
+		Policy:            types.RunPolicySpec{AllowedDomains: []string{"api.openai.com", "api.anthropic.com"}},
 		Injection: []runner.InjectionGrant{
 			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.openai.com", Header: "Authorization", Format: "Bearer %s"}},
 			{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", Format: "%s"}},
@@ -128,7 +137,9 @@ func newReviveFixture(t *testing.T) *reviveFixture {
 	f.rr = &reviveRunner{lostRunner: f.lr, cfg: cfg}
 	f.srv.cfg.Store = f.rs
 	f.srv.cfg.Runner = f.rr
-	f.srv.cfg.ControlPlaneURL = "http://127.0.0.1:8080"
+	f.srv.cfg.ControlPlaneURL = "https://wardynd:8443"
+	f.srv.cfg.ControlPlaneCAPEM = string(currentCA.CertPEM)
+	f.currentCAPEM = string(currentCA.CertPEM)
 	f.ls.lapsed = true
 	f.sweepTokens(t)
 	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostOutage {
@@ -136,6 +147,21 @@ func newReviveFixture(t *testing.T) *reviveFixture {
 	}
 	f.run = f.st.run
 	return f
+}
+
+// testHopCA mints a fresh internal (hoptls) CA for a test, as
+// internal/api/proxy_hop_tls_test.go's TestDispatch_ProxyConfigCarriesControlPlaneCA does.
+func testHopCA(t *testing.T) *hoptls.CA {
+	t.Helper()
+	blob, err := hoptls.NewCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := hoptls.ParseCA(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ca
 }
 
 // revive POSTs /runs/{id}/revive as the admin token: a caller whose OWN
@@ -185,8 +211,14 @@ func TestReviveRun_TheOwnersCeilingNotTheCallers(t *testing.T) {
 	if _, ok := cfg.PATGrants["git.example"]; !ok || len(cfg.Injection) != 1 {
 		t.Errorf("PAT grants %v, injections %v; want the lanes to allowed hosts kept", cfg.PATGrants, cfg.Injection)
 	}
-	if cfg.RunToken == "old-token" || cfg.RunToken == "" || cfg.ControlPlaneURL != "http://127.0.0.1:8080" {
+	if cfg.RunToken == "old-token" || cfg.RunToken == "" || cfg.ControlPlaneURL != "https://wardynd:8443" {
 		t.Errorf("run token %q, control plane %q; want a fresh token and the current control plane", cfg.RunToken, cfg.ControlPlaneURL)
+	}
+	// The URL and its CA are rewritten TOGETHER: a revive must never keep the
+	// old rendered config's CA under the current URL, which would leave the
+	// proxy trusting a certificate that does not attest to where it now dials.
+	if cfg.ControlPlaneCAPEM != f.currentCAPEM || cfg.ControlPlaneCAPEM == "" {
+		t.Errorf("control plane CA = %q; want the deployment's CURRENT internal CA, not the rendered config's old one", cfg.ControlPlaneCAPEM)
 	}
 	claims, err := f.srv.cfg.Identity.Verify(context.Background(), cfg.RunToken, internalAudience)
 	if err != nil || claims.RunID != f.run.ID || claims.Sub != f.run.CreatedBy {

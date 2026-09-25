@@ -142,6 +142,25 @@ func TestRevive_RechecksOwnerGrants(t *testing.T) {
 	}
 }
 
+// TestRevive_FailsClosedOnGrantsStoreError: capAllowedForSub must refuse a
+// revive when the capability-grants store cannot be read, never treat the
+// error as an implicit allow — an outage must not silently grant a
+// capability the owner may since have lost.
+func TestRevive_FailsClosedOnGrantsStoreError(t *testing.T) {
+	f := newReviveFixture(t)
+	f.st.grantsErr = errors.New("grants store: connection reset")
+	code, body := f.reviveAs(t, false) // a non-owner admin
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("revive with the grants store erroring = %d %s, want 503", code, body)
+	}
+	if len(f.rr.replaced) != 0 {
+		t.Error("a refused revive replaced the proxy")
+	}
+	if lostAt, _ := f.st.lost(); lostAt == nil {
+		t.Error("a refused revive cleared the lost mark")
+	}
+}
+
 // TestRevive_AnAdminCannotRuleOutTheOwnersGroups: an admin's revive knows the
 // owner by sub alone, so a group deny covering the run's agent refuses it
 // even though no row names the owner.

@@ -34,9 +34,13 @@ type leaseStore struct {
 	siteErr    error
 	credGrants []types.CredentialGrant
 	casErr     error // returned once by UpdateRunStateIf
+	grantsErr  error // ListCapabilityGrants fails closed with this, never an implicit allow
 }
 
 func (s *leaseStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	if s.grantsErr != nil {
+		return nil, s.grantsErr
+	}
 	return slices.Clone(s.caps), nil
 }
 
