@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -108,6 +109,59 @@ func TestApplyDispatchModeEnv_ToolApprovals(t *testing.T) {
 	}
 }
 
+// TestApplyDispatchModeEnv_ApprovalExpiryAfter is RL-1's dispatch-env
+// contract: a hold-mode run's sandbox carries the SAME ceiling the
+// approval-expiry sweeper actually expires a PENDING approval at
+// (WARDYN_APPROVAL_EXPIRY_AFTER), so agent-run and wardyn-toolgate can size
+// their own waits from it instead of a hardcoded literal — never emitted for
+// a non-hold run, the same "don't emit a wire default nobody asked for" shape
+// TestApplyDispatchModeEnv_ToolApprovals already pins for its own var.
+func TestApplyDispatchModeEnv_ApprovalExpiryAfter(t *testing.T) {
+	run := types.AgentRun{ID: uuid.New()}
+
+	t.Run("hold carries the ceiling as a Go duration string", func(t *testing.T) {
+		env := map[string]string{}
+		applyDispatchModeEnv(env, run, dispatchParams{ToolApprovals: "hold", ApprovalExpiryAfter: 72 * time.Hour})
+		if got, want := env["WARDYN_APPROVAL_EXPIRY_AFTER"], "72h0m0s"; got != want {
+			t.Errorf("Env[WARDYN_APPROVAL_EXPIRY_AFTER] = %q, want %q", got, want)
+		}
+	})
+	t.Run("no hold, no ceiling in the sandbox env", func(t *testing.T) {
+		env := map[string]string{}
+		applyDispatchModeEnv(env, run, dispatchParams{ApprovalExpiryAfter: 72 * time.Hour})
+		if _, ok := env["WARDYN_APPROVAL_EXPIRY_AFTER"]; ok {
+			t.Errorf("Env[WARDYN_APPROVAL_EXPIRY_AFTER] set on a non-hold run: %q", env["WARDYN_APPROVAL_EXPIRY_AFTER"])
+		}
+	})
+}
+
+// TestDispatch_HoldRunCarriesConfiguredApprovalCeiling is the dispatch-level
+// half of RL-1: TestApplyDispatchModeEnv_ApprovalExpiryAfter feeds the ceiling
+// in by hand, so it stays green if dispatchRun stops copying
+// Config.ApprovalExpiryAfter into dispatchParams — and both sandbox consumers
+// fall back silently. This one goes through the real create → dispatch path.
+func TestDispatch_HoldRunCarriesConfiguredApprovalCeiling(t *testing.T) {
+	// An L1 autonomy rung derives the hold (TestGovernance_NonEscape row 20's fixture).
+	p := govProfile("autonomy-walled")
+	p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(types.AutonomyL1)}
+	srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
+	srv.cfg.ApprovalExpiryAfter = 72 * time.Hour
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, "sub-walled", []string{"eng"}, false),
+		`{"agent":"claude-code","task":"t","confinement_class":"CC2"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	fr := srv.cfg.Runner.(*fakeRunner)
+	fr.waitForSandbox(t)
+	env := fr.lastSandboxEnv()
+	if env["WARDYN_TOOL_APPROVALS"] != "hold" {
+		t.Fatalf("fixture no longer yields a hold run: WARDYN_TOOL_APPROVALS = %q", env["WARDYN_TOOL_APPROVALS"])
+	}
+	if got, want := env["WARDYN_APPROVAL_EXPIRY_AFTER"], "72h0m0s"; got != want {
+		t.Errorf("Env[WARDYN_APPROVAL_EXPIRY_AFTER] = %q, want %q (the server's configured ceiling)", got, want)
+	}
+}
+
 // TestCreateRun_ToolApprovals_Validation covers C1's closed-enum + codex-cli
 // rejection at the HTTP layer (runs_create_validate.go) — same shape as
 // TestCreateRun_UnknownTaskModeIs400 (task_mode_test.go). The two 400 cases
@@ -134,11 +188,11 @@ func TestCreateRun_ToolApprovals_Validation(t *testing.T) {
 		}
 	})
 
-	// C.3: the field used to be ACCEPTED AND SILENTLY DISCARDED on an
-	// interactive run — applyDispatchModeEnv writes WARDYN_TOOL_APPROVALS only
-	// when !interactive, so the caller got a 201 and none of the supervision they
-	// asked for. A field accepted and thrown away is worse than one refused: the
-	// caller believes the run is gated.
+	// The field must not be accepted and silently discarded on an interactive run
+	// — applyDispatchModeEnv writes WARDYN_TOOL_APPROVALS only when !interactive,
+	// so the caller would get a 201 and none of the supervision they asked for. A
+	// field accepted and thrown away is worse than one refused: the caller
+	// believes the run is gated.
 	t.Run("hold is refused for an interactive run", func(t *testing.T) {
 		h := newHarness(t)
 		w := do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken,

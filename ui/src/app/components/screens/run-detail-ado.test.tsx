@@ -57,6 +57,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: v
 import { RunDetailScreen } from "./run-detail";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { VIEWER_APPROVAL_BLOCKS_NOTE } from "../wardyn/copy";
+import { ADO } from "../../lib/ado-entra-copy";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -116,7 +117,8 @@ function renderOwnedBy(principal: string) {
   );
 }
 
-describe("RunDetailScreen — the Approvals tab's Azure DevOps capability card (F2)", () => {
+describe("RunDetailScreen — the Approvals tab's Azure DevOps capability card", () => {
+  // ticket: F2
   it("the run's own owner (no operator tier) can decide it, with an explicit scope", async () => {
     renderOwnedBy("dana@acme.example");
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -156,7 +158,8 @@ describe("RunDetailScreen — the Approvals tab's Azure DevOps capability card (
 // AdoCapabilityCard, which has no "decided" rendering at all — before this
 // fix it showed live Approve/Deny buttons (and, on an ended run, a false
 // "nothing to allow") over a row nobody can act on any more.
-describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab (N1)", () => {
+describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab", () => {
+  // ticket: N1
   it("an APPROVED escalation falls through to the generic row with the 'Allowed for this run' badge", async () => {
     getRunMock.mockResolvedValue(RUN);
     listApprovalsMock.mockResolvedValue([
@@ -229,7 +232,7 @@ describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab (N1
 
     await screen.findByText(/Decided by/);
     expect(screen.queryByTestId("ado-consent-card")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Allow and continue" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: ADO.REQ_CONSENT_CTA })).not.toBeInTheDocument();
   });
 
   it("an ended run with an APPROVED escalation never says 'nothing to allow'", async () => {
@@ -255,7 +258,8 @@ describe("RunDetailScreen — decided Azure DevOps rows on the Approvals tab (N1
   });
 });
 
-describe("RunDetailScreen — the Overview viewerBlocked banner (F2)", () => {
+describe("RunDetailScreen — the Overview viewerBlocked banner", () => {
+  // ticket: F2
   it("does NOT claim the run's own owner is blocked — their own card lets them decide it", async () => {
     renderOwnedBy("dana@acme.example");
     await screen.findByRole("heading", { name: "checkout retry", level: 1 });

@@ -5,9 +5,6 @@ package main
 
 import (
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -64,127 +61,6 @@ var backtickSpan = regexp.MustCompile("`([^`]+)`")
 // symbol to scope to. Weaker than the symbol-checked path by construction, and
 // still the difference between "resolved" and "never looked at".
 var barePathCitation = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.(?:go|md)$`)
-
-// mdHeading matches one markdown heading line, capturing its level and text.
-var mdHeading = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
-
-// headingSlug renders a markdown heading the way GitHub anchors it: lower-cased,
-// everything but letters, digits, spaces and hyphens dropped, spaces to hyphens.
-// So `## ` + "`wardynd` (control plane)" anchors as wardynd-control-plane, and a
-// citation to it is a link a reader can actually follow.
-func headingSlug(text string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(text)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
-			b.WriteRune(r)
-		case r == ' ' || r == '_':
-			b.WriteRune('-')
-		}
-	}
-	out := b.String()
-	for strings.Contains(out, "--") {
-		out = strings.ReplaceAll(out, "--", "-")
-	}
-	return strings.Trim(out, "-")
-}
-
-// citedSymbolBodies returns, for one cited file, the source text a citation into
-// it is allowed to look at, keyed by symbol.
-//
-// For Go that is the symbol's OWN BODY and nothing else: the braces of a func or
-// method, or the spec of a package-level const/var/type. Deliberately not the
-// doc comment and not the signature — a comment that mentions an action is not
-// an emit of it, and the file-wide search this replaces is exactly how a
-// citation could name the wrong function and still resolve.
-//
-// For markdown the unit is the heading's SECTION: the heading line down to the
-// next heading of the same or a higher level. A doc has no symbols, and the
-// section is the smallest thing a reader can be sent to that still contains the
-// claim.
-func citedSymbolBodies(rel string, src []byte) (map[string]string, error) {
-	out := map[string]string{}
-	if strings.HasSuffix(rel, ".md") {
-		lines := strings.Split(string(src), "\n")
-		for i, line := range lines {
-			m := mdHeading.FindStringSubmatch(line)
-			if m == nil {
-				continue
-			}
-			level := len(m[1])
-			end := len(lines)
-			for j := i + 1; j < len(lines); j++ {
-				if h := mdHeading.FindStringSubmatch(lines[j]); h != nil && len(h[1]) <= level {
-					end = j
-					break
-				}
-			}
-			slug := headingSlug(m[2])
-			if slug != "" {
-				if _, dup := out[slug]; !dup {
-					out[slug] = strings.Join(lines[i:end], "\n")
-				}
-			}
-		}
-		return out, nil
-	}
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, rel, src, 0)
-	if err != nil {
-		return nil, err
-	}
-	span := func(from, to token.Pos) string {
-		a, b := fset.Position(from).Offset, fset.Position(to).Offset
-		if a < 0 || b > len(src) || a >= b {
-			return ""
-		}
-		return string(src[a:b])
-	}
-	for _, d := range f.Decls {
-		switch v := d.(type) {
-		case *ast.FuncDecl:
-			name := v.Name.Name
-			if v.Recv != nil && len(v.Recv.List) > 0 {
-				name = receiverTypeName(v.Recv.List[0].Type) + "." + name
-			}
-			if v.Body == nil {
-				out[name] = "" // declared without a body: resolvable, never evidence
-				continue
-			}
-			out[name] = span(v.Body.Lbrace, v.Body.Rbrace)
-		case *ast.GenDecl:
-			for _, sp := range v.Specs {
-				switch s := sp.(type) {
-				case *ast.ValueSpec:
-					for _, n := range s.Names {
-						out[n.Name] = span(s.Pos(), s.End())
-					}
-				case *ast.TypeSpec:
-					out[s.Name.Name] = span(s.Pos(), s.End())
-				}
-			}
-		}
-	}
-	return out, nil
-}
-
-// receiverTypeName is the bare type name a method hangs off — the `Server` in
-// `func (s *Server) foo()`, so the citation reads `Server.foo` whether the
-// receiver is a pointer, a value or generic.
-func receiverTypeName(e ast.Expr) string {
-	switch v := e.(type) {
-	case *ast.StarExpr:
-		return receiverTypeName(v.X)
-	case *ast.Ident:
-		return v.Name
-	case *ast.IndexExpr:
-		return receiverTypeName(v.X)
-	case *ast.IndexListExpr:
-		return receiverTypeName(v.X)
-	}
-	return ""
-}
 
 // constNamesFor inverts the tree's package-level string constants: action value
 // -> the names that hold it. An emit whose action arrives as a named constant
@@ -508,13 +384,12 @@ func dataFieldsCell(t *testing.T, root, action string) []string {
 	return nil
 }
 
-// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit is the targeted
-// regression for X1c-F3: ui.open's Data-fields cell claimed `duration_sec`,
-// which is computed only at CLOSE (s.auditUI's caller at
-// internal/api/uigateway.go passes it in the ui.close call's map literal, not
-// ui.open's) — a doc cell that was never checked against what the emit call
-// actually passes, because TestAuditActionsDocCitationsAreLive only checks
-// citation PROXIMITY, never the Data-fields column's content.
+// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit pins the ui.open and
+// ui.close Data-fields cells to what the emit passes: `duration_sec` is
+// computed only at close (s.auditUI's caller at internal/api/uigateway.go
+// passes it in the ui.close call's map literal, not ui.open's), and
+// TestAuditActionsDocCitationsAreLive only checks citation proximity, never
+// the Data-fields column's content.
 //
 // Scoped to these two rows rather than a general derived parity check: the
 // data argument arrives as a map literal at 223 emit call sites across four
@@ -522,8 +397,8 @@ func dataFieldsCell(t *testing.T, root, action string) []string {
 // one built by a helper), several behind indirection the existing forward
 // guard's fixed-point wrapper resolution does not (and does not need to)
 // follow for the ACTION argument. A general version would have to re-derive
-// that whole shape for the DATA argument too; this pins the actual regression
-// with the same "read it back out of the source" method instead of hand
+// that whole shape for the data argument too; this pins the two rows with the
+// same "read it back out of the source" method instead of hand
 // re-typing a second copy of what the code passes.
 func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 	root := repoRoot(t)
@@ -573,21 +448,20 @@ func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 }
 
 // TestAuditActionsForwardGuardCoversEveryEmitShape is the anchor under the
-// forward guard, and it exists because that guard passed for the wrong reason
-// twice: once when it did not exist at all, and once when it existed but could
-// not see two of the six packages docs/AUDIT-ACTIONS.md itself names.
+// forward guard: a guard that cannot see an emit helper, or one of the six
+// packages docs/AUDIT-ACTIONS.md itself names, passes for the wrong reason.
 //
 // A guard's FIELD OF VIEW is part of its correctness, and a gap in it is
 // invisible precisely because everything passes. So this asserts the view, not
 // the verdict:
 //
-//   - the emitter set is DERIVED and contains all three in-tree emit helpers, at
-//     the right parameter index. `auditEvent` used to be hardcoded; (*Provider)
-//     .audit and auditFor were the two the hardcoding missed, and adding a
-//     brand-new action through either left the whole suite green.
-//   - every action that was outside the old scan's reach is inside this one's.
-//     These seven are documented, so the forward guard says nothing about them
-//     either way — deleting their rows failed nothing before, and must fail now.
+//   - the emitter set is derived and contains all three in-tree emit helpers,
+//     at the right parameter index: `auditEvent`, (*Provider).audit and
+//     auditFor. A hardcoded set that misses one lets a brand-new action added
+//     through it leave the whole suite green.
+//   - every action outside a narrower scan's reach is inside this one's. These
+//     seven are documented, so the forward guard says nothing about them
+//     either way — deleting their rows must fail.
 func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
 	root := repoRoot(t)
 	tr := parseAuditTree(t, root)

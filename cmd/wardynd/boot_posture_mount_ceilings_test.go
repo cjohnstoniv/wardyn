@@ -82,7 +82,7 @@ func TestParseMountCeilings_WideRootStillReadsAsWide(t *testing.T) {
 	if !strings.Contains(out, "bounded only by the credential dotfile deny-list") {
 		t.Errorf("member $HOME ceiling did not carry its wide-open sentence:\n  %s", strings.TrimSpace(out))
 	}
-	if !strings.Contains(out, "WARDYN_MEMBER_WORKSPACE_ROOTS") || !strings.Contains(out, "WARDYN_USER_DRIVE_HOST_ROOTS") {
+	if !strings.Contains(out, "WARDYN_USER_WORKSPACE_ROOTS") || !strings.Contains(out, "WARDYN_USER_DRIVE_HOST_ROOTS") {
 		t.Errorf("boot log does not name both variables:\n  %s", strings.TrimSpace(out))
 	}
 }
@@ -100,7 +100,7 @@ func TestParseMountCeilings_OverlappingCeilingsAreWarnedAbout(t *testing.T) {
 	if !strings.Contains(out, "mount ceilings overlap") {
 		t.Errorf("boot log does not warn that the two ceilings name one tree:\n  %s", strings.TrimSpace(out))
 	}
-	for _, name := range []string{"WARDYN_MEMBER_WORKSPACE_ROOTS", "WARDYN_USER_DRIVE_HOST_ROOTS"} {
+	for _, name := range []string{"WARDYN_USER_WORKSPACE_ROOTS", "WARDYN_USER_DRIVE_HOST_ROOTS"} {
 		if !strings.Contains(out, name) {
 			t.Errorf("boot log does not name %s, so the operator cannot tell which of the two to change:\n  %s", name, strings.TrimSpace(out))
 		}

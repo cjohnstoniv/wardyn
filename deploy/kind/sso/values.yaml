@@ -13,7 +13,7 @@ env:
   WARDYN_OIDC_REDIRECT_URL: "http://localhost:8280/auth/callback"
   WARDYN_OIDC_EMAIL_DOMAINS: "wardyn.local"
   WARDYN_OIDC_OPERATOR_EMAILS: "admin@wardyn.local,operator@wardyn.local"
-  WARDYN_OIDC_ROLE_MAP: "admin@wardyn.local=admin,member@wardyn.local=member,member2@wardyn.local=member,secadmin@wardyn.local=security_admin"
+  WARDYN_OIDC_ROLE_MAP: "admin@wardyn.local=admin,member@wardyn.local=user,member2@wardyn.local=user,secadmin@wardyn.local=security_admin"
 extraEnv:
   - name: WARDYN_OIDC_CLIENT_SECRET
     value: "wardyn-oidc-secret"   # demo literal — must match dex.yaml staticClients

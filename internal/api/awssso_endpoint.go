@@ -11,36 +11,16 @@ import (
 
 // The AWS SSO endpoint override — one test-only knob
 // (WARDYN_AWS_SSO_ENDPOINT_OVERRIDE, Config.AWSSSOEndpointOverride) that moves
-// every derivation naming an AWS IAM Identity Center endpoint at once:
-//
-//	1. the dispatch egress hosts       (ssoEgressHosts, runs_bedrock.go)
-//	2. the login-run egress hosts      (harnessLogin.loginEgress, harnesscred.go)
-//	   — including the device.sso.<r> entry only the interactive flow adds
-//	3. the CreateToken URL             (Server.awsSSOTokenEndpoint, below)
-//	4. the LOGIN sandbox env           (harnessLogin.loginEnv, awssso_pin.go)
-//	5. the ssoInject sandbox env       (resolveBedrockAuth, runs_bedrock.go)
-//
-// ONE knob for five derivations because they were five separate hardcodings of
-// `amazonaws.com` in four files: a fake reachable by the egress list was
-// unreachable by the SDK, and a fake the SDK could reach was denied by the
-// proxy. Anything short of moving all five leaves the walk failing somewhere
-// that says nothing about the code under test.
-//
-// Why it exists at all. Without it, "a member signs in on Kubernetes and their
-// Bedrock run gets per-user credentials" is unprovable outside a real AWS
-// tenant on the owner's hardware: `aws sso login` and the SDK both dial
-// oidc.<region>.amazonaws.com / portal.sso.<region>.amazonaws.com, and nothing
-// could redirect them into a sandbox. The two prose claims this replaces said a
-// passthrough "would be a production escape hatch" — true of an UNGATED one,
-// which is why this one is refused unless WARDYN_ALLOW_TEST_ENDPOINTS=true, WARNs
-// at boot naming itself a test hatch, and is documented as such in
-// docs/ENV.md's test-only table and threatmodel/THREAT-MODEL.md's residual list.
-//
-// It is DELIBERATELY NOT WARDYN_BEDROCK_BASE_URL. That knob is the Bedrock DATA
-// PLANE (a real, supported PrivateLink posture); SSO is a different service,
-// and one knob meaning both would make a production PrivateLink setting also
-// re-point the credential exchange. It is equally not the GLOBAL
-// AWS_ENDPOINT_URL, which re-points every AWS service at once.
+// every derivation naming an AWS IAM Identity Center endpoint at once: the
+// dispatch egress hosts (ssoEgressHosts), the login-run egress hosts
+// (harnessLogin.loginEgress, including device.sso.<r>), the CreateToken URL
+// (Server.awsSSOTokenEndpoint), the LOGIN sandbox env (harnessLogin.loginEnv)
+// and the ssoInject sandbox env (resolveBedrockAuth). Moving fewer than all five
+// leaves a fake reachable by one side and denied by the other. Gated: refused
+// unless WARDYN_ALLOW_TEST_ENDPOINTS=true, WARNs at boot, and documented in
+// docs/ENV.md and threatmodel/THREAT-MODEL.md. DELIBERATELY NOT
+// WARDYN_BEDROCK_BASE_URL (the Bedrock DATA PLANE, a real PrivateLink posture)
+// nor the global AWS_ENDPOINT_URL, which re-points every AWS service.
 
 // DRAFT (M2 canon pending)
 
@@ -75,20 +55,13 @@ const (
 // returns the normalized base URL for Config.AWSSSOEndpointOverride. Empty =>
 // ("", nil), byte-identical to a deployment that never heard of this knob.
 //
-// allowTestEndpoints is WARDYN_ALLOW_TEST_ENDPOINTS. A non-empty override
-// without it REFUSES BOOT — the same shape as the -local-mode-with-OIDC refusal
-// in cmd/wardynd's resolveLocalMode: a posture this dangerous must take two
-// deliberate acts to reach, never one stray env var in a Helm values file.
-//
-// The rules are looser than validateOneLLMGateway's on purpose, and only in the
-// two places a TEST endpoint differs from a PRODUCTION one: plain http:// is
-// accepted (the fake serves no TLS, and AWS_ENDPOINT_URL_SSO* accept http —
-// proven against the real AWS CLI v2 in test/awsssofake/docker.go), and a
-// loopback/private address is not refused (an in-cluster Service ClusterIP is
-// private by construction). Everything a malformed value could hide — a missing
-// scheme, an embedded credential, a path, a query, a fragment — is still
-// refused, so a typo fails at boot rather than by silently dialing the wrong
-// place.
+// allowTestEndpoints is WARDYN_ALLOW_TEST_ENDPOINTS; a non-empty override
+// without it REFUSES BOOT, so this posture takes two deliberate acts. Looser than
+// validateOneLLMGateway only where a TEST endpoint differs: plain http:// is
+// accepted (the fake serves no TLS; proven against the real AWS CLI v2 in
+// test/awsssofake/docker.go) and a loopback/private address is not refused (a
+// ClusterIP is private). A missing scheme, embedded credential, path, query or
+// fragment is still refused, so a typo fails at boot.
 func ValidateAWSSSOEndpointOverride(raw string, allowTestEndpoints bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

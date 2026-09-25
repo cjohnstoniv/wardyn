@@ -76,7 +76,7 @@ func TestProviderCredentialOwnNamespace(t *testing.T) {
 	srv := modelProvidersStatusSrv(t, site, cs)
 	mem := srv.cfg.Secrets.(*memSecrets)
 	audit := srv.cfg.Audit.(*recRecorder)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	const key = "sk-ant-member-own-key-0001"
 
 	w := doSSO(t, srv, http.MethodPut, "/api/v1/model-providers/anthropic/credential", member, `{"value":" `+key+`\n"}`)
@@ -155,7 +155,7 @@ func TestProviderCredentialRefusals(t *testing.T) {
 	cs := &capStore{grants: []types.CapabilityGrant{{
 		SubjectType: types.CapabilitySubjectAll, Capability: capAgent, Value: "codex-cli", Effect: types.CapabilityDeny,
 	}}}
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	for _, tc := range []struct {
 		name, path, body string
 		admin            bool
