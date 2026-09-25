@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -94,15 +95,12 @@ const (
 	// case, as the nav item and the page title are.
 	llmMechanismRemedyPerUser = "sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page."
 
-	// llmMechanismRemedyShared is the ADMIN's destination, unchanged: under a
-	// shared row the one credential is theirs and Settings → Model provider is
-	// where they replace it.
-	llmMechanismRemedyShared = "sign in again under Settings → Model provider."
-
-	// llmMechanismRemedySharedFirst is the same destination without "again":
-	// "again" is a claim about the reader's past, and the not-configured arm is
-	// the one state that says nothing ever fired here.
-	llmMechanismRemedySharedFirst = "sign in under Settings → Model provider."
+	// llmMechanismRemedySharedFmt is the ADMIN's destination: under a shared row
+	// the one credential is theirs and Settings → Model provider is where they
+	// replace it. The one blank is "again" — a claim about the reader's past
+	// that the not-configured arm must not make, since that is the one state
+	// where nothing ever fired here.
+	llmMechanismRemedySharedFmt = "sign in%s under Settings → Model provider."
 
 	// llmDetailBedrockExpired is the brokered-LLM 404's detail for a
 	// half-configured Bedrock deployment (see llmUnavailableDetail). %s = the
@@ -227,14 +225,14 @@ const llmRefusalAuditReason = "model_credential"
 // `configured` is whether ANY lane fired — the one state where nothing ever
 // did is also the one where "again" would be false.
 func llmMechanismRemedy(perUser, configured bool) string {
-	switch {
-	case perUser:
+	if perUser {
 		return llmMechanismRemedyPerUser
-	case !configured:
-		return llmMechanismRemedySharedFirst
-	default:
-		return llmMechanismRemedyShared
 	}
+	again := " again"
+	if !configured {
+		again = ""
+	}
+	return fmt.Sprintf(llmMechanismRemedySharedFmt, again)
 }
 
 // llmMechanismRefusal is the sentence for a declared lane that is not carrying
@@ -469,7 +467,13 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	// launched by newStepRun, never decoded from a create body) — the same term
 	// llmMechanismGateApplies passes.
 	modelRun := isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive)
-	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
+	// refresh may redeem and rotate the captured SSO session, so those reads are
+	// not a mere status check.
+	purpose := secretstore.PurposeStatus
+	if refresh {
+		purpose = secretstore.PurposeSSORefresh
+	}
+	l.bedrock = s.resolveBedrockAuth(secretstore.WithPurpose(ctx, purpose), req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
 	// The SAME predicate dispatch applies, with the same terms — including the
 	// posture term, whose absence here made every SSO deployment's managed run
 	// read as "subscription" at create and dispatch as something else.
@@ -535,6 +539,9 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	selected, ok := s.selectedMechanism(req.Agent, lanes.subscription, lanes.bedrock, lanes.managed, lanes.apiKey)
 	if out != nil {
 		*out = gradeModelCredential(row, declared, lanes, selected, ok, s.subscriptionInjectEnabled())
+		if ok && selected.ProviderType() == types.AgentProviderTypeBedrock {
+			out.bedrockHost = lanes.bedrock.runtimeHost
+		}
 	}
 	if !declared {
 		return true
@@ -605,7 +612,7 @@ func (s *Server) llmUnavailableDetail(ctx context.Context, run types.AgentRun, l
 	// The run's OWN scope: under per_user the expiry worth naming is this
 	// principal's, and the operator's says nothing about why their run has no
 	// credential.
-	blob, found, err := s.readAWSSSOBlob(ctx, sso)
+	blob, found, err := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sso)
 	if err != nil || !found || blob.ExpiresAt.IsZero() {
 		return ""
 	}

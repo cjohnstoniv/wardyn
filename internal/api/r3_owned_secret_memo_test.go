@@ -146,7 +146,7 @@ func TestOwnedSecretReadsAreFlatInCallerInput(t *testing.T) {
 		})
 		cfg.Secrets = sec
 		srv := New(cfg)
-		member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleMember)
+		member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleUser)
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member, r3MemberPreflightBody(t, n))
 		if w.Code != http.StatusOK {
 			t.Fatalf("n=%d: preflight = %d, want 200; body=%s", n, w.Code, w.Body.String())

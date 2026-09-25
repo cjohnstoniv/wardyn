@@ -287,6 +287,19 @@ func TestModelProvidersPutSubscriptionNeedsSignInImage(t *testing.T) {
 		}
 	})
 
+	t.Run("turning a stored-off subscription back on adds one: refused", func(t *testing.T) {
+		off := subscriptionProvider("claude-sub")
+		off.Disabled = true
+		srv, fake := signInImageSrv(t, types.SiteConfig{ModelProviders: providerBlock(off)}, signInImageMissing())
+		w := do(t, srv, http.MethodPut, "/api/v1/model-providers", adminToken, body)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "sign-in image") {
+			t.Fatalf("PUT = %d, want 400 with the E4 sentence; body=%s", w.Code, w.Body.String())
+		}
+		if fake.putSeen != nil {
+			t.Fatal("a refused PUT must not write")
+		}
+	})
+
 	t.Run("a stored id changing kind to a subscription adds one: refused", func(t *testing.T) {
 		stored := types.SiteConfig{ModelProviders: providerBlock(keyProvider("claude-sub", "claude-code"))}
 		srv, _ := signInImageSrv(t, stored, signInImageMissing())
@@ -318,6 +331,16 @@ func TestSiteConfigPutSubscriptionNeedsSignInImage(t *testing.T) {
 			&imageCheckerRunner{fakeRunner: &fakeRunner{}, present: map[string]bool{signInRef: true}})
 		if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body); w.Code != http.StatusOK {
 			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("turning a stored-off subscription back on, pinned but absent: refused", func(t *testing.T) {
+		off := subscriptionProvider("claude-sub")
+		off.Disabled = true
+		srv, _ := signInImageSrv(t, types.SiteConfig{ModelProviders: providerBlock(off)}, signInImageMissing())
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "sign-in image") {
+			t.Fatalf("PUT = %d, want 400 with the E4 sentence; body=%s", w.Code, w.Body.String())
 		}
 	})
 
@@ -373,7 +396,7 @@ func TestSetupStatusModelProviders(t *testing.T) {
 		SubjectType: types.CapabilitySubjectAll, Capability: capAgent, Value: "codex-cli", Effect: types.CapabilityDeny,
 	}}}
 	srv := modelProvidersStatusSrv(t, site, cs)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /setup/status = %d; body=%s", w.Code, w.Body.String())
@@ -419,7 +442,7 @@ func TestSetupStatusModelProviders(t *testing.T) {
 // either tier, and the member body keeps exactly the keys it had.
 func TestSetupStatusNilBlockIsToday(t *testing.T) {
 	srv := modelProvidersStatusSrv(t, types.SiteConfig{}, &capStore{})
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	for name, body := range map[string]string{
 		"admin":  do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, "").Body.String(),
 		"member": doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "").Body.String(),

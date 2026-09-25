@@ -7,7 +7,7 @@
 // All wire fields are snake_case (see lib/types.ts's barrel comment for the
 // one documented exception, in a different domain module).
 
-import type { AutonomyLevel, AutonomyResolution } from "../api/governance";
+import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
 import type { SCMAccess } from "./setup";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
@@ -167,7 +167,20 @@ export interface AgentRun {
   // (#99 is types/storage/mirrors only); this field exists so the console has
   // somewhere to read it the day #93 renders it.
   autonomy_level?: AutonomyLevel;
-  // internal/types/types.go's AgentRun.ModelProviderID (migration 0069, #527) —
+  // Run limits captured at create (migration 0072, #567): the lease end (null =
+  // no end), the wait for a decision (absent = the deployment's approval
+  // expiry), the owner's profile run limits and that profile's id (absent for
+  // an unassigned or super-admin owner). Optional: a pre-0.8 daemon sends none.
+  ends_at?: string | null;
+  wait_budget_sec?: number;
+  run_limits?: RunLimits;
+  governance_profile_id?: string;
+  // Set when the run lost its sandbox but is kept (migration 0073, #568):
+  // "ended" = its end passed, so it is stopped with no network and its files
+  // stay for the ended-run grace. The run stays RUNNING meanwhile.
+  lost_at?: string;
+  lost_reason?: "ended";
+  // internal/types/types.go's AgentRun.ModelProviderID (migration 0076, #527) —
   // the id of the model provider chooseModelProvider (#526) resolved this run
   // to at create time. The KIND is not here (it can change later on the
   // provider row itself); it lives only on the run.create audit event's

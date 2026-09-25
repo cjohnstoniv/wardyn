@@ -128,7 +128,7 @@ func TestAuthorBedrockSSOInjection_EndpointOverrideDropsRequireTLS(t *testing.T)
 	if injections[0].Rule.RequireTLS {
 		t.Error("RequireTLS stayed true under the endpoint override — the plain-http fake serves no TLS, so the run would be refused rather than credentialed")
 	}
-	// THE OVERRIDE'S OWN PORT (security NIT-2). Authored at 443 the tunnel is
+	// The override's own port (security NIT-2). Authored at 443 the tunnel is
 	// never terminated and the header is never injected — the fake lane would
 	// carry a placeholder to a 401 with nothing in the proxy to say why.
 	// …AND IN THE SCHEME THE OVERRIDE NAMES (walk-3). The proxy TERMINATES this
@@ -160,7 +160,7 @@ func (c *captureGrantStore) CreateGrant(_ context.Context, g types.CredentialGra
 	return g, nil
 }
 
-// PRODUCTION IS BYTE-FOR-BYTE UNCHANGED, and this is the pin for it. A real
+// Production is byte-for-byte unchanged, and this is the pin for it. A real
 // portal serves TLS, so its entry must carry NO scheme prefix — the exact
 // spelling every deployment has today, parsed by a sidecar that predates the
 // prefix to exactly the same host and port.
@@ -192,7 +192,7 @@ func TestSSOPortalMITMEntry_ProductionIsUnprefixedAndPlainHTTPIsExplicit(t *test
 	}
 }
 
-// THE PIN IS AUTHORED, AND IT IS AUTHORED FROM THE SNAPSHOT (docs REVIEW-3
+// The pin is authored, and it is authored from the snapshot (docs review-3
 // coverage note). The proxy enforces it (internal/egress/proxy), and the proxy's
 // tests supply the rule by hand — so nothing checked that a real dispatch
 // actually writes one. A grant authored without it is a rule the sidecar reads
@@ -223,7 +223,7 @@ func TestAuthorBedrockSSOInjection_ScopeCarriesThePathPin(t *testing.T) {
 		t.Errorf("pin_path = %q, want /federation/credentials — GetRoleCredentials is the ONE call this "+
 			"session may ride", scope.PinPath)
 	}
-	// FROM THE SNAPSHOT, not from anywhere else: the snapshot is what the
+	// From the snapshot, not from anywhere else: the snapshot is what the
 	// resolver re-compares against the roster, so pinning from the same value
 	// keeps the wire and the resolve talking about one pair.
 	want := map[string]string{"account_id": scope.Snapshot.SSOAccountID, "role_name": scope.Snapshot.SSORoleName}
