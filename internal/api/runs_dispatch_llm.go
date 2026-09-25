@@ -405,6 +405,25 @@ func (s *Server) applyBedrockTransport(run types.AgentRun, b bedrockAuth, policy
 	}
 }
 
+// recordBedrockTransport records, for a Bedrock run, the run.llm.bedrock row
+// applyBedrockTransport computed, once resolveLLMInjections' gates have all
+// held (#518). `provider` names the model provider a provider run chose (#530).
+func (s *Server) recordBedrockTransport(ctx context.Context, run types.AgentRun, llm llmTransport) {
+	if !llm.bedrockReady {
+		return
+	}
+	a := llm.bedrockAudit
+	data := map[string]any{
+		"region": a.region, "model": a.model, "hosts": a.hosts, "endpoint": a.endpoint,
+		"mode": a.mode, "detail": a.detail,
+	}
+	if run.ModelProviderID != "" {
+		data["provider"] = run.ModelProviderID
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
+		run.ID.String(), "success", mustJSON(data)))
+}
+
 // provisionDispatchMITMCA provisions the per-run TLS-MITM CA when any consumer
 // needs it (subscription/managed injection, intercept_tls content inspection,
 // artifact-token injection, or Bedrock bearer injection). The PRIVATE key
@@ -889,18 +908,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// (or inside applyBedrockTransport itself), is what keeps a run ANY later
 	// refusal takes from showing a "success" injection row for a credential it
 	// was never handed (#518).
-	if llm.bedrockReady {
-		data := map[string]any{
-			"region": llm.bedrockAudit.region, "model": llm.bedrockAudit.model, "hosts": llm.bedrockAudit.hosts,
-			"endpoint": llm.bedrockAudit.endpoint,
-			"mode":     llm.bedrockAudit.mode, "detail": llm.bedrockAudit.detail,
-		}
-		if run.ModelProviderID != "" {
-			data["provider"] = run.ModelProviderID
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
-			run.ID.String(), "success", mustJSON(data)))
-	}
+	s.recordBedrockTransport(ctx, run, llm)
 
 	var unavailable string
 	if llm.provider == nil {
