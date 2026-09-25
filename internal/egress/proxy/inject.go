@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,6 +35,12 @@ import (
 // initialise it (or not needing it) is a safe no-op rather than a panic.
 var procRegistry = secretmask.NewRegistry()
 
+// procMask registers v with procRegistry for the life of this process. The
+// sidecar serves one run, so what it holds is that run's corpus, filed under
+// uuid.Nil: the key every proxy-side reader (decisions.go, the content scanner)
+// masks with. It is never evicted, because the process ends with the run.
+func procMask(v []byte) { procRegistry.Add(uuid.Nil, v) }
+
 // InjectionConfig pairs an egress.InjectionRule with the credential grant the
 // proxy mints from at startup. The minted secret lives ONLY in proxy memory:
 // it is never exposed to the sandbox (no env, no disk, no args). CONNECT
@@ -52,11 +59,23 @@ type InjectionConfig struct {
 // provider's own refresh margin so the provider refreshes when the proxy asks.
 const injectRefreshMargin = 5 * time.Minute
 
-// injector holds the per-host injection headers. A STATIC entry (api-key grant,
-// expiresAt == 0) is fetched once at startup and cached for the run. A DYNAMIC
-// entry (the subscription OAuth token, expiresAt != 0) is re-resolved via the
-// control plane when it nears expiry — so the injected credential never goes
-// stale. base/token/client are retained for those re-resolves.
+// lastGoodGrace is how long past its expiry an entry keeps serving its
+// last-good header while re-resolving it fails TRANSIENTLY: the control plane,
+// or the store behind it, did not answer (credential-storage design K8). A
+// definitive refusal drops the header at once, whatever is left of the grace.
+const lastGoodGrace = 15 * time.Minute
+
+// lastGoodRetry paces re-resolves while a last-good header is being served, so
+// an outage is asked once per interval per entry, not once per request.
+const lastGoodRetry = 30 * time.Second
+
+// injector holds the per-host injection headers. A STATIC entry (expiresAt ==
+// 0: an approval-gated api-key grant, whose mint is single-use) is fetched once
+// at startup and cached for the run. A DYNAMIC entry (expiresAt != 0: an OAuth
+// token, and every other stored key, which the sink gives a ten-minute expiry)
+// is re-resolved via the control plane when it nears expiry — so the injected
+// credential never goes stale, and one removed or refused at the store stops
+// being injected. base/token/client are retained for those re-resolves.
 type injector struct {
 	mu     sync.Mutex // guards byHost lookups
 	byHost map[string]*injEntry
@@ -97,6 +116,50 @@ type injEntry struct {
 	// buildInjector for requireTLS's reason, so it needs no lock.
 	rule      egress.InjectionRule
 	expiresAt int64 // unix ms
+	// retryAt is set while the last-good header is served after a transient
+	// failure (lastGood), or after a re-resolve whose answer was already stale
+	// (install); until then the entry counts as fresh. Guarded by reMu.
+	retryAt time.Time
+}
+
+// install writes a re-resolved credential onto e. An answer already inside
+// injectRefreshMargin by this proxy's clock (the control plane's clock runs
+// more than the margin behind it, or the credential is that short-lived) would
+// make every request a re-resolve, each a mint and a secret.read row, so it is
+// paced like an outage. The caller holds reMu.
+func (e *injEntry) install(resolved types.ResolvedInjection, now time.Time) {
+	e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
+	e.expiresAt = resolved.ExpiresAt
+	e.retryAt = time.Time{}
+	if e.expiresAt != 0 && !now.Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
+		e.retryAt = now.Add(lastGoodRetry)
+	}
+}
+
+// lastGood reports whether e may keep serving its header after a re-resolve
+// failed with err: only when err is transient, the header was not already
+// dropped, and e is within lastGoodGrace of its expiry. On true it paces the
+// next attempt. The caller holds reMu.
+func (e *injEntry) lastGood(err error, now time.Time) bool {
+	if !transientResolveFailure(err) || e.header.value == "" || e.expiresAt == 0 ||
+		!now.Before(time.UnixMilli(e.expiresAt).Add(lastGoodGrace)) {
+		return false
+	}
+	e.retryAt = now.Add(lastGoodRetry)
+	return true
+}
+
+// transientResolveFailure reports whether a re-resolve failed because nothing
+// answered: the sink's 503 (the store, or the control plane's own database,
+// did not answer) or no answer from the control plane at all. Every other
+// failure is a refusal.
+func transientResolveFailure(err error) bool {
+	var se injectionStatusError
+	if errors.As(err, &se) {
+		return se.status == http.StatusServiceUnavailable
+	}
+	var ue *url.Error
+	return errors.As(err, &ue)
 }
 
 // buildInjector mints each injection rule's secret once and formats its
@@ -104,9 +167,6 @@ type injEntry struct {
 // injection must never widen egress nor leak a secret to a wildcard/approved
 // host. Returns an error if any mint fails (fail closed at startup).
 func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
 	inj := &injector{
 		byHost: make(map[string]*injEntry), base: base, token: token, client: client,
 		reauth:    newReauthCoordinator(),
@@ -159,8 +219,9 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 // returns the startup-minted value; for a dynamic (expiring) entry it re-resolves
 // via the control plane when within injectRefreshMargin of expiry. The bool
 // reports whether a rule EXISTS for the host; a non-nil error means a rule exists
-// but its (dynamic) credential could not be refreshed — the caller MUST fail
-// closed rather than forward a stale credential.
+// but its (dynamic) credential could not be refreshed and may not be served as
+// last-good (injEntry.lastGood) — the caller MUST fail closed rather than
+// forward a stale credential.
 func (i *injector) resolve(host string) (injectedHeader, bool, error) {
 	return i.resolveCtx(context.Background(), host)
 }
@@ -197,10 +258,11 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 	// for minutes.
 	for {
 		e.reMu.Lock()
-		if e.expiresAt == 0 || time.Now().Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
+		now := time.Now()
+		if e.expiresAt == 0 || now.Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) || now.Before(e.retryAt) {
 			h := e.header
 			e.reMu.Unlock()
-			return h, true, nil // static, or dynamic and still fresh
+			return h, true, nil // static, dynamic and still fresh, or riding out an outage
 		}
 		if wf := e.reauth; wf != nil {
 			if wf.finished() {
@@ -227,13 +289,23 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 
 		resolved, err := resolveInjection(ctx, i.base, i.token.Get(), e.grantID, i.client)
 		if err == nil {
-			e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
-			e.expiresAt = resolved.ExpiresAt
+			e.install(resolved, time.Now())
 			h := e.header
 			e.reMu.Unlock()
 			registerHeaderCredential(resolved.Value)
 			return h, true, nil
 		}
+		if e.lastGood(err, time.Now()) {
+			h := e.header
+			e.reMu.Unlock()
+			slog.WarnContext(ctx, "wardyn-proxy: re-resolving an injected credential failed transiently; serving the last-good value",
+				slog.String("host", key), slog.Time("until", time.UnixMilli(e.expiresAt).Add(lastGoodGrace)), slog.Any("err", err))
+			return h, true, nil
+		}
+		// Definitive, or the grace is spent: the header goes now, so nothing
+		// later can serve it as last-good. A 423 is included — the control
+		// plane just said this credential needs a person.
+		e.header, e.retryAt = injectedHeader{}, time.Time{}
 		var pending errReauthPending
 		if !errors.As(err, &pending) {
 			e.reMu.Unlock()
@@ -298,8 +370,7 @@ func (e *injEntry) dropIfFinished(wf *reauthWorkflow) {
 // only for the write.
 func (i *injector) installHeader(e *injEntry, wf *reauthWorkflow, resolved types.ResolvedInjection) injectedHeader {
 	e.reMu.Lock()
-	e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
-	e.expiresAt = resolved.ExpiresAt
+	e.install(resolved, time.Now())
 	if e.reauth == wf {
 		e.reauth = nil // the hold is over and its credential is installed
 	}
@@ -333,7 +404,7 @@ func (i *injector) requiresTLS(host string) bool {
 // every rendering of ONE header credential the proxy holds — not merely the
 // rendering the call site happens to be carrying.
 //
-// TRUST BOUNDARY (F155 — the mask is per-RENDERING, not per-credential; read
+// TRUST BOUNDARY (the mask is per-RENDERING, not per-credential; read
 // before trimming an arm): procRegistry is what stands between a proxy-held
 // credential and every sandbox-facing error body (Proxy.httpError ->
 // maskDecisionBytes) and every decision-log line (decisions.go). And
@@ -366,20 +437,20 @@ func registerHeaderCredential(formatted string) {
 	if formatted == "" {
 		return
 	}
-	procRegistry.AddGlobal([]byte(formatted))
+	procMask([]byte(formatted))
 	i := strings.LastIndexByte(formatted, ' ')
 	if i < 0 || i+1 >= len(formatted) {
 		return // no scheme prefix: the formatted value IS the credential
 	}
 	tail := formatted[i+1:]
-	procRegistry.AddGlobal([]byte(tail))
+	procMask([]byte(tail))
 	dec, err := base64.StdEncoding.DecodeString(tail)
 	if err != nil {
 		return
 	}
 	if c := bytes.IndexByte(dec, ':'); c >= 0 && c+1 < len(dec) {
-		procRegistry.AddGlobal(dec)
-		procRegistry.AddGlobal(dec[c+1:])
+		procMask(dec)
+		procMask(dec[c+1:])
 	}
 }
 
@@ -387,7 +458,7 @@ func registerHeaderCredential(formatted string) {
 // with http.Request.SetBasicAuth(user, tok) — the git-broker installation token
 // and the PAT lane's minted token.
 //
-// TRUST BOUNDARY (F155): SetBasicAuth does not send tok; it sends
+// TRUST BOUNDARY: SetBasicAuth does not send tok; it sends
 // base64(user + ":" + tok). Registering only the raw token therefore leaves the
 // form that is actually on the wire — and the form that lands in a transport
 // error quoting the request — unmasked. Both go in, via the same one definition
@@ -396,14 +467,14 @@ func registerBasicAuthCredential(user, tok string) {
 	if tok == "" {
 		return
 	}
-	procRegistry.AddGlobal([]byte(tok))
+	procMask([]byte(tok))
 	registerHeaderCredential("Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+tok)))
 }
 
 // stripSandboxCredentials removes EVERY credential header the sandbox may have
 // put on a request that is about to be injected with an operator-brokered one.
 //
-// TRUST BOUNDARY (F104 — this is the single definition, do not re-spell it at a
+// TRUST BOUNDARY (this is the single definition, do not re-spell it at a
 // call site): setting the brokered header is not enough, because the sandbox
 // chooses the OTHER headers. A rule that injects under `X-Api-Key` leaves an
 // `Authorization: Bearer <sandbox key>` untouched, and which of the two the
@@ -465,7 +536,7 @@ func stripSandboxCredentials(h http.Header, owned string) {
 // injectableTransport reports whether a brokered credential may be attached to
 // a forward request bound for scheme://host:port.
 //
-// TRUST BOUNDARY (F110): injection keys on the lowercased hostname alone, and
+// TRUST BOUNDARY: injection keys on the lowercased hostname alone, and
 // addAPIKeyGrant couples each grant to a BARE exact allowlist entry, which
 // policy.go matches on ANY port. The SANDBOX therefore picks the transport:
 // `POST http://<host>:443/…` on the plain lane made the proxy attach the
@@ -479,7 +550,7 @@ func stripSandboxCredentials(h http.Header, owned string) {
 //
 //   - https: the proxy runs the TLS leg. Always injectable.
 //   - cleartext to port 443: NEVER, whatever the allowlist says. This is the
-//     unconditional clamp F110 named, kept unconditional on purpose: an
+//     unconditional clamp, kept unconditional on purpose: an
 //     AUTHORED port cannot re-admit it. `allowed_domains: ["files.example.org:443"]`
 //     is the port-scoping remedy docs/POLICIES.md recommends, and addAPIKeyGrant
 //     (internal/api/llmcred.go) appends the BARE host beside whatever the
@@ -547,7 +618,7 @@ func (p *Proxy) injectableTransport(scheme, host string, port int) bool {
 // ships as its HTTPS port. Cleartext credential injection is refused to ALL of
 // them regardless of authoring.
 //
-// 443 alone was the F110 leak one port over: AuthoredPortFor deliberately reads
+// 443 alone would leave the same leak one port over: AuthoredPortFor deliberately reads
 // a port-qualified entry as the operator declaring the transport, so
 // `allowed_domains: ["vendor.example:8443"]` plus an api_key grant handed the
 // operator's credential to `POST http://vendor.example:8443/…` IN CLEARTEXT —
@@ -563,7 +634,7 @@ var tlsConventionalPorts = map[int]bool{443: true, 8443: true, 9443: true}
 
 // applyInjection is the plain forward lane's credential injection.
 //
-// The split is deliberate (F110): the PROXY decides whether the TRANSPORT may
+// The split is deliberate: the PROXY decides whether the TRANSPORT may
 // carry a brokered credential — that question needs the run's policy and the
 // vendor table, neither of which the injector holds — and the INJECTOR decides
 // whether a rule matches the host. A host with no rule is left byte-for-byte
@@ -649,7 +720,9 @@ func resolveInjectionQuery(ctx context.Context, base, token string, grantID uuid
 		// SANDBOX on the MITM refresh-failure path (serveMITMRequest), so it is an
 		// amplifier for control-plane text. Enough to diagnose a fail-closed
 		// startup, not a 4 KiB relay. (The mask still covers it — see httpError.)
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		// 1 KiB, not less: the longest Azure DevOps refusal plus its reason is
+		// past 256 bytes, and a cut body parses as no sentence at all.
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		// 423 is not a refusal: the control plane is asking for a human. It is
 		// answered by exactly one resolve (the captured-AWS-SSO session, whose
 		// owner has to sign in again) and becomes a typed error the re-resolve

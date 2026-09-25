@@ -31,7 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fakes ─────────────────────────────────────────────────────────────────
+// fakes
 
 // sshMemStore is a minimal in-memory store.Store for this test: only the
 // methods the gateway's auth/channel path touches are implemented; every
@@ -118,6 +118,29 @@ func (s *sshMemStore) DeleteSSHKey(_ context.Context, fingerprint, principal str
 	}
 	delete(s.keys, fingerprint)
 	return nil
+}
+
+// GetCapabilityEnforcement and ListCapabilityGrantsFor are the two reads
+// handleAddSSHKey's capFeature gate makes (denyUserCapability ->
+// capSeamAllowed). No enforcement row and no grants: capFeature is a
+// narrowing kind, so this test's door stays open exactly as before the gate
+// was added.
+func (s *sshMemStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
+func (s *sshMemStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
+func (s *sshMemStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
+// No "Available to" restriction (#612): capFeature is restrictable, so the
+// resolver reads the set before it decides.
+func (s *sshMemStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 
 // sshFakeRunner is Attach/ExecStream-capable (the brief's explicit "fake
@@ -273,7 +296,7 @@ func (s *fakeShellSession) Close() error                                 { _ = s
 
 var _ runner.Session = (*fakeShellSession)(nil)
 
-// ─── harness ───────────────────────────────────────────────────────────────
+// harness
 
 // sshTestHarness starts a real SSH gateway (ServeSSHGateway) on a loopback
 // port backed by st/fr, and returns everything a test needs to dial it.
@@ -455,12 +478,32 @@ func sshDial(t *testing.T, h *sshTestHarness, username string, clientPriv ed2551
 	})
 }
 
-// ─── tests ─────────────────────────────────────────────────────────────────
+// tests
+
+// TestSSHGateway_FreshRunRefusesAKeptRun: sshFreshRun re-checks the run on
+// every channel open; a run the lease ended is RUNNING with a live sandbox
+// ref but nothing to attach to, so it must be refused the same as the two
+// attach gates (TestAttach_RefusesAKeptRun) rather than accepting a channel
+// that dies on its first ExecStream.
+func TestSSHGateway_FreshRunRefusesAKeptRun(t *testing.T) {
+	st := newSSHMemStore()
+	runID := uuid.New()
+	endedAt := time.Now()
+	st.putRun(types.AgentRun{
+		ID: runID, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
+		LostAt: &endedAt, LostReason: types.LostEnded,
+	})
+	srv := New(Config{Store: st, Runner: &sshFakeRunner{}})
+
+	if run, msg := srv.sshFreshRun(context.Background(), runID); msg == "" || !strings.Contains(msg, "run has ended") {
+		t.Fatalf("kept run: run=%+v msg=%q, want a \"run has ended\" refusal", run, msg)
+	}
+}
 
 // TestSSHGateway_AuthRejectAccept covers auth reject/accept: an unregistered
 // key is rejected, a registered key authenticating for a run it does NOT own
 // is rejected (owner-only), and the owner's registered key is accepted —
-// each rejection/acceptance is audited under ssh.auth.
+// each rejection/acceptance is audited under ssh.authenticate.
 func TestSSHGateway_AuthRejectAccept(t *testing.T) {
 	st := newSSHMemStore()
 	ownRun := uuid.New()
@@ -493,15 +536,15 @@ func TestSSHGateway_AuthRejectAccept(t *testing.T) {
 		// The key itself is genuine (alice's), just not authorized for
 		// bob's run — the audit trail must name alice, not "unknown", and
 		// must carry the caller's source IP.
-		ev := waitForAudit(t, h.audit, otherRun, "ssh.auth", "failure")
+		ev := waitForAudit(t, h.audit, otherRun, "ssh.authenticate", "failure")
 		if ev == nil {
-			t.Fatalf("no failed ssh.auth event for the owner-mismatch case; events=%s", auditDump(h.audit.snapshot(), otherRun))
+			t.Fatalf("no failed ssh.authenticate event for the owner-mismatch case; events=%s", auditDump(h.audit.snapshot(), otherRun))
 		}
 		if ev.Actor != "alice@example.com" {
-			t.Errorf("ssh.auth failure actor = %q, want alice@example.com (a real, known principal — not \"unknown\")", ev.Actor)
+			t.Errorf("ssh.authenticate failure actor = %q, want alice@example.com (a real, known principal — not \"unknown\")", ev.Actor)
 		}
 		if ev.SourceIP == "" {
-			t.Error("ssh.auth failure has no SourceIP recorded")
+			t.Error("ssh.authenticate failure has no SourceIP recorded")
 		}
 	})
 
@@ -519,19 +562,19 @@ func TestSSHGateway_AuthRejectAccept(t *testing.T) {
 		}
 		defer client.Close()
 
-		ev := waitForAudit(t, h.audit, ownRun, "ssh.auth", "success")
+		ev := waitForAudit(t, h.audit, ownRun, "ssh.authenticate", "success")
 		if ev == nil {
-			t.Fatalf("no successful ssh.auth event; events=%s", auditDump(h.audit.snapshot(), ownRun))
+			t.Fatalf("no successful ssh.authenticate event; events=%s", auditDump(h.audit.snapshot(), ownRun))
 		}
 		if ev.SourceIP == "" {
-			t.Error("ssh.auth success has no SourceIP recorded")
+			t.Error("ssh.authenticate success has no SourceIP recorded")
 		}
 	})
 
 	// Every case above left a trail: at least one failure and one success.
 	var failures, successes int
 	for _, ev := range h.audit.snapshot() {
-		if ev.Action != "ssh.auth" {
+		if ev.Action != "ssh.authenticate" {
 			continue
 		}
 		if ev.Outcome == "success" {
@@ -541,13 +584,13 @@ func TestSSHGateway_AuthRejectAccept(t *testing.T) {
 		}
 	}
 	if successes == 0 || failures == 0 {
-		t.Errorf("ssh.auth audit trail = %d success, %d failure; want at least one of each", successes, failures)
+		t.Errorf("ssh.authenticate audit trail = %d success, %d failure; want at least one of each", successes, failures)
 	}
 }
 
 // TestSSHGateway_AdminKeyOverride covers F1's admin override (migration 0043):
 // a key whose STORED role is admin reaches a run it does not own, and the
-// ssh.auth success that results carries override:true; a key stored with the
+// ssh.authenticate success that results carries override:true; a key stored with the
 // member role is still refused for the same run; and an ordinary owner login
 // carries NO override datum (its absence is what makes the datum greppable).
 func TestSSHGateway_AdminKeyOverride(t *testing.T) {
@@ -571,7 +614,7 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 		Fingerprint:   ssh.FingerprintSHA256(memberPub),
 		Principal:     "mallory@example.com",
 		PublicKey:     string(ssh.MarshalAuthorizedKey(memberPub)),
-		Role:          oidc.RoleMember,
+		Role:          oidc.RoleUser,
 		RoleCheckedAt: &now,
 	})
 
@@ -584,21 +627,21 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 		}
 		defer client.Close()
 
-		ev := waitForAudit(t, h.audit, bobRun, "ssh.auth", "success")
+		ev := waitForAudit(t, h.audit, bobRun, "ssh.authenticate", "success")
 		if ev == nil {
-			t.Fatalf("no successful ssh.auth event for the admin override; events=%s", auditDump(h.audit.snapshot(), bobRun))
+			t.Fatalf("no successful ssh.authenticate event for the admin override; events=%s", auditDump(h.audit.snapshot(), bobRun))
 		}
 		if ev.Actor != "root@example.com" {
-			t.Errorf("ssh.auth success actor = %q, want root@example.com (the admin, not the run's owner)", ev.Actor)
+			t.Errorf("ssh.authenticate success actor = %q, want root@example.com (the admin, not the run's owner)", ev.Actor)
 		}
 		var data struct {
 			Override bool `json:"override"`
 		}
 		if err := json.Unmarshal(ev.Data, &data); err != nil {
-			t.Fatalf("decode ssh.auth data %q: %v", string(ev.Data), err)
+			t.Fatalf("decode ssh.authenticate data %q: %v", string(ev.Data), err)
 		}
 		if !data.Override {
-			t.Errorf("ssh.auth success data = %q, want override:true", string(ev.Data))
+			t.Errorf("ssh.authenticate success data = %q, want override:true", string(ev.Data))
 		}
 	})
 
@@ -606,12 +649,12 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 		if _, err := sshDial(t, h, bobRun.String(), memberPriv); err == nil {
 			t.Fatal("dial with a member-role key for another human's run succeeded, want refused")
 		}
-		ev := waitForAudit(t, h.audit, bobRun, "ssh.auth", "failure")
+		ev := waitForAudit(t, h.audit, bobRun, "ssh.authenticate", "failure")
 		if ev == nil {
-			t.Fatalf("no failed ssh.auth event for the member key; events=%s", auditDump(h.audit.snapshot(), bobRun))
+			t.Fatalf("no failed ssh.authenticate event for the member key; events=%s", auditDump(h.audit.snapshot(), bobRun))
 		}
 		if ev.Actor != "mallory@example.com" {
-			t.Errorf("ssh.auth failure actor = %q, want mallory@example.com", ev.Actor)
+			t.Errorf("ssh.authenticate failure actor = %q, want mallory@example.com", ev.Actor)
 		}
 	})
 
@@ -622,12 +665,12 @@ func TestSSHGateway_AdminKeyOverride(t *testing.T) {
 		}
 		defer client.Close()
 
-		ev := waitForAudit(t, h.audit, adminRun, "ssh.auth", "success")
+		ev := waitForAudit(t, h.audit, adminRun, "ssh.authenticate", "success")
 		if ev == nil {
-			t.Fatalf("no successful ssh.auth event; events=%s", auditDump(h.audit.snapshot(), adminRun))
+			t.Fatalf("no successful ssh.authenticate event; events=%s", auditDump(h.audit.snapshot(), adminRun))
 		}
 		if len(ev.Data) != 0 {
-			t.Errorf("owner ssh.auth success data = %q, want no datum at all (override marks the exception, not the rule)", string(ev.Data))
+			t.Errorf("owner ssh.authenticate success data = %q, want no datum at all (override marks the exception, not the rule)", string(ev.Data))
 		}
 	})
 }
@@ -693,7 +736,7 @@ func TestSSHGateway_OverrideRoleIsBoundedStale(t *testing.T) {
 		Fingerprint:   ssh.FingerprintSHA256(promotedPub),
 		Principal:     "newadmin@example.com",
 		PublicKey:     string(ssh.MarshalAuthorizedKey(promotedPub)),
-		Role:          oidc.RoleMember,
+		Role:          oidc.RoleUser,
 		RoleCheckedAt: &fresh,
 	})
 
@@ -731,7 +774,7 @@ func TestSSHGateway_OverrideRoleIsBoundedStale(t *testing.T) {
 // TestSSHGateway_OfferWithoutSignatureNeverAudited pins W25.4-1: PublicKeyCallback
 // (sshAuth) fires on the UNSIGNED "query" every pubkey auth attempt opens
 // with (RFC 4252 §7) — before the client ever proves it holds the matching
-// private key. Auditing "ssh.auth success" there (the pre-fix behavior) let
+// private key. Auditing "ssh.authenticate success" there (the pre-fix behavior) let
 // an attacker who merely KNOWS a victim's public key — never the private key
 // — mint a forged success row attributed to that victim. The offered key
 // here is genuinely registered and owned (sshAuth's own checks all pass, so
@@ -756,12 +799,12 @@ func TestSSHGateway_OfferWithoutSignatureNeverAudited(t *testing.T) {
 	}
 
 	// We want the ABSENCE of an event, so a bounded sleep-out is the right
-	// shape here (giving the server-side query handling — and, pre-fix, its
-	// forged success write — a moment to run), not waitForAudit's
+	// shape here (giving the server-side query handling — and any forged
+	// success write — a moment to run), not waitForAudit's
 	// poll-until-found, which would just time out either way.
 	time.Sleep(200 * time.Millisecond)
-	if ev := findAudit(h.audit.snapshot(), run.ID, "ssh.auth", "success"); ev != nil {
-		t.Fatalf("ssh.auth success recorded for an offer that was never signed: %+v; events=%s", ev, auditDump(h.audit.snapshot(), run.ID))
+	if ev := findAudit(h.audit.snapshot(), run.ID, "ssh.authenticate", "success"); ev != nil {
+		t.Fatalf("ssh.authenticate success recorded for an offer that was never signed: %+v; events=%s", ev, auditDump(h.audit.snapshot(), run.ID))
 	}
 }
 
@@ -1031,25 +1074,25 @@ func TestSSHGateway_DirectTCPIPLoopbackRestriction(t *testing.T) {
 	}
 }
 
-// TestSSHGateway_ForwardAuditSurvivesKill pins the audit-race the live C5
-// e2e caught (scripts/run-e2e-ssh.sh's -L forward step, see its step-5
-// comment): killing the WHOLE SSH session (not just the forwarded conn)
-// races handleSSHConn's connCtx cancellation — deferred, fires the instant
-// the connection tears down — against handleSSHDirectTCPIP's own trailing
-// recordAudit call for ssh.forward. That call used to run on connCtx; if the
-// cancellation lands first, the write is attempted on an already-cancelled
-// context and is silently dropped (sshTestRecorder.Record mirrors the real
-// store/pgx behaviour here: it errors on a cancelled ctx instead of writing).
-// The fix runs that trailing write on s.cfg.BaseCtx instead — see
-// bridgeSSHExec's FINDING comment in sshgateway_channels.go.
+// TestSSHGateway_ForwardAuditSurvivesKill pins an audit race: killing the
+// whole SSH session (not just the forwarded conn) races handleSSHConn's
+// connCtx cancellation — deferred, fires the instant the connection tears
+// down — against handleSSHDirectTCPIP's own trailing recordAudit call for
+// ssh.forward. On connCtx that write would be attempted on an
+// already-cancelled context whenever the cancellation lands first, and
+// silently dropped (sshTestRecorder.Record mirrors the real store/pgx
+// behaviour here: it errors on a cancelled ctx instead of writing). The
+// trailing write runs on s.cfg.BaseCtx instead — see bridgeSSHExec's comment
+// in sshgateway_channels.go. scripts/run-e2e-ssh.sh's -L forward step
+// exercises the same race live.
 //
 // Deterministic, not timing-dependent: the fake ExecSession's Stdout blocks
 // until this test itself closes it, so "the connection is already dead" is
 // guaranteed true (a bounded wait lets handleSSHConn's teardown actually
 // finish) BEFORE the bridge's tail — and its recordAudit call — is ever
-// allowed to run. Revert the s.cfg.BaseCtx fix and this test fails (the
-// event never appears within waitForAudit's deadline); with the fix, BaseCtx
-// is never cancelled by the kill, so the row lands regardless.
+// allowed to run. With the trailing write on connCtx this test fails (the
+// event never appears within waitForAudit's deadline); on BaseCtx, which the
+// kill never cancels, the row lands regardless.
 func TestSSHGateway_ForwardAuditSurvivesKill(t *testing.T) {
 	st, run, principal := sshOwnedRunningRun(t)
 	priv, pub := mustSSHKeypair(t)
@@ -1255,8 +1298,13 @@ func TestSSHGateway_MaxConnectionsEnforced(t *testing.T) {
 // connection that never sends the SSH version string is closed by the
 // server on its own within sshHandshakeTimeout, not held open forever —
 // ssh.NewServerConn has no default timeout, so this deadline is the only
-// thing that bounds it. Slow by design (waits out the real constant).
+// thing that bounds it. It shrinks sshHandshakeTimeout instead of waiting out
+// the real 15s constant (restored after — see
+// TestSSHHandshakeTimeout_ProductionValueUnchanged).
 func TestSSHGateway_HandshakeTimeoutFires(t *testing.T) {
+	prevTimeout := setSSHHandshakeTimeout(50 * time.Millisecond)
+	t.Cleanup(func() { setSSHHandshakeTimeout(prevTimeout) })
+
 	h := newSSHTestHarness(t, newSSHMemStore(), &sshFakeRunner{})
 
 	conn, err := net.DialTimeout("tcp", h.addr, 2*time.Second)
@@ -1274,7 +1322,7 @@ func TestSSHGateway_HandshakeTimeoutFires(t *testing.T) {
 	// distinguishes "closed by the server's own deadline" (io.Copy reaches
 	// EOF/an error before ours fires) from "held open forever" (ours fires
 	// first, surfacing as a Timeout() net.Error).
-	_ = conn.SetReadDeadline(time.Now().Add(sshHandshakeTimeout + 5*time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(sshHandshakeTimeout() + 5*time.Second))
 	_, rerr := io.Copy(io.Discard, conn)
 	var netErr net.Error
 	if errors.As(rerr, &netErr) && netErr.Timeout() {
@@ -1282,7 +1330,16 @@ func TestSSHGateway_HandshakeTimeoutFires(t *testing.T) {
 	}
 }
 
-// ─── small helpers ─────────────────────────────────────────────────────────
+// TestSSHHandshakeTimeout_ProductionValueUnchanged pins the production
+// default of sshHandshakeTimeout. It does not check that a shrinking test restored it —
+// that test's own t.Cleanup does.
+func TestSSHHandshakeTimeout_ProductionValueUnchanged(t *testing.T) {
+	if got := sshHandshakeTimeout(); got != 15*time.Second {
+		t.Fatalf("sshHandshakeTimeout() = %v, want the production 15s default", got)
+	}
+}
+
+// small helpers
 
 // sshOwnedRunningRun seeds a store with one RUNNING, owned run and returns it
 // alongside the principal, for the tests that don't need to exercise auth
@@ -1317,16 +1374,15 @@ func containsPrefix(env []string, prefix string) bool {
 // TestSSHGateway_MixedChannelTypesShareOneCap is B2′.
 //
 // TestSSHGateway_MaxSessionsPerRunEnforced above exercises "session" channels
-// ONLY. Nothing proved that "direct-tcpip" (-L forwards) draws on the SAME
-// per-run counter — which is the whole structural finding: Wardyn's cap is
-// per-RUN and shared across channel TYPES, inverting the OpenSSH model, where
-// MaxSessions scopes to session channels and a direct-tcpip is dispatched
-// straight to the forward path. That inversion is why a client which opens
-// shells and forwards together (VS Code Remote-SSH being the motivating case)
-// can exhaust a cap that looks generous for shells alone.
+// only. This proves that "direct-tcpip" (-L forwards) draws on the same
+// per-run counter: Wardyn's cap is per-run and shared across channel types,
+// inverting the OpenSSH model, where MaxSessions scopes to session channels
+// and a direct-tcpip is dispatched straight to the forward path. That
+// inversion is why a client which opens shells and forwards together (VS Code
+// Remote-SSH being the motivating case) can exhaust a cap that looks generous
+// for shells alone.
 //
-// It also pins the audit, which did not exist before 0.7: a refusal used to be
-// invisible to the deployment.
+// It also pins the audit: a refusal must be visible to the deployment.
 func TestSSHGateway_MixedChannelTypesShareOneCap(t *testing.T) {
 	st, run, principal := sshOwnedRunningRun(t)
 	priv, pub := mustSSHKeypair(t)
@@ -1393,14 +1449,14 @@ func TestSSHGateway_MixedChannelTypesShareOneCap(t *testing.T) {
 
 	// ...and the refusal is visible to the deployment, not just to the client.
 	t.Run("the refusal is audited, naming the channel type", func(t *testing.T) {
-		ev := waitForAudit(t, h.audit, run.ID, "ssh.channel_rejected", "failure")
+		ev := waitForAudit(t, h.audit, run.ID, "ssh.channel.reject", "failure")
 		if ev.Action == "" {
 			t.Fatalf("a channel-cap refusal emitted no audit event: the client sees ResourceShortage and the deployment sees nothing. events=%s",
 				auditDump(h.audit.snapshot(), run.ID))
 		}
 		var got []types.AuditEvent
 		for _, e := range h.audit.snapshot() {
-			if e.Action == "ssh.channel_rejected" {
+			if e.Action == "ssh.channel.reject" {
 				got = append(got, e)
 			}
 		}

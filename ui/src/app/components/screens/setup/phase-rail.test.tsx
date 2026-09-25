@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PhaseRail } from "./phase-rail";
-import { STEP_LABEL, STEP_ORDER, type SetupStepId, type StepBadge } from "./steps";
+import { STEP_LABEL, type SetupStepId, type StepBadge } from "./steps";
 import { DEMOS } from "../demos/demo-catalog";
 
 // Exhaustive over SetupStepId (the compiler enforces it) — every demo
@@ -64,6 +64,17 @@ const DONE: Record<SetupStepId, boolean> = {
   review: false,
 };
 
+// PhaseRail is a pure, generic component: it renders whatever `order` names,
+// and its own default (steps.ts's STEP_ORDER) is the REAL admin-funnel walk,
+// which M-6 (D5) trimmed to 7 ids once the demos left it. These tests still
+// want the rich, ~23-id exhaustive fixture BADGES/DONE already are — that's
+// what lets "renders every step label" and the group-count test mean
+// anything — so they pass it explicitly rather than leaning on the shrunk
+// production default. Derived from BADGES (itself exhaustive over
+// SetupStepId, the compiler enforces it), not hand-kept, for the same reason
+// BADGES/DONE are keyed that way.
+const FULL_ORDER = Object.keys(BADGES) as SetupStepId[];
+
 // The compact icon rail (lg-only) renders every step unconditionally (CSS-hidden,
 // not DOM-absent — jsdom doesn't apply Tailwind's responsive `hidden`), so its
 // buttons share accessible names with the full rail's. Scope queries to the full
@@ -74,7 +85,7 @@ const DONE: Record<SetupStepId, boolean> = {
 // compact rail is declared first in PhaseRail's JSX).
 function renderRail(current: SetupStepId, onSelect = vi.fn()) {
   cleanup(); // some tests render twice (collapsed vs. expanded) to compare
-  render(<PhaseRail current={current} badges={BADGES} done={DONE} onSelect={onSelect} />);
+  render(<PhaseRail current={current} badges={BADGES} done={DONE} onSelect={onSelect} order={FULL_ORDER} />);
   const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
   return within(navs[navs.length - 1]);
 }
@@ -116,7 +127,7 @@ describe("PhaseRail", () => {
     // subsection with NO surviving steps, and a literal list silently stops
     // emptying the Secrets subsection the moment a demo is added to it.
     const dropped = new Set<string>(["agent-in-the-box", ...DEMOS.filter((d) => d.section === "secrets").map((d) => d.id)]);
-    const order = STEP_ORDER.filter((id) => !dropped.has(id));
+    const order = FULL_ORDER.filter((id) => !dropped.has(id));
     render(<PhaseRail current="environment" badges={BADGES} done={DONE} onSelect={vi.fn()} order={order} />);
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
     const rail = within(navs[navs.length - 1]);
@@ -152,7 +163,8 @@ describe("PhaseRail", () => {
   // ungated corp_network read as a live, clickable step whose onSelect just
   // silently no-oped (a dead click, not a disabled one). Wired identically on
   // both rails (compact + full); this exercises the full one.
-  it("F3-F3: a step refused by refuseNext renders disabled with the refusal as its title, on both rails", () => {
+  it("a step refused by refuseNext renders disabled with the refusal as its title, on both rails", () => {
+    // ticket: F3-F3
     cleanup();
     const refuseNext = (next: SetupStepId) =>
       next === "workspaces" || next === "review" ? "Prove network access first." : undefined;
@@ -163,6 +175,7 @@ describe("PhaseRail", () => {
         done={DONE}
         onSelect={vi.fn()}
         refuseNext={refuseNext}
+        order={FULL_ORDER}
       />,
     );
     const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
@@ -181,7 +194,8 @@ describe("PhaseRail", () => {
     }
   });
 
-  it("F3-F3 negative control: with no refuseNext, no button in either rail is ever disabled", () => {
+  it("negative control: with no refuseNext, no button in either rail is ever disabled", () => {
+    // ticket: F3-F3
     renderRail("environment");
     for (const btn of screen.getAllByRole("button")) {
       expect(btn).not.toBeDisabled();
@@ -193,9 +207,10 @@ describe("PhaseRail", () => {
   // Demos have no notion of "done" any more; per-step dots still track real
   // progress inside each group).
   it("shows the three group headers with their counts (Required · 4, Optional setup · 3, Demos · N)", () => {
-    // renderRail's default `order` is the unfiltered STEP_ORDER (the full
-    // 16-demo catalog, not a status-walked subset) — see the demo-catalog
-    // count pin below for why 16, not 10.
+    // renderRail's default `order` is FULL_ORDER (the full 16-demo catalog,
+    // not a status-walked subset, and not the shrunk 7-id production
+    // default since M-6/D5) — see the demo-catalog count pin below for why
+    // 16, not 10.
     const rail = renderRail("environment");
     expect(rail.getByText("Required")).toBeInTheDocument();
     expect(rail.getByText("· 4")).toBeInTheDocument();

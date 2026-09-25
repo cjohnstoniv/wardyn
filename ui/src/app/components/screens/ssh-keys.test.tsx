@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { aheadByHours } from "../../lib/test-clock";
 
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
@@ -25,12 +26,30 @@ vi.mock("../../lib/api/ssh-keys", () => ({
   },
 }));
 
+let mockCaps: MeCapabilities = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false };
+vi.mock("../../lib/api/permissions", () => ({
+  permissions: { getMyCapabilities: () => Promise.resolve(mockCaps) },
+}));
+
 import { SSHKeysScreen } from "./ssh-keys";
+import { OperatorProvider } from "../wardyn/operator-context";
+import { DENIED } from "../../lib/permissions-copy";
+import type { MeCapabilities } from "../../lib/types";
 
 function renderScreen() {
   return render(
     <MemoryRouter>
       <SSHKeysScreen />
+    </MemoryRouter>,
+  );
+}
+
+function renderAsUser() {
+  return render(
+    <MemoryRouter>
+      <OperatorProvider operator={false} securityOperator={false}>
+        <SSHKeysScreen />
+      </OperatorProvider>
     </MemoryRouter>,
   );
 }
@@ -55,7 +74,7 @@ describe("SSHKeysScreen — empty state", () => {
 describe("SSHKeysScreen — list + remove", () => {
   beforeEach(() => {
     listKeysMock.mockResolvedValue([
-      { fingerprint: "SHA256:abc/def", principal: "alice@example.com", name: "laptop", public_key: "", created_at: "2026-01-01T00:00:00Z" },
+      { fingerprint: "SHA256:abc/def", principal: "alice@example.com", name: "laptop", public_key: "", created_at: aheadByHours(-1) },
     ]);
   });
 
@@ -120,7 +139,7 @@ describe("SSHKeysScreen — add key", () => {
       principal: "alice@example.com",
       name: "new key",
       public_key: "ssh-ed25519 AAAA",
-      created_at: "2026-01-01T00:00:00Z",
+      created_at: aheadByHours(-2),
     });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
@@ -131,7 +150,7 @@ describe("SSHKeysScreen — add key", () => {
     await user.type(screen.getByLabelText(/public key/i), "ssh-ed25519 AAAA");
 
     listKeysMock.mockResolvedValue([
-      { fingerprint: "SHA256:new", principal: "alice@example.com", name: "new key", public_key: "", created_at: "2026-01-01T00:00:00Z" },
+      { fingerprint: "SHA256:new", principal: "alice@example.com", name: "new key", public_key: "", created_at: aheadByHours(-1) },
     ]);
     await user.click(screen.getByRole("button", { name: /^add key$/i }));
 
@@ -188,8 +207,8 @@ describe("SSHKeysScreen — admin-override badge", () => {
         principal: "alice@example.com",
         name: "laptop",
         public_key: "",
-        role: "member",
-        created_at: "2026-01-01T00:00:00Z",
+        role: "user",
+        created_at: aheadByHours(-2),
       },
       {
         fingerprint: "SHA256:bbb",
@@ -197,7 +216,7 @@ describe("SSHKeysScreen — admin-override badge", () => {
         name: "workstation",
         public_key: "",
         role: "admin",
-        created_at: "2026-01-02T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
     ]);
     renderScreen();
@@ -206,5 +225,88 @@ describe("SSHKeysScreen — admin-override badge", () => {
     expect(screen.getAllByText("Admin override")).toHaveLength(1);
     // …on the admin key's row, not the member key's.
     expect(badge.closest("tr")).toHaveTextContent("workstation");
+  });
+});
+
+// #584: a key added in the user view is capped at member rights for good
+// (docs/SSH.md §Bounds). The chip reads the API's `capped`, not `role`.
+// Frozen strings: docs/design/admin-access-canon.md.
+describe("SSHKeysScreen — capped-key chip", () => {
+  it("marks only the capped key, with the owner-approved tooltip", async () => {
+    listKeysMock.mockResolvedValue([
+      {
+        fingerprint: "SHA256:aaa",
+        principal: "alice@example.com",
+        name: "laptop",
+        public_key: "",
+        role: "user",
+        capped: true,
+        created_at: aheadByHours(-48),
+      },
+      {
+        fingerprint: "SHA256:bbb",
+        principal: "alice@example.com",
+        name: "workstation",
+        public_key: "",
+        role: "user",
+        capped: false,
+        created_at: aheadByHours(-24),
+      },
+    ]);
+    renderScreen();
+    const chip = await screen.findByText("Member access");
+    expect(screen.getAllByText("Member access")).toHaveLength(1);
+    expect(chip.closest("tr")).toHaveTextContent("laptop");
+    expect(chip.closest("[title]")).toHaveAttribute(
+      "title",
+      "Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH.",
+    );
+  });
+});
+
+// UT-12: the `feature` kind. The server's check is the wall; the pane only
+// says so before the click, with the server's own sentence.
+describe("SSHKeysScreen — ssh_key feature not available", () => {
+  beforeEach(() => {
+    listKeysMock.mockResolvedValue([]);
+    mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false };
+  });
+
+  it("disables Add key with the sentence when the feature is enforced and not granted", async () => {
+    mockCaps = { ...mockCaps, enforcement: { feature: true } };
+    renderAsUser();
+    await screen.findByText(DENIED.SSH_KEY_FEATURE);
+    for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeDisabled();
+  });
+
+  it("disables Add key when a deny row names ssh_key, even unenforced", async () => {
+    mockCaps = {
+      ...mockCaps,
+      grants: [{ id: "g1", subject_type: "user_type", subject: "portfolio-manager", capability: "feature", value: "ssh_key", effect: "deny", created_at: "" }],
+    };
+    renderAsUser();
+    await screen.findByText(DENIED.SSH_KEY_FEATURE);
+    for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeDisabled();
+  });
+
+  it("leaves Add key alone when only api_token is denied", async () => {
+    mockCaps = {
+      ...mockCaps,
+      grants: [{ id: "g2", subject_type: "all", subject: "", capability: "feature", value: "api_token", effect: "deny", created_at: "" }],
+    };
+    renderAsUser();
+    await screen.findByText("No keys yet.");
+    await waitFor(() => {
+      for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeEnabled();
+    });
+    expect(screen.queryByText(DENIED.SSH_KEY_FEATURE)).not.toBeInTheDocument();
+  });
+
+  it("never fetches or disables for a super admin", async () => {
+    mockCaps = { ...mockCaps, enforcement: { feature: true } };
+    renderScreen();
+    await screen.findByText("No keys yet.");
+    for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeEnabled();
+    expect(screen.queryByText(DENIED.SSH_KEY_FEATURE)).not.toBeInTheDocument();
   });
 });

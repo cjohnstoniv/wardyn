@@ -186,20 +186,19 @@ func TestUpstreamPrivateIPException(t *testing.T) {
 	}
 }
 
-// TestUpstreamDoesNotWeakenLiteralIPGuard is the regression that the private-IP
-// exception is scoped to the CONFIGURED proxy address ONLY: with an upstream
-// proxy set, an AGENT-chosen egress target that is a literal private/loopback/
-// metadata IP is STILL denied by the step-0 guard (no SSRF-via-corp-proxy).
+// TestUpstreamDoesNotWeakenLiteralIPGuard pins that the private-IP exception
+// is scoped to the configured proxy address only: with an upstream proxy set,
+// an agent-chosen egress target that is a literal private/loopback/metadata IP
+// is still denied by the step-0 guard (no SSRF-via-corp-proxy).
 //
-// F004 — why the policy and the rule_source assertion are load-bearing: this
-// test used to run under AllowedDomains=["tls.test"], i.e. DEFAULT-DENY, and
-// assert only `dec != egress.Deny`... in fact only that the decision was Deny.
-// Every host it named was refused by `policy:default-deny` whether or not the
-// builtin guard existed, so deleting evaluate's whole step-0 block left it
-// GREEN — it pinned the policy engine, not the guard it is named for. Under
-// allow_all_egress the ONLY thing that can deny these targets is the builtin
-// guard, and the rule_source assertion says so out loud. The table also carries
-// the non-canonical inet_aton spellings, which a corp proxy's own getaddrinfo
+// Why the policy and the rule_source assertion are load-bearing: under
+// default-deny (AllowedDomains=["tls.test"]) every host named here is refused
+// by `policy:default-deny` whether or not the builtin guard exists, so
+// deleting evaluate's whole step-0 block would leave an assertion of "Deny"
+// green — pinning the policy engine, not the guard. Under allow_all_egress the
+// only thing that can deny these targets is the builtin guard, and the
+// rule_source assertion says so out loud. The table also carries the
+// non-canonical inet_aton spellings, which a corp proxy's own getaddrinfo
 // resolves to the same blocked addresses.
 func TestUpstreamDoesNotWeakenLiteralIPGuard(t *testing.T) {
 	f := startFakeUpstream(t)
@@ -353,16 +352,15 @@ func TestControlPlaneBypassesUpstream(t *testing.T) {
 	}
 }
 
-// TestGitBrokerDialsGithubByNameThroughUpstream is the W23-S1-4 / W19-W19d-3
-// regression for the git broker: before egressTarget existed, handleGitBroker
-// called vetURL UNCONDITIONALLY, ignoring p.upstream entirely — requiring
-// local DNS resolution the sandbox host frequently cannot do at all under a
-// corp upstream, and (with a resolver that DOES answer, as here) handing the
-// corp proxy a resolved IP LITERAL to CONNECT instead of "github.com". Many
-// corp proxies allowlist CONNECT targets by hostname, so an IP-literal CONNECT
-// is exactly the shape that breaks the one governed git lane on the network it
-// exists for. This proves the CONNECT the corp proxy actually receives names
-// github.com, not an IP.
+// TestGitBrokerDialsGithubByNameThroughUpstream: handleGitBroker must go
+// through egressTarget, not call vetURL unconditionally — ignoring p.upstream
+// would require local DNS resolution the sandbox host frequently cannot do at
+// all under a corp upstream, and (with a resolver that does answer, as here)
+// hand the corp proxy a resolved IP literal to CONNECT instead of
+// "github.com". Many corp proxies allowlist CONNECT targets by hostname, so an
+// IP-literal CONNECT is exactly the shape that breaks the one governed git
+// lane on the network it exists for. This proves the CONNECT the corp proxy
+// actually receives names github.com, not an IP.
 func TestGitBrokerDialsGithubByNameThroughUpstream(t *testing.T) {
 	f := startFakeUpstream(t)
 	up, err := parseUpstreamProxy("http://" + f.addr())
@@ -406,7 +404,7 @@ func TestGitBrokerDialsGithubByNameThroughUpstream(t *testing.T) {
 	}
 }
 
-// TestLLMRouteDialsByNameThroughUpstream is W23-S1-4 / W19-W19d-3's other
+// TestLLMRouteDialsByNameThroughUpstream is other
 // half: proxyLLMRequest (the /wardyn/llm/anthropic and /wardyn/llm/openai
 // brokered routes) had the SAME unconditional vetURL call as the git broker.
 func TestLLMRouteDialsByNameThroughUpstream(t *testing.T) {
@@ -447,7 +445,7 @@ func TestUpstreamCredentialMasked(t *testing.T) {
 		t.Fatal("expected credential mask values")
 	}
 	for _, v := range vals {
-		procRegistry.AddGlobal(v)
+		procMask(v)
 	}
 	b64 := base64.StdEncoding.EncodeToString([]byte("alice:s3cr3t-longpass"))
 	line := []byte(`{"proxy_authorization":"Basic ` + b64 + `","pw":"s3cr3t-longpass"}`)
@@ -494,6 +492,13 @@ func TestUpstreamParseRejectsBadScheme(t *testing.T) {
 // before this dial happens, so without a read deadline the operator sees an
 // approved request stall indefinitely with no failure to act on.
 func TestUpstreamCONNECTStallFailsFast(t *testing.T) {
+	// Shrink the wait: the property under test is "bounded", not the exact
+	// production value (restored after — see
+	// TestUpstreamConnectTimeout_ProductionValueUnchanged).
+	prevTimeout := upstreamConnectTimeout
+	upstreamConnectTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { upstreamConnectTimeout = prevTimeout })
+
 	// A listener that accepts and then goes silent forever.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -519,8 +524,6 @@ func TestUpstreamCONNECTStallFailsFast(t *testing.T) {
 	}
 	p := newUpstreamProxy(t, up)
 
-	// Shrink the wait: the production budget is upstreamConnectTimeout, but the
-	// property under test is "bounded", not the exact value.
 	type result struct {
 		conn net.Conn
 		err  error
@@ -540,7 +543,16 @@ func TestUpstreamCONNECTStallFailsFast(t *testing.T) {
 		if !strings.Contains(got.err.Error(), "read upstream CONNECT response") {
 			t.Errorf("error = %v, want the CONNECT-response read to fail", got.err)
 		}
-	case <-time.After(upstreamConnectTimeout + 10*time.Second):
+	case <-time.After(upstreamConnectTimeout + 2*time.Second):
 		t.Fatal("dialThroughUpstream HUNG against a silent upstream — the read deadline is missing")
+	}
+}
+
+// TestUpstreamConnectTimeout_ProductionValueUnchanged pins the production
+// default of upstreamConnectTimeout. It does not check that a shrinking test restored it —
+// that test's own t.Cleanup does.
+func TestUpstreamConnectTimeout_ProductionValueUnchanged(t *testing.T) {
+	if upstreamConnectTimeout != 15*time.Second {
+		t.Fatalf("upstreamConnectTimeout = %v, want the production 15s default", upstreamConnectTimeout)
 	}
 }

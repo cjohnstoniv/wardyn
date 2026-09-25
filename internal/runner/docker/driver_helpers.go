@@ -74,10 +74,15 @@ func envSlice(env map[string]string) []string {
 // docker-Env-slice shape and the operator-knob forwarding below.
 func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) []string {
 	cfgJSON, _ := runner.BuildProxyConfig(runID, pc, port)
+	return proxyEnvFromJSON(runID, cfgJSON, pc.ControlPlaneURL)
+}
+
+// proxyEnvFromJSON is proxyEnv for a config already rendered (ReplaceProxy).
+func proxyEnvFromJSON(runID uuid.UUID, cfgJSON []byte, controlPlaneURL string) []string {
 	env := []string{
-		"WARDYN_PROXY_CONFIG_JSON=" + string(cfgJSON),
+		proxyConfigEnv + "=" + string(cfgJSON),
 		"WARDYN_RUN_ID=" + runID.String(),
-		"WARDYN_CONTROL_PLANE_URL=" + pc.ControlPlaneURL,
+		"WARDYN_CONTROL_PLANE_URL=" + controlPlaneURL,
 	}
 	// Operator knobs the sidecar reads from ITS environment, forwarded from
 	// wardynd's when set. The LIST is runner.ProxySidecarEnvKnobs — shared with

@@ -10,7 +10,7 @@
 --
 -- It is NOT a decision kind. Nobody approves or denies it: the capture of a new
 -- sign-in resolves it (internal/api ResolveReauth, audit action
--- credential.reauth.resolved), and Server.decide answers 409 for it so a
+-- credential.reauth.resolve), and Server.decide answers 409 for it so a
 -- security operator cannot Deny a row whose next poll would simply raise a
 -- fresh one. The row still moves to APPROVED, so every existing list, count,
 -- sweeper and terminal-run cascade reads it unchanged.

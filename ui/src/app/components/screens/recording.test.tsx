@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, Recording } from "../../lib/types";
+import { makeRun } from "../../../test/factories";
 
 // R4-F077: the screen used to have no "list all recordings" endpoint to call
 // — it listed every run, then probed api.probeRecording(run.id) PER RUN and
@@ -54,10 +55,8 @@ vi.mock("../wardyn/terminal-player", () => ({
 import { RecordingScreen } from "./recording";
 
 function run(id: string, overrides: Partial<AgentRun> = {}): AgentRun {
-  return {
+  return makeRun({
     id,
-    created_at: "2026-06-01T00:00:00.000Z",
-    updated_at: "2026-06-01T00:00:00.000Z",
     created_by: "op",
     agent: "claude-code",
     repo: "acme/widgets",
@@ -67,7 +66,7 @@ function run(id: string, overrides: Partial<AgentRun> = {}): AgentRun {
     spiffe_id: `spiffe://wardyn/${id}`,
     runner_target: "docker",
     ...overrides,
-  } as AgentRun;
+  });
 }
 
 // A run whose server-side projection found a recording — has_recording=true
@@ -120,7 +119,8 @@ describe("RecordingScreen", () => {
     listRunsMock.mockResolvedValue(page([]));
     renderScreen();
 
-    await screen.findByText(/recordings appear once a run's terminal session is captured/i);
+    await screen.findByRole("heading", { name: "No recordings yet" });
+    expect(screen.getByText("Recordings appear once a run's terminal session is captured.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /go to runs/i })).toBeInTheDocument();
     expect(getRecordingMock).not.toHaveBeenCalled();
   });
@@ -175,6 +175,25 @@ describe("RecordingScreen", () => {
 
     await screen.findByText(/session recording is disabled on this deployment/i);
     expect(screen.queryByText(/none of your runs have a recording yet/i)).not.toBeInTheDocument();
+  });
+
+  // #459 — a deployment that has turned recording off still shows its
+  // (historical) library, but the search field states in visible text why
+  // it's dead, not only via a title tooltip.
+  it("disables search and states the reason visibly when recording is disabled on this deployment", async () => {
+    healthMock.mockResolvedValue({ components: { recording: { selected: "none", source: "disabled" } } });
+    const runs = Array.from({ length: 5 }, (_, i) => recorded(`run_${i}`, { task: `task number ${i}` }));
+    listRunsMock.mockResolvedValue(page(runs));
+    renderScreen();
+
+    await screen.findByText("task number 0");
+    const search = screen.getByPlaceholderText(/search tasks, repos, run ids/i);
+    expect(search).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Session recording is disabled on this deployment — there is nothing to search.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("filters down to a 'no recordings match' empty state, and Clear filters restores the library", async () => {
@@ -334,7 +353,7 @@ describe("RecordingScreen — paging (#159)", () => {
     renderScreen();
 
     await screen.findByText("fix the leak");
-    expect(screen.getByText("1 recordings loaded so far — there are more on the server.")).toBeInTheDocument();
+    expect(screen.getByText("1 recording loaded so far — there are more on the server.")).toBeInTheDocument();
     const loadMore = screen.getByRole("button", { name: "Load 100 more" });
     expect(loadMore).toHaveClass("text-info");
     expect(screen.queryByText(/of 1,000|100 of/i)).not.toBeInTheDocument();
@@ -345,7 +364,7 @@ describe("RecordingScreen — paging (#159)", () => {
     renderScreen();
 
     await screen.findByText("fix the leak");
-    expect(screen.getByText("All 1 recordings are loaded.")).toBeInTheDocument();
+    expect(screen.getByText("All 1 recording is loaded.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /load .* more/i })).not.toBeInTheDocument();
   });
 

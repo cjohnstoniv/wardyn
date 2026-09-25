@@ -38,7 +38,7 @@ import (
 // part that was load-bearing — the literal must appear INSIDE the cited
 // symbol's own body, never merely somewhere in the file — so a citation that
 // has drifted onto the wrong function still fails, which is the drift that
-// actually happened (see the ssh.auth/authz.denied repairs this guard's
+// actually happened (see the ssh.authenticate/authz.denied repairs this guard's
 // line-anchored ancestor made). What it stops punishing is an edit that moved
 // the symbol without changing it.
 var symbolCitation = regexp.MustCompile(`^([A-Za-z0-9_./-]+\.(?:go|md))#([A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*)$`)
@@ -330,7 +330,7 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 
 // TestAuditActionsDocCitesSymbolsNotLineNumbers holds docs/AUDIT-ACTIONS.md to
 // the rule its neighbours already enforce on Go comments, threatmodel/*.md and
-// docs/MEMBERS.md (TestCommentsCiteSymbolsNotLineNumbers,
+// docs/USERS.md (TestCommentsCiteSymbolsNotLineNumbers,
 // TestSecurityDocsCiteSymbolsNotLineNumbers,
 // TestMembersDocCitesSymbolsNotLineNumbers): a claim about code is pinned to a
 // SYMBOL, never to a line number.
@@ -384,13 +384,12 @@ func dataFieldsCell(t *testing.T, root, action string) []string {
 	return nil
 }
 
-// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit is the targeted
-// regression for X1c-F3: ui.open's Data-fields cell claimed `duration_sec`,
-// which is computed only at CLOSE (s.auditUI's caller at
-// internal/api/uigateway.go passes it in the ui.close call's map literal, not
-// ui.open's) — a doc cell that was never checked against what the emit call
-// actually passes, because TestAuditActionsDocCitationsAreLive only checks
-// citation PROXIMITY, never the Data-fields column's content.
+// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit pins the ui.open and
+// ui.close Data-fields cells to what the emit passes: `duration_sec` is
+// computed only at close (s.auditUI's caller at internal/api/uigateway.go
+// passes it in the ui.close call's map literal, not ui.open's), and
+// TestAuditActionsDocCitationsAreLive only checks citation proximity, never
+// the Data-fields column's content.
 //
 // Scoped to these two rows rather than a general derived parity check: the
 // data argument arrives as a map literal at 223 emit call sites across four
@@ -398,8 +397,8 @@ func dataFieldsCell(t *testing.T, root, action string) []string {
 // one built by a helper), several behind indirection the existing forward
 // guard's fixed-point wrapper resolution does not (and does not need to)
 // follow for the ACTION argument. A general version would have to re-derive
-// that whole shape for the DATA argument too; this pins the actual regression
-// with the same "read it back out of the source" method instead of hand
+// that whole shape for the data argument too; this pins the two rows with the
+// same "read it back out of the source" method instead of hand
 // re-typing a second copy of what the code passes.
 func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 	root := repoRoot(t)
@@ -449,21 +448,20 @@ func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 }
 
 // TestAuditActionsForwardGuardCoversEveryEmitShape is the anchor under the
-// forward guard, and it exists because that guard passed for the wrong reason
-// twice: once when it did not exist at all, and once when it existed but could
-// not see two of the six packages docs/AUDIT-ACTIONS.md itself names.
+// forward guard: a guard that cannot see an emit helper, or one of the six
+// packages docs/AUDIT-ACTIONS.md itself names, passes for the wrong reason.
 //
 // A guard's FIELD OF VIEW is part of its correctness, and a gap in it is
 // invisible precisely because everything passes. So this asserts the view, not
 // the verdict:
 //
-//   - the emitter set is DERIVED and contains all three in-tree emit helpers, at
-//     the right parameter index. `auditEvent` used to be hardcoded; (*Provider)
-//     .audit and auditFor were the two the hardcoding missed, and adding a
-//     brand-new action through either left the whole suite green.
-//   - every action that was outside the old scan's reach is inside this one's.
-//     These seven are documented, so the forward guard says nothing about them
-//     either way — deleting their rows failed nothing before, and must fail now.
+//   - the emitter set is derived and contains all three in-tree emit helpers,
+//     at the right parameter index: `auditEvent`, (*Provider).audit and
+//     auditFor. A hardcoded set that misses one lets a brand-new action added
+//     through it leave the whole suite green.
+//   - every action outside a narrower scan's reach is inside this one's. These
+//     seven are documented, so the forward guard says nothing about them
+//     either way — deleting their rows must fail.
 func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
 	root := repoRoot(t)
 	tr := parseAuditTree(t, root)
@@ -495,7 +493,7 @@ func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
 		// internal/groundtruth, through auditFor and through const-valued
 		// Action fields in composite literals.
 		"kernel.process.exec", "kernel.network.connect", "kernel.file.write",
-		"kernel.sensor.heartbeat", "kernel.sensor.blind",
+		"kernel.sensor.ping", "kernel.sensor.bypass",
 		// The shapes that were already covered, so a refactor cannot trade one
 		// blind spot for another.
 		"drive.delete", "credential.mint", "approval.decide", "run.autostop",
@@ -505,4 +503,154 @@ func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
 				"deleting its docs/AUDIT-ACTIONS.md row would fail nothing", action)
 		}
 	}
+}
+
+// auditActionGrammarAllow is the same kind of honest exception auditActionAllow
+// is for the forward guard: an action deliberately outside docs/AUDIT-ACTIONS.md's
+// "Grammar" section, each with the reason it is not renamed.
+var auditActionGrammarAllow = map[string]bool{
+	// Past tense. The single heaviest-cited action in the tree and a
+	// compatibility surface docs/OPERATIONS.md already commits to by name; its
+	// rename is its own reviewed change, not a rider on #205's.
+	"authz.denied": true,
+	// The lease's two end-of-run rows (#568) landed on main after this grammar
+	// did. "ended"/"expired" are past tense, and adding them to the closed verb
+	// list would fail the list's OWN no-past-tense check below — so, like
+	// authz.denied, they are allowlisted rather than renamed: an audit action
+	// name is an append-only public code, not a rider on this PR's rename.
+	"run.ended":         true,
+	"run.ended.expired": true,
+	// The sign-in lock's no-capacity row also landed on main after this
+	// grammar did. "unserialized" ends in the same past-participle shape the
+	// no-past-tense check rejects, for the same reason as the two above.
+	"auth.signin_unserialized": true,
+	// The lost-run rows (#574) are run.ended's siblings: the same kept-run
+	// state, named the same way, so they are allowlisted with it rather than
+	// renamed alone.
+	"run.lost":         true,
+	"run.lost.expired": true,
+	// The user view's compat row: dual-emitted beside auth.user_view.set under
+	// its exact pre-0.8 name for one minor (OD-18, #617), which is its whole
+	// purpose. Removed in 0.9.
+	"auth.member_mode": true,
+}
+
+// actionSegment is one dot-separated segment of an action name.
+var actionSegment = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// ruleSourceValue is `family:kebab`: kebab-case segments joined by colons, no
+// dots. `<n>`/`<approval-id>` placeholders stand for a value filled at runtime.
+var ruleSourceValue = regexp.MustCompile(`^[a-z]+(-[a-z]+)*(:[a-z0-9<>-]+)+$`)
+
+// TestAuditActionsDoc_Grammar is #205's guard: every action row in
+// docs/AUDIT-ACTIONS.md, and every suffix a wildcard family row names, is
+// `<noun>[.<sub>].<verb>` — two or three segments, the last one a verb from the
+// doc's own closed "**Verbs:**" list — and every row of the two `rule_source`
+// tables is `family:kebab`. The verb list lives in the doc rather than here so
+// the reader and the guard see one list; a new verb is an edit to it.
+//
+// Scoped to everything before "## Renamed in 0.8": that appendix's left column
+// holds the old names on purpose.
+func TestAuditActionsDoc_Grammar(t *testing.T) {
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "AUDIT-ACTIONS.md"))
+	if err != nil {
+		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
+	}
+	body, _, ok := strings.Cut(string(raw), "## Renamed in 0.8")
+	if !ok {
+		t.Fatal(`docs/AUDIT-ACTIONS.md has no "## Renamed in 0.8" heading — this guard's scope boundary moved; re-anchor it`)
+	}
+	// One heading: this guard and the forward guard both cut at the first, so a
+	// second copy would move their boundary without either noticing.
+	if n := strings.Count(string(raw), "\n## Renamed in 0.8\n"); n != 1 {
+		t.Fatalf(`docs/AUDIT-ACTIONS.md has %d "## Renamed in 0.8" headings, want 1 — fold them into one section`, n)
+	}
+
+	verbs := map[string]bool{}
+	for _, line := range strings.Split(body, "\n") {
+		if rest, ok := strings.CutPrefix(line, "**Verbs:**"); ok {
+			for _, m := range backtickSpan.FindAllStringSubmatch(rest, -1) {
+				verbs[m[1]] = true
+			}
+		}
+	}
+	if len(verbs) == 0 {
+		t.Fatal(`docs/AUDIT-ACTIONS.md's "Grammar" section lists no **Verbs:** — re-anchor this guard`)
+	}
+	for v := range verbs {
+		if !actionSegment.MatchString(v) || strings.HasSuffix(v, "ed") {
+			t.Errorf("docs/AUDIT-ACTIONS.md's verb list carries %q — a verb is one snake_case word in the imperative, never a past tense", v)
+		}
+	}
+
+	checkAction := func(action string) {
+		segs := strings.Split(action, ".")
+		if len(segs) < 2 || len(segs) > 3 {
+			t.Errorf("docs/AUDIT-ACTIONS.md: action %q has %d segments — the grammar is <noun>[.<sub>].<verb>, two or three", action, len(segs))
+			return
+		}
+		for _, seg := range segs {
+			if !actionSegment.MatchString(seg) {
+				t.Errorf("docs/AUDIT-ACTIONS.md: action %q has a segment %q that is not snake_case", action, seg)
+			}
+		}
+		if last := segs[len(segs)-1]; !verbs[last] {
+			t.Errorf("docs/AUDIT-ACTIONS.md: action %q ends in %q, which is not in the Grammar section's verb list — "+
+				"end it in a listed verb, add the verb to the list, or add the action to auditActionGrammarAllow with its reason", action, last)
+		}
+	}
+
+	// Each table is an action table ("| Action |") or a rule_source table
+	// ("| `rule_source` |"); a heading ends either.
+	const actionTable, ruleSourceTable = 1, 2
+	table, actions, sources := 0, 0, 0
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "| Action |"):
+			table = actionTable
+			continue
+		case strings.HasPrefix(trimmed, "| `rule_source` |"):
+			table = ruleSourceTable
+			continue
+		case strings.HasPrefix(trimmed, "#"):
+			table = 0
+			continue
+		}
+		m := auditActionRow.FindStringSubmatch(trimmed)
+		if m == nil {
+			continue
+		}
+		switch table {
+		case ruleSourceTable:
+			sources++
+			if !ruleSourceValue.MatchString(m[1]) {
+				t.Errorf("docs/AUDIT-ACTIONS.md: rule_source %q is not family:kebab (kebab-case segments joined by colons, no dots)", m[1])
+			}
+		case actionTable:
+			actions++
+			if auditActionGrammarAllow[m[1]] {
+				continue
+			}
+			family, wild := strings.CutSuffix(m[1], "*")
+			if !wild {
+				checkAction(m[1])
+				continue
+			}
+			// A family row names its suffixes in its own text (`egress.allow`, …).
+			member := regexp.MustCompile("`(" + regexp.QuoteMeta(family) + "[a-z_]+)`")
+			members := member.FindAllStringSubmatch(trimmed, -1)
+			if len(members) == 0 {
+				t.Errorf("docs/AUDIT-ACTIONS.md: family row %q names none of its suffixes, so nothing holds them to the grammar", m[1])
+			}
+			for _, mm := range members {
+				checkAction(mm[1])
+			}
+		}
+	}
+	if actions == 0 || sources == 0 {
+		t.Fatalf("checked %d action rows and %d rule_source rows — a table's shape changed and this guard now checks nothing", actions, sources)
+	}
+	t.Logf("checked %d action rows, %d rule_source rows, %d verbs", actions, sources, len(verbs))
 }

@@ -114,12 +114,12 @@ export function AddWorkspaceDialog({
   // carries no operator gate — only local_dir's root constraint below is
   // role-aware.
   //
-  // 0.7 §B: this is `!operator`, NOT `role === "member"`. The constraint
+  // 0.7 §B: this is `!operator`, NOT `role === "user"`. The constraint
   // follows the workspace-OWNERSHIP namespace — secretOwnerFromRequest stays
   // on isOperator deliberately — so a SECURITY ADMIN's workspaces are
   // owner-stamped like a member's, get a real member_local_dir_root from /me
   // (me.go keys it on !isOperator for exactly this reason), and are clamped by
-  // memberSourcesAllowed at authoring time and ValidateMemberMountSource at
+  // userSourcesAllowed at authoring time and ValidateUserMountSource at
   // bind time. Byte-identical for the two pre-0.7 tiers (role === "member" ⟺
   // !operator when the only roles are admin and member); without it the third
   // tier is silently clamped with no hint ever shown.
@@ -127,7 +127,7 @@ export function AddWorkspaceDialog({
   const memberClamped = !operator;
   const memberLocalDirRoot = useMemberLocalDirRoot();
   // §DECISIONS O1: no per-member root AND no shared root ⇒ local_dir is
-  // unavailable for this member. Presentational only — ValidateMemberMountSource
+  // unavailable for this member. Presentational only — ValidateUserMountSource
   // at bind time is the real enforcement (member-role-desktop.md §c).
   const localDirUnavailable = memberClamped && memberLocalDirRoot === null;
 
@@ -183,7 +183,7 @@ export function AddWorkspaceDialog({
               // below — so a checked box from an earlier repo/ephemeral
               // selection must not ride along into a clamped local_dir submit
               // and 400 against a control the caller can no longer even see.
-              // (ValidateMemberMount refuses a writable member mount outright
+              // (ValidateUserMount refuses a writable member mount outright
               // unless WARDYN_MEMBER_WRITABLE_ROOTS is set.)
               writable: memberClamped ? undefined : writable || undefined,
             }
@@ -268,7 +268,7 @@ export function AddWorkspaceDialog({
               field — an admin-configuration gap, not a control that silently
               vanishes. No Input renders here, so canSubmit stays gated on a
               non-empty path same as every other kind; the server's own
-              root-empty fail-closed (ValidateMemberMountSource) is what
+              root-empty fail-closed (ValidateUserMountSource) is what
               actually stops a stale client from racing past this hint. */}
           {kind === "local_dir" && localDirUnavailable && (
             <p className="text-meta leading-snug text-muted-foreground">

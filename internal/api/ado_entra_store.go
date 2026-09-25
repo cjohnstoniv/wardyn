@@ -85,14 +85,15 @@ const (
 	entraOAuthInteractionRequired = "interaction_required"
 )
 
-// The four failure classes a caller answers differently, as sentinels so a
+// The failure classes a caller answers differently, as sentinels so a
 // caller can switch on them with errors.Is and a log line still names the code
 // the authority sent.
 //
 // They are DISTINCT because the answers are: a dead credential must be
 // re-captured, a consent refusal needs an admin or a fresh consent prompt, an
 // interaction refusal needs the human at a keyboard on a compliant device, and
-// an unavailable authority needs nothing but a retry. Collapsing any pair of
+// an unavailable authority needs nothing but a retry, and a store that refuses
+// the stored sign-in must stop its use at once. Collapsing any pair of
 // them turns a transient outage into a fleet-wide re-sign-in.
 var (
 	// ErrADOEntraNotCaptured: this principal has no stored Azure DevOps
@@ -110,9 +111,15 @@ var (
 	// unusably. The credential is untouched and the next attempt redeems it
 	// normally.
 	ErrADOEntraUnavailable = errors.New("renewing the captured Azure DevOps sign-in did not complete")
+	// ErrADOEntraStoreRefused: the secret store answered and refused the
+	// stored sign-in (moved, changed at the store, or Wardyn's access to it
+	// revoked). Definitive, unlike ErrADOEntraUnavailable: a store that refuses
+	// must stop the run's use of the credential at once (credential-storage
+	// design K8, rule 21).
+	ErrADOEntraStoreRefused = errors.New("the secret store refused the captured Azure DevOps sign-in")
 )
 
-// ADOEntraFailure is the same four classes as a machine-readable label, for a
+// ADOEntraFailure is the same classes as a machine-readable label, for a
 // caller that puts the class in a refusal body or an audit row rather than
 // branching on it. "" means no failure.
 type ADOEntraFailure string
@@ -124,6 +131,7 @@ const (
 	ADOEntraFailureConsentRequired     ADOEntraFailure = "consent_required"
 	ADOEntraFailureInteractionRequired ADOEntraFailure = "interaction_required"
 	ADOEntraFailureUnavailable         ADOEntraFailure = "unavailable"
+	ADOEntraFailureStoreRefused        ADOEntraFailure = "store_refused"
 )
 
 // ADOEntraClassify maps an error from this lane onto its class. An error from
@@ -142,6 +150,8 @@ func ADOEntraClassify(err error) ADOEntraFailure {
 		return ADOEntraFailureConsentRequired
 	case errors.Is(err, ErrADOEntraInteractionRequired):
 		return ADOEntraFailureInteractionRequired
+	case errors.Is(err, ErrADOEntraStoreRefused):
+		return ADOEntraFailureStoreRefused
 	default:
 		return ADOEntraFailureUnavailable
 	}
@@ -177,9 +187,10 @@ type adoEntraBlob struct {
 	// RenewedAt is when the stored refresh token was last rotated. Absent on a
 	// credential that has never been redeemed.
 	RenewedAt time.Time `json:"renewed_at,omitempty"`
-	// DeadAt is when a renewal last met a refusal no renewal gets past: the
-	// refresh token is gone, or a Conditional Access policy wants the person
-	// present. It lives on the blob, not in a table, so /me/scm-access and the
+	// DeadAt is when a renewal last met a refusal no renewal gets past while
+	// the refresh token lives: a Conditional Access policy wants the person
+	// present. (A dead refresh token is deleted instead, noteADOEntraSignInEnded;
+	// a blob stored before 0.8 may still carry dead_credential.) It lives on the blob, not in a table, so /me/scm-access and the
 	// launch gate can say expired_signin before the next run fails at its
 	// sidecar's boot. A fresh capture writes a blob without it; a renewal that
 	// succeeds later clears it.
@@ -294,7 +305,9 @@ func (s *Server) storeADOEntraBlob(ctx context.Context, owner, rowID string, blo
 	if err != nil {
 		return fmt.Errorf("marshal azure devops sign-in blob: %w", err)
 	}
-	return s.cfg.Secrets.For(owner).Put(ctx, adoEntraSecretName(rowID), raw)
+	err = s.cfg.Secrets.For(owner).Put(ctx, adoEntraSecretName(rowID), raw)
+	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, adoEntraSecretName(rowID))
+	return err
 }
 
 // ── redemption ──────────────────────────────────────────────────────────────
@@ -384,9 +397,12 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	unlock := s.adoEntra.lock(owner, cfg.RowID)
 	defer unlock()
 
-	blob, found, err := s.readADOEntraBlob(ctx, owner, cfg.RowID)
-	if err != nil {
+	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, cfg.RowID)
+	switch {
+	case errors.Is(err, secretstore.ErrUnavailable):
 		return ADOEntraAccess{}, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
+	case err != nil:
+		return ADOEntraAccess{}, fmt.Errorf("%w: %w", ErrADOEntraStoreRefused, err)
 	}
 	if !found {
 		return ADOEntraAccess{}, ErrADOEntraNotCaptured
@@ -413,11 +429,19 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 
 	// Mask BEFORE anything can log or persist the new values, and globally for
 	// the same reason the AWS capture masks globally: one credential is reused
-	// across every run that selects this lane.
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.AccessToken))
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.RefreshToken))
+	// across every run that selects this lane. Register the refresh token the
+	// blob will hold: one the response left out is still in use, and leaving it
+	// out of this call would retire it (and sweep it an hour later) while live.
+	// The access token is let go one grace after its expiry (#151).
+	keep := blob.RefreshToken
+	if resp.RefreshToken != "" {
+		keep = resp.RefreshToken
+	}
+	now := s.cfg.Now()
+	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
+	s.cfg.MaskRegistry.AddGlobalUntil(owner, adoEntraSecretName(cfg.RowID), now, accessExpiry, []byte(resp.AccessToken), []byte(keep))
 
-	granted := adoEntraSplitScope(resp.Scope)
+	granted := strings.Fields(resp.Scope)
 	if len(granted) == 0 {
 		// An authority that reports no granted scope has told us nothing about
 		// what this token may do, and since the granted set is routinely WIDER
@@ -429,7 +453,7 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	access := ADOEntraAccess{
 		AccessToken: resp.AccessToken,
 		Scopes:      granted,
-		ExpiresAt:   s.cfg.Now().Add(time.Duration(resp.ExpiresIn) * time.Second).UTC(),
+		ExpiresAt:   accessExpiry,
 	}
 
 	// Persist the ROTATION. An absent refresh token in the response means keep
@@ -451,12 +475,20 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	return access, nil
 }
 
-// noteADOEntraSignInEnded records, on the stored blob, a renewal refusal only a
-// new sign-in can answer. Best-effort: the caller's own answer does not depend
+// noteADOEntraSignInEnded answers a renewal refusal only a new sign-in can
+// answer. A dead refresh token is deleted (deleteDeadCredential): nothing can
+// renew it. An interaction refusal leaves the token live, so it is recorded on
+// the stored blob instead. Best-effort: the caller's own answer does not depend
 // on it, and a failed write only means the next launch learns it at boot.
-// Called under the redemption lock, so it cannot overwrite a rotation.
+// Called under the redemption lock, on the blob read inside it, so it cannot
+// delete or overwrite a rotation.
 func (s *Server) noteADOEntraSignInEnded(ctx context.Context, owner, rowID string, blob adoEntraBlob, class ADOEntraFailure) {
-	if class != ADOEntraFailureDeadCredential && class != ADOEntraFailureInteractionRequired {
+	switch class {
+	case ADOEntraFailureDeadCredential:
+		s.deleteDeadCredential(ctx, s.cfg.Secrets.For(owner), owner, adoEntraSecretName(rowID), adoEntraProviderPrefix)
+		return
+	case ADOEntraFailureInteractionRequired:
+	default:
 		return
 	}
 	blob.DeadAt, blob.DeadReason = s.cfg.Now().UTC(), class
@@ -584,11 +616,12 @@ func classifyADOEntraError(code, desc string) error {
 	}
 }
 
-// adoEntraSplitScope splits an OAuth scope string on whitespace.
-func adoEntraSplitScope(raw string) []string {
-	return strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == '\r' || r == '\n'
-	})
+// adoCaptureScopes is what a capture stores from a token response's granted
+// scope string: the row's ceiling intersected with what was granted, in the
+// ceiling's order. Both capture doors (the console login and the dedicated
+// sign-in) record the same fact through this one helper.
+func adoCaptureScopes(granted string, ceiling []string) []string {
+	return intersect(ceiling, strings.Fields(granted))
 }
 
 // auditADOCapture emits the one audit action the sign-in owns. outcome is

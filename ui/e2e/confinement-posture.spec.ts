@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole } from "./fixtures";
+import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 // #162 — the console never said when network confinement was unenforced.
@@ -14,6 +14,10 @@ import type { Page } from "@playwright/test";
 // meanings — so the shell resolves posture from `runner` + `network_policy`
 // together. This walks all five rows of that table against one intercepted
 // /healthz, real everything else (the seeded backend's own runs board).
+//
+// The band is Admin-view only (admin-member-modes-design.md §4.2, M-3), so
+// every row lands in the Admin view; the last case proves the User view drops
+// the band and keeps the chip.
 async function mockHealthz(page: Page, body: { runner: string; network_policy?: string }): Promise<void> {
   await page.route("**/healthz", (route) =>
     route.fulfill({
@@ -36,7 +40,7 @@ const NO_BANNER = /network confinement|network-confined/i;
 test.describe("confinement posture (#162)", () => {
   test("docker, network_policy absent: not applicable — no banner, no ring", async ({ page }) => {
     await mockHealthz(page, { runner: "docker" });
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await expect(page.getByRole("status").filter({ hasText: NO_BANNER })).toHaveCount(0);
 
     const chip = firstConfinementChip(page);
@@ -48,7 +52,7 @@ test.describe("confinement posture (#162)", () => {
 
   test("k8s, enforced: no banner, no ring — the canary proved it", async ({ page }) => {
     await mockHealthz(page, { runner: "k8s", network_policy: "enforced" });
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await expect(page.getByRole("status").filter({ hasText: NO_BANNER })).toHaveCount(0);
 
     const chip = firstConfinementChip(page);
@@ -60,7 +64,7 @@ test.describe("confinement posture (#162)", () => {
 
   test("k8s, acknowledged: warning strip + soft ring, no glyph", async ({ page }) => {
     await mockHealthz(page, { runner: "k8s", network_policy: "acknowledged" });
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await expect(
       page.getByRole("status").filter({ hasText: "Network confinement is acknowledged, not proven." }),
     ).toBeVisible();
@@ -75,9 +79,29 @@ test.describe("confinement posture (#162)", () => {
     expect(await chip.getAttribute("title")).toContain("network confinement is acknowledged, not proven");
   });
 
+  // The strip's action opens the Admin view's Environment step. Plain /setup is
+  // the User view's Getting Started (M-6), which has no such step.
+  test("the strip's action opens the Admin view's Environment step", async ({ page }) => {
+    // The funnel shows the welcome hero first until this flag is set.
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("wardyn-onboarding-seen", "1");
+      } catch {
+        /* private mode — ignore */
+      }
+    });
+    await mockHealthz(page, { runner: "k8s", network_policy: "acknowledged" });
+    // The band is Admin-view only (#635).
+    await gotoConsole(page, "admin");
+    await page.getByRole("button", { name: "How to prove it" }).click();
+
+    await expect(page).toHaveURL(/\/admin\/setup\?step=environment$/);
+    await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible();
+  });
+
   test("k8s, unenforced: danger strip + warning ring + glyph", async ({ page }) => {
     await mockHealthz(page, { runner: "k8s", network_policy: "unenforced" });
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await expect(
       page.getByRole("status").filter({ hasText: "Runs on this cluster are not network-confined." }),
     ).toBeVisible();
@@ -97,7 +121,7 @@ test.describe("confinement posture (#162)", () => {
 
   test("k8s, network_policy absent: could not confirm — warns, ruling 2, no chip ring", async ({ page }) => {
     await mockHealthz(page, { runner: "k8s" }); // network_policy key entirely absent
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await expect(
       page
         .getByRole("status")
@@ -113,5 +137,25 @@ test.describe("confinement posture (#162)", () => {
     await expect(chip.locator("svg")).toHaveCount(1);
     const cls = (await chip.getAttribute("class")) ?? "";
     expect(cls).not.toContain("color-mix");
+  });
+
+  // §4.2 (M-3): nobody but an admin can act on a cluster-wide posture, so the
+  // User view has no band — the chip on the person's own runs still warns.
+  // The band is seen first in the Admin view, so its absence after the switch
+  // is the view rule at work, not a band that had not loaded yet.
+  test("k8s, unenforced, User view: no band, the chip still warns", async ({ page }) => {
+    await mockHealthz(page, { runner: "k8s", network_policy: "unenforced" });
+    await gotoConsole(page, "admin");
+    const band = page.getByRole("status").filter({ hasText: "Runs on this cluster are not network-confined." });
+    await expect(band).toBeVisible();
+
+    await navToRoute(page, "/runs");
+    await expect(band).toHaveCount(0);
+
+    const chip = firstConfinementChip(page);
+    await expect(chip).toBeVisible();
+    await expect(chip.locator("svg")).toHaveCount(2);
+    const cls = (await chip.getAttribute("class")) ?? "";
+    expect(cls).toMatch(/color-mix\(in_oklab,var\(--warning\)_55%/);
   });
 });

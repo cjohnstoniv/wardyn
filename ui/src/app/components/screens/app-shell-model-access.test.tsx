@@ -18,6 +18,7 @@ import { MODEL_ACCESS_BANNER } from "../wardyn/model-access-copy";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { baseStatus } from "../../lib/test-fixtures";
+import { aheadByHours } from "../../lib/test-clock";
 
 // The model-access strip's place in the stack.
 //
@@ -78,19 +79,25 @@ describe("AppShell (the model-access strip)", () => {
     );
   }
 
-  const MEMBER_WITH_DYING_SESSION = {
-    principal: "alice@corp.example",
-    method: "sso",
-    operator: false,
-    security_operator: false,
-    role: "member",
-    email: "alice@corp.example",
-    // Inside SESSION_WARN_MS, so the session strip is on screen too.
-    session_expires_at: new Date(Date.now() + 60_000).toISOString(),
-  };
+  // A function, not a describe-body constant: aheadByHours(1/60) must be
+  // computed inside the test (after any clock-advancing beforeEach has
+  // already run), never at collection time — a fixed collection-time
+  // "1 minute from now" reads as long-expired once the clock moves (#195-b).
+  function MEMBER_WITH_DYING_SESSION() {
+    return {
+      principal: "alice@corp.example",
+      method: "sso",
+      operator: false,
+      security_operator: false,
+      role: "user",
+      email: "alice@corp.example",
+      // Inside SESSION_WARN_MS, so the session strip is on screen too.
+      session_expires_at: aheadByHours(1 / 60), // 1 minute
+    };
+  }
 
   it("renders BELOW the session-expiry banner", async () => {
-    renderShellAt("/runs", MEMBER_WITH_DYING_SESSION);
+    renderShellAt("/runs", MEMBER_WITH_DYING_SESSION());
     const session = await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
     const model = await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN);
     // DOCUMENT_POSITION_FOLLOWING: `model` comes after `session` in the DOM.
@@ -98,13 +105,13 @@ describe("AppShell (the model-access strip)", () => {
   });
 
   it("is withheld on /setup — that page IS the door", async () => {
-    renderShellAt("/setup", MEMBER_WITH_DYING_SESSION);
+    renderShellAt("/setup", MEMBER_WITH_DYING_SESSION());
     await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
     expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
   });
 
-  it("is withheld on /settings for an OPERATOR, which already mounts the same pane", async () => {
-    renderShellAt("/settings", { ...MEMBER_WITH_DYING_SESSION, operator: true, role: "admin" });
+  it("is withheld on /admin/settings for an OPERATOR, which already mounts the same pane", async () => {
+    renderShellAt("/admin/settings", { ...MEMBER_WITH_DYING_SESSION(), operator: true, role: "admin" });
     await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
     await waitFor(() => expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull());
   });
@@ -112,8 +119,8 @@ describe("AppShell (the model-access strip)", () => {
   // …and the member it does not: the Settings card's AWS button is
   // `disabled={!operator}` there, so hiding the strip would strand exactly the
   // person the refusal sentence sends to that page.
-  it("stays for a MEMBER on /settings", async () => {
-    renderShellAt("/settings", MEMBER_WITH_DYING_SESSION);
+  it("stays for a user on /account", async () => {
+    renderShellAt("/account", MEMBER_WITH_DYING_SESSION());
     expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
 
@@ -133,7 +140,7 @@ describe("AppShell (the model-access strip)", () => {
             json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
           });
         if (u.endsWith("/api/v1/me"))
-          return Promise.resolve({ ok: true, json: async () => ({ principal: "a@b", role: "member", operator: false }) });
+          return Promise.resolve({ ok: true, json: async () => ({ principal: "a@b", role: "user", operator: false }) });
         return Promise.resolve({ ok: true, json: async () => ({}) });
       }) as unknown as typeof fetch,
     );
@@ -207,7 +214,7 @@ describe("AppShell (the model-access strip)", () => {
     expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
     expect(screen.queryByText(SHARED_ACTION)).toBeNull();
 
-    answer({ principal: "member@corp.example", role: "member", operator: false, security_operator: false });
+    answer({ principal: "member@corp.example", role: "user", operator: false, security_operator: false });
     // …and once it lands, the member reads the server's instruction, with no
     // button: nobody but their admin can repair it.
     expect(await screen.findByText(SHARED_ACTION)).toBeInTheDocument();

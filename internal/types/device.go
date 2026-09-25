@@ -60,12 +60,32 @@ type DeviceEnrolmentToken struct {
 // computed, not the organisation's — plus Seq, that same local table's own
 // seq for the row.
 //
-// Seq is what idempotency rides on (store.PG.IngestDeviceAudit and
+// Seq positions the row (store.PG.IngestDeviceAudit and
 // ListAuditEventsAfterSeq): a device's audit_events.id is not unique across a
 // retried push (the forwarder re-reads and re-sends whatever is at or after
-// its durable cursor), but its local seq is monotonic and gapless, so it is
-// the only field a replayed batch can be deduplicated against.
+// its durable cursor), and its local seq is monotonic within one chain. It is
+// not identity on its own — a table reset can restart it — so a replayed row
+// is recognised by its seq together with its RowHash.
 type FederatedAuditEvent struct {
 	AuditEvent
 	Seq int64 `json:"seq"`
+}
+
+// DeviceEnrolRequest / DeviceEnrolResponse are POST /api/v1/devices/enrol's
+// wire shapes, shared by the organisation's handler and the laptop's
+// federation client. DeviceAck is what the ingest and heartbeat routes answer:
+// the organisation's recorded cursor for the device, which the forwarder
+// advances to.
+type DeviceEnrolRequest struct {
+	Token string `json:"token"`
+}
+
+type DeviceEnrolResponse struct {
+	DeviceID uuid.UUID `json:"device_id"`
+	Name     string    `json:"name"`
+	Token    string    `json:"token"`
+}
+
+type DeviceAck struct {
+	AckedSeq int64 `json:"acked_seq"`
 }

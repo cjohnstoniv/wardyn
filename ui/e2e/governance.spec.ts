@@ -28,7 +28,8 @@ import {
   runLimitsChip,
 } from "../src/app/lib/governance-copy";
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
-import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -63,7 +64,7 @@ import type { Page } from "@playwright/test";
 //      walls are asserted at the API level instead (the resolver, the stored
 //      ceiling, the two write refusals), and the run-level enforcement is
 //      proven in Go — TestGovernanceProfileNonEscape's 16-row escape table on
-//      the decoded run.policy.effective envelope, and
+//      the decoded run.policy.resolve envelope, and
 //      governance_ceiling_test.go's governance_profile_name pin.
 //
 //   2. THE MEMBER'S TWO DISPLAY MOMENTS. Same cause: the field the rail and
@@ -150,7 +151,7 @@ async function resolve(page: Page, claims: string): Promise<void> {
 
 test.describe("governance — the security admin's authoring walk", () => {
   test("a fresh install: no profiles, and the empty state carries the action that fills it", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
     await expect(page.getByRole("heading", { name: GOV.TITLE, level: 1 })).toBeVisible();
@@ -181,7 +182,7 @@ test.describe("governance — the security admin's authoring walk", () => {
   });
 
   test("creating a profile: the editor opens in place, and the save warns what it takes away", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
     await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
@@ -234,7 +235,7 @@ test.describe("governance — the security admin's authoring walk", () => {
   });
 
   test("assigning it to a group lands the row, its precedence, and the profile's new count", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
     // The subject Segmented defaults to Group (assignments.tsx) — assert it
@@ -271,7 +272,7 @@ test.describe("governance — the security admin's authoring walk", () => {
   });
 
   test("the editor opens in place and the add form COLLAPSES while it is open", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
     await page.getByRole("button", { name: `${GOV.EDIT} ${NAME}`, exact: true }).click();
@@ -319,7 +320,7 @@ test.describe("governance — the security admin's authoring walk", () => {
   test("the autonomy rubric round-trips through the editor, and the profiles list names the strictest cap", async ({
     page,
   }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
     await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
@@ -361,7 +362,7 @@ test.describe("governance — the security admin's authoring walk", () => {
   test("delete is REFUSED while assigned: pre-filled from the count, and the confirm never enables", async ({
     page,
   }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
     await page.getByRole("button", { name: `${GOV.DELETE} ${NAME}`, exact: true }).click();
@@ -391,7 +392,7 @@ test.describe("governance — the security admin's authoring walk", () => {
 
 test.describe("governance — the resolved preview", () => {
   test("pasted claims resolve to the profile, named with the assignment that won", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
     await expect(page.getByText(GOV.PREVIEW_LEAD)).toBeVisible();
@@ -409,7 +410,7 @@ test.describe("governance — the resolved preview", () => {
   });
 
   test("claims nothing matches resolve to the deployment ceiling, not to a profile", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
     await resolve(page, "no-such-group\nnobody@corp.example");
@@ -425,7 +426,7 @@ test.describe("governance — the resolved preview", () => {
 
 test.describe("governance — a ceiling that would MINT credential eligibility is refused", () => {
   test("the grant-bound refusal renders the server's message under the frozen heading", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
     await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
@@ -457,7 +458,7 @@ test.describe("governance — the security admin's console (mocked /me role)", (
   });
 
   test("Governance, Permissions and Audit are offered — and Governance is ACTIONABLE", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
 
     await expect(sidebarLink(page, "Governance")).toBeVisible();
     await expect(sidebarLink(page, "Permissions")).toBeVisible();
@@ -487,7 +488,7 @@ test.describe("governance — the security admin's console (mocked /me role)", (
   });
 
   test("the audit feed is the org-wide trail, not the admin-only stub", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Audit");
 
     // audit.tsx:500 renders this ONLY for !securityOperator. Its absence over a
@@ -515,7 +516,7 @@ test.describe("governance — the security admin's console (mocked /me role)", (
     await gotoConsole(page);
     await navToRoute(page, "/approvals");
 
-    // authorizeMemberDecision early-returns for isSecurityOperator
+    // authorizeUserDecision early-returns for isSecurityOperator
     // (approvals.go:392), so this tier decides ANY kind on ANY run org-wide —
     // and is never bounded by the egress_host capability a member would be.
     await expect(page.getByRole("button", { name: /^Approve$/ }).first()).toBeEnabled();
@@ -523,8 +524,11 @@ test.describe("governance — the security admin's console (mocked /me role)", (
   });
 
   test("but NOT the super admin's surfaces: writing a secret is refused, and it says why", async ({ page }) => {
-    await gotoConsole(page);
-    await navTo(page, "Secrets");
+    // M-2: org Secrets is super-admin only, so it is not in this tier's
+    // Admin-view nav (packet M-A); their own namespace is the User view's.
+    await gotoConsole(page, "admin");
+    await expect(sidebarLink(page, "Secrets")).toHaveCount(0);
+    await navToRoute(page, "/secrets");
 
     // Purely operator-gated (secrets.tsx:81,115) — the one chokepoint every
     // secret-write caller routes through.
@@ -571,7 +575,7 @@ test.describe("governance — a member sees none of it (mocked /me role)", () =>
 
 test.describe("governance — admin (unmocked, the harness's real session): the negative control", () => {
   test("the SAME screens the security admin was refused are live for a super admin", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
 
     // Without this pair the two assertions above would pass just as well on a
     // screen that is broken for everyone.
@@ -756,11 +760,12 @@ test.describe("governance — the walls, asserted where this harness can reach t
 
 // R4/F032 — the Limits cell tested only the three BOOLEAN doors, so a profile
 // whose one limit is a run quota read GOV.LIMITS_NONE ("None") while
-// denyMemberRunQuota (internal/api/runs_create_validate.go) was refusing that
+// denyUserRunQuota (internal/api/runs_create_validate.go) was refusing that
 // member's next run with a 422. Real profile, real row: only the rendered table
 // proves the cell, and only a stored max_concurrent_runs proves it round-trips
 // the wire.
-test.describe("governance — a quota-only profile is not 'None' (R4/F032)", () => {
+test.describe("governance — a quota-only profile is not 'None'", () => {
+  // ticket: R4/F032
   test("names the cap in the Limits column, and leaves an unlimited profile reading None", async ({
     page,
   }) => {
@@ -778,7 +783,7 @@ test.describe("governance — a quota-only profile is not 'None' (R4/F032)", () 
       expect(res.status()).toBe(201);
     }
 
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
 
     const cappedRow = page.getByRole("row").filter({ hasText: capped });
@@ -799,10 +804,11 @@ test.describe("governance — a quota-only profile is not 'None' (R4/F032)", () 
 // /providers' Storage tab as the ceiling an admin sets and on /drives at
 // write-time instead), so the round-trip through the EDITOR — real fields,
 // real save, real reload — is the only e2e proof either exists on the wire.
-test.describe("governance — the two storage ceilings round-trip through the editor (0.7.2)", () => {
+test.describe("governance — the two storage ceilings round-trip through the editor", () => {
+  // ticket: 0.7.2
   test("both LimitNumberRows write real integers, and 0 means unlimited on both", async ({ page }) => {
     const name = `storage-ceilings-${randomUUID().slice(0, 8)}`;
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
     await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
 
@@ -943,32 +949,25 @@ test.describe("governance — the run limits round-trip through the editor (RL-1
   });
 });
 
-// X3-F5 — /governance is /permissions' securityOps sibling: hidden from a
-// member's nav, reachable by typing the URL, and its 403 was reported as an
-// unreachable control plane over a Retry that 403s forever.
+// X3-F5 — /admin/governance is /admin/permissions' securityOps sibling:
+// hidden from a member's nav, reachable by typing the URL. M-1b: Governance
+// moved under /admin/*, so a member's own 403/500 render (what this test used
+// to pin) is now unreachable — the admin-view gate refuses them, and nothing
+// is fetched at all (admin-member-modes-design.md §2.3's refusal-page row).
 test.describe("Governance — a member by URL is told the tier, not an outage", () => {
-  test("a 403 names the role and offers no Retry; a 500 still does", async ({ page }) => {
+  test("the admin-view refusal, before /api/v1/governance is ever asked", async ({ page }) => {
     await mockMemberRole(page);
-    await page.route("**/api/v1/governance", (route) =>
-      route.request().method() === "GET"
-        ? route.fulfill({ status: 403, contentType: "application/json", body: '{"error":"forbidden"}' })
-        : route.continue(),
-    );
+    let fetched = false;
+    await page.route("**/api/v1/governance", async (route) => {
+      fetched = true;
+      await route.fallback();
+    });
     await gotoConsole(page);
-    await navToRoute(page, "/governance");
+    await navToRoute(page, "/admin/governance");
 
-    await expect(page.getByText(SECURITY_ONLY_REASON).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toBeVisible();
+    await expect(page.getByText(VIEW_REFUSAL.BODY)).toBeVisible();
     await expect(page.getByRole("button", { name: GOV.FETCH_FAILED_TITLE })).toHaveCount(0);
-    await expect(page.getByText(GOV.FETCH_FAILED_BODY)).toHaveCount(0);
-
-    await page.unrouteAll({ behavior: "ignoreErrors" });
-    await mockMemberRole(page);
-    await page.route("**/api/v1/governance", (route) =>
-      route.request().method() === "GET"
-        ? route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' })
-        : route.continue(),
-    );
-    await page.goto("/governance");
-    await expect(page.getByText(GOV.FETCH_FAILED_BODY)).toBeVisible();
+    expect(fetched).toBe(false);
   });
 });

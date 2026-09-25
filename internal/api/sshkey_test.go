@@ -230,10 +230,10 @@ func TestBrokeredRunSSHLaneEvaluatesDeny(t *testing.T) {
 	probe(t, brokered, "ssh.github.com", 443, egress.VerdictDeny)
 	probe(t, brokered, "api.anthropic.com", 443, egress.VerdictAllow)
 
-	// THE PROBE THE BARE-HOST DENY EXISTS FOR — and the only one that fails if the
+	// The probe the bare-host deny exists for — and the only one that fails if the
 	// deny is spelled ":443". Two things have to be true at once: allow_all_egress
 	// (so the allowlist subtraction is worth nothing — everything not denied is
-	// allowed, and the deny is the ONLY remaining half) and port 22 (plain
+	// allowed, and the deny is the only remaining half) and port 22 (plain
 	// git-over-SSH, which no ":443" entry matches). Measured on this evaluator:
 	// a ":443"-spelled deny gives ssh.github.com:22 = ALLOW, a bare-host deny gives
 	// deny. Without this case the confineGitBrokerEgress deviation is pinned only
@@ -322,7 +322,7 @@ func TestDispatch_BrokeredSSHDropIsAuditedAndNeverReachesTheSandbox(t *testing.T
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // no agent exec / completion watcher; this test is about dispatch
 
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy:    types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC1},
 		GitGrants: map[string]uuid.UUID{"acme/widgets": uuid.New()},
@@ -332,9 +332,9 @@ func TestDispatch_BrokeredSSHDropIsAuditedAndNeverReachesTheSandbox(t *testing.T
 	if v, ok := fr.lastSpec.Env["WARDYN_SSH_GRANTS"]; ok {
 		t.Errorf("the sandbox was handed WARDYN_SSH_GRANTS=%q on a brokered run — agent-run will mint the key and write it 0400", v)
 	}
-	ev := findAudit(audit.events, run.ID, "run.ssh.brokered_forge", "failure")
+	ev := findAudit(audit.events, run.ID, "run.ssh.drop", "failure")
 	if ev == nil {
-		t.Fatalf("the ssh_key drop was SILENT: no run.ssh.brokered_forge event; events=%s", auditDump(audit.events, run.ID))
+		t.Fatalf("the ssh_key drop was SILENT: no run.ssh.drop event; events=%s", auditDump(audit.events, run.ID))
 	}
 	if !strings.Contains(string(ev.Data), "github.com") {
 		t.Errorf("audit event does not name the dropped host: %s", ev.Data)

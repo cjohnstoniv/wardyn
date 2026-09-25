@@ -54,7 +54,7 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	// created_at AFTER the cutoff and survive it, so "revoke every session for
 	// this human" would silently not.
 	//
-	// The age, not now(), because plain now() would re-open F143: the API stamps
+	// The age, not now(), because plain now() would break admission-time stamping: the API stamps
 	// t.CreatedAt at request ADMISSION, before it reads the body, precisely so a
 	// caller who holds a mint request open across POST /sessions/revoke cannot
 	// land a created_at after the cutoff. now() - age keeps that and adds the
@@ -75,11 +75,11 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	// reads these rows, and a const cannot call it. A string concatenation per
 	// mint, on a path that already does a network round trip.
 	q := `
-		INSERT INTO api_tokens (id, principal, email, role, groups, groups_truncated, name, token_sha256, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,` + db.AppClockAgeSQL("$9") + `)
+		INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,` + db.AppClockAgeSQL("$10") + `)
 		RETURNING ` + apiTokenCols
 	out, err := scanAPIToken(s.Pool.QueryRow(ctx, q,
-		t.ID, t.Principal, t.Email, t.Role, groups, t.GroupsTruncated, t.Name, hashToken(raw), age))
+		t.ID, t.Principal, t.Email, t.Role, t.UserType, groups, t.GroupsTruncated, t.Name, hashToken(raw), age))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -98,7 +98,7 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 // `revoked_at IS NULL` is in the WHERE, not checked by the caller, and that is
 // the security shape: a revoked token, an unknown token and a token whose hash
 // does not match all fail IDENTICALLY with ErrNotFound, so the boundary is not
-// an oracle for "this token used to exist".
+// an oracle for "this token once existed".
 func (s PG) GetAPITokenByRaw(ctx context.Context, raw string) (types.APIToken, error) {
 	const q = `
 		SELECT ` + apiTokenCols + `
@@ -129,7 +129,7 @@ func (s PG) TouchAPIToken(ctx context.Context, id uuid.UUID, now time.Time) erro
 func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]types.APIToken, error) {
 	const q = `
 		SELECT ` + apiTokenCols + `
-		FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC`
+		FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC, id`
 	return queryAPITokens(ctx, s, q, principal)
 }
 
@@ -143,8 +143,8 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 	return queryAPITokens(ctx, s, q)
 }
 
-// RefreshAPITokenIdentity re-stamps role AND the group snapshot (with its
-// completeness bit) on EVERY token principal holds, and it is the api-token
+// RefreshAPITokenIdentity re-stamps role, user type AND the group snapshot
+// (with its completeness bit) on EVERY token principal holds, and it is the api-token
 // twin of RefreshSSHKeyRoles: the OIDC callback's OnLogin hook fires both, so
 // one login bounds both frozen credentials at once.
 //
@@ -155,7 +155,7 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 // memberships moved on keeps authorizing against the groups they held at mint
 // time until they mint a fresh token. The role half was bound this way in
 // migration 0046; this widens the token lane's counterpart to cover groups
-// too.
+// too, and migration 0082 the user type.
 //
 // truncated is bound EXACTLY as the caller passes it, never defaulted or
 // inferred here: it must come straight from the login's own session-
@@ -174,14 +174,14 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 //
 // No error when the principal holds no tokens: an UPDATE matching zero rows is
 // the ordinary case for most humans, not a failure.
-func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role string, groups []string, truncated bool) error {
+func (s PG) RefreshAPITokenIdentity(ctx context.Context, principal, role, userType string, groups []string, truncated bool) error {
 	g, err := marshalGroups(groups)
 	if err != nil {
 		return err
 	}
 	_, err = s.Pool.Exec(ctx,
-		`UPDATE api_tokens SET role = $1, groups = $2, groups_truncated = $3 WHERE principal = $4 AND revoked_at IS NULL`,
-		role, g, truncated, principal)
+		`UPDATE api_tokens SET role = $1, user_type = $2, groups = $3, groups_truncated = $4 WHERE principal = $5 AND revoked_at IS NULL`,
+		role, userType, g, truncated, principal)
 	if err != nil {
 		return fmt.Errorf("store: refresh api token identity: %w", err)
 	}
@@ -234,12 +234,12 @@ func marshalGroups(groups []string) (any, error) {
 // token_sha256, which no read ever selects (the hash never leaves the row),
 // and omits last_used_at / revoked_at, which no insert sets. Those lists
 // differ in BOTH directions, so deriving one from the other would hide that.
-const apiTokenCols = `id, principal, email, role, groups, groups_truncated, name, created_at, last_used_at, revoked_at`
+const apiTokenCols = `id, principal, email, role, user_type, groups, groups_truncated, name, created_at, last_used_at, revoked_at`
 
 func scanAPIToken(row pgx.Row) (types.APIToken, error) {
 	var t types.APIToken
 	var groups []byte
-	err := row.Scan(&t.ID, &t.Principal, &t.Email, &t.Role, &groups, &t.GroupsTruncated, &t.Name,
+	err := row.Scan(&t.ID, &t.Principal, &t.Email, &t.Role, &t.UserType, &groups, &t.GroupsTruncated, &t.Name,
 		&t.CreatedAt, &t.LastUsedAt, &t.RevokedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.APIToken{}, ErrNotFound

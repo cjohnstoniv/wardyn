@@ -63,7 +63,7 @@ func apiKeyScopes(t *testing.T, spec *types.RunPolicySpec) []map[string]string {
 	return out
 }
 
-// ─── nothing is ambient ──────────────────────────────────────────────────────
+// nothing is ambient
 
 // TestIntegrationFold_NothingIsAmbient is the invariant the whole design rests
 // on: an integration that EXISTS but is not named by any workspace requirement
@@ -97,7 +97,7 @@ func TestIntegrationFold_NothingIsAmbient(t *testing.T) {
 	}
 }
 
-// ─── the granted path ────────────────────────────────────────────────────────
+// the granted path
 
 func TestIntegrationFold_GrantedFoldsHostsAndOneGrantPerHost(t *testing.T) {
 	srv := runIntegrationSrv(t, []types.Integration{feedIntegration()},
@@ -123,7 +123,7 @@ func TestIntegrationFold_GrantedFoldsHostsAndOneGrantPerHost(t *testing.T) {
 			t.Errorf("grant scope host = %q, not one of the integration's hosts", sc["host"])
 		}
 	}
-	if len(events) != 1 || events[0].action != "run.workspace.requirement.integration" {
+	if len(events) != 1 || events[0].action != "run.requirement.inject" {
 		t.Fatalf("events = %+v, want one integration audit entry", events)
 	}
 	if events[0].target != "corp-artifactory" {
@@ -150,7 +150,7 @@ func TestIntegrationFold_EmptyFormatBecomesRawSecretNotBearer(t *testing.T) {
 	}
 }
 
-// ─── optional lane, same rules as every other requirement type ──────────────
+// optional lane, same rules as every other requirement type
 
 func TestIntegrationFold_OptionalNeedsAnExplicitPerRunEnable(t *testing.T) {
 	srv := runIntegrationSrv(t, []types.Integration{feedIntegration()},
@@ -174,7 +174,7 @@ func TestIntegrationFold_OptionalNeedsAnExplicitPerRunEnable(t *testing.T) {
 	}
 }
 
-// ─── degrade, never brick ────────────────────────────────────────────────────
+// degrade, never brick
 
 // Every one of these would fail the proxy CLOSED at startup if it authored a
 // grant anyway (an unresolvable secret, or a host the exact allowlist can't
@@ -247,7 +247,7 @@ func TestIntegrationFold_DegradesNeverBricks(t *testing.T) {
 	})
 }
 
-// ─── never double-grant a host ───────────────────────────────────────────────
+// never double-grant a host
 
 // Two workspaces requiring the SAME integration, or an integration whose host
 // a policy already credentialed, must not stack two api_key grants on one host
@@ -276,7 +276,7 @@ func TestIntegrationFold_NeverDoubleGrantsAHost(t *testing.T) {
 	}
 }
 
-// ─── the member's own key satisfies a workspace requirement ──────────────────
+// the member's own key satisfies a workspace requirement
 
 // TestIntegrationFold_MemberOwnKeySatisfiesRequirement: an operator-configured
 // integration whose credential the operator has NOT stored is satisfied by the

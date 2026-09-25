@@ -58,6 +58,9 @@ type createdContainer struct {
 	connectedTo []string
 	state       *container.State
 	removed     bool
+	// forceRemoved records whether the removal asked for Force, which a
+	// container that may be running needs.
+	forceRemoved bool
 }
 
 // fakeDocker is an in-memory dockerAPI for unit tests. It is concurrency-safe
@@ -171,6 +174,13 @@ type fakeDocker struct {
 	listItems       []container.Summary
 	lastListFilters client.Filters
 	lastListAll     bool
+
+	// probeExitCode is the exit code ContainerWait reports for a container
+	// whose name carries the drive-probe prefix ("wardyn-drive-probe-") —
+	// there is no real command interpreter here to run `test -r/-x` against a
+	// bind mount, so a ProbeDrive test scripts the answer this way instead.
+	// Zero (readable) unless a test overrides it.
+	probeExitCode int64
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -420,7 +430,15 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 	if c == nil {
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
-	c.state = &container.State{Status: "running", Running: true}
+	if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
+		// No real command interpreter here to run the probe's `test -r/-x`
+		// against a bind mount — model it as already exited with the
+		// scripted code, the same "immediate" shape a real one-shot process
+		// this fast would leave ContainerWait to observe.
+		c.state = &container.State{Status: "exited", ExitCode: int(f.probeExitCode)}
+	} else {
+		c.state = &container.State{Status: "running", Running: true}
+	}
 	f.startedNames = append(f.startedNames, id)
 	return client.ContainerStartResult{}, nil
 }
@@ -465,6 +483,7 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		Name:            "/" + c.name,
 		State:           c.state,
 		Config:          c.cfg,
+		HostConfig:      c.host,
 		NetworkSettings: &container.NetworkSettings{Networks: nets},
 	}}, nil
 }
@@ -526,7 +545,7 @@ func (f *fakeDocker) ContainerUnpause(ctx context.Context, id string, _ client.C
 	return client.ContainerUnpauseResult{}, nil
 }
 
-func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, _ client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.containers[id]
@@ -534,6 +553,7 @@ func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, _ client.Co
 		return client.ContainerRemoveResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	c.removed = true
+	c.forceRemoved = opts.Force
 	return client.ContainerRemoveResult{}, nil
 }
 

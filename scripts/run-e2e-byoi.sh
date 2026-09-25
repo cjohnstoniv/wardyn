@@ -43,7 +43,8 @@ source "${ROOT}/scripts/lib/common.sh"
 BASE="${WARDYN_E2E_BASE_URL:-http://localhost:8080}"
 export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
 
-die() { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
+# die() is common.sh's default (identical prefix/stream/exit) — no local
+# override needed here.
 command -v docker >/dev/null 2>&1 || die "docker not found"
 command -v jq >/dev/null 2>&1 || die "jq not found (needed to read run/audit JSON)"
 

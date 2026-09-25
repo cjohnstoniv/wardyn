@@ -111,7 +111,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	// hides their credential, it does not hand them a second identity — so this
 	// is the one door the preview has to close rather than let fail closed.
 	if previewHidesOwnCredential(r.Context()) {
-		writeError(w, http.StatusConflict, memberPreviewSignInRefusal)
+		writeError(w, http.StatusConflict, userViewPreviewSignInRefusal)
 		return
 	}
 	// AWS: `aws sso login` cannot run at all without an sso_start_url + sso_region
@@ -153,14 +153,20 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	// runner / no capabilities / no confinement class, the governance limit
 	// below, the roster fail-closed arm and the admin-token-under-per_user arm
 	// all answer here, with no run to show for it either way.
-	run, dispatch, err := s.launchHarnessLoginRun(r.Context(), actor, hl, startURL,
-		awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName}, scope)
+	run, dispatch, err := s.launchHarnessLoginRun(r.Context(), actor, hl, loginTarget{
+		startURL: startURL, region: cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion),
+		pin: awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName}, scope: scope,
+	})
 	if err != nil {
 		// A governance limit is the acting principal's own profile refusing, not a
 		// daemon fault — answered the way launchRecordRun's caller answers it
 		// (record.go), with the profile's own sentence and no 500.
 		if errors.Is(err, errRecordCeilingLimit) {
 			writeError(w, http.StatusForbidden, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
+			return
+		}
+		if errors.Is(err, errSignInBusy) {
+			writeError(w, http.StatusServiceUnavailable, signInBusyRefusal)
 			return
 		}
 		writeServerError(w, r, "launch login sandbox", err)
@@ -178,7 +184,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 
 // finishHarnessLoginLaunch is the part of the launch that can block: resolve the
 // dispatch ceiling, then dispatchRun (CreateSandbox, the STARTING->RUNNING CAS,
-// run.interactive). It runs detached, after the caller already holds a 200 and
+// run.interactive.start). It runs detached, after the caller already holds a 200 and
 // a run id.
 //
 // The ceiling error is the missed door. resolveDispatchCeiling errors AFTER the

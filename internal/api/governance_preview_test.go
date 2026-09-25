@@ -3,7 +3,7 @@
 
 // POST /governance/preview — the console's resolved-profile dry run.
 //
-// THE CONTRACT UNDER TEST is not "the preview ranks correctly". It is that the
+// The contract under test is not "the preview ranks correctly". It is that the
 // preview HAS NO RANKING OF ITS OWN: every case below asserts the endpoint's
 // answer against a DIRECT Store.ResolveGovernanceProfile call on the same
 // fixtures and the same claim lists — the identical call the enforcement path
@@ -145,7 +145,7 @@ func previewViaHTTP(t *testing.T, srv *Server, users, groups []string) governanc
 // which is exactly what the endpoint ships as an empty object.
 func resolveDirect(t *testing.T, pool *pgxpool.Pool, users, groups []string) governancePreviewResponse {
 	t.Helper()
-	p, tier, err := store.NewPG(pool).ResolveGovernanceProfile(context.Background(), users, groups)
+	p, tier, err := store.NewPG(pool).ResolveGovernanceProfile(context.Background(), users, groups, "")
 	if errors.Is(err, store.ErrNotFound) {
 		return governancePreviewResponse{}
 	}
@@ -309,7 +309,7 @@ func TestGovernancePreview_RefusesAnOversizedClaimList(t *testing.T) {
 // it refuses, and needs no Postgres to do it.
 func TestGovernancePreview_IsSecurityTierOnly(t *testing.T) {
 	srv, _, _, _ := newAuthzMatrixServer(t)
-	member := ssoSession(t, "sub-preview-member", "member-preview@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-preview-member", "member-preview@corp.example", oidc.RoleUser)
 	if w := doSSO(t, srv, http.MethodPost, "/api/v1/governance/preview", member, `{}`); w.Code != http.StatusForbidden {
 		t.Errorf("member on the preview: code = %d, want 403; body=%s", w.Code, w.Body.String())
 	}

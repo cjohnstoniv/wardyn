@@ -47,7 +47,7 @@ import { GOVERNANCE_NAV_TITLE } from "./nav-copy";
 //   PERM.COL_WHO / FIELD_WHO / COL_ADDED / SUBJECT_USER / SUBJECT_GROUP /
 //   SUBJECT_ALL / HINT_USER / HINT_GROUP / HINT_ALL / REMOVE — the assignments
 //     table's "Who" column, its three subject kinds, and their hints.
-//   PEOPLE.CANCEL / ROLE_ADMIN / ROLE_MEMBER / FIELD_VALUE / ADD_CTA /
+//   PEOPLE.CANCEL / ROLE_ADMIN / ROLE_USER / FIELD_VALUE / ADD_CTA /
 //     FIELD_ROLE.
 //   PREVIEW.FIELD_CLAIMS / FIELD_CLAIMS_HINT — the resolved preview takes the
 //     claims a token would carry, which is exactly what the People step's
@@ -123,7 +123,7 @@ export const GOVERNANCE = {
   ASSIGNED_COUNT: (n: number) => `${n} subject${n === 1 ? "" : "s"}`,
   // ADDITION to §7.2 (R4/F032): the Limits cell must also account for a run
   // quota, not just the three BOOLEAN doors — otherwise a profile whose one
-  // limit is a run quota reads "None" while denyMemberRunQuota (internal/api/
+  // limit is a run quota reads "None" while denyUserRunQuota (internal/api/
   // runs_create_validate.go) still refuses that member's fourth run with a
   // 422. Same inline pluralisation as ASSIGNED_COUNT; the wording tracks the
   // server's own "too many runs at once".
@@ -224,6 +224,9 @@ export const GOVERNANCE = {
   // ENFORCE_OFF_TITLE was.
   MATCHED_USER: "a user assignment",
   MATCHED_GROUP: "a group assignment",
+  // 0.8: the user type tier (user > group > user type > all), in the same
+  // shape as its neighbours. Not in §7.3's prose, which predates user types.
+  MATCHED_USER_TYPE: "a user type assignment",
   MATCHED_ALL: "the everyone assignment",
   PREVIEW_RESULT_DEFAULT: "These claims resolve to the deployment ceiling — no assignment matches them.",
   PREVIEW_RESULT_UNKNOWN: "Couldn't resolve this — try again.",
@@ -279,6 +282,8 @@ export const GOVERNANCE = {
 //     when a redeploy removes a pairing from WARDYN_DEFAULT_POLICY that a
 //     stored profile still names: the grant is dropped rather than the run
 //     failed, and the member is told.
+//     WARN_PUSH_RULES_DROPPED is its push_rules mirror (droppedPushRulesWarning,
+//     same file), fired at the same resolve seam (#272).
 // DENIED_CODEX_HOLD sits BESIDE, never replaces, runs_create_validate.go's
 // existing explicit-hold refusal (§7.1) — one refuses a hold the caller asked
 // for, the other a hold their profile derived. WARN_STORED_CLAMPED is the
@@ -306,13 +311,15 @@ export const MEMBER = {
     `workspace host "${host}" is denied by your governance profile "${name}" — the run launches, but that host is refused at the proxy`,
   WARN_GRANT_DROPPED: (name: string, kind: string, reason: string) =>
     `governance profile "${name}": dropped ${kind} grant no longer within the deployment's eligible grants (${reason})`,
+  WARN_PUSH_RULES_DROPPED: (name: string) =>
+    `governance profile "${name}": push_rules dropped — this profile's ceiling sets none, so the deployment default's content rules do not apply to members of it`,
   DENIED_STALE_GROUPS:
     "groups_snapshot_stale: your group membership snapshot is missing or was truncated at sign-in, and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved",
 
   // The two CAPABILITY refusals, which is why — alone in this group — they name
   // no profile: they fire whether or not the caller has one. Both close a door a
   // member could otherwise walk through AFTER the explicit check had already run
-  // (denyMemberSeededImage, runs_create_validate.go; handleCreateWorkspace,
+  // (denyUserSeededImage, runs_create_validate.go; handleCreateWorkspace,
   // workspaces.go). The `{id}` below is a literal route segment, not a parameter.
   DENIED_SEEDED_IMAGE: (image: string) =>
     `image ${image} comes from your own workspace's base image and is not granted to you — ask an admin to grant the exact image ref, or launch with the agent's convention image`,
@@ -348,7 +355,7 @@ export const POSITIONING = {
 export const DIRECTORY = {
   // RE-EXPORTED, never retyped: §7.9 freezes this as the picker option, the
   // table chip AND the mapped-role label — one string for all three — and puts
-  // its home next to PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_MEMBER, which is why it
+  // its home next to PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_USER, which is why it
   // is title case AS THE CHIP; a sentence takes its lowercase
   // (people-access-prompt.md §7.2, access-panel.tsx's roleLabelInSentence).
   // Two homes for one frozen label is how they drift

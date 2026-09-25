@@ -364,11 +364,23 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, strings.TrimPrefix(lerr.Error(), errAgentNotEnabled.Error()+": "))
 			return
 		}
+		// The model-provider choice: the create door's 422 and sentence, without
+		// its provider/kind/reason fields yet (#797).
+		if errors.Is(lerr, errModelProviderRefused) {
+			writeError(w, http.StatusUnprocessableEntity, strings.TrimPrefix(lerr.Error(), errModelProviderRefused.Error()+": "))
+			return
+		}
 		// Provider admission, the roster refusal's sibling and mapped the
 		// same way: the status and the sentence are the ones every other admission
 		// door answers, so "this repository is not on an enabled provider" costs
 		// the same here as it does at create.
 		if s.writeAdmissionLaunchRefusal(w, r, lerr) {
+			return
+		}
+		// The same gate could not read the sign-in state: the 503 every
+		// other door answers, not the 422 below and not a bare 500.
+		if errors.Is(lerr, errGitCredentialUnreadable) {
+			writeGitCredentialUnreadable(w, r, lerr)
 			return
 		}
 		// The per-user Azure DevOps gate (#386 review follow-up N4): admitted,
@@ -382,7 +394,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// A governance LIMIT is a refusal, not a fault: 403, the same status
-		// denyMemberGovernance answers when the identical limit refuses the
+		// denyUserGovernance answers when the identical limit refuses the
 		// identical principal's ordinary run. Both limits map here — the quota
 		// one too, even though the create path answers it 422 — because 422 on
 		// this route would mean "your request is malformed", and the request is
@@ -403,7 +415,7 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// differently from run-create for the same cause. Everything else keeps
 		// today's 500.
 		if errors.Is(lerr, errGroupsSnapshotStale) {
-			writeCeilingError(w, lerr)
+			writeCeilingError(w, r, lerr)
 			return
 		}
 		writeServerError(w, r, "launch record run", lerr)

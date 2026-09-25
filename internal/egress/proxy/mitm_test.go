@@ -247,16 +247,15 @@ func TestMITMBlockRefusesOverTunnel(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_DialsConfiguredPort is the W13-S1-5 regression. A corp
-// artifact MITM host is matched by HOSTNAME (mitmHosts), so before this fix
-// serveMITMRequest hardcoded the dial target to port 443 regardless of which
-// port the sandbox actually CONNECTed to. An operator's mirror living on a
-// non-443 port (npmrc/pip.conf/etc. pointing at "mirror.corp:5000") would
-// still get its tunnel TLS-terminated (hostname matched) and its registry
-// token injected — then FORWARDED to port 443 of that same host, presenting
-// the token to whatever answers there instead of the configured mirror. This
-// test fails on base 6d76911 (captures a dial to port 443) and passes once
-// the real CONNECT port is threaded through mitmConnect/serveMITMRequest.
+// TestMITMCorpHost_DialsConfiguredPort: a corp artifact MITM host is matched
+// by hostname (mitmHosts), so serveMITMRequest must dial the port the sandbox
+// actually CONNECTed to, not a hardcoded 443. An operator's mirror living on
+// a non-443 port (npmrc/pip.conf/etc. pointing at "mirror.corp:5000") gets
+// its tunnel TLS-terminated (hostname matched) and its registry token
+// injected, so a 443 dial would forward it to port 443 of that same host,
+// presenting the token to whatever answers there instead of the configured
+// mirror. The real CONNECT port is threaded through
+// mitmConnect/serveMITMRequest.
 func TestMITMCorpHost_DialsConfiguredPort(t *testing.T) {
 	cu := captureUpstream(t, true, "mirror-ok")
 
@@ -343,7 +342,7 @@ func TestMITMCorpHost_DialsConfiguredPort(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_PortMismatchFallsThroughOpaque is W13-S1-5's other half:
+// TestMITMCorpHost_PortMismatchFallsThroughOpaque is other half:
 // an EXPLICITLY port-scoped mitmHosts entry ("host:port", what
 // planArtifactRedirect now authors) is MITM/injection-eligible ONLY at that
 // port. A CONNECT to the same host on a DIFFERENT, unconfigured port must NOT
@@ -388,14 +387,14 @@ func TestMITMCorpHost_PortMismatchFallsThroughOpaque(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_ForwardEgressScanCoversBody is the W19-W19d-1 regression.
-// channelForHost maps every corp artifact MITM host to ChannelGeneric, which
-// classifyLLM unconditionally treats as scanNone (not prompt-bearing) — so
-// inspectLLM alone streamed an artifact-MITM body through completely
-// unscanned, even with inspect_forward_egress on (the flag that already
-// extends inspection to the PLAIN, non-MITM forward path). A secret leaking
-// through a "corp registry" MITM tunnel must be caught exactly like one
-// leaking through a plain HTTP connector.
+// TestMITMCorpHost_ForwardEgressScanCoversBody: channelForHost maps every
+// corp artifact MITM host to ChannelGeneric, which classifyLLM
+// unconditionally treats as scanNone (not prompt-bearing) — so inspectLLM
+// alone would stream an artifact-MITM body through completely unscanned, even
+// with inspect_forward_egress on (the flag that extends inspection to the
+// plain, non-MITM forward path). A secret leaking through a "corp registry"
+// MITM tunnel must be caught exactly like one leaking through a plain HTTP
+// connector.
 func TestMITMCorpHost_ForwardEgressScanCoversBody(t *testing.T) {
 	cu := captureUpstream(t, true, "mirror-ok")
 
@@ -457,7 +456,7 @@ func TestMITMCorpHost_ForwardEgressScanCoversBody(t *testing.T) {
 // so any registered secret it carries is masked (httpError) before it leaves.
 func TestMITMRefreshFailureMasksSecretInError(t *testing.T) {
 	const secret = "sk-ant-oat-LEAKED-0123456789"
-	procRegistry.AddGlobal([]byte(secret))
+	procMask([]byte(secret))
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "resolve failed for "+secret, http.StatusInternalServerError)
 	}))
@@ -488,16 +487,16 @@ func TestMITMRefreshFailureMasksSecretInError(t *testing.T) {
 	}
 }
 
-// TestMITMCorpHost_DecisionCarriesRealPort is the audit half of W13-S1-5.
-// TestMITMCorpHost_DialsConfiguredPort already pins that the real CONNECT port
-// reaches the DIAL; this pins that it also reaches the DECISION LOG. The two are
-// separate plumbing — mitmConnect threads port into serveMITMRequest, which
-// hands it to BOTH egressTarget and emitLLMDecision — so a regression that
+// TestMITMCorpHost_DecisionCarriesRealPort is the audit half of
+// TestMITMCorpHost_DialsConfiguredPort: that test pins that the real CONNECT
+// port reaches the dial; this pins that it also reaches the decision log. The
+// two are separate plumbing — mitmConnect threads port into serveMITMRequest,
+// which hands it to both egressTarget and emitLLMDecision — so a change that
 // reverted only the decision arm would leave the audit trail saying the
-// operator's registry token went to mirror.corp:443 while the wire says :5000.
-// On a host-matched MITM lane the port is the ONLY field distinguishing the
-// configured mirror from anything else answering on that hostname, so a row
-// naming the wrong one is worse than no row.
+// operator's registry token went to mirror.corp:443 while the wire says
+// :5000. On a host-matched MITM lane the port is the only field
+// distinguishing the configured mirror from anything else answering on that
+// hostname, so a row naming the wrong one is worse than no row.
 func TestMITMCorpHost_DecisionCarriesRealPort(t *testing.T) {
 	cu := captureUpstream(t, true, "mirror-ok")
 
@@ -576,7 +575,13 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 	holdPollInterval = 5 * time.Millisecond
 	defer func() { holdPollInterval = prevPoll }()
 
-	// THE DECISION ROW IS NARROWER THAN THE 401 (security NIT-B). Every case
+	// Shrink the clamp floor: the "budget really expired" case below waits out
+	// the whole budget, so this trades the real 10s production floor for a
+	// test-scale one (restored after — see
+	// TestMinCredentialReauthTimeout_ProductionFloorUnchanged).
+	shrinkReauthFloor(t, 50*time.Millisecond)
+
+	// The decision row is narrower than the 401 (security NIT-B). Every case
 	// below ends without a credential and every one of them earns the modelled
 	// 401 — the sandbox has to be told. Only ONE of them expired, and only that
 	// one may write credential:reauth-timeout, because that row is what an
@@ -591,7 +596,7 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 		sentence string
 	}{{
 		name:     "the budget really expired",
-		budget:   "10s", // the clamp's floor
+		budget:   "1ms", // clamped UP to the (shrunk) floor
 		steps:    pending(1),
 		wantRow:  true,
 		sentence: reauthTimedOutSentence,
@@ -670,7 +675,7 @@ func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
 	}
 }
 
-// A CLIENT THAT HUNG UP IS WRITTEN NOTHING — no 401, no deny row (security
+// A client that hung up is written nothing — no 401, no deny row (security
 // SHOULD-1). The first shape ended the workflow with an expiry whenever its
 // first caller's ctx died, so a disconnect was recorded as "nobody signed in
 // before the hold expired" for a hold that still had minutes left, and every

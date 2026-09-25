@@ -66,7 +66,7 @@ export function SandboxWidget({ runId, live }: { runId: string; live: boolean })
   );
 
   React.useEffect(() => {
-    load(true);
+    void load(true);
   }, [load]);
   usePoll(() => load(false), POLL_MS, !live);
 

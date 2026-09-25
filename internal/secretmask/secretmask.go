@@ -10,7 +10,7 @@
 // representations of the secret are NOT caught. This is intentional and
 // documented here so the limitation is visible at the implementation site.
 //
-// Stated precisely, because the wider reading is the one that bites (F155): the
+// Stated precisely, because the wider reading is the one that bites: the
 // unit of protection is a RENDERING, not a credential. Registering "Bearer
 // sk-abc" does not mask a bare "sk-abc" in the same buffer, and registering a
 // token does not mask the base64 an Authorization: Basic header carries it in.
@@ -29,8 +29,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"slices"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -48,9 +50,19 @@ var placeholder = []byte("<secret-hidden>")
 //
 // A nil *Registry is safe: all methods on a nil pointer are no-ops.
 type Registry struct {
-	mu      sync.RWMutex
-	perRun  map[uuid.UUID][][]byte // run id -> set of secret values
-	globals [][]byte               // process-wide secrets applied to every run
+	mu     sync.RWMutex
+	perRun map[uuid.UUID][][]byte // run id -> set of secret values
+	// globals is every process-wide value masked right now, on every run: the
+	// union of current and retired, rebuilt by reflatten whenever either changes.
+	globals [][]byte
+	// current holds each credential's live values by (owner, name), so a
+	// refreshed or deleted credential's old values can be let go (CS-4, F5)
+	// instead of living for the daemon's whole life.
+	current map[globalKey][]globalValue
+	// retired holds values that are no longer current. They stay masked until
+	// SweepGlobals drops them: masking fails open, and an event quoting the old
+	// value can still arrive after the credential moved on.
+	retired []retiredValue
 
 	// gen bumps on every mutation that CHANGES the corpus (a de-duplicated Add
 	// is not a change). It is the cache key below: a Masker built at generation
@@ -62,6 +74,22 @@ type Registry struct {
 	// without this the masking hot path re-derives an unchanged set thousands of
 	// times per run. Evict drops a run's entry with its secrets.
 	cached map[uuid.UUID]*runMaskers
+}
+
+type globalKey struct{ owner, name string }
+
+// globalValue is one current value of a credential. until, when set, is the
+// value's own expiry (a short-lived access token's): from then on SweepGlobals
+// treats it as retired at until, so a credential nobody refreshes again still
+// lets go of it (#151).
+type globalValue struct {
+	value []byte
+	until time.Time
+}
+
+type retiredValue struct {
+	value []byte
+	at    time.Time
 }
 
 // runMaskers is one run's derived masking state at a single registry generation.
@@ -77,7 +105,7 @@ type runMaskers struct {
 
 // NewRegistry returns an empty, ready-to-use Registry.
 func NewRegistry() *Registry {
-	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}}
+	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}, current: map[globalKey][]globalValue{}}
 }
 
 // Add registers value as a secret for runID. Values shorter than MinLen are
@@ -111,24 +139,190 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) {
 	r.gen++
 }
 
-// AddGlobal registers value as a process-global secret applied on every run.
-// Values shorter than MinLen are ignored. Re-registering the same value is a
-// no-op: per-run call sites (Bedrock SSO auth resolution, subscription inject)
-// re-add the same blob on every dispatch and every preflight, and duplicates
-// would grow globals without bound — Snapshot clones and NewMasker sorts the
-// whole set on every masked chunk, so the masking hot path pays for each one.
-func (r *Registry) AddGlobal(value []byte) {
-	if r == nil || len(value) < MinLen {
+// AddGlobal registers values as the CURRENT values of one credential, the row
+// (owner, name), masked process-wide on every run. Values shorter than MinLen
+// are ignored, and so are repeats: a caller re-registers the same credential on
+// every dispatch and every refresh.
+//
+// The key is what lets the registry let go. Every value the credential held
+// before and does not hold now (a refreshed access token, a rotated refresh
+// token) is retired, not dropped, and SweepGlobals drops it later. Pass every
+// value the credential currently holds in one call: a value left out is retired.
+// A call with no usable value (every one empty or below MinLen) changes
+// nothing; EvictGlobal is the one way to retire a credential's whole set.
+//
+// now is the caller's clock, the one its expiries and SweepGlobals' cutoff are
+// read on: a value is retired at now.
+func (r *Registry) AddGlobal(owner, name string, now time.Time, values ...[]byte) {
+	r.setGlobal(owner, name, now, false, time.Time{}, nil, values)
+}
+
+// AddGlobalUntil is AddGlobal for a credential whose expiring value (a
+// short-lived access token) stops working at until, its expiry. That value is
+// let go even if nothing ever replaces it: SweepGlobals drops it once until is
+// older than the sweep's grace, so it stays masked for expiry plus grace, the
+// floor a recording uploaded after the token's last use needs. The lasting
+// values (a refresh token, a client secret) carry no expiry of their own and
+// stay until they are replaced or evicted.
+func (r *Registry) AddGlobalUntil(owner, name string, now, until time.Time, expiring []byte, lasting ...[]byte) {
+	r.setGlobal(owner, name, now, false, until, expiring, lasting)
+}
+
+// MergeGlobal is AddGlobal that retires nothing: values join the credential's
+// current ones. It is for a caller that may hold a stale read of the
+// credential (a dispatch that read the row outside the refresh's lock), which
+// must never retire the values a concurrent refresh just made current. The
+// paths that know the credential's full new set (capture, refresh) use
+// AddGlobal.
+func (r *Registry) MergeGlobal(owner, name string, values ...[]byte) {
+	r.setGlobal(owner, name, time.Time{}, true, time.Time{}, nil, values)
+}
+
+// MergeGlobalUntil is MergeGlobal with AddGlobalUntil's expiring value. An
+// expiring value already current keeps the later of its two expiries.
+func (r *Registry) MergeGlobalUntil(owner, name string, until time.Time, expiring []byte, lasting ...[]byte) {
+	r.setGlobal(owner, name, time.Time{}, true, until, expiring, lasting)
+}
+
+// setGlobal's now is unused on a merge, which retires nothing.
+func (r *Registry) setGlobal(owner, name string, now time.Time, merge bool, until time.Time, expiring []byte, lasting [][]byte) {
+	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, g := range r.globals {
-		if bytes.Equal(g, value) {
+	k := globalKey{owner, name}
+	var keep []globalValue
+	if merge {
+		keep = slices.Clone(r.current[k])
+	}
+	add := func(v []byte, until time.Time) {
+		if len(v) < MinLen {
 			return
 		}
+		i := slices.IndexFunc(keep, func(gv globalValue) bool { return bytes.Equal(gv.value, v) })
+		switch {
+		case i < 0:
+			keep = append(keep, globalValue{value: bytes.Clone(v), until: until})
+		case merge:
+			keep[i].until = laterExpiry(keep[i].until, until)
+		default:
+			keep[i].until = until
+		}
 	}
-	r.globals = append(r.globals, bytes.Clone(value))
+	add(expiring, until)
+	for _, v := range lasting {
+		add(v, time.Time{})
+	}
+	if len(keep) == 0 {
+		return
+	}
+	if !merge {
+		r.retireLocked(k, keep, now)
+	}
+	r.current[k] = keep
+	// A value that comes back is current again, not waiting to be swept.
+	r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return containsValue(keep, rv.value) })
+	r.reflattenLocked()
+}
+
+// laterExpiry returns the later of two expiries, where zero means none.
+func laterExpiry(a, b time.Time) time.Time {
+	if a.IsZero() || b.IsZero() {
+		return time.Time{}
+	}
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+func containsValue(set []globalValue, v []byte) bool {
+	return slices.ContainsFunc(set, func(gv globalValue) bool { return bytes.Equal(gv.value, v) })
+}
+
+// EvictGlobal retires every current value of the credential (owner, name): the
+// credential was deleted. The values stay masked until SweepGlobals drops them.
+// Idempotent. now is read as on AddGlobal.
+func (r *Registry) EvictGlobal(owner, name string, now time.Time) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.retireLocked(globalKey{owner, name}, nil, now)
+	r.reflattenLocked()
+}
+
+// SweepGlobals drops the values retired before cutoff, and the current values
+// whose expiry (AddGlobalUntil) is before cutoff, and reports how many it
+// dropped. The production caller is api.Server.SweepRunSecrets, with the same
+// grace a finished run's corpus gets.
+func (r *Registry) SweepGlobals(cutoff time.Time) int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	dropped := len(r.retired)
+	r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return rv.at.Before(cutoff) })
+	dropped -= len(r.retired)
+	for k, vs := range r.current {
+		n := len(vs)
+		vs = slices.DeleteFunc(vs, func(gv globalValue) bool { return !gv.until.IsZero() && gv.until.Before(cutoff) })
+		dropped += n - len(vs)
+		if len(vs) == 0 {
+			delete(r.current, k)
+		} else {
+			r.current[k] = vs
+		}
+	}
+	r.reflattenLocked()
+	return dropped
+}
+
+// retireLocked moves k's current values that are not in keep to retired and
+// forgets k. A value with an expiry is retired at the later of now and that
+// expiry: replacing an access token does not end it, and a cached copy may
+// still be served until it expires. The caller holds r.mu.
+func (r *Registry) retireLocked(k globalKey, keep []globalValue, now time.Time) {
+	for _, gv := range r.current[k] {
+		if !containsValue(keep, gv.value) {
+			at := now
+			if gv.until.After(at) {
+				at = gv.until
+			}
+			r.retired = append(r.retired, retiredValue{value: gv.value, at: at})
+		}
+	}
+	delete(r.current, k)
+}
+
+// reflattenLocked rebuilds globals from current and retired, and bumps gen only
+// when the masked set changed: retiring a value masks exactly what it did
+// before, so it must not invalidate every run's cached Masker. The caller
+// holds r.mu.
+func (r *Registry) reflattenLocked() {
+	seen := map[string]bool{}
+	var out [][]byte
+	add := func(v []byte) {
+		if !seen[string(v)] {
+			seen[string(v)] = true
+			out = append(out, v)
+		}
+	}
+	for _, vs := range r.current {
+		for _, gv := range vs {
+			add(gv.value)
+		}
+	}
+	for _, rv := range r.retired {
+		add(rv.value)
+	}
+	if len(out) == len(r.globals) && !slices.ContainsFunc(r.globals, func(v []byte) bool { return !seen[string(v)] }) {
+		return
+	}
+	r.globals = out
 	r.gen++
 }
 
@@ -277,9 +471,8 @@ func (r *Registry) Evict(runID uuid.UUID) {
 // The UNION, not just perRun (B11b-F8). Masker caches a derived Masker for
 // every run id that asks for one, including a run with no per-run secrets at
 // all — a scan run, a grantless run — whose corpus is the process globals.
-// Listing perRun alone made those ids invisible to the sweep, so their cached
-// clones lived for the process lifetime: the leak W12-S1-2 closed, one field
-// over. Evict already deletes from both maps, so nothing else had to change.
+// Listing perRun alone would hide those ids from the sweep, so their cached
+// clones would live for the process lifetime.
 func (r *Registry) RunIDs() []uuid.UUID {
 	if r == nil {
 		return nil

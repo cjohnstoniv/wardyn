@@ -116,7 +116,7 @@ func admissionRefusalStatus(operator bool) int {
 // refusal — when the caller must stop.
 //
 // It runs BEFORE the member capability check at every site it shares with
-// denyMemberWorkspaceProviders, and the order is deliberate: admission is the
+// denyUserWorkspaceProviders, and the order is deliberate: admission is the
 // operator-binding question ("may anyone clone this here?"), and a repository
 // nobody may clone must not first be reported as a missing grant the admin
 // could hand out.
@@ -287,8 +287,8 @@ func legacyHostAdmittedHosts(sc types.SiteConfig, repos []string) []string {
 // one shape reads better in the trail than two that differ by their target.
 func (s *Server) auditLegacyHostAdmissions(ctx context.Context, sc types.SiteConfig, repos []string) {
 	for _, host := range legacyHostAdmittedHosts(sc, repos) {
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "workspace.provider.legacy_host",
-			host, "success", mustJSON(map[string]any{"host": host})))
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "workspace.provider.admit",
+			host, "success", mustJSON(map[string]any{"reason": "legacy_host", "host": host})))
 	}
 }
 
@@ -314,7 +314,7 @@ func (s *Server) legacyHostAdmissionWarnings(ctx context.Context, repos ...strin
 }
 
 // sshHostLevelWarnings is the ADMIT_SSH_HOST_LEVEL sentence — plus its audit row,
-// the run.provider.lane_dropped shape — for every SSH repository on this run that
+// the run.provider.veto shape — for every SSH repository on this run that
 // a PATH-SCOPED row admitted host-level. Never silent: this is the one admission
 // outcome that is WIDER than the policy reads, and run create is the only door
 // with a warnings channel, so the audit half rides along here rather than at
@@ -341,9 +341,9 @@ func (s *Server) sshHostLevelWarnings(ctx context.Context, runID uuid.UUID, repo
 			if !sshAdmittedAbovePath(row, t) {
 				continue
 			}
-			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.provider.ssh_host_level",
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.provider.admit",
 				string(row.Kind), "failure", mustJSON(map[string]any{
-					"lane": string(types.GitLaneSSH), "kind": string(row.Kind), "host": t.host,
+					"reason": "ssh_host_level", "lane": string(types.GitLaneSSH), "kind": string(row.Kind), "host": t.host,
 				})))
 			warnings = append(warnings, fmt.Sprintf(admitSSHHostLevel, repo, row.Kind))
 		}
@@ -353,13 +353,13 @@ func (s *Server) sshHostLevelWarnings(ctx context.Context, runID uuid.UUID, repo
 
 // requestRepoProviderRefusals is both provider gates over the two FREE-TEXT
 // repository fields on POST /runs — `repo` and `devcontainer_repo` — which reach
-// neither denyMemberRequest (neither is a capability kind of its own) nor
+// neither denyUserRequest (neither is a capability kind of its own) nor
 // validateWorkspaceSources (neither is a spec entry), and are nonetheless cloned:
 // `repo` by the sandbox (broker-minted for, unioned into egress) and
 // `devcontainer_repo` by the image builder, SERVER-SIDE.
 //
 // ADMISSION over both, the member CAPABILITY over `repo` alone — because
-// `devcontainer_repo` is operator-only in effect (denyMemberRequest refuses it
+// `devcontainer_repo` is operator-only in effect (denyUserRequest refuses it
 // from a member before this runs), so there is no member left to check.
 //
 // One function for the pair because decodeAndValidateCreateRun sits at the
@@ -375,7 +375,7 @@ func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Requ
 	if s.admitRepoSources(w, r, req.Repo, req.DevcontainerRepo) {
 		return true
 	}
-	if req.Repo != "" && s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", req.Repo) {
+	if req.Repo != "" && s.denyUserWorkspaceProviders(w, r, "runs.workspace_provider", req.Repo) {
 		return true
 	}
 	return gate && s.gitCredentialRefusal(w, r, req.Repo, req.DevcontainerRepo)
@@ -516,7 +516,7 @@ func (s *Server) laneVetoed(ctx context.Context, runID uuid.UUID,
 		return "", false
 	}
 	decided := rows[0] // every row in the list vetoed; they agree on the kind
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.provider.lane_dropped",
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.provider.veto",
 		string(decided.Kind), "failure", mustJSON(map[string]any{
 			"lane": string(lane), "grant": string(grant), "kind": string(decided.Kind),
 		})))

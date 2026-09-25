@@ -24,6 +24,7 @@ import {
 } from "./governance-copy";
 import { PEOPLE } from "./people-access-copy";
 import { AUTONOMY_RUBRIC_ROW_KEYS, type AutonomyRubricRowKey } from "./api/governance";
+import { parseFrozenTables } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
@@ -46,32 +47,12 @@ import { AUTONOMY_RUBRIC_ROW_KEYS, type AutonomyRubricRowKey } from "./api/gover
 // a file: URL under the jsdom environment, so it can't resolve this.
 const DOC = resolve(process.cwd(), "../docs/design/governance-prompt.md");
 
-const unmono = (s: string) => s.replace(/`/g, "");
-
-/** key -> frozen string, for every row of §7.2-§7.9's tables. */
-function parseFrozenTables(): Map<string, string> {
-  const rows = new Map<string, string>();
-  let inSection = false;
-  for (const line of readFileSync(DOC, "utf8").split("\n")) {
-    if (line.startsWith("#")) {
-      // §7.2 onward only: §7.1 is the reused-canon table (strings that live in
-      // permissions-copy.ts / people-access-copy.ts / the server), not keys
-      // this module freezes.
-      inSection = /^### 7\.[2-9]\b/.test(line);
-      continue;
-    }
-    if (!inSection || !line.startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells[0] === "Key") continue; // header
-    if (/^:?-+:?$/.test(cells[0])) continue; // separator
-    // §7.8 is a three-column table (Key | Today | Frozen) — the FROZEN column
-    // is the canon; "Today" is the string being replaced.
-    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
-  }
-  return rows;
-}
-
-const doc = parseFrozenTables();
+// §7.2 onward only: §7.1 is the reused-canon table (strings that live in
+// permissions-copy.ts / people-access-copy.ts / the server), not keys this
+// module freezes. §7.8 is a three-column table (Key | Today | Frozen) —
+// parseFrozenTables() takes the LAST cell, so it reads the FROZEN column
+// (the canon) rather than "Today" (the string being replaced).
+const doc = parseFrozenTables(DOC, /^### 7\.[2-9]\b/);
 
 // The two keys whose doc cell carries an "A / B" pluralisation alternation
 // rather than a single renderable string — checked in their own test.
@@ -170,6 +151,7 @@ const rendered: Record<string, string> = {
   "WARN_STORED_CLAMPED(policy, name)": MEMBER.WARN_STORED_CLAMPED("{policy}", "{name}"),
   "WARN_WORKSPACE_DENIED(host, name)": MEMBER.WARN_WORKSPACE_DENIED("{host}", "{name}"),
   "WARN_GRANT_DROPPED(name, kind, reason)": MEMBER.WARN_GRANT_DROPPED("{name}", "{kind}", "{reason}"),
+  "WARN_PUSH_RULES_DROPPED(name)": MEMBER.WARN_PUSH_RULES_DROPPED("{name}"),
   DENIED_STALE_GROUPS: MEMBER.DENIED_STALE_GROUPS,
   "DENIED_SEEDED_IMAGE(image)": MEMBER.DENIED_SEEDED_IMAGE("{image}"),
   DENIED_WORKSPACE_LLM_CRED: MEMBER.DENIED_WORKSPACE_LLM_CRED,
@@ -190,8 +172,8 @@ const rendered: Record<string, string> = {
 };
 
 describe("governance-copy — §7.2-§7.9 parsed out of the prompt doc", () => {
-  it("finds all 96 frozen keys in the doc", () => {
-    expect(doc.size).toBe(96);
+  it("finds all 97 frozen keys in the doc", () => {
+    expect(doc.size).toBe(97);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
@@ -256,7 +238,7 @@ describe("governance-copy — the §7.3 {matched} vocabulary (ADDITION)", () => 
 
 describe("governance-copy — the reuse rules §7 spells out", () => {
   // §7.9: one string for the picker option, the table chip and the mapped-role
-  // label, homed next to PEOPLE.ROLE_ADMIN / ROLE_MEMBER. Two homes for one
+  // label, homed next to PEOPLE.ROLE_ADMIN / ROLE_USER. Two homes for one
   // frozen label is how they drift — this pins the reference, not a copy.
   it("DIRECTORY.ROLE_SECURITY_ADMIN IS PEOPLE.ROLE_SECURITY_ADMIN", () => {
     expect(DIRECTORY.ROLE_SECURITY_ADMIN).toBe(PEOPLE.ROLE_SECURITY_ADMIN);

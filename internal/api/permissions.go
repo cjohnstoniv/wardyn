@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -19,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -87,7 +89,7 @@ func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant
 
 // handleGetPermissions returns every capability grant (admin audience — the
 // FULL table, unlike GET /me/capabilities below) plus the enforcement switch
-// map. operatorOnly (routes.go).
+// map. securityOps (routes.go).
 func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 	grants, err := s.cfg.Store.ListCapabilityGrants(r.Context())
 	if err != nil {
@@ -197,6 +199,13 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 		}
 		g.Subject = subject
+	} else if g.SubjectType == types.CapabilitySubjectUserType {
+		// A type id is matched verbatim against the caller's stamped type, so
+		// it is never folded: only the slug shape the user_types table holds
+		// can ever match. Existence is the handler's check (a store read).
+		if !oidc.UserTypeIDWellFormed(g.Subject) {
+			return fmt.Errorf("subject: %q is not a user type id", g.Subject)
+		}
 	} else {
 		// A USER subject gets canonicalUserSubject, not a bare ToLower. The
 		// fold is UNICODE: U+212A folds to ASCII 'k' and U+0130 to ASCII 'i',
@@ -232,7 +241,7 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //     suffix test), and a mid-label or URL-shaped value stored as a row that can
 //     never match — a deny that protects nothing.
 //
-//   - workspace: uuid.Parse, stored as .String(). The resolver compares
+//   - workspace and policy: uuid.Parse, stored as .String(). The resolver compares
 //     capValueMatches' `grantValue == want` against uuid.UUID.String(), which is
 //     always canonical lowercase-hyphenated, so all four alternative spellings
 //     uuid.Parse accepts were stored 201-Created, rendered as an active DENY,
@@ -253,6 +262,11 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //     same order canonicalUserSubject and oidc.CanonicalGroupSubject use: a
 //     non-ASCII value can never name one of these rows, and folding first would
 //     let U+212A land on an ASCII name the author never typed.
+//
+//   - feature: LOWERCASED (ASCII guard first, as above), then held to the
+//     closed featureValues set. The mint doors ask about exactly those two
+//     strings, so any other value is a row that can never match — a deny that
+//     turns nothing off.
 //
 //   - agent and image: STORED VERBATIM, and that is a decision rather than an
 //     omission. An agent id is not held to a closed catalog at the run boundary
@@ -280,19 +294,33 @@ func canonicalGrantValue(capability, value string) (string, error) {
 		if err := proxy.ValidDomainEntry(v); err != nil {
 			return "", fmt.Errorf("value: %w", err)
 		}
-	case capWorkspace:
+	case capImage:
+		// Verbatim, as above, but never a dot-segment path: the base-image doors'
+		// own rule, so a grant or restriction cannot target a value no image has.
+		if !imageRefPathSafe(v) {
+			return "", fmt.Errorf("value: "+image400DotSegment, fmt.Sprintf("%q", v))
+		}
+	case capWorkspace, capPolicy:
 		id, err := uuid.Parse(v)
 		if err != nil {
-			return "", fmt.Errorf("value: %q is not a workspace id — a workspace capability names a workspace by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v)
+			return "", fmt.Errorf("value: %q is not a %s id — a %s capability names one by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v, capability, capability)
 		}
 		return id.String(), nil
-	case capSecret, capIntegration, capWorkspaceProvider:
+	case capFeature:
+		lowered := strings.ToLower(v)
+		if !oidc.ASCIIOnly(v) || !slices.Contains(featureValues, lowered) {
+			return "", fmt.Errorf("value: %q is not a feature — a feature capability is one of %s, and the resolver compares it exactly, so any other value can never match anything", v, strings.Join(featureValues, ", "))
+		}
+		return lowered, nil
+	case capSecret, capIntegration, capWorkspaceProvider, capModelProvider:
 		grammar, what := secretNameRE, "secret name"
 		switch capability {
 		case capIntegration:
 			grammar, what = integrationRefRE, "integration id"
 		case capWorkspaceProvider:
 			grammar, what = integrationRefRE, "git provider id"
+		case capModelProvider:
+			grammar, what = modelProviderIDPattern, "model provider id"
 		}
 		if !oidc.ASCIIOnly(v) {
 			return "", fmt.Errorf("value: %q is not a %s — one is written in lowercase ASCII, so this value can never match a stored row", v, what)
@@ -311,7 +339,7 @@ func canonicalGrantValue(capability, value string) (string, error) {
 // existing row's effect in place (store.UpsertCapabilityGrant) rather than
 // leaving two contradictory rows — the response status tells the caller which
 // happened: 201 for a genuinely new row, 200 when an existing one was
-// updated (the console's DUPLICATE copy). operatorOnly (routes.go).
+// updated (the console's DUPLICATE copy). securityOps (routes.go).
 func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Request) {
 	var req grantWriteRequest
 	if !decodeStrict(w, r, &req) {
@@ -328,6 +356,9 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid grant: "+err.Error())
 		return
 	}
+	if !s.userTypeSubjectExists(w, r, g.SubjectType, g.Subject) {
+		return
+	}
 	// A fresh candidate id: UpsertCapabilityGrant returns the EXISTING row's id
 	// on a natural-key conflict, never this one — comparing the two is how the
 	// handler tells created from updated without a separate existence read.
@@ -338,9 +369,9 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		writeServerError(w, r, "upsert capability grant", err)
 		return
 	}
-	action, status := "capability.grant.created", http.StatusCreated
+	action, status := "capability.grant.create", http.StatusCreated
 	if saved.ID != g.ID {
-		action, status = "capability.grant.updated", http.StatusOK
+		action, status = "capability.grant.update", http.StatusOK
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, saved.ID.String(), "success", mustJSON(map[string]any{
@@ -353,7 +384,7 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, status, saved)
 }
 
-// handleDeleteCapabilityGrant removes one grant by id. operatorOnly
+// handleDeleteCapabilityGrant removes one grant by id. securityOps
 // (routes.go) — there is no owning principal to scope this to, so a 404 on an
 // unknown id is the whole story (no existence oracle to protect: an admin
 // already sees the full table via GET /permissions).
@@ -370,7 +401,7 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"capability.grant.deleted", id.String(), "success", nil))
+		"capability.grant.delete", id.String(), "success", nil))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -380,7 +411,7 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 // "turn it off": absent == not enforced everywhere else this state is read.
 // Every key must be one of the four known kinds — validated here rather than
 // left inert, matching the closed-kind write-boundary rule the grant handler
-// above already applies. operatorOnly (routes.go); its own table, never
+// above already applies. securityOps (routes.go); its own table, never
 // SiteConfig, so a stale client round-tripping an older document can never
 // silently disable this (see migration 0042's comment).
 //
@@ -426,15 +457,17 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 
 // meCapabilitiesResponse is GET /me/capabilities's body: what the CALLER
 // personally holds, never the full admin table (that stays behind
-// GET /permissions). Grants is exactly ListCapabilityGrantsFor(users, groups)
-// — the same subject resolution capAllowed itself uses — so the console can
-// answer "am I granted X" the identical way the server would, without a
-// dedicated per-value probe endpoint.
+// GET /permissions). Grants is exactly
+// ListCapabilityGrantsFor(users, groups, userType) — the same subject
+// resolution capAllowed itself uses — so the console can answer "am I
+// granted X" the identical way the server would, without a dedicated
+// per-value probe endpoint.
 type meCapabilitiesResponse struct {
 	Grants              []types.CapabilityGrant `json:"grants"`
 	Enforcement         map[string]bool         `json:"enforcement"`
 	SessionGroups       []string                `json:"session_groups"`
 	GroupsSnapshotStale bool                    `json:"groups_snapshot_stale"`
+	KindsVersion        int                     `json:"kinds_version"`
 }
 
 // handleMeCapabilities is the member-safe twin of GET /permissions: it sits on
@@ -443,14 +476,39 @@ type meCapabilitiesResponse struct {
 // nil-vs-empty distinction capabilitySubjects documents: a pre-0.6 cookie or a
 // session with no group claim at all must read as "can't tell yet", not as
 // silently holding no group grants.
+//
+// Grants is paginated by ?limit=&offset= (see parseListPage), same contract as
+// every other list route (#657), though ListCapabilityGrantsFor's own doc
+// explains why a deployment's grant list rarely truncates in practice: this is
+// the uniform contract, not evidence the table is expected to grow unbounded.
 func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
-	users, groups, stale := capabilitySubjects(r.Context())
-	grants, err := s.cfg.Store.ListCapabilityGrantsFor(r.Context(), users, groups)
+	ctx := r.Context()
+	subj, err := s.callerSubjects(ctx)
+	if err != nil {
+		writeServerError(w, r, "resolve capability subjects", err)
+		return
+	}
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
+		return
+	}
+	// CapabilityGrantsForPager, not the plain Pager: the query is already
+	// scoped to users/groups (ListCapabilityGrantsFor), so an absent
+	// implementation falls back safely to the full fetch + in-Go window.
+	var pageFn func(store.Page) ([]types.CapabilityGrant, error)
+	if pg, capable := s.cfg.Store.(store.CapabilityGrantsForPager); capable {
+		pageFn = func(p store.Page) ([]types.CapabilityGrant, error) {
+			return pg.ListCapabilityGrantsForPage(ctx, subj.users, subj.groups, subj.userType, p)
+		}
+	}
+	grants, truncated, err := pagedItems(page, pageFn, func() ([]types.CapabilityGrant, error) {
+		return s.cfg.Store.ListCapabilityGrantsFor(ctx, subj.users, subj.groups, subj.userType)
+	})
 	if err != nil {
 		writeServerError(w, r, "list capability grants", err)
 		return
 	}
-	enf, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())
+	enf, err := s.cfg.Store.GetCapabilityEnforcement(ctx)
 	if err != nil {
 		writeServerError(w, r, "get capability enforcement", err)
 		return
@@ -458,14 +516,18 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 	// CreatedBy names the ADMIN who wrote the row (principal or email). A member
 	// needs to know WHAT they hold, never which colleague signed it — and the
 	// field is `omitempty`, so blanking it drops it from the body rather than
-	// shipping an empty string. GET /permissions (operatorOnly) still carries it.
+	// shipping an empty string. GET /permissions (securityOps) still carries it.
 	for i := range grants {
 		grants[i].CreatedBy = ""
+	}
+	if truncated {
+		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
 	writeJSON(w, http.StatusOK, meCapabilitiesResponse{
 		Grants:              grants,
 		Enforcement:         enf,
-		SessionGroups:       groups,
-		GroupsSnapshotStale: stale,
+		SessionGroups:       subj.groups,
+		GroupsSnapshotStale: subj.stale,
+		KindsVersion:        capKindsVersion,
 	})
 }

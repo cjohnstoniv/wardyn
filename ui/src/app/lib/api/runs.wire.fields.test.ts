@@ -118,8 +118,10 @@ const expectedWire: Record<string, unknown> = {
 
 // Go DTO JSON tags the console NEVER sends (CLI-only — cmd/wardyn/commands.go:96-103).
 // If the whitelist starts forwarding one of these, or the Go DTO drops one,
-// this list must change in the same commit.
-const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref"]);
+// this list must change in the same commit. model_provider is CLI/API-only
+// until the New Run rail's provider picker lands (multi-provider MP-23), which
+// moves it into runWireBody.
+const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref", "model_provider"]);
 
 // ui_apps used to sit on this set as a TS AgentRun key with no Go AgentRun
 // json tag (handleGetRun's anonymous wrapper struct, runs_policy.go:172-175,
@@ -127,7 +129,8 @@ const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref"]);
 // test below), so AgentRun itself needs no wrapper-key exclusion.
 
 // A. Every forwarded field reaches both doors with the value the caller set.
-describe("runWireBody — every console-settable DTO field reaches the wire (F8 probe)", () => {
+describe("runWireBody — every console-settable DTO field reaches the wire", () => {
+  // ticket: F8
   for (const door of ["createRun", "preflightRun"] as const) {
     it(`${door}: forwards all ${Object.keys(expectedWire).length} fields verbatim`, async () => {
       await runs[door](fullInput);
@@ -221,12 +224,14 @@ describe("runWireBody — confinement_class clamp against inline_policy.min_conf
   // replaced by the floor instead of reaching the server's 400
   // (runs.go:40-49). This pins today's behaviour so a fix (or a regression)
   // is visible; the assertion is on what the code does, not on what is ideal.
-  it("H3a: an unrecognised requested class is replaced by the floor (server 400 is masked)", async () => {
+  it("an unrecognised requested class is replaced by the floor (server 400 is masked)", async () => {
+    // ticket: H3a
     await runs.createRun({ ...base, confinement_class: "cc2" as never, inline_policy: policyWithFloor("CC2") });
     expect(sentBody().confinement_class).toBe("CC2");
   });
 
-  it("H3b: an unrecognised FLOOR disables the clamp entirely", async () => {
+  it("an unrecognised FLOOR disables the clamp entirely", async () => {
+    // ticket: H3b
     await runs.createRun({ ...base, confinement_class: "CC1", inline_policy: policyWithFloor("vault") });
     expect(sentBody().confinement_class).toBe("CC1");
   });
@@ -271,7 +276,8 @@ function tsInterfaceKeys(src: string, name: string): string[] {
   return keys;
 }
 
-describe("source parity — Go wire tags vs the TS mirror (F8 probe)", () => {
+describe("source parity — Go wire tags vs the TS mirror", () => {
+  // ticket: F8
   const root = repoRoot();
   const clientGo = readFileSync(join(root, "pkg/client/client.go"), "utf8");
   const typesGo = readFileSync(join(root, "internal/types/types.go"), "utf8");
@@ -320,7 +326,8 @@ describe("source parity — Go wire tags vs the TS mirror (F8 probe)", () => {
     ).toEqual([]);
   });
 
-  it("every Go AgentRun tag is mirrored on the TS interface (F8: agent_exec_id/auto_stop_after_sec/source_id closed)", () => {
+  it("every Go AgentRun tag is mirrored on the TS interface (agent_exec_id/auto_stop_after_sec/source_id included)", () => {
+    // ticket: F8
     const goTags = goJSONTags(typesGo, "AgentRun");
     const tsKeys = new Set(tsInterfaceKeys(runsTs, "AgentRun"));
     const omitted = goTags.filter((t) => !tsKeys.has(t));
@@ -348,7 +355,8 @@ describe("source parity — Go wire tags vs the TS mirror (F8 probe)", () => {
 // type, never folded into the base struct's tag list — these drifts are
 // mostly embedded, which is why CapabilityGrant/RunPolicySpec below show
 // full parity on the base struct even though the response bodies carry more.
-describe("source parity — five more flat structs (F6-F14)", () => {
+describe("source parity — five more flat structs", () => {
+  // ticket: F6-F14
   const root = repoRoot();
   const workspaceGo = readFileSync(join(root, "internal/types/workspace.go"), "utf8");
   const typesGoFull = readFileSync(join(root, "internal/types/types.go"), "utf8");
@@ -417,10 +425,44 @@ describe("source parity — five more flat structs (F6-F14)", () => {
   // review finding F4: TS SCMAccess still carried `row_id`, which Go dropped
   // in 84cd08e1 ("NO ROW ID", scmaccess.go's own doc comment), and lacked
   // Go's `kind`. Full parity, base struct — either direction of drift fails.
-  it("every Go SCMAccess tag is mirrored on the TS interface, and nothing extra (F4: row_id dropped, kind added)", () => {
+  it("every Go SCMAccess tag is mirrored on the TS interface, and nothing extra (row_id dropped, kind added)", () => {
+    // ticket: F4
     const goTags = goJSONTags(scmaccessGo, "SCMAccess");
     expect(goTags.length).toBeGreaterThanOrEqual(4);
     const tsKeys = tsInterfaceKeys(setupTs, "SCMAccess");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+});
+
+// #510-F8 — the autonomy wire types (0.8 #97/#93) were hand-mirrored in
+// governance.ts with no entry in this suite: a Go rename of any of the nine
+// AutonomyRubric fields, or a drift on AutonomyPosture/AutonomyResolution,
+// would have shown up only as a runtime `undefined`. Full parity, base
+// structs — either direction of drift fails, same discipline as
+// RunPolicySpec/SCMAccess above.
+describe("source parity — autonomy wire types (#510-F8)", () => {
+  const root = repoRoot();
+  const governanceGo = readFileSync(join(root, "internal/types/governance.go"), "utf8");
+  const governanceTs = readFileSync(join(root, "ui/src/app/lib/api/governance.ts"), "utf8");
+
+  it("AutonomyRubric: full parity — the nine closed fields", () => {
+    const goTags = goJSONTags(governanceGo, "AutonomyRubric");
+    expect(goTags.length).toBe(9);
+    const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyRubric");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
+  it("AutonomyPosture: full parity — the three-axis shape", () => {
+    const goTags = goJSONTags(governanceGo, "AutonomyPosture");
+    expect(goTags.length).toBe(3);
+    const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyPosture");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
+  it("AutonomyResolution: full parity — level, posture, bound_by", () => {
+    const goTags = goJSONTags(governanceGo, "AutonomyResolution");
+    expect(goTags.length).toBe(3);
+    const tsKeys = tsInterfaceKeys(governanceTs, "AutonomyResolution");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 });

@@ -23,7 +23,7 @@ import { setup as setupApi } from "./api/setup";
 // (the "hiding is cosmetic" rule applies here too — nothing server-side reads
 // this hook), so a slow probe must never hide a legitimate option.
 //
-// Member coupling: redactSetupStatusForMember zeroes runner (Driver becomes
+// Member coupling: redactSetupStatusForUser zeroes runner (Driver becomes
 // "", the Go zero value, not "k8s") — so for a signed-in member this hook
 // always reads false, on k8s or not, and would offer local directories to a
 // member on a real k8s deployment. That is harmless only because both of

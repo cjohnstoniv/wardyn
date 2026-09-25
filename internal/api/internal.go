@@ -8,17 +8,18 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
-	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -57,11 +58,11 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 
-	// A synthetic "blind" decision is PURELY an LLM-inspection coverage signal
+	// A synthetic "bypass" decision is PURELY an LLM-inspection coverage signal
 	// (an opaque CONNECT to a model host that could not be inspected). Emit only
-	// the llm.scan.blind degradation event — not a duplicate egress.allow for
+	// the llm.scan.bypass degradation event — not a duplicate egress.allow for
 	// the tunnel, which the real CONNECT decision already recorded.
-	if dl.Scan != nil && dl.Scan.Action == "blind" {
+	if dl.Scan != nil && dl.Scan.Action == "bypass" {
 		s.recordLLMScanAudit(r.Context(), runID, claims.SPIFFEID, r.RemoteAddr, dl.Scan, dl.Request.Host)
 		writeJSON(w, http.StatusAccepted, nil)
 		return
@@ -101,7 +102,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// wardyn_egress_denies_total is exposed as "denied by policy", and it
 	// is the only egress counter Wardyn has. A builtin:dial-failed (a flaky
 	// upstream, on a request policy ALLOWED) and the synthetic
-	// egress.decisions.dropped:<n> audit-fidelity summary both arrive here as
+	// egress:dropped-decisions-<n> audit-fidelity summary both arrive here as
 	// egress.Deny; counting them would page operators for policy denials that
 	// never happened and make the true deny rate unreadable off the series. Both
 	// still record their egress.deny AUDIT row unchanged — only the counter is
@@ -152,7 +153,7 @@ func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor,
 	switch sc.Action {
 	case "block":
 		outcome = "denied"
-	case "error":
+	case "fail":
 		outcome = "failure"
 	}
 	// finding_count is the number of findings the scan PRODUCED before the cap
@@ -415,13 +416,14 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	switch body.Kind {
-	case types.ApprovalEgressDomain, types.ApprovalToolCall:
-		// Sidecars may only raise egress/tool approvals. credential approvals are
-		// created by the broker mint path, never by an untrusted sidecar.
+	case types.ApprovalEgressDomain, types.ApprovalToolCall, types.ApprovalPushContent:
+		// Sidecars may only raise egress/tool/held-push approvals. credential
+		// approvals are created by the broker mint path, never by an untrusted
+		// sidecar.
 	default:
 		// Recorded: this refusal is the forgery the case above exists to
 		// stop — a sidecar asking Wardyn to raise a `credential` approval. Same
-		// rate-bound auth.failed row, limiter and suppressed
+		// rate-bound auth.fail row, limiter and suppressed
 		// counter as every other refusal; the KIND is a closed enum of our own
 		// types, never echoed from the body.
 		s.auditAuthFailedAs(r, internalApprovalActor, "unsupported_internal_approval_kind")
@@ -441,6 +443,12 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		s.auditAuthFailedAs(r, internalApprovalActor, "reserved_scope_key")
 		writeError(w, http.StatusBadRequest, "requested_scope may not name a lane")
 		return
+	}
+	if body.Kind == types.ApprovalPushContent {
+		var ok bool
+		if body.RequestedScope, ok = s.admitPushContentRaise(w, r, claims, body.RequestedScope); !ok {
+			return
+		}
 	}
 
 	// Per-run cap, checked BEFORE the raise. Fail CLOSED on a count
@@ -521,6 +529,57 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 	// The same repair for an Azure DevOps consent or sign-in request: the
 	// person's new sign-in is the resolution (injection_ado_signin.go).
 	ap = s.reconcileADOReauthOnRead(r.Context(), ap)
+	writeJSON(w, http.StatusOK, ap)
+}
+
+// handleInternalExpireApproval lets wardyn-toolgate close its OWN tool_call
+// approval the moment it gives up waiting for one (its -deadline reached, or
+// its poll loop otherwise exhausted), instead of leaving the row PENDING for
+// the periodic sweep (approval-expiry-after/-interval) to catch up to — up to
+// one sweep interval later. In that window an operator could still approve a
+// call the gate has already answered deny for (#811).
+//
+// Scoped exactly like handleInternalGetApproval (own run only, 404 on any
+// mismatch so existence is never confirmed for another run's row) plus one
+// more restriction: only a tool_call approval the SANDBOX raised
+// (handleBrokerCreateApproval) may be expired here — a grant_id marks a row
+// the control plane raised (an Azure DevOps escalation, adoEscalationScope),
+// which is the operator's to decide, not the sandbox's to withdraw. The
+// transition itself is idempotent — an approval a human or the sweep already
+// decided is left untouched — and the answer is the row's FINAL state, so a
+// gate whose expire lost the race to an approval honours that approval.
+func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Request) {
+	claims, err := claimsFromContext(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "missing run claims")
+		return
+	}
+	id, ok := parseIDParam(w, r, "id", "approval")
+	if !ok {
+		return
+	}
+	ap, err := s.cfg.Approvals.Get(r.Context(), id)
+	if notFoundIf(w, err, "approval") {
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, "get approval", err)
+		return
+	}
+	if ap.RunID != claims.RunID || ap.Kind != types.ApprovalToolCall || ap.GrantID != nil {
+		// Do not confirm existence of another run's approval, or of an
+		// approval this route was never meant to touch.
+		writeError(w, http.StatusNotFound, "approval not found")
+		return
+	}
+	if err := s.cfg.Approvals.ExpireOne(r.Context(), id, claims.SPIFFEID, "client_withdrawn"); err != nil {
+		writeServerError(w, r, "expire approval", err)
+		return
+	}
+	if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
+		writeServerError(w, r, "get approval", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, ap)
 }
 
@@ -756,9 +815,22 @@ func (s *Server) writeMintError(w http.ResponseWriter, r *http.Request, err erro
 		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictScopeMismatch, "error": "requested scope does not match grant (no-widening)"})
 	case errors.Is(err, broker.ErrAlreadyMinted):
 		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictAlreadyMinted, "error": "credential already minted (single-use)"})
+	case mintUnreachable(err):
+		// Transient, like the store's own outage: a run's proxy rides it out
+		// on its last-good header (K8) instead of dropping it at once.
+		writeError(w, http.StatusServiceUnavailable, sinkStoreUnreachable)
 	default:
 		writeServerError(w, r, "mint", err)
 	}
+}
+
+// mintUnreachable reports whether a mint failed because nothing answered: a
+// connection that could not be made or was lost, or a timeout. A database
+// that answered with an error (a *pgconn.PgError) is not one.
+func mintUnreachable(err error) bool {
+	var connErr *pgconn.ConnectError
+	var netErr net.Error
+	return errors.As(err, &connErr) || errors.As(err, &netErr) || pgconn.Timeout(err)
 }
 
 // tokenRenewResponse is the POST /api/v1/internal/token/renew success body: a
@@ -824,6 +896,9 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			// 403, not 404: same reason as refuseTerminalRun — the caller's own
+			// presented token names claims.RunID, so a missing run is that
+			// token's authority gone, not a path a member could probe.
 			s.auditRenewDenied(r, claims, "run_not_found")
 			writeError(w, http.StatusForbidden, "run not found")
 			return
@@ -838,11 +913,35 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusForbidden, "run is terminal")
 		return
 	}
+	// A kept run (ended or lost) has no proxy on purpose; only a revive gives
+	// it one, with a token of its own. Nothing may carry its identity forward.
+	if runIsKept(run) {
+		s.auditRenewDenied(r, claims, "run_lost:"+string(run.LostReason))
+		writeError(w, http.StatusForbidden, "run is lost")
+		return
+	}
 
 	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience)
 	if err != nil {
 		writeServerError(w, r, "renew run identity", err)
 		return
+	}
+	// The stamp is what the lapsed-token sweep reads (run_lost.go), so it is
+	// written after the mint and the token is handed out only once it lands: a
+	// stamp can then never be older than the token the proxy holds. A failed
+	// stamp is retryable, like a store blip on the read above; a run marked
+	// lost since that read is refused.
+	if loser, ok := s.cfg.Store.(store.RunLoser); ok {
+		stamped, serr := loser.StampRunTokenRenewed(r.Context(), claims.RunID)
+		if serr != nil {
+			writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "stamp run token renewed", serr))
+			return
+		}
+		if !stamped {
+			s.auditRenewDenied(r, claims, "run_lost")
+			writeError(w, http.StatusForbidden, "run is lost")
+			return
+		}
 	}
 
 	// Honest trail: the provider records its own identity.mint for the new token;
@@ -882,44 +981,4 @@ func decisionOutcome(d egress.Decision) string {
 		return "denied"
 	}
 	return "success"
-}
-
-// touchDebounce bounds how often the decision ingest refreshes a run's
-// updated_at, turning a chatty agent's burst into one UPDATE per window. The
-// reaper adds the same constant as threshold slack (lifecycle.TouchDebounce),
-// so the debounce can never make an active run look idle.
-const touchDebounce = lifecycle.TouchDebounce
-
-// shouldTouch reports whether runID's last touch is older than touchDebounce,
-// recording now when it is. The map is pruned wholesale past a bound instead of
-// per-run bookkeeping — worst case is one extra UPDATE per live run after a
-// prune, which the debounce exists to make harmless.
-// ponytail: in-process only; per-replica debounce is fine because the singleton
-// control plane is a documented constraint (docs/OPERATIONS.md).
-//
-// ruleSource excludes the ONE decision that is not real agent activity:
-// credential:reauth-timeout is the proxy's own signal that a re-auth hold's
-// WAIT ran out with nobody there (ruleSourceCredentialReauthTimeout, mirrored
-// from internal/egress/proxy). Touching on it would fight the hold-aware idle
-// reaper (RL-5, store.openHoldSQL): the run would look freshly active at the
-// exact moment its open request stopped being open, so a chatty retrying
-// client could keep an otherwise-idle run alive forever purely by repeating
-// the timeout it is causing.
-func (s *Server) shouldTouch(runID uuid.UUID, ruleSource string) bool {
-	if ruleSource == ruleSourceCredentialReauthTimeout {
-		return false
-	}
-	now := time.Now()
-	s.lastTouchMu.Lock()
-	defer s.lastTouchMu.Unlock()
-	if last, ok := s.lastTouch[runID]; ok && now.Sub(last) < touchDebounce {
-		return false
-	}
-	if s.lastTouch == nil {
-		s.lastTouch = make(map[uuid.UUID]time.Time)
-	} else if len(s.lastTouch) > 4096 {
-		clear(s.lastTouch)
-	}
-	s.lastTouch[runID] = now
-	return true
 }

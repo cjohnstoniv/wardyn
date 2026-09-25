@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestWardynLabels_ReservedKeysWinOverExtra is the M3 regression test: extra
+// TestWardynLabels_ReservedKeysWinOverExtra: extra
 // (caller-supplied) must never override wardyn.component, wardyn.run-id, or
 // wardyn.managed — an override on wardyn.component would un-select the
 // agent from its own NetworkPolicy (built from this same label map).
@@ -38,7 +38,7 @@ func TestWardynLabels_ReservedKeysWinOverExtra(t *testing.T) {
 	}
 }
 
-// TestWardynLabels_SanitizesOrOmitsExtraValues is the L4 regression test: a
+// TestWardynLabels_SanitizesOrOmitsExtraValues: a
 // free-form extra value (e.g. wardyn.agent from a run's Agent field) that
 // isn't legal k8s label syntax must never reach the apiserver as-is — that
 // would 422 the WHOLE object create, taking the run-id/component/managed

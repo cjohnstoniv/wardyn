@@ -5,10 +5,8 @@ package main
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -30,48 +28,22 @@ func r3bTruncatedListServer(t *testing.T, body any) *httptest.Server {
 	return srv
 }
 
-// r3bCaptureStdout runs fn with os.Stdout redirected to a pipe and returns what
-// it wrote. emitJSON encodes to os.Stdout directly, NOT cmd.OutOrStdout(), so
-// cobra's own out buffer never sees the --json payload — capturing the real fd
-// is the only way to assert the shape a script actually parses.
-func r3bCaptureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	saved := os.Stdout
-	os.Stdout = w
-	done := make(chan string, 1)
-	go func() {
-		var b strings.Builder
-		_, _ = io.Copy(&b, r)
-		done <- b.String()
-	}()
-	fn()
-	os.Stdout = saved
-	_ = w.Close()
-	out := <-done
-	_ = r.Close()
-	return out
-}
-
-// TestR3BListCmdsWarnOnTruncation is F265's CLI half: a list command against a
-// page the server flagged truncated printed the rows, exited 0, wrote nothing to
-// stderr and left no marker in --json — indistinguishable from a complete list.
-// `wardyn audit` has warned on exactly this signal since W16-S1-2; the four list
-// families named in the finding now do the same.
+// TestListCmdsWarnOnTruncation is the CLI half of list truncation: a list
+// command against a page the server flagged truncated must not print the rows,
+// exit 0, write nothing to stderr and leave no marker in --json — that is
+// indistinguishable from a complete list. `wardyn audit` warns on exactly this
+// signal, and the four list families do the same.
 //
-// ALL FOUR, because the first pass covered two. `policy list` and `workspace
-// list` kept calling the plain SDK wrappers, so the truncation bit the server
-// set was discarded before the CLI could see it and neither command had an
-// --offset to page with — the same defect, unfixed, on a binary whose sibling
-// commands were fixed. A table with two of the four entries is what let that
-// read as done.
+// All four, because two is easy to mistake for done. `policy list` and
+// `workspace list` must call the truncation-aware SDK wrappers too, or the
+// truncation bit the server sets is discarded before the CLI can see it and
+// neither command has an --offset to page with. A table with two of the four
+// entries would read as done with half the defect left in place.
 //
 // STDERR is asserted, and stdout is asserted NOT to carry it: --json output
 // must keep the plain array shape existing scripts parse.
-func TestR3BListCmdsWarnOnTruncation(t *testing.T) {
+func TestListCmdsWarnOnTruncation(t *testing.T) {
+	// ticket: R3B
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -90,14 +62,14 @@ func TestR3BListCmdsWarnOnTruncation(t *testing.T) {
 			srv := r3bTruncatedListServer(t, tc.body)
 			root := rootCmd()
 			errBuf := &strings.Builder{}
+			outBuf := &strings.Builder{}
 			root.SetArgs(append(append([]string{}, tc.args...), "--limit", "1", "--offset", "1", "--json", "--url", srv.URL, "--token", "tok"))
-			root.SetOut(&strings.Builder{})
+			root.SetOut(outBuf)
 			root.SetErr(errBuf)
-			var execErr error
-			stdout := r3bCaptureStdout(t, func() { execErr = root.Execute() })
-			if execErr != nil {
+			if execErr := root.Execute(); execErr != nil {
 				t.Fatalf("%s returned error: %v", tc.name, execErr)
 			}
+			stdout := outBuf.String()
 			if !strings.Contains(errBuf.String(), "truncated") {
 				t.Errorf("%s: stderr = %q, want a truncation warning — a silently incomplete list at exit 0 "+
 					"is the whole finding", tc.name, errBuf.String())

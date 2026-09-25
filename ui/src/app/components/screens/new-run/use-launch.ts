@@ -13,6 +13,7 @@ import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import type { CreateRunResult, PreflightResult } from "../../../lib/types";
 import { isCredentialRefusal, runs as runsApi } from "../../../lib/api/runs";
+import { HttpError } from "../../../lib/api/core";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { getErrorMessage } from "../../../lib/format";
 import { primaryWorkspaceId, type WizardState } from "./wizard-types";
@@ -37,13 +38,25 @@ export interface UseLaunchResult {
   launchDisabled: boolean;
   launchSpinning: boolean;
   error: string | null;
+  /** Bumped on every failed launch, including a repeat of the same message —
+   *  so the rail's alert region remounts and gets re-announced (#459). */
+  errorSeq: number;
   credentialRefused: boolean;
+  /** The model provider that credential refusal names (#532), "" when it
+   *  names none — the door the rail opens is THAT provider's (#543). */
+  refusedProvider: string;
   launchWarnings: string[];
   launchedRunId: string | null;
-  launch: () => Promise<void>;
+  /** Resolves to the failure's sentence only when this screen had already
+   *  unmounted by the time it came back — the relaunch after a sign-in the
+   *  person started here and finished elsewhere (#146). The shell's strip
+   *  shows it then (B9); on screen, the rail's own alert does. */
+  launch: () => Promise<string | void>;
   preflighting: boolean;
   preflightResult: PreflightResult | null;
   preflightError: string | null;
+  /** Same remount purpose as errorSeq, for the preflight alert. */
+  preflightErrorSeq: number;
   /** Whether preflightResult/preflightError are graded from the request buildRunInput would send RIGHT NOW. */
   preflightIsCurrent: boolean;
   preflight: () => Promise<void>;
@@ -56,13 +69,22 @@ export interface UseLaunchResult {
 // shows, so the screen and this hook can never author two different requests.
 export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLaunchError }: UseLaunchParams): UseLaunchResult {
   const navigate = useNavigate();
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const [launching, setLaunching] = React.useState(false);
   // Rulebook §7: disable Launch the instant it fires, but only show the
   // spinner once the request has been running long enough to need one.
   const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
+  const [errorSeq, setErrorSeq] = React.useState(0);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
+  const [refusedProvider, setRefusedProvider] = React.useState("");
   // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
   const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
   // Set ONLY while a launched run's advisories are on screen — the rail's
@@ -74,6 +96,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   const [preflighting, setPreflighting] = React.useState(false);
   const [preflightResult, setPreflightResult] = React.useState<PreflightResult | null>(null);
   const [preflightError, setPreflightError] = React.useState<string | null>(null);
+  const [preflightErrorSeq, setPreflightErrorSeq] = React.useState(0);
   // The request body the verdict on screen was graded FROM. A preflight result
   // is a statement about one body, and the rail renders it directly above
   // Launch as "the last thing read before committing" — so the moment the body
@@ -112,6 +135,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   const launch = async () => {
     setError(null);
     setCredentialRefused(false);
+    setRefusedProvider("");
     setLaunching(true);
     setLaunchWarnings([]);
     setLaunchedRunId(null);
@@ -130,11 +154,18 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
         setLaunchedRunId(created.id);
         setLaunching(false); // nothing reads it once onOpenRun is set.
       } else {
-        navigate(`/runs/${encodeURIComponent(created.id)}`);
+        void navigate(`/runs/${encodeURIComponent(created.id)}`);
       }
     } catch (e) {
-      setError(getErrorMessage(e) || "Failed to launch run.");
+      const server = getErrorMessage(e);
+      // B9 renders the SERVER's sentence verbatim: with none, the strip says
+      // nothing rather than showing this screen's own fallback.
+      if (!mounted.current) return server || undefined;
+      const sentence = server || "Failed to launch run.";
+      setError(sentence);
+      setErrorSeq((n) => n + 1);
       setCredentialRefused(isCredentialRefusal(e));
+      setRefusedProvider(isCredentialRefusal(e) && e instanceof HttpError ? e.provider : "");
       onLaunchError?.(e);
       setLaunching(false);
     }
@@ -175,6 +206,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
       setPreflightResult(await runsApi.preflightRun(body));
     } catch (e) {
       setPreflightError(getErrorMessage(e) || "Preflight failed.");
+      setPreflightErrorSeq((n) => n + 1);
     } finally {
       setPreflightedBody(key);
       setPreflighting(false);
@@ -186,13 +218,16 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     launchDisabled,
     launchSpinning,
     error,
+    errorSeq,
     credentialRefused,
+    refusedProvider,
     launchWarnings,
     launchedRunId,
     launch,
     preflighting,
     preflightResult,
     preflightError,
+    preflightErrorSeq,
     preflightIsCurrent,
     preflight,
   };

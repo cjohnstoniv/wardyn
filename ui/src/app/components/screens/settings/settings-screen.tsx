@@ -41,6 +41,8 @@ import { ModelProviderCard } from "./connection-cards";
 import { UserDrivesCard } from "../setup/user-drives-card";
 import { ProvidersCard } from "../setup/providers-card";
 import { AdoConnectionCard } from "./ado-connection";
+import { ModelProvidersList } from "./model-providers-list";
+import { useConsoleMode } from "../../wardyn/console-view";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -162,7 +164,7 @@ function HostCard({
       {operator && (
         <button
           type="button"
-          onClick={() => navigate("/setup?step=corp_network")}
+          onClick={() => navigate("/admin/setup?step=corp_network")}
           className="mt-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:border-border-strong"
         >
           <span>
@@ -216,6 +218,7 @@ export function SettingsScreen() {
   const operator = useOperator();
   const operatorResolved = useOperatorResolved();
   const adminReads = operatorResolved && operator;
+  const adminView = useConsoleMode() === "admin";
 
   const load = React.useCallback(() => {
     let failed = false;
@@ -253,6 +256,17 @@ export function SettingsScreen() {
             siteConfig={configFailed ? "error" : siteConfig}
             onRecheck={load}
           />
+          {/* #536: the Admin view only. The card below stays until the old
+              model is retired (MP-15), since it still backs runs today.
+              #538: the Claude subscription kind is disabled on the editor's
+              kind step until the sign-in image resolves — undefined status
+              (an older daemon with no such check) reads as available. */}
+          {adminView && adminReads && (
+            <ModelProvidersList
+              harnesses={status.harnesses}
+              subscriptionAvailable={status.checks.find((c) => c.id === "claude_signin_image")?.status !== "warn"}
+            />
+          )}
           <ModelProviderCard
             status={status}
             siteConfig={siteConfig}

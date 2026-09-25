@@ -19,7 +19,7 @@ import (
 )
 
 // B5 — the audit trail flooded itself out. On a real deployment 999 of the last
-// 1000 audit rows were `auth.failed` from ONE sidecar retrying a renew the
+// 1000 audit rows were `auth.fail` from ONE sidecar retrying a renew the
 // control plane would never grant, once a minute, forever; every real security
 // event had aged out of the console's window mid-investigation into who held
 // admin. The rate limiter did not help and could not: it caps ~1 row/sec, and a
@@ -60,12 +60,12 @@ func (c *coalesceHarness) flush() {
 	c.srv.recordAuthFailedSummary(c.srv.cfg.BaseCtx, ev)
 }
 
-// authFailedEvents returns the raw auth.failed events, so a test can read the
+// authFailedEvents returns the raw auth.fail events, so a test can read the
 // summary row's data fields and its identity (a summary is a NEW row).
 func authFailedEvents(h *harness) []types.AuditEvent {
 	var out []types.AuditEvent
 	for _, ev := range h.audit.events {
-		if ev.Action == "auth.failed" {
+		if ev.Action == "auth.fail" {
 			out = append(out, ev)
 		}
 	}
@@ -81,7 +81,7 @@ func coalesceData(t *testing.T, ev types.AuditEvent) (reason string, count int, 
 		LastSeen  string `json:"last_seen"`
 	}
 	if err := json.Unmarshal(ev.Data, &d); err != nil {
-		t.Fatalf("decode auth.failed data: %v", err)
+		t.Fatalf("decode auth.fail data: %v", err)
 	}
 	return d.Reason, d.Count, d.FirstSeen, d.LastSeen
 }
@@ -101,7 +101,7 @@ func TestAuthFailedCoalesce_SixtyIdenticalRefusalsBecomeTwoRows(t *testing.T) {
 
 	rows := authFailedEvents(c.harness)
 	if len(rows) != 2 {
-		t.Fatalf("auth.failed rows = %d for %d identical refusals, want 2 (the first + one summary)", len(rows), refusals)
+		t.Fatalf("auth.fail rows = %d for %d identical refusals, want 2 (the first + one summary)", len(rows), refusals)
 	}
 	if _, count, _, _ := coalesceData(t, rows[0]); count != 0 {
 		t.Errorf("the FIRST row carries count=%d; it must stay the plain row it always was", count)
@@ -145,7 +145,7 @@ func TestAuthFailedCoalesce_OneRowPerMinuteStillFolds(t *testing.T) {
 
 	rows := authFailedEvents(c.harness)
 	if len(rows) != 2 {
-		t.Fatalf("auth.failed rows = %d for %d refusals a minute apart, want 2 — a window shorter than the "+
+		t.Fatalf("auth.fail rows = %d for %d refusals a minute apart, want 2 — a window shorter than the "+
 			"drip's period folds nothing at all", len(rows), refusals)
 	}
 	if _, count, _, _ := coalesceData(t, rows[1]); count != refusals {
@@ -173,7 +173,7 @@ func TestAuthFailedCoalesce_DistinctPeersFoldIntoOneCountedStreak(t *testing.T) 
 
 	rows := authFailedEvents(c.harness)
 	if len(rows) != 2 {
-		t.Fatalf("auth.failed rows = %d for %d peers on one path and reason, want 2 (the first + one summary)",
+		t.Fatalf("auth.fail rows = %d for %d peers on one path and reason, want 2 (the first + one summary)",
 			len(rows), principals)
 	}
 	if _, count, _, _ := coalesceData(t, rows[1]); count != principals {
@@ -194,7 +194,7 @@ func coalescePeers(t *testing.T, ev types.AuditEvent) int {
 		Peers int `json:"peers"`
 	}
 	if err := json.Unmarshal(ev.Data, &d); err != nil {
-		t.Fatalf("decode auth.failed data: %v", err)
+		t.Fatalf("decode auth.fail data: %v", err)
 	}
 	return d.Peers
 }
@@ -230,7 +230,7 @@ func TestAuthFailedCoalesce_RotatingPeerDripFoldsIntoOneStreak(t *testing.T) {
 
 	rows := authFailedEvents(c.harness)
 	if len(rows) != 2 {
-		t.Fatalf("auth.failed rows = %d for a %d-request drip over %d rotating peers, want 2 (the first + one summary)",
+		t.Fatalf("auth.fail rows = %d for a %d-request drip over %d rotating peers, want 2 (the first + one summary)",
 			len(rows), refusals, peers)
 	}
 	if _, count, _, _ := coalesceData(t, rows[1]); count != refusals {
@@ -265,7 +265,7 @@ func TestAuthFailedCoalesce_BurstFromANewPeerDuringADripIsCounted(t *testing.T) 
 
 	rows := authFailedEvents(c.harness)
 	if len(rows) != 2 {
-		t.Fatalf("auth.failed rows = %d, want 2 (the first + one summary)", len(rows))
+		t.Fatalf("auth.fail rows = %d, want 2 (the first + one summary)", len(rows))
 	}
 	if _, count, _, _ := coalesceData(t, rows[1]); count != drip+burst {
 		t.Errorf("summary count = %d, want %d — the burst's refusals belong in it", count, drip+burst)
@@ -278,7 +278,7 @@ func TestAuthFailedCoalesce_BurstFromANewPeerDuringADripIsCounted(t *testing.T) 
 		PeersTruncated bool     `json:"peers_truncated"`
 	}
 	if err := json.Unmarshal(rows[1].Data, &d); err != nil {
-		t.Fatalf("decode auth.failed data: %v", err)
+		t.Fatalf("decode auth.fail data: %v", err)
 	}
 	if !slices.Equal(d.PeerIPs, []string{"10.0.0.9", "203.0.113.50"}) {
 		t.Errorf("summary peer_ips = %v, want [10.0.0.9 203.0.113.50] — the burst's address must be in the list", d.PeerIPs)
@@ -329,7 +329,7 @@ func TestAuthFailedCoalesce_ExactlyTwoRowsAtTheStreakCap(t *testing.T) {
 
 	rows := authFailedEvents(c.harness)
 	if len(rows) != 2 {
-		t.Fatalf("auth.failed rows = %d for exactly %d identical refusals, want 2 (the first + the capping "+
+		t.Fatalf("auth.fail rows = %d for exactly %d identical refusals, want 2 (the first + the capping "+
 			"summary)", len(rows), maxAuthFailedStreak)
 	}
 	if _, count, _, _ := coalesceData(t, rows[0]); count != 0 {
@@ -368,7 +368,7 @@ func TestAuthFailedCoalesce_DisabledKeepsARowPerRefusal(t *testing.T) {
 	}
 	rows := authFailedEvents(c.harness)
 	if len(rows) != refusals {
-		t.Errorf("auth.failed rows = %d with coalescing OFF, want %d — one per refusal", len(rows), refusals)
+		t.Errorf("auth.fail rows = %d with coalescing OFF, want %d — one per refusal", len(rows), refusals)
 	}
 	for _, ev := range rows {
 		if _, count, _, _ := coalesceData(t, ev); count != 0 {
@@ -420,7 +420,7 @@ func TestAuthFailedCoalesce_ShutdownFlushesTheOpenStreak(t *testing.T) {
 
 	rows := authFailedEvents(c.harness)
 	if len(rows) != 2 {
-		t.Fatalf("auth.failed rows = %d after a shutdown flush of %d identical refusals, want 2 "+
+		t.Fatalf("auth.fail rows = %d after a shutdown flush of %d identical refusals, want 2 "+
 			"(the first + one summary) — a missing summary is %d lost refusals", len(rows), refusals, refusals-1)
 	}
 	_, count, first, last := coalesceData(t, rows[1])
@@ -441,7 +441,7 @@ func TestAuthFailedCoalesce_ShutdownFlushesTheOpenStreak(t *testing.T) {
 	}
 }
 
-// ─── V1-r2-lensS: the summary row is rate-bound, and the key is the peer IP ───
+// V1-r2-lensS: the summary row is rate-bound, and the key is the peer IP
 
 // TestAuthFailedCoalesce_SummaryRowsPayTheRateLimiter is the HIGH of lens S round
 // 2, and it is the audit-flood vector the coalescer itself introduced: a streak
@@ -465,14 +465,14 @@ func TestAuthFailedCoalesce_SummaryRowsPayTheRateLimiter(t *testing.T) {
 	}
 	rows := authFailedEvents(c.harness)
 	if len(rows) > int(authFailedBurst) {
-		t.Fatalf("auth.failed rows = %d for %d refusals at one frozen instant; the limiter's ceiling is %v — "+
+		t.Fatalf("auth.fail rows = %d for %d refusals at one frozen instant; the limiter's ceiling is %v — "+
 			"a summary row must be charged to it exactly like a first row", len(rows), refusals, authFailedBurst)
 	}
 }
 
 // TestAuthFailedCoalesce_ARefusedSummaryIsDroppedAndCounted is the other half of
 // the same fix: a summary the limiter refuses is DROPPED, never recorded, and it
-// lands in the same suppressed series every other dropped auth.failed row does —
+// lands in the same suppressed series every other dropped auth.fail row does —
 // so the volume the summary would have carried is still visible to an operator
 // alerting on the series, which is what OPERATIONS.md tells them to do.
 func TestAuthFailedCoalesce_ARefusedSummaryIsDroppedAndCounted(t *testing.T) {
@@ -491,7 +491,7 @@ func TestAuthFailedCoalesce_ARefusedSummaryIsDroppedAndCounted(t *testing.T) {
 	c.flush()
 
 	if rows := authFailedEvents(c.harness); len(rows) != 1 {
-		t.Fatalf("auth.failed rows = %d after a summary the limiter refused, want 1 (the opening row only) — "+
+		t.Fatalf("auth.fail rows = %d after a summary the limiter refused, want 1 (the opening row only) — "+
 			"a refused summary must be dropped, not recorded", len(rows))
 	}
 	if got := suppressedTotal(t, c.harness); got != before+1 {
@@ -520,7 +520,7 @@ func TestAuthFailedCoalesce_OneConnectionPerRequestStillFolds(t *testing.T) {
 
 	rows := authFailedEvents(c.harness)
 	if len(rows) != 2 {
-		t.Fatalf("auth.failed rows = %d for %d refusals from %d connections on ONE peer IP, want 2 "+
+		t.Fatalf("auth.fail rows = %d for %d refusals from %d connections on ONE peer IP, want 2 "+
 			"(the first + one summary) — the ephemeral port must not be in the coalescing key",
 			len(rows), refusals, refusals)
 	}

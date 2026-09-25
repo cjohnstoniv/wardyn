@@ -1,0 +1,35 @@
+# The authz wire contract (schema authz/v1). Append-only from the 0.8.0 tag:
+# removing or renaming a line is a major version. TestWireContractGolden.
+schema authz/v1
+effect allow
+effect deny
+effect hidden
+effect unprocessable
+effect conflict
+obligationkind drop
+reason admin_surface
+reason security_admin_surface
+reason not_owner
+reason attach_ticket_foreign_run
+reason byoi_user
+reason capability_agent
+reason capability_egress_host
+reason capability_feature
+reason capability_integration
+reason capability_policy
+reason capability_secret
+reason capability_workspace
+reason capability_workspace_provider
+reason governance_profile
+reason grant_pairing_not_eligible
+reason groups_snapshot_stale
+reason harness_login_mechanism_principal
+reason harness_login_not_per_user
+reason run_not_found
+reason run_terminal
+reason second_human_required
+reason run_quota
+reason capability_model_provider
+reason user_type_unknown
+reason user_view_type_deleted
+reason admin_view

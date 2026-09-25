@@ -48,7 +48,8 @@ import { Field, Switch } from "../../wardyn/form-primitives";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
-import { HarnessLoginPane, isLikelyStartUrl } from "../settings/harness-login-pane";
+import { isLikelyStartUrl } from "../settings/harness-login-pane";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 
 // The two catalog agents whose declared lane folds to a coarse ai-integration
@@ -197,45 +198,27 @@ function ModelAccessNote({ access }: { access: SetupModelAccess }) {
 
 // The SIGNED-IN ADMIN'S OWN block (C4.2): the chip, the server's action line,
 // the ADMIN_OWN_CHIP_NOTE, and (for the three actionable states) the sign-in
-// CTA or the open login pane. Shared between the ordinary bottom placement
-// and the prominent per_user banner at the top of the row (Appendix A finding
-// 4) — the content is identical, only the wrapper around it differs.
-function ModelAccessSignIn({
-  access,
-  loginOpen,
-  setLoginOpen,
-  startURLManaged,
-}: {
-  access: SetupModelAccess;
-  loginOpen: boolean;
-  setLoginOpen: (open: boolean) => void;
-  startURLManaged: boolean;
-}) {
+// CTA, which opens the shell's one door (#544 — this tab mounted its own pane
+// before). Shared between the ordinary bottom placement and the prominent
+// per_user banner at the top of the row (Appendix A finding 4) — the content is
+// identical, only the wrapper around it differs.
+function ModelAccessSignIn({ access }: { access: SetupModelAccess }) {
+  const door = useModelAccessDoor();
   return (
     <>
       <ModelAccessNote access={access} />
       <p className="mt-1 text-meta text-muted-foreground">{AGENTS.ADMIN_OWN_CHIP_NOTE}</p>
-      {loginOpen ? (
-        <div className="mt-2">
-          {/* Under a per_user row the server signs in against THAT row's
-              stored sso_start_url and ignores a typed one, so the pane's
-              start-URL field is suppressed for a note (the member's CTA
-              does the same). A shared row has nothing stored, so the
-              ordinary flow still asks. */}
-          <HarnessLoginPane
-            provider="aws"
-            startURLManaged={startURLManaged}
-            onDone={() => setLoginOpen(false)}
-            onCancel={() => setLoginOpen(false)}
-          />
-        </div>
-      ) : (
-        MODEL_ACCESS_ACTIONABLE.has(access.state) && (
-          // outline, never a second teal — Save is the tab's one default.
-          <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setLoginOpen(true)}>
-            {AGENTS.SIGN_IN_AWS}
-          </Button>
-        )
+      {MODEL_ACCESS_ACTIONABLE.has(access.state) && (
+        // outline, never a second teal — Save is the tab's one default.
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-2"
+          onClick={() => door.openDoor({ for: { login: "aws" } })}
+        >
+          {AGENTS.SIGN_IN_AWS}
+        </Button>
       )}
     </>
   );
@@ -258,7 +241,6 @@ function Row({
   operator: boolean;
   onUpdate: (next: AgentProvider) => void;
 }) {
-  const [loginOpen, setLoginOpen] = React.useState(false);
   const choices = mechanismChoices(harness);
   const perUserAvailable = row.mechanism === "bedrock_sso";
   const credentialSource = row.credential_source || "shared";
@@ -348,21 +330,13 @@ function Row({
               data-testid="per-user-sign-in-banner"
             >
               {/* role="status" covers ONLY the title/body pair — NOT
-                  ModelAccessSignIn below, which can open HarnessLoginPane's
-                  own multi-step device-code/poll flow. A live region around
-                  that whole flow would re-announce it wholesale on every
-                  poll tick. */}
+                  ModelAccessSignIn below and the button that opens the door. */}
               <div role="status">
                 <p className="text-sm font-medium text-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE}</p>
                 <p className="mt-1 text-body text-muted-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_BODY}</p>
               </div>
               <div className="mt-2">
-                <ModelAccessSignIn
-                  access={modelAccess!}
-                  loginOpen={loginOpen}
-                  setLoginOpen={setLoginOpen}
-                  startURLManaged={perUserSaved}
-                />
+                <ModelAccessSignIn access={modelAccess!} />
               </div>
             </div>
           )}
@@ -514,12 +488,7 @@ function Row({
               actionable) keeps the block at the bottom, exactly as before. */}
           {showModelAccess && !modelAccessProminent && (
             <div className="border-t border-border pt-3">
-              <ModelAccessSignIn
-                access={modelAccess!}
-                loginOpen={loginOpen}
-                setLoginOpen={setLoginOpen}
-                startURLManaged={perUserSaved}
-              />
+              <ModelAccessSignIn access={modelAccess!} />
             </div>
           )}
         </div>
@@ -534,6 +503,7 @@ export function AgentsTab({
   operator,
   onRetryRoster,
   onStatusRefresh,
+  onDirtyChange,
 }: {
   /** The harness catalog off SetupStatus.harnesses. UNDEFINED is "unknown"
    *  (an older daemon omits the field, or the status read failed) — NEVER an
@@ -559,6 +529,12 @@ export function AgentsTab({
    *  edits), clears `savedElsewhere`, and a transient GET failure flips the
    *  whole screen to FETCH_FAILED right after a successful agent save. */
   onStatusRefresh: () => void;
+  /** #460 — this tab is its own resource with its own draft, so the parent
+   *  screen has no other way to know whether IT is dirty (for the PageHeader
+   *  chip and the Agents Segmented option). Fired whenever the dirty fact
+   *  changes, and once more with `false` on unmount (leaving the tab clears
+   *  it, same as the tab's own draft resets on remount). */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [draft, setDraft] = React.useState<AgentProviders | null>(null);
   // #217 — the snapshot `draft` started from, same role as providers-screen's
@@ -594,7 +570,16 @@ export function AgentsTab({
   const invalidAgentRow = agents.some(agentRowInvalid);
   // #217 — see providers-screen.tsx's own changedLines/useUnsavedGuard pair.
   const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
-  useUnsavedGuard(changedLines.length > 0);
+  useUnsavedGuard("agents-tab", changedLines.length > 0, () => JSON.stringify(draft, null, 2));
+  // #460 — tells the parent screen this tab's own dirty fact (its PageHeader
+  // chip and Agents Segmented option); `false` on unmount, since leaving this
+  // tab drops the draft too (see AgentsTab's own file-header note).
+  const dirty = changedLines.length > 0;
+  React.useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onDirtyChange is a parent callback; `dirty` is the only real trigger
+  }, [dirty]);
   const roster = harnesses ?? [];
   const catalogIds = new Set(roster.map((h) => h.id));
   // Any row not in this build's catalog (a custom WARDYN_AGENT_IMAGES id) is
@@ -709,7 +694,7 @@ export function AgentsTab({
           above the rows rather than replacing them, so an edit typed
           moments before the 412 is still readable. #217: Copy my changes
           before Discard mine and reload — there is no "Save over theirs" arm. */}
-      {savedElsewhere && <SavedElsewhereBanner changedLines={changedLines} onDiscard={load} />}
+      {savedElsewhere && <SavedElsewhereBanner documentText={JSON.stringify(draft, null, 2)} onDiscard={load} />}
       {saveError && (
         <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
           <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE}</b>
@@ -741,7 +726,9 @@ export function AgentsTab({
           {/* #217 — beside the control, not only in a title tooltip. */}
           {!operator && <OperatorOnlyHint />}
           {operator && changedLines.length > 0 && (
-            <span className="mr-auto text-meta text-muted-foreground">{PROVIDERS_DRAFT.UNSAVED_MARKER}</span>
+            <span data-testid="unsaved-marker" className="mr-auto text-meta text-muted-foreground">
+              {PROVIDERS_DRAFT.UNSAVED_MARKER}
+            </span>
           )}
           <Button disabled={!operator || saving || invalidAgentRow} onClick={save}>
             {PROVIDERS.SAVE_CTA}

@@ -90,7 +90,7 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 		t.Fatalf("create the shadowing audit_events in %s: %v", appSchema, err)
 	}
 
-	pool, err := connectAndMigrate(t.Context(), schemaDSN(appSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute)
+	pool, err := connectAndMigrate(t.Context(), schemaDSN(appSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute, false)
 	if pool != nil {
 		pool.Close()
 	}
@@ -108,7 +108,7 @@ func TestConnectAndMigrate_CanaryRunsOnTheAppPoolNotJustTheMigrator(t *testing.T
 	// SCOPED: the same split-role boot with both DSNs on the migrated schema
 	// must still come up. The canary is a refusal for a chain that does not
 	// chain, not a tax on the split-role posture.
-	ok, err := connectAndMigrate(t.Context(), schemaDSN(migrateSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute)
+	ok, err := connectAndMigrate(t.Context(), schemaDSN(migrateSchema), schemaDSN(migrateSchema), 30*time.Second, 2*time.Minute, false)
 	if err != nil {
 		t.Fatalf("a split-role boot on a healthy schema: %v, want it to come up", err)
 	}

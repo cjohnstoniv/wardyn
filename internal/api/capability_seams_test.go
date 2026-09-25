@@ -59,7 +59,7 @@ func auditReasons(t *testing.T, srv *Server, action string) []string {
 	return out
 }
 
-// ─── D1: deciding an egress approval ──────────────────────────────────────────
+// D1: deciding an egress approval
 
 // approveAs POSTs the plain (scope-less) approve the console sends.
 func approveAs(t *testing.T, srv *Server, sess *http.Cookie, id uuid.UUID) (int, string) {
@@ -119,7 +119,7 @@ func TestDecide_EgressHostCapability(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newScopeFixture(t)
 			withCaps(f.srv, f.store, tc.grants, tc.enf)
-			member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember)
+			member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser)
 			id := f.seedEgress(t, host)
 
 			code, body := approveAs(t, f.srv, member, id)
@@ -165,7 +165,7 @@ func TestDecide_EgressHostCapabilityRunsAfterOwnership(t *testing.T) {
 	withCaps(f.srv, f.store,
 		[]types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capEgressHost, capWildcard, types.CapabilityDeny)},
 		map[string]bool{capEgressHost: true})
-	member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser)
 
 	// An egress approval on somebody else's run.
 	foreignRun := uuid.New()
@@ -224,7 +224,7 @@ func TestDecide_EgressHostCapabilityExemptsOperators(t *testing.T) {
 	}
 }
 
-// ─── D2: a member's own inline policy ─────────────────────────────────────────
+// D2: a member's own inline policy
 
 // capPolicyServer is a member-facing create-run resolution: the secrets harness
 // (so an api_key grant's secret actually exists) with capability rows behind it.
@@ -244,7 +244,7 @@ func capPolicyServer(t *testing.T, grants []types.CapabilityGrant, enf map[strin
 func memberRequest(t *testing.T) *http.Request {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
-	return r.WithContext(withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleMember), nil))
+	return r.WithContext(withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleUser), nil))
 }
 
 // resolveInline runs the member's inline policy through the real chokepoint and
@@ -343,7 +343,7 @@ func TestInlinePolicy_EgressHostNarrowing(t *testing.T) {
 // operator's eligible list and this member's own secret grants.
 func TestInlinePolicy_SecretNarrowing(t *testing.T) {
 	// An operator ceiling that eligible-lists the EXACT pairing, so
-	// filterMemberGrants keeps it and the capability is the only thing left.
+	// filterUserGrants keeps it and the capability is the only thing left.
 	pairing := apiKeyGrantSpec("api.anthropic.com", "anthropic-api-key")
 	ceiling := types.RunPolicySpec{
 		MinConfinementClass: types.CC2,
@@ -393,8 +393,8 @@ func TestInlinePolicy_SecretNarrowing(t *testing.T) {
 }
 
 // TestInlinePolicy_DropsAreAggregatedPerReason: a spec that loses many things
-// produces ONE event per reason, not one per thing, and the pre-existing
-// ceiling drop (which used to be a warning and nothing else) is now among them.
+// produces one event per reason, not one per thing, and the ceiling drop is
+// among them rather than a bare warning.
 func TestInlinePolicy_DropsAreAggregatedPerReason(t *testing.T) {
 	h := capPolicyServer(t, nil, map[string]bool{capEgressHost: true, capSecret: true})
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{
@@ -423,7 +423,7 @@ func TestInlinePolicy_DropsAreAggregatedPerReason(t *testing.T) {
 
 // TestInlinePolicy_PreflightDoesNotAudit: Review re-resolves on every edit, so a
 // dry run warns without writing denials nobody's run ever hit — the same rule
-// policy.inline already follows.
+// policy.inline.apply already follows.
 func TestInlinePolicy_PreflightDoesNotAudit(t *testing.T) {
 	h := capPolicyServer(t, nil, map[string]bool{capEgressHost: true})
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"pypi.org"}}
@@ -445,7 +445,7 @@ func TestInlinePolicy_PreflightDoesNotAudit(t *testing.T) {
 	}
 }
 
-// ─── D3: the request fields a member does not freely choose ───────────────────
+// D3: the request fields a member does not freely choose
 
 // denyRequest runs the request-level gate directly and returns whether it
 // refused, plus the status it wrote. The HTTP wiring on both doors (create and
@@ -454,7 +454,7 @@ func TestInlinePolicy_PreflightDoesNotAudit(t *testing.T) {
 func denyRequest(t *testing.T, srv *Server, req createRunRequest) (bool, int) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	_, denied := srv.denyMemberRequest(w, memberRequest(t), req)
+	_, denied := srv.denyUserRequest(w, memberRequest(t), req)
 	return denied, w.Code
 }
 
@@ -529,8 +529,8 @@ func TestDenyMemberRequest_ImageWidens(t *testing.T) {
 				if code != http.StatusForbidden {
 					t.Fatalf("status = %d, want 403", code)
 				}
-				if reasons := auditReasons(t, h.srv, "authz.denied"); !slices.Equal(reasons, []string{"byoi_member"}) {
-					t.Fatalf("authz.denied reasons = %v, want [byoi_member] (the reason OPERATIONS already documents)", reasons)
+				if reasons := auditReasons(t, h.srv, "authz.denied"); !slices.Equal(reasons, []string{"byoi_user"}) {
+					t.Fatalf("authz.denied reasons = %v, want [byoi_user] (the reason OPERATIONS already documents)", reasons)
 				}
 			}
 		})
@@ -598,7 +598,7 @@ func TestDenyMemberRequest_WorkspaceRefusedOnBothDoors(t *testing.T) {
 	h.srv.cfg.OIDC = &oidc.Authenticator{}
 	h.srv.cfg.Store = &capStore{Store: newAuthzStore(), enf: map[string]bool{capWorkspace: true}}
 	h.srv.router = h.srv.routes()
-	member := ssoSession(t, capSub, capEmail, oidc.RoleMember)
+	member := ssoSession(t, capSub, capEmail, oidc.RoleUser)
 	body := `{"agent":"claude-code","workspace_id":"` + uuid.New().String() + `"}`
 
 	for _, path := range []string{"/api/v1/runs", "/api/v1/runs/preflight"} {
@@ -612,7 +612,7 @@ func TestDenyMemberRequest_WorkspaceRefusedOnBothDoors(t *testing.T) {
 }
 
 // TestInlinePolicy_WorkspaceNarrowing: the OTHER door to the same room.
-// denyMemberRequest gates req.workspace_id, but an inline_policy naming an
+// denyUserRequest gates req.workspace_id, but an inline_policy naming an
 // onboarded repo URL reached referencedWorkspaces all the same — and with it
 // that workspace's admin-authored egress, secret grants and base image. The
 // entry is DROPPED, not refused, exactly as an ungranted egress host is:
@@ -731,12 +731,12 @@ func TestDenyMemberRequest_OperatorsAreExempt(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).
 		WithContext(withOIDCGroups(operatorCtx("sub-admin", "admin@corp.example", oidc.RoleAdmin), nil))
-	if _, denied := h.srv.denyMemberRequest(w, r, createRunRequest{Image: "ghcr.io/acme/agent:1", WorkspaceID: &ws}); denied {
+	if _, denied := h.srv.denyUserRequest(w, r, createRunRequest{Image: "ghcr.io/acme/agent:1", WorkspaceID: &ws}); denied {
 		t.Fatalf("admin denied: %d %s", w.Code, w.Body.String())
 	}
 }
 
-// ─── D4: what a member sees on the secrets list ───────────────────────────────
+// D4: what a member sees on the secrets list
 
 // listSecretNames reads GET /secrets as the given session.
 func listSecretNames(t *testing.T, srv *Server, sess *http.Cookie) []string {
@@ -759,7 +759,7 @@ func listSecretNames(t *testing.T, srv *Server, sess *http.Cookie) []string {
 // launch gate would drop.
 //
 // Both fixture names are ceiling-paired (0.7, migration 0050:
-// memberVisibleOperatorSecretNames' unconditional pairing gate, tested on its
+// userVisibleOperatorSecretNames' unconditional pairing gate, tested on its
 // own in secrets_test.go) so this suite tests capSecret's OWN narrowing in
 // isolation, on top of a ceiling that already offers everything — a member
 // seeing NEITHER name because the ceiling pairs neither is a different,
@@ -781,7 +781,7 @@ func TestListSecrets_MemberNarrowing(t *testing.T) {
 		h.srv.router = h.srv.routes()
 		return h.srv
 	}
-	member := ssoSession(t, capSub, capEmail, oidc.RoleMember)
+	member := ssoSession(t, capSub, capEmail, oidc.RoleUser)
 	admin := ssoSession(t, "sub-admin-secrets", "admin@corp.example", oidc.RoleAdmin)
 
 	t.Run("no grants and no switch: the whole ceiling-paired list, capSecret unenforced", func(t *testing.T) {
@@ -825,7 +825,7 @@ func TestListSecrets_MemberNarrowing(t *testing.T) {
 	})
 }
 
-// ─── D5: what a member is told about their own grants ─────────────────────────
+// D5: what a member is told about their own grants
 
 // TestMeCapabilities_HidesCreatedBy: /me/capabilities answers "what do I hold",
 // and the answer does not include which admin signed the row. GET /permissions
@@ -840,7 +840,7 @@ func TestMeCapabilities_HidesCreatedBy(t *testing.T) {
 	h.srv.router = h.srv.routes()
 
 	w := doSSO(t, h.srv, http.MethodGet, "/api/v1/me/capabilities",
-		ssoSession(t, capSub, capEmail, oidc.RoleMember), "")
+		ssoSession(t, capSub, capEmail, oidc.RoleUser), "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /me/capabilities = %d: %s", w.Code, w.Body.String())
 	}

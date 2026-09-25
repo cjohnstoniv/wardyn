@@ -19,7 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fixtures ─────────────────────────────────────────────────────────────────
+// fixtures
 
 // govDeployment is the DEPLOYMENT ceiling (Config.DefaultPolicy) every case
 // below falls through to when no assignment applies. Deliberately WIDER than
@@ -66,11 +66,11 @@ func govServer(st *capStore) *Server {
 // identity, group snapshot, and the snapshot's PF-26 completeness bit.
 func govMemberCtx(groups []string, truncated bool) context.Context {
 	return withOIDCGroupsTruncated(
-		withOIDCGroups(operatorCtx("sub-gov-bob", "bob@corp.example", oidc.RoleMember), groups),
+		withOIDCGroups(operatorCtx("sub-gov-bob", "bob@corp.example", oidc.RoleUser), groups),
 		truncated)
 }
 
-// ─── the precedence table ─────────────────────────────────────────────────────
+// the precedence table
 
 // TestEffectiveCeilingPrecedence walks effectiveCeiling's resolution order. It
 // is the pin on the one function every routed site now trusts, and each case is
@@ -153,7 +153,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		}
 		// And the HTTP shape a routed site would produce.
 		w := httptest.NewRecorder()
-		writeCeilingError(w, err)
+		writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusInternalServerError {
 			t.Errorf("writeCeilingError(store failure) = %d, want 500", w.Code)
 		}
@@ -216,7 +216,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		}
 	})
 
-	// ─── the stale/truncated 403 and its scoping ──────────────────────────────
+	// the stale/truncated 403 and its scoping
 	//
 	// Four cases, and the three that DO NOT refuse are the point: a blanket
 	// refusal here would lock every pre-0.6 cookie out of every deployment,
@@ -237,7 +237,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 			t.Errorf("stale snapshot maps to %d, want 403", code)
 		}
 		w := httptest.NewRecorder()
-		writeCeilingError(w, err)
+		writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 		if w.Code != http.StatusForbidden {
 			t.Errorf("writeCeilingError(stale) = %d, want 403", w.Code)
 		}
@@ -324,12 +324,11 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 	})
 
 	// The two governance reads ceilingWithUnusableGroups makes fail
-	// INDEPENDENTLY, and each needs its own case. They used to share one
-	// fixture field, which meant the second could never be reached: the
-	// resolver errors and returns before the gate is ever asked, so the case
-	// named for the gate was re-testing the resolver. Deleting the gate's
-	// error check left the ENTIRE package green — executed, 53s — with this
-	// subtest still passing under its old name.
+	// independently, and each needs its own case with its own fixture field:
+	// with one shared field the second can never be reached — the resolver
+	// errors and returns before the gate is ever asked, so the case named
+	// for the gate re-tests the resolver, and deleting the gate's error
+	// check leaves the entire package green.
 	t.Run("ResolveGovernanceProfile failing is an error, not a pass", func(t *testing.T) {
 		boom := errors.New("pg: connection refused")
 		st := &capStore{govErr: boom}
@@ -337,7 +336,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 			t.Fatalf("err = %v, want the store failure — a failed resolve must never read as `no assignment matched`", err)
 		}
 
-		// AND IT MUST NOT BE MASKED AS A REFUSAL. Deleting
+		// And it must not be masked as a refusal. Deleting
 		// ceilingWithUnusableGroups' own resolve-error check does NOT fail-open
 		// — ceilingFromProfile re-checks the same error downstream, which is
 		// why the arm above passes without it — but with a group-tier row
@@ -356,7 +355,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 	})
 
 	t.Run("HasGroupTierAssignments failing is an error, not a pass", func(t *testing.T) {
-		// THE GATE ITSELF, reached at last: an unreadable "does a group row
+		// The gate itself, reached at last: an unreadable "does a group row
 		// exist" is not evidence that none does. The fixture is the ordinary
 		// production shape this branch exists for — the resolver answers
 		// ErrNotFound (nobody has a user-tier assignment) while the gate's own
@@ -388,7 +387,7 @@ func containsAll(s string, subs ...string) bool {
 	return true
 }
 
-// ─── PF-22, resolve-time ──────────────────────────────────────────────────────
+// PF-22, resolve-time
 
 // TestEffectiveCeilingReintersectsGrants is PF-22's second half. The write-time
 // monotone-⊆ bound (governance_grantbound.go) cannot be the whole story:
@@ -434,7 +433,7 @@ func TestEffectiveCeilingReintersectsGrants(t *testing.T) {
 	if len(got.Spec.EligibleGrants) != 0 {
 		t.Errorf("eligible_grants = %+v, want empty — the deployment no longer provisions this pairing", got.Spec.EligibleGrants)
 	}
-	// DROPPED WITH A WARNING, not refused: a redeploy is somebody else's act
+	// Dropped with a warning, not refused: a redeploy is somebody else's act
 	// arriving between a member's two runs, and failing their run for it turns
 	// one env edit into an outage.
 	if !containsAll(strings.Join(got.Warnings, "\n"), "has-a-grant", "api_key") {
@@ -442,7 +441,61 @@ func TestEffectiveCeilingReintersectsGrants(t *testing.T) {
 	}
 }
 
-// ─── the routed read surfaces ─────────────────────────────────────────────────
+// TestEffectiveCeilingWarnsOnDroppedPushRules pins #272: a profile narrower
+// than the deployment default on push_rules must say so at resolve time, not
+// drop the deployment's content rules in silence.
+func TestEffectiveCeilingWarnsOnDroppedPushRules(t *testing.T) {
+	profile := govProfile("no-push-rules")
+	st := &capStore{govProfile: profile, govTier: types.CapabilitySubjectGroup}
+
+	t.Run("deployment carries push_rules, profile does not: warns", func(t *testing.T) {
+		srv := govServer(st)
+		srv.cfg.DefaultPolicy.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}
+		got, err := srv.effectiveCeiling(govMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("effectiveCeiling: %v", err)
+		}
+		if got.Spec.PushRules.IsSet() {
+			t.Fatalf("profile ceiling unexpectedly carries push_rules: %+v", got.Spec.PushRules)
+		}
+		// BYTE-EXACT frozen copy (docs/design/governance-prompt.md §7.7,
+		// WARN_PUSH_RULES_DROPPED).
+		const want = `governance profile "no-push-rules": push_rules dropped — this profile's ceiling sets none, ` +
+			`so the deployment default's content rules do not apply to members of it`
+		if !slices.Contains(got.Warnings, want) {
+			t.Errorf("warnings = %v\nwant §7.7 BYTE-EXACT: %s", got.Warnings, want)
+		}
+	})
+
+	t.Run("deployment carries none either: no warning", func(t *testing.T) {
+		srv := govServer(st)
+		srv.cfg.DefaultPolicy.PushRules = nil
+		got, err := srv.effectiveCeiling(govMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("effectiveCeiling: %v", err)
+		}
+		if len(got.Warnings) != 0 {
+			t.Errorf("warnings = %v, want none — the deployment had no push_rules to drop", got.Warnings)
+		}
+	})
+
+	t.Run("profile carries its own push_rules: no warning", func(t *testing.T) {
+		profileWithRules := govProfile("has-push-rules")
+		profileWithRules.Ceiling.PushRules = &types.PushRulesSpec{DenyPaths: []string{"secrets/**"}}
+		st := &capStore{govProfile: profileWithRules, govTier: types.CapabilitySubjectGroup}
+		srv := govServer(st)
+		srv.cfg.DefaultPolicy.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}
+		got, err := srv.effectiveCeiling(govMemberCtx([]string{"eng"}, false))
+		if err != nil {
+			t.Fatalf("effectiveCeiling: %v", err)
+		}
+		if len(got.Warnings) != 0 {
+			t.Errorf("warnings = %v, want none — the profile sets its own push_rules", got.Warnings)
+		}
+	})
+}
+
+// the routed read surfaces
 
 // TestGovernanceRoutedReadSites covers the two routed sites the escape table
 // cannot reach through a run create: GET /policies/default (which its own
@@ -514,9 +567,9 @@ func TestGovernanceRoutedReadSites(t *testing.T) {
 		}
 		srv.cfg.Secrets = &memSecrets{m: map[string][]byte{blessed: []byte("v"), other: []byte("v")}}
 
-		names, err := srv.memberVisibleOperatorSecretNames(govMemberCtx([]string{"eng"}, false))
+		names, err := srv.userVisibleOperatorSecretNames(govMemberCtx([]string{"eng"}, false))
 		if err != nil {
-			t.Fatalf("memberVisibleOperatorSecretNames: %v", err)
+			t.Fatalf("userVisibleOperatorSecretNames: %v", err)
 		}
 		if !slices.Contains(names, blessed) {
 			t.Errorf("names = %v, want the profile's own pairing listed", names)
