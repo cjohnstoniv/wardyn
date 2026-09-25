@@ -407,7 +407,8 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 // The handler gathers state; every checklist row is a small pure function below
 // (one per item, in the order the wizard renders them).
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	// One capability snapshot for every per-person list below (capVisible).
+	ctx := withCapBatch(r.Context())
 
 	// auth: same derivation handleMe uses, plus the "disabled" edge (no auth
 	// configured at all — practically unreachable here since adminAuth would have
@@ -629,8 +630,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Harness:            harnessCreds,
 		// Integrations reuses the single integrationsWithCapabilitiesUsing call
 		// hoisted above (PLATFORM-API-7 optimization + HIGH-4 llm_ready reuse).
-		Integrations: integrations,
-		Harnesses:    setupHarnessTools(siteCfg, s.cfg.AgentImages),
+		// Both lists hold only what this caller may use (capVisible);
+		// llmReady above stays the deployment fact it documents.
+		Integrations: capVisible(ctx, s, capIntegration, integrations, setupIntegrationID),
+		Harnesses:    capVisible(ctx, s, capAgent, setupHarnessTools(siteCfg, s.cfg.AgentImages), setupHarnessToolID),
 		LLMReady:     llmReady,
 		ModelAccess:  modelAccess,
 		SCMAccess:    s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value

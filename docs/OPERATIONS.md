@@ -1886,6 +1886,16 @@ where the operator ceiling sets `allow_all_egress` the allowlist is not the gate
 at all, so `egress_host` narrowing does nothing there — the operator's own
 posture, not a switch that failed.
 
+**What a person is offered.** The per-person lists the console's pickers read
+hold only what the caller may use, decided by the same resolver the launch doors
+refuse with: the `harnesses` (`agent`) and `integrations` (`integration`) of
+`GET /setup/status`, `GET /integrations`, and the Azure DevOps rows of
+`GET /me/scm-access` and `/setup/status`'s `scm_access` (`workspace_provider`).
+A refused row is dropped whole, so it reads exactly as a resource the deployment
+does not have. If the grant tables cannot be read, those lists come back empty
+rather than unfiltered. Admins are exempt, as at every door; a `security_admin`
+is bounded like a member.
+
 **Managing them** (the four `/permissions` rows are `securityOps` — admin or
 `security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities`
 is member-safe):
@@ -1900,7 +1910,7 @@ is member-safe):
 | `POST /access/mappings` | upsert one console role mapping on its natural key (`value`) — `201` new, `200` updated; refused on a chart/operator-allowlist collision, an unmatched-outcome flip without `acknowledge_access_change`, or a write that would remove the caller's own admin access |
 | `DELETE /access/mappings/{id}` | remove one console role mapping — same flip/lockout guards as the write above |
 | `POST /access/preview` | dry-run `roles`/`groups`/email (or the caller's own session) through the SAME derivation a real login would use — no write |
-| `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, and `groups_snapshot_stale` |
+| `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, `groups_snapshot_stale`, and `kinds_version` (a number that goes up whenever the set of capability kinds changes) |
 
 `PUT /permissions/enforcement` replaces the **whole** map, so an omitted kind is
 an enforced kind switched off: re-fetch `GET /permissions` immediately before

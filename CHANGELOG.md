@@ -470,6 +470,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `-platform-`, where a policy or role restricting Wardyn's own keys would not cover it. It now sits
   with the signing, session, UI-session and SSH host keys, and the list of platform keys is checked
   against the keys wardynd actually mints at boot, so a new one cannot be left out again.
+- **The lists a person picks from now hold only what they may use (#737).** The harnesses and
+  integrations in `GET /setup/status`, `GET /integrations`, and the Azure DevOps rows in
+  `GET /me/scm-access` and `/setup/status`'s `scm_access` are filtered by the same capability rules
+  the launch doors refuse with (`agent`, `integration`, `workspace_provider`). A refused row is
+  dropped whole and reads exactly as one the deployment does not have; if the grant tables cannot
+  be read, those lists come back empty rather than unfiltered. Admins still see every row.
+  `GET /me/capabilities` gains `kinds_version`, which goes up whenever the set of capability kinds
+  changes.
 - **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
   view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
   The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `user`,
