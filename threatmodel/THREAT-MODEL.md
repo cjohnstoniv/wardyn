@@ -2673,7 +2673,7 @@ residuals particular to holding:
   is not one for every destination. The sidecar's memory (`pushHolds`) is per
   process and bounded, so a restarted sidecar asks again.
 - **Members cannot decide one, not even on their own run.**
-  `authorizeMemberDecision` keeps members to `egress_domain` (and their own
+  `authorizeUserDecision` keeps members to `egress_domain` (and their own
   Azure DevOps escalations); a member approving their own run's workflow-file
   edit is the exfiltration the rule exists to stop. A security operator decides
   any kind, as today.

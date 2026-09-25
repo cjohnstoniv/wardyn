@@ -91,7 +91,7 @@ export interface MeIdentity {
   // (unresolved /me, a failed fetch, an unwrapped test all read as "no
   // root", which shows AddWorkspaceDialog's local_dir-unavailable state
   // rather than a path field that would just be refused server-side).
-  // Never the enforcement point — ValidateMemberMountSource at bind time is
+  // Never the enforcement point — ValidateUserMountSource at bind time is
   // (member-role-desktop.md §c).
   memberLocalDirRoot: string | null;
 
