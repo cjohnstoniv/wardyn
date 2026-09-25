@@ -53,7 +53,7 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
   };
 });
 // The REAL rail with its props recorded — this file pins only what the screen hands it.
-const railProps: Array<{ launch: { credentialRefused: boolean; onOpenRun: (() => void) | null } }> = [];
+const railProps: Array<{ launch: { credentialRefused: boolean; refusedProvider?: string; onOpenRun: (() => void) | null } }> = [];
 vi.mock("./new-run-rail", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./new-run-rail")>();
   return {
@@ -435,6 +435,14 @@ describe("NewRunScreen — the server's credential refusal reaches the rail", ()
     await user.click(launch);
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/runs/run_2"));
     expect(lastRail().launch.credentialRefused).toBe(false);
+  });
+
+  // #543: the refusal's own provider travels with it — the door it opens.
+  it("a model_credential 422 naming a provider hands the rail that provider", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "add your token first", "model_credential", "", "corp-gateway"));
+    await user.click(await titled());
+    expect(await screen.findByText("add your token first")).toBeInTheDocument();
+    expect(lastRail().launch.refusedProvider).toBe("corp-gateway");
   });
 
   it("a 422 without a reason — a policy error — never sets it", async () => {

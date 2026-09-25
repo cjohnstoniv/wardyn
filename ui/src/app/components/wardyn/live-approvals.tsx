@@ -34,7 +34,9 @@ import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
-import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
+import { useModelAccessDoor, useClaimModelAccessDoor, useShellSetupStatus } from "./model-access-context";
+import { resolveDoor } from "../../lib/model-access";
+import { viewOfPath } from "./console-view";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
@@ -819,8 +821,18 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
   // those answer the FAIL-OPEN default while /me is in flight, which is exactly
   // the window in which this row would paint a door for the wrong audience.
   // The door grades nothing until the viewer is known, and so does this.
-  const audience = reauthAudience(request, { operator: door.operator, principal: door.principal });
-  const canAct = audience.canAct;
+  const audience = reauthAudience(request, {
+    operator: door.operator,
+    principal: door.principal,
+    // The path, not useLocation(), as the door's own context reads it: this
+    // row is mounted without a router in its suites.
+    view: viewOfPath(window.location.pathname),
+  });
+  // A hold whose provider this person has no door for any more gets its hint
+  // alone, never a button that opens nothing (#543).
+  const { status } = useShellSetupStatus();
+  const canAct =
+    audience.canAct && (!audience.provider || !!resolveDoor(status, { provider: audience.provider }, "user"));
   // Nobody should claim the door for a control they are not rendering.
   useClaimModelAccessDoor(canAct);
   return (
@@ -840,7 +852,9 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
           variant="outline"
           className="h-7 shrink-0"
           aria-label={REAUTH_ROW.ariaLabel}
-          onClick={() => door.openDoor()}
+          // The hold's OWN provider's door (#543): the claude-code default
+          // may be another AWS provider, whose sign-in cannot clear it.
+          onClick={() => door.openDoor(audience.provider ? { for: { provider: audience.provider } } : undefined)}
         >
           {REAUTH_ROW.action}
         </Button>

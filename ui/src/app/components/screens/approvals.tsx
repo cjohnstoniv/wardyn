@@ -46,7 +46,9 @@ import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthAudience, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
-import { useClaimModelAccessDoor, useModelAccessDoor } from "../wardyn/model-access-context";
+import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../wardyn/model-access-context";
+import { OpenInUserView, useConsoleMode } from "../wardyn/console-view";
+import { resolveDoor } from "../../lib/model-access";
 import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../wardyn/operator-context";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
@@ -173,7 +175,7 @@ interface Banner {
 }
 
 // The fail-closed audience: no viewer in hand is "this is not yours to clear".
-const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "" };
+const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "", provider: "", mine: false };
 
 // This is a PRE-decision preview, not a live readout of a scope in progress:
 // PendingCard calls it before any scope has been chosen (the picker lives
@@ -594,7 +596,16 @@ function PendingCard({
   // default in exactly the window the answer is audience-dependent and the
   // audience is unknown.
   const door = useModelAccessDoor();
-  const reauth = reauthAudience(item, { operator: door.operator, principal: door.principal });
+  const view = useConsoleMode();
+  const reauth = reauthAudience(item, { operator: door.operator, principal: door.principal, view });
+  const { status } = useShellSetupStatus();
+  const reauthProvider = reauth.provider
+    ? (status?.model_providers?.find((p) => p.id === reauth.provider)?.name || reauth.provider)
+    : "";
+  // A hold whose provider this person has no door for any more (removed, or no
+  // agent of theirs uses it) gets its hint alone, never a button that opens
+  // nothing — the failure block's rule (ProviderDoor).
+  const reauthDoor = reauth.canAct && (!reauth.provider || !!resolveDoor(status, { provider: reauth.provider }, "user"));
   const banner = deriveBanner(item.kind, scope, reauth);
   // Deciding an egress_domain approval on an owned run is a MEMBER act (B3,
   // decide() in approvals.go); credential and tool_call stay admin-only
@@ -695,6 +706,12 @@ function PendingCard({
         </span>
       </div>
 
+      {/* #543: which AWS provider the hold is for — a sign-in to another
+          one cannot clear it. */}
+      {item.kind === "credential_reauth" && reauthProvider && (
+        <p className="mt-1 text-xs text-muted-foreground">{REAUTH_ROW.PROVIDER(reauthProvider)}</p>
+      )}
+
       <RunContextRow runId={item.run_id} onRun={setRun} />
 
       {/* Blast-radius banner (D1) — derived from the real scope above. */}
@@ -750,7 +767,12 @@ function PendingCard({
              disabled: a disabled Approve reads as "an admin can do this", and
              no tier can — the server answers 409 to either verb. The one
              control opens the same dialog every other sign-in surface opens. */
-          reauth.canAct ? <ReauthAction /> : null
+          reauthDoor ? (
+            <ReauthAction provider={reauth.provider} />
+          ) : !reauth.canAct && reauth.mine && reauth.provider ? (
+            // The admin's own hold, in the Admin view: its door is in the User view.
+            <OpenInUserView />
+          ) : null
         ) : (
           <>
             <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide}>
@@ -842,11 +864,14 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
  * everyone else reads the card's hint, which names whose sign-in is awaited,
  * and gets no control at all.
  */
-function ReauthAction() {
+function ReauthAction({ provider }: { provider: string }) {
   const door = useModelAccessDoor();
   useClaimModelAccessDoor(true);
+  // The hold's OWN provider's door (#543): the claude-code default may be
+  // another AWS provider, whose sign-in cannot clear it.
+  const open = () => door.openDoor(provider ? { for: { provider } } : undefined);
   return (
-    <Button size="sm" variant="info" aria-label={REAUTH_ROW.ariaLabel} onClick={() => door.openDoor()}>
+    <Button size="sm" variant="info" aria-label={REAUTH_ROW.ariaLabel} onClick={open}>
       {REAUTH_ROW.action}
     </Button>
   );

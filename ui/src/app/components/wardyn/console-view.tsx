@@ -238,6 +238,37 @@ export function ViewGate({ fallback }: { fallback: React.ReactNode }) {
   }
 }
 
+// #543: the admin's own failed run or held sign-in, read in the Admin view. The
+// door is the admin's own credential and opens in the User view only, so this
+// takes them to the same page there — a click, as every view change is.
+export function OpenInUserView() {
+  const access = useViewAccess();
+  const { pathname, search, hash } = useLocation();
+  const navigate = useNavigate();
+  const [failed, setFailed] = React.useState(false);
+  const target = viewTarget("user", pathname, `${search}${hash}`);
+  const go = () => {
+    if (access === "url") {
+      void navigate(target);
+      return;
+    }
+    setFailed(false);
+    switchView("user", target).catch(() => setFailed(true));
+  };
+  return (
+    <>
+      <Button variant="link" size="sm" onClick={go}>
+        {CONSOLE_VIEW.OPEN_IN_USER}
+      </Button>
+      {failed && (
+        <span role="alert" className="text-xs text-danger">
+          {CONSOLE_VIEW.SWITCH_FAILED}
+        </span>
+      )}
+    </>
+  );
+}
+
 // A path with its view prefix removed, for code that asks "which screen is
 // this" and must answer the same in both trees.
 export function screenPath(path: string): string {

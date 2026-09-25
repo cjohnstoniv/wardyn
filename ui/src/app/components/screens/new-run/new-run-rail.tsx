@@ -42,6 +42,7 @@ import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import {
   useClaimModelAccessDoor,
   useModelAccessDoor,
+  useShellSetupStatus,
   type ModelAccessDoorHandle,
 } from "../../wardyn/model-access-context";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
@@ -85,6 +86,10 @@ interface RunRailProps {
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
     credentialRefused: boolean;
+    /** The provider that refusal names (#532), "" when none: its door is the
+     *  one that opens (#543). Optional so a caller with no provider block
+     *  passes nothing. */
+    refusedProvider?: string;
     /** The 201's advisory `warnings[]`, once Launch has actually fired
      *  (§5c.8) — rendered here, inline, instead of a toast. */
     warnings: string[];
@@ -395,24 +400,35 @@ export function RunRail({
   const onLaunchRef = React.useRef(launch.onLaunch);
   onLaunchRef.current = launch.onLaunch;
   const autoOpened = React.useRef(false);
+  const { status: shellStatus } = useShellSetupStatus();
+  const refusedProvider = launch.refusedProvider ?? "";
+  const providerBlock = !!shellStatus?.model_providers;
   React.useEffect(() => {
     if (!launch.credentialRefused || autoOpened.current) return;
     autoOpened.current = true;
-    // #725/T-65: door.bedrockSSO grades the claude-code row ALONE
-    // (modelAccessDoor mirrors internal/api/modelaccess.go's
-    // modelAccessAgent) — it says nothing about which agent THIS run
-    // picked. Without the agentRow check, a codex launch refused for its
-    // OWN model_credential reason on a deployment that also has a
-    // claude-code bedrock_sso per_user row would open "Sign in to AWS" for
-    // a refusal an AWS sign-in cannot repair. The audience rule
-    // modelAccessDoor otherwise states: a sign-in repairs a bedrock_sso
-    // lane for its per_user owner, or for any operator (a shared row); a
-    // member under a shared row keeps the server's sentence, no door.
-    if (agentRow?.id !== MODEL_ACCESS_AGENT || door.open || !door.bedrockSSO || !(door.perUser || door.operator)) return;
-    door.openDoor({ returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
+    if (door.open) return;
+    if (refusedProvider) {
+      // #543 (§5.8): the door of the provider the refusal names — never the
+      // agent or provider selected on screen, which may have moved since the
+      // click (#146's ruling). A provider this person has no door for opens
+      // nothing (resolveDoor's null) and the sentence stands.
+      door.openDoor({ for: { provider: refusedProvider }, returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
+    } else {
+      // A refusal naming no provider under a provider block (a sign-in renewal
+      // that did not complete) has no door. #725/T-65: door.bedrockSSO grades
+      // the claude-code row ALONE (modelAccessDoor mirrors
+      // internal/api/modelaccess.go's modelAccessAgent) — it says nothing about
+      // which agent THIS run picked, so a codex launch refused for its OWN
+      // model_credential reason must not open "Sign in to AWS". Otherwise the
+      // audience rule modelAccessDoor already states: a sign-in repairs a
+      // bedrock_sso lane for its per_user owner, or for any operator (a shared
+      // row); a member under a shared row keeps the server's sentence, no door.
+      if (providerBlock || agentRow?.id !== MODEL_ACCESS_AGENT || !door.bedrockSSO || !(door.perUser || door.operator)) return;
+      door.openDoor({ returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
+    }
     // The strip and the line above catch up with what the server just said.
     void door.refresh();
-  }, [launch.credentialRefused, agentRow?.id, door]);
+  }, [launch.credentialRefused, refusedProvider, providerBlock, agentRow?.id, door]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise

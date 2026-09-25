@@ -13,6 +13,7 @@ import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import type { CreateRunResult, PreflightResult } from "../../../lib/types";
 import { isCredentialRefusal, runs as runsApi } from "../../../lib/api/runs";
+import { HttpError } from "../../../lib/api/core";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { getErrorMessage } from "../../../lib/format";
 import { primaryWorkspaceId, type WizardState } from "./wizard-types";
@@ -41,6 +42,9 @@ export interface UseLaunchResult {
    *  so the rail's alert region remounts and gets re-announced (#459). */
   errorSeq: number;
   credentialRefused: boolean;
+  /** The model provider that credential refusal names (#532), "" when it
+   *  names none — the door the rail opens is THAT provider's (#543). */
+  refusedProvider: string;
   launchWarnings: string[];
   launchedRunId: string | null;
   /** Resolves to the failure's sentence only when this screen had already
@@ -80,6 +84,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   const [error, setError] = React.useState<string | null>(null);
   const [errorSeq, setErrorSeq] = React.useState(0);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
+  const [refusedProvider, setRefusedProvider] = React.useState("");
   // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
   const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
   // Set ONLY while a launched run's advisories are on screen — the rail's
@@ -130,6 +135,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   const launch = async () => {
     setError(null);
     setCredentialRefused(false);
+    setRefusedProvider("");
     setLaunching(true);
     setLaunchWarnings([]);
     setLaunchedRunId(null);
@@ -159,6 +165,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
       setError(sentence);
       setErrorSeq((n) => n + 1);
       setCredentialRefused(isCredentialRefusal(e));
+      setRefusedProvider(isCredentialRefusal(e) && e instanceof HttpError ? e.provider : "");
       onLaunchError?.(e);
       setLaunching(false);
     }
@@ -213,6 +220,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     error,
     errorSeq,
     credentialRefused,
+    refusedProvider,
     launchWarnings,
     launchedRunId,
     launch,

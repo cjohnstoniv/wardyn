@@ -15,6 +15,9 @@ export const CONSOLE_VIEW = {
   EYEBROW_ADMIN: "Admin view",
   TITLE_ADMIN: "Wardyn admin",
   TITLE_USER: "Wardyn",
+  // #543: the admin's own run, on a failure block or reauth card whose door is
+  // User view only.
+  OPEN_IN_USER: "Open in user view",
 } as const;
 
 export const NAV = {

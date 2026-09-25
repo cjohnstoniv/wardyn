@@ -33,12 +33,12 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 
   it("a non-string reason is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", reason: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "" });
   });
 
   it("a raw (non-envelope) body carries no reason", async () => {
     const res = new Response("plain", { status: 500 });
-    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "", provider: "" });
   });
 
   it('{"error":"…","reason":"git_credential","org":"…"} -> an HttpError carrying the org', async () => {
@@ -54,7 +54,17 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 
   it("a non-string org is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", org: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "" });
+  });
+
+  it('{"error":"…","provider":"corp"} -> an HttpError naming the refused provider (#532, #543)', async () => {
+    const res = new Response(
+      JSON.stringify({ error: "refused", reason: "model_credential", provider: "corp", kind: "custom_endpoint" }),
+      { status: 422 },
+    );
+    const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
+    expect(err.provider).toBe("corp");
+    expect(new HttpError(422, "x").provider).toBe("");
   });
 
   it("errText is the envelope's message, byte for byte", async () => {

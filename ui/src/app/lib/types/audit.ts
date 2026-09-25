@@ -197,11 +197,18 @@ export interface RunEnding {
    */
   detail?: string;
   /**
-   * For `credential`: the DECLARED mechanism of the run that was refused
-   * (`data.mechanism` — "bedrock_sso", "anthropic_api_key", …), so a surface
-   * offering a repair binds to the failed run's own lane rather than to
-   * whatever the viewer's claude-code row says today. Absent on an older
-   * trail, which reads as "not a lane this console has a door for".
+   * For `credential`: the model provider the refusal names (`data.provider`,
+   * #532). A provider run's door is keyed by this alone (#543); `mechanism`
+   * below is not read when it is set.
+   */
+  provider?: string;
+  /**
+   * For `credential` with no `provider`: the DECLARED legacy mechanism of the
+   * run that was refused (`data.mechanism` — "bedrock_sso",
+   * "anthropic_api_key", …), so a surface offering a repair binds to the
+   * failed run's own lane rather than to whatever the viewer's claude-code row
+   * says today. Absent on an older trail, which reads as "not a lane this
+   * console has a door for".
    */
   mechanism?: string;
 }
