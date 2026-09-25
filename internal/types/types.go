@@ -288,7 +288,7 @@ type AgentRun struct {
 	// UserType freezes the user type the run's creator resolved as at create
 	// time: the chosen type for a run launched in the user view, the stamped
 	// one otherwise. Empty for a run with no human creator (admin token, local
-	// mode) or created before migration 0077.
+	// mode) or created before migration 0080.
 	UserType string `json:"user_type,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
@@ -855,7 +855,7 @@ type SSHPublicKey struct {
 // oidcGroupsCtxKey in internal/api/http.go): nil means "snapshot unavailable",
 // empty means "the IdP sent no usable groups".
 //
-// UserType is the user type of the minting session (migration 0076), stamped
+// UserType is the user type of the minting session (migration 0082), stamped
 // and re-stamped beside Role. A person whose type changes on the People page
 // has their tokens revoked rather than re-stamped (revokeDemotedRoleSnapshots).
 //

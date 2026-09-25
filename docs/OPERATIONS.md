@@ -1980,7 +1980,7 @@ enforcement map alone, not the grant table) can be sent back as this `PUT`'s
 
 **"Available to" (0.8).** `workspace`, `image`, `agent`, `integration` and
 `workspace_provider` values can each be restricted one at a time (migration
-`0078_capability_restrictions`). A restricted value counts as enforced whatever
+`0081_capability_restrictions`). A restricted value counts as enforced whatever
 its kind's switch says, and only a caller holding an allow row that names the
 value itself gets it: a `*` allow lists nobody, and a deny still wins. So the
 "Only…" list is the allow rows for that value, written through
@@ -5837,6 +5837,10 @@ too: it renames the stored `member` tier to `user`, re-adding the role CHECK on
 `ssh_public_keys` (`0033`'s, whose `0070` cap it re-creates), and altering
 `role_mappings` (`0051`'s). So does `0075`, which re-adds the `approvals.kind`
 CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.model_provider_id`.
+0.8's user types add three more: `0079` re-adds the subject-type CHECKs on
+`capability_grants` (`0042`'s table), `governance_assignments` (`0052`'s) and
+`user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
+`api_tokens.user_type` with its CHECK.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does

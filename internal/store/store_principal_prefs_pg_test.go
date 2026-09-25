@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Integration tests for migration 0077_user_view_type. Guarded by
+// Integration tests for migration 0080_user_view_type. Guarded by
 // WARDYN_TEST_PG; skipped cleanly when unset.
 package store_test
 

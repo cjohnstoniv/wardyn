@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Integration tests for the user_type subject (migration
-// 0076_user_type_subject). Guarded by WARDYN_TEST_PG; skipped cleanly when
+// 0079_user_type_subject). Guarded by WARDYN_TEST_PG; skipped cleanly when
 // unset.
 package store_test
 
@@ -200,7 +200,7 @@ func TestPG_DeleteUserType_RefusedWhileASubjectRowNamesIt(t *testing.T) {
 // TestPG_CreateUserType_RefusedWhileAnOrphanedSubjectRowNamesTheID pins the
 // close for userTypeSubjectExists' disclosed check-then-insert race: a
 // subject row can be written just after a delete's reference check passed,
-// outliving the type it names (migration 0076 has no FK by design). Recreating
+// outliving the type it names (migration 0079 has no FK by design). Recreating
 // that id must stay refused, or the orphan would silently rebind to whatever
 // type is created next with the same id.
 func TestPG_CreateUserType_RefusedWhileAnOrphanedSubjectRowNamesTheID(t *testing.T) {

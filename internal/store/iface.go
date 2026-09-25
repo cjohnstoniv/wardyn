@@ -254,7 +254,7 @@ type Store interface {
 	// omits loses its row) and returns the stored result.
 	PutCapabilityEnforcement(ctx context.Context, enabled map[string]bool) (map[string]bool, error)
 	// ListCapabilityRestrictions returns the restricted values ("Available to:
-	// Only...", migration 0078) as kind -> set of values; an absent value is
+	// Only...", migration 0081) as kind -> set of values; an absent value is
 	// not restricted. Never nil.
 	ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error)
 	// SetCapabilityRestriction turns one value's restriction on or off

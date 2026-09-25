@@ -137,7 +137,7 @@ export interface AgentRun {
   // for mirror parity, same reason as source_id above.
   agent_exec_id?: string;
   // The user type the run's creator resolved as at create time
-  // (internal/types/types.go's AgentRun.UserType, migration 0077) — the chosen
+  // (internal/types/types.go's AgentRun.UserType, migration 0080) — the chosen
   // type for a run launched in the user view, the stamped one otherwise. Empty
   // for a run with no human creator or created before the migration. No
   // console reader today, kept for mirror parity, same reason as source_id

@@ -321,7 +321,7 @@ func TestPG_ListGroupDenyGrants_PredicateMatchesAGoSideScan(t *testing.T) {
 }
 
 // TestPG_CapabilityRestrictions_SetIsIdempotentBothWays: "Available to"'s
-// restricted bit (migration 0078). Restricting twice keeps one row, lifting
+// restricted bit (migration 0081). Restricting twice keeps one row, lifting
 // removes it, and lifting a value never restricted is not an error.
 func TestPG_CapabilityRestrictions_SetIsIdempotentBothWays(t *testing.T) {
 	pool := runsPGPool(t)

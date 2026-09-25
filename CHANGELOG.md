@@ -83,7 +83,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A deleted user type's orphaned subject row could silently rebind to a same-id type created
   later.** `userTypeSubjectExists`' existence check races a concurrent `DeleteUserType`: a
   capability grant, governance assignment or drive grant can finish writing just after the type it
-  names was deleted (migration `0076` carries no FK, by design), leaving a row nothing owns.
+  names was deleted (migration `0079` carries no FK, by design), leaving a row nothing owns.
   `CreateUserType` now refuses (`409`) an id any of those three tables still names, so the id stays
   dead until an operator clears the orphan rows themselves, rather than quietly inheriting whatever
   a later type of the same id is given to (#610).
@@ -366,7 +366,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   process ended in `exec sleep infinity`; as PID 1, `sleep` ignores SIGTERM, so every stop
   (k8s and docker, task mode and interactive `agent-run --idle`) sat out the whole grace period
   before the runtime force-killed it. It now traps TERM/INT and exits immediately.
-- **API tokens carry a user type (#611).** Migration `0076_api_tokens_user_type` adds
+- **API tokens carry a user type (#611).** Migration `0082_api_tokens_user_type` adds
   `api_tokens.user_type`: a new token is stamped with its session's user type (every existing
   token becomes Standard user), the holder's next sign-in re-stamps it beside the role and
   groups, and every request the token authenticates carries it — `/me` now reports `user_type`
@@ -841,7 +841,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ListSecretsPage`, each surfacing the truncation signal the same way `ListRunsPage` does;
   `ListGrants`, `ListSSHKeys` and `ListSecrets` now also accept a `ListOpts` to page.
 - **"Available to": one resource can be limited to the people listed for it (#612).** Migration
-  `0078_capability_restrictions` adds a restricted bit per value of the `workspace`, `image`, `agent`,
+  `0081_capability_restrictions` adds a restricted bit per value of the `workspace`, `image`, `agent`,
   `integration` and `workspace_provider` kinds, set with `PUT /permissions/availability/{kind}/{value}`
   (`{"restricted": true}` for "Only…", `false` for Everyone) and read with `GET` on the same path,
   which also lists the allow rows naming the value. Both are admin or `security_admin`, and each
@@ -856,7 +856,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `{"view": "user", "user_type": "<id>"}` puts an admin in the user view as that type: its grants,
   governance profile, drives and run limits bind exactly as for a person of that type, and the tier
   stays clamped to `user`. With no type given, the view uses the admin's previous choice (migration
-  `0077_user_view_type` adds `principal_prefs`, so the choice follows them across devices), then
+  `0080_user_view_type` adds `principal_prefs`, so the choice follows them across devices), then
   their own type, then the built-in one; an unknown type is refused `400`. If the viewed type is
   deleted, the next request is refused `403` `user_view_type_deleted` (a launch `409` `admin_view`)
   rather than answered as the admin, and the view turns off; `GET /me` answers the real tier with
@@ -881,7 +881,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   no policy is never gated, and a super admin is exempt; a security admin is bounded like anyone.
   Grant values are folded to the canonical uuid, and anything else is refused (`400`).
 
-- **A user type is a subject (#610).** Migration `0076_user_type_subject` lets a capability
+- **A user type is a subject (#610).** Migration `0079_user_type_subject` lets a capability
   grant, a governance assignment and a drive grant name `subject_type: "user_type"` with a type's
   id. A grant on a type is one more subject beside user and group: an allow lets that type's
   people in, and a deny is a wall no user or group allow lifts (a `security_admin` of that type

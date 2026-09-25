@@ -155,7 +155,7 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 // memberships moved on keeps authorizing against the groups they held at mint
 // time until they mint a fresh token. The role half was bound this way in
 // migration 0046; this widens the token lane's counterpart to cover groups
-// too, and migration 0076 the user type.
+// too, and migration 0082 the user type.
 //
 // truncated is bound EXACTLY as the caller passes it, never defaulted or
 // inferred here: it must come straight from the login's own session-
