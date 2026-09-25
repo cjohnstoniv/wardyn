@@ -380,7 +380,7 @@ func assertBedrockBearerRefused(t *testing.T, rr *httptest.ResponseRecorder, h *
 		}
 	}
 	ev := lastAuditEvent(t, h.audit.events, "secret.read")
-	if !strings.Contains(string(ev.Data), wantReason) {
+	if !strings.Contains(string(ev.Data), `"reason":"`+wantReason+`"`) {
 		t.Fatalf("audit data = %s, want reason %q", ev.Data, wantReason)
 	}
 	// #656: the same machine reason now reaches the WIRE body, not just the

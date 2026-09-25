@@ -142,8 +142,8 @@ func TestBedrockBearerSink_StoreOutageIsTransientRefusalDefinitive(t *testing.T)
 		wantStatus int
 		wantReason string
 	}{
-		{errStoreDown, http.StatusServiceUnavailable, `"reason":"store-unavailable"`},
-		{errStoreRefused, http.StatusFailedDependency, `"reason":"refused"`},
+		{errStoreDown, http.StatusServiceUnavailable, "store-unavailable"},
+		{errStoreRefused, http.StatusFailedDependency, "refused"},
 	} {
 		st := &bearerGuardStore{run: types.AgentRun{ID: uuid.New(), Agent: "claude-code"},
 			site: bearerRow(types.CredentialSourceShared)}
