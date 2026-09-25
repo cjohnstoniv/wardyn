@@ -1321,13 +1321,22 @@ func TestSecretRmCmd(t *testing.T) {
 func TestSSHKeyDeleteCmd(t *testing.T) {
 	srv := newCmdServer(t, http.StatusNoContent, nil)
 
-	if err := execCmd(t, "ssh-key", "delete", "SHA256:abcdef1234567890", "--url", srv.URL, "--token", "tok"); err != nil {
+	var buf strings.Builder
+	root := rootCmd()
+	root.SetArgs([]string{"ssh-key", "delete", "SHA256:abcdef1234567890", "--url", srv.URL, "--token", "tok"})
+	root.SetIn(strings.NewReader(""))
+	root.SetOut(&buf)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
 		t.Fatalf("ssh-key delete returned error: %v", err)
 	}
 	got := srv.last()
 	want := "/api/v1/me/ssh-keys/SHA256:abcdef1234567890"
 	if got.method != http.MethodDelete || got.path != want {
 		t.Errorf("got %s %s, want DELETE %s", got.method, got.path, want)
+	}
+	if want := "ssh key \"SHA256:abcdef1234567890\" deleted\n"; buf.String() != want {
+		t.Errorf("stdout = %q, want %q", buf.String(), want)
 	}
 }
 

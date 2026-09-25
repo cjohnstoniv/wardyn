@@ -695,6 +695,27 @@ func TestSetSecret_NameEscaped(t *testing.T) {
 	}
 }
 
+// TestDeleteSSHKey_FingerprintEscaped verifies the fingerprint is
+// path-escaped: ssh.FingerprintSHA256's raw form routinely contains a "/",
+// which url.PathEscape must percent-encode so it cannot be read as a path
+// separator (matching handleDeleteSSHKey's own decode).
+func TestDeleteSSHKey_FingerprintEscaped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("method = %s, want DELETE", r.Method)
+		}
+		if got := r.URL.EscapedPath(); got != "/api/v1/me/ssh-keys/SHA256:ab%2Fcd+ef" {
+			t.Errorf("got escaped path %q, want /api/v1/me/ssh-keys/SHA256:ab%%2Fcd+ef", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	if err := newTestClient(srv).DeleteSSHKey(context.Background(), "SHA256:ab/cd+ef"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestDeleteSecret_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/v1/secrets/old-key" {
