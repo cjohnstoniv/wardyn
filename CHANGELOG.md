@@ -519,6 +519,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `PUT /site-config` alike; the count is audited as `per_user_credentials_invalidated`. New audit
   actions `model_provider.credential.write` / `.delete` record `{provider, owner}`, never the value.
 
+- **CI launches as a dedicated CI principal, with that person's own model credential (#546).**
+  With `WARDYN_URL` set, `scripts/ci-run.sh` drives that existing control plane instead of
+  starting a throwaway stack: every call authenticates as `WARDYN_CI_TOKEN`, the CI principal's own
+  `wdn_` token, and `WARDYN_ADMIN_TOKEN` is cleared for those calls. A harness run needs
+  `WARDYN_CI_MODEL_PROVIDER`: the script reads that identity's `provider_access`, stores nothing,
+  fails naming the provider unless its credential is `live` or `expiring`, and launches with
+  `--model-provider`. **Breaking:** `WARDYN_CI_SECRETS` is refused — CI no longer seeds credentials
+  into the operator's namespace — and the throwaway stack runs `exec` mode only, since nobody's
+  model credential is on it. `docs/CI.md` ("CI's identity", provisioning the CI principal), the
+  `wardyn-ci` skill and the GitHub Actions/Azure DevOps examples follow.
+
 - **The Claude sign-in image is a checked prerequisite for `anthropic_subscription` model
   providers (#524).** "Resolves" is now two things, not one: `WARDYN_AGENT_IMAGES["claude-code"]`
   must be pinned, and, when the wired Runner can confirm its local image store (the Docker
