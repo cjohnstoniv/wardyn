@@ -1416,6 +1416,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
   both vars are set rather than picking one silently. See `docs/ENV.md`.
   This resolves 0.7.6's known gap that `WARDYN_DAEMON_PROXY_URL` had no credentialed-proxy
   form.
+- **Push rules govern Azure DevOps REST pushes too (#494).** The per-person Azure DevOps credential
+  writes content over REST as well as git: Git Pushes - Create carries files inline, and it never
+  reached `push_rules` — a REST push adding `.github/workflows/exfil.yml` under
+  `deny_paths: [".github/**"]` answered `201`. With push rules set the REST gate now reads a push
+  body path by path (every `item.path`, and `sourceServerItem` for a rename) before the capability
+  check: a deny match is refused (`brokered:git:push-rules`), a review match is held for an admin
+  on the same `push_content` approval (its `commits` carries the SHA-256 of the request body, since
+  a REST push names no commit yet), an unattended run refuses. A body it cannot read whole, and
+  every other REST route that puts content on a branch without naming its paths — import requests,
+  server-side commits, merges, cherry-picks, reverts and suggestions, fork syncs, annotated tags, a
+  ref pointed at a commit, a pull request completed or set to auto-complete (created that way or
+  updated to it), wiki pages, TFVC check-ins — is refused (`brokered:git:push-uninspectable`), on
+  its effective method, so an `X-HTTP-Method-Override` cannot turn a push into a non-write. A run with no `push_rules` is
+  unchanged. The GitHub App and `git_pat` lanes were checked for the same class and have no REST
+  door: their credentials stay in the proxy, their routes admit only git's smart-HTTP endpoints,
+  and `api.github.com` is denied to a brokered run.
+- **Push rules cover the Azure DevOps Entra lane (#494).** A push through the per-person Azure
+  DevOps lane now gets the same `push_rules` step the GitHub App and `git_pat` lanes run —
+  `deny_paths` refuses (`brokered:git:push-rules`), `require_review_paths` holds for an admin
+  (`brokered:git:push-held`, `acts_as_kind: "ado_entra"`, labelled with the person whose sign-in the
+  push uses), an unattended run refuses (`brokered:git:push-held-unattended`) — and it runs
+  BEFORE the capability check, so nobody is asked to approve `code_write` or `policy_bypass` for a
+  push the rules refuse. The lane also advertises `no-thin` on the same trigger, so a shallow
+  clone's push arrives readable. A probe that moves no ref is untouched, and a run with no
+  `push_rules` behaves exactly as before.
 - **A push that touches a reviewed path is held for an admin's decision (#180).** `push_rules`
   gains `require_review_paths` — deny_paths' pattern language and write-time checks — and
   `hold_seconds` (default 120, at most 600). A brokered push no deny path refuses, but which
@@ -1434,7 +1459,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   cannot, even on their own run. An unattended (non-interactive) run refuses at once with no
   approval raised (`brokered:git:push-held-unattended`). Both lanes that enforce deny paths hold:
   the GitHub App lane and the `git_pat` lane (Azure DevOps over a PAT included); the Azure DevOps
-  Entra lane applies no content rules yet. Migration `0075_approval_push_content` adds the kind
+  Entra lane holds too (below). Migration `0075_approval_push_content` adds the kind
   to the `approvals.kind` CHECK.
 
 - **A brokered push that touches a denied path, cannot be inspected, or is too large is refused.**
