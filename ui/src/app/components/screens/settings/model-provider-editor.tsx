@@ -367,8 +367,11 @@ function HarnessBlock({
             aria-label={harness.display}
             aria-expanded={expanded}
             aria-controls={`${base}-body`}
+            // A required, empty Path stays open: collapsing would unmount the
+            // input its `required` check lives on.
+            disabled={needsPath}
             onClick={() => setOpen(!expanded)}
-            className="text-muted-foreground"
+            className="text-muted-foreground disabled:opacity-50"
           >
             {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
           </button>

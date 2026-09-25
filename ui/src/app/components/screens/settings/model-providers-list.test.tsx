@@ -86,6 +86,18 @@ describe("ModelProvidersList", () => {
     expect(within(dialog).getByRole("group", { name: PROVIDER_EDITOR.KIND_TITLE })).toBeInTheDocument();
   });
 
+  it.each([
+    ["a Bedrock row", bedrock, "Bedrock (prod)"],
+    ["a Claude subscription row", sub, "Claude subscription"],
+  ])("%s does not open the editor (#538 builds those kinds)", async (_, provider, name) => {
+    given([provider]);
+    renderList();
+    const r = await screen.findByTestId(`model-provider-${provider.id}`);
+    expect(within(r).queryByRole("button")).toBeNull();
+    await userEvent.click(within(r).getByText(name));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("a row opens the editor on that provider", async () => {
     given([gateway]);
     renderList();

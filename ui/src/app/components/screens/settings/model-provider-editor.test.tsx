@@ -179,6 +179,20 @@ describe("E2 — a new endpoint on both agents", () => {
     expect(within(dialog()).queryByLabelText(/token/i)).toBeNull();
   });
 
+  it("an agent whose required Path is empty can't be collapsed; once filled, it can", async () => {
+    const { user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.custom_endpoint }));
+    const chevron = screen.getByRole("button", { name: "Claude Code" });
+    expect(chevron).toBeDisabled();
+    await user.click(chevron);
+    expect(screen.getAllByLabelText(E.PATH)).toHaveLength(2);
+
+    await user.type(screen.getAllByLabelText(E.PATH)[0], "/anthropic");
+    expect(chevron).toBeEnabled();
+    await user.click(chevron);
+    expect(screen.getAllByLabelText(E.PATH)).toHaveLength(1);
+  });
+
   it("filled: saves corp-gateway with its paths, and the format back in its wire form", async () => {
     const { user } = renderEditor();
     await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.custom_endpoint }));
