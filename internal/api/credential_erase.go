@@ -87,17 +87,27 @@ var noSweepOnce sync.Once
 // SweepExpiredCredentials deletes every stored credential whose expiry has
 // passed, audits each as credential.expired_deleted, and returns how many it
 // deleted. cmd/wardynd calls it daily. A row it could not delete is kept, and
-// the next sweep tries it again.
+// the next sweep tries it again. A store that cannot sweep — no DeleteExpired,
+// or a wrapper answering secretstore.ErrNoExpirySweep — is logged at Error once.
 func (s *Server) SweepExpiredCredentials(ctx context.Context) int {
-	sw, ok := s.cfg.Secrets.(expiredSweeper)
-	if !ok {
+	if s.cfg.Secrets == nil {
+		return 0 // no store, so nothing stored to expire
+	}
+	noSweep := func() int {
 		noSweepOnce.Do(func() {
 			slog.ErrorContext(ctx, "wardynd: the secret store has no expiry sweep; expired stored credentials are NOT being deleted",
-				slog.String("store", fmt.Sprintf("%T", s.cfg.Secrets)))
+				slog.String("store", fmt.Sprintf("%T", s.cfg.Secrets)), slog.String("store_name", s.cfg.Secrets.Name()))
 		})
 		return 0
 	}
+	sw, ok := s.cfg.Secrets.(expiredSweeper)
+	if !ok {
+		return noSweep()
+	}
 	gone, err := sw.DeleteExpired(ctx)
+	if errors.Is(err, secretstore.ErrNoExpirySweep) {
+		return noSweep()
+	}
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: deleting expired credentials left some behind; the next sweep retries them", slog.Any("err", err))
 	}

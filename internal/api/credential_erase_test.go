@@ -4,11 +4,15 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -163,6 +167,29 @@ func TestSweepExpiredCredentials_ReachesThroughTheAuditedWrapper(t *testing.T) {
 	h.srv.cfg.Secrets = secretstore.Audited(inner, nil)
 	if n := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
 		t.Fatalf("swept %d through the audited wrapper, want 1", n)
+	}
+}
+
+// A wrapped store that cannot sweep is least retention switched off: the
+// sweep says so at Error, once per process, and reports nothing deleted.
+func TestSweepExpiredCredentials_WrappedStoreWithoutSweepLogsOnce(t *testing.T) {
+	noSweepOnce = sync.Once{}
+	t.Cleanup(func() { noSweepOnce = sync.Once{} })
+	var logged bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	h := newHarness(t)
+	h.srv.cfg.Secrets = secretstore.Audited(&memSecrets{m: map[string][]byte{}}, nil)
+	for range 2 {
+		if n := h.srv.SweepExpiredCredentials(context.Background()); n != 0 {
+			t.Fatalf("swept %d with a store that cannot sweep, want 0", n)
+		}
+	}
+	const msg = "the secret store has no expiry sweep"
+	if got := strings.Count(logged.String(), msg); got != 1 || !strings.Contains(logged.String(), "level=ERROR") {
+		t.Fatalf("logged %q %d times (want once, at ERROR): %s", msg, got, logged.String())
 	}
 }
 
