@@ -1112,11 +1112,12 @@ test("F (member-preview): an admin previews the state a member is in before they
   // per-principal credential lookup still finds the admin's own session.
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("not_configured");
-  // #541 retired Getting Started's own "Your model key" card; this deployment
-  // has no model-providers block (a per_user roster row alone), so the
-  // connections-summary chip it replaced reads "Not set up by your admin" —
-  // the same flagged gap sso-member.spec.ts's case (5) notes.
-  await expect(page.getByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeVisible({ timeout: 60_000 });
+  // #541 fix review: Getting Started's own "Your model key" card is retired,
+  // but its model_access reading moved to legacySummary
+  // (lib/model-connections.ts) — this deployment has no model-providers block
+  // (a per_user roster row alone), so the connections-summary chip reads the
+  // same not_configured state: Needs you.
+  await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
 
   // …and the one door that could WRITE inside the preview is refused, because a
   // capture made here would land on the admin's own identity and overwrite

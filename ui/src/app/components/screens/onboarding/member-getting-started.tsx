@@ -39,7 +39,8 @@ import {
   SectionLabel,
 } from "../../wardyn/primitives";
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
-import { connectionRows, connectionsSummary } from "../../../lib/model-connections";
+import { connectionRows, connectionsSummary, legacySummary } from "../../../lib/model-connections";
+import { MODEL_ACCESS_AGENT, isPerUserSsoRow } from "../../../lib/model-access";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
@@ -204,8 +205,22 @@ export function MemberGettingStarted() {
 
   // #541 (§5.4, packet MP-D): the SAME predicate the Your account page's own
   // header chip reads (model-connections-card.tsx) — one Ready/Needs
-  // you/Not-set-up answer, never two independently-computed copies.
-  const connectionsChip = connectionsSummary(connectionRows(status));
+  // you/Not-set-up answer, never two independently-computed copies, WHEN
+  // there is a provider block to read. Fix review: an install with none
+  // (every legacy shared or per_user roster install, since the admin funnel
+  // writes no provider block until #548 lands) falls back to legacySummary,
+  // the retired "Your model key" card's own model_access/llm_ready reading —
+  // connectionsSummary's rows are always empty there, and "Not set up by
+  // your admin" over a working shared credential was the regression this
+  // fixes. null while `status` itself hasn't loaded yet: no claim before
+  // there is an answer to make one from.
+  const providerMode = !!status?.model_providers;
+  const connectionsChip = status ? (providerMode ? connectionsSummary(connectionRows(status)) : legacySummary(status)) : null;
+  // The per_user roster row (the pre-provider per-person AWS-SSO lane) —
+  // SETUP_SUMMARY_HELPER's "shared credentials" claim is false under it, same
+  // as under any real provider block (every provider is per-person by
+  // design), so both pick the per_user lede instead.
+  const isPerUserModelAccess = !!status?.harnesses?.some((h) => h.id === MODEL_ACCESS_AGENT && isPerUserSsoRow(h));
 
   // #386: the Azure DevOps chip + its fallback connect control — the same
   // popup-driven flow the New Run rail's launch door uses.
@@ -293,8 +308,10 @@ export function MemberGettingStarted() {
                   </Chip>
                 )}
                 {/* #541 (§5.4): Ready / Needs you / Not set up by your admin
-                    — the same chip Your account's own header carries. */}
-                <Chip tone={connectionsChip.tone}>{connectionsChip.label}</Chip>
+                    — the same chip Your account's own header carries. null
+                    (status not loaded yet) claims nothing, same as every
+                    other chip on this row. */}
+                {connectionsChip && <Chip tone={connectionsChip.tone}>{connectionsChip.label}</Chip>}
                 {/* #386: one more chip from the six states, a second subject
                     (§6.2 — "In the common case that is the whole of it: no
                     action line, no button"). */}
@@ -351,7 +368,9 @@ export function MemberGettingStarted() {
               {status?.scm_access?.state === "shared_expired" && (
                 <p className="mt-2 text-sm text-warning">{ADO.ACCESS_SHARED_EXPIRED_ACTION}</p>
               )}
-              <p className="mt-3 text-sm text-muted-foreground">{T.SETUP_SUMMARY_HELPER}</p>
+              <p className="mt-3 text-sm text-muted-foreground">
+                {isPerUserModelAccess || providerMode ? T.SETUP_SUMMARY_HELPER_PER_USER : T.SETUP_SUMMARY_HELPER}
+              </p>
               {/* The chip names the profile; this says what having one means.
                   Both render only when there IS one. */}
               {governanceProfile && (

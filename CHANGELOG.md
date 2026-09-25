@@ -10,6 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Getting Started's model-access chip read "Not set up by your admin" for every legacy install
+  (#541 fix review).** #541's new per-provider connections chip graded only `model_providers`/
+  `provider_access`, which are empty for any install predating provider records — every shared or
+  per_user-roster install still on main, since the admin funnel writes no provider block until
+  #548 lands. `legacySummary` (`lib/model-connections.ts`) restores the old per-principal
+  `model_access`/`llm_ready` reading as Getting Started's own fallback whenever there is no
+  provider block, and the per_user lede is back for both that case and a real provider block
+  (every provider is a per-person credential, never shared). The expiring row's own line
+  (`Your account`'s connections list) now reads a clock time, matching packet MP-D's own drawn
+  text, instead of a relative offset.
 - **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
   map being set was previously enough to hide the "Who is an admin" setup row and the shell
   banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still

@@ -228,12 +228,14 @@ console. Leave off `?run_id=` and you get an empty `200`: a collection
 endpoint's answer when it has nothing scoped to show you, not an error. The
 action vocabulary is [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 
-## Your model key
+## Your model connections
 
-Store your own key under the provider-convention name from Getting Started ▸
-Your model key (`anthropic-api-key` for Claude, `openai-api-key` for Codex)
-via `PUT /secrets/<name>` or the console — `GET /secrets` shows it under
-`mine`, never under a name another member wrote. Pick it under Model access
+If your admin has set up per-provider model records (#551), add your own
+credential for a provider from Your account ▸ Your model connections in the
+console. Otherwise (today's more common shape), store your own key under the
+provider-convention name yourself: `anthropic-api-key` for Claude,
+`openai-api-key` for Codex, via `PUT /secrets/<name>` — `GET /secrets` shows it
+under `mine`, never under a name another member wrote. Pick it under Model access
 when you launch a run; your run then uses YOUR key, injected proxy-side
 exactly like an operator's own (the value is never resident in the sandbox).
 Setting your own key needs no operator integration or workspace requirement
@@ -282,7 +284,7 @@ their own inline policy.
   integration, or a workspace requirement, re-adds a model grant after your
   policy is clamped — see [DESKTOP.md § Model access on
   m′](DESKTOP.md#model-access-on-m). If you'd rather bring your own key, see
-  [Your model key](#your-model-key) above — no admin action needed.
+  [Your model connections](#your-model-connections) above — no admin action needed.
 - **A git provider your repo's host is on.** If onboarding a repository or
   launching a run against it is refused because its host is not an enabled git
   provider, only an admin can fix it — by enabling a provider row for that host,

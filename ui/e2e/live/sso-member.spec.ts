@@ -187,16 +187,14 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   // (5) THE ONE SUPPRESSION A MEMBER GETS, and the one they deliberately do
   // NOT. Getting Started IS the door, so the strip is withheld there.
   //
-  // #541 FLAG: Getting Started's own "Your model key" card (which used to say
-  // this half in the door's place) is retired — this install has no
-  // model-providers block (a pure per_user roster row), so #541's own
-  // connections-summary chip reads "Not set up by your admin" here, which is
-  // NOT an honest description of a working per_user AWS lane. A per_user
-  // roster row with no model-providers record is a real gap #541 did not
-  // invent a fix for (see its report); asserted here so it stays visible
-  // rather than silently passing.
+  // #541 fix review: Getting Started's own "Your model key" card (which used
+  // to say this half in the door's place) is retired, but its own
+  // model_access reading moved with it — legacySummary (lib/model-connections.ts)
+  // is the fallback for an install with no model-providers block (this one: a
+  // pure per_user roster row), so the connections-summary chip reads the
+  // SAME not_configured state as the strip: Needs you.
   await page.goto("/setup");
-  await expect(page.getByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
   // …and on /account a MEMBER keeps it, deliberately: that card's AWS button
   // is admin-only, so hiding the strip there would strand exactly the person a

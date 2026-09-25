@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { SetupStatus, AgentRun } from "../../../lib/types";
+import type { SetupStatus, AgentRun, SetupHarnessTool } from "../../../lib/types";
 import { makeRun } from "../../../../test/factories";
 import { WithDoor } from "../../../../test/door-harness";
 import { MODEL_PROVIDERS, baseMe, baseMeDrive, baseStatus, providerStatus } from "../../../lib/test-fixtures";
@@ -116,6 +116,20 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
 function run(id: string): AgentRun {
   return makeRun({ id, created_at: "", updated_at: "" });
 }
+
+// A per_user roster row (the pre-provider per-person AWS-SSO lane) — restored
+// for the per_user-lede tests below (fix review on #541).
+const perUserHarness: SetupHarnessTool[] = [
+  {
+    id: "claude-code",
+    display: "Claude Code",
+    has_gateway: true,
+    has_login: true,
+    enabled: true,
+    credential_source: "per_user",
+    mechanism: "bedrock_sso",
+  },
+];
 
 // The page reads its drive off the shell's ONE GET /me (operator-context's
 // MeIdentity.userDrive), not a fetch of its own — so a case states its /me body
@@ -408,15 +422,65 @@ describe("MemberGettingStarted", () => {
       expect(await screen.findByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeInTheDocument();
     });
 
-    // #541's own report flags the gap this fixture is: a per_user roster row
-    // with model_access live but NO model-providers block still reads "Not
-    // set up by your admin" — the retired "Your model key" card used to read
-    // this correctly off model_access; the new chip cannot, since it grades
-    // model_providers/provider_access alone.
-    it("KNOWN GAP: a working per_user AWS lane with no model-providers block still reads Not set up", async () => {
+    // Fix review on #541: with no model-providers block at all,
+    // connectionsSummary's rows are always empty — legacySummary is the
+    // fallback (lib/model-connections.ts), reading the SAME model_access the
+    // retired "Your model key" card used to, so a working per_user AWS lane
+    // still reads Ready rather than a false "Not set up by your admin".
+    it("a working per_user AWS lane with no model-providers block reads Ready (legacySummary)", async () => {
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "live" } }));
       renderPage();
-      expect(await screen.findByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeInTheDocument();
+      expect(await screen.findByText(CONNECTIONS.SUMMARY_READY)).toBeInTheDocument();
+    });
+
+    it("a per_user AWS lane not yet signed in reads Needs you (legacySummary)", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" } }));
+      renderPage();
+      expect(await screen.findByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeInTheDocument();
+    });
+
+    // The shared-credential legacy install: no per-principal model_access at
+    // all, but the deployment-wide llm_ready fallback is true — the exact
+    // shape "Your model key" used to read "Provided by your admin" from.
+    it("a shared legacy install with llm_ready reads Ready (legacySummary)", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ llm_ready: true }));
+      renderPage();
+      expect(await screen.findByText(CONNECTIONS.SUMMARY_READY)).toBeInTheDocument();
+    });
+
+    it("renders no chip at all before status has loaded", () => {
+      renderPage();
+      expect(screen.queryByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).not.toBeInTheDocument();
+      expect(screen.queryByText(CONNECTIONS.SUMMARY_READY)).not.toBeInTheDocument();
+      expect(screen.queryByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).not.toBeInTheDocument();
+    });
+
+    // Restored (fix review on #541): the "shared credentials … your runs
+    // inherit them" lede is false under a per_user roster row — SAME reason
+    // it's false under a real provider block.
+    it("a per_user roster row shows the per_user lede, never the shared one", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({ model_access: { state: "live" }, harnesses: perUserHarness }),
+      );
+      renderPage();
+      expect(await screen.findByText(T.SETUP_SUMMARY_HELPER_PER_USER)).toBeInTheDocument();
+      expect(screen.queryByText(T.SETUP_SUMMARY_HELPER)).not.toBeInTheDocument();
+    });
+
+    it("a plain shared install (no per_user row, no providers) shows the shared lede", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ llm_ready: true }));
+      renderPage();
+      await screen.findByText(CONNECTIONS.SUMMARY_READY);
+      expect(screen.getByText(T.SETUP_SUMMARY_HELPER)).toBeInTheDocument();
+      expect(screen.queryByText(T.SETUP_SUMMARY_HELPER_PER_USER)).not.toBeInTheDocument();
+    });
+
+    it("a real provider block shows the per_user lede too — every provider is per-person", async () => {
+      const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "live" }]);
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
+      expect(await screen.findByText(T.SETUP_SUMMARY_HELPER_PER_USER)).toBeInTheDocument();
+      expect(screen.queryByText(T.SETUP_SUMMARY_HELPER)).not.toBeInTheDocument();
     });
   });
 

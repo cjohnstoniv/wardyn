@@ -3,13 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { connectionRowCopy, connectionRows, connectionsSummary } from "./model-connections";
+import { connectionRowCopy, connectionRows, connectionsSummary, legacySummary } from "./model-connections";
 import { CONNECTIONS } from "../components/wardyn/copy/door";
 import { AGENTS } from "./workspace-providers-copy";
-import { absoluteTime, relativeTime } from "./format";
-import { aheadByHours } from "./test-clock";
 import { MODEL_PROVIDERS, baseStatus, providerStatus } from "./test-fixtures";
 import type { SetupModelProvider, SetupProviderAccess, SetupStatus } from "./types";
 
@@ -103,13 +101,29 @@ describe("connectionRowCopy — bedrock_sso (C3-C7)", () => {
     expect(copy.button).toBeUndefined();
   });
 
-  it("C5 expiring: Expiring, 'Sign in again before {when}', Sign in to AWS", () => {
-    const deadline = aheadByHours(3);
-    const copy = connectionRowCopy(baseStatus(), row({ provider: MODEL_PROVIDERS.bedrock.id, state: "expiring", deadline }));
-    expect(copy.chip).toEqual({ label: CONNECTIONS.EXPIRING, tone: "warning" });
-    expect(copy.line).toBe(CONNECTIONS.EXPIRING_LINE(relativeTime(deadline)));
-    expect(copy.title).toBe(absoluteTime(deadline));
-    expect(copy.button).toBe(AGENTS.SIGN_IN_AWS);
+  // A CLOCK TIME (packet MP-D draws "Sign in again before 17:30"), pinned as a
+  // literal — never a recomputation through absoluteTime, which would let the
+  // implementation and the test drift in lockstep and still pass. The
+  // deadline is a fixed PAST instant (2020, so check-fixture-dates.sh never
+  // counts it — an earlier year can't expire) under a fixed TZ, so the
+  // literal is deterministic wherever this runs.
+  describe("C5 expiring, a fixed clock time", () => {
+    const priorTZ = process.env.TZ;
+    beforeAll(() => {
+      process.env.TZ = "UTC";
+    });
+    afterAll(() => {
+      process.env.TZ = priorTZ;
+    });
+
+    it("Expiring, 'Sign in again before {when}', Sign in to AWS", () => {
+      const deadline = "2020-01-15T09:30:00Z";
+      const copy = connectionRowCopy(baseStatus(), row({ provider: MODEL_PROVIDERS.bedrock.id, state: "expiring", deadline }));
+      expect(copy.chip).toEqual({ label: CONNECTIONS.EXPIRING, tone: "warning" });
+      expect(copy.line).toBe(CONNECTIONS.EXPIRING_LINE("Jan 15, 2020, 09:30:00 AM"));
+      expect(copy.title).toBe("");
+      expect(copy.button).toBe(AGENTS.SIGN_IN_AWS);
+    });
   });
 
   it("C6 expired_signin, ordinary dead session: Signed out, the C6 line, Sign in to AWS", () => {
@@ -219,5 +233,61 @@ describe("connectionRowCopy — the 'For …' line", () => {
       access: { provider: MODEL_PROVIDERS.gateway.id, state: "live" },
     });
     expect(copy.forLine).toBe(CONNECTIONS.FOR("Claude Code and Codex CLI"));
+  });
+});
+
+// Getting Started's own fallback for an install with no model-providers block
+// at all (fix review on #541) — reads the SAME model_access/llm_ready pair
+// the retired "Your model key" card used to, so a legacy shared or per_user
+// install still reads an honest chip instead of a false "Not set up".
+describe("legacySummary", () => {
+  it("model_access live: Ready", () => {
+    expect(legacySummary(baseStatus({ model_access: { state: "live" } }))).toEqual({
+      label: CONNECTIONS.SUMMARY_READY,
+      tone: "success",
+    });
+  });
+
+  it("model_access expiring: still Ready — it signs today", () => {
+    expect(legacySummary(baseStatus({ model_access: { state: "expiring" } }))).toEqual({
+      label: CONNECTIONS.SUMMARY_READY,
+      tone: "success",
+    });
+  });
+
+  it("model_access not_configured: Needs you", () => {
+    expect(legacySummary(baseStatus({ model_access: { state: "not_configured" } }))).toEqual({
+      label: CONNECTIONS.SUMMARY_NEEDS_YOU,
+      tone: "warning",
+    });
+  });
+
+  it("model_access expired_signin: Needs you", () => {
+    expect(legacySummary(baseStatus({ model_access: { state: "expired_signin" } }))).toEqual({
+      label: CONNECTIONS.SUMMARY_NEEDS_YOU,
+      tone: "warning",
+    });
+  });
+
+  // The shared-credential install: no per-principal model_access state at
+  // all, but the deployment-wide llm_ready fallback is true — the exact shape
+  // "Your model key" used to read "Provided by your admin" from.
+  it("no model_access, llm_ready true (a shared install): Ready", () => {
+    expect(legacySummary(baseStatus({ llm_ready: true }))).toEqual({
+      label: CONNECTIONS.SUMMARY_READY,
+      tone: "success",
+    });
+  });
+
+  it("no model_access, llm_ready false: Not set up by your admin", () => {
+    expect(legacySummary(baseStatus({ llm_ready: false }))).toEqual({
+      label: CONNECTIONS.SUMMARY_NOT_SET_UP,
+      tone: "neutral",
+    });
+  });
+
+  it("a status not loaded yet (null/undefined) reads the same as nothing configured", () => {
+    expect(legacySummary(null)).toEqual({ label: CONNECTIONS.SUMMARY_NOT_SET_UP, tone: "neutral" });
+    expect(legacySummary(undefined)).toEqual({ label: CONNECTIONS.SUMMARY_NOT_SET_UP, tone: "neutral" });
   });
 });

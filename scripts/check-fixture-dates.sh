@@ -111,6 +111,13 @@ declare -A ALLOWLIST=(
   ["ui/src/app/components/screens/new-run/new-run-rail.test.tsx"]=1
   ["ui/src/app/components/wardyn/model-access-banner.test.tsx"]=2
   ["ui/src/app/lib/model-access.test.ts"]=5
+  # #541 fix review: connectionRowCopy's C5 (expiring) test pins a LITERAL
+  # expected string for absoluteTime's clock-time rendering, deliberately not
+  # a recomputation through absoluteTime itself (that would let the
+  # implementation and the test drift in lockstep and still pass) — so the
+  # fixed deadline is genuinely display/passthrough data, never compared
+  # against the clock (connectionRowCopy does no expiry math of its own).
+  ["ui/src/app/lib/model-connections.test.ts"]=1
 )
 
 fail=0

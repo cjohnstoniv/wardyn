@@ -309,8 +309,9 @@ export async function otherPin(request: APIRequestContext): Promise<{ account: s
  * Put the member back into a state where the "Sign in to AWS" CTA EXISTS.
  *
  * A `live` member has NO such button, and that is not a bug to work around:
- * your-model-key.tsx and the chip row both render it only for
- * MODEL_ACCESS_ACTIONABLE = {not_configured, expired_signin, expiring}
+ * the strip and the door-opening controls it shares (#541 retired the last
+ * page-local one, Getting Started's "Your model key" card) all render it only
+ * for MODEL_ACCESS_ACTIONABLE = {not_configured, expired_signin, expiring}
  * (workspace-providers-copy.ts). sso-member.spec.ts leaves the member `live`,
  * so every case in the recovery file that needs to DRIVE a sign-in has to make
  * one legitimately available first.

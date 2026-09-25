@@ -15,6 +15,14 @@ export const MEMBER_GETTING_STARTED = {
   RETRY: "Retry",
   SETUP_SUMMARY_TITLE: "What's set up for you",
   SETUP_SUMMARY_HELPER: "Your admin configured the barrier, network and shared credentials. Your runs inherit them.",
+  // Restored (#541 fix review): SETUP_SUMMARY_HELPER's "shared credentials …
+  // your runs inherit them" is FALSE whenever the credential is per person —
+  // a legacy per_user AWS-SSO roster row, or any install with a provider
+  // block at all (every provider is a per-person credential by design, never
+  // shared — model-connections.ts's own doc). member-getting-started.tsx
+  // picks this one instead in both cases.
+  SETUP_SUMMARY_HELPER_PER_USER:
+    "Your admin configured the barrier, network and the model-access lane. Model access uses your own AWS sign-in; your runs inherit the rest.",
   BARRIER_CHIP: (label: string) => `Barrier · ${label}`,
   SIGNIN_SSO_CHIP: "Sign-in · SSO",
   WORKSPACE_TITLE: "Add your workspace",

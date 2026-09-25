@@ -142,11 +142,11 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await navToRoute(page, "/setup");
     await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
-    // No model-providers block on this fixture: the connections-summary chip
-    // reads its own no-providers state (a real gap for a per_user-only
-    // install with no provider record — flagged, not invented, in #541's
-    // report).
-    await expect(page.getByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeVisible();
+    // No model-providers block on this fixture: legacySummary
+    // (lib/model-connections.ts) is the fallback, reading the same
+    // not_configured state model_access carries: Needs you — with no button,
+    // since this page (since #541) offers no in-page action at all.
+    await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible();
   });
 
   // The provider-mode chip: Ready when the granted harness's default provider

@@ -8,10 +8,11 @@
 // it?", read by every surface that offers the sign-in (the shell strip, the New
 // Run rail, a credential-failed run's failure block, a held run's approval row).
 //
-// Not an extension of model-key-state.ts: that answers a CARD-shaped question
-// (done / revealAllowed / band) keyed on modelKeyProvider's roster-ORDER row,
-// which is the wrong row for this — model_access grades the claude-code row
-// alone (internal/api/modelaccess.go's modelAccessAgent).
+// Not a CARD-shaped question (done / revealAllowed / band) keyed on a
+// roster-ORDER row, the way the retired "Your model key" card's own state
+// table (#541) answered one — model_access grades the claude-code row alone
+// (internal/api/modelaccess.go's modelAccessAgent), which is the only row
+// that predicate ever needed.
 //
 // Pure, no React: the context above it (components/wardyn/model-access-context)
 // is what makes it reachable without prop-drilling through screens that are at
