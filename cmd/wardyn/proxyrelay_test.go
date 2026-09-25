@@ -10,9 +10,33 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// syncBuffer is a bytes.Buffer safe to Write from a running command's
+// goroutine while the test polls it with String() on another — plain
+// bytes.Buffer is not safe for that, which is exactly why a test that needs
+// to observe a command's output AS IT STARTS (rather than only after it has
+// fully stopped) cannot just poll an ordinary bytes.Buffer instead of
+// sleeping a guessed duration.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // `wardyn proxy-relay` is an UNAUTHENTICATED TCP relay onto the operator's
 // corporate proxy, and neither half of it was covered: relayConn was 0% and the
@@ -202,7 +226,8 @@ func TestProxyRelay_WarningGoesToStderrNotStdout(t *testing.T) {
 	probe.Close()
 
 	cmd := setupProxyRelayCmd()
-	var out, errOut bytes.Buffer
+	var out syncBuffer
+	var errOut bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -211,8 +236,17 @@ func TestProxyRelay_WarningGoesToStderrNotStdout(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- cmd.Execute() }()
-	// Let the listener bind and print before stopping it.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the listener to actually bind and print, rather than sleeping a
+	// guessed duration: a slow CI host can make any fixed sleep flaky in
+	// either direction (too short to have bound yet, or long enough to mask a
+	// real regression).
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(out.String(), "relaying") && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !strings.Contains(out.String(), "relaying") {
+		t.Fatal("proxy-relay never printed its relaying line")
+	}
 	cancel()
 
 	select {

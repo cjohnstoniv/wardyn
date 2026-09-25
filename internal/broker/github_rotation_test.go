@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 // genPEM generates a fresh RSA private key PEM, so two calls produce
@@ -47,7 +49,7 @@ func TestGitHubMinter_CredentialRotationPickedUpWithoutRestart(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id": 42}`))
 		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_ok","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_ok","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -115,10 +117,10 @@ func TestGitHubMinter_CredentialRotationInvalidatesInstallationCache(t *testing.
 			}
 		case strings.HasSuffix(r.URL.Path, "/installations/42/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_first","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_first","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		case strings.HasSuffix(r.URL.Path, "/installations/77/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_after_rotation","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_after_rotation","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		default:
 			// A non-401/404 status: isStaleInstallation must NOT classify this
 			// as a self-heal signal, so relying on the reactive drop alone
@@ -184,7 +186,7 @@ func TestGitHubMinter_StaleInstallationIDDroppedOn401(t *testing.T) {
 			_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
 		case strings.HasSuffix(r.URL.Path, "/installations/99/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_recovered","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_recovered","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
