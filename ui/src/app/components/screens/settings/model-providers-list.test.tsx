@@ -50,10 +50,10 @@ function given(providers: ModelProvider[], connected: Record<string, number> = {
 
 const def = (id: string, provider: string): AgentProvider => ({ id, mechanism: "none", default_provider: provider });
 
-function renderList(harnesses: SetupHarnessTool[] = [CLAUDE, CODEX, NONE]) {
+function renderList(harnesses: SetupHarnessTool[] = [CLAUDE, CODEX, NONE], subscriptionAvailable?: boolean) {
   return render(
     <MemoryRouter>
-      <ModelProvidersList harnesses={harnesses} />
+      <ModelProvidersList harnesses={harnesses} subscriptionAvailable={subscriptionAvailable} />
     </MemoryRouter>,
   );
 }
@@ -86,16 +86,26 @@ describe("ModelProvidersList", () => {
     expect(within(dialog).getByRole("group", { name: PROVIDER_EDITOR.KIND_TITLE })).toBeInTheDocument();
   });
 
+  it("threads subscriptionAvailable to the editor's kind step (#538)", async () => {
+    given([]);
+    renderList(undefined, false);
+    await userEvent.click(await screen.findByRole("button", { name: M.ADD_CTA }));
+    expect(within(screen.getByRole("dialog")).getByText(PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING)).toBeInTheDocument();
+  });
+
   it.each([
-    ["a Bedrock row", bedrock, "Bedrock (prod)"],
-    ["a Claude subscription row", sub, "Claude subscription"],
-  ])("%s does not open the editor (#538 builds those kinds)", async (_, provider, name) => {
+    ["a Bedrock row", bedrock, "Bedrock (prod)", "Amazon Bedrock"],
+    ["a Claude subscription row", sub, "Claude subscription", "Claude subscription"],
+  ])("%s opens the editor on that provider (#538)", async (_, provider, name, kindChip) => {
     given([provider]);
     renderList();
     const r = await screen.findByTestId(`model-provider-${provider.id}`);
-    expect(within(r).queryByRole("button")).toBeNull();
     await userEvent.click(within(r).getByText(name));
-    expect(screen.queryByRole("dialog")).toBeNull();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name })).toBeInTheDocument();
+    // The kind chip: a separate element from the title, except when the
+    // provider's own name equals its kind label (the subscription fixture).
+    expect(within(dialog).getAllByText(kindChip).length).toBeGreaterThanOrEqual(1);
   });
 
   it("a row opens the editor on that provider", async () => {

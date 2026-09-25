@@ -830,6 +830,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (#536) opens it from "Add model provider" or a provider's row, replacing that list's stub page
   (`settings/model-provider-editor.tsx`).
 
+- **The model-provider editor gains the Bedrock and Claude subscription kinds (#538).** Amazon
+  Bedrock adds a "How people sign in" choice (SSO sign-in or Bearer key) and, for SSO, an AWS IAM
+  Identity Center block (region, access portal start URL, and an optional account/role pin) —
+  Model is required per agent, an inference profile id, and Region and the access portal start URL
+  are required the same way, so Save is withheld until each is filled. Claude subscription is
+  configuration-only (each person signs in with their own subscription) and is disabled on the kind
+  step with its own reason — "Claude subscriptions need the Claude Code sign-in image, which this
+  install hasn't built yet" — until `/setup/status`'s `claude_signin_image` check resolves (#524). A
+  change to Bedrock's region or endpoint, or switching How people sign in between SSO and Bearer on
+  a stored provider, now also asks before deleting everyone's credential — a kind switch mints a
+  fresh id for the same reason a changed address does, and drops the SSO-only fields (the access
+  portal, and the account/role pin) once confirmed. Every row in Settings → Model providers now
+  opens the editor; #537 had left Bedrock and Claude subscription rows inert.
+
 - **A regression fixture pins `scripts/nightly-migration-merge-check.sh` (#864).**
   `make test-scripts` now runs `scripts/test-nightly-migration-merge-check.sh`,
   covering a clean candidate set, two PRs claiming the same migration prefix, a
