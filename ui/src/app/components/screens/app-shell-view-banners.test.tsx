@@ -105,7 +105,7 @@ describe("the confinement posture band is absent in the User view (§4.2, M-3)",
   });
 
   it("the same unenforced posture stays silent for a user in /runs", async () => {
-    renderShellAt("/runs", { principal: "m@corp.example", method: "sso", role: "member", operator: false, security_operator: false }, {
+    renderShellAt("/runs", { principal: "m@corp.example", method: "sso", role: "user", operator: false, security_operator: false }, {
       runner: "k8s",
       network_policy: "unenforced",
     });
