@@ -592,7 +592,7 @@ func normalizeClampTTL(ttl int) int {
 // This is the SELECTION half of "is this grant within the ceiling", and it is
 // exported because internal/api's write-time comparator
 // (governanceGrantWithinCeiling) must select from the same set the runtime clamp
-// bounds against (F014): one definition, not two independent searches that can
+// bounds against: one definition, not two independent searches that can
 // drift on a kind like github_token, whose scope names no pairing at all.
 //
 // Identity, never bounds: approval, TTL and github scope are what a clamp
@@ -648,7 +648,7 @@ func grantDominatedBy(g, cg types.GrantSpec) bool {
 // covers it, and drops any whose KIND the ceiling does not carry.
 //
 // WHICH ceiling grant supplies the bound is a two-step answer, and the steps are
-// the whole of F014:
+// the whole of it:
 //
 //  1. SELECT the ceiling grants whose identity covers the proposal
 //     (CeilingGrantsCovering: same kind, same pairing where the kind names a

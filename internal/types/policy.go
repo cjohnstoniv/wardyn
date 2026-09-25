@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -334,9 +335,18 @@ func (s *PushRulesSpec) IsSet() bool {
 // .gitignore and CODEOWNERS spelling — so "infra/" reads as "infra/**". An
 // empty, "." or ".." segment is refused: git never stores a path containing
 // one, so "./infra/**" or "infra//**" would match nothing, and a deny rule that
-// silently matches nothing reads as enforcement that is not there.
+// silently matches nothing reads as enforcement that is not there. Invalid
+// UTF-8 is refused so validation's byte-length and rune-based control-character
+// bounds read the same well-formed string, and leading or trailing whitespace
+// is refused as almost certainly a typo.
 func DenyPathSegments(pattern string) ([]string, error) {
+	if !utf8.ValidString(pattern) {
+		return nil, fmt.Errorf("%q is not valid UTF-8", pattern)
+	}
 	p := strings.TrimPrefix(pattern, "/")
+	if strings.TrimSpace(p) != p {
+		return nil, fmt.Errorf("%q has leading or trailing whitespace (almost certainly a typo)", pattern)
+	}
 	if strings.HasSuffix(p, "/") {
 		p += "**"
 	}
@@ -549,8 +559,7 @@ func (m WorkspaceMount) ReadOnlyOrDefault() bool {
 // clones the remote's default branch, unchanged from before this field
 // existed. Carried as a 4th tab-separated field in WARDYN_REPOS
 // (buildRepoRecords, runs_scm.go) for agent-run-lib.sh's clone_one to check
-// out (W9-S1-3 — previously advertised on the source's identity but never
-// actually honored by any clone).
+// out.
 type WorkspaceRepo struct {
 	Repo   string `json:"repo"`
 	Target string `json:"target,omitempty"`

@@ -297,7 +297,7 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 	// in-sandbox client cannot smuggle its own onto the outbound request. Same
 	// order, and the same reason, as the GitHub lane.
 	//
-	// F104: through stripSandboxCredentials — the ONE definition (inject.go) —
+	// Through stripSandboxCredentials — the ONE definition (inject.go) —
 	// not a local Header.Del("Authorization"). The narrower spelling left
 	// Private-Token (GitLab's own access-token header, on the very forge kind
 	// this lane exists for), X-Api-Key, Api-Key, X-Auth-Token and Cookie on the
@@ -337,8 +337,8 @@ func (p *Proxy) forwardBrokeredGit(w http.ResponseWriter, r *http.Request, host,
 // is the one value that fails on every forge, so it is never sent.
 func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username string, err error) {
 	// The mask must be registered under the username THIS lane sends, so the
-	// fallback chain is handed to brokeredToken rather than re-derived after it
-	// (F120): masking base64(<mint user>:tok) while the wire carries
+	// fallback chain is handed to brokeredToken rather than re-derived after it:
+	// masking base64(<mint user>:tok) while the wire carries
 	// base64("pat":tok) protects a rendering that never leaves the process.
 	wireUser := func(mintUser string) string { return cmp.Or(mintUser, g.Username, "pat") }
 	tok, user, err := p.brokeredToken(ctx, g.GrantID, wireUser)
@@ -351,7 +351,7 @@ func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username strin
 	// ":" + tok) that SetBasicAuth puts on the wire, under the username THIS
 	// lane sends (which may differ from the mint's).
 	//
-	// Trust boundary (F155, same root cause as the git lane's): procRegistry is
+	// Trust boundary (same as the git lane's): procRegistry is
 	// what maskDecisionBytes consults for every sandbox-facing error body
 	// (Proxy.httpError) and every decision-log line, and the mask is exact-bytes
 	// per RENDERING. registerBasicAuthCredential (inject.go) is the one definition.

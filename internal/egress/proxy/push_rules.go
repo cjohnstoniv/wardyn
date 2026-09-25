@@ -8,12 +8,15 @@ package proxy
 //
 // Three outcomes, and they are the whole feature:
 //
-//   - the buffered request is bigger than the run's inspection ceiling, so it
-//     is refused rather than waved through unread (brokered:git:push-too-large);
-//   - the inspector cannot answer from the request's own bytes — a thin pack
-//     whose delta bases stayed on the forge, a body in a content-coding this
-//     proxy cannot read past, a pack that is malformed or over one of
-//     internal/gitpack's own ceilings (brokered:git:push-uninspectable);
+//   - the buffered request is bigger than the run's inspection ceiling, or an
+//     otherwise-inspectable pack costs more than one of internal/gitpack's own
+//     ceilings allow, so it is refused rather than waved through unread —
+//     both with the same fix, push fewer commits at a time
+//     (brokered:git:push-too-large);
+//   - the inspector cannot answer from the request's own bytes at all — a
+//     thin pack whose delta bases stayed on the forge, a body in a
+//     content-coding this proxy cannot read past, a pack that is malformed
+//     (brokered:git:push-uninspectable);
 //   - a path the push introduces matches a deny rule (brokered:git:push-rules).
 //
 // A push none of those refuses, but which introduces a path a
@@ -75,10 +78,9 @@ package proxy
 // other outcome — a different or absent entry, no commit the repository's own
 // history vouches for, a forge that cannot be read — refuses, and says which.
 //
-// Phase one has no size rule, so nothing here compares gitpack.Change.Size.
-// Whoever adds max_file_size_mib must DECIDE what Size == -1 means rather than
-// compare it: -1 is "the pack does not carry this blob", and it passes every
-// "is it under the limit" test by accident.
+// Phase one has no size rule. Whoever adds max_file_size_mib decides with
+// gitpack.Change.Within, which refuses a size the pack does not carry, or reads
+// gitpack.Change.Size, whose pair cannot be compared until unknown is decided.
 
 import (
 	"bytes"
@@ -92,9 +94,9 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -104,12 +106,24 @@ const (
 	// introduces matched push_rules.deny_paths.
 	ruleSourceGitRules = "brokered:git:push-rules"
 	// ruleSourceGitPackBig marks a brokered push refused because its body is
-	// larger than push_rules.max_inspect_pack_mib. Refused rather than held:
-	// holding would ask a person to approve a push nobody inspected.
+	// larger than push_rules.max_inspect_pack_mib, or because an honest,
+	// fully-inspectable pack still costs more objects, bytes, tree entries or
+	// changed paths than internal/gitpack's own ceilings allow
+	// (gitpack.ErrTooLarge). Refused rather than held: holding would ask a
+	// person to approve a push nobody inspected. Both cases have the same fix
+	// on the sender's side — push fewer commits at a time.
 	ruleSourceGitPackBig = "brokered:git:push-too-large"
 	// ruleSourceGitPackBlind marks a brokered push refused because the
-	// inspector could not answer from the request's own bytes.
+	// inspector could not answer from the request's own bytes at all — a thin
+	// pack's delta bases, a ref whose commit is not in the pack, or a shape git
+	// would read differently (gitpack.ErrUninspectable) — or because a control
+	// error (an unreadable rule, an unsupported encoding, a busy scan slot)
+	// left the rules unable to run.
 	ruleSourceGitPackBlind = "brokered:git:push-uninspectable"
+	// ruleSourceGitForgeRead marks the broker's OWN credentialed reads of
+	// api.github.com on a push's behalf: one ALLOW row per push that read the
+	// forge at all, so an egress review of the run sees them.
+	ruleSourceGitForgeRead = "brokered:git:forge-read"
 	// defaultInspectPackMiB is the ceiling a run that sets push_rules without
 	// naming max_inspect_pack_mib gets. It sits BELOW the 0..64 range
 	// validatePushRules admits on purpose: raising the ceiling is the stated
@@ -474,6 +488,12 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		return nil, pushReview{}, noRelease, false
 	}
 	res, err := gitpack.Inspect(buf)
+	if errors.Is(err, gitpack.ErrTooLarge) {
+		p.refusePush(w, r, subject, deny, ruleSourceGitPackBig, http.StatusRequestEntityTooLarge,
+			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
+				"\npush fewer commits at a time")
+		return nil, pushReview{}, noRelease, false
+	}
 	if err != nil {
 		p.refusePush(w, r, subject, deny, ruleSourceGitPackBlind, http.StatusUnsupportedMediaType,
 			"wardyn: cannot enforce push content rules on this push: "+err.Error()+
@@ -509,13 +529,12 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 	// The buffer outlives the slot: it is forwarded (or held) from here.
 	// Charged while the slot is still held, so scanRetained keeps its single
 	// acquirer.
-	if !scanRetained.acquire(ctx, len(buf)) {
+	release, ok := retainScanBuffer(ctx, len(buf))
+	if !ok {
 		busy()
 		return nil, pushReview{}, noRelease, false
 	}
-	var once sync.Once
-	n := len(buf)
-	return buf, review, func() { once.Do(func() { scanRetained.release(n) }) }, true
+	return buf, review, release, true
 }
 
 // matchedPaths is the verdict of one pattern list on one inspected push: every
@@ -549,6 +568,8 @@ func (p *Proxy) matchedPaths(r *http.Request, pats [][]string, res gitpack.Resul
 		paths = append(paths, shownPath(c))
 	}
 	if forge != nil && forge.reads > 0 {
+		p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: githubAPIHost, Port: 443,
+			Method: http.MethodGet, Time: p.now()}, egress.Allow, ruleSourceGitForgeRead))
 		slog.InfoContext(r.Context(), "wardyn-proxy: git push content rules read the forge",
 			slog.String("run_id", p.runID.String()),
 			subject,

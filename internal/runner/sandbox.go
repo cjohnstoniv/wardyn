@@ -220,6 +220,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 	cfg := proxy.Config{
 		RunID:                runID,
 		ControlPlaneURL:      pc.ControlPlaneURL,
+		ControlPlaneCAPEM:    pc.ControlPlaneCAPEM,
 		RunToken:             pc.RunToken,
 		Policy:               pc.Policy,
 		Injection:            inj,
@@ -230,7 +231,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		MITMLLM:              pc.MITMLLM,
 		GitGrants:            pc.GitGrants,
 		PATGrants:            pc.PATGrants,
-		ADOGrants:            pc.ADOGrants,
+		ADOGrant:             pc.ADOGrant,
 		UpstreamProxyURL:     pc.UpstreamProxyURL,
 		TrustedCAPEM:         pc.TrustedCAPEM,
 		InternalHosts:        pc.InternalHosts,

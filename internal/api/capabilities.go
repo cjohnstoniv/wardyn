@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -24,8 +25,8 @@ import (
 //
 // Six of the seven NARROW what a member may already do; capImage WIDENS (a
 // member cannot name a custom image at all today). Both directions resolve
-// through the same rules below — the difference lives at the enforcement seam,
-// not here.
+// through the one resolver below (capBatch.decide) — the difference is the
+// kind's row in capKinds.
 const (
 	// capEgressHost bounds the egress hosts a member may author on an inline
 	// policy, and the hosts a member may approve an egress request for. Values
@@ -49,7 +50,7 @@ const (
 	// Values are the exact `--agent` string plus `*`.
 	//
 	// DELIBERATELY narrowing rather than widening, and the direction is decided
-	// by capGranted's own documented rule below: a WIDENING kind refuses on
+	// by capBatch.decide's step 4 below: a WIDENING kind refuses on
 	// !enforced, which would refuse every member run on every deployment that
 	// has not enforced this kind — i.e. all of them on upgrade day. Launching an
 	// agent is something every member could already do, so it stays allowed
@@ -104,6 +105,13 @@ const (
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
 var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider}
+
+// capKindsVersion numbers the kind table, and GET /me/capabilities returns it so
+// a client holding a copy of the set (the console's CAPABILITY_KINDS) can tell
+// its copy is stale. Monotonic: a change to capKinds — a kind added, or a row's
+// direction changed — bumps it by one and it never goes down.
+// TestCapKindsVersionPinsTheTable fails on a table change that forgets to.
+const capKindsVersion = 1
 
 // validCapabilityKind reports whether kind is one of the seven. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
@@ -192,161 +200,132 @@ func capabilitySubjects(ctx context.Context) (users, groups []string, stale bool
 	return users, groups, groups == nil || oidcGroupsTruncatedFromContext(ctx)
 }
 
-// capAllowed answers "may this caller use `kind` at `value`". Precedence, in
-// order, and the order IS the design:
+// the kind table
+
+// capDirection is which way a kind moves a member's power, and so what its
+// enforcement switch means while it is OFF. One rule — "an upgrade with no
+// configuration changes nothing" — lands on opposite defaults, because the two
+// directions start from opposite postures.
+type capDirection int
+
+const (
+	// capNarrowing bounds something a member could already do: an unenforced
+	// kind ALLOWS, because 0.5 already let a member do it.
+	capNarrowing capDirection = iota
+	// capWidening hands out something a member could not do: the switch ON is a
+	// PRECONDITION on any allow, because 0.5 already refused it. The console's
+	// own copy states this contract for image (permissions-copy.ts KIND.image).
+	capWidening
+)
+
+// capKind is one kind's row: DATA the one resolver reads, rather than a rule
+// each wrapper re-derived from a comment.
+type capKind struct {
+	direction capDirection
+	// hostSet: values are host sets ("host", "host:port", "*.suffix") compared
+	// by the one host matcher, and a deny overlaps in EITHER direction
+	// (capValueOverlaps). Every other kind is an exact, case-sensitive id.
+	hostSet bool
+	// restrictable: an "Available to" list may restrict one value of this kind
+	// (user-types design 2.6: the admin-configured resources a person is
+	// offered). Read by UT-10's step 3; nothing reads it yet.
+	restrictable bool
+	// gatesAdminPins: the kind also bounds a value an ADMIN pinned, not only the
+	// member's own choice. False for all seven — "a capability bounds what a
+	// member chose, never what an admin pre-authorized" (capIntegration).
+	gatesAdminPins bool
+	// reason is the authz.denied reason a refusal of this kind carries. The
+	// widening kind's refusal is the BYOI one: image is refused as a member
+	// bringing their own image, whichever door asked.
+	reason authz.Reason
+}
+
+// capKinds is the table, keyed by exactly the names in capabilityKinds
+// (TestCapKindTableIsTheClosedSet).
+var capKinds = map[string]capKind{
+	capEgressHost:        {direction: capNarrowing, hostSet: true, reason: authz.ReasonCapabilityEgressHost},
+	capSecret:            {direction: capNarrowing, reason: authz.ReasonCapabilitySecret},
+	capWorkspace:         {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspace},
+	capImage:             {direction: capWidening, restrictable: true, reason: authz.ReasonBYOIMember},
+	capAgent:             {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityAgent},
+	capIntegration:       {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityIntegration},
+	capWorkspaceProvider: {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspaceProvider},
+}
+
+// the wrappers
 //
-//  1. Admin, admin token, and local mode are EXEMPT. A capability bounds a
-//     member; the admin tier is the one writing the grants.
-//  2. Any matching DENY ⇒ false. Deny beats everything, including a grant on
-//     the caller's own user row — there is no user-over-group precedence,
-//     because "Bob's user allow overrode the group deny" is a breach report.
-//  3. Any matching ALLOW ⇒ true.
-//  4. The kind is not enforced ⇒ true. An absent enforcement row is a
-//     freshly-upgraded 0.5 deployment, which must behave byte-for-byte as it
-//     did before this file existed.
-//  5. Otherwise false.
+// Every capability question in this package is answered by capBatch.decide,
+// the ONE grant resolver. The functions below are one-value doors onto it; each
+// reaches it through capBatchFor, so a resolution that installed withCapBatch
+// shares one snapshot across every question it asks.
+
+// capAllowed answers "may this caller use `kind` at `value`" with the kind's
+// own direction from capKinds, in capBatch.decide's seven-step order.
 //
 // Deny sits ABOVE the enforcement switch on purpose: it makes deny rows the
 // adoption on-ramp. An admin can blacklist one host for one contractor without
 // flipping the whole deployment fail-closed, which is the only way this feature
-// gets used before anyone trusts it.
+// gets used before anyone trusts it. There is no user-over-group precedence,
+// because "Bob's user allow overrode the group deny" is a breach report.
 //
 // Errors are never allowed to read as permission. A store failure returns
 // (false, err) so the caller answers 500 rather than deciding either way; a nil
-// Store (test wiring only — wardynd always wires PG) is that same error, NOT a
-// silent allow.
+// Store (test wiring only — wardynd always wires PG) is that same error here,
+// NOT a silent allow. capSeamAllowed is the door that answers a store-less
+// build instead of erroring.
 //
-// ponytail: no cache. Two indexed reads per call on a small table, so a new
-// grant takes effect on the very next request. A process-local cache is the HA
-// blocker OPERATIONS already names for other state, and a stale permission
-// cache is a security bug rather than a slow page — add one only behind a
-// shared invalidation channel.
+// ponytail: no cache across requests. A new grant takes effect on the very next
+// request. A process-local cache is the HA blocker OPERATIONS already names for
+// other state, and a stale permission cache is a security bug rather than a
+// slow page — add one only behind a shared invalidation channel.
 //
-// DELIBERATELY isOperator, and capGranted below likewise — this is the
-// INVARIANT that makes handing /permissions to a security admin safe at all:
-// no capability kind, present or future, can ever widen the admin tier. A
-// security admin is capability-BOUNDED exactly like a member (they may
-// self-grant through /permissions, audited, and still reach nothing this
-// exemption would give them). See the three-tier doctrine on
-// internal/auth/oidc's RoleSecurityAdmin. A pinning test asserts it.
+// DELIBERATELY isOperator (capBatch.decide's step 1) — this is the INVARIANT
+// that makes handing /permissions to a security admin safe at all: no
+// capability kind, present or future, can ever widen the admin tier. A security
+// admin is capability-BOUNDED exactly like a member (they may self-grant
+// through /permissions, audited, and still reach nothing this exemption would
+// give them). See the three-tier doctrine on internal/auth/oidc's
+// RoleSecurityAdmin. A pinning test asserts it.
 func (s *Server) capAllowed(ctx context.Context, kind, value string) (bool, error) {
-	if !validCapabilityKind(kind) {
-		return false, fmt.Errorf("api: unknown capability kind %q", kind)
-	}
-	if s.isOperator(ctx) {
-		return true, nil
-	}
-	if s.cfg.Store == nil {
+	if s.cfg.Store == nil && validCapabilityKind(kind) && !s.isOperator(ctx) {
 		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
 	}
-
-	deny, allow, err := s.capScan(ctx, kind, value)
-	switch {
-	case err != nil:
-		return false, err
-	case deny:
-		return false, nil
-	case allow:
-		return true, nil
-	}
-
-	enforced, err := s.capEnforced(ctx, kind)
-	if err != nil {
-		return false, err
-	}
-	return !enforced, nil
+	return s.capSeamAllowed(ctx, kind, value)
 }
 
-// capGranted answers the WIDENING question: does this caller hold an explicit
-// grant of `kind` at `value`? It is not capAllowed with the sign flipped — the
-// two differ on the one case that decides an upgrade's behavior:
-//
-//   - narrowing (capAllowed): an unenforced kind is ALLOWED, because 0.5
-//     already let a member do it.
-//   - widening (capGranted): an unenforced kind is REFUSED, because 0.5 already
-//     refused it.
-//
-// Same rule — "an upgrade with no configuration changes nothing" — landing on
-// opposite defaults because the two kinds start from opposite postures. `image`
-// is the only widening kind today, and the console's own copy states exactly
-// this contract (permissions-copy.ts KIND.image: unenforced means members
-// cannot name an image at all; enforced means a granted ref becomes nameable).
-//
-// Deny still beats allow. A build with no store holds no rows, so it refuses,
+// capGranted asks the WIDENING question of `kind`, whatever its row says: does
+// this caller hold an explicit grant AND is the kind enforced? `image` is the
+// only widening kind and the only production caller; the direction is fixed
+// here rather than read from capKinds because this door has always answered
+// that question for any kind it was handed, and the widening answer is the
+// narrower of the two. A build with no store holds no rows, so it refuses —
 // which is again 0.5.
 func (s *Server) capGranted(ctx context.Context, kind, value string) (bool, error) {
 	if !validCapabilityKind(kind) {
 		return false, fmt.Errorf("api: unknown capability kind %q", kind)
 	}
-	if s.isOperator(ctx) {
-		return true, nil
-	}
-	if s.cfg.Store == nil {
-		return false, nil
-	}
-	enforced, err := s.capEnforced(ctx, kind)
-	if err != nil || !enforced {
-		return false, err
-	}
-	deny, allow, err := s.capScan(ctx, kind, value)
-	if err != nil {
-		return false, err
-	}
-	return allow && !deny, nil
+	return s.capBatchFor(ctx).decide(ctx, kind, capWidening, value)
 }
 
-// capScan walks the caller's own grants for one kind/value and reports whether
-// a DENY and/or an ALLOW matched. The single place a stored row is compared
-// against a request, so the narrowing and widening answers can never disagree
-// about what a row covers.
+// capSeamAllowed is the resolver at an enforcement seam: the kind's own
+// direction, and the one case a seam has that capAllowed refuses to guess at —
+// a deployment with no Store cannot hold a grant OR an enforcement row, so a
+// NARROWING kind behaves exactly as 0.5 did (allowed) and a WIDENING kind is
+// refused (capBatch.decide's nil-Store rule).
 //
-// An unanswerable group snapshot is not "no group rows" (the capability
-// half). capabilitySubjects' stale bit says the group list this scan matched
-// against is missing or partial, so a group DENY the caller actually holds may
-// simply not be in `grants` — and every seam above reads a clean scan as
-// permission. effectiveCeiling (governance.go) already refuses on exactly this
-// input; without the same treatment here, a member whose walling group fell off
-// the cap keeps reaching the denied host, and on a deployment with group deny
-// rows but no group-tier ASSIGNMENTS there is no ceiling refusal anywhere to
-// catch it. So when the snapshot is unanswerable and a group deny row COULD
-// cover this value, the scan reports the deny it cannot rule out.
+// capAllowed keeps erroring on a nil Store, because a RESOLVER that answered
+// "allowed" for a question it could not resolve is the failure mode this file
+// is built against. The resolver is asked about a deployment that has
+// capability state and cannot reach it, while a seam is running in a build that
+// has none at all (this package's own harnesses; wardynd always wires PG).
+func (s *Server) capSeamAllowed(ctx context.Context, kind, value string) (bool, error) {
+	return s.capBatchFor(ctx).allowed(ctx, kind, value)
+}
+
+// capScan reports whether a DENY overlaps and/or an ALLOW covers value — the
+// grant half of the resolver (capBatch.scan), stale-snapshot refusal included.
 func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow bool, err error) {
-	users, groups, stale := capabilitySubjects(ctx)
-	grants, err := s.cfg.Store.ListCapabilityGrantsFor(ctx, users, groups)
-	if err != nil {
-		return false, false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
-	}
-	for _, g := range grants {
-		if g.Capability != kind {
-			continue
-		}
-		if g.Effect == types.CapabilityDeny {
-			if capValueOverlaps(kind, g.Value, value) {
-				return true, false, nil // scan no further: deny is final
-			}
-			continue
-		}
-		if capValueMatches(kind, g.Value, value) {
-			allow = true
-		}
-	}
-	if stale {
-		unresolved, uerr := s.capUnresolvableGroupDeny(ctx, kind, value)
-		if uerr != nil {
-			return false, false, uerr
-		}
-		if unresolved {
-			// Logged, not audited: the seam that asked writes its own
-			// authz.denied with the reason it knows, and this line is what
-			// tells an operator the refusal was about COMPLETENESS rather than
-			// a row naming this human. Value is left out — a secret name or a
-			// workspace id is the seam's to log, not the resolver's.
-			slog.Warn("api: capability refused because the caller's group snapshot is unanswerable and a group deny grant of this kind exists",
-				"capability", kind, "principal", oidcHumanFromContext(ctx))
-			return true, false, nil
-		}
-	}
-	return false, allow, nil
+	return s.capBatchFor(ctx).scan(ctx, kind, value)
 }
 
 // capUnresolvableGroupDeny reports whether ANY group-subject DENY row of this
@@ -360,86 +339,30 @@ func (s *Server) capScan(ctx context.Context, kind, value string) (deny, allow b
 // this whole file is built on.
 //
 // ALLOW rows deliberately need no equivalent: a group allow the scan cannot see
-// costs the caller access (capAllowed falls through to the enforcement switch,
-// capGranted refuses outright), which is the fail-CLOSED direction already.
+// costs the caller access (a narrowing kind falls through to the enforcement
+// switch, a widening one refuses outright), which is the fail-CLOSED direction
+// already.
 //
 // The rows are selected in SQL, not scanned in Go, and the reason is not
 // tidiness. This runs on the path taken by every caller whose group snapshot is
 // unanswerable — which, by the fail-closed reading of a NULL groups_truncated
-// column, is EVERY API token minted before 0.7, on every request it makes — and
-// it runs once per value a handler checks, not once per request. Asking
-// ListCapabilityGrants (the whole table) there meant the cost of an
+// column, is EVERY API token minted before 0.7, on every request it makes.
+// Asking ListCapabilityGrants (the whole table) there meant the cost of an
 // authorization check scaled with the size of the grant table: measured at
-// 68 ms per call against 20k grants versus 0.35 ms for the indexed sibling, and
-// a run create alone checks three values while a secrets narrowing checks one
-// per paired name. That is an availability surface — a caller holding one
-// pre-0.7 token can force an unbounded read per checked value — and it grows
-// precisely as a deployment adopts the feature.
+// 68 ms per call against 20k grants versus 0.35 ms for the indexed sibling.
+// That is an availability surface — a caller holding one pre-0.7 token can
+// force an unbounded read per checked value — and it grows precisely as a
+// deployment adopts the feature.
 //
-// ListGroupDenyGrants applies EXACTLY the predicate this loop applied
+// ListGroupDenyGrants applies EXACTLY the predicate the old loop applied
 // (group + deny + this kind) in the query instead, leaving only the
-// value-overlap test in Go, where the one host/wildcard matcher lives. Same
-// rows considered, same answer; TestCapUnresolvableGroupDenyMatchesFullScan
-// pins the new path against a full scan of the old shape over a generated
-// matrix, because a FASTER fail-closed check that stops firing is a breach, not
-// a regression.
-//
-// ponytail: still no per-request memo. The query now returns nothing at all on
-// any deployment holding no group deny rows of this kind — the overwhelming
-// majority, and the case the scoping above exists to protect — so a memo would
-// add a request-scoped cache and a context holder to save a query that returns
-// zero rows. The remaining per-VALUE repetition is the caller-controlled loop's
-// problem, not this function's.
+// value-overlap test in Go, where the one host/wildcard matcher lives.
+// TestCapUnresolvableGroupDenyMatchesFullScan pins the path against a full scan
+// of the old shape over a generated matrix, because a FASTER fail-closed check
+// that stops firing is a breach, not a regression. Within one resolution the
+// read is memoized per kind (capBatch.unresolvableGroupDeny).
 func (s *Server) capUnresolvableGroupDeny(ctx context.Context, kind, value string) (bool, error) {
-	grants, err := s.cfg.Store.ListGroupDenyGrants(ctx, kind)
-	if err != nil {
-		return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
-	}
-	for _, g := range grants {
-		if capValueOverlaps(kind, g.Value, value) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// capSeamAllowed is capAllowed at an enforcement seam — same answer, plus the
-// one case a seam has and the resolver deliberately refuses to guess at: a
-// deployment with no Store cannot hold a grant OR an enforcement row, so there
-// is nothing to enforce and the seam behaves exactly as 0.5 did.
-//
-// capAllowed itself keeps erroring on a nil Store, because a RESOLVER that
-// answered "allowed" for a question it could not resolve is the failure mode
-// this file is built against. The difference is that the resolver is asked
-// about a deployment that has capability state and cannot reach it, while a
-// seam is running in a build that has none at all (this package's own
-// harnesses; wardynd always wires PG). Those are not the same situation and
-// must not fail the same way.
-//
-// ponytail: one call per value, so a seam asking about N values pays 2N indexed
-// reads on a small table. N is a handful everywhere it is used today (a run's
-// egress allowlist, a deployment's secret names). If one grows, resolve the
-// caller's grants + enforcement ONCE and match in-process — capValueMatches is
-// already the whole matcher — rather than caching across requests, which is the
-// HA blocker capAllowed's own comment names.
-func (s *Server) capSeamAllowed(ctx context.Context, kind, value string) (bool, error) {
-	if s.cfg.Store == nil {
-		return true, nil
-	}
-	return s.capAllowed(ctx, kind, value)
-}
-
-// capEnforced reports whether kind's switch is on. An absent row is off — the
-// zero-config default that keeps an upgraded 0.5 deployment unchanged.
-func (s *Server) capEnforced(ctx context.Context, kind string) (bool, error) {
-	if s.cfg.Store == nil {
-		return false, fmt.Errorf("api: capability %q cannot be resolved: no store configured", kind)
-	}
-	enf, err := s.cfg.Store.GetCapabilityEnforcement(ctx)
-	if err != nil {
-		return false, fmt.Errorf("api: read capability enforcement: %w", err)
-	}
-	return enf[kind], nil
+	return s.newCapBatch(ctx).unresolvableGroupDeny(ctx, kind, value)
 }
 
 // capValueMatches reports whether a grant written for grantValue covers want.
@@ -453,15 +376,13 @@ func (s *Server) capEnforced(ctx context.Context, kind string) (bool, error) {
 // Every other kind is an exact, case-sensitive compare. A secret name, a
 // workspace uuid, an image ref, an agent id, an integration id and a git
 // provider row id are all identifiers where a near-miss must not match; only
-// egress hosts have a defensible subdomain semantics. The agent and
-// workspace_provider kinds therefore need no arm of their own — this default
-// IS their matcher, exact plus the shared wildcard.
+// egress hosts have a defensible subdomain semantics (capKind.hostSet).
 func capValueMatches(kind, grantValue, want string) bool {
 	grantValue = strings.TrimSpace(grantValue)
 	if grantValue == capWildcard {
 		return true
 	}
-	if kind == capEgressHost {
+	if capKinds[kind].hostSet {
 		return entryCoversAny(grantValue, map[string]bool{egressEntryHost(want): true})
 	}
 	return grantValue == strings.TrimSpace(want)
@@ -484,43 +405,34 @@ func capValueOverlaps(kind, grantValue, want string) bool {
 	if capValueMatches(kind, grantValue, want) {
 		return true
 	}
-	// Only egress hosts have set-valued entries; every other kind is an exact
+	// Only host-set kinds have set-valued entries; every other kind is an exact
 	// identifier, where "want covers deny" is the same compare reversed.
-	return kind == capEgressHost && capValueMatches(kind, want, grantValue)
+	return capKinds[kind].hostSet && capValueMatches(kind, want, grantValue)
 }
 
-// the batch seam
+// the one resolver
 
-// capBatch is capSeamAllowed for MANY values: it resolves the caller's grants,
-// the enforcement map and (only when needed) the unresolvable-group-deny table
-// ONCE, then answers every value in process with the same matchers capScan uses.
+// capBatch is THE capability-grant resolver. It resolves the caller's grants,
+// the enforcement map and (only when needed) the unresolvable-group-deny rows
+// at most ONCE, then answers every value in process through decide.
 //
-// A run's egress allowlist is NOT a handful: it is
-// spec.AllowedDomains, taken verbatim from the request body, and nothing on the
-// member create/preflight path caps or de-duplicates it before
-// narrowMemberInlinePolicy loops over it — validatePolicySpec's count caps
-// (maxToolRulesPerPolicy, maxUIAppsPerPolicy) have no allowed_domains arm, and
-// composer.Clamp's intersection keeps duplicates of a permitted entry (its
-// partition appends every element that passes) and is skipped outright under a
-// ceiling with allow_all_egress.
-//
-// Measured, against a real store.PG over loopback with an empty grants table:
-// ~505µs per entry, linear, so one member request carrying the most entries
-// that fit under maxJSONBody (52,425 x "api.anthropic.com") spent 104,850
-// sequential round trips and 27.0s inside this one function — 157,275 and 45.3s
-// when the caller's group snapshot is unanswerable. POST /runs/preflight is on
-// the member router group and persists nothing, so that is repeatable for free.
-// After: 2 round trips (3 stale), flat in N.
+// A run's egress allowlist is NOT a handful: it is spec.AllowedDomains, taken
+// verbatim from the request body. Measured, against a real store.PG over
+// loopback with an empty grants table, before the batch existed: ~505µs per
+// entry, linear, so one member request carrying the most entries that fit under
+// maxJSONBody (52,425 x "api.anthropic.com") spent 104,850 sequential round
+// trips and 27.0s resolving — 157,275 and 45.3s when the caller's group
+// snapshot is unanswerable. POST /runs/preflight is on the member router group
+// and persists nothing, so that is repeatable for free. After: 2 round trips
+// (3 stale), flat in N.
 //
 // Not a cache, deliberately, and that distinction is the whole reason this is
-// safe: the batch lives for ONE narrowMemberInlinePolicy call and is discarded,
-// so a grant revoked between requests still binds on the next one. Caching
-// across requests is the HA blocker capAllowed's own comment names, and nothing
-// here reaches for it.
+// safe: a batch lives for ONE resolution (a ctx memo installed by withCapBatch,
+// or a one-shot batch per call without one) and is discarded, so a grant
+// revoked between requests still binds on the next one.
 //
-// Lazy, so a spec with nothing to check performs no reads at all and the ~30
-// nil-store doubles in this package keep the behaviour capSeamAllowed gives
-// them.
+// Lazy, so a resolution with nothing to check performs no reads at all, and in
+// the order the per-value wrappers always read (decide's step comments).
 type capBatch struct {
 	s        *Server
 	operator bool
@@ -529,76 +441,207 @@ type capBatch struct {
 	users, groups []string
 	stale         bool
 
-	loaded bool
-	grants []types.CapabilityGrant
-	// byKind indexes grants by capability, built ONCE in load() — so a spec
+	// byKind indexes the caller's grants by capability, built ONCE — so a spec
 	// asking about N egress hosts does not pay O(N x every grant the caller
 	// holds) inside one handler, on a path any authenticated member reaches
-	// (POST /runs/preflight).
+	// (POST /runs/preflight). nil until read.
 	byKind map[string][]types.CapabilityGrant
-	enf    map[string]bool
+
+	enfLoaded bool
+	enf       map[string]bool
 
 	// groupDeny memoizes ListGroupDenyGrants PER KIND — the narrow read, not the
-	// full table. It is a map because the store call is keyed by capability and a
-	// spec can ask about more than one (egress_host, then secret).
+	// full table. A map because the store call is keyed by capability and a
+	// resolution can ask about more than one (egress_host, then secret).
 	groupDeny map[string][]types.CapabilityGrant
 }
 
-// newCapBatch snapshots the cheap, store-free decisions capAllowed makes before
-// it ever reads (operator short-circuit, nil store) so the hot loop below is a
-// pure in-process match.
+// newCapBatch snapshots the store-free inputs decide needs before it ever
+// reads: the operator bit, the nil-Store bit and the caller's subjects.
 func (s *Server) newCapBatch(ctx context.Context) *capBatch {
-	b := &capBatch{s: s, noStore: s.cfg.Store == nil}
-	if !b.noStore {
-		b.operator = s.isOperator(ctx)
-		b.users, b.groups, b.stale = capabilitySubjects(ctx)
-	}
+	b := &capBatch{s: s, noStore: s.cfg.Store == nil, operator: s.isOperator(ctx)}
+	b.users, b.groups, b.stale = capabilitySubjects(ctx)
 	return b
 }
 
-// load performs the two per-request reads, once.
-func (b *capBatch) load(ctx context.Context) error {
-	if b.loaded {
-		return nil
+// capBatchKey carries one resolution's batch: the ownedSecretMemo pattern, a
+// pointer holder installed once at the top of a resolution and shared by every
+// door further down without re-threading a parameter.
+type capBatchKey struct{}
+
+type capBatchMemo struct{ b *capBatch }
+
+// withCapBatch installs the batch memo for a resolution. Idempotent: a nested
+// call keeps the outer memo, so the whole resolution shares one snapshot.
+// Single-goroutine by construction, on ownedSecretMemo's terms.
+func withCapBatch(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(capBatchKey{}).(*capBatchMemo); ok {
+		return ctx
 	}
-	grants, err := b.s.cfg.Store.ListCapabilityGrantsFor(ctx, b.users, b.groups)
-	if err != nil {
-		return fmt.Errorf("api: resolve capability grants: %w", err)
-	}
-	enf, err := b.s.cfg.Store.GetCapabilityEnforcement(ctx)
-	if err != nil {
-		return fmt.Errorf("api: read capability enforcement: %w", err)
-	}
-	b.grants, b.enf, b.loaded = grants, enf, true
-	b.byKind = make(map[string][]types.CapabilityGrant, len(capabilityKinds))
-	for _, g := range grants {
-		b.byKind[g.Capability] = append(b.byKind[g.Capability], g)
-	}
-	return nil
+	return context.WithValue(ctx, capBatchKey{}, &capBatchMemo{})
 }
 
-// allowed answers one value, with the SAME rule order capAllowed applies:
-// unknown kind errors, an operator and a store-less build short-circuit, a deny
-// beats an allow, and a value neither granted nor denied falls through to
-// whether the kind is enforced.
+// capBatchFor returns the resolution's batch, built on first use. Without a
+// memo in ctx it is a fresh one-shot batch: exactly the per-call reads the
+// one-value wrappers made before they shared one.
+func (s *Server) capBatchFor(ctx context.Context) *capBatch {
+	m, ok := ctx.Value(capBatchKey{}).(*capBatchMemo)
+	if !ok {
+		return s.newCapBatch(ctx)
+	}
+	if m.b == nil {
+		m.b = s.newCapBatch(ctx)
+	}
+	return m.b
+}
+
+// allowed answers one value in the direction capKinds gives its kind.
 func (b *capBatch) allowed(ctx context.Context, kind, value string) (bool, error) {
-	if !validCapabilityKind(kind) {
+	k, ok := capKinds[kind]
+	if !ok {
 		return false, fmt.Errorf("api: unknown capability kind %q", kind)
 	}
-	if b.noStore || b.operator {
+	return b.decide(ctx, kind, k.direction, value)
+}
+
+// decide is the rule order, the ONE place it is written — union of every
+// subject's rows, deny-wins:
+//
+//  1. Admin, admin token and local mode are EXEMPT: a capability bounds a
+//     member; the admin tier is the one writing the grants.
+//  2. An overlapping DENY ⇒ Deny.
+//  3. (Reserved, UT-10: a restricted value makes the kind count as enforced.)
+//  4. Widening && !enforced ⇒ Deny.
+//  5. A matching ALLOW ⇒ Allow.
+//  6. Narrowing && !enforced ⇒ Allow. An absent enforcement row is a
+//     freshly-upgraded deployment, which must behave as it did before.
+//  7. Otherwise ⇒ Deny.
+//
+// A build with no Store holds no rows and no switch: a widening kind is
+// refused and a narrowing kind allowed — the 0.5 answer for each.
+//
+// Reads are lazy and in the order the per-value wrappers always made them: a
+// narrowing kind reads grants (then, on a stale snapshot, the group-deny rows)
+// and the switch only when no row settled it; a widening kind reads its switch
+// FIRST and never reads grants while it is off. Steps 2 and 4 both answer Deny,
+// so reading 4's input first changes which reads happen, never the answer — and
+// it keeps a grants-read failure on an unenforced widening kind a 403, not a
+// 500.
+func (b *capBatch) decide(ctx context.Context, kind string, dir capDirection, value string) (bool, error) {
+	if b.operator { // 1
 		return true, nil
 	}
-	if err := b.load(ctx); err != nil {
-		return false, err
+	if b.noStore {
+		return dir == capNarrowing, nil
 	}
-	allow := false
-	// The kind's OWN rows, not every row the caller holds — same order, same
-	// rules, same answer (a grant of another kind could only ever be skipped).
+	r := &capRead{b: b, kind: kind, value: value}
+	ok := r.steps(ctx, dir == capWidening)
+	if r.err != nil {
+		return false, r.err // never an answer the store could not back
+	}
+	return ok, nil
+}
+
+// capRead is one decide call's lazy view of the batch: each input is read on
+// first use, and the first error stops every later read.
+type capRead struct {
+	b           *capBatch
+	kind, value string
+	err         error
+	scanned     bool
+	deny, allow bool
+}
+
+// steps is decide's 2-7. Any error lands on r.err and decide discards the answer.
+func (r *capRead) steps(ctx context.Context, widening bool) bool {
+	// 2. An overlapping deny. A widening kind whose switch is off skips the read:
+	// step 4 answers Deny whatever this one would.
+	if !(widening && !r.enforced(ctx)) && r.denied(ctx) {
+		return false
+	}
+	// 3. Reserved for UT-10 (#612): a restricted value makes the kind count as
+	// enforced. It lands once, in capRead.enforced, so steps 2, 4 and 6 all see it.
+
+	// 4. Widening && !enforced.
+	if widening && !r.enforced(ctx) {
+		return false
+	}
+	// 5. A matching allow.
+	if r.granted(ctx) {
+		return true
+	}
+	// 6. Narrowing && !enforced.
+	if !widening && !r.enforced(ctx) {
+		return true
+	}
+	// 7. Otherwise.
+	return false
+}
+
+// enforced reports whether the kind's switch is on. An absent row is off.
+func (r *capRead) enforced(ctx context.Context) bool {
+	if r.err != nil {
+		return false
+	}
+	var on bool
+	on, r.err = r.b.enforced(ctx, r.kind)
+	// UT-10 (step 3): `on = on || <value is restricted>` goes here.
+	return on
+}
+
+func (r *capRead) denied(ctx context.Context) bool  { r.scan(ctx); return r.deny }
+func (r *capRead) granted(ctx context.Context) bool { r.scan(ctx); return r.allow }
+
+func (r *capRead) scan(ctx context.Context) {
+	if r.scanned || r.err != nil {
+		return
+	}
+	r.scanned = true
+	r.deny, r.allow, r.err = r.b.scan(ctx, r.kind, r.value)
+}
+
+// enforced reads the switch map once per batch.
+func (b *capBatch) enforced(ctx context.Context, kind string) (bool, error) {
+	if !b.enfLoaded {
+		enf, err := b.s.cfg.Store.GetCapabilityEnforcement(ctx)
+		if err != nil {
+			return false, fmt.Errorf("api: read capability enforcement: %w", err)
+		}
+		b.enf, b.enfLoaded = enf, true
+	}
+	return b.enf[kind], nil
+}
+
+// scan walks the caller's own grants of one kind and reports whether a DENY
+// overlaps value and/or an ALLOW covers it — the single place a stored row is
+// compared against a request.
+//
+// An unanswerable group snapshot is not "no group rows". capabilitySubjects'
+// stale bit says the group list the grants were read for is missing or
+// partial, so a group DENY the caller actually holds may simply not be in them
+// — and every door reads a clean scan as permission. effectiveCeiling
+// (governance.go) already refuses on exactly this input. So when the snapshot
+// is unanswerable and a group deny row COULD cover this value, the scan reports
+// the deny it cannot rule out — UNCONDITIONALLY on allow: gating it on !allow
+// would let a value the caller holds a user-tier allow for slip past a group
+// deny nobody could evaluate.
+func (b *capBatch) scan(ctx context.Context, kind, value string) (deny, allow bool, err error) {
+	if b.byKind == nil {
+		grants, err := b.s.cfg.Store.ListCapabilityGrantsFor(ctx, b.users, b.groups)
+		if err != nil {
+			return false, false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
+		}
+		b.byKind = make(map[string][]types.CapabilityGrant, len(capabilityKinds))
+		for _, g := range grants {
+			b.byKind[g.Capability] = append(b.byKind[g.Capability], g)
+		}
+	}
+	// The kind's OWN rows, not every row the caller holds.
 	for _, g := range b.byKind[kind] {
 		b.s.capRowsScanned.Add(1)
 		if g.Effect == types.CapabilityDeny {
 			if capValueOverlaps(kind, g.Value, value) {
-				return false, nil // deny is final
+				return true, false, nil // deny is final
 			}
 			continue
 		}
@@ -606,34 +649,27 @@ func (b *capBatch) allowed(ctx context.Context, kind, value string) (bool, error
 			allow = true
 		}
 	}
-	// UNCONDITIONAL on allow, exactly as capScan is: a group snapshot that
-	// cannot be answered may be hiding a group DENY, and a deny beats an allow.
-	// Gating this on !allow would let a value the caller holds a user-tier allow
-	// for slip past a group deny nobody could evaluate — a widening, in the one
-	// direction this resolver exists to refuse.
 	if b.stale {
 		unresolved, err := b.unresolvableGroupDeny(ctx, kind, value)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if unresolved {
-			// Same line capScan logs, for the same reason: the seam that asked
-			// writes its own authz.denied, and this says the refusal was about
-			// COMPLETENESS rather than a row naming this human.
+			// Logged, not audited: the door that asked writes its own
+			// authz.denied with the reason it knows, and this line is what
+			// tells an operator the refusal was about COMPLETENESS rather than
+			// a row naming this human. Value is left out — a secret name or a
+			// workspace id is the door's to log, not the resolver's.
 			slog.Warn("api: capability refused because the caller's group snapshot is unanswerable and a group deny grant of this kind exists",
 				"capability", kind, "principal", oidcHumanFromContext(ctx))
-			return false, nil
+			return true, false, nil
 		}
 	}
-	if allow {
-		return true, nil
-	}
-	return !b.enf[kind], nil
+	return false, allow, nil
 }
 
-// unresolvableGroupDeny is capUnresolvableGroupDeny over a full-table read taken
-// ONCE. Loaded only on the stale path, so an answerable caller never pays for it
-// — exactly as before.
+// unresolvableGroupDeny is capUnresolvableGroupDeny's read, memoized per kind.
+// Loaded only on the stale path, so an answerable caller never pays for it.
 func (b *capBatch) unresolvableGroupDeny(ctx context.Context, kind, value string) (bool, error) {
 	if b.groupDeny == nil {
 		b.groupDeny = map[string][]types.CapabilityGrant{}
@@ -641,14 +677,9 @@ func (b *capBatch) unresolvableGroupDeny(ctx context.Context, kind, value string
 	grants, loaded := b.groupDeny[kind]
 	if !loaded {
 		var err error
-		// ListGroupDenyGrants, the same NARROW read capUnresolvableGroupDeny
-		// makes: the store filters subject_type='group' AND effect='deny' AND
+		// ListGroupDenyGrants filters subject_type='group' AND effect='deny' AND
 		// capability=$1 in SQL, so nothing is filtered again here and the match
-		// is capValueOverlaps alone — one shared matcher, as capScan uses.
-		//
-		// The predicate here must track ListGroupDenyGrants' own narrow read
-		// exactly — a mismatch would not change the ANSWER, only the cost,
-		// which is the kind of drift nothing fails on.
+		// is capValueOverlaps alone — one shared matcher.
 		if grants, err = b.s.cfg.Store.ListGroupDenyGrants(ctx, kind); err != nil {
 			return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
 		}

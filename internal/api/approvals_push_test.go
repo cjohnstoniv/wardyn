@@ -56,7 +56,7 @@ func (f *scopeFixture) seedPushContent(t *testing.T) uuid.UUID {
 // stops.
 func TestPushContentMemberCannotDecide(t *testing.T) {
 	f := newScopeFixture(t)
-	owner := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember)
+	owner := ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser)
 
 	for _, verb := range []string{"approve", "deny"} {
 		t.Run(verb, func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestDispatchStampsUnattended(t *testing.T) {
 		fr := &fakeRunner{}
 		srv, _, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
 		run.Task = ""
-		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 			RunToken: "run-token", Image: "wardyn/claude-code:latest", Interactive: interactive,
 		})
 		if got := fr.lastSpec.ProxyConfig.Unattended; got == interactive {

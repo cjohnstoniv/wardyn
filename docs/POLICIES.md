@@ -19,7 +19,7 @@ write time. A guard test fails if a field here drifts from the struct.
 The console has three places a policy gets written, and all three resolve to
 this same JSON through this same validator — there is no separate UI schema.
 
-- **The [`/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
+- **The [`/admin/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
   reusable policy (`POST`/`PUT /policies`).
 - **The run screen's Custom policy.** An `inline_policy` on the create-run
   request, member-authored — this editor carries no operator gate.
@@ -793,6 +793,7 @@ or forwards the buffered bytes unchanged:
 |---|---|---|---|
 | A path the push introduces matched `deny_paths` | `403` | `brokered:git:push-rules` | Take those paths out of the push, or have an operator widen `deny_paths`. The refusal names up to ten of them and, for a path the broker compared with the forge, why it could not clear it. |
 | The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
+| The buffered pack is under the inspection ceiling but still costs more objects, inflated bytes, tree entries or changed paths than `internal/gitpack`'s own compiled-in ceilings allow | `413` | `brokered:git:push-too-large` | Push fewer commits. Raising `max_inspect_pack_mib` does not help — these ceilings are unrelated to that setting. |
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
 | A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403` | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
@@ -893,6 +894,13 @@ sidecar's inspection slot, and the credential is normally the one the push's
 own discovery request already minted. In the refusal, a path ending in `/`
 names a directory the push does not carry, and `/` alone names the whole tree.
 
+**On a `git_pat` forge other than github.com, deny only paths the repository
+does not hold yet.** No comparison can be made there, so an entry that reaches
+anything the repository already has — `infra/**` against an existing `infra/`,
+or `Makefile` — refuses every push, including one that never touches it. The
+run's risk grade says so (`push_rules`, `deny_paths on <host>`) before the
+first push does.
+
 **What these rules do not stop.**
 
 - **Building on an older commit of the default branch keeps what that commit
@@ -919,8 +927,11 @@ trimmed), so `*.pem` matches `server.pem` and not `certs/server.pem`, while
 as in `.gitignore` and `CODEOWNERS`: `infra/` reads as `infra/**`. An entry
 with an empty, `.` or `..` segment — `./infra/**`, `infra//**`, `a/../b` — is
 **refused at write time**, because no git path contains one and the rule would
-silently match nothing; a policy that reaches the broker carrying one anyway
-has every push refused rather than the entry ignored. A pattern that is not a
+silently match nothing; so is an entry with leading or trailing whitespace
+(almost certainly a typo) or one that is not valid UTF-8. A policy that
+reaches the broker carrying any of these anyway has every push refused rather
+than the entry ignored. `..` inside a segment (`infra..x/`) is an ordinary
+name and reads as written. A pattern that is not a
 valid Go pattern — an unterminated `[`, say — is compared literally rather than
 silently matching nothing.
 
@@ -978,9 +989,10 @@ match always wins: a path both lists match is refused and nothing is asked.
   lane's REST door holds the same way — see **Every door, not only git's**.
 
 `deny_new_executables` and `max_file_size_mib` are a later change. Whoever adds
-a size rule must **decide** what an unmeasurable file means rather than compare
-it: the inspector reports `-1` for a blob the pack does not carry, and `-1`
-passes every "is it under the limit" test by accident.
+a size rule decides with `gitpack.Change.Within`, which refuses a size the pack
+does not carry (a submodule pointer, an unchanged file on a second push);
+`Size()` returns `(bytes, known)`, so a bare comparison against a limit does
+not compile.
 
 **Unenforceable is a warning, not a refusal.** `push_rules` is enforced only on
 the brokered lanes (`github_token`, `git_pat`) — git's own SSH transport has no
@@ -1006,9 +1018,9 @@ there is nothing here for a silent ceiling to protect against. When both set
 
 | Field | Type | Default | What it does |
 |---|---|---|---|
-| `deny_paths` | `[]string` | `[]` | Path patterns (e.g. `.github/workflows/**`) refused in a push — see **Pattern language** above. Each entry at most **256 bytes**, no NUL or other control character; rejected (`400`) at write time. **No count cap** — deny-only lists narrow rather than widen, the same stance `denied_domains` takes, and a clamp-merged list can legitimately exceed what either the operator's ceiling or the member's own proposal authored on its own. The matcher therefore bounds its own work instead of assuming the list is short: a list long enough that matching it against a push would not finish in bounded time refuses that push (`brokered:git:push-uninspectable`) rather than being ground through. |
+| `deny_paths` | `[]string` | `[]` | Path patterns (e.g. `.github/workflows/**`) refused in a push — see **Pattern language** above. Each entry at most **256 bytes**, valid UTF-8, no NUL or other control character, and no leading or trailing whitespace; rejected (`400`) at write time. **No count cap** — deny-only lists narrow rather than widen, the same stance `denied_domains` takes, and a clamp-merged list can legitimately exceed what either the operator's ceiling or the member's own proposal authored on its own. The matcher therefore bounds its own work instead of assuming the list is short: a list long enough that matching it against a push would not finish in bounded time refuses that push (`brokered:git:push-uninspectable`) rather than being ground through. |
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
-| `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, no control character, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
+| `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
 | `hold_seconds` | `int` | `0` | How long a held push waits for its decision before it is refused. `0`/absent means **120**. Bounded at write time to **0..600**, the proxy's own hold ceiling, which also clamps a stored value past it. |
 
 ## `llm_inspection` — `LLMInspectionSpec`

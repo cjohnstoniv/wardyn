@@ -43,7 +43,8 @@ async function createWorkspace(page: Page, name: string): Promise<string> {
   return ws.id as string;
 }
 
-test.describe("Workspace detail — the seeded workspace's real page (X2-F5)", () => {
+test.describe("Workspace detail — the seeded workspace's real page", () => {
+  // ticket: X2-F5
   test("payments renders its real name, source line, and Start-a-run CTA with no route intercept", async ({
     page,
   }) => {
@@ -66,7 +67,8 @@ test.describe("Workspace detail — the seeded workspace's real page (X2-F5)", (
   });
 });
 
-test.describe("Workspace detail — the member delete gate (X2-F4)", () => {
+test.describe("Workspace detail — the member delete gate", () => {
+  // ticket: X2-F4
   test("Delete is enabled for a member's OWN workspace, and parked for another member's", async ({ page }) => {
     const name = uniqueName("owner-gate");
     const wsId = await createWorkspace(page, name);
@@ -77,7 +79,7 @@ test.describe("Workspace detail — the member delete gate (X2-F4)", () => {
     await page.route("**/api/v1/me", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
-      json.role = "member";
+      json.role = "user";
       json.operator = false;
       json.security_operator = false;
       json.principal = principal;
@@ -114,7 +116,8 @@ test.describe("Workspace detail — the member delete gate (X2-F4)", () => {
   });
 });
 
-test.describe("Workspace detail — delete round-trip (X2-F19)", () => {
+test.describe("Workspace detail — delete round-trip", () => {
+  // ticket: X2-F19
   test("Delete returns to the list, and GET /workspaces confirms it's gone", async ({ page }) => {
     const name = uniqueName("delete-target");
     const wsId = await createWorkspace(page, name);

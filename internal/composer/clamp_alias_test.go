@@ -13,8 +13,8 @@ import (
 
 // aliasProposal is a proposal that sets EVERY reference-semantics field of
 // RunPolicySpec, paired with aliasCeiling so the clamp tightens nothing: the
-// pass-through paths are exactly the ones where a ceiling "has no opinion" and
-// the shallow copy therefore used to hand the caller's own memory back.
+// pass-through paths are exactly the ones where a ceiling "has no opinion",
+// and where a shallow copy would hand the caller's own memory back.
 func aliasProposal(t *testing.T) types.RunPolicySpec {
 	t.Helper()
 	ro := true

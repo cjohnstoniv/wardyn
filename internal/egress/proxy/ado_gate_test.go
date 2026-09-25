@@ -23,14 +23,6 @@ const (
 	adoToken = "entra-bearer-for-acme"
 )
 
-// adoGrantMap is the test double for ADOGrantSource.
-type adoGrantMap map[string]ADOGrant
-
-func (m adoGrantMap) ADOGrantFor(host string) (ADOGrant, bool) {
-	g, ok := m[host]
-	return g, ok
-}
-
 // adoHarness is a proxy terminating dev.azure.com with the bearer injected, its
 // upstream leg pointed at an adofake whose token carries EVERY scope — so
 // whatever the gate forwards, the fake would answer. A refusal can only be the
@@ -58,7 +50,7 @@ func newADOHarness(t *testing.T, caps ...adoscope.Capability) *adoHarness {
 	p.mitmHosts = map[string]bool{adoHost: true}
 	p.mitmPorts = map[string]int{adoHost: 443}
 	p.mitmPlaintext = map[string]bool{plaintextKey(adoHost, 443): true}
-	p.adoGrants = adoGrantMap{adoHost: {Organization: "acme", Capabilities: caps}}
+	p.adoGrants = adoGrantsByHost{adoHost: {Organization: "acme", Capabilities: caps}}
 	return &adoHarness{p: p, fake: fake, log: func() string {
 		_ = p.sink.close(context.Background())
 		return buf.String()
@@ -239,13 +231,13 @@ func TestADOGate_RefusalBodyGolden(t *testing.T) {
 
 // A host the grant does not cover is not gated at all.
 func TestADOGate_UncoveredHostStandsAside(t *testing.T) {
-	p := &Proxy{adoGrants: adoGrantMap{}}
+	p := &Proxy{adoGrants: adoGrantsByHost{}}
 	if got := p.gateADO(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), "example.com", 443, "artifact:mitm"); got != "artifact:mitm" {
 		t.Errorf("gateADO on an uncovered host = %q, want the source unchanged", got)
 	}
 }
 
-// ONE RULE PER REF ACROSS BOTH DOORS: a REST push to the run's own branch
+// One rule per ref across both doors: a REST push to the run's own branch
 // namespace needs code_write, exactly as a git push through the broker does
 // (adoRunRefProtected).
 func TestADOGate_RunNamespacePushNeedsCodeWrite(t *testing.T) {
