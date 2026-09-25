@@ -65,6 +65,11 @@ var preflightGateExceptions = map[string]string{
 	"resolveEnforcedConfinement": "preflight calls enforcedConfinement directly; the runner-capability + cloud_sts tail gates are reported by the checklist instead (doc comment)",
 }
 
+// preflightGateExceptionsMax caps preflightGateExceptions, which may only
+// shrink or stay (authorization-kernel design G3). Lower it when an entry
+// goes; raising it needs a reviewed reason.
+const preflightGateExceptionsMax = 2
+
 func TestPreflightMirrorsLaunchGates(t *testing.T) {
 	fset := token.NewFileSet()
 	create := parseHandler(t, fset, "runs.go", "handleCreateRun")
@@ -108,6 +113,11 @@ func TestPreflightMirrorsLaunchGates(t *testing.T) {
 		t.Errorf("handleCreateRun gates handlePreflightRun does not reproduce: %v\n"+
 			"Either call them from handlePreflightRun (preferred — a shared helper both call is better still), "+
 			"or add each to preflightGateExceptions with the reason Review is allowed to skip it.", missing)
+	}
+
+	if len(preflightGateExceptions) > preflightGateExceptionsMax {
+		t.Errorf("preflightGateExceptions has %d entries, the cap is %d — reproduce the new gate in preflight instead of exempting it",
+			len(preflightGateExceptions), preflightGateExceptionsMax)
 	}
 
 	// The exception list must not rot: an entry naming a helper launch no longer
