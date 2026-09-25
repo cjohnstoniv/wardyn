@@ -382,7 +382,7 @@ func TestResumeRun_OwnerThawsAForeignMemberCannot(t *testing.T) {
 	f.st.run.PausedAt, f.st.run.PausedReason = &paused, types.PauseIdle
 	path := "/api/v1/runs/" + f.run.ID.String() + "/resume"
 
-	stranger := ssoSession(t, "sub-stranger", "stranger@corp.example", oidc.RoleMember)
+	stranger := ssoSession(t, "sub-stranger", "stranger@corp.example", oidc.RoleUser)
 	if w := doSSO(t, f.srv, http.MethodPost, path, stranger, ""); w.Code != http.StatusNotFound {
 		t.Fatalf("foreign member resume = %d, want 404", w.Code)
 	}
@@ -390,7 +390,7 @@ func TestResumeRun_OwnerThawsAForeignMemberCannot(t *testing.T) {
 		t.Fatalf("thaws = %d after a refused resume, want 0", thaws)
 	}
 
-	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleMember)
+	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
 	if w := doSSO(t, f.srv, http.MethodPost, path, owner, ""); w.Code != http.StatusOK {
 		t.Fatalf("owner resume = %d %s, want 200", w.Code, w.Body.String())
 	}
@@ -412,7 +412,7 @@ func TestPausedRun_WidgetsDoNotThawIt(t *testing.T) {
 	f := newPauseFixture(t, time.Hour)
 	paused := time.Now().UTC()
 	f.st.run.PausedAt, f.st.run.PausedReason = &paused, types.PauseIdle
-	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleMember)
+	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
 	for _, p := range []string{"/resources", "/files"} {
 		w := doSSO(t, f.srv, http.MethodGet, "/api/v1/runs/"+f.run.ID.String()+p, owner, "")
 		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), runPausedReadMsg) {
