@@ -17,7 +17,9 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -180,15 +182,15 @@ func sizedPool(t *testing.T, base *pgxpool.Pool, maxConns int) *pgxpool.Pool {
 // by DIFFERENT people. Their actor strings fold to different objids, so they
 // never contend on the lock at all — what they contend for is the POOL.
 //
-// The regression this pins was real and daemon-wide. A lock hold borrows a
-// connection for its whole span and the guarded work needs another, so one
-// connection per concurrent sign-in exhausted the pool; `lock_timeout` does not
-// bound a pool acquire (it bounds a LOCK wait), and pgxpool's Acquire does not
-// error on an empty pool, it blocks on the context. With no WriteTimeout and no
-// TimeoutHandler in front of the route, that context ends when the client
+// The failure this pins is daemon-wide. A lock hold borrows a connection for
+// its whole span and the guarded work needs another, so one connection per
+// concurrent sign-in can exhaust the pool; `lock_timeout` does not bound a pool
+// acquire (it bounds a lock wait), and pgxpool's Acquire does not error on an
+// empty pool, it blocks on the context. With no WriteTimeout and no
+// TimeoutHandler in front of the route, that context ends only when the client
 // disconnects — so both sign-ins, and every other database-backed request in
-// the daemon, hung. At pool_max_conns=3 two people were enough; at the floor
-// docs/ENV.md blesses, 2, one was.
+// the daemon, would hang. At pool_max_conns=3 two people are enough; at the
+// floor docs/ENV.md blesses, 2, one is.
 //
 // Sized at both, with the single-instance lock held exactly as a serving
 // wardynd holds it (one connection, whole process lifetime) — that hold is what
@@ -258,5 +260,71 @@ func TestPG_LoginSupersedeDoesNotStarveConcurrentSignIns(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPG_LoginSupersedeRefusesWhenThePersonsLockIsHeld is #505 F5 against the
+// real lock: another session holds this person's key past the wait budget, so
+// the launch is REFUSED — errSignInBusy, no run row — rather than proceeding
+// unlocked into the interleaving the lock exists to remove. Held with raw SQL
+// on its own connection, not through db.AdvisoryLockKeyed, so the refusal comes
+// from the Postgres lock wait itself and not from the in-process slot.
+func TestPG_LoginSupersedeRefusesWhenThePersonsLockIsHeld(t *testing.T) {
+	pool := throwawayPGPool(t)
+	const actor = "member@corp.example"
+
+	prev := db.LoginSupersedeLockWait
+	db.LoginSupersedeLockWait = 500 * time.Millisecond
+	t.Cleanup(func() { db.LoginSupersedeLockWait = prev })
+
+	holder, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("acquire the holder's connection: %v", err)
+	}
+	obj := int32(crc32.ChecksumIEEE([]byte(actor)))
+	if _, err := holder.Exec(context.Background(), `SELECT pg_advisory_lock($1, $2)`, db.LoginSupersedeLockClass, obj); err != nil {
+		t.Fatalf("hold the person's sign-in lock: %v", err)
+	}
+	released := false
+	release := func() {
+		if !released {
+			holder.Exec(context.Background(), `SELECT pg_advisory_unlock($1, $2)`, db.LoginSupersedeLockClass, obj) //nolint:errcheck // test cleanup
+			holder.Release()
+			released = true
+		}
+	}
+	t.Cleanup(release)
+
+	h := newHarness(t)
+	cfg := baseTestConfig(h, store.NewPG(pool))
+	cfg.Audit = &memAudit{}
+	cfg.Approvals = h.approvals
+	cfg.Broker = h.broker
+	cfg.Runner = &fakeRunner{}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.MaskRegistry = secretmask.NewRegistry()
+	cfg.BedrockRegion = "us-east-1"
+	cfg.DefaultPolicy = govDeployment()
+	srv := New(cfg)
+	hl, ok := agentHarnessLogin(awsSSOAgent)
+	if !ok {
+		t.Fatal("aws-sso harness login convention missing")
+	}
+
+	_, _, err = srv.launchHarnessLoginRun(context.Background(), actor, hl, loginTarget{startURL: perUserPortal})
+	if !errors.Is(err, errSignInBusy) {
+		t.Fatalf("launch err = %v, want errSignInBusy — a held lock must refuse, not proceed unlocked", err)
+	}
+	live, err := store.NewPG(pool).ActiveRunsByCreator(context.Background(), actor, harnessLoginTask, hl.agent)
+	if err != nil {
+		t.Fatalf("list the person's login runs: %v", err)
+	}
+	if len(live) != 0 {
+		t.Fatalf("a refused sign-in left %d login run(s) behind", len(live))
+	}
+
+	release()
+	if _, _, err := srv.launchHarnessLoginRun(context.Background(), actor, hl, loginTarget{startURL: perUserPortal}); err != nil {
+		t.Fatalf("with the lock free the sign-in must proceed: %v", err)
 	}
 }

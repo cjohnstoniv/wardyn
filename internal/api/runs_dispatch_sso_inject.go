@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/url"
 	"strings"
@@ -247,7 +248,10 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 	}); gerr != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not author the AWS SSO credential injection: "+gerr.Error())
+		// The hint is member-visible: a fixed sentence, never the store's text.
+		slog.ErrorContext(ctx, "wardynd: could not record the AWS SSO credential grant",
+			slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not record the AWS SSO credential grant")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "aws sso inject grant: " + gerr.Error()})))
 		return injections, nil, false

@@ -32,10 +32,32 @@ const (
 	// daemonProxyUserinfoRefusal is the BOOT REFUSAL when the URL embeds a
 	// credential — refused at parse, never merely documented, because a
 	// credential in the process environment is visible to diagnostics and logs.
+	// This refusal applies ONLY to the plain WARDYN_DAEMON_PROXY_URL: a
+	// credentialed proxy is reached via WARDYN_DAEMON_PROXY_SECRET (a file
+	// path) instead, below.
 	//
 	// DRAFT (M2 canon pending)
 	daemonProxyUserinfoRefusal = "refusing to start: WARDYN_DAEMON_PROXY_URL must not embed a " +
-		"credential (user:pass@) — put the proxy's credential in the proxy, or open an issue for a secret-ref form"
+		"credential (user:pass@) — put the credential in a file and point WARDYN_DAEMON_PROXY_SECRET at it, " +
+		"or put the proxy's credential in the proxy"
+	// daemonProxySecretInvalidRefusal is daemonProxyInvalidRefusal's sibling
+	// for the WARDYN_DAEMON_PROXY_SECRET file's CONTENT. Same classification
+	// vocabulary, never the raw content (which may carry a credential).
+	daemonProxySecretInvalidRefusal = "refusing to start: the file WARDYN_DAEMON_PROXY_SECRET points at is %s — " +
+		"it must hold exactly one http:// or https:// proxy URL (user:pass@ allowed); fix it or unset the var"
+	// daemonProxySecretModeRefusal is the BOOT REFUSAL when the
+	// WARDYN_DAEMON_PROXY_SECRET file is readable or writable by group or
+	// other — a proxy credential in a shared-mode file defeats the point of
+	// keeping it out of the process environment in the first place.
+	daemonProxySecretModeRefusal = "refusing to start: WARDYN_DAEMON_PROXY_SECRET file %q is mode %04o — " +
+		"must not be readable or writable by group or other (0600 or tighter)"
+	// daemonProxyBothSetRefusal is the BOOT REFUSAL when both
+	// WARDYN_DAEMON_PROXY_URL and WARDYN_DAEMON_PROXY_SECRET name a proxy —
+	// refused rather than picking one, because a silent precedence between
+	// two ways of saying the same thing is how an operator ends up proxying
+	// through something they did not intend.
+	daemonProxyBothSetRefusal = "refusing to start: both WARDYN_DAEMON_PROXY_URL and WARDYN_DAEMON_PROXY_SECRET " +
+		"are set — unset one; they name the same knob two different ways"
 )
 
 // installDaemonProxy sets tr.Proxy from WARDYN_DAEMON_PROXY_URL, scoped to the
@@ -67,20 +89,89 @@ func installDaemonProxy(tr *http.Transport, rawURL, noProxy string, autoBypass .
 	if rawURL == "" {
 		return "", nil
 	}
-	u, perr := url.Parse(rawURL)
-	if perr != nil || u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf(daemonProxyInvalidRefusal, "not a URL")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf(daemonProxyInvalidRefusal, "an unsupported scheme")
-	}
-	if u.Hostname() == "" {
-		return "", fmt.Errorf(daemonProxyInvalidRefusal, "missing a host")
+	u, classification := classifyProxyURLShape(rawURL)
+	if classification != "" {
+		return "", fmt.Errorf(daemonProxyInvalidRefusal, classification)
 	}
 	if u.User != nil {
 		return "", errors.New(daemonProxyUserinfoRefusal)
 	}
+	return wireDaemonProxy(tr, u, noProxy, autoBypass...), nil
+}
 
+// installDaemonProxySecret is installDaemonProxy's sibling for
+// WARDYN_DAEMON_PROXY_SECRET — a FILE PATH (never a value, so it can carry a
+// credential without one ever landing in the process environment) holding
+// exactly one proxy URL that MAY embed user:pass@. It exists because the
+// transport this wires is installed before the database connects and before
+// the secret store is built (see installBootTransport's call site in
+// run()), so a secret-store reference cannot be resolved here — a file is
+// the only credentialed form boot ordering allows.
+//
+// secretPath is WARDYN_DAEMON_PROXY_SECRET. Empty (the default) leaves
+// tr.Proxy untouched, exactly like installDaemonProxy's own empty case. The
+// caller (bootDaemonProxy) refuses boot before this runs if BOTH
+// WARDYN_DAEMON_PROXY_URL and WARDYN_DAEMON_PROXY_SECRET are set, so this
+// function never has to arbitrate between them.
+//
+// The file's mode is checked (refused if wider than 0600) and its content
+// is read fresh at boot, never cached or re-read later — same "read once at
+// boot, not deferred" posture as WARDYN_TRUSTED_CA_FILE.
+func installDaemonProxySecret(tr *http.Transport, secretPath, noProxy string, autoBypass ...string) (effective string, err error) {
+	secretPath = strings.TrimSpace(secretPath)
+	if secretPath == "" {
+		return "", nil
+	}
+	fi, statErr := os.Stat(secretPath)
+	if statErr != nil {
+		return "", fmt.Errorf("WARDYN_DAEMON_PROXY_SECRET: %w", statErr)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf(daemonProxySecretModeRefusal, secretPath, fi.Mode().Perm())
+	}
+	raw, rerr := os.ReadFile(secretPath)
+	if rerr != nil {
+		return "", fmt.Errorf("WARDYN_DAEMON_PROXY_SECRET: %w", rerr)
+	}
+	rawURL := strings.TrimSpace(string(raw))
+	if rawURL == "" {
+		return "", fmt.Errorf(daemonProxySecretInvalidRefusal, "empty")
+	}
+	u, classification := classifyProxyURLShape(rawURL)
+	if classification != "" {
+		return "", fmt.Errorf(daemonProxySecretInvalidRefusal, classification)
+	}
+	// Userinfo is DELIBERATELY allowed here — this file is exactly the
+	// credentialed form WARDYN_DAEMON_PROXY_URL's userinfo refusal exists to
+	// push operators toward.
+	return wireDaemonProxy(tr, u, noProxy, autoBypass...), nil
+}
+
+// classifyProxyURLShape parses rawURL and reports whether its SHAPE (scheme,
+// host) is a usable proxy target, shared by installDaemonProxy and
+// installDaemonProxySecret so both refuse the same malformed shapes the same
+// way. The returned classification ("not a URL", "an unsupported scheme",
+// "missing a host") is safe to embed in a boot refusal — never the raw value
+// or the url.Parse error text, either of which could echo a credential.
+// Userinfo is NOT judged here — each caller decides whether to allow it.
+func classifyProxyURLShape(rawURL string) (u *url.URL, classification string) {
+	pu, perr := url.Parse(rawURL)
+	if perr != nil || pu.Scheme == "" || pu.Host == "" {
+		return nil, "not a URL"
+	}
+	if pu.Scheme != "http" && pu.Scheme != "https" {
+		return nil, "an unsupported scheme"
+	}
+	if pu.Hostname() == "" {
+		return nil, "missing a host"
+	}
+	return pu, ""
+}
+
+// wireDaemonProxy is installDaemonProxy's and installDaemonProxySecret's
+// shared last step: build the NO_PROXY-aware proxy func from an ALREADY
+// VALIDATED proxy URL and assign it to tr.Proxy.
+func wireDaemonProxy(tr *http.Transport, u *url.URL, noProxy string, autoBypass ...string) string {
 	parts := filterEmpty(append([]string{noProxy}, autoBypass...))
 	cfg := &httpproxy.Config{
 		HTTPProxy:  u.String(),
@@ -91,7 +182,7 @@ func installDaemonProxy(tr *http.Transport, rawURL, noProxy string, autoBypass .
 	tr.Proxy = func(req *http.Request) (*url.URL, error) {
 		return proxyFunc(req.URL)
 	}
-	return u.String(), nil
+	return u.String()
 }
 
 // installBootTransport is run()'s single call site for both transport
@@ -114,30 +205,48 @@ func installBootTransport(rt http.RoundTripper, trustedCAPool *x509.CertPool, f 
 }
 
 // bootDaemonProxy is installBootTransport's call-site glue for
-// installDaemonProxy: resolves the auto-bypass hosts from the RAW boot flags
-// (validated Configs don't exist yet at this point in boot — see
-// installDaemonProxy's doc comment) and logs the outcome. One boot log line
-// names the proxy host (never any userinfo — installDaemonProxy already
-// refused one) and the effective bypass list, so an operator can grep for it.
+// installDaemonProxy/installDaemonProxySecret: resolves the auto-bypass
+// hosts from the RAW boot flags (validated Configs don't exist yet at this
+// point in boot — see installDaemonProxy's doc comment), refuses boot if
+// both WARDYN_DAEMON_PROXY_URL and WARDYN_DAEMON_PROXY_SECRET name a proxy,
+// and logs the outcome. One boot log line names the proxy host (never any
+// userinfo or file content — neither install path ever hands one back
+// through effective's scheme://host display) and the effective bypass list,
+// so an operator can grep for it.
 func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
 	autoBypass := []string{
 		os.Getenv("KUBERNETES_SERVICE_HOST"),
 		daemonProxyBypassHost(*f.awsSSOEndpointOverride),
 		daemonProxyBypassHost(*f.oidcInternalIss),
 	}
-	effective, err := installDaemonProxy(tr, *f.daemonProxyURL, *f.daemonNoProxy, autoBypass...)
+
+	plainURL := strings.TrimSpace(*f.daemonProxyURL)
+	secretFile := strings.TrimSpace(*f.daemonProxySecretFile)
+	if plainURL != "" && secretFile != "" {
+		return errors.New(daemonProxyBothSetRefusal)
+	}
+
+	var effective, source string
+	var err error
+	if secretFile != "" {
+		source = "WARDYN_DAEMON_PROXY_SECRET"
+		effective, err = installDaemonProxySecret(tr, secretFile, *f.daemonNoProxy, autoBypass...)
+	} else {
+		source = "WARDYN_DAEMON_PROXY_URL"
+		effective, err = installDaemonProxy(tr, plainURL, *f.daemonNoProxy, autoBypass...)
+	}
 	if err != nil {
 		return err
 	}
 	if effective != "" {
 		// scheme://host only — never u.String()'s full form, which could carry
-		// a query string (installDaemonProxy refuses userinfo, not a query) into
+		// a query string or userinfo (the secret-file path allows userinfo) into
 		// the boot log.
 		display := effective
 		if u, perr := url.Parse(effective); perr == nil {
 			display = u.Scheme + "://" + u.Host
 		}
-		slog.Info("wardynd: daemon egress proxy configured (WARDYN_DAEMON_PROXY_URL)",
+		slog.Info("wardynd: daemon egress proxy configured ("+source+")",
 			slog.String("proxy", display),
 			slog.String("no_proxy", *f.daemonNoProxy),
 			slog.String("auto_bypass", strings.Join(filterEmpty(autoBypass), ",")))

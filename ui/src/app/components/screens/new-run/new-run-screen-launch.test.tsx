@@ -105,7 +105,7 @@ import { ADO } from "../../../lib/ado-entra-copy";
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
 // The Workspace card's drive block reads the shell's ONE GET /me off the
-// context (operator-context's UserDriveContext), not a fetch of its own — so a
+// context (operator-context's MeIdentity.userDrive), not a fetch of its own — so a
 // case states its /me body here, exactly as app-shell hands it down. The
 // default carries NEITHER /me drive bit: no allocation and no door, which is
 // what every case below except the drive ones is, and which must render as
@@ -522,7 +522,8 @@ describe("NewRunScreen — the git_credential refusal opens the Connect Azure De
   // Review finding F1: the org comes from the 422 body itself, so the dialog
   // names it even with NO preflight verdict ever having run (this screen
   // fires preflight on a debounce; a fast Launch click can beat it there).
-  it("F1: names the org from the 422 body, with no preflight verdict having run", async () => {
+  it("names the org from the 422 body, with no preflight verdict having run", async () => {
+    // ticket: F1
     createRunMock.mockRejectedValueOnce(
       new HttpError(422, "git_credential: you are not connected to Azure DevOps — connect and start the run again", "git_credential", "https://dev.azure.com/contoso"),
     );
@@ -532,7 +533,8 @@ describe("NewRunScreen — the git_credential refusal opens the Connect Azure De
     expect(screen.getByText(ADO.LAUNCH_DIALOG_BODY("https://dev.azure.com/contoso"))).toBeInTheDocument();
   });
 
-  it("F8: confirming connects and closes the dialog, but never relaunches — the person presses Launch themselves", async () => {
+  it("confirming connects and closes the dialog, but never relaunches — the person presses Launch themselves", async () => {
+    // ticket: F8
     createRunMock.mockRejectedValueOnce(new HttpError(422, "not connected", "git_credential"));
     adoConnectMock.mockResolvedValueOnce(true);
     const launch = await titled();

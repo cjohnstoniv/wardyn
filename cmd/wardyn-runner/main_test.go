@@ -85,7 +85,7 @@ func buildStub(t *testing.T) string {
 // had for keeping them was not, and evidence that does not survive a check is
 // how a correct check gets deleted.
 //
-// READ FROM THE SOURCE rather than exercised, because loadSpec is behind
+// Read from the source rather than exercised, because loadSpec is behind
 // `//go:build docker` and this pin has to run in the DEFAULT build — the one
 // `go test ./cmd/wardyn-runner/...` runs. Adding a drive field to either place
 // fails this and sends whoever adds it to re-derive the three comments.

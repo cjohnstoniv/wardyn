@@ -35,7 +35,7 @@ func denialRows(events []types.AuditEvent) []types.AuditEvent {
 func TestInHandlerMemberDenialsAreAudited(t *testing.T) {
 	member := func(t *testing.T) *http.Cookie {
 		t.Helper()
-		return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleMember)
+		return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleUser)
 	}
 
 	t.Run("a member naming another namespace with ?owner=", func(t *testing.T) {
@@ -90,7 +90,7 @@ func TestInHandlerMemberDenialsAreAudited(t *testing.T) {
 		}
 	})
 
-	// THE SECOND SILENT GATE, in another handler: `always` is operator-only
+	// The second silent gate, in another handler: `always` is operator-only
 	// (rule 6) because it writes a permanent workspace allowlist entry, which is
 	// the back door around the operatorOnly PUT /workspaces/{id}/approved-egress.
 	// The refusal is a 403 and left no row, while its two neighbours on the same
@@ -99,7 +99,7 @@ func TestInHandlerMemberDenialsAreAudited(t *testing.T) {
 		f := newScopeFixture(t)
 		id := f.seedEgress(t, "registry.npmjs.org")
 		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve",
-			ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember),
+			ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser),
 			decideBody(t, types.ScopeAlways, nil))
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("member picking always = %d, want 403; body=%s", w.Code, w.Body.String())

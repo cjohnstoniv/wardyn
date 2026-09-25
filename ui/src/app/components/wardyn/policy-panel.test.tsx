@@ -16,8 +16,8 @@ vi.mock("../../lib/api/runs", () => ({
   runs: { gradePolicy: (...a: unknown[]) => gradePolicyMock(...a) },
 }));
 
+import { FIELD_HELP } from "./policy-field-help";
 import {
-  FIELD_HELP,
   POLICY_TEMPLATES,
   PolicyPanel,
   templateText,
@@ -148,7 +148,8 @@ describe("PolicyPanel — helper rail", () => {
   // This is the one surviving surface that describes the three modes — each
   // card states what actually happens, not the mode name — so the canon
   // strings (ui-batch2-mock.md D33 + D8) pin here.
-  it("first_use_approval states what each mode does, and bounds the hold (D33 + D8)", () => {
+  it("first_use_approval states what each mode does, and bounds the hold", () => {
+    // ticket: D33 + D8
     const v = FIELD_HELP.first_use_approval.values;
     expect(v).toContain(
       "Default-deny. A new host is refused and raised for your review — approve it once and a retry gets through.",

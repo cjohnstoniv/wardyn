@@ -166,7 +166,7 @@ func TestProviderSignInAWSLaunch(t *testing.T) {
 	site := credentialSite(ssoProvider())
 	p := site.ModelProviders.Providers[0]
 	srv, _, audit, _ := signInFixture(t, nil, site)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	code, body := signIn(t, srv, member, p.ID)
 	if code != http.StatusOK {
 		t.Fatalf("sign-in = %d %s, want 200", code, body)
@@ -192,7 +192,7 @@ func TestProviderSignInAWSModel(t *testing.T) {
 		modelA = "arn:aws:bedrock:us-east-1:111122223333:application-inference-profile/claude"
 		modelB = "arn:aws:bedrock:us-east-1:444455556666:application-inference-profile/codex"
 	)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	provider := func(pinned bool, hs ...types.ProviderHarness) types.ModelProvider {
 		p := ssoProvider()
 		if !pinned {
@@ -239,7 +239,7 @@ func TestProviderSignInRefusals(t *testing.T) {
 	off := subProvider("claude-off")
 	off.Disabled = true
 	site := credentialSite(ssoProvider(), subProvider("claude"), keyProvider("anthropic", "claude-code"), noPortal, off)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	for _, tc := range []struct {
 		name string
@@ -320,7 +320,7 @@ func providerSSOBody(p types.ModelProvider, region string) string {
 	b, _ := json.Marshal(map[string]any{
 		"access_token": "aws-sso-provider-access-token", "refresh_token": "aws-sso-provider-refresh",
 		"start_url": p.Bedrock.SSOStartURL, "region": region,
-		"account_id": p.Bedrock.SSOAccountID, "role_name": p.Bedrock.SSORoleName, "expires_at": "2100-01-01T00:00:00Z",
+		"account_id": p.Bedrock.SSOAccountID, "role_name": p.Bedrock.SSORoleName, "expires_at": time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
 	})
 	return string(b)
 }
@@ -402,7 +402,7 @@ func TestProviderSignInClaudeCapture(t *testing.T) {
 	const token = "sk-ant-oat01-member-own-claude-sign-in"
 	site := credentialSite(subProvider("claude"), subProvider("claude-team"), ssoProvider())
 	p := site.ModelProviders.Providers[0]
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	capture := func(t *testing.T, srv *Server, sess *http.Cookie, id string, runID uuid.UUID, tok string) (int, string) {
 		t.Helper()
 		w := doSSO(t, srv, http.MethodPut, "/api/v1/model-providers/"+id+"/sign-in", sess,
@@ -446,7 +446,7 @@ func TestProviderSignInClaudeCapture(t *testing.T) {
 	})
 
 	t.Run("refused", func(t *testing.T) {
-		other := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleMember)
+		other := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleUser)
 		for _, tc := range []struct {
 			name string
 			do   func(*testing.T, *Server, *signInStore, uuid.UUID) (int, string)

@@ -155,6 +155,29 @@ func TestProviderBedrockDispatch(t *testing.T) {
 		}
 	})
 
+	// #504 on a provider run: the create door grades a Bedrock provider's run
+	// WITH its credential (runProviderChoice.modelCredential), so dispatch's
+	// bedrockCredGradeHolds lets it through; graded without one, it would not.
+	t.Run("bearer: graded as the create door grades it, the run dispatches", func(t *testing.T) {
+		p := brBearerProvider()
+		h, st, _ := brHarness(t, p)
+		grade := bedrockCredGradedAs(runProviderChoice{provider: p, chosen: true}.modelCredential())
+		if grade.host != providerBedrockRuntimeHost(p) {
+			t.Fatalf("graded host = %q, want the provider's %q", grade.host, providerBedrockRuntimeHost(p))
+		}
+		_, ok := h.srv.resolveLLMInjections(context.Background(), st.run, dispatchParams{},
+			&types.RunPolicySpec{}, map[string]string{}, nil, "", artifactRedirectPlan{}, false, st.site, true, false, grade)
+		if !ok {
+			t.Fatalf("a Bedrock provider run graded with its credential was refused: %q", st.failed)
+		}
+		h, st, _ = brHarness(t, p)
+		if _, ok := h.srv.resolveLLMInjections(context.Background(), st.run, dispatchParams{},
+			&types.RunPolicySpec{}, map[string]string{}, nil, "", artifactRedirectPlan{}, false, st.site, true, false,
+			bedrockCredGrade{graded: true}); ok {
+			t.Fatal("a Bedrock provider run graded WITHOUT its credential dispatched")
+		}
+	})
+
 	t.Run("sso: the owner's own session, never the roster's", func(t *testing.T) {
 		p := brSSOProvider()
 		h, st, _ := brHarness(t, p)
