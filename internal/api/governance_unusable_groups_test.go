@@ -38,7 +38,7 @@ func TestCeilingResolvesOnTheAnswerableIdentityOnly(t *testing.T) {
 	t.Run("the unusable-groups resolve asks on users alone", func(t *testing.T) {
 		st := &driveStore{}
 		srv := driveServer(st)
-		if _, err := srv.ceilingWithUnusableGroups(context.Background(), users, governanceCeiling{}); err != nil {
+		if _, err := srv.ceilingWithUnusableGroups(context.Background(), users, "", governanceCeiling{}); err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
 		if len(st.sawGovUsers) == 0 {

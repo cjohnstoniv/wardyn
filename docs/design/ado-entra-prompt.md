@@ -25,7 +25,7 @@ states side by side, so there is no clickable prototype); `mock.css` is the work
 round's stylesheet verbatim plus four listed idioms. Frozen strings: §7 below. No TS copy module
 exists yet. The implementation stage creates `ui/src/app/lib/ado-entra-copy.ts` **from §7 verbatim**;
 every product string in the mock matches §7 byte-for-byte (checked mechanically, see §7's freeze note), and §7.2 onwards is exactly two columns,
-`Key` and `String`, so `parseFrozenTables()` clones over it the way `user-drives-copy.test.ts` does.
+`Key` and `String`, so `parseFrozenTables()` (now shared: `ui/src/app/lib/copy-doc-parity.ts`) clones over it the way `user-drives-copy.test.ts` does.
 
 ---
 
@@ -584,7 +584,8 @@ separate connect. That is a second fact on the same row, not a seventh state (§
 | `CONNECT_CONSENT_BODY` | Microsoft may ask you to allow it once. What you allow is what Wardyn is able to ask Azure DevOps for at all. What any one run may actually do is smaller, and Wardyn holds it there: |
 | `CONNECT_APP_NOTE(app)` | The application asking is {app} — the same one you signed in to this console with. You can withdraw this at any time from your Microsoft account's My Apps page; doing so stops your runs reaching Azure DevOps. |
 | `CONNECT_CTA` | Continue to Microsoft |
-| `CONNECT_POPUP_BLOCKED` | Your browser blocked the popup. |
+| `CONNECT_POPUP_BLOCKED` | Your browser blocked the connect popup. |
+| `CONNECT_POPUP_OPEN` | Open Azure DevOps sign-in |
 | `GROUP_STARTS_WITH` | Starts with |
 | `GROUP_CAN_ASK` | Can ask you for |
 | `GROUP_NEVER` | Never |
@@ -900,7 +901,9 @@ not only in a lane's commit message. It is not a copy decision and this document
 10. **`CONNECT_POPUP_BLOCKED` was added to §7.5 after the freeze** (implementation review, #386): a
     popup a browser refuses to open needs a plain-link fallback wherever CONNECT_CTA's popup can be
     blocked, and the fallback line was shipping as three copies of hand-typed, unfrozen text before
-    this row existed. One sentence, approved at the same gate as the rest of §7.5.
+    this row existed. One sentence, approved at the same gate as the rest of §7.5. The sign-in
+    progress packet (#628) redrew that fallback as a sentence and a button: `CONNECT_POPUP_BLOCKED`
+    now names the connect popup, and `CONNECT_POPUP_OPEN` is the fallback's own label everywhere.
 
 Not drawn, deliberately: a second forge, a second identity provider, multi-party approval, a
 per-capability application registration, device code, a "tell my admin" action on the above-ceiling

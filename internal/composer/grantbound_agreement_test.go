@@ -158,7 +158,7 @@ func TestCeilingGrantsCoveringIsTheIdentityAxis(t *testing.T) {
 	}
 }
 
-// ─── THE TWO DOMINATION AXES A MUTATION COULD DELETE UNSEEN ──────────────────
+// The two domination axes a mutation could delete unseen
 //
 // grantDominatedBy asks three questions, and clampGrants' whole shape turns on
 // the answer: when ONE covering ceiling grant dominates the proposal the clamp
@@ -285,7 +285,7 @@ func TestNormalizeClampTTLReadsEveryNonPositiveAsTheMaximum(t *testing.T) {
 }
 
 // TestClampApprovalAxisThroughTheExportedClamp runs the approval shape through
-// Clamp itself, the entry point boundMemberSpec calls, so the axis is pinned at
+// Clamp itself, the entry point boundUserSpec calls, so the axis is pinned at
 // the boundary a caller actually reaches and not only at the helper.
 func TestClampApprovalAxisThroughTheExportedClamp(t *testing.T) {
 	ceiling := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{

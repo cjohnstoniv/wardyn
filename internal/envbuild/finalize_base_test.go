@@ -164,8 +164,8 @@ func TestBuild_PullsBaseItselfSoTheDaemonCannotRePullPastThePreflight(t *testing
 		t.Fatalf("Build: %v", err)
 	}
 	// The pushed base is still fetched fresh, from THIS build's own per-build
-	// push ref (W20-record-image-2: a bare/shared ref would let a concurrent
-	// build's push resolve here instead — see TestBuild_ConcurrentBuildsUsePerBuildPushRef).
+	// push ref: a bare/shared ref would let a concurrent build's push resolve
+	// here instead — see TestBuild_ConcurrentBuildsUsePerBuildPushRef.
 	if len(f.pulledRefs) == 0 {
 		t.Fatal("finalize did not pull the freshly pushed base")
 	}
@@ -193,14 +193,15 @@ func TestFinalizeBase_FailsWhenToolsDirMissing(t *testing.T) {
 	}
 }
 
-// TestFinalizeBase_AppliesOwnDeadline is W20-W20-record-image-4:
-// runBuildAndFinalize (the devcontainer-build path) always bounds its work
-// with BuildTimeout/defaultBuildTimeout; FinalizeBase (the BYOI-wrap path)
-// used to run under whatever the caller's ctx carried — nothing at all for a
-// caller that detaches from request cancellation (context.WithoutCancel,
-// e.g. launchRecordRun). Called with context.Background() (no deadline) and
-// a small BuildTimeout, FinalizeBase must still apply ITS OWN bound: the
-// underlying docker call must observe a ctx with a deadline.
+// TestFinalizeBase_AppliesOwnDeadline: runBuildAndFinalize (the
+// devcontainer-build path) always bounds its work with
+// BuildTimeout/defaultBuildTimeout, and FinalizeBase (the BYOI-wrap path)
+// must too, not run under whatever the caller's ctx carries — nothing at all
+// for a caller that detaches from request cancellation
+// (context.WithoutCancel, e.g. launchRecordRun). Called with
+// context.Background() (no deadline) and a small BuildTimeout, FinalizeBase
+// must still apply its own bound: the underlying docker call must observe a
+// ctx with a deadline.
 func TestFinalizeBase_AppliesOwnDeadline(t *testing.T) {
 	f := newFakeEnvbuilderDocker()
 	f.imagesPresent["ubuntu:24.04"] = true

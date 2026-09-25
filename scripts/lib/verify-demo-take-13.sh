@@ -60,9 +60,9 @@ else
   # 3 · beat 5: every connection attributed to the run's owner. sshAuth is
   # owner-only, so a success under any other actor would mean the gateway let
   # somebody else in — the opposite of what the closing line says.
-  N="$(v13q 'select(.action == "ssh.auth" and .outcome == "success")')"
-  M="$(v13q "select(.action == \"ssh.auth\" and .outcome == \"success\" and .actor == \"${V13_OWNER}\")")"
-  [[ "${N}" -ge 1 && "${N}" == "${M}" ]] && ok "all ${N} ssh.auth successes attributed to the run's owner (${V13_OWNER})" \
-    || bad "${N} ssh.auth success(es), ${M} of them the run's owner (${V13_OWNER}) — a connection this video does not account for"
+  N="$(v13q 'select(.action == "ssh.authenticate" and .outcome == "success")')"
+  M="$(v13q "select(.action == \"ssh.authenticate\" and .outcome == \"success\" and .actor == \"${V13_OWNER}\")")"
+  [[ "${N}" -ge 1 && "${N}" == "${M}" ]] && ok "all ${N} ssh.authenticate successes attributed to the run's owner (${V13_OWNER})" \
+    || bad "${N} ssh.authenticate success(es), ${M} of them the run's owner (${V13_OWNER}) — a connection this video does not account for"
 fi
 }

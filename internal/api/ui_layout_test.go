@@ -173,8 +173,8 @@ func TestRunLayoutREST_UnknownWidgetIDRejected(t *testing.T) {
 // visible to principal B.
 func TestRunLayoutREST_ScopedToOwnPrincipal(t *testing.T) {
 	srv, _ := runLayoutTestServer(t)
-	alice := ssoSession(t, "alice-sub", "alice@example.com", oidc.RoleMember)
-	bob := ssoSession(t, "bob-sub", "bob@example.com", oidc.RoleMember)
+	alice := ssoSession(t, "alice-sub", "alice@example.com", oidc.RoleUser)
+	bob := ssoSession(t, "bob-sub", "bob@example.com", oidc.RoleUser)
 
 	body := `{"preset":"live","layout":[{"widget":"identity","x":0,"y":0,"w":12,"h":4}]}`
 	w := doSSO(t, srv, http.MethodPut, "/api/v1/me/run-layout", alice, body)

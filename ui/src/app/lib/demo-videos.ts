@@ -81,8 +81,9 @@ export const DEFAULT_DEMO_VIDEO_BASE_URL = "https://github.com/cjohnstoniv/wardy
 // null tag = not recorded yet — never build a URL for a release that doesn't
 // exist, mirror configured or not.
 //
-// `base` is /healthz's demo_video_base_url (use-demo-video-base-url.ts's
-// hook) — an air-gapped deployment's operator-run mirror. Defaults to
+// `base` is /healthz's demo_video_base_url (operator-context.tsx's
+// useDemoVideoBaseUrl hook) — an air-gapped deployment's operator-run
+// mirror. Defaults to
 // DEFAULT_DEMO_VIDEO_BASE_URL so every existing caller (and this file's own
 // tests) that never passes one keeps building the exact same GitHub URL as
 // before.

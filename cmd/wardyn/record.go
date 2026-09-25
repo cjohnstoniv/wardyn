@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -39,9 +40,9 @@ func recordCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if synthJSON {
-				return emitJSON(p)
+				return emitJSON(cmd.OutOrStdout(), p)
 			}
-			printProfile(p)
+			printProfile(cmd.OutOrStdout(), p)
 			return nil
 		},
 	}
@@ -67,11 +68,11 @@ func recordCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if saveJSON {
-				return emitJSON(pol)
+				return emitJSON(cmd.OutOrStdout(), pol)
 			}
-			printProfile(p)
-			fmt.Printf("\nsaved sandbox profile as policy %q (id %s)\n", pol.Name, pol.ID)
-			fmt.Printf("  launch an enforced run with: wardyn run --agent <agent> --policy %s\n", pol.ID)
+			printProfile(cmd.OutOrStdout(), p)
+			fmt.Fprintf(cmd.OutOrStdout(), "\nsaved sandbox profile as policy %q (id %s)\n", pol.Name, pol.ID)
+			fmt.Fprintf(cmd.OutOrStdout(), "  launch an enforced run with: wardyn run --agent <agent> --policy %s\n", pol.ID)
 			return nil
 		},
 	}
@@ -99,17 +100,17 @@ func recordCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if taskJSON {
-				return emitJSON(resp)
+				return emitJSON(cmd.OutOrStdout(), resp)
 			}
-			fmt.Printf("record run %s launched (task %s, mode %s)\n", resp.RecordRunID, resp.TaskKey, resp.Mode)
+			fmt.Fprintf(cmd.OutOrStdout(), "record run %s launched (task %s, mode %s)\n", resp.RecordRunID, resp.TaskKey, resp.Mode)
 			if resp.Detail != "" {
-				fmt.Println("  " + resp.Detail)
+				fmt.Fprintln(cmd.OutOrStdout(), "  "+resp.Detail)
 			}
 			for _, w := range resp.Warnings {
-				fmt.Println("  warning: " + w)
+				fmt.Fprintln(cmd.OutOrStdout(), "  warning: "+w)
 			}
-			fmt.Println("  when it completes: `wardyn record synthesize " + resp.RecordRunID + "` for a task profile,")
-			fmt.Println("  or promote the observed egress from the console's import panel")
+			fmt.Fprintln(cmd.OutOrStdout(), "  when it completes: `wardyn record synthesize "+resp.RecordRunID+"` for a task profile,")
+			fmt.Fprintln(cmd.OutOrStdout(), "  or promote the observed egress from the console's import panel")
 			return nil
 		},
 	}
@@ -119,27 +120,27 @@ func recordCmd(client clientFn) *cobra.Command {
 	return subcommandGroup(cmd)
 }
 
-func printProfile(p sdk.ProfileResult) {
-	fmt.Printf("Synthesized sandbox profile (overall risk: %s)\n", orDash(p.OverallRisk))
+func printProfile(w io.Writer, p sdk.ProfileResult) {
+	fmt.Fprintf(w, "Synthesized sandbox profile (overall risk: %s)\n", orDash(p.OverallRisk))
 	spec := p.Proposed.InlinePolicy
-	fmt.Printf("  min confinement: %s   first-use approval: %s   allow-all egress: %v\n",
+	fmt.Fprintf(w, "  min confinement: %s   first-use approval: %s   allow-all egress: %v\n",
 		orDash(string(spec.MinConfinementClass)), orDash(string(spec.FirstUseApproval.Normalize())), spec.AllowAllEgress)
-	fmt.Printf("  allowed domains (%d): %v\n", len(spec.AllowedDomains), spec.AllowedDomains)
-	fmt.Printf("  eligible grants: %d\n", len(spec.EligibleGrants))
+	fmt.Fprintf(w, "  allowed domains (%d): %v\n", len(spec.AllowedDomains), spec.AllowedDomains)
+	fmt.Fprintf(w, "  eligible grants: %d\n", len(spec.EligibleGrants))
 	if len(p.Observations.Domains) > 0 {
-		fmt.Println("  observed domains:")
+		fmt.Fprintln(w, "  observed domains:")
 		for _, d := range p.Observations.Domains {
-			fmt.Printf("    - %s %v\n", d.Host, d.Methods)
+			fmt.Fprintf(w, "    - %s %v\n", d.Host, d.Methods)
 		}
 	}
 	if len(p.Observations.Anomalies) > 0 {
-		fmt.Printf("  ANOMALIES (%d):\n", len(p.Observations.Anomalies))
+		fmt.Fprintf(w, "  ANOMALIES (%d):\n", len(p.Observations.Anomalies))
 		for _, a := range p.Observations.Anomalies {
-			fmt.Printf("    ! %s\n", a)
+			fmt.Fprintf(w, "    ! %s\n", a)
 		}
 	}
-	for _, w := range p.Warnings {
-		fmt.Printf("  warning: %s\n", w)
+	for _, warn := range p.Warnings {
+		fmt.Fprintf(w, "  warning: %s\n", warn)
 	}
 }
 

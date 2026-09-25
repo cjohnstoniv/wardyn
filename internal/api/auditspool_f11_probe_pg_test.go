@@ -1,16 +1,15 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F11 PROBE — destination: internal/api/auditspool_f11_probe_pg_test.go
-//
 // The spool → drain → store hop of the append-only claim: a spooled line can
 // carry ANY prev_hash/row_hash (the JSON tags exist on types.AuditEvent) and
 // even a "seq", yet what lands in audit_events must be chained by Postgres at
 // the CURRENT head — the INSERT statement never names those columns and the
 // 0047 BEFORE INSERT trigger overwrites them unconditionally. Guarded by
-// WARDYN_TEST_PG (db.Connect + db.Migrate, the pgHarness convention).
-//
-// Expected result on feat/v0.7-profiles @ fa910735: GREEN (pins the claim).
+// WARDYN_TEST_PG, on its own throwaway database (throwawayPGPool): this test
+// verifies the WHOLE chain from the top (VerifyAuditChain), so a concurrent
+// package's audit_events rows in the shared default database — including
+// ones another test deliberately breaks — must never be visible to it.
 package api
 
 import (
@@ -23,24 +22,15 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
-func TestPG_ProbeF11_SpoolReplayCannotForgeChain(t *testing.T) {
-	dsn := os.Getenv("WARDYN_TEST_PG")
-	if dsn == "" {
-		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed spool replay probe")
-	}
+func TestPG_AuditSpool_ReplayCannotForgeChain(t *testing.T) {
+	// ticket: F11
+	testfloor.Mark(t, "pg")
 	ctx := context.Background()
-	pool, err := db.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	if err := db.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	pool := throwawayPGPool(t)
 
 	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
 	sp, err := NewAuditSpool(path)

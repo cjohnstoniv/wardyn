@@ -17,7 +17,7 @@
 # api_key grant lets the run fall through to the managed subscription, injected
 # proxy-side — the sandbox only ever holds an inert sentinel (verify:
 # `docker exec wardyn-agent-<id> env | grep -i key`), and audit logs
-# `run.llm.subscription_inject`.
+# `run.subscription.inject`.
 
 # Anthropic egress is what a subscription run needs. Both forms are accepted by the
 # reachability check; the managed token is injected only to api.anthropic.com.

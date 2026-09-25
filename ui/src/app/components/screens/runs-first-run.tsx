@@ -157,7 +157,7 @@ export function RunsFirstRun({
                 ) : (
                   <>
                     Not connected — agent runs need one. Governed commands run without one.{" "}
-                    <Link to="/settings" className="font-medium text-primary hover:underline">
+                    <Link to="/admin/settings" className="font-medium text-primary hover:underline">
                       Connect →
                     </Link>
                   </>
@@ -178,8 +178,10 @@ export function RunsFirstRun({
 
         {/* Secondary on purpose (plain text link, not a button) — the guided
             funnel is an alternative path for someone who wants the walkthrough,
-            never competing with "New run" for primary attention. */}
-        <Link to="/setup" className="inline-block text-xs text-muted-foreground hover:text-foreground hover:underline">
+            never competing with "New run" for primary attention. The funnel is
+            the Admin view's (M-6): plain /setup is the User view's Getting
+            Started. */}
+        <Link to="/admin/setup" className="inline-block text-xs text-muted-foreground hover:text-foreground hover:underline">
           Or take the guided tour →
         </Link>
       </div>

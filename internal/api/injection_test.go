@@ -7,7 +7,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -57,11 +60,12 @@ func (s *memSecrets) Put(_ context.Context, name string, v []byte) error {
 	s.owned[s.owner][name] = v
 	return nil
 }
-func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
+func (s *memSecrets) Get(ctx context.Context, name string) ([]byte, error) {
 	memSecretsMu.Lock()
 	defer memSecretsMu.Unlock()
 	if s.owner != "" {
 		if v, ok := s.owned[s.owner][name]; ok {
+			secretstore.NoteRow(ctx, secretstore.Row{Store: "mem", Owner: s.owner, Name: name, Ref: "mem:" + s.owner + "/" + name})
 			return v, nil
 		}
 		// Fall through to the operator row below — the owner-view fallback.
@@ -72,6 +76,7 @@ func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
 		// so callers can tell "never stored" from a backend failure).
 		return nil, secretstore.ErrNotFound
 	}
+	secretstore.NoteRow(ctx, secretstore.Row{Store: "mem", Name: name, Ref: "mem:/" + name})
 	return v, nil
 }
 func (s *memSecrets) Delete(_ context.Context, name string) error {
@@ -94,6 +99,38 @@ func (s *memSecrets) List(_ context.Context) ([]string, error) {
 	var out []string
 	for k := range src {
 		out = append(out, k)
+	}
+	return out, nil
+}
+
+func (s *memSecrets) DeleteEverywhere(_ context.Context, names []string) (int, error) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
+	n := 0
+	for _, rows := range append([]map[string][]byte{s.m}, slices.Collect(maps.Values(s.owned))...) {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				delete(rows, name)
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+func (s *memSecrets) Holders(_ context.Context, names []string) (map[string][]string, error) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
+	out := map[string][]string{}
+	for _, name := range names {
+		if _, ok := s.m[name]; ok {
+			out[name] = append(out[name], "")
+		}
+		for owner, rows := range s.owned {
+			if _, ok := rows[name]; ok {
+				out[name] = append(out[name], owner)
+			}
+		}
 	}
 	return out, nil
 }
@@ -184,8 +221,8 @@ func TestInternalInjection_RejectsSplittingHeaderName(t *testing.T) {
 				t.Errorf("header %q: secret was read despite the refusal", bad)
 			}
 		}
-		if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "invalid-header-name") {
-			t.Errorf("header %q: audit data = %s, want the invalid-header-name reason", bad, ev.Data)
+		if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "invalid_header_name") {
+			t.Errorf("header %q: audit data = %s, want the invalid_header_name reason", bad, ev.Data)
 		}
 	}
 }
@@ -212,10 +249,84 @@ func TestInternalInjection_FailsClosed(t *testing.T) {
 	if rr.Code != http.StatusFailedDependency || !strings.Contains(rr.Body.String(), "wardyn secret set") {
 		t.Fatalf("missing secret: status = %d body=%s", rr.Code, rr.Body.String())
 	}
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"not_found"`) {
+		t.Fatalf("missing secret: audit data = %s, want the not_found reason", ev.Data)
+	}
 
 	// No auth => 401.
 	if rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), "", ""); rr.Code != http.StatusUnauthorized {
 		t.Fatalf("no auth: status = %d, want 401", rr.Code)
+	}
+}
+
+// unavailableSecrets is a store whose external backend cannot answer.
+type unavailableSecrets struct{ *memSecrets }
+
+func (unavailableSecrets) Get(ctx context.Context, name string) ([]byte, error) {
+	// A real store names the row before it opens the value, so the failure is
+	// recorded against it.
+	secretstore.NoteRow(ctx, secretstore.Row{Store: "vaultkv", Name: name, Ref: "vaultkv:ns1/operator/" + name})
+	return nil, fmt.Errorf("vault GET wardyn/data/x: 503: %w", secretstore.ErrUnavailable)
+}
+func (u unavailableSecrets) For(string) secretstore.Store { return u }
+
+// A store that did not answer is a distinct 503, never the 424 that means the
+// credential is gone (design §2.3a.4): the two must not be confused by the
+// proxy or the person reading the run's failure.
+func TestInternalInjection_StoreUnavailableIsDistinctFromMissing(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	h.srv.cfg.Secrets = unavailableSecrets{sec}
+	h.srv.router = h.srv.routes()
+	token := h.mintRunToken(t, uuid.New())
+	h.broker.minted = broker.Minted{
+		Kind:      types.GrantAPIKey,
+		JTI:       "j3",
+		Injection: &egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", SecretName: "anthropic-api-key"},
+	}
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "couldn't reach the service") {
+		t.Fatalf("store unavailable: status = %d body=%s, want 503", rr.Code, rr.Body.String())
+	}
+	// Wardyn's own audit tells the outage apart too, not only the status, and
+	// still says why the read happened, for whom, and which row it opened.
+	ev := lastAuditEvent(t, h.audit.events, "secret.read")
+	var d map[string]any
+	if err := json.Unmarshal(ev.Data, &d); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Outcome != "failure" || d["reason"] != "store_unavailable" || d["purpose"] != "proxy-injection" ||
+		d["owner"] != "alice@example.com" || d["store"] != "vaultkv" || d["row_owner"] != "" ||
+		d["ref"] != "vaultkv:ns1/operator/anthropic-api-key" {
+		t.Fatalf("store unavailable: audit %s %s, want a failure with reason store_unavailable, purpose proxy-injection, owner alice@example.com and the vaultkv row", ev.Outcome, ev.Data)
+	}
+}
+
+type refusedSecrets struct{ *memSecrets }
+
+func (refusedSecrets) Get(context.Context, string) ([]byte, error) {
+	return nil, fmt.Errorf("refused: Vault no longer holds this credential at wardyn/ns1/operator/x")
+}
+func (u refusedSecrets) For(string) secretstore.Store { return u }
+
+// A credential whose row exists but whose value the store refused is not
+// reported as missing: the "set it" hint would overwrite what is left of it.
+func TestInternalInjection_RefusedIsNotReportedAsMissing(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	h.srv.cfg.Secrets = refusedSecrets{sec}
+	h.srv.router = h.srv.routes()
+	token := h.mintRunToken(t, uuid.New())
+	h.broker.minted = broker.Minted{
+		Kind:      types.GrantAPIKey,
+		JTI:       "j4",
+		Injection: &egress.InjectionRule{Host: "api.anthropic.com", Header: "x-api-key", SecretName: "anthropic-api-key"},
+	}
+	rr := do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), token, "")
+	body := rr.Body.String()
+	if rr.Code != http.StatusFailedDependency || !strings.Contains(body, "exists but could not be used") || strings.Contains(body, "wardyn secret set") {
+		t.Fatalf("refused: status = %d body=%s, want 424 saying the credential exists but was refused", rr.Code, body)
+	}
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"refused"`) {
+		t.Fatalf("refused: audit data = %s, want the refused reason", ev.Data)
 	}
 }
 
@@ -290,8 +401,8 @@ func TestSecretsAPI_RejectsShortSecret(t *testing.T) {
 
 // TestSecretsAPI_ListExcludesReserved asserts the list endpoint NEVER surfaces a
 // reserved platform-internal secret name even when the underlying store holds
-// one (they back identity/session handling and are not user-managed). This was a
-// real leak: the reserved names were previously listable.
+// one (they back identity/session handling and are not user-managed, so listing
+// them would leak them).
 func TestSecretsAPI_ListExcludesReserved(t *testing.T) {
 	h, sec := newSecretsHarness(t)
 	// Seed a reserved key directly in the store (bypassing the write API, which
@@ -473,11 +584,13 @@ func (p liveOAuthProvider) Peek() (subscription.Token, error) {
 }
 
 // sentinelHarness wires a harness whose sentinel resolve WOULD succeed: posture
-// ok, both providers live, a mask registry to observe. Only the injection rule
-// differs per case.
+// ok, both providers live, no provider block, a mask registry to observe. Only
+// the injection rule differs per case.
 func sentinelHarness(t *testing.T, tok liveOAuthProvider) *harness {
 	t.Helper()
 	h, _ := newSecretsHarness(t)
+	h.srv.cfg.Store = &bearerGuardStore{}
+	h.srv.router = h.srv.routes()
 	h.srv.cfg.SubscriptionPostureOK = true
 	h.srv.cfg.SubscriptionPostureReason = ""
 	h.srv.cfg.SubscriptionToken = tok
@@ -517,8 +630,8 @@ func TestInternalInjection_RefusesSentinelForNonAnthropicHost(t *testing.T) {
 					t.Fatalf("%s -> host %q: a successful secret.read was recorded for a refused injection", sentinel, host)
 				}
 			}
-			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "oauth-host-not-anthropic") {
-				t.Fatalf("%s -> host %q: audit data = %s, want the oauth-host-not-anthropic reason", sentinel, host, ev.Data)
+			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "oauth_host_not_anthropic") {
+				t.Fatalf("%s -> host %q: audit data = %s, want the oauth_host_not_anthropic reason", sentinel, host, ev.Data)
 			}
 			// The token must not have been resolved (provider.Current rotates the
 			// operator's own resident credentials) nor registered for masking.

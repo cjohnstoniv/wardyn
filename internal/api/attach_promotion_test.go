@@ -246,7 +246,7 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 		srv, _, fr, audit, run := holderTestServer(t)
 		ts := httptest.NewServer(panicFails(t, srv.Handler()))
 		defer ts.Close()
-		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 
 		// Somebody else is driving the run's owner's terminal...
 		c1 := dialAttach(t, ts, srv, run.ID, holderSecond, "")
@@ -264,6 +264,19 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/attach/takeover", owner, "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("takeover: code = %d, body = %s", w.Code, w.Body.String())
+		}
+		// The UI's doTakeover (attach-terminal.tsx) branches on this field: it
+		// must NOT evict-then-reconnect its own socket when the server already
+		// promoted it in place, or it closes the very socket just promoted and
+		// hands the writer slot to the next queued observer by FIFO (#507).
+		var takeoverBody struct {
+			Promoted bool `json:"promoted"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &takeoverBody); err != nil {
+			t.Fatalf("decode takeover body %q: %v", w.Body.String(), err)
+		}
+		if !takeoverBody.Promoted {
+			t.Fatalf("takeover body promoted = %v, want true (the taker had a queued observer socket)", takeoverBody.Promoted)
 		}
 
 		m := readNextAttachMode(t, c2)
@@ -320,6 +333,113 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 		}
 		if ev := findAudit(audit.snapshot(), run.ID, "session.promote", "success"); ev != nil {
 			t.Errorf("a take-over with no observer of its own audited a promotion: %s", ev.Data)
+		}
+	})
+
+	// The three-party case the two above cannot tell apart from plain FIFO: the
+	// taker is queued BEHIND a bystander, so "promote the oldest observer" and
+	// "promote the taker's own socket" pick different sockets. Only the second
+	// is correct.
+	t.Run("a later-queued taker is promoted over an earlier-queued bystander", func(t *testing.T) {
+		const holderBystander = "carol@example.com"
+		srv, _, fr, audit, run := holderTestServer(t)
+		ts := httptest.NewServer(panicFails(t, srv.Handler()))
+		defer ts.Close()
+		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
+
+		// W drives...
+		cW := dialAttach(t, ts, srv, run.ID, holderSecond, "")
+		if m := readAttachMode(t, cW); m.ReadOnly {
+			t.Fatal("the first client was told it is read-only")
+		}
+		// ...B queues first, T second.
+		cB := dialAttach(t, ts, srv, run.ID, holderBystander, "")
+		if m := readAttachMode(t, cB); !m.ReadOnly {
+			t.Fatal("the bystander was admitted writable")
+		}
+		waitFor(t, "the bystander's session to open", func() bool { return fr.session(1) != nil })
+		bystander := fr.session(1)
+		cT := dialAttach(t, ts, srv, run.ID, holderOwner, "")
+		if m := readAttachMode(t, cT); !m.ReadOnly {
+			t.Fatal("the taker was admitted writable")
+		}
+		waitFor(t, "the taker's session to open", func() bool { return fr.session(2) != nil })
+		taker := fr.session(2)
+
+		// Every attach-mode frame B receives from here on. The reader also lets
+		// the ping barrier below complete.
+		bModes := make(chan attachModeMsg, 8)
+		bDone := make(chan struct{})
+		go func() {
+			defer close(bDone)
+			for {
+				typ, data, err := cB.Read(context.Background())
+				if err != nil {
+					return
+				}
+				var msg attachModeMsg
+				if typ == websocket.MessageText && json.Unmarshal(data, &msg) == nil && msg.Type == "attach-mode" {
+					select {
+					case bModes <- msg:
+					default:
+					}
+				}
+			}
+		}()
+
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/attach/takeover", owner, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("takeover: code = %d, body = %s", w.Code, w.Body.String())
+		}
+		var takeoverBody struct {
+			Promoted bool `json:"promoted"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &takeoverBody); err != nil {
+			t.Fatalf("decode takeover body %q: %v", w.Body.String(), err)
+		}
+		if !takeoverBody.Promoted {
+			t.Fatalf("takeover body promoted = false, want true (the taker had a queued observer socket)")
+		}
+
+		// T is promoted in place, on the socket it already had.
+		if m := readNextAttachMode(t, cT); m.ReadOnly || m.Holder == nil || m.Holder.Principal != holderOwner {
+			t.Fatalf("the taker's own socket was not promoted in place: read_only=%v holder=%+v", m.ReadOnly, m.Holder)
+		}
+		if got := srv.attachHolderFor(run.ID); got == nil || got.principal != holderOwner {
+			t.Fatalf("attachHolderFor = %+v, want the taker %s — not the older bystander", got, holderOwner)
+		}
+		wsWrite(t, cT, websocket.MessageBinary, []byte("mine now\r"))
+		waitFor(t, "the taker's keystrokes to reach the sandbox", func() bool { return taker.written() > 0 })
+
+		// B stays read-only: its keystroke is dropped (ping barrier: the server
+		// answers from the read loop that consumed it) and no promotion frame
+		// reached it.
+		wsWrite(t, cB, websocket.MessageBinary, []byte("not mine\r"))
+		wsPing(t, cB)
+		if n := bystander.written(); n != 0 {
+			t.Errorf("the bystander's keystrokes reached the sandbox (%d writes) — the take-over promoted it", n)
+		}
+		select {
+		case m := <-bModes:
+			t.Errorf("the bystander received an attach-mode frame after the take-over: %+v", m)
+		case <-bDone:
+			t.Error("the bystander's socket closed; a take-over must leave it an observer")
+		default:
+		}
+		if ev := waitForActorAudit(t, audit, run.ID, "session.promote", holderOwner); !strings.Contains(string(ev.Data), `"previous_holder":"`+holderSecond+`"`) {
+			t.Errorf("session.promote data = %s, want previous_holder %s", ev.Data, holderSecond)
+		}
+		for _, ev := range audit.snapshot() {
+			if ev.Action == "session.promote" && ev.Actor == holderBystander {
+				t.Errorf("the bystander was audited as promoted: %s", ev.Data)
+			}
+		}
+
+		// W learns why, on the close frame the UI matches.
+		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rcancel()
+		if _, _, err := cW.Read(rctx); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+			t.Fatalf("displaced close status = %v, want 1008", websocket.CloseStatus(err))
 		}
 	})
 }

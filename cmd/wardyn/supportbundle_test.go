@@ -26,7 +26,7 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// ─── redactSecrets: the test proving redaction (D11) ──────────────────────────
+// redactSecrets: the test proving redaction (D11)
 
 func TestRedactSecrets(t *testing.T) {
 	cases := []struct {
@@ -130,7 +130,7 @@ func TestRedactSecretsMultiLineDocument(t *testing.T) {
 	}
 }
 
-// ─── writeTarGz / gatherComposeConfig ──────────────────────────────────────────
+// writeTarGz / gatherComposeConfig
 
 func TestWriteTarGzRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -289,7 +289,7 @@ func TestGatherComposeConfigMissingFileReturnsNote(t *testing.T) {
 	}
 }
 
-// ─── gatherProxyDiagnostics: the corporate-proxy field-report triad ──────────
+// gatherProxyDiagnostics: the corporate-proxy field-report triad
 
 func TestGatherProxyDiagnostics(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +360,7 @@ func TestGatherProxyDiagnosticsUnreachableReturnsNote(t *testing.T) {
 	}
 }
 
-// ─── end-to-end: the CLI command wired through a fake control plane ───────────
+// end-to-end: the CLI command wired through a fake control plane
 
 func TestSupportBundleCmdEndToEnd(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -400,7 +400,7 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 	outPath := filepath.Join(dir, "bundle.tar.gz")
 	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
 		root.SetArgs([]string{"support-bundle", "--url", srv.URL, "--token", "tok",
-			"--out", outPath, "--compose-file", composePath})
+			"--output", outPath, "--compose-file", composePath})
 	})
 	if err != nil {
 		t.Fatalf("support-bundle returned error: %v; output=%s", err, out)
@@ -464,7 +464,33 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 	}
 }
 
-// ─── redactSecrets: the key names and value shapes the first pass missed ─────
+// TestSupportBundleCmd_OutputFlagRenamed pins #200's clean break: the flag is
+// spelled --output/-o, matching the rest of the CLI, and the old --out
+// spelling is gone with no alias (owner ruling 2026-09-22).
+func TestSupportBundleCmd_OutputFlagRenamed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "bundle.tar.gz")
+	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"support-bundle", "--url", srv.URL, "--token", "tok", "-o", outPath})
+	})
+	if err != nil {
+		t.Fatalf("support-bundle -o returned error: %v; output=%s", err, out)
+	}
+	if _, err := os.Stat(outPath); err != nil {
+		t.Errorf("support-bundle -o did not write %s: %v", outPath, err)
+	}
+
+	if err := execCmd(t, "support-bundle", "--url", srv.URL, "--token", "tok", "--out", outPath); err == nil {
+		t.Error("support-bundle --out succeeded, want an unknown-flag error (the old spelling has no alias)")
+	}
+}
+
+// redactSecrets: the key names and value shapes the first pass missed
 //
 // F070/F143/F166/F201. `support-bundle`'s own Long text promises "Never
 // includes a secret VALUE", and the bundle is gathered from `docker compose

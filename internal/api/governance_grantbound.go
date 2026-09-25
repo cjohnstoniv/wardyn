@@ -95,7 +95,7 @@ const (
 // profile-authoring surface writes a profile carrying an arbitrary grant
 // pairing, assigns it to themselves — their own ceiling IS their assigned
 // profile, since the resolver's operator short-circuit keys on the admin tier
-// they do not hold — and filterMemberGrants plus the dispatch injection then
+// they do not hold — and filterUserGrants plus the dispatch injection then
 // deliver any operator-stored secret into their own sandbox, with self-authored
 // egress to carry it out. A profile may narrow credential eligibility; it may
 // never mint it.
@@ -115,7 +115,7 @@ const (
 // Four axes, all in the narrowing direction: the pairing must be one the
 // deployment ceiling already lists — that axis is composer.CeilingGrantsCovering,
 // the SAME selection the runtime clamp bounds against and the same pairing rule
-// filterMemberGrants enforces, so a profile, a member and a dispatched run are
+// filterUserGrants enforces, so a profile, a member and a dispatched run are
 // bounded by one rule, not three that can drift; approval may be forced on,
 // never stripped;
 // TTL may be shortened, never lengthened (both sides normalized —
@@ -142,7 +142,7 @@ func governanceGrantsWithinCeiling(profile, ceiling []types.GrantSpec) error {
 func governanceGrantWithinCeiling(g types.GrantSpec, ceiling []types.GrantSpec) error {
 	// An UNDECODABLE profile scope is a malformed write, not a silent pass: the
 	// pairing cannot be computed, so nothing can be said about whether it is in
-	// the ceiling. Fail closed, exactly as filterMemberGrants does.
+	// the ceiling. Fail closed, exactly as filterUserGrants does.
 	host, secretRef, _, covered, derr := storedSecretGrantPairing(g)
 	if derr != nil {
 		return fmt.Errorf("eligible grant %q: invalid scope: %w", g.Kind, derr)

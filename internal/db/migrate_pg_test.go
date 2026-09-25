@@ -21,11 +21,13 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -83,21 +85,21 @@ func isConcurrentMigrateRace(err error) bool {
 	return false
 }
 
-// embeddedMigrationCount is the number of *.sql migrations bundled in the embed
-// FS; schema_migrations must track each exactly once after Migrate().
-func embeddedMigrationCount(t *testing.T) int {
+// embeddedMigrationNames is the *.sql filenames bundled in the embed FS;
+// schema_migrations must track each exactly once after Migrate().
+func embeddedMigrationNames(t *testing.T) []string {
 	t.Helper()
 	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
 	}
-	n := 0
+	var names []string
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			n++
+			names = append(names, e.Name())
 		}
 	}
-	return n
+	return names
 }
 
 // TestMigrateAppliesAndIsIdempotent proves the live-DB idempotency the Migrate()
@@ -109,54 +111,53 @@ func TestMigrateAppliesAndIsIdempotent(t *testing.T) {
 	pool := pgPool(t) // first Migrate() already ran
 	ctx := context.Background()
 
-	want := embeddedMigrationCount(t)
-	if want == 0 {
+	names := embeddedMigrationNames(t)
+	if len(names) == 0 {
 		t.Fatal("no embedded migrations; embed glob is broken")
 	}
 
-	// Every embedded migration must be tracked exactly once after the first run.
-	countRecorded := func() int {
+	// Compare the recorded SET with the embedded one, filename by filename, so a
+	// failure names the file: one Migrate did not record, or a recorded one that
+	// no embedded migration accounts for. A row count could only say "off by one"
+	// (#210). filename is the table's primary key, so no name can be recorded
+	// twice.
+	assertRecordedSetIsEmbeddedSet := func(when string) {
 		t.Helper()
-		var n int
-		if err := pool.QueryRow(ctx,
-			`SELECT COUNT(*) FROM schema_migrations`).Scan(&n); err != nil {
-			t.Fatalf("count schema_migrations: %v", err)
+		rows, err := pool.Query(ctx, `SELECT filename FROM schema_migrations ORDER BY filename`)
+		if err != nil {
+			t.Fatalf("read schema_migrations: %v", err)
 		}
-		return n
+		recorded, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatalf("read schema_migrations: %v", err)
+		}
+		for _, name := range names {
+			if !slices.Contains(recorded, name) {
+				t.Errorf("%s: %s is not recorded in schema_migrations", when, name)
+			}
+		}
+		for _, name := range recorded {
+			if !slices.Contains(names, name) {
+				t.Errorf("%s: schema_migrations records %s, which is not an embedded migration", when, name)
+			}
+		}
 	}
-	if got := countRecorded(); got != want {
-		t.Fatalf("schema_migrations rows after first Migrate = %d, want %d", got, want)
-	}
+	assertRecordedSetIsEmbeddedSet("after first Migrate")
 
-	// No filename is tracked more than once (filename is the PK; a dupe would
-	// mean a migration was applied twice).
-	var maxDupe int
-	if err := pool.QueryRow(ctx, `
-		SELECT COALESCE(MAX(c),0) FROM (
-			SELECT COUNT(*) AS c FROM schema_migrations GROUP BY filename
-		) g`).Scan(&maxDupe); err != nil {
-		t.Fatalf("dupe check: %v", err)
-	}
-	if maxDupe != 1 {
-		t.Errorf("a migration filename is tracked %d times; Migrate is not idempotent", maxDupe)
-	}
-
-	// Re-running Migrate() must be a clean no-op: same row count, no error.
+	// Re-running Migrate() must be a clean no-op: same recorded set, no error.
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("second Migrate (should be no-op): %v", err)
 	}
-	if got := countRecorded(); got != want {
-		t.Errorf("schema_migrations rows after second Migrate = %d, want %d (re-run must not add rows)", got, want)
-	}
+	assertRecordedSetIsEmbeddedSet("after second Migrate")
 }
 
-// TestMigrateAdvisoryLockSerializesBoots proves N5: Migrate() takes the
-// dedicated session-level advisory lock so a second, concurrent boot BLOCKS
-// until the first finishes rather than racing the migration loop. We simulate an
-// in-flight migration on "another boot" by holding the SAME advisory lock on a
-// separate connection, then assert a concurrent Migrate() blocks (returns a
-// deadline error) instead of completing. Pre-fix (no lock) Migrate() ignored the
-// held lock and returned nil immediately here.
+// TestMigrateAdvisoryLockSerializesBoots: Migrate() takes the dedicated
+// session-level advisory lock so a second, concurrent boot blocks until the
+// first finishes rather than racing the migration loop. We simulate an
+// in-flight migration on "another boot" by holding the same advisory lock on
+// a separate connection, then assert a concurrent Migrate() blocks (returns a
+// deadline error) instead of completing; without the lock it would return nil
+// immediately.
 func TestMigrateAdvisoryLockSerializesBoots(t *testing.T) {
 	pool := pgPool(t) // fully migrated; a lone Migrate() here is a clean no-op
 	ctx := context.Background()
@@ -216,7 +217,7 @@ func insertAgentRun(t *testing.T, pool *pgxpool.Pool, state string) (uuid.UUID, 
 func TestAgentRunStateCheckEnforcedLive(t *testing.T) {
 	pool := pgPool(t)
 
-	// ACCEPT: COMPLETED must be insertable (regression for the COMPLETED fix).
+	// Accept: COMPLETED must be insertable.
 	if _, err := insertAgentRun(t, pool, "COMPLETED"); err != nil {
 		t.Fatalf("INSERT agent_runs state=COMPLETED rejected by live CHECK: %v; "+
 			"the 0003 COMPLETED fix is not in effect on this DB", err)
@@ -290,8 +291,7 @@ func TestAuditEventsAppendOnlyEnforcedLive(t *testing.T) {
 		id := insertAuditEvent(t, pool)
 
 		// Issue a REAL TRUNCATE. The 0004 statement-level BEFORE TRUNCATE trigger
-		// must raise (TRUNCATE bypasses the 0001 row trigger). This is the direct
-		// regression for the TRUNCATE append-only gap.
+		// must raise (TRUNCATE bypasses the 0001 row trigger).
 		_, err := pool.Exec(ctx, `TRUNCATE TABLE audit_events`)
 		if err == nil {
 			t.Fatal("TRUNCATE audit_events was ACCEPTED; the 0004 BEFORE TRUNCATE guard is missing — " +
@@ -364,8 +364,7 @@ func TestMigrateRestoresADisabledChainTrigger(t *testing.T) {
 // ensureAuditTriggers. The chain trigger is restored because its migrations are
 // replayable; the append-only trigger is defined by 0001 (the whole initial
 // schema), so replaying it at boot to fix one trigger is a bigger blast radius
-// than refusing — but the process must NOT continue silently either, which is
-// what it used to do.
+// than refusing — but the process must not continue silently either.
 func TestMigrateRefusesWithoutTheAppendOnlyTrigger(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()
@@ -530,8 +529,14 @@ func TestMigrateKeepsAnAlwaysTriggerAcrossAnUpgrade(t *testing.T) {
 // on its owner's behalf would be its own surprise (an ALWAYS trigger fires under
 // session_replication_role = replica, which is exactly what a restore/replication
 // tool sets to load rows).
+//
+// Runs on its own throwaway schema (probeSchemaPool), not the lane's shared
+// default one: its precondition reads the shipped trigger state before the
+// test even starts, which a concurrent package hardening the SAME table in
+// the SAME database (WARDYN_TEST_PG is one DB for the whole `go test ./...`
+// run) would otherwise fail underneath it.
 func TestMigrateDoesNotHardenATriggerNobodyHardened(t *testing.T) {
-	pool := pgPool(t)
+	pool, _ := probeSchemaPool(t)
 	ctx := context.Background()
 	pending := chainTriggerMigrations(t)
 
@@ -552,7 +557,7 @@ func TestMigrateDoesNotHardenATriggerNobodyHardened(t *testing.T) {
 	}
 }
 
-// ─── the 0048-0054 upgrade set, applied over NON-EMPTY data ──────────────────
+// the 0048-0054 upgrade set, applied over non-empty data
 
 // partialSchemaPool migrates a throwaway schema up to (but NOT including)
 // upTo, and returns a pool pointed at it. It is probeSchemaPool's other half:
@@ -668,7 +673,7 @@ func TestPG_MigrateAppliesTheUpgradeSetOverNonEmptyData(t *testing.T) {
 			upgradeFloor, err)
 	}
 
-	// THE ROWS SURVIVED, with the new columns taking their defaults.
+	// The rows survived, with the new columns taking their defaults.
 	var wsOwner, secretOwner, tokenRole string
 	if err := pool.QueryRow(ctx, `SELECT owned_by FROM workspaces WHERE id = $1`, wsID).Scan(&wsOwner); err != nil {
 		t.Fatalf("0048 over an existing workspace row: %v", err)
@@ -682,8 +687,8 @@ func TestPG_MigrateAppliesTheUpgradeSetOverNonEmptyData(t *testing.T) {
 	if wsOwner != "" || secretOwner != "" {
 		t.Errorf("pre-upgrade rows did not take the '' owner default: workspace=%q secret=%q", wsOwner, secretOwner)
 	}
-	if tokenRole != "member" {
-		t.Errorf("pre-upgrade api_tokens.role = %q, want the column default 'member'", tokenRole)
+	if tokenRole != "user" {
+		t.Errorf("pre-upgrade api_tokens.role = %q, want the column default 'member' as renamed by the tier rename, 'user'", tokenRole)
 	}
 
 	// 0050 REBUILT THE PRIMARY KEY on a table holding a row. Asserted from the

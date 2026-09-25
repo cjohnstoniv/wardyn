@@ -105,9 +105,9 @@ func TestADOSignIn_MidRunHoldIsResolvedByACapture(t *testing.T) {
 			if again := pendingID(t, f.resolveQ(t, ""), reauthPendingState); again != id {
 				t.Fatalf("a second resolve for the same lapse raised %s, want the same request %s", again, id)
 			}
-			if req := f.audit.find("credential.reauth.requested"); len(req) != 1 ||
+			if req := f.audit.find("credential.reauth.request"); len(req) != 1 ||
 				!strings.Contains(string(req[0].Data), `"reason":"`+string(name)+`"`) {
-				t.Fatalf("credential.reauth.requested rows = %+v, want exactly one with reason %s", req, name)
+				t.Fatalf("credential.reauth.request rows = %+v, want exactly one with reason %s", req, name)
 			}
 			if got := f.srv.reconcileADOReauthOnRead(context.Background(), f.row(id)); got.State != types.ApprovalPending {
 				t.Fatalf("resolved before any sign-in: %s", got.State)
@@ -146,6 +146,38 @@ func TestADOSignIn_CountsTowardMaxReauthHolds(t *testing.T) {
 	w := f.resolveQ(t, "")
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "too many times") {
 		t.Fatalf("status %d body %s, want the per-run cap's 403", w.Code, w.Body.String())
+	}
+}
+
+// A raise that cannot even ask (the approval store errors) used to answer 503
+// with no audit trace at all — it and its capability and consent siblings
+// bypassed fail(). #204 routes it through fail() like every other refusal, so it now
+// leaves the same secret.read failure row and carries reason on the wire.
+func TestADOSignIn_RaiseFailureIsAudited(t *testing.T) {
+	f := newADOSignInFixture(t)
+	f.approvals.requestErr = errors.New("approvals store unavailable")
+	f.fake.SetInvalidGrant(true)
+	f.at(time.Now().Add(time.Minute))
+
+	w := f.resolveQ(t, "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d body %s, want 503", w.Code, w.Body.String())
+	}
+	rows := f.audit.find("secret.read")
+	if len(rows) != 1 || rows[0].Outcome != "failure" {
+		t.Fatalf("secret.read rows = %+v, want exactly one failure", rows)
+	}
+	var d map[string]any
+	_ = json.Unmarshal(rows[0].Data, &d)
+	if d["reason"] != "raise_failed" {
+		t.Errorf("audit reason = %v, want raise_failed", d["reason"])
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != "raise_failed" {
+		t.Errorf("wire reason = %q, want raise_failed", body.Reason)
 	}
 }
 
@@ -199,14 +231,14 @@ func TestADOSignIn_AnotherOwnersRowIsNotThisHold(t *testing.T) {
 func TestADOSignIn_AnotherPersonsCaptureResolvesNothing(t *testing.T) {
 	f := newADOSignInFixture(t)
 	ctx := context.Background()
+	blob, _ := f.stored(t, f.subject)
 	f.fake.SetInvalidGrant(true)
 	f.at(time.Now().Add(time.Minute))
 	id := pendingID(t, f.resolveQ(t, ""), reauthPendingState)
 
 	// Post-raise, usable sign-ins for A and for B, written without the eager
 	// resolve a capture door would run.
-	blob, _ := f.stored(t, f.subject)
-	blob.CapturedAt, blob.DeadAt = time.Now().Add(time.Hour), time.Time{}
+	blob.CapturedAt = time.Now().Add(time.Hour)
 	const other = "someone-else"
 	for _, owner := range []string{f.subject, other} {
 		if err := f.srv.storeADOEntraBlob(ctx, owner, f.cfg.RowID, blob); err != nil {
@@ -224,9 +256,10 @@ func TestADOSignIn_AnotherPersonsCaptureResolvesNothing(t *testing.T) {
 }
 
 // At the sidecar's boot there is no request to hold: the run fails with a hint
-// that says to sign in again, and the stored sign-in is recorded as ended — so
-// /me/scm-access and the launch gate say expired_signin before the next launch.
-func TestADOSignIn_BootFailsWithAHintAndRecordsTheEnd(t *testing.T) {
+// that says to sign in again, and the dead sign-in is deleted (CS-5) — so
+// /me/scm-access and the launch gate say it is not connected before the next
+// launch.
+func TestADOSignIn_BootFailsWithAHintAndDeletesTheSignIn(t *testing.T) {
 	f := newADOSignInFixture(t)
 	f.st.site = adoSite(f.row0())
 	f.fake.SetInvalidGrant(true)
@@ -240,19 +273,21 @@ func TestADOSignIn_BootFailsWithAHintAndRecordsTheEnd(t *testing.T) {
 	if n := len(f.approvals.byID); n != 0 {
 		t.Fatalf("the boot resolve raised %d requests, want none", n)
 	}
-	blob, _ := f.stored(t, f.subject)
-	if !blob.signInEnded() || blob.DeadReason != ADOEntraFailureDeadCredential {
-		t.Fatalf("stored sign-in = %+v, want its end recorded", blob)
+	if _, found := f.stored(t, f.subject); found {
+		t.Fatal("the dead sign-in is still stored, want it deleted")
+	}
+	if del := f.audit.find("credential.expired.delete"); len(del) != 1 || del[0].Outcome != "success" {
+		t.Fatalf("credential.expired.delete rows = %+v, want one success row", del)
 	}
 
-	access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject)
-	if len(access) != 1 || access[0].State != modelAccessExpiredSignin || access[0].Cause != scmAccessCauseEnded {
-		t.Fatalf("scm-access = %+v, want expired_signin / ended", access)
+	access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject)
+	if len(access) != 1 || access[0].State != modelAccessNotConfigured {
+		t.Fatalf("scm-access = %+v, want not connected", access)
 	}
 	var gc *gitCredentialRefusalError
 	if err := f.srv.gitCredentialRefusalForLauncher(context.Background(), f.subject, adoTestRepo); !errors.As(err, &gc) ||
-		gc.Sentence != gitCredentialEndedRefusal {
-		t.Fatalf("launch gate = %v, want the connection-ended refusal", err)
+		gc.Sentence != gitCredentialNotConnectedRefusal {
+		t.Fatalf("launch gate = %v, want the not-connected refusal", err)
 	}
 
 	// A fresh sign-in, consented for the row's ceiling, clears it.
@@ -263,7 +298,7 @@ func TestADOSignIn_BootFailsWithAHintAndRecordsTheEnd(t *testing.T) {
 	if w := f.capture(t, f.subject); w.Code != http.StatusFound {
 		t.Fatalf("re-sign-in: %d %s", w.Code, w.Body.String())
 	}
-	if access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject); access[0].State != modelAccessLive {
+	if access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject); access[0].State != modelAccessLive {
 		t.Fatalf("after a fresh sign-in scm-access = %+v, want live", access)
 	}
 }
@@ -296,7 +331,7 @@ func TestADOSignIn_WidenedCeiling(t *testing.T) {
 	if w := f.resolveQ(t, "?phase=boot"); w.Code != http.StatusOK {
 		t.Fatalf("a run on the old baseline no longer boots: %d %s", w.Code, w.Body.String())
 	}
-	if access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject); len(access) != 1 ||
+	if access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject); len(access) != 1 ||
 		access[0].State != modelAccessLive {
 		t.Fatalf("scm-access = %+v, want live while the baseline is covered", access)
 	}
@@ -313,7 +348,7 @@ func TestADOSignIn_WidenedCeiling(t *testing.T) {
 	// The baseline outgrows the sign-in: re-consent state, and the gate says so.
 	row.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapRead, adoscope.CapBuildExecute}
 	f.st.site = adoSite(row)
-	access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject)
+	access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject)
 	if len(access) != 1 || access[0].State != modelAccessExpiredSignin || access[0].Cause != scmAccessCauseConsentNeeded {
 		t.Fatalf("scm-access = %+v, want expired_signin / consent_needed", access)
 	}
@@ -328,7 +363,7 @@ func TestADOSignIn_WidenedCeiling(t *testing.T) {
 // answers nothing.
 func TestADOSignIn_AnEndedCaptureResolvesNothing(t *testing.T) {
 	f := newADOSignInFixture(t)
-	f.fake.SetInvalidGrant(true)
+	f.fake.SetInteractionRequired(true)
 	f.at(time.Now().Add(time.Minute))
 	id := pendingID(t, f.resolveQ(t, ""), reauthPendingState)
 	blob, _ := f.stored(t, f.subject)

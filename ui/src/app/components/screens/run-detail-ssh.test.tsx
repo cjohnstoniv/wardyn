@@ -31,12 +31,13 @@ vi.mock("../../lib/api/runs", () => ({
 import { ConnectSSHCard } from "./run-detail-ssh";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { UI_APPS_LANE } from "../wardyn/copy";
+import { aheadByHours } from "../../lib/test-clock";
 
 const OWNER = "alice@example.com";
 const baseRun: RunDetail = {
   id: "11111111-1111-1111-1111-111111111111",
-  created_at: "2026-01-01T00:00:00Z",
-  updated_at: "2026-01-01T00:00:00Z",
+  created_at: aheadByHours(-1),
+  updated_at: aheadByHours(-1),
   created_by: OWNER,
   agent: "claude-code",
   repo: "acme/widgets",
@@ -160,7 +161,7 @@ describe("ConnectSSHCard — content", () => {
       ssh: { enabled: true, advertise_addr: "wardyn.corp.example:2222", host_key_fingerprint: "SHA256:abc123" },
     });
     listKeysMock.mockResolvedValue([
-      { fingerprint: "SHA256:x", principal: OWNER, name: "laptop", public_key: "", created_at: "2026-01-01T00:00:00Z" },
+      { fingerprint: "SHA256:x", principal: OWNER, name: "laptop", public_key: "", created_at: aheadByHours(-1) },
     ]);
     renderCard();
 

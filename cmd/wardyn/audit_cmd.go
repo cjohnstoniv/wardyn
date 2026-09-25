@@ -73,9 +73,9 @@ func auditCmd(client clientFn) *cobra.Command {
 					len(events), offset+len(events))
 			}
 			if asJSON {
-				return emitJSON(events)
+				return emitJSON(cmd.OutOrStdout(), events)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "TIME\tACTOR_TYPE\tACTOR\tACTION\tTARGET\tOUTCOME")
 			for _, e := range events {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",

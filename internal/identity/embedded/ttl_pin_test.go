@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
 )
 
-// TestRenewU070_TokenTTLStaysShortAndExpiredIsRefused pins the invariant the
+// TestTokenTTLStaysShortAndExpiredIsRefused pins the invariant the
 // renew route exists to PRESERVE.
 //
 // The bug renew fixes — a run outliving its token loses every /internal/* call —
@@ -28,7 +28,8 @@ import (
 // It also asserts the other half: a token past its TTL really is refused. That is
 // what makes renewal load-bearing rather than decorative — if expiry were not
 // enforced, nothing would need renewing.
-func TestRenewU070_TokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
+func TestTokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
+	// ticket: U070
 	// The ceiling this design rests on. Renewal is the sanctioned way to outlive
 	// it; raising it is not.
 	const maxAcceptableTTL = time.Hour
@@ -67,11 +68,11 @@ func TestRenewU070_TokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
 	}
 }
 
-// TestB5_ExpiredVerifyCarriesTheRunID is the control-plane half of B5's quieting
+// TestExpiredVerifyCarriesTheRunID is the control-plane half of B5's quieting
 // rule: the sidecar backs off and stops hammering a refused renew, so the case
 // underneath — a HEALTHY run whose renews were refused through a control-plane
 // outage and which now holds a dead identity for the rest of its life — must be
-// visible somewhere, keyed to the run. internal/api's run.identity.expired row is
+// visible somewhere, keyed to the run. internal/api's run.identity.expire row is
 // where, and it can only exist because Verify reports EXPIRY as a typed error
 // carrying the run id.
 //
@@ -81,7 +82,8 @@ func TestRenewU070_TokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
 //     let a prober write rows against a run id it chose;
 //   - the error is still an error. Verify returns nil claims with it, and every
 //     caller keeps failing closed.
-func TestB5_ExpiredVerifyCarriesTheRunID(t *testing.T) {
+func TestExpiredVerifyCarriesTheRunID(t *testing.T) {
+	// ticket: B5
 	ctx := context.Background()
 	base := time.Now()
 	p, err := New(nil, "wardyn.local", identitytest.NewMemRevocationStore(), &recordingRecorder{})
@@ -107,7 +109,7 @@ func TestB5_ExpiredVerifyCarriesTheRunID(t *testing.T) {
 	}
 	var exp *identity.ExpiredTokenError
 	if !errors.As(verr, &exp) {
-		t.Fatalf("expired Verify returned %T (%v); internal/api cannot key run.identity.expired to a run "+
+		t.Fatalf("expired Verify returned %T (%v); internal/api cannot key run.identity.expire to a run "+
 			"without the typed error", verr, verr)
 	}
 	if exp.RunID != runID {

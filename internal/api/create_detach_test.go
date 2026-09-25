@@ -147,9 +147,9 @@ func (b *disconnectBuilder) observedCtx() context.Context {
 // must still land FAILED with its credentials revoked — the compensator exists
 // precisely for the build-failure case, and the single most likely producer of a
 // build failure (a disconnect) must not be the one case that silently disables
-// it. Counterfactual: on the request ctx, failAndRevoke's CAS returns
-// (false, context.Canceled), which the old code collapsed into "someone else
-// won" — so the run stays PENDING, nothing is revoked, and no audit is written.
+// it. Counterfactual: on the request ctx, failAndRevoke's CAS returns (false,
+// context.Canceled); collapsing that into "someone else won" would leave the
+// run PENDING, nothing revoked, and no audit written.
 func TestCreateRun_ClientDisconnectDuringBuild_StillCompensates(t *testing.T) {
 	h := newHarness(t)
 	st := newCreateDetachStore()

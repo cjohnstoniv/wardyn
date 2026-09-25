@@ -1,22 +1,15 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The durable write-back: what a decided approval leaves behind on a WORKSPACE,
-// as opposed to on the approval row itself. Split out of approvals.go for the
-// 1000-line file-size gate (scripts/check-file-size.sh).
+// The durable write-back: what a decided approval leaves behind on a WORKSPACE.
+// An `always` decision and a verify-loop approval both edit a workspace the
+// operator may not be looking at, and share one contract: fail silent but
+// audited. The decision already stands when these run, so none may fail the
+// request; every give-up path must leave an audit row instead.
 //
-// They belong together because they are one question — an `always` decision and
-// a verify-loop approval both reach past the approval and edit a workspace an
-// operator may not have been looking at — and because they share one contract
-// the rest of this package does not: Fail silent but audited. The decision
-// itself already stands by the time these run, so none of them may fail the
-// request; every give-up path therefore has to leave an audit row instead, or
-// the operator gets a green UI and a workspace that learned nothing.
-//
-// internal/api/approvals_reconcile.go is this file's BOOT-TIME twin: it replays
-// the same `always` verdicts after a restart, and it calls this file's two
-// direction-specific reject predicates so the two cannot disagree about what a
-// workspace will accept.
+// internal/api/approvals_reconcile.go is the BOOT-TIME twin: it replays the same
+// `always` verdicts and calls this file's two direction-specific reject predicates
+// so the two cannot disagree about what a workspace will accept.
 package api
 
 import (
@@ -60,24 +53,16 @@ func approvalHost(ap types.ApprovalRequest) string {
 	return strings.ToLower(strings.TrimSpace(scope.Host))
 }
 
-// approveAlwaysRejects is the set of hosts an approve·always must refuse:
-// entries a real run's proxy will never consult, so promoting one writes dead
-// weight the operator believes is granting them something — the same honesty
-// rule handleSetApprovedEgress and promoteSkipHosts already enforce at the
-// other two write points.
+// approveAlwaysRejects is the set of hosts an approve·always must refuse: entries
+// a real run's proxy never consults, so promoting one writes dead weight — the
+// rule handleSetApprovedEgress and promoteSkipHosts enforce at the other two
+// write points. It is the UNION of those sets, as neither is a superset:
+// promoteSkipHosts lacks only the control plane's OWN host (controlPlaneHost
+// lowercases, matching how handleSetApprovedEgress inserts it raw).
 //
-// It is the UNION of those two sets, because they are NOT identical and neither
-// is a superset: promoteSkipHosts (workspace-aware — model provider, the
-// workspace's own bedrock transport, required-integration hosts, clone hosts,
-// broker + brokered-SSH hosts) lacks only the control plane's OWN host, which
-// handleSetApprovedEgress's inline static set carries. controlPlaneHost already
-// lowercases, matching how that set inserts it raw.
-//
-// Allow-shaped only — do not reuse this for the deny direction. A deny entry for
-// a git-broker host IS consulted (runs_dispatch_gitbroker.go reads and extends
-// policy.DeniedDomains), so the "never consulted" rationale does not transfer,
-// and the deny direction's real hazard is the opposite one (see
-// denyAlwaysReject).
+// Allow-shaped only — do not reuse it for the deny direction: a deny entry for a
+// git-broker host IS consulted (runs_dispatch_gitbroker.go extends
+// policy.DeniedDomains), and the deny hazard is the opposite (denyAlwaysReject).
 func (s *Server) approveAlwaysRejects(ctx context.Context, ws types.Workspace) map[string]struct{} {
 	skip := s.promoteSkipHosts(ctx, ws)
 	if self := controlPlaneHost(s.cfg.ControlPlaneURL); self != "" {
@@ -87,22 +72,15 @@ func (s *Server) approveAlwaysRejects(ctx context.Context, ws types.Workspace) m
 }
 
 // denyAlwaysReject reports why a deny·always on host must be refused, or "" to
-// allow it. It is deliberately NOT approveAlwaysRejects' mirror: the hazard is
-// not symmetric, and one shared set would be wrong in both directions.
-// approve·always on api.anthropic.com is merely redundant, while deny·always on
-// it BRICKS the workspace — deny beats everything the proxy evaluates, and
-// Policy.AllowedExactHost (the gate for proxy-side credential injection)
-// returns false on a denied host, so every future run of this workspace would
-// launch with a model credential it can never use. An injected INTEGRATION host
-// is worse still: buildInjector returns an error for a rule whose host is not
-// exactly allowlisted, failing the sidecar outright rather than quietly
-// disabling one credential.
+// allow it. It is NOT approveAlwaysRejects' mirror: deny·always on a model
+// provider BRICKS the workspace — deny beats everything the proxy evaluates, and
+// Policy.AllowedExactHost (the gate for proxy-side credential injection) returns
+// false on a denied host — and on an injected INTEGRATION host buildInjector
+// fails the sidecar outright rather than disabling one credential.
 //
-// Best-effort BY DESIGN, and the message says so rather than implying the check
-// is exhaustive. The hazard class is every host carrying a proxy-side injection
-// rule (model providers, header-delivered integrations, artifact redirects);
-// the two guarded here are the two that fail SILENTLY. The rest fail loudly at
-// proxy build, where an operator can see and undo them.
+// Best-effort BY DESIGN, and the message says so: every host with a proxy-side
+// injection rule is in the hazard class, but these two are the ones that fail
+// SILENTLY; the rest fail loudly at proxy build, where an operator can undo them.
 func (s *Server) denyAlwaysReject(ctx context.Context, ws types.Workspace, host string) string {
 	const caveat = " (this guard covers model-provider and required-integration hosts only; " +
 		"a deny on another injected host fails loudly at proxy build instead)"
@@ -133,18 +111,12 @@ func (s *Server) denyAlwaysReject(ctx context.Context, ws types.Workspace, host 
 
 // requiredEgressHost reports whether ws's EFFECTIVE contract marks
 // egress:<host> required — the self-contradiction check behind
-// denyAlwaysReject. confinedEgressDomains unions exactly these rows into a
-// confined replay's AllowedDomains, so a workspace that both requires and
-// permanently denies one host fails every replay on it. The path is reachable,
-// not hypothetical: learnVerifyEgress writes precisely such a row on approve,
-// so approve·always then deny·always the same host is one operator away.
-//
-// Refusing is chosen over silently clearing the requirement: this runs BEFORE
-// Decide(), where a 4xx still means something and the operator learns which
-// knob to turn, whereas clearing the row would delete an operator-declared
-// contract entry as an invisible side effect of an approval click — from the
-// write-back, after the decision is already durable and unauditable as a
-// rejection.
+// denyAlwaysReject. confinedEgressDomains unions these rows into a confined
+// replay's AllowedDomains, so requiring and permanently denying one host fails
+// every replay on it; learnVerifyEgress writes such a row on approve, so it is
+// reachable. Refusing beats silently clearing the requirement: this runs BEFORE
+// Decide(), where a 4xx still tells the operator which knob to turn, and clearing
+// would delete an operator-declared contract entry as a side effect of a click.
 func requiredEgressHost(ws types.Workspace, host string) bool {
 	for key, req := range effectiveRequirements(ws) {
 		if req.Level != "required" {
@@ -158,26 +130,17 @@ func requiredEgressHost(ws types.Workspace, host string) bool {
 	return false
 }
 
-// persistWorkspaceEgressDecision is `always`'s durable half: the host the
-// operator just decided lands on the run's PRIMARY workspace — approved_egress
-// on approve, denied_egress on deny, and removed from the other list either way
-// (deny beats allow everywhere the proxy evaluates policy, so a host left on
-// both would make one direction a silent no-op) — so FUTURE runs inherit the
-// decision instead of re-raising it.
+// persistWorkspaceEgressDecision is `always`'s durable half: the decided host
+// lands on the run's PRIMARY workspace — approved_egress on approve, denied_egress
+// on deny, removed from the other list either way (deny beats allow, so a host on
+// both would make one direction a silent no-op) — so FUTURE runs inherit it.
 //
-// Host shape and the two direction-specific reject sets are validated in
-// decide()'s rule 7, BEFORE Decide() flips the row. Nothing validating belongs
-// here: this runs after a decision that is already durable and cannot be taken
-// back, and answering 4xx on it would be worse than useless. Only genuine
-// runtime failures reach here — cap reached, workspace deleted mid-flight — and
-// they fail SILENT-BUT-AUDITED exactly like learnVerifyEgress: the approval
-// itself stands either way, and the audit record is what lets an operator add
-// the row by hand instead of wondering why the next run still asks.
-//
-// Audited under the workspace.egress.approve namespace the approved-egress PUT
-// already owns, plus its workspace.egress.deny sibling, and with the same
-// {"domains": [...]} payload shape, so one audit query answers "how did this
-// host get onto this workspace's list" across all three writers.
+// Validation belongs in decide()'s rule 7, BEFORE Decide() flips the row; this
+// runs after the decision is durable, so its runtime failures (cap reached,
+// workspace deleted) are SILENT-BUT-AUDITED like learnVerifyEgress. Audited under
+// workspace.egress.approve / workspace.egress.deny with the approved-egress PUT's
+// {"domains": [...]} payload, so one query answers "how did this host get onto
+// this workspace's list" across all three writers.
 func (s *Server) persistWorkspaceEgressDecision(ctx context.Context, ap types.ApprovalRequest, wsID uuid.UUID, allow bool, byType types.ActorType, by string) {
 	action := "workspace.egress.deny"
 	if allow {
@@ -185,24 +148,15 @@ func (s *Server) persistWorkspaceEgressDecision(ctx context.Context, ap types.Ap
 	}
 	host := approvalHost(ap)
 	data := map[string]any{"domains": []string{host}, "source": "approval:" + ap.ID.String()}
-	// Audit the give-up paths too — this function's contract is fail-SILENT-BUT-
-	// AUDITED, and a bare `return` here would deliver only the first half. Both are
-	// reachable and neither is cosmetic: a nil Store means the decision stands
-	// with nothing durable behind it, and an empty host means we re-derived it
-	// from the post-Decide RETURNING row rather than the `ap` rule 7 validated —
-	// so if that RETURNING ever stops listing requested_scope, `always` silently
-	// becomes a no-op. That is the same failure class as the SET-clause trap this
-	// package already warns about, and it deserves the same visibility: an
-	// operator who clicked Always and got a green UI must be able to find out
-	// from the audit stream that nothing was written.
+	// Audit the give-up paths too: a bare `return` would make the contract silent
+	// but not audited. Both are reachable: a nil Store leaves the decision with
+	// nothing durable behind it, and an empty host means the post-Decide RETURNING
+	// row stopped listing requested_scope, turning `always` into a silent no-op.
 	//
-	// Every emit below stamps the cross-user marker (auditWorkspaceDataFor).
-	// Deciding an approval is owner-OR-ADMIN (routes.go), so this is the most
-	// common path on which an admin durably rewrites a MEMBER-owned workspace —
-	// an `always` on someone else's run — and "which member's data did this
-	// admin touch" has to stay a query here too, not just on the workspace
-	// routes. The owner comes from the write's own returned row where there is
-	// one, and from a marker-only re-read on the give-up paths.
+	// Every emit stamps the cross-user marker (auditWorkspaceDataFor): deciding is
+	// owner-OR-ADMIN (routes.go), so this is the commonest path on which an admin
+	// rewrites a MEMBER-owned workspace. The owner comes from the write's returned
+	// row where there is one, and from a marker-only re-read on the give-up paths.
 	if s.cfg.Store == nil || host == "" {
 		reason := "no store configured"
 		if s.cfg.Store != nil {

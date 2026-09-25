@@ -33,15 +33,16 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 
   it("a non-string reason is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", reason: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "" });
   });
 
   it("a raw (non-envelope) body carries no reason", async () => {
     const res = new Response("plain", { status: 500 });
-    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "", provider: "", kind: "" });
   });
 
-  it('{"error":"…","reason":"git_credential","org":"…"} -> an HttpError carrying the org (F1)', async () => {
+  it('{"error":"…","reason":"git_credential","org":"…"} -> an HttpError carrying the org', async () => {
+    // ticket: F1
     const res = new Response(
       JSON.stringify({ error: "not connected", reason: "git_credential", org: "https://dev.azure.com/contoso" }),
       { status: 422 },
@@ -53,7 +54,19 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 
   it("a non-string org is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", org: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "", provider: "", kind: "" });
+  });
+
+  it('{"error":"…","provider":"corp","kind":"custom_endpoint"} -> an HttpError naming the refused provider and kind (#532, #535, #543)', async () => {
+    const res = new Response(
+      JSON.stringify({ error: "refused", reason: "model_credential", provider: "corp", kind: "custom_endpoint" }),
+      { status: 422 },
+    );
+    const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
+    expect(err.provider).toBe("corp");
+    expect(err.kind).toBe("custom_endpoint");
+    expect(new HttpError(422, "x").provider).toBe("");
+    expect(new HttpError(422, "x").kind).toBe("");
   });
 
   it("errText is the envelope's message, byte for byte", async () => {

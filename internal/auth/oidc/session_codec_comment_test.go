@@ -23,7 +23,7 @@ import (
 // decodes to 0 and is refused. Upgrading signs every SSO human out once.
 // Correcting the documents and leaving the comment would just re-seed them.
 //
-// DERIVED FROM THE CONST, exactly like the sibling doc guard: if the codec is
+// Derived from the const, exactly like the sibling doc guard: if the codec is
 // ever relaxed to tolerate an older payload, the claim becomes true again and
 // this stops demanding otherwise, instead of pinning a sentence to a rule that
 // has moved.

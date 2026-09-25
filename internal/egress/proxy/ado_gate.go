@@ -43,12 +43,6 @@ type ADOGrant struct {
 	Capabilities []adoscope.Capability
 }
 
-// ADOGrantSource answers, for a host, the run's Azure DevOps grant. ok=false
-// means the host is not covered and the gate stands aside.
-type ADOGrantSource interface {
-	ADOGrantFor(host string) (ADOGrant, bool)
-}
-
 // adoRefProtected is the base protected-ref rule: no grant carries a
 // protected-branch list yet, so every ref counts as protected. Fail closed.
 func adoRefProtected(string) bool { return true }
@@ -82,7 +76,19 @@ func (p *Proxy) gateADO(w http.ResponseWriter, r *http.Request, host string, por
 	if !ok {
 		return src
 	}
-	if msg, held := adoCheck(r, host, grant, p.adoRunRefProtected); msg != "" && !p.refuseADO(w, r, host, port, msg, held) {
+	msg, held := adoCheck(r, host, grant, p.adoRunRefProtected)
+	// Push rules sit between the capability gate's hard refusals and its one
+	// liftable refusal: a request refused outright stays refused as it was,
+	// and a content write is judged before anyone is asked to grant it a
+	// capability (ado_content.go).
+	if msg != "" && held == nil {
+		p.refuseADO(w, r, host, port, msg, nil)
+		return ""
+	}
+	if !p.governADOContent(w, r, host, port, grant) {
+		return ""
+	}
+	if msg != "" && !p.refuseADO(w, r, host, port, msg, held) {
 		return ""
 	}
 	return ruleSourceADO

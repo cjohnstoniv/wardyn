@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +26,61 @@ type leaseStore struct {
 	*dispatchTestStore
 	warnFor *time.Time
 	warnSec int
+	// The owner re-check's reads (run_owner_authority.go): capability rows and
+	// switches, the site config and the run's credential grants.
+	caps       []types.CapabilityGrant
+	enf        map[string]bool
+	site       types.SiteConfig
+	siteErr    error
+	credGrants []types.CredentialGrant
+	casErr     error // returned once by UpdateRunStateIf
+	grantsErr  error // ListCapabilityGrants fails closed with this, never an implicit allow
+	restricted map[string]map[string]bool
+}
+
+func (s *leaseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	if s.restricted == nil {
+		return map[string]map[string]bool{}, nil
+	}
+	return s.restricted, nil
+}
+
+func (s *leaseStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {
+	if s.grantsErr != nil {
+		return nil, s.grantsErr
+	}
+	return slices.Clone(s.caps), nil
+}
+
+func (s *leaseStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
+	return (&capStore{grants: s.caps}).ListCapabilityGrantsFor(ctx, users, groups, userType)
+}
+
+func (s *leaseStore) ListGroupDenyGrants(ctx context.Context, kind string) ([]types.CapabilityGrant, error) {
+	return (&capStore{grants: s.caps}).ListGroupDenyGrants(ctx, kind)
+}
+
+func (s *leaseStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return maps.Clone(s.enf), nil
+}
+
+func (s *leaseStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.site, s.siteErr
+}
+
+func (s *leaseStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
+	return s.credGrants, nil
+}
+
+func (s *leaseStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
+	s.mu.Lock()
+	err := s.casErr
+	s.casErr = nil
+	s.mu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	return s.dispatchTestStore.UpdateRunStateIf(ctx, id, from, to)
 }
 
 func (s *leaseStore) ListLeasedRuns(ctx context.Context) ([]types.AgentRun, error) {
@@ -62,7 +119,7 @@ func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromEnd *t
 	defer s.mu.Unlock()
 	cur := s.run.EndsAt
 	sameEnd := (fromEnd == nil && cur == nil) || (fromEnd != nil && cur != nil && fromEnd.Equal(*cur))
-	if !sameEnd || fromWait != s.run.WaitBudgetSec || s.run.LostAt != nil || s.state.IsTerminal() {
+	if !sameEnd || fromWait != s.run.WaitBudgetSec || s.run.LostReason == types.LostEnded || s.state.IsTerminal() {
 		return false, nil
 	}
 	s.run.EndsAt, s.run.WaitBudgetSec = toEnd, toWait
@@ -114,6 +171,19 @@ func (c *countingIdentity) RevokeRun(ctx context.Context, runID uuid.UUID) error
 	c.revokes++
 	c.mu.Unlock()
 	return c.Provider.RevokeRun(ctx, runID)
+}
+
+// RevokeJTI forwards to the wrapped provider (O2): countingIdentity embeds
+// identity.Provider, whose four-method interface does not carry RevokeJTI, so
+// without this passthrough a revive under this fixture would silently skip
+// revoking the retiring token — the jtiRevoker assertion in run_revive.go
+// would just fail closed-but-quiet, not error.
+func (c *countingIdentity) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error {
+	jr, ok := c.Provider.(jtiRevoker)
+	if !ok {
+		return nil
+	}
+	return jr.RevokeJTI(ctx, jti, runID)
 }
 
 func (c *countingIdentity) count() int {
@@ -257,6 +327,29 @@ func TestRunLease_EndFailsClosed(t *testing.T) {
 	}
 }
 
+// TestRunLease_AFailedEndIsRevokedOnReassert: an end that fails and whose
+// fail-closed stop fails too (the same daemon down, or the pass out of time)
+// leaves the run claimed and RUNNING with its broker credentials live. The next
+// pass must revoke them; it must not read the failed end as already revoked.
+func TestRunLease_AFailedEndIsRevokedOnReassert(t *testing.T) {
+	f := newLeaseFixture(t, -time.Minute)
+	f.rn.endErr = context.DeadlineExceeded
+	f.st.casErr = context.DeadlineExceeded
+	f.sweep(t)
+	if f.st.State() != types.RunRunning || f.brk.count(f.run.ID) != 0 {
+		t.Fatalf("first pass: state %s, broker revocations %d; want RUNNING, 0 (end and stop both failed)",
+			f.st.State(), f.brk.count(f.run.ID))
+	}
+
+	f.rn.endErr = nil
+	f.now = f.now.Add(time.Minute)
+	f.sweep(t)
+	if f.brk.count(f.run.ID) != 1 {
+		t.Errorf("re-assert pass: broker revocations = %d, want 1 — the failed end's credentials were never revoked",
+			f.brk.count(f.run.ID))
+	}
+}
+
 // TestRunLease_TornDownAtTheEndWhenItCannotBeKept: no grace, or a runner that
 // cannot keep a stopped sandbox (Kubernetes), stops the run at its end.
 func TestRunLease_TornDownAtTheEndWhenItCannotBeKept(t *testing.T) {
@@ -279,6 +372,23 @@ func TestRunLease_TornDownAtTheEndWhenItCannotBeKept(t *testing.T) {
 		}
 		if calls := f.fa.cancelledCalls(); len(calls) != 1 || calls[0].Reason != "run_ended" {
 			t.Errorf("approval cancels = %+v, want one with reason run_ended", calls)
+		}
+	})
+	// A runner that IS a SandboxEnder at the type level (canKeep true) but
+	// whose EndSandbox call itself answers ErrEndUnsupported for this run
+	// (a Kubernetes Orchestrator, always): the kept branch must not revoke
+	// the broker before falling through to stopEndedRun's own full cascade,
+	// or the broker gets revoked twice (a row per credential) on every
+	// substrate that hits this arm.
+	t.Run("SandboxEnder that answers ErrEndUnsupported", func(t *testing.T) {
+		f := newLeaseFixture(t, -time.Minute)
+		f.rn.endErr = runner.ErrEndUnsupported
+		f.sweep(t)
+		if f.st.State() != types.RunStopped || f.rn.stopCount() != 1 {
+			t.Errorf("state %s, StopSandbox %d; want STOPPED, 1", f.st.State(), f.rn.stopCount())
+		}
+		if f.brk.count(f.run.ID) != 1 {
+			t.Errorf("broker revocations = %d, want 1 — the kept branch and the teardown cascade must not both revoke", f.brk.count(f.run.ID))
 		}
 	})
 }

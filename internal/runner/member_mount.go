@@ -24,8 +24,8 @@ import (
 // deny-list (ValidateMountSource) AND, additively, everything below:
 //
 //  1. ROOT ALLOWLIST. The source's canonicalized real path must sit inside one
-//     of the operator/MDM-set roots (WARDYN_MEMBER_WORKSPACE_ROOTS, or that
-//     member's own entry in WARDYN_MEMBER_WORKSPACE_ROOTS_MAP, which REPLACES
+//     of the operator/MDM-set roots (WARDYN_USER_WORKSPACE_ROOTS, or that
+//     member's own entry in WARDYN_USER_WORKSPACE_ROOTS_MAP, which REPLACES
 //     the shared list rather than adding to it). No roots configured => a
 //     member local_dir mount is refused outright (fail closed); repos and
 //     operator-owned workspaces still work.
@@ -42,15 +42,15 @@ import (
 //     and it is belt-and-braces with (1): an operator who does point a root at
 //     $HOME still cannot let a member mount their own ~/.ssh.
 //
-// WRITABLE is a separate, narrower allowlist (WARDYN_MEMBER_WRITABLE_ROOTS,
-// minus WARDYN_MEMBER_WRITABLE_DENY, deny winning) because a writable bind
+// WRITABLE is a separate, narrower allowlist (WARDYN_USER_WRITABLE_ROOTS,
+// minus WARDYN_USER_WRITABLE_DENY, deny winning) because a writable bind
 // widens the residual; both unset means NO writable member mounts at all.
 // Operators keep the unrestricted per-source Writable opt-in they have today —
 // none of this narrows an operator mount, since a run with no member-owned
 // workspace carries no roots and takes exactly today's path.
 //
 // RESIDUAL, stated honestly: the bind-time re-check (docker driver's
-// agentMounts, via SandboxSpec.MemberMountRoots) resolves the real path as late
+// agentMounts, via SandboxSpec.UserMountRoots) resolves the real path as late
 // as this process can, but validate and ContainerCreate are still not atomic —
 // the same TOCTOU window ValidateMountSource's own residual note already
 // documents for operator mounts. Two things bound it: the roots are operator-set, so a member can only
@@ -82,7 +82,7 @@ var memberDeniedPairs = [][2]string{
 	{".git", "config"},
 }
 
-// MemberMountPolicy is the operator/MDM-set posture for MEMBER-authored
+// UserMountPolicy is the operator/MDM-set posture for MEMBER-authored
 // local_dir binds. The zero value means "no member local_dir mounts at all",
 // which is the fail-closed default: a deployment that configures none of these
 // vars behaves exactly as it does today, minus the ability for a member to
@@ -91,47 +91,47 @@ var memberDeniedPairs = [][2]string{
 // Every field comes from operator/MDM-set ENV (cmd/wardynd), never SiteConfig —
 // site config is a full-replace row a single bad PUT can blank (the 0042
 // hazard), and this is a security ceiling.
-type MemberMountPolicy struct {
-	// Roots is the shared allowlist (WARDYN_MEMBER_WORKSPACE_ROOTS): absolute,
+type UserMountPolicy struct {
+	// Roots is the shared allowlist (WARDYN_USER_WORKSPACE_ROOTS): absolute,
 	// cleaned host prefixes any member's local_dir source must resolve into.
 	Roots []string
-	// RootsByPrincipal (WARDYN_MEMBER_WORKSPACE_ROOTS_MAP) is the per-member
+	// RootsByPrincipal (WARDYN_USER_WORKSPACE_ROOTS_MAP) is the per-member
 	// override. A principal with an entry uses ONLY that entry — per-member
 	// REPLACES shared, because per-member exists to be the more restrictive
 	// control, and a union would make adding a row widen rather than narrow.
 	// Keys are lowercased principals (OIDC sub or email, the same dual-key
 	// identity a capability_grants `user` subject carries).
 	RootsByPrincipal map[string][]string
-	// WritableRoots (WARDYN_MEMBER_WRITABLE_ROOTS) is where a member may mark
+	// WritableRoots (WARDYN_USER_WRITABLE_ROOTS) is where a member may mark
 	// their own mount writable. Empty = nowhere.
 	WritableRoots []string
-	// WritableDeny (WARDYN_MEMBER_WRITABLE_DENY) carves holes in WritableRoots.
+	// WritableDeny (WARDYN_USER_WRITABLE_DENY) carves holes in WritableRoots.
 	// Deny WINS over allow, and is checked first.
 	WritableDeny []string
 }
 
 // Configured reports whether any member root is set at all — i.e. whether
 // member local_dir onboarding is available on this deployment.
-func (p MemberMountPolicy) Configured() bool {
+func (p UserMountPolicy) Configured() bool {
 	return len(p.Roots) > 0 || len(p.RootsByPrincipal) > 0
 }
 
 // RootsFor returns the roots that bound one member's mounts: their own map
 // entry when they have one (REPLACING the shared list), otherwise the shared
 // list. An empty result means this member may not mount a host dir at all.
-func (p MemberMountPolicy) RootsFor(principal string) []string {
+func (p UserMountPolicy) RootsFor(principal string) []string {
 	if own, ok := p.RootsByPrincipal[strings.ToLower(strings.TrimSpace(principal))]; ok {
 		return own
 	}
 	return p.Roots
 }
 
-// ValidateMemberMount is the AUTHORING-time gate (workspace onboarding and
+// ValidateUserMount is the AUTHORING-time gate (workspace onboarding and
 // run-create): the full source check for principal, plus the writable
 // allowlist when the source asks to be mounted read-write. A nil error means
 // this member may bind this source with this writability.
-func (p MemberMountPolicy) ValidateMemberMount(principal, src string, writable bool) error {
-	real, err := validateMemberSource(src, p.RootsFor(principal))
+func (p UserMountPolicy) ValidateUserMount(principal, src string, writable bool) error {
+	real, err := validateUserSource(src, p.RootsFor(principal))
 	if err != nil {
 		return err
 	}
@@ -139,38 +139,38 @@ func (p MemberMountPolicy) ValidateMemberMount(principal, src string, writable b
 		return nil
 	}
 	if withinAnyRoot(real, p.WritableDeny) {
-		return fmt.Errorf("mount source %q may not be mounted writable: it is under a member writable-deny path (WARDYN_MEMBER_WRITABLE_DENY)", src)
+		return fmt.Errorf("mount source %q may not be mounted writable: it is under a member writable-deny path (WARDYN_USER_WRITABLE_DENY)", src)
 	}
 	if len(p.WritableRoots) == 0 {
-		return fmt.Errorf("mount source %q may not be mounted writable: no member writable roots are configured (WARDYN_MEMBER_WRITABLE_ROOTS) — member mounts are read-only by default", src)
+		return fmt.Errorf("mount source %q may not be mounted writable: no member writable roots are configured (WARDYN_USER_WRITABLE_ROOTS) — member mounts are read-only by default", src)
 	}
 	if !withinAnyRoot(real, p.WritableRoots) {
-		return fmt.Errorf("mount source %q may not be mounted writable: it is outside every member writable root (WARDYN_MEMBER_WRITABLE_ROOTS)", src)
+		return fmt.Errorf("mount source %q may not be mounted writable: it is outside every member writable root (WARDYN_USER_WRITABLE_ROOTS)", src)
 	}
 	return nil
 }
 
-// ValidateMemberMountSource is the BIND-time gate: the source half only, run
-// against the roots already resolved for the run (SandboxSpec.MemberMountRoots)
+// ValidateUserMountSource is the BIND-time gate: the source half only, run
+// against the roots already resolved for the run (SandboxSpec.UserMountRoots)
 // as the last thing before the driver hands the bind to the container runtime.
 // Writability is not re-derived here — it was decided at authoring time and
 // rides on the mount itself, so a path swap cannot change it.
-func ValidateMemberMountSource(src string, roots []string) error {
-	_, err := validateMemberSource(src, roots)
+func ValidateUserMountSource(src string, roots []string) error {
+	_, err := validateUserSource(src, roots)
 	return err
 }
 
-// validateMemberSource runs the three additive checks and returns the resolved
+// validateUserSource runs the three additive checks and returns the resolved
 // real path (which the writable check then matches against, so the two can
 // never disagree about WHICH path they are deciding about).
-func validateMemberSource(src string, roots []string) (string, error) {
+func validateUserSource(src string, roots []string) (string, error) {
 	// The operator deny-list first, unchanged and unweakened: absolute, cleaned
 	// (so lexical ".." is already refused), not host-root/proc/etc/docker.sock.
 	if err := ValidateMountSource(src); err != nil {
 		return "", err
 	}
 	if len(roots) == 0 {
-		return "", fmt.Errorf("mount source %q is refused: this deployment configures no member workspace roots (WARDYN_MEMBER_WORKSPACE_ROOTS / _MAP), so a member may not mount a host directory", src)
+		return "", fmt.Errorf("mount source %q is refused: this deployment configures no member workspace roots (WARDYN_USER_WORKSPACE_ROOTS / _MAP), so a member may not mount a host directory", src)
 	}
 	// Fail CLOSED on any resolve error, "does not exist" included: unlike the
 	// operator path, there is no lexical-only fallback here — an allowlist we
@@ -182,7 +182,7 @@ func validateMemberSource(src string, roots []string) (string, error) {
 	if !withinAnyRoot(real, roots) {
 		return "", fmt.Errorf("mount source %q resolves to %q, which is outside every member workspace root (%s)", src, real, strings.Join(roots, ", "))
 	}
-	if seg := deniedMemberSegment(real); seg != "" {
+	if seg := deniedUserSegment(real); seg != "" {
 		return "", fmt.Errorf("mount source %q resolves to %q, which is or traverses the credential path %q; denied", src, real, seg)
 	}
 	return real, nil
@@ -206,9 +206,9 @@ func withinAnyRoot(real string, roots []string) bool {
 	return false
 }
 
-// deniedMemberSegment returns the offending path element when real IS or
+// deniedUserSegment returns the offending path element when real IS or
 // TRAVERSES a credential dotfile path, or "" when it is clean.
-func deniedMemberSegment(real string) string {
+func deniedUserSegment(real string) string {
 	parts := strings.Split(strings.TrimPrefix(filepath.ToSlash(real), "/"), "/")
 	for i, part := range parts {
 		if memberDeniedSegments[part] {
@@ -225,8 +225,8 @@ func deniedMemberSegment(real string) string {
 	return ""
 }
 
-// ParseMemberMountPolicy builds the policy from its four raw operator/MDM env
-// values (see MemberMountPolicy for what each one means). roots, writable and
+// ParseUserMountPolicy builds the policy from its four raw operator/MDM env
+// values (see UserMountPolicy for what each one means). roots, writable and
 // writableDeny are comma-separated absolute paths; rootsMap is JSON
 // {"<principal>": ["/abs/root", ...]}.
 //
@@ -239,30 +239,30 @@ func deniedMemberSegment(real string) string {
 // of $HOME is permitted (matching the LocalMode unspecified-bind WARN precedent
 // documented on humanOrAdminAuth) but leaves the section-(c) residual
 // unbounded, so it must never be silent.
-func ParseMemberMountPolicy(roots, rootsMap, writable, writableDeny string) (p MemberMountPolicy, warnings []string, err error) {
-	if p.Roots, err = parseRootList("WARDYN_MEMBER_WORKSPACE_ROOTS", roots); err != nil {
-		return MemberMountPolicy{}, nil, err
+func ParseUserMountPolicy(roots, rootsMap, writable, writableDeny string) (p UserMountPolicy, warnings []string, err error) {
+	if p.Roots, err = parseRootList("WARDYN_USER_WORKSPACE_ROOTS", roots); err != nil {
+		return UserMountPolicy{}, nil, err
 	}
-	if p.WritableRoots, err = parseRootList("WARDYN_MEMBER_WRITABLE_ROOTS", writable); err != nil {
-		return MemberMountPolicy{}, nil, err
+	if p.WritableRoots, err = parseRootList("WARDYN_USER_WRITABLE_ROOTS", writable); err != nil {
+		return UserMountPolicy{}, nil, err
 	}
-	if p.WritableDeny, err = parseRootList("WARDYN_MEMBER_WRITABLE_DENY", writableDeny); err != nil {
-		return MemberMountPolicy{}, nil, err
+	if p.WritableDeny, err = parseRootList("WARDYN_USER_WRITABLE_DENY", writableDeny); err != nil {
+		return UserMountPolicy{}, nil, err
 	}
 	if strings.TrimSpace(rootsMap) != "" {
 		var raw map[string][]string
 		if uerr := json.Unmarshal([]byte(rootsMap), &raw); uerr != nil {
-			return MemberMountPolicy{}, nil, fmt.Errorf("WARDYN_MEMBER_WORKSPACE_ROOTS_MAP: %w (want {\"<principal>\": [\"/abs/root\", ...]})", uerr)
+			return UserMountPolicy{}, nil, fmt.Errorf("WARDYN_USER_WORKSPACE_ROOTS_MAP: %w (want {\"<principal>\": [\"/abs/root\", ...]})", uerr)
 		}
 		p.RootsByPrincipal = make(map[string][]string, len(raw))
 		for principal, list := range raw {
 			key := strings.ToLower(strings.TrimSpace(principal))
 			if key == "" {
-				return MemberMountPolicy{}, nil, fmt.Errorf("WARDYN_MEMBER_WORKSPACE_ROOTS_MAP: empty principal key")
+				return UserMountPolicy{}, nil, fmt.Errorf("WARDYN_USER_WORKSPACE_ROOTS_MAP: empty principal key")
 			}
-			parsed, perr := parseRootList("WARDYN_MEMBER_WORKSPACE_ROOTS_MAP["+key+"]", strings.Join(list, ","))
+			parsed, perr := parseRootList("WARDYN_USER_WORKSPACE_ROOTS_MAP["+key+"]", strings.Join(list, ","))
 			if perr != nil {
-				return MemberMountPolicy{}, nil, perr
+				return UserMountPolicy{}, nil, perr
 			}
 			// An entry REPLACES the shared list, so an empty one is "this member
 			// mounts nothing" — a meaningful, deliberately-expressible posture.
@@ -309,7 +309,7 @@ func parseRootList(name, raw string) ([]string, error) {
 // Fail-closed is the right behaviour for "/". internal/runner/member_mount_test.go
 // drives both against withinAnyRoot so the wording cannot drift from the
 // behaviour.
-func (p MemberMountPolicy) bootWarnings() []string {
+func (p UserMountPolicy) bootWarnings() []string {
 	home := filepath.Clean(strings.TrimSpace(os.Getenv("HOME")))
 	seen := map[string]bool{}
 	var out []string
@@ -330,10 +330,10 @@ func (p MemberMountPolicy) bootWarnings() []string {
 			}
 		}
 	}
-	check("WARDYN_MEMBER_WORKSPACE_ROOTS", p.Roots)
-	check("WARDYN_MEMBER_WRITABLE_ROOTS", p.WritableRoots)
+	check("WARDYN_USER_WORKSPACE_ROOTS", p.Roots)
+	check("WARDYN_USER_WRITABLE_ROOTS", p.WritableRoots)
 	for _, principal := range slices.Sorted(maps.Keys(p.RootsByPrincipal)) {
-		check("WARDYN_MEMBER_WORKSPACE_ROOTS_MAP["+principal+"]", p.RootsByPrincipal[principal])
+		check("WARDYN_USER_WORKSPACE_ROOTS_MAP["+principal+"]", p.RootsByPrincipal[principal])
 	}
 	return out
 }

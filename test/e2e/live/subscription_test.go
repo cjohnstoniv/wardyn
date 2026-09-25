@@ -31,7 +31,7 @@ import (
 //   - TestLive_SubscriptionInject      (WARDYN_E2E_EXPECT_INJECT=on, the default):
 //     the safe default. Launching a subscription run authors the re-mintable
 //     injection grant + auto-enables MITM — proven by the wardynd-emitted
-//     run.llm.subscription_inject audit event — then `wardyn attach` reaches a
+//     run.subscription.inject audit event — then `wardyn attach` reaches a
 //     shell whose curl to api.anthropic.com traverses the injected+MITM'd path.
 //   - TestLive_SubscriptionEscapeHatch (WARDYN_E2E_EXPECT_INJECT=off): the
 //     WARDYN_SUBSCRIPTION_INJECT=off escape hatch. NO injection grant is authored
@@ -48,7 +48,7 @@ import (
 // the proxy->control-plane egress callback may not route). The in-PTY curl
 // corroborates at the transport layer.
 
-const subscriptionInjectAuditAction = "run.llm.subscription_inject"
+const subscriptionInjectAuditAction = "run.subscription.inject"
 
 // expectInject reads the mode the operator/driver brought the stack up in
 // ("on" | "off"), defaulting to "on" (the safe default when a token provider is
@@ -190,7 +190,7 @@ func TestLive_SubscriptionEscapeHatch(t *testing.T) {
 	t.Logf("garbage sentinel credential rejected 401 — confirms NO live token was injected (legacy resident-copy behavior)")
 }
 
-// ── shared subscription helpers ──────────────────────────────────────────────
+// shared subscription helpers
 
 // launchSubscriptionInteractive seeds a trivial workspace and launches an
 // interactive run with the .claude credential mounts that engage subscription

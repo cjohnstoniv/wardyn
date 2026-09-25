@@ -207,13 +207,10 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 
 // ExpireStaleByKind is ExpireStale plus a per-KIND tally of what it moved.
 //
-// It exists because a metric that counts a state transition has to be
-// incremented WHERE THE STATE CHANGES: bumping the credential re-auth counter
-// at a later resolve that happens to meet a terminal row would count retries
-// rather than outcomes — with the measured ~30 s SDK cadence one aged-out
-// request would score dozens of "expired" — and would never fire at all for a
-// run whose sidecar had already given up. A separate function rather than a
-// changed signature: every existing caller asks the question it always asked.
+// The tally is incremented HERE, where the state actually changes, not at a
+// later resolve that happens to meet a terminal row — that would count
+// retries rather than outcomes. A separate function rather than a changed
+// signature: every existing caller asks the question it always asked.
 func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (int, map[types.ApprovalKind]int, error) {
 	now := time.Now().UTC()
 	cutoff := now.Add(-olderThan)
@@ -227,11 +224,10 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 	byKind := map[types.ApprovalKind]int{}
 	// Collected, not returned on the first failure: ListApprovals is ordered
 	// (ORDER BY requested_at DESC in the store) and the sweeper re-lists in the
-	// same order every tick, so returning on the first permanently failing
-	// PENDING row would abort the sweep at the same position every time —
-	// stranding every approval sorted after it, fleet-wide, with no expiry ever
-	// reaching them. The sweep instead expires what it can and reports every row
-	// it could not, the shape FSStore.Sweep already uses.
+	// same order every tick, so returning early would strand every approval
+	// sorted after the first failure, fleet-wide. The sweep instead expires
+	// what it can and reports every row it could not, the shape FSStore.Sweep
+	// already uses.
 	var failures []error
 	for _, ap := range pending {
 		runBound := ap.ExpiresAt != nil && !ap.ExpiresAt.After(now)
@@ -280,8 +276,104 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 	return expired, byKind, errors.Join(failures...)
 }
 
+// ExpireOne transitions a single PENDING approval straight to EXPIRED,
+// regardless of age — the same terminal state and audit action
+// ExpireStaleByKind's periodic sweep gives a stale row, but raised eagerly by
+// the CLIENT that is giving up on it (wardyn-toolgate at its own -deadline)
+// rather than waited out by the sweep's next tick. Without this, a row the
+// gate has already treated as denied stays PENDING — and approvable in the
+// console — for up to one sweep interval after the gate stopped waiting for
+// it (#811).
+//
+// Idempotent: a row already decided, by a human or by a concurrent sweep, is
+// left untouched — ErrAlreadyDecided is swallowed as the race it is, exactly
+// as ExpireStaleByKind and CancelForRun already treat it.
+//
+// The audit row is attributed to the run's agent (actor), not the system: the
+// sandbox can call this at any time, so nothing ties it to a deadline.
+func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string) error {
+	result, err := st.DecideApproval(ctx, id, types.ApprovalDecision{
+		State: types.ApprovalExpired, DecidedBy: "system", Reason: reason,
+	})
+	if err != nil {
+		if errors.Is(err, ErrAlreadyDecided) {
+			return nil
+		}
+		return fmt.Errorf("approval: expire %s: %w", id, err)
+	}
+	auditData, _ := json.Marshal(map[string]any{"approval_id": id, "reason": reason})
+	ev := types.AuditEvent{
+		ID:        uuid.New(),
+		Time:      time.Now().UTC(),
+		RunID:     &result.RunID,
+		ActorType: types.ActorAgent,
+		Actor:     actor,
+		Action:    "approval.expire",
+		Target:    id.String(),
+		Outcome:   "success",
+		Data:      json.RawMessage(auditData),
+	}
+	if err := st.Record(ctx, ev); err != nil {
+		audit.LogWriteFailure(ctx, ev, err)
+	}
+	return nil
+}
+
+// Tally keys for the rows one kind carries with two meanings (#151). Every
+// other row is tallied under its kind as-is: egress_domain, credential, a hook
+// tool_call as `tool_call`, and a credential_reauth of no shape below as
+// `credential_reauth`. Documented on docs/AUDIT-ACTIONS.md's
+// approval.cancel row.
+const (
+	// TallyToolCallADO is an Azure DevOps capability escalation.
+	TallyToolCallADO = "tool_call:azure_devops"
+	// TallyReauthAWSSSO is a lapsed captured AWS SSO session's re-auth.
+	TallyReauthAWSSSO = "credential_reauth:aws_sso"
+	// TallyReauthADOSignIn is an Azure DevOps sign-in request.
+	TallyReauthADOSignIn = "credential_reauth:azure_devops_signin"
+	// TallyReauthADOConsent is an Azure DevOps consent request.
+	TallyReauthADOConsent = "credential_reauth:azure_devops_consent"
+)
+
+// TallyKey is the key CancelForRun counts ap under, read off the stored row
+// alone. It restates internal/api's own definitions — adoEscalationScope (a
+// tool_call whose grant_id column is set, which only the control plane can
+// set, and whose scope names the same grant on the azure_devops lane),
+// adoSignInScope and adoConsentScope (lane + mechanism), and the AWS raise's
+// scope (no lane, a credential_source) — and
+// TestApprovalTallyKeyAgreesWithTheLanes (internal/api) pins that they agree.
+func TallyKey(ap types.ApprovalRequest) string {
+	var sc struct {
+		Lane             string    `json:"lane"`
+		Mechanism        string    `json:"mechanism"`
+		CredentialSource string    `json:"credential_source"`
+		GrantID          uuid.UUID `json:"grant_id"`
+	}
+	if json.Unmarshal(ap.RequestedScope, &sc) != nil {
+		return string(ap.Kind)
+	}
+	switch ap.Kind {
+	case types.ApprovalToolCall:
+		if ap.GrantID != nil && *ap.GrantID != uuid.Nil && sc.Lane == "azure_devops" && sc.GrantID == *ap.GrantID {
+			return TallyToolCallADO
+		}
+	case types.ApprovalCredentialReauth:
+		switch {
+		case sc.Lane == "azure_devops" && sc.Mechanism == "entra_signin":
+			return TallyReauthADOSignIn
+		case sc.Lane == "azure_devops" && sc.Mechanism == "entra_consent":
+			return TallyReauthADOConsent
+		case sc.Lane == "" && sc.CredentialSource != "":
+			return TallyReauthAWSSSO
+		}
+	}
+	return string(ap.Kind)
+}
+
 // CancelForRun transitions every still-PENDING approval belonging to runID to
-// CANCELLED and returns how many it moved. reason is the transition that ended
+// CANCELLED and returns how many it moved, per TallyKey — counted where the
+// CAS lands, so a row a human decided first is not in it. reason is the
+// transition that ended
 // the run ("run_killed", "run_completed", "run_failed", "run_stopped"), recorded
 // on each row and on the ONE audit event this emits.
 //
@@ -292,7 +384,7 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 // ErrAlreadyDecided is a race, not an error. DecidedBy is "system" for the same
 // reason the sweeper's is: nobody decided this, the run ended.
 //
-// ONE audit row for the batch, carrying the count, rather than one per approval:
+// ONE audit row for the batch, carrying the count and by_kind, rather than one per approval:
 // unlike an expiry sweep (whose rows are independent events spread over days),
 // these all belong to a single run transition an operator reads as one fact, and
 // the row is keyed to the run so it lands in that run's evidence rail. A run
@@ -300,17 +392,16 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 // idempotent in the audit log as well as in the store.
 //
 // The row is emitted on the failure path too, carrying however many rows DID
-// move plus the error: returning the CAS failure before reaching the audit
-// block would leave a cancel that moved two approvals and then hit a store
-// error with two rows durably CANCELLED and nothing in the trail — exactly the
-// unexplained emptying of the operator's queue this row exists to explain, and
-// the reason ExpireStale records inside its own loop rather than after it.
-func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (int, error) {
+// move plus the error, so a partial cancel never leaves rows durably CANCELLED
+// with nothing in the trail — the same reason ExpireStale records inside its
+// own loop rather than after it.
+func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (map[string]int, error) {
 	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
 	if err != nil {
-		return 0, fmt.Errorf("approval: list for cancel: %w", err)
+		return nil, fmt.Errorf("approval: list for cancel: %w", err)
 	}
 	cancelled := 0
+	byKind := map[string]int{}
 	// recordCancelled writes the ONE summary row for whatever this call actually
 	// moved. failure is nil on the clean path and the CAS error on the partial
 	// one; either way a call that moved NOTHING writes nothing, because there is
@@ -320,9 +411,10 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 			return
 		}
 		data := map[string]any{
-			"run_id": runID,
-			"reason": reason,
-			"count":  cancelled,
+			"run_id":  runID,
+			"reason":  reason,
+			"count":   cancelled,
+			"by_kind": byKind,
 		}
 		outcome := "success"
 		if failure != nil {
@@ -339,13 +431,13 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 			RunID:     &runID,
 			ActorType: types.ActorSystem,
 			Actor:     "wardyn/approval-cancel",
-			Action:    "approval.cancelled",
+			Action:    "approval.cancel",
 			Target:    runID.String(),
 			Outcome:   outcome,
 			Data:      json.RawMessage(auditData),
 		}
 		// Log-loud instead of swallowing, same rule as the expiry sweep: a dropped
-		// approval.cancelled row would leave the queue's emptying unexplained.
+		// approval.cancel row would leave the queue's emptying unexplained.
 		if rerr := st.Record(ctx, ev); rerr != nil {
 			audit.LogWriteFailure(ctx, ev, rerr)
 		}
@@ -367,12 +459,13 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 			}
 			cerr := fmt.Errorf("approval: cancel %s: %w", ap.ID, derr)
 			recordCancelled(cerr)
-			return cancelled, cerr
+			return byKind, cerr
 		}
 		cancelled++
+		byKind[TallyKey(ap)]++
 	}
 	recordCancelled(nil)
-	return cancelled, nil
+	return byKind, nil
 }
 
 // scopeHash produces a stable content hash over (runID, kind, scope) for

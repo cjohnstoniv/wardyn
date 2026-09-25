@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -219,8 +220,9 @@ func TestAWSSSORefresh_AbsentRefreshTokenKeepsTheOldOne(t *testing.T) {
 // TestAWSSSORefresh_InvalidGrantMarksDeadAndNeverFallsThroughToAPIKey is C2's
 // finding at its root: a spent refresh token must not become a silent switch to
 // a DIFFERENT auth mechanism. The lane goes not-ready and carries the sentence,
-// the credential is marked dead FOR THAT TOKEN (so the next dispatch does not
-// redeem it again), and nothing here hands the run an Anthropic api-key.
+// the credential is marked dead FOR THAT TOKEN, the stored sign-in is deleted
+// (CS-5: nothing can renew it), and nothing here hands the run an Anthropic
+// api-key — neither on this dispatch nor on the next, which finds no sign-in.
 func TestAWSSSORefresh_InvalidGrantMarksDeadAndNeverFallsThroughToAPIKey(t *testing.T) {
 	s, audit, blob := ssoRefreshServer(t)
 	calls := fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
@@ -254,12 +256,24 @@ func TestAWSSSORefresh_InvalidGrantMarksDeadAndNeverFallsThroughToAPIKey(t *test
 	if !s.awsSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken)) {
 		t.Fatal("the spent refresh token was not dead-marked")
 	}
+	if _, err := s.cfg.Secrets.Get(context.Background(), harnessCredSecretName(awsSSOProvider)); !errors.Is(err, secretstore.ErrNotFound) {
+		t.Fatalf("stored sign-in after invalid_grant: err = %v, want it deleted", err)
+	}
+	if del := audit.find("credential.expired.delete"); len(del) != 1 || del[0].Outcome != "success" ||
+		!strings.Contains(string(del[0].Data), `"reason":"invalid_grant"`) {
+		t.Fatalf("credential.expired.delete rows = %+v; want one success row with reason invalid_grant", del)
+	}
 	ba2 := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, true, nil, awsSSOScope{})
-	if ba2.ssoRefreshFailure != awsSSORefreshSpentRefusal(false) {
-		t.Errorf("second dispatch failure = %q; want the spent sentence", ba2.ssoRefreshFailure)
+	if ba2.ready || ba2.ssoInject {
+		t.Errorf("second dispatch ready=%v ssoInject=%v; want both false with the sign-in gone", ba2.ready, ba2.ssoInject)
+	}
+	for k := range ba2.env {
+		if strings.Contains(k, "ANTHROPIC_API_KEY") {
+			t.Errorf("second dispatch env carries %q — a deleted SSO session must never become an api-key run", k)
+		}
 	}
 	if got := calls.Load(); got != 1 {
-		t.Errorf("CreateToken calls after the second dispatch = %d; want 1 (the dead mark short-circuits)", got)
+		t.Errorf("CreateToken calls after the second dispatch = %d; want 1 (nothing left to redeem)", got)
 	}
 	// Keyed to the TOKEN, not the credential: a fresh capture is not pre-dead.
 	next := blob
@@ -664,7 +678,7 @@ func TestAWSSSORefresh_AdvisoryNeverRedeems(t *testing.T) {
 	})
 
 	llm := s.resolveRunLLMAccess(context.Background(), createRunRequest{Agent: "claude-code"},
-		types.RunPolicySpec{}, nil, nil, "")
+		types.RunPolicySpec{}, nil, nil, "", runProviderChoice{})
 	if llm == nil || !llm.Provisioned {
 		t.Fatalf("resolveRunLLMAccess = %+v; want a provisioned Bedrock verdict for an expired-but-renewable session", llm)
 	}
@@ -791,5 +805,55 @@ func TestAWSSSORefresh_TransientFailureServesAStillValidToken(t *testing.T) {
 	}
 	if got := s.metrics.ssoRefreshOutcomes[ssoRefreshOutcomeTransportError]; got != 1 {
 		t.Errorf("wardyn_sso_refresh_total{outcome=transport_error} = %d, want 1 (the access token was still valid)", got)
+	}
+}
+
+// flakySpentStore is a spent-mark store whose FIRST read fails and whose later
+// reads report the persisted mark — a transient error on the first probe after
+// a restart.
+type flakySpentStore struct {
+	store.Store
+	reads int
+}
+
+func (f *flakySpentStore) AWSSSOTokenSpent(context.Context, string) (bool, error) {
+	f.reads++
+	if f.reads == 1 {
+		return false, errors.New("conn reset by peer")
+	}
+	return true, nil
+}
+
+func (f *flakySpentStore) MarkAWSSSOTokenSpent(context.Context, string, string, time.Time) error {
+	return nil
+}
+
+func (f *flakySpentStore) PruneAWSSSOSpentTokens(context.Context, time.Time) (int, error) {
+	return 0, nil
+}
+
+// A failed read of the persisted spent mark is not an answer, so it is not
+// memoized: the next check reads the row again and finds the mark. Caching the
+// failure as spent=false masked a known-dead token as renewable for the whole
+// process lifetime (#505 F4).
+func TestAWSSSOTokenSpent_AFailedReadIsNotMemoized(t *testing.T) {
+	st := &flakySpentStore{}
+	s := &Server{cfg: Config{Store: st, BaseCtx: context.Background()}}
+	fp := awsSSOTokenFingerprint("rt-known-dead")
+
+	if s.awsSSOTokenSpent(fp) {
+		t.Fatal("the failed first read answered spent; it answers not-spent for that one call")
+	}
+	if _, cached := s.ssoRefreshSpent[fp]; cached {
+		t.Fatal("the failed read was memoized — the persisted mark is masked until the next restart")
+	}
+	if !s.awsSSOTokenSpent(fp) {
+		t.Fatal("the second check did not read the persisted mark; a transient error hid a spent token")
+	}
+	if st.reads != 2 {
+		t.Fatalf("store reads = %d, want 2 (the failure, then the definitive answer)", st.reads)
+	}
+	if !s.awsSSOTokenSpent(fp) || st.reads != 2 {
+		t.Fatalf("the definitive answer must be memoized; reads = %d", st.reads)
 	}
 }

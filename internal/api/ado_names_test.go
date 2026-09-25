@@ -49,7 +49,7 @@ func adoNameSpellings(project, repo string) []string {
 	}
 }
 
-// THE WORKSPACE DOOR takes every spelling of a spaced repository and stores
+// The workspace door takes every spelling of a spaced repository and stores
 // the one canonical URL.
 func TestADONames_WorkspaceDoorStoresOneSpelling(t *testing.T) {
 	for _, fx := range adoNameFixtures {
@@ -68,7 +68,7 @@ func TestADONames_WorkspaceDoorStoresOneSpelling(t *testing.T) {
 	}
 }
 
-// THE SOURCE LIBRARY DOOR does the same, and names the entry after the
+// The source library door does the same, and names the entry after the
 // repository as Azure DevOps shows it, not after its escapes.
 func TestADONames_SourceLibraryDoor(t *testing.T) {
 	for _, fx := range adoNameFixtures {
@@ -89,7 +89,7 @@ func TestADONames_SourceLibraryDoor(t *testing.T) {
 	}
 }
 
-// THE RUN DOOR canonicalises the run's repo before any gate reads it, so the
+// The run door canonicalises the run's repo before any gate reads it, so the
 // launch gates, the stored run row and WARDYN_REPOS all see one spelling.
 func TestADONames_RunDoorCanonicalises(t *testing.T) {
 	h := newHarness(t)
@@ -192,7 +192,7 @@ func TestADONames_StructureStaysRefused(t *testing.T) {
 	}
 }
 
-// AN AZURE DEVOPS SERVER HOST takes the name rule only when a provider row
+// An Azure DevOps server host takes the name rule only when a provider row
 // names it: nothing on the wire tells a TFS host from any other forge, so the
 // row is the only fact available. Without one, its escapes are refused as
 // every other forge's are.
@@ -218,7 +218,7 @@ func TestADONames_ServerHostsComeFromProviderRows(t *testing.T) {
 		}
 		return req.Sources[0].Source, ""
 	}
-	if got, msg := decode(func() []string { return hosts }); got != canonical {
+	if got, msg := decode(func() ([]string, error) { return hosts, nil }); got != canonical {
 		t.Errorf("with the row: stored %q (%s), want %q", got, msg, canonical)
 	}
 	if got, msg := decode(nil); msg == "" {
@@ -232,7 +232,7 @@ func TestADONames_ServerHostsComeFromProviderRows(t *testing.T) {
 	}
 }
 
-// TWO REPOSITORIES ONE DIRECTORY: "Card Auth" and "Card-Auth" both clone to
+// Two repositories one directory: "Card Auth" and "Card-Auth" both clone to
 // Card-Auth, so the second is dropped — and the run's 201 names it.
 func TestADONames_CloneDirectoryCollisionIsAWarning(t *testing.T) {
 	const (

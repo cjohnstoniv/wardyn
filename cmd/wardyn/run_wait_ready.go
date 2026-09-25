@@ -7,8 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,12 +59,12 @@ sandbox to an external tool over the SSH gateway.
 			if err != nil {
 				return err
 			}
-			res, err := waitForRunReady(cmd.Context(), client(), id, timeout, expectGit)
+			res, err := waitForRunReady(cmd.Context(), cmd.ErrOrStderr(), client(), id, timeout, expectGit)
 			if err != nil {
 				return err
 			}
 			if asJSON {
-				return emitJSON(res)
+				return emitJSON(cmd.OutOrStdout(), res)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "run %s is %s; workspace %s (%s)\n", res.ID, res.State, res.Workspace.Path, res.Workspace.VCS)
 			return nil
@@ -83,8 +83,8 @@ sandbox to an external tool over the SSH gateway.
 // 4xx and 501 are permanent and fail immediately. With wantGit it additionally
 // waits for vcs:"git". Exit codes mirror waitForRun: FAILED→1, other terminal
 // states→2, timeout→124.
-func waitForRunReady(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout time.Duration, wantGit bool) (waitReadyResult, error) {
-	fmt.Fprintf(os.Stderr, "waiting for run %s to be ready (timeout %s)\n", runID, timeout)
+func waitForRunReady(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.UUID, timeout time.Duration, wantGit bool) (waitReadyResult, error) {
+	fmt.Fprintf(errW, "waiting for run %s to be ready (timeout %s)\n", runID, timeout)
 	deadline := time.Now().Add(timeout)
 	var res waitReadyResult
 	res.ID = runID
@@ -131,7 +131,7 @@ func waitForRunReady(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeou
 					// vcs:"none" — when git is missing outright), the shape a
 					// clone still landing has.
 					if files.VCS == "git" || !wantGit {
-						fmt.Fprintf(os.Stderr, "run %s ready: workspace %s (%s)\n", runID, files.Path, files.VCS)
+						fmt.Fprintf(errW, "run %s ready: workspace %s (%s)\n", runID, files.Path, files.VCS)
 						return res, nil
 					}
 				case filesErrIsPermanent(ferr):

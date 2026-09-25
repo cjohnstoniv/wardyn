@@ -42,6 +42,7 @@ import "@xterm/xterm/css/xterm.css";
 // NONE of the fontsource subsets; those already come from the OS fallback).
 import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/latin-ext-400.css";
+import { decideKey } from "./attach-terminal-keys";
 import { getToken, HttpError } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
@@ -509,10 +510,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           if (cb) cb(outDecoder.decode(bytes, { stream: true }));
           return;
         }
-        // TEXT frame = control JSON. Today the server sends exactly one, the
-        // attach-mode frame, immediately on open (attach_holder.go). Anything
-        // else — a keepalive, a frame from a newer daemon — is ignored exactly
-        // as it was before this branch existed.
+        // TEXT frame = control JSON: the attach-mode frame, sent on open
+        // (attach_holder.go) and again mid-stream, read_only:false, when the
+        // server promotes this socket in place. Anything else — a keepalive, a
+        // frame from a newer daemon — is ignored, as before this branch existed.
         if (typeof ev.data !== "string") return;
         try {
           const msg = JSON.parse(ev.data) as AttachModeMsg;
@@ -608,13 +609,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       };
     };
 
-    // Take-over evicts, it does not promote (handleAttachTakeover). After the
-    // POST returns 200 the old holder's socket is closed, but ours is still the
-    // read-only one the server admitted — the server has no mid-stream "you may
-    // now type" message, and inventing one on both ends buys nothing over the
-    // reconnect this component already does. So: drop our socket and
-    // attach again; the fresh attach registers as holder. Between the eviction
-    // and that attach the holder endpoint honestly reports held:false.
+    // Unless our own open socket was just promoted in place (doTakeover skips
+    // this then), a take-over freed the slot rather than promoting us into it
+    // (handleAttachTakeover). After the POST returns 200 the old holder's
+    // socket is closed, but ours is still the read-only one the server
+    // admitted (or we had none) — so: drop our socket and attach again; the
+    // fresh attach registers as holder. Between the eviction and that attach
+    // the holder endpoint honestly reports held:false.
     reclaimRef.current = () => {
       if (disposed) return;
       const cur = wsRef.current;
@@ -662,32 +663,24 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // Alt+Enter sequence (ESC + CR) which Claude Code and similar TUIs treat as
     // "newline". (Plain Enter still submits; "\\" + Enter also works in Claude.)
     term.attachCustomKeyEventHandler((e) => {
-      // R4-F144 — WCAG 2.1.2 (No Keyboard Trap). xterm takes Tab, Shift+Tab and
-      // Escape into the PTY, which is right for a terminal and means a keyboard
-      // user who focuses this panel cannot leave the page without a pointer.
-      // 2.1.2 permits a non-standard exit only if it is ADVISED ON ENTRY — the
-      // title bar and the grid's aria-description carry that, and copy.ts's
-      // TERMINAL block holds the why-this-chord; this is the binding behind it.
-      // Focus lands on the panel (tabIndex -1 below) so the next Tab continues
-      // in document order, and `false` keeps xterm from ALSO forwarding the
-      // chord — it would otherwise leave the terminal AND type into it.
-      if (e.type === "keydown" && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key === "]") {
-        panelRef.current?.focus();
-        return false;
+      // R4-F144 (WCAG 2.1.2 No Keyboard Trap) + #133 (chord must be typeable
+      // on every layout): decideKey (attach-terminal-keys.ts, table-tested)
+      // carries the why. `false` below stops xterm from ALSO forwarding the
+      // key — an escape must not also type, and a newline must not also CR.
+      if (e.type !== "keydown") return true;
+      switch (decideKey(e)) {
+        case "escape":
+          panelRef.current?.focus(); // tabIndex -1: next Tab continues in document order
+          return false;
+        case "newline":
+          send(new TextEncoder().encode("\x1b\r"));
+          return false;
+        case "paste":
+          navigator.clipboard?.readText?.().then(sendPaste).catch(() => {});
+          return false;
+        default:
+          return true;
       }
-      if (e.type === "keydown" && e.key === "Enter" && (e.shiftKey || e.ctrlKey)) {
-        send(new TextEncoder().encode("\x1b\r"));
-        return false; // don't let xterm also send a plain CR
-      }
-      // Ctrl+V / Cmd+V (NOT Ctrl+Shift+V): read the clipboard and paste RAW.
-      // Otherwise xterm sends a literal ^V and never pastes. Ctrl+Shift+V /
-      // right-click go through the native paste event below; sendPaste coalesces
-      // so a key + event pair never double-pastes.
-      if (e.type === "keydown" && (e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "v" || e.key === "V")) {
-        navigator.clipboard?.readText?.().then(sendPaste).catch(() => {});
-        return false;
-      }
-      return true;
     });
 
     // Native paste (Ctrl+Shift+V, right-click, Cmd+V) → send RAW and STOP xterm's
@@ -765,12 +758,14 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const doTakeover = React.useCallback(async () => {
     setConfirmTakeover(false);
     setTakeoverErr("");
+    let promoted = false;
     try {
-      await runs.takeoverAttach(runId);
+      ({ promoted } = await runs.takeoverAttach(runId));
     } catch (e) {
       // A 409 means the server says NOBODY holds it — the holder left while we
-      // sat here as an observer, and nothing told us: the attach-mode frame is
-      // sent once, at connect. Without this branch the panel was a dead end,
+      // sat here as an observer, and nothing told us: past connect, an
+      // attach-mode frame (read_only:false) comes only with a promotion, and
+      // ours did not happen. Without this branch the panel was a dead end,
       // because the whole page's hero is a terminal permanently convinced it is
       // read-only, and the only way out was a full reload. There IS nothing to
       // take over, so reclaiming is the correct response to that answer, not an
@@ -785,6 +780,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       return;
     }
     setTakenOverBy(null);
+    // promoted: this principal's FIRST observer socket was flipped to writer IN
+    // PLACE, its notice on the way (see lastReadOnly above); reconnecting would
+    // close it and hand the slot to the oldest bystander, landing the taker
+    // read-only (#507). That socket may be another tab's, so only a still-open
+    // one can be ours — a displaced or exhausted panel has none, and reclaims.
+    if (promoted && wsRef.current?.readyState === WebSocket.OPEN) return;
     setMode(null);
     reclaimRef.current(); // evict-then-reconnect; see reclaimRef's assignment
   }, [runId]);
@@ -918,7 +919,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           // the root also renders the title-bar Redraw/Fullscreen buttons and
           // the footer's Take-over button, and stealing focus back from a
           // just-pressed button on every click would be its own bug; the root
-          // also owns the tabIndex={-1} landing pad the Ctrl+] chord targets.
+          // also owns the tabIndex={-1} landing pad the escape chord targets.
           onMouseDown={(e) => {
             e.stopPropagation();
             termRef.current?.focus();

@@ -48,6 +48,15 @@ set -euo pipefail
 # resolve_workdir) — identical across every agent image's agent-run.
 source /usr/local/bin/agent-run-lib.sh
 
+# ── managed agent-side policy ────────────────────────────────────────────────
+# codex reads no managed-policy file — nothing in this image consults one — so
+# there is no agent-side half of a run's autonomy level to deliver here, and
+# inventing deny rules the CLI would not honour would be worse than saying so.
+# The level is enforced at the Wardyn boundary (the launch gate, the egress
+# proxy, the confinement class) and by nothing inside this container.  Said out
+# loud on every launch rather than left to be inferred from an absent file.
+echo "agent-run: no managed agent-side settings — codex reads no managed-policy file, so autonomy level ${WARDYN_AUTONOMY_LEVEL:-none} is enforced at the Wardyn boundary and not inside this sandbox" >&2
+
 # ── selftest ─────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--selftest" ]]; then
     echo "=== wardyn agent-run selftest (codex-cli) ==="
@@ -121,13 +130,23 @@ start_boot_session() {
     fi
 }
 
+# A container that has booted before is being revived after a reboot (see
+# booted_before in agent-run-lib.sh): same prep over the kept files, and the
+# seed is never started again. Codex does not continue its last session here:
+# revive_markers clears agent-started, so the first attach starts a fresh codex
+# in the workspace (attach-bashrc.sh), as an unseeded run does.
+if [[ "${1:-}" == "--idle" ]] && booted_before; then
+    set -- --revive
+fi
+
 # ── idle mode (INTERACTIVE runs) ──────────────────────────────────────────────
 # Interactive counterpart to task mode: prepare the workspace (MITM CA, artifact
 # config, git-helper secret, CLONE the repo into ~/work) then hold open for
 # `wardyn attach`, so the attach shell isn't empty. (No SSH lane in the codex image.)
-if [[ "${1:-}" == "--idle" ]]; then
+if [[ "${1:-}" == "--idle" || "${1:-}" == "--revive" ]]; then
     : "${HOME:=/home/agent}"; export HOME
-    start_boot_session  # BEFORE any prep — see the function for why
+    # BEFORE any prep — see start_boot_session for why; a revive never re-seeds.
+    if [[ "$1" == "--revive" ]]; then revive_markers; else start_boot_session; fi
     install_mitm_ca
     prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
     install_artifact_config
@@ -147,7 +166,15 @@ if [[ "${1:-}" == "--idle" ]]; then
     printf '%s\n' "$workdir" > "$HOME/.wardyn/workdir"
     : > "$HOME/.wardyn/prep-done"
     echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
-    exec sleep infinity
+    # TERM-aware idle loop (not `exec sleep infinity`): as PID 1, sleep
+    # ignores SIGTERM, so a stop always waited out the full kill timeout
+    # instead of exiting promptly (wardyn issue #468).
+    # `|| :`: under set -e, a kill of the child sleep alone must not end PID 1.
+    # Exits 143/130 (the usual SIGTERM/SIGINT codes), not 0: an out-of-band
+    # stop must still read as a signal kill downstream, not success.
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
+    while :; do sleep 3600 & wait $! || :; done
 fi
 
 # ── boot-seed mode (INTERACTIVE runs that carry a seed) ───────────────────────
