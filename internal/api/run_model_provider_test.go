@@ -123,7 +123,8 @@ func providerRunFixture(t *testing.T, site types.SiteConfig, cs *capStore, ws *t
 func TestRunModelProviderDoors(t *testing.T) {
 	enforced := map[string]bool{capModelProvider: true}
 	twoKeys := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), keyProvider("corp", "claude-code"))}
-	// corp as a kind whose dispatch arm has not landed (MP-9's).
+	// corp as a Bedrock key provider with no region or model: refused, naming
+	// it, with no credential reason — no key of the caller's would repair it.
 	bearerCorp := keyProvider("corp", "claude-code")
 	bearerCorp.Kind = types.ModelProviderBedrockBearer
 	keyAndBearer := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), bearerCorp)}
@@ -173,12 +174,13 @@ func TestRunModelProviderDoors(t *testing.T) {
 			body: byID(pinned, ""), want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
 		{name: "workspace_id: two candidates and no choice", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
 			body: byID(plain, ""), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
-		{name: "workspace_id: a chosen provider whose kind has no dispatch arm yet", site: keyAndBearer, ws: plain, cs: &capStore{}, operator: true,
-			body: byID(plain, `,"model_provider":"corp"`), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp"),
+		{name: "workspace_id: a chosen Bedrock provider with no region or model", site: keyAndBearer, ws: plain, cs: &capStore{}, operator: true,
+			body: byID(plain, `,"model_provider":"corp"`), want: http.StatusUnprocessableEntity,
+			wantBody:     fmt.Sprintf(mpRunRefusal, "corp", fmt.Sprintf(mpBRUnset, "claude-code"), mpRunRemedy),
 			wantProvider: "corp", wantKind: types.ModelProviderBedrockBearer},
-		{name: "a chosen provider whose kind has no dispatch arm yet", site: keyAndBearer, cs: &capStore{}, operator: true,
+		{name: "a chosen Bedrock provider with no region or model", site: keyAndBearer, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
-			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp"),
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", fmt.Sprintf(mpBRUnset, "claude-code"), mpRunRemedy),
 			wantProvider: "corp", wantKind: types.ModelProviderBedrockBearer},
 		{name: "a chosen key provider the caller has not added their own key for", site: twoKeys, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,

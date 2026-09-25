@@ -49,8 +49,6 @@ func (s *Server) recordProviderChoice(ctx context.Context, actor string, ws type
 	switch {
 	case choice.refusal != "":
 		return refuse(choice.refusal)
-	case choice.chosen && !providerKindDispatched[choice.provider.Kind]:
-		return refuse(fmt.Sprintf(mpRunNotYet, choice.provider.ID))
 	case choice.chosen:
 		_, d, cerr := s.providerLiveness(ctx, choice.provider, stepRunAgent, runIdentitySubject(ctx, actor), false)
 		if cerr != nil {

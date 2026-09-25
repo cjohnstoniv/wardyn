@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -214,7 +215,7 @@ func mapsEqual(a, b map[string]string) bool {
 // TestProviderDispatch_RefusesNamingTheProvider: dispatch re-reads the
 // provider the run chose and refuses — FAILED, naming it, before any
 // credential is authored — when it is gone, off, no longer serves the agent,
-// is of a kind with no arm, when the provider block cannot be read, and when
+// was re-kinded to one its record cannot serve, when the provider block cannot be read, and when
 // the owner's own key is absent even though the operator namespace holds a
 // value under that very name.
 func TestProviderDispatch_RefusesNamingTheProvider(t *testing.T) {
@@ -245,8 +246,10 @@ func TestProviderDispatch_RefusesNamingTheProvider(t *testing.T) {
 			providerRefusal("anthropic", types.ModelProviderAnthropicAPIKey, mpRunStateOff).refusal, types.ModelProviderAnthropicAPIKey, false, ""},
 		{"no longer serves the agent", "anthropic", with(func(q *types.ModelProvider) { q.Harnesses = nil }), true, true,
 			providerRefusal("anthropic", types.ModelProviderAnthropicAPIKey, "it is not available to claude-code").refusal, types.ModelProviderAnthropicAPIKey, false, ""},
-		{"re-kinded to one with no arm", "anthropic", with(func(q *types.ModelProvider) { q.Kind = types.ModelProviderBedrockBearer }), true, true,
-			"This run's model provider is anthropic, and provider dispatch for that kind is not yet available on this build — nothing was started.",
+		// The record now names a Bedrock key with no region or model: the
+		// Bedrock arm refuses it, and no key of the owner's would repair it.
+		{"re-kinded to a Bedrock key with no region or model", "anthropic", with(func(q *types.ModelProvider) { q.Kind = types.ModelProviderBedrockBearer }), true, true,
+			stateDenial("anthropic", fmt.Sprintf(mpBRUnset, "claude-code"), mpRunRemedy).msg,
 			types.ModelProviderBedrockBearer, false, ""},
 		{"the block cannot be read", "anthropic", types.SiteConfig{}, false, true, mpRunUnreadable, "", false, ""},
 		// Created under a block that serves no provider for claude-code: nothing

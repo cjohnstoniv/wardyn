@@ -26,23 +26,10 @@ const (
 	mpRunStateNotGranted = "you are not granted it"
 	mpRunNoneGranted     = "No model provider that serves %s is granted to you — ask your admin. Wardyn does not substitute a different model provider."
 	mpRunChoose          = "Choose a model provider for this run: more than one serves %s, and none is its default."
-	mpRunNotYet          = "This run's model provider is %s, and provider dispatch for that kind is not yet available on this build — nothing was started."
 	mpRunNoBlock         = "model_provider names %q, but this deployment has no model providers — launch without model_provider."
 	mpRunNoModel         = "model_provider applies only to a run that calls a model — a task_mode=exec run or an agent that takes no model provider chooses none."
 	mpRunBadID           = "model_provider: %q is not a provider id — lowercase letters, digits and ._- , at most 64 characters"
 )
-
-// providerKindDispatched is the kinds whose dispatch arm has landed: since the
-// two dispatch lines joined (#551), every kind. ponytail: deleted with
-// mpRunNotYet once nothing reads it.
-var providerKindDispatched = map[types.ModelProviderKind]bool{
-	types.ModelProviderAnthropicAPIKey:       true,
-	types.ModelProviderOpenAIAPIKey:          true,
-	types.ModelProviderCustomEndpoint:        true,
-	types.ModelProviderAnthropicSubscription: true,
-	types.ModelProviderBedrockSSO:            true,
-	types.ModelProviderBedrockBearer:         true,
-}
 
 // runProviderChoice is chooseModelProvider's answer. chosen=false with no
 // refusal is "no provider serves this harness": the run launches on today's
@@ -151,8 +138,8 @@ func providerRefusal(id string, kind types.ModelProviderKind, state string) runP
 // (llmRefusalAuditReason, "model_credential") rides only on a credential
 // refusal, the one class a sign-in or a stored key repairs: the console
 // already answers that reason with a sign-in and a relaunch, which would
-// repair nothing for a provider that is off, not available to the agent or
-// of a kind with no dispatch arm (multi-provider §5.8: no door).
+// repair nothing for a provider that is off, not available to the agent,
+// unset, or of no person (multi-provider §5.8: no door).
 func writeProviderRefusal(w http.ResponseWriter, id string, kind types.ModelProviderKind, msg string, credential bool) {
 	body := errorBody{Error: msg, Provider: id, Kind: string(kind)}
 	if credential {
@@ -242,9 +229,6 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		return runProviderChoice{}, false
 	case choice.refusal != "":
 		writeProviderRefusal(w, choice.providerID, choice.kind, choice.refusal, false)
-		return runProviderChoice{}, false
-	case choice.chosen && !providerKindDispatched[choice.provider.Kind]:
-		writeProviderRefusal(w, choice.provider.ID, choice.provider.Kind, fmt.Sprintf(mpRunNotYet, choice.provider.ID), false)
 		return runProviderChoice{}, false
 	case choice.chosen:
 		// Liveness, the check dispatch repeats: the caller's OWN credential for

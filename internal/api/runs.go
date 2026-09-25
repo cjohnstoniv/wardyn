@@ -245,8 +245,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Bedrock model credential is handed to the run at dispatch, and a secrets
 	// axis graded without it froze the level a rung too high (#504).
 	// The model-provider choice first: with a provider block, it is the run's
-	// provider that decides its lane, and one this build cannot dispatch yet is
-	// refused here rather than handed to the lane chain below. mpChoice is
+	// provider that decides its lane, and one whose credential its owner does
+	// not hold is refused here rather than at dispatch. mpChoice is
 	// this run's ONLY source for ModelProviderID below and for the run.create
 	// audit snapshot (#527) — mpChoice.chosen is false, with a zero
 	// mpChoice.provider, on every "today's path" return (no block, or a block
