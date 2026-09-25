@@ -71,7 +71,7 @@ func TestAccessStaleSnapshotNamesTheCallerRemedy(t *testing.T) {
 			} else {
 				r = r.WithContext(cookieCtx)
 			}
-			err := srv.accessLockoutErr(r, nil, nil)
+			err := srv.accessLockoutErr(r, nil, nil, nil)
 			if err == nil {
 				t.Fatalf("%s: no refusal — a snapshot too stale to verify a no-op write is too stale to verify a "+
 					"real demotion either, so this must still refuse", tc.name)
@@ -96,7 +96,7 @@ func TestAccessStaleSnapshotNamesTheCallerRemedy(t *testing.T) {
 					[]string{"chart-admin"}), false),
 			uuid.New())
 		r := httptest.NewRequest("POST", "/api/v1/access/mappings", nil).WithContext(ctx)
-		if err := srv.accessLockoutErr(r, nil, []oidc.RoleMapping{{Value: "chart-admin", Role: oidc.RoleAdmin}}); err != nil {
+		if err := srv.accessLockoutErr(r, nil, []oidc.RoleMapping{{Value: "chart-admin", Role: oidc.RoleAdmin}}, nil); err != nil {
 			t.Errorf("a token caller whose snapshot reproduces admin was refused: %v — the lane split changes the "+
 				"remedy, never the decision", err)
 		}

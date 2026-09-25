@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 )
 
@@ -104,7 +105,10 @@ type bootFlags struct {
 	confinementMap       *string
 	trustDomain          *string
 	controlURL           *string
-	policyPath           *string
+	// internalListen is the proxy-facing TLS listener (internal_tls.go); it
+	// runs whenever controlURL is https.
+	internalListen *string
+	policyPath     *string
 	// trustedCAFile is WARDYN_TRUSTED_CA_FILE (see trusted_ca.go): a PATH to a
 	// PEM bundle of additional roots a corporate TLS-inspecting middlebox signs
 	// with. Same shape as policyPath above (a path read once at boot, not a
@@ -163,6 +167,7 @@ type bootFlags struct {
 	openaiGatewayHeader    *string
 	openaiGatewayFormat    *string
 	ageKey                 *string
+	platformKeyFile        *string
 	proxyImage             *string
 
 	recordingDir       *string
@@ -218,6 +223,7 @@ type bootFlags struct {
 
 	approvalExpiryInterval *time.Duration
 	approvalExpiryAfter    *time.Duration
+	endedRunGrace          *time.Duration
 	auditCoalesceWindow    *time.Duration
 
 	envbuild     *bool
@@ -264,12 +270,23 @@ type bootFlags struct {
 	printGroundtruthToken *bool
 	genAgeKey             *bool
 	// rotateAgeKey is the one knob in this struct with NO WARDYN_* env pair, on
-	// purpose: it is a destructive maintenance mode that re-encrypts every
+	// purpose: it is a destructive maintenance mode that rewraps every
 	// stored secret, so it must be an explicit act on a command line. Its
 	// early-exit siblings above are print-and-quit and harmless if an env var
 	// turns them on; a stray WARDYN_ROTATE_AGE_KEY left in a compose .env would
 	// rotate the store on EVERY boot. See rotateAgeKeyMode (rekey.go).
 	rotateAgeKey *string
+	// migrateSecrets, migrateTo and reconcile are the store-mode maintenance
+	// modes (migrate_secrets.go); like rotateAgeKey they have NO env pair.
+	migrateSecrets *bool
+	migrateTo      *string
+	reconcile      *bool
+	// rewrap is the local-key maintenance mode (rewrap.go); no env pair either.
+	rewrap *bool
+	// vault configures the Vault KV v2 external store, azure the Azure Key
+	// Vault one (secret_store.go).
+	vault vaultFlags
+	azure azureFlags
 
 	// allowMultiInstance is the runtime twin of the Helm chart's
 	// allowMultiReplica: it waives the single-instance boot lock
@@ -298,10 +315,48 @@ type bootFlags struct {
 	uiSessionTTL *time.Duration
 }
 
+// deprecatedEnvAliases is UT-5's six WARDYN_MEMBER_* → WARDYN_USER_* renames
+// (user-types-design.md rev 4 §6, §4's D5 ruling): {new, old} pairs, resolved
+// before any flag is parsed so every FlagBool/FlagEnv/os.Getenv(new) read below
+// sees the operator's value whichever name they used. No M-surface-2 generic
+// alias mechanism exists yet (issue UT-5 allows "or self-contained"), so this
+// is wardynd's own list rather than a shared registry; a later M-surface-2 PR
+// can fold it into a bigger one using the same cliutil.EnvAlias primitive.
+// Accepted through 0.8.x, removed in 0.9 — same shape as the boot WARN for a
+// chart WARDYN_OIDC_ROLE_MAP entry still saying `=member` (UT-2a).
+var deprecatedEnvAliases = [][2]string{
+	{"WARDYN_USER_DESKTOP", "WARDYN_MEMBER_MODE"},
+	{"WARDYN_USER_WORKSPACE_ROOTS", "WARDYN_MEMBER_WORKSPACE_ROOTS"},
+	{"WARDYN_USER_WORKSPACE_ROOTS_MAP", "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP"},
+	{"WARDYN_USER_WRITABLE_ROOTS", "WARDYN_MEMBER_WRITABLE_ROOTS"},
+	{"WARDYN_USER_WRITABLE_DENY", "WARDYN_MEMBER_WRITABLE_DENY"},
+	{"WARDYN_ALLOW_USER_ENV_SECRET", "WARDYN_ALLOW_MEMBER_ENV_SECRET"},
+}
+
+// resolveDeprecatedEnvAliases applies deprecatedEnvAliases. It WARNs once per
+// deprecated name actually carrying a value, naming 0.9 as the removal release,
+// and WARNs when both spellings are set to different values, naming the one it
+// ignored — for WARDYN_USER_WRITABLE_DENY a silently dropped old list would
+// widen the writable set.
+func resolveDeprecatedEnvAliases() {
+	for _, pair := range deprecatedEnvAliases {
+		newEnv, oldEnv := pair[0], pair[1]
+		aliased, ignored := cliutil.EnvAlias(newEnv, oldEnv)
+		attrs := []any{slog.String("old_env", oldEnv), slog.String("new_env", newEnv)}
+		switch {
+		case aliased:
+			slog.Warn(fmt.Sprintf("wardynd: %s is no longer a variable name; use %s instead. Accepted through 0.8.x, removed in 0.9.", oldEnv, newEnv), attrs...)
+		case ignored:
+			slog.Warn(fmt.Sprintf("wardynd: %s and %s are both set, to different values; using %s and ignoring %s. Unset %s, which is removed in 0.9.", newEnv, oldEnv, newEnv, oldEnv, oldEnv), attrs...)
+		}
+	}
+}
+
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
 // and parses the command line. Moved verbatim out of run(); the usage strings
 // carry the operator-facing documentation for each knob.
 func parseBootFlags() *bootFlags {
+	resolveDeprecatedEnvAliases()
 	f := &bootFlags{
 		dsn:            flagEnv("dsn", "WARDYN_PG_DSN", "", "Postgres connection string (required)"),
 		migrateDSN:     flagEnv("migrate-dsn", "WARDYN_PG_MIGRATE_DSN", "", "Postgres DSN for a migrator role, used only to run migrations; when set, the main DSN is used only for the least-privilege runtime pool. Empty (default) runs migrations on the main DSN directly"),
@@ -321,11 +376,11 @@ func parseBootFlags() *bootFlags {
 		localTrustFwd:           flagBool("local-trust-forwarder", "WARDYN_LOCAL_TRUST_FORWARDER", false, "in -local-mode, accept a non-loopback request peer instead of requiring a loopback TCP peer; safe only when the port is published loopback-only, e.g. 127.0.0.1:PORT; never set on a directly-bound host-mode wardynd, which re-opens no-auth LAN access (default false)"),
 		allowLocalModeWithOIDC:  flagBool("allow-local-mode-with-oidc", "WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC", false, "allow boot with -local-mode explicitly set alongside a configured -oidc-issuer, which disables the configured SSO/RBAC deployment; normally refused (default false)"),
 		allowSharedSubscription: flagBool("allow-shared-subscription", "WARDYN_ALLOW_SHARED_SUBSCRIPTION", false, "allow one operator's Anthropic subscription credential to be injected into runs on a deployment that is not -local-mode, e.g. the compose demo stack. Does not waive the refusals for the k8s runner or a configured OIDC issuer (default false)"),
-		memberMode:              flagBool("member-mode", "WARDYN_MEMBER_MODE", false, "assert that the human using this daemon is a MEMBER and operator authority lives elsewhere, e.g. an org IdP/MDM; refuses to start unless -local-mode is off and OIDC is configured (default false)"),
-		memberRoots:             flagEnv("member-workspace-roots", "WARDYN_MEMBER_WORKSPACE_ROOTS", "", "comma-separated absolute host directories a member's own local_dir workspace source may live under. Empty (default) means members may not mount host directories at all"),
-		memberRootsMap:          flagEnv("member-workspace-roots-map", "WARDYN_MEMBER_WORKSPACE_ROOTS_MAP", "", `optional per-member override of -member-workspace-roots, as JSON {"<principal>": ["/abs/root", ...]} keyed by OIDC sub or email; a listed principal's entry replaces the shared list rather than adding to it`),
-		memberWritableRoots:     flagEnv("member-writable-roots", "WARDYN_MEMBER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a member may mark their own mount writable. Empty (default) means member mounts are read-only"),
-		memberWritableDeny:      flagEnv("member-writable-deny", "WARDYN_MEMBER_WRITABLE_DENY", "", "comma-separated absolute host directories carved out of -member-writable-roots; deny wins over allow"),
+		memberMode:              flagBool("member-mode", "WARDYN_USER_DESKTOP", false, "assert that the human using this daemon is a MEMBER and operator authority lives elsewhere, e.g. an org IdP/MDM; refuses to start unless -local-mode is off and OIDC is configured (default false)"),
+		memberRoots:             flagEnv("member-workspace-roots", "WARDYN_USER_WORKSPACE_ROOTS", "", "comma-separated absolute host directories a member's own local_dir workspace source may live under. Empty (default) means members may not mount host directories at all"),
+		memberRootsMap:          flagEnv("member-workspace-roots-map", "WARDYN_USER_WORKSPACE_ROOTS_MAP", "", `optional per-member override of -member-workspace-roots, as JSON {"<principal>": ["/abs/root", ...]} keyed by OIDC sub or email; a listed principal's entry replaces the shared list rather than adding to it`),
+		memberWritableRoots:     flagEnv("member-writable-roots", "WARDYN_USER_WRITABLE_ROOTS", "", "comma-separated absolute host directories where a member may mark their own mount writable. Empty (default) means member mounts are read-only"),
+		memberWritableDeny:      flagEnv("member-writable-deny", "WARDYN_USER_WRITABLE_DENY", "", "comma-separated absolute host directories carved out of -member-writable-roots; deny wins over allow"),
 		orgURL:                  flagEnv("org-url", "WARDYN_ORG_URL", "", "org control plane this managed laptop belongs to (https://, or a plain http:// loopback URL for local testing). Empty (default) means no hybrid posture; requires -member-mode when set"),
 		orgEnrolToken:           flagEnv("org-enrolment-token", "WARDYN_ORG_ENROLMENT_TOKEN", "", "secret enrolment token this device presents to -org-url; requires -org-url to also be set"),
 		orgDeviceName:           flagEnv("org-device-name", "WARDYN_ORG_DEVICE_NAME", "", "human-readable name this device registers under at -org-url, e.g. a hostname or asset tag"),
@@ -339,7 +394,8 @@ func parseBootFlags() *bootFlags {
 		recordingSel:            flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `session recording store: "pg" (Postgres-backed, visible to every replica), "fs" (per-pod on-disk store) or "off" (no recording, no replay)`),
 		confinementMap:          flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins, e.g. "CC2=runsc;CC3=kata-qemu". Empty (default) uses the built-in defaults`),
 		trustDomain:             flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
-		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars"),
+		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),
+		internalListen:          flagEnv("internal-listen", "WARDYN_INTERNAL_LISTEN", ":8443", "listen address of the proxy-facing TLS listener (the /api/v1/internal/ routes and /healthz only), served with a certificate from wardynd's own internal CA. Runs whenever -control-plane-url is https"),
 		policyPath:              flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		trustedCAFile:           flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots, e.g. a corporate TLS-inspecting proxy's CA; added to the system roots for wardynd's own outbound TLS, the proxy sidecar and every sandbox. Empty (default) trusts only the system roots"),
 		daemonProxyURL:          flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
@@ -353,6 +409,7 @@ func parseBootFlags() *bootFlags {
 		openaiGatewayHeader:     flagEnv("openai-gateway-header", "WARDYN_OPENAI_GATEWAY_HEADER", "", "same as -anthropic-gateway-header, for OpenAI's gateway (default Authorization)"),
 		openaiGatewayFormat:     flagEnv("openai-gateway-format", "WARDYN_OPENAI_GATEWAY_FORMAT", "", `same as -anthropic-gateway-format, for OpenAI's gateway (default "Bearer %s")`),
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated and logged if empty"),
+		platformKeyFile:         flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap once; see docs/OPERATIONS.md"),
 		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 
 		recordingDir: flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); used only by the "fs" recording store`),
@@ -375,8 +432,8 @@ func parseBootFlags() *bootFlags {
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
 		// shape as -allow-plaintext-listen above.
 		allowOIDCNoOperatorList: flagBool("allow-oidc-no-operator-list", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST", false, "allow boot with OIDC SSO configured but -oidc-operator-emails empty, making every signed-in human admin-equivalent absent a role map; normally refused (default false)"),
-		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs, e.g. "Wardyn.Admin=admin,eng-team=member", mapping an App Role, group or email to "admin", "security_admin" or "member"; highest tier wins. Empty (default) disables role derivation; every signed-in human is "admin"`),
-		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "member") assigned when -oidc-role-map is set but nothing matched; "security_admin" is refused here. Empty (default) denies that login instead. Ignored when -oidc-role-map is empty`),
+		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an App Role, group or email to "admin", "security_admin" or "user"; highest tier wins. "member" means "user" until 0.9, with a boot warning. Empty (default) disables role derivation; every signed-in human is "admin"`),
+		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "user"; "member" means "user" until 0.9, with a boot warning) assigned when -oidc-role-map is set but nothing matched; "security_admin" is refused here. Empty (default) denies that login instead. Ignored when -oidc-role-map is empty`),
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "allow an email-shaped value on a console People-step role mapping (POST /access/mappings); refused by default in favor of an App Role or group key (default false)"),
 
 		dirProvider: flagEnv("directory-provider", "WARDYN_DIRECTORY_PROVIDER", "", `identity-directory connector for the console's "who" autocomplete: "entra" (Microsoft Graph) or empty. Empty (default) is the feature off; enabling it grants wardynd read of the whole directory`),
@@ -388,6 +445,7 @@ func parseBootFlags() *bootFlags {
 
 		approvalExpiryInterval: flagDuration("approval-expiry-interval", "WARDYN_APPROVAL_EXPIRY_INTERVAL", 10*time.Minute, "how often to sweep stale PENDING approvals (duration; 0 disables)"),
 		approvalExpiryAfter:    flagDuration("approval-expiry-after", "WARDYN_APPROVAL_EXPIRY_AFTER", 24*time.Hour, "PENDING approvals older than this transition to EXPIRED (duration)"),
+		endedRunGrace:          flagDuration("ended-run-grace", "WARDYN_ENDED_RUN_GRACE", 7*24*time.Hour, "how long a run past its end keeps its files, stopped with no network and no broker credentials, before it is torn down (duration; 0 tears it down at its end)"),
 		// A maximum GAP between two IDENTICAL consecutive auth.failed rows, not a
 		// cap on how long a streak may run: the flood this bounds was one row a
 		// minute forever from one retrying sidecar, which the auth.failed rate
@@ -463,9 +521,17 @@ func parseBootFlags() *bootFlags {
 		// flag.String, NOT flagEnv: no env pair by design — see the struct field.
 		// The backquoted word is deliberate: flag.PrintDefaults renders the first
 		// one in a usage string as the argument placeholder ("-rotate-age-key path").
-		rotateAgeKey: flag.String("rotate-age-key", "", "maintenance mode, daemon must be stopped: mint a new age identity, re-encrypt every stored secret from "+
-			"WARDYN_AGE_KEY to it in one transaction, replace the key file at `path` (previous kept as <path>.bak), then exit. "+
+		rotateAgeKey: flag.String("rotate-age-key", "", "maintenance mode, daemon must be stopped: mint a new age identity, rewrap every stored secret's data key from "+
+			"WARDYN_AGE_KEY's key to it in one transaction, replace the key file at `path` (previous kept as <path>.bak), then exit. "+
 			"That file must already hold the current identity as a bare AGE-SECRET-KEY-... line; see docs/OPERATIONS.md"),
+
+		// flag.Bool/flag.String, NOT the env helpers: no env pair by design.
+		migrateSecrets: flag.Bool("migrate-secrets", false, "maintenance mode, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit; idempotent and resumable. See docs/OPERATIONS.md (default false)"),
+		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
+		reconcile:      flag.Bool("reconcile", false, "maintenance mode: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit, non-zero on any; deletes nothing (default false)"),
+		rewrap:         flag.Bool("rewrap", false, "maintenance mode: in one transaction, rewrap every stored secret's data key onto the local key its purpose uses today (after an upgrade or setting WARDYN_PLATFORM_KEY_FILE), then exit; values are never decrypted. See docs/OPERATIONS.md (default false)"),
+		vault:          registerVaultFlags(),
+		azure:          registerAzureFlags(),
 
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address, e.g. ":2222". Empty (default) disables the gateway entirely`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address, e.g. ":8081". Empty (default) disables the gateway entirely; must differ from -listen`),
@@ -507,6 +573,16 @@ func parseBootFlags() *bootFlags {
 	}
 	if *f.bedrockAWSProfile == "" {
 		*f.bedrockAWSProfile = envOr("AWS_PROFILE", "")
+	}
+
+	// <VAR>_FILE twins resolve here, with the rest of the flag/env reading,
+	// so every caller — -rotate-age-key included — sees one resolved value. A
+	// bad file is a malformed setting like a bad flag, so it exits here the way
+	// flag.Parse does, with main's own fatal line (run() has no cyclomatic
+	// budget left for another early return).
+	if err := resolveSecretFiles(secretFileSettings(f)); err != nil {
+		slog.Error("wardynd: fatal", slog.Any("err", err))
+		os.Exit(1)
 	}
 	return f
 }

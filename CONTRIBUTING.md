@@ -47,7 +47,7 @@ Features are not done until they pass the conformance suite (`test/conformance`)
   reach because it strips `WARDYN_TEST_PG`
 - Conformance tests: Docker + the driver-agnostic stub (blocking in CI), plus
   `conformance-k8s` for the Kubernetes runner
-- UI: `pnpm typecheck`, unit tests with coverage, `pnpm build`, and the Playwright e2e suite
+- UI: ESLint (`react-hooks` and `no-floating-promises`, run by `make lint`), `pnpm typecheck`, unit tests with coverage, `pnpm build`, and the Playwright e2e suite
 - Docs: the mermaid diagram + label-truth gate (`make diagrams`)
 - Deploy: `helm lint` + `helm template` render assertions over the default AND
   `ci/all-on-values.yaml` value sets, `docker compose config` validation, and
@@ -213,6 +213,7 @@ tests with coverage, build, and a Playwright e2e suite) — a PR that touches
 ```bash
 (cd ui && pnpm install --frozen-lockfile)   # Node 22 + pnpm 9 (package.json pins packageManager)
 (cd ui && pnpm exec playwright install chromium) # once; run-ui-e2e.sh also needs jq on PATH
+(cd ui && pnpm lint)      # ESLint; `make lint` runs it too, so it needs node + pnpm
 make ui-typecheck         # tsc --noEmit
 make ui-test              # vitest with coverage
 make ui                   # production build (vite)

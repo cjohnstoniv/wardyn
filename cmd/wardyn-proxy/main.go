@@ -76,32 +76,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Per-proxy kill-switch: WARDYN_LLM_SCAN=off forces THIS proxy process's
-	// outbound content inspection OFF regardless of policy. It can only DISABLE
-	// (fail-safe direction), never enable beyond what the policy authorizes.
-	// NOTE: this is a per-proxy env read — the docker/k8s runner drivers copy
-	// it from wardynd's OWN process env into every sidecar they create
-	// (runner.ProxySidecarEnvKnobs), and compose now forwards it from the
-	// operator's shell into wardynd's env too (deploy/compose/docker-
-	// compose.yaml), so setting it once per wardynd instance now reaches
-	// every sidecar that instance creates; Helm still requires env.WARDYN_LLM_SCAN
-	// set explicitly in values (R-09).
-	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("WARDYN_LLM_SCAN"))); v {
-	case "off", "0", "false", "no", "disable", "disabled", "none":
-		if cfg.Policy.LLMInspection != nil {
-			slog.Info("wardyn-proxy: WARDYN_LLM_SCAN kill-switch set — outbound content inspection disabled")
-			cfg.Policy.LLMInspection = nil
-		}
-	case "", "on", "1", "true", "yes", "enable", "enabled":
-		// Unset or an explicit "leave as policy" token: the switch only DISABLES,
-		// so these are a no-op — inspection stays exactly as the policy authorizes.
-	default:
-		// A value that is neither a disable token nor an enable token states no
-		// intent this kill-switch can honor. Fail loud rather than silently
-		// ignore it (the operator may have typo'd "of" and think scanning is off).
-		slog.Error("wardyn-proxy: WARDYN_LLM_SCAN has an unrecognized value; want off/0/false/no/disable to disable, or on/1/true/yes to leave as policy",
-			slog.String("value", v))
-		os.Exit(2)
+	if code := applyLLMScanSwitch(cfg, os.Getenv("WARDYN_LLM_SCAN")); code != 0 {
+		os.Exit(code)
 	}
 
 	// Tell the Go runtime about the sidecar's cgroup ceiling BEFORE any request
@@ -160,6 +136,41 @@ func main() {
 	}
 }
 
+// applyLLMScanSwitch is the per-proxy kill-switch: WARDYN_LLM_SCAN=off forces
+// THIS proxy process's outbound content inspection OFF regardless of policy.
+// It can only DISABLE (fail-safe direction), never enable beyond what the
+// policy authorizes.
+// NOTE: this is a per-proxy env read — the docker/k8s runner drivers copy
+// it from wardynd's OWN process env into every sidecar they create
+// (runner.ProxySidecarEnvKnobs), and compose now forwards it from the
+// operator's shell into wardynd's env too (deploy/compose/docker-
+// compose.yaml), so setting it once per wardynd instance now reaches
+// every sidecar that instance creates; Helm still requires env.WARDYN_LLM_SCAN
+// set explicitly in values (R-09).
+//
+// It returns the process exit code main must use: 0 to carry on, 2 for a value
+// that states no intent the switch can honor.
+func applyLLMScanSwitch(cfg *proxy.Config, v string) int {
+	switch v := strings.ToLower(strings.TrimSpace(v)); v {
+	case "off", "0", "false", "no", "disable", "disabled", "none":
+		if cfg.Policy.LLMInspection != nil {
+			slog.Info("wardyn-proxy: WARDYN_LLM_SCAN kill-switch set — outbound content inspection disabled")
+			cfg.Policy.LLMInspection = nil
+		}
+	case "", "on", "1", "true", "yes", "enable", "enabled":
+		// Unset or an explicit "leave as policy" token: the switch only DISABLES,
+		// so these are a no-op — inspection stays exactly as the policy authorizes.
+	default:
+		// A value that is neither a disable token nor an enable token states no
+		// intent this kill-switch can honor. Fail loud rather than silently
+		// ignore it (the operator may have typo'd "of" and think scanning is off).
+		slog.Error("wardyn-proxy: WARDYN_LLM_SCAN has an unrecognized value; want off/0/false/no/disable to disable, or on/1/true/yes to leave as policy",
+			slog.String("value", v))
+		return 2
+	}
+	return 0
+}
+
 // logBranchNSPosture states the git-broker push branch-namespace posture ONCE
 // at boot, and only when it is OFF — the sibling of the WARDYN_LLM_SCAN line
 // in main, for the one control in that path that is ON by default. WARN, not
@@ -214,7 +225,7 @@ func applyCgroupMemoryLimit() {
 	if os.Getenv("GOMEMLIMIT") != "" {
 		return
 	}
-	limit, ok := cgroupMemoryLimitBytes()
+	limit, ok := cgroupMemoryLimitBytes(cgroupMemoryFiles...)
 	if !ok {
 		return
 	}
@@ -227,14 +238,17 @@ func applyCgroupMemoryLimit() {
 		slog.Int64("cgroup_bytes", limit), slog.Int64("gomemlimit_bytes", soft))
 }
 
-// cgroupMemoryLimitBytes reads this process's memory ceiling from cgroup v2
-// (memory.max) or v1 (memory.limit_in_bytes). "max" — and v1's
-// effectively-unlimited sentinel — report no limit.
-func cgroupMemoryLimitBytes() (int64, bool) {
-	for _, path := range []string{
-		"/sys/fs/cgroup/memory.max",
-		"/sys/fs/cgroup/memory/memory.limit_in_bytes",
-	} {
+// cgroupMemoryFiles are where this process's memory ceiling lives: cgroup v2
+// (memory.max), then v1 (memory.limit_in_bytes).
+var cgroupMemoryFiles = []string{
+	"/sys/fs/cgroup/memory.max",
+	"/sys/fs/cgroup/memory/memory.limit_in_bytes",
+}
+
+// cgroupMemoryLimitBytes reads the first usable ceiling from paths. "max" —
+// and v1's effectively-unlimited sentinel — report no limit.
+func cgroupMemoryLimitBytes(paths ...string) (int64, bool) {
+	for _, path := range paths {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			continue

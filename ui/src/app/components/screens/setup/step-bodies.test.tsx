@@ -43,6 +43,9 @@ vi.mock("../../../lib/api/health", () => ({
   health: {
     health: (...a: unknown[]) => healthMock(...a),
     getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    // #492: setup-screen.tsx's reloadSiteConfig now reads the ETag-carrying
+    // snapshot — routed through the SAME mock these tests already drive.
+    getSiteConfigSnapshot: async (...a: unknown[]) => ({ siteConfig: await getSiteConfigMock(...a), etag: null }),
     putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
   },
 }));
@@ -227,7 +230,8 @@ describe("step-bodies.tsx — smoke", () => {
   // one-line env var to turn it on) used to land in green "Ready" alongside
   // checks that are actually done — a false "nothing left to do". It gets its
   // own group instead.
-  it("F3-F2: an info+fix check lands under 'Optional — not blocking', not green Ready", () => {
+  it("an info+fix check lands under 'Optional — not blocking', not green Ready", () => {
+    // ticket: F3-F2
     const status = baseStatus({
       checks: [
         { id: "gvisor", label: "gVisor runtime", status: "ok", detail: "runsc detected" },
@@ -261,7 +265,8 @@ describe("step-bodies.tsx — smoke", () => {
   // F3-F2: a platform fact that ALSO carries a fix must not be introduced by a
   // sentence claiming "nothing to set up" — CheckRow renders its Fix line
   // regardless, so the sentence would contradict its own section.
-  it("F3-F2: 'About this host' drops the nothing-to-set-up sentence when a platform note carries a fix", () => {
+  it("'About this host' drops the nothing-to-set-up sentence when a platform note carries a fix", () => {
+    // ticket: F3-F2
     const status = baseStatus({
       checks: [
         {
@@ -290,7 +295,8 @@ describe("step-bodies.tsx — smoke", () => {
 
   // Negative control: the existing platform_wsl fixture (no fix) keeps the
   // reassurance sentence — only a fix-carrying note loses it.
-  it("F3-F2 negative control: a platform note with no fix keeps the nothing-to-set-up sentence", () => {
+  it("negative control: a platform note with no fix keeps the nothing-to-set-up sentence", () => {
+    // ticket: F3-F2
     const status = baseStatus();
     render(
       <ReviewStep
@@ -308,7 +314,8 @@ describe("step-bodies.tsx — smoke", () => {
   // X3-F15: "on the left" is wrong below `lg` (setup-layout.tsx stacks the
   // rail ABOVE the content there) — the sentence now names the rail without
   // claiming a position.
-  it("X3-F15: 'jump straight to any step' names the phase rail without claiming it's on the left", () => {
+  it("'jump straight to any step' names the phase rail without claiming it's on the left", () => {
+    // ticket: X3-F15
     const status = baseStatus();
     render(
       <ReviewStep
@@ -351,11 +358,11 @@ describe("step-bodies.tsx — smoke", () => {
   it("#161: a blocking warn lands under 'Blocking'; a non-blocking fail lands under 'Worth a look'", () => {
     renderReview(
       reviewStatus([
-        { id: "sso_rbac", label: "SSO role mapping", status: "warn", blocking: true },
+        { id: "sso_rbac", label: "Who is an admin", status: "warn", blocking: true },
         { id: "kvm", label: "/dev/kvm", status: "fail", detail: "missing" },
       ]),
     );
-    expect(screen.getByText("Blocking").closest("section")).toHaveTextContent("SSO role mapping");
+    expect(screen.getByText("Blocking").closest("section")).toHaveTextContent("Who is an admin");
     expect(screen.getByText("Worth a look").closest("section")).toHaveTextContent("/dev/kvm");
   });
 

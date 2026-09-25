@@ -18,7 +18,7 @@ func TestValidateBootPosture(t *testing.T) {
 		wantErr                        string // substring; empty = must succeed
 	}{
 		{name: "nothing set boots", listen: ":8080"},
-		{name: "hybrid without member mode refused", listen: ":8080", orgURL: "https://org.example.com", wantErr: "WARDYN_ORG_URL is set but WARDYN_MEMBER_MODE is not"},
+		{name: "hybrid without member mode refused", listen: ":8080", orgURL: "https://org.example.com", wantErr: "WARDYN_ORG_URL is set but WARDYN_USER_DESKTOP is not"},
 		{name: "UI-sandbox on the console address refused", listen: ":8080", uiListen: ":8080", wantErr: "same address as -listen"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
