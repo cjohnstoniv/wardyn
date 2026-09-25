@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
+  never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
+  to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
+  failing nightly lane opened no issue. `GH_REPO: ${{ github.repository }}` is now set alongside
+  the job's `GH_TOKEN`.
 - **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
   map being set was previously enough to hide the "Who is an admin" setup row and the shell
   banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
