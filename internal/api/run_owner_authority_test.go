@@ -573,6 +573,9 @@ func TestPersistedDoorsClassifyEveryKind(t *testing.T) {
 	if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(rechecked))) {
 		t.Errorf("persistedLaunchDoors kinds = %v, want exactly %v", got, rechecked)
 	}
+	if got := persistedLaunchDoors(types.AgentRun{Agent: "claude-code"}, nil); slices.ContainsFunc(got, func(d door) bool { return d.kind == capModelProvider || d.kind == capPolicy }) {
+		t.Errorf("a legacy row (no model provider, no policy) yields %v; want no model_provider or policy door", got)
+	}
 }
 
 // TestRecheck_AnAdminOwnedRunIsHeldToItsOwnersSubRows pins the by-sub rule for
