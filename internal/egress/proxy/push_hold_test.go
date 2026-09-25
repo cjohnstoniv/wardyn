@@ -36,6 +36,7 @@ type pushCP struct {
 	raises []types.PushContentScope
 	lists  []*types.PushPathList
 	polls  int
+	refuse int // when set, every raise is answered with this status
 }
 
 func newPushCP(t *testing.T, state types.ApprovalState) *pushCP {
@@ -61,6 +62,10 @@ func newPushCP(t *testing.T, state types.ApprovalState) *pushCP {
 			c.kinds = append(c.kinds, body.Kind)
 			c.raises = append(c.raises, scope)
 			c.lists = append(c.lists, body.PathList)
+			if c.refuse != 0 {
+				http.Error(w, "refused", c.refuse)
+				return
+			}
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(types.ApprovalRequest{ID: c.id, State: types.ApprovalPending})
 			return

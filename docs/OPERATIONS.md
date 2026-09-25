@@ -641,11 +641,16 @@ lever today**. Concretely:
   keeps the rest, one row per approval, bounded at 10,000 paths or 1 MiB of
   path text (`truncated: true` past either), verified against the approval's
   `paths_total` and `paths_digest` before it is written, and refused UPDATE,
-  DELETE and TRUNCATE by its own triggers. The same list is written into the
-  run's audit trail as `approval.push_paths.record` (AUDIT-ACTIONS.md), so the
-  run's audit export carries it, and `GET /api/v1/approvals/{id}/paths` reads
-  it back to whoever may see the approval — the run's owner, an admin or a
-  `security_admin` — whatever state the run ended in. The route answers every
+  DELETE and TRUNCATE by its own triggers. A run keeps at most 32 such lists.
+  The run's audit trail records each as a small chained
+  `approval.push_paths.record` row carrying the list's SHA-256
+  (`stored_list_digest`); `GET /api/v1/audit/export` inlines the stored list
+  into that row as it streams, so the audit log and its SIEM sinks never carry
+  a megabyte row, and an exported list that no longer hashes to the chained
+  digest was altered in the table (AUDIT-ACTIONS.md). `GET
+  /api/v1/approvals/{id}/paths` reads the list back to whoever may see the
+  approval — the run's owner, an admin or a `security_admin` — whatever state
+  the run ended in. The route answers every
   `push_content` approval: one raised by a previous-release proxy, which sent no
   list, answers with the ten paths its scope names and `truncated: true` when
   more matched.
@@ -5868,6 +5873,9 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
 `api_tokens.user_type` with its CHECK. The long-holds runs add two more on `agent_runs`:
 `0083` adds `token_renewed_at` and `0084` adds `proxy_release`.
+`0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
+but it is not an instance of the hazard: it creates that function and the
+`push_content_paths` table in the same file, so the migrator owns both from the start.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does

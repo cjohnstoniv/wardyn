@@ -45,25 +45,34 @@ func NewPushPathList(paths []string) PushPathList {
 	return PushPathList{Paths: paths[:n], Truncated: n < len(paths)}
 }
 
+// pushPathListSlack is how far under PushPathListMaxBytes a list cut by the
+// byte bound may stop: the path that did not fit is at most this long.
+// ponytail: a git path longer than PATH_MAX, or one quoting has grown past
+// it, makes an honest cut look early and the raise is refused.
+const pushPathListSlack = 4096
+
 // VerifyAgainst checks l is the list s was built from: sorted, distinct and
-// within bounds, opening with s.Paths, and — unless Truncated — exactly
-// PathsTotal paths whose digest is s.PathsDigest. Where a truncated list was
-// cut is the sidecar's word: nothing the scope carries names the next path.
+// within bounds, opening with every one of s.Paths, and — unless Truncated —
+// exactly PathsTotal paths whose digest is s.PathsDigest. A truncated list
+// must also have been cut by a bound: PushPathListMaxPaths paths, or within
+// pushPathListSlack of PushPathListMaxBytes. Which path follows the cut is
+// still the sidecar's word; nothing the scope carries names it.
 func (l PushPathList) VerifyAgainst(s PushContentScope) error {
 	size := 0
 	for _, p := range l.Paths {
 		size += len(p)
 	}
-	head := min(len(l.Paths), len(s.Paths))
 	switch {
 	case len(l.Paths) > PushPathListMaxPaths || size > PushPathListMaxBytes:
 		return fmt.Errorf("path list is over %d paths or %d bytes", PushPathListMaxPaths, PushPathListMaxBytes)
 	case !sortedUnique(l.Paths) || slices.Contains(l.Paths, ""):
 		return errors.New("path list must be non-empty paths, sorted and distinct")
-	case !slices.Equal(l.Paths[:head], s.Paths[:head]):
+	case len(l.Paths) < len(s.Paths) || !slices.Equal(l.Paths[:len(s.Paths)], s.Paths):
 		return errors.New("path list does not open with the scope's paths")
 	case l.Truncated && len(l.Paths) >= s.PathsTotal:
 		return fmt.Errorf("a truncated path list holds %d paths, want fewer than paths_total %d", len(l.Paths), s.PathsTotal)
+	case l.Truncated && len(l.Paths) < PushPathListMaxPaths && size <= PushPathListMaxBytes-pushPathListSlack:
+		return fmt.Errorf("a truncated path list of %d paths and %d bytes stops short of both bounds", len(l.Paths), size)
 	case !l.Truncated && len(l.Paths) != s.PathsTotal:
 		return fmt.Errorf("path list holds %d paths, want paths_total %d", len(l.Paths), s.PathsTotal)
 	case !l.Truncated && PushPathsDigest(l.Paths) != s.PathsDigest:
@@ -104,8 +113,10 @@ type PushContentScope struct {
 	// ActsAs is the credential the forwarded push authenticates with, as
 	// "<grant kind>:<grant id>" — "github_token:<uuid>" or "git_pat:<uuid>".
 	ActsAs string `json:"acts_as"`
-	// Paths are the first PushContentMaxPaths review-matched paths, sorted. A
-	// path ending in "/" is a directory the push does not carry.
+	// Paths are the first PushContentMaxPaths review-matched paths, sorted,
+	// each named as git names it with core.quotePath on (the sidecar's
+	// quotePath), so every path is valid UTF-8 on the wire. A path ending in
+	// "/" is a directory the push does not carry.
 	Paths []string `json:"paths"`
 	// PathsTotal is how many paths matched a review pattern in all.
 	PathsTotal int `json:"paths_total"`

@@ -48,6 +48,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -163,11 +164,46 @@ func pushScope(paths []string, cmds []gitpack.Command, t pushTarget) (types.Push
 	return s, strings.Join([]string{s.Repo, s.Branch, s.PathsDigest, strings.Join(s.Commits, ",")}, "\x00")
 }
 
+// quotePath is p as git names it with core.quotePath on (git's quote_c_style):
+// unchanged unless it holds a control byte, '"', '\\', DEL or a byte past
+// ASCII, and then double-quoted with C escapes and every other such byte as a
+// three-digit octal escape. A held push's paths are named this way everywhere
+// — card, list, digest, dedup key — because the wire is JSON: a path that is
+// not UTF-8 would reach the control plane altered and fail its own digest.
+// Quoting is one-to-one, so distinct paths stay distinct.
+func quotePath(p string) string {
+	if !strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == '"' || r == '\\' || r >= 0x7f }) {
+		return p
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(p); i++ {
+		switch c := p[i]; {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c >= 0x07 && c <= 0x0d:
+			b.WriteByte('\\')
+			b.WriteByte("abtnvfr"[c-0x07])
+		case c < 0x20 || c >= 0x7f:
+			fmt.Fprintf(&b, "\\%03o", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 // holdPush decides a push the review rules matched: forwarded (true) once an
 // admin approves it, refused otherwise. It writes the refusal itself.
 func (p *Proxy) holdPush(w http.ResponseWriter, r *http.Request, rules *pushRuleSet, rv pushReview,
 	target pushTarget, subject slog.Attr, deny func(ruleSource string)) bool {
-	paths := slices.Compact(slices.Sorted(slices.Values(rv.paths)))
+	paths := make([]string, len(rv.paths))
+	for i, pth := range rv.paths {
+		paths[i] = quotePath(pth)
+	}
+	paths = slices.Compact(slices.Sorted(slices.Values(paths)))
 	scope, key := pushScope(paths, rv.cmds, target)
 	slog.WarnContext(r.Context(), "wardyn-proxy: git push touches paths that need review",
 		slog.String("run_id", p.runID.String()),
@@ -267,6 +303,11 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 		}{types.ApprovalPushContent, scope, list})
 		if err == nil {
 			id, err = p.approval.raiseBytes(ctx, body)
+		}
+		var refused *raiseRefusedError
+		if errors.As(err, &refused) {
+			return refuse(ruleSourceGitPushHeld, fmt.Sprintf("%s, and Wardyn refused the request for one (%d)", headline, refused.status),
+				"pushing again will be refused the same way: remove these paths from the push, or ask an admin")
 		}
 		if err != nil {
 			return refuse(ruleSourceGitPushHeld, headline+", and the request for one could not be raised",

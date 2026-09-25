@@ -35,6 +35,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -49,12 +50,15 @@ import (
 // pushContentUnattendedBody is the refusal a raise for an unattended run gets.
 const pushContentUnattendedBody = "this run is unattended, so a push that needs review is refused rather than held"
 
-// maxPushPathListsPerRun bounds the path lists one run may store — each up to
-// types.PushPathListMaxBytes — at the sidecar's own maxPushHoldKeys: a
-// sidecar never asks about more distinct pushes than that.
-// ponytail: count-then-insert; a burst of concurrent raises can pass it by at
-// most the sidecar's concurrent holds.
-const maxPushPathListsPerRun = 256
+// maxPushPathListsPerRun bounds the path lists one run may store, each up to
+// types.PushPathListMaxBytes (owner ruling, #1087). admitPushPathList checks
+// it before the approval exists; the store enforces it atomically when the
+// list is written, which is what holds under a burst.
+const maxPushPathListsPerRun = 32
+
+// pushPathsAuditAction is the row recordPushPathList writes and the audit
+// export fills in (withPushPaths).
+const pushPathsAuditAction = "approval.push_paths.record"
 
 // admitPushContentRaise is handleInternalRequestApproval's push_content arm.
 // It returns the scope to store — the sidecar's, with acts_as_kind and
@@ -176,20 +180,37 @@ func (s *Server) admitPushPathList(w http.ResponseWriter, r *http.Request, runID
 		return false
 	}
 	if n >= maxPushPathListsPerRun {
-		writeError(w, http.StatusTooManyRequests, "this run has held too many pushes for review; no more will be accepted")
+		writeError(w, http.StatusTooManyRequests, pushPathListCapBody)
 		return false
 	}
 	return true
 }
 
+const pushPathListCapBody = "this run has held too many pushes for review; no more will be accepted"
+
 // recordPushPathList keeps a raise's verified list with the approval it raised
 // or was deduplicated to (the same push, so the same list), and the first time
-// writes it into the run's audit trail, which the run's audit export reads. A
-// failure leaves the PENDING row without its list: the sidecar refuses the
-// push, and its next push dedups to the same row and records the list then.
+// records it in the run's audit trail. The audit row carries the list's
+// digest, not the list: it is chained and fans out to every SIEM sink, so it
+// stays small, and the audit export fills the paths in from the stored row
+// (withPushPaths).
+//
+// A raise that loses the per-run cap to a concurrent one expires the approval
+// it just raised, so no question is left in front of a human without its list.
+// Any other failure leaves the PENDING row without its list: the sidecar
+// refuses the push, and its next push dedups to the same row and records the
+// list then.
 func (s *Server) recordPushPathList(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
 	ap types.ApprovalRequest, l types.PushPathList) bool {
-	stored, err := s.cfg.Store.(store.PushPathListStore).RecordPushPathList(r.Context(), ap.ID, l)
+	stored, err := s.cfg.Store.(store.PushPathListStore).RecordPushPathList(r.Context(), ap.ID, ap.RunID, l, maxPushPathListsPerRun)
+	if errors.Is(err, store.ErrPushPathListCap) {
+		if xerr := s.cfg.Approvals.ExpireOne(r.Context(), ap.ID, claims.SPIFFEID, "push_path_list_cap"); xerr != nil {
+			writeServerError(w, r, "expire a push_content approval past the path-list cap", xerr)
+			return false
+		}
+		writeError(w, http.StatusTooManyRequests, pushPathListCapBody)
+		return false
+	}
 	if err != nil {
 		writeServerError(w, r, "store push path list", err)
 		return false
@@ -197,13 +218,38 @@ func (s *Server) recordPushPathList(w http.ResponseWriter, r *http.Request, clai
 	if stored {
 		var scope types.PushContentScope
 		_ = json.Unmarshal(ap.RequestedScope, &scope)
-		s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, types.ActorAgent, claims.SPIFFEID, "approval.push_paths.record",
+		s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, types.ActorAgent, claims.SPIFFEID, pushPathsAuditAction,
 			ap.ID.String(), "success", mustJSON(map[string]any{
-				"approval_id": ap.ID.String(), "paths": l.Paths, "truncated": l.Truncated,
-				"paths_total": scope.PathsTotal, "paths_digest": scope.PathsDigest,
+				"approval_id": ap.ID.String(), "truncated": l.Truncated, "paths_total": scope.PathsTotal,
+				"paths_digest": scope.PathsDigest, "stored_list_digest": types.PushPathsDigest(l.Paths),
 			})))
 	}
 	return true
+}
+
+// withPushPaths is an approval.push_paths.record row as the audit export
+// shows it: the stored list inlined as data.paths, read one row at a time so
+// the export's memory stays one page plus one list. The chained row's
+// stored_list_digest was fixed when the list was stored, so a reader checks
+// the inlined paths against it (types.PushPathsDigest) and a list altered in
+// push_content_paths since no longer matches. A list that cannot be read
+// leaves the row as stored, without paths, and is logged.
+func (s *Server) withPushPaths(ctx context.Context, ev types.AuditEvent) types.AuditEvent {
+	lists, ok := s.cfg.Store.(store.PushPathListStore)
+	id, perr := uuid.Parse(ev.Target)
+	var data map[string]json.RawMessage
+	if !ok || perr != nil || json.Unmarshal(ev.Data, &data) != nil {
+		return ev
+	}
+	l, err := lists.GetPushPathList(ctx, id)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardyn: audit export could not read a held push's path list",
+			slog.String("approval_id", ev.Target), slog.Any("err", err))
+		return ev
+	}
+	data["paths"] = mustJSON(l.Paths)
+	ev.Data = mustJSON(data)
+	return ev
 }
 
 // handleGetPushPathList returns a push_content approval's complete path list
