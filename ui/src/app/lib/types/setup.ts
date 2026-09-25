@@ -29,7 +29,7 @@ export interface SetupCheck {
   fix?: string;
   blocking?: boolean;
   // Narrows a row that can warn for more than one reason — the same shape as
-  // SCMAccess.cause above. Only sso_rbac sets it today ("default_role", #491);
+  // SCMAccess.cause below. Only sso_rbac sets it today ("default_role", #491);
   // absent on #484's original no-role-map-and-no-admin-list warn.
   cause?: string;
 }

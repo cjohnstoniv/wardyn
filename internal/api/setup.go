@@ -686,9 +686,12 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // admin — ssoRBACCheck's defaultRoleAdmin input (#491). Split out of
 // handleSetupStatus (which is otherwise inline) to keep it under the gocyclo
 // gate; s.cfg.OIDC already carries the boot-validated DefaultRole, so no new
-// Config field is needed.
+// Config field is needed. Deciding "is this the admin role" is
+// oidc.Authenticator's own call (DefaultRoleIsAdmin), not a bare == RoleAdmin
+// comparison here — internal/api/refusal_test.go's roleComparisons guard
+// stays shrink-only.
 func (s *Server) oidcDefaultRoleIsAdmin(oidcConfigured bool) bool {
-	return oidcConfigured && s.cfg.OIDC.DefaultRole() == oidc.RoleAdmin
+	return oidcConfigured && s.cfg.OIDC.DefaultRoleIsAdmin()
 }
 
 // redactSetupStatusForMember drops the operator/admin-facing DIAGNOSTIC detail

@@ -2228,10 +2228,12 @@ showing every admin a banner above every page — on either of two conditions
   People-step row) **nor** an admin list (the operator allowlist,
   `WARDYN_OIDC_OPERATOR_EMAILS`). An admin list alone is enough to clear this:
   an unmatched person then derives `member`.
-- **A role map (or admin list) IS set, but `WARDYN_OIDC_DEFAULT_ROLE=admin`.**
+- **A role map IS set (chart or People step), but `WARDYN_OIDC_DEFAULT_ROLE=admin`.**
   Every sign-in the map doesn't match still falls through to `admin` — before
   #491 this read `ok`, since a role map being set was all the check looked for.
   Fix by setting `WARDYN_OIDC_DEFAULT_ROLE` to `user` or a user type instead.
+  An admin list alone does not trip this: with no role map, a sign-in the
+  (empty) map doesn't match derives `member` regardless of the default role.
 
 A deployment that hits BOTH conditions (no role map, no admin list, AND
 `WARDYN_OIDC_DEFAULT_ROLE=admin`) reads the first condition's own sentence —

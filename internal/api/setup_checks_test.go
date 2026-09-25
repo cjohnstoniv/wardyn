@@ -44,7 +44,12 @@ func TestSsoRBACCheck(t *testing.T) {
 		// unmatched sign-in is still an admin, so the row must not read ok.
 		{"role map (chart) + default role admin: warn, default_role cause", true, true, false, false, true, true, "warn", "default_role"},
 		{"role map (People-step) + default role admin: warn, default_role cause", true, false, true, false, true, true, "warn", "default_role"},
-		{"admin list + default role admin: warn, default_role cause", true, false, false, true, true, true, "warn", "default_role"},
+		// F1: deriveRole ignores defaultRole when the merged role map is
+		// empty (derive.go's DefaultRole doc) and the admin list is never
+		// folded into that map — so an admin list alone plus a default role
+		// of admin still leaves an unmatched person deriving user. ok, not warn.
+		{"admin list only + default role admin: ok (deriveRole ignores the default role with no role map)", true, false, false, true, true, true, "ok", ""},
+		{"admin list + chart role map + default role admin: warn, default_role cause", true, true, false, true, true, true, "warn", "default_role"},
 		// Q491-1: the combination case (neither role map nor admin list, AND
 		// default role admin) reads as #484's ORIGINAL case, not the new one —
 		// the packet shows one banner, not two competing ones.
@@ -858,7 +863,9 @@ func assertSetupCheckBlocking(t *testing.T, chk SetupCheck) {
 // which needs a DefaultPolicy no golden fixture sets) across every arm/status
 // each one can produce, and asserts Blocking through assertSetupCheckBlocking.
 func TestSetupCheckBlocking(t *testing.T) {
-	// The three blocking-capable ids: the blocking arm, and their other arms.
+	// The three blocking-capable ids: the blocking arm(s), and their other
+	// arms — ssoRBACCheck has two distinct warn causes (#484's original and
+	// #491's default-role cause), both exercised below.
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "none"}))
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1"}}))
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1", "CC2"}}))

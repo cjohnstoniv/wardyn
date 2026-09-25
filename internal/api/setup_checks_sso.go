@@ -23,15 +23,19 @@ import "strings"
 //     deployment with neither a role map nor an admin list reads this row's
 //     strings even if defaultRoleAdmin is also true (Q491-1: one banner, not
 //     two competing ones).
-//  2. A role map (or admin list) IS set, but WARDYN_OIDC_DEFAULT_ROLE=admin
-//     (defaultRoleAdmin) — so every sign-in the map doesn't match still
+//  2. A role map IS set (chart or People step), but WARDYN_OIDC_DEFAULT_ROLE=
+//     admin (defaultRoleAdmin) — so every sign-in the map doesn't match still
 //     falls through to admin (deriveRole's arm 3). Before #491 this read
 //     "ok": a role map being set was the only thing this check looked for,
 //     so a deployment could have named rows, a default role of admin, and no
 //     warning anywhere. Cause "default_role" tells the console which of the
 //     two sentences to show (everyone-admin-banner.tsx); Q457-6's canon
 //     already treats Blocking as this row's own concern, not the banner's,
-//     so this arm blocks the console the same as arm 1.
+//     so this arm blocks the console the same as arm 1. An admin list ALONE
+//     (no role map) does not trip this arm: deriveRole only consults
+//     defaultRole when the merged role map is non-empty (derive.go's
+//     DefaultRole doc) — the admin list is never folded into that map, so an
+//     unmatched person there derives user regardless of defaultRoleAdmin.
 //
 // consoleRows is whether the store currently holds at least one People-step
 // row (the same nil-Store guard setup.go's own read of it applies —
@@ -63,16 +67,20 @@ func ssoRBACCheck(oidcConfigured, roleMapConfigured, consoleRows, adminList, def
 
 // ssoRBACWarnReason picks which of the two sso_rbac warn causes applies, or
 // reports no warning at all. Arm 1 (neither role map, console rows, nor admin
-// list) takes priority over arm 2 (defaultRoleAdmin) per Q491-1: a deployment
-// with neither set reads #484's original sentence even if the default role is
-// also admin, so the packet shows one banner, never two competing ones.
+// list) takes priority over arm 2 (a role map or console rows set, AND
+// defaultRoleAdmin) per Q491-1: a deployment with neither set reads #484's
+// original sentence even if the default role is also admin, so the packet
+// shows one banner, never two competing ones. Arm 2 requires an actual role
+// map (roleMapConfigured || consoleRows) — an admin list alone does not
+// trip it, because deriveRole ignores defaultRole when the merged map is
+// empty, so an unmatched person there derives user regardless.
 func ssoRBACWarnReason(roleMapConfigured, consoleRows, adminList, defaultRoleAdmin bool) (detail, fix, cause string, warn bool) {
 	switch {
 	case !roleMapConfigured && !consoleRows && !adminList:
 		return "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin.",
 			"Map people to admin or user on the People step, so only the people you name can change this deployment.",
 			"", true
-	case defaultRoleAdmin:
+	case defaultRoleAdmin && (roleMapConfigured || consoleRows):
 		return "A role map is set, but the default role is admin, so a sign-in the map doesn't match is still an admin.",
 			"Set WARDYN_OIDC_DEFAULT_ROLE to user or a user type (chart: env.WARDYN_OIDC_DEFAULT_ROLE), so a sign-in the role map doesn't match becomes a user, not an admin.",
 			"default_role", true
