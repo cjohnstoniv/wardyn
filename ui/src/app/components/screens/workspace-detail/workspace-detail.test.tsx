@@ -633,7 +633,8 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
 // least-privilege policy" — it writes `egress:` requirement rows; the policy
 // hand-off is the separate optional "Save session profile" action. The
 // retired sentence must appear nowhere.
-describe("WorkspaceDetailScreen — F5-F10: the Recorded-sessions subtitle stops overclaiming", () => {
+describe("WorkspaceDetailScreen — the Recorded-sessions subtitle stops overclaiming", () => {
+  // ticket: F5-F10
   it("never says the loop writes the least-privilege policy", async () => {
     getWorkspaceMock.mockResolvedValue(ws());
     renderDetail();
@@ -647,7 +648,8 @@ describe("WorkspaceDetailScreen — F5-F10: the Recorded-sessions subtitle stops
 // always false, so `.then((s) => setLlmReady(hasLlmPath(s)))` alone would
 // tell an operator "no model provider configured" for a daemon that simply
 // never answered. `unreachable` must read as unknown, not "no".
-describe("WorkspaceDetailScreen — F6-F3 site 2: an unreachable setup status never claims no model provider", () => {
+describe("WorkspaceDetailScreen — an unreachable setup status never claims no model provider", () => {
+  // ticket: F6-F3 (site 2)
   it("shows no model-provider warning when the setup status is the synthetic unreachable fallback", async () => {
     getSetupStatusMock.mockResolvedValue(setupStatus({ unreachable: true }));
     getWorkspaceMock.mockResolvedValue(ws());
@@ -679,7 +681,8 @@ function NavButton({ to }: { to: string }) {
   );
 }
 
-describe("WorkspaceDetailScreen — F5-F7: a stale load can't clobber a newer one", () => {
+describe("WorkspaceDetailScreen — a stale load can't clobber a newer one", () => {
+  // ticket: F5-F7
   it("renders workspace B even when A's load resolves after B's", async () => {
     let resolveA: (w: ReturnType<typeof ws>) => void = () => {};
     const aPromise = new Promise<ReturnType<typeof ws>>((res) => {
