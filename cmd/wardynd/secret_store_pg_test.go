@@ -267,7 +267,7 @@ func TestPG_ServedStoreSweepsExpiredCredentials(t *testing.T) {
 	pool := envelopeDB(t)
 	ctx := t.Context()
 	id, _ := age.GenerateX25519Identity()
-	secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
+	secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
 	if err != nil {
 		t.Fatalf("buildSecretStore: %v", err)
 	}
