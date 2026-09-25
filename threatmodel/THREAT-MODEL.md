@@ -1970,7 +1970,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     (`WARDYN_VAULT_ROLE_PLATFORM`) separates the privilege. Azure Key Vault has
     no per-name policy, so there the split is tags and audit only. In store mode
     the organisation's vault operators hold the boot keys too (design K11), and
-    can forge what this residual lists.
+    can forge what this residual lists. (c) **Transit mode**
+    (`WARDYN_KEK=transit`): the age key protects nothing once `wardynd -rewrap`
+    has moved every row, and boot refuses while it is still set with no row
+    under it. The residual moves to Vault: ONE Transit key and ONE Vault role
+    wrap the boot keys and the credentials alike, so that role's token (or
+    Vault's operators) unwraps both and can forge what this residual lists.
+    What it cannot do from the database alone is pass a credential's wrap off
+    as a boot key's: each wrap's `associated_data` binds `kek_id`, owner and
+    name, so a wrap moved to another row does not unwrap. A separate Transit
+    key and role for the boot keys is a 0.8.x follow-up (#979).
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 

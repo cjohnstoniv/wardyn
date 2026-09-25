@@ -4973,6 +4973,14 @@ vault secrets enable transit
 vault write -f transit/keys/wardyn type=aes256-gcm96
 ```
 
+Keep the key at `exportable=false`, `allow_plaintext_backup=false` and
+`deletion_allowed=false` (Vault's defaults; `vault read transit/keys/wardyn`
+shows them). The first two cannot be turned back off once set, and either lets
+the key leave Vault; the third keeps one command from destroying every stored
+credential. One Transit key and one Vault role wrap Wardyn's boot keys and the
+credentials alike; a separate key and role for the boot keys is a 0.8.x
+follow-up (`threatmodel/THREAT-MODEL.md` residual #49).
+
 **Policy.** Two paths, `update` only. Wardyn never calls `rewrap/` (Vault does
 not document `associated_data` on it, so `wardynd -rewrap` rewraps client-side)
 and never reads `keys/`:
