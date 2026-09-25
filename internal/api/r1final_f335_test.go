@@ -32,15 +32,16 @@ import (
 // session, or the status itself is the existence oracle denyForeignWorkspace
 // exists to close.
 
-// TestF335_ForeignMemberWorkspaceNotLaunchable is door 1.
-func TestF335_ForeignMemberWorkspaceNotLaunchable(t *testing.T) {
+// TestForeignMemberWorkspaceNotLaunchable is door 1.
+func TestForeignMemberWorkspaceNotLaunchable(t *testing.T) {
+	// ticket: F335
 	for _, tc := range []struct{ name, sub, email, role string }{
-		{"plain member", ownerOtherSub, "other@corp.example", oidc.RoleMember},
+		{"plain member", ownerOtherSub, "other@corp.example", oidc.RoleUser},
 		{"security admin", "sub-sec-admin", "sec@corp.example", oidc.RoleSecurityAdmin},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, project := memberProjectRoot(t)
-			srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
+			srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 			foreign := memberOwnedWorkspace(st, ownerMemberSub, project)
 			caller := ssoSession(t, tc.sub, tc.email, tc.role)
 
@@ -64,14 +65,15 @@ func TestF335_ForeignMemberWorkspaceNotLaunchable(t *testing.T) {
 	}
 }
 
-// TestF335_ForeignMemberSourceRefusedOnResolvedSpec is door 2: the same refusal
+// TestForeignMemberSourceRefusedOnResolvedSpec is door 2: the same refusal
 // on the RESOLVED spec, which is what a hand-authored policy naming the path
 // directly walks through. Driven at seedAndAdmitWorkspace, the chokepoint
 // create AND preflight share, so neither can preview or launch what the other
 // refuses.
-func TestF335_ForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
+func TestForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
+	// ticket: F335
 	root, project := memberProjectRoot(t)
-	srv, st, _ := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
+	srv, st, _ := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 	memberOwnedWorkspace(st, ownerMemberSub, project) // the OTHER member's onboarded dir
 
 	spec := types.RunPolicySpec{
@@ -80,7 +82,7 @@ func TestF335_ForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
 	}
 	req := createRunRequest{Agent: "claude-code"}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).
-		WithContext(operatorCtx(ownerOtherSub, "other@corp.example", oidc.RoleMember))
+		WithContext(operatorCtx(ownerOtherSub, "other@corp.example", oidc.RoleUser))
 	w := httptest.NewRecorder()
 
 	if _, ok := srv.seedAndAdmitWorkspace(r.Context(), w, r, &spec, &req, true); ok {
@@ -96,18 +98,19 @@ func TestF335_ForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
 	}
 }
 
-// TestF335_OwnAndOperatorWorkspacesStillLaunch is the counterfactual that stops
+// TestOwnAndOperatorWorkspacesStillLaunch is the counterfactual that stops
 // the gate above from being satisfied by refusing everyone: the owner's own
 // workspace and an OPERATOR-owned one both still reach the runner.
-func TestF335_OwnAndOperatorWorkspacesStillLaunch(t *testing.T) {
+func TestOwnAndOperatorWorkspacesStillLaunch(t *testing.T) {
+	// ticket: F335
 	for _, tc := range []struct{ name, owner string }{
 		{"own workspace", ownerMemberSub},
 		{"operator-owned workspace", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, project := memberProjectRoot(t)
-			srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
-			member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+			srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+			member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 			createMemberRun(t, srv, fr, member, memberOwnedWorkspace(st, tc.owner, project))
 		})
 	}

@@ -167,7 +167,7 @@ func TestDenyDialFailed_BrokeredLLM_RoundTrip(t *testing.T) {
 // decision-log datum a run's own CREATOR can also read (auditScope).
 func TestDenyDialFailed_SecretNeverReachesCause(t *testing.T) {
 	const secret = "dial-failed-cause-test-secret-should-never-appear"
-	procRegistry.AddGlobal([]byte(secret))
+	procMask([]byte(secret))
 
 	buf := &bytes.Buffer{}
 	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}

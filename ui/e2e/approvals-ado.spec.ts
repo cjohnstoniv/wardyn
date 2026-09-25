@@ -60,8 +60,14 @@ test.describe("Approvals — the Azure DevOps capability card", () => {
       await route.continue();
     });
     let approveBody: Record<string, unknown> | null = null;
+    // Held open until the assertions below observe the mid-decide state
+    // (#458: both buttons disable, only the pressed one spins) — otherwise
+    // the fulfill would race the click and there'd be nothing to catch.
+    let releaseApprove: () => void = () => {};
+    const approveHeld = new Promise<void>((resolve) => { releaseApprove = resolve; });
     await page.route(`**/api/v1/approvals/${APPROVAL_ID}/approve`, async (route) => {
       approveBody = route.request().postDataJSON() as Record<string, unknown>;
+      await approveHeld;
       decided = true;
       await route.fulfill({ json: { ...escalationRow(runId), state: "APPROVED", decision_scope: "once" } });
     });
@@ -85,6 +91,12 @@ test.describe("Approvals — the Azure DevOps capability card", () => {
 
     await card.getByRole("button", { name: "Approve" }).click();
 
+    // #458: while deciding, BOTH buttons disable and only the pressed one
+    // (Approve) shows a spinner.
+    await expect(card.getByRole("button", { name: "Deny" })).toBeDisabled();
+    await expect(card.locator(".animate-spin")).toHaveCount(1);
+
+    releaseApprove();
     await expect(card).toHaveCount(0);
     expect(approveBody).toMatchObject({ decision_scope: "once" });
   });

@@ -21,10 +21,11 @@
  * against this workspace is episode 05, and this episode ending with the
  * workspace ready is the seam between them.
  *
- * THE DIALOG IS THE OWNER'S, VERBATIM — local/episodes-03-12-scripts-current.md
- * ("# Episode 03 — Add a workspace"). Every blank-line stanza there is exactly
- * one caption here; SAY-ON-CLICK lines are act() captions spoken on the click
- * they name. Wording changes go through that file, never through this one.
+ * THE DIALOG IS THE OWNER'S, VERBATIM — from the frozen script's
+ * "# Episode 03 — Add a workspace" section. Every blank-line stanza there is
+ * exactly one caption here; SAY-ON-CLICK lines are act() captions spoken on
+ * the click they name. Wording changes go through that script, never through
+ * this one.
  * Short stanzas ride BEAT_SHORT. The choreography (rings, typing, asserts) is
  * this file's job; the words are not.
  *

@@ -59,7 +59,7 @@ import { DirectoryCombobox } from "../../wardyn/directory-combobox";
 import { Field } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
-import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText } from "../permissions";
+import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText, type PickableSubjectType } from "../permissions";
 import { Note, question } from "./display";
 
 // What PREVIEW_RESULT's {matched} says — the matching row named in the table's
@@ -67,6 +67,7 @@ import { Note, question } from "./display";
 const MATCHED_LABEL: Record<CapabilitySubjectType, string> = {
   user: GOV.MATCHED_USER,
   group: GOV.MATCHED_GROUP,
+  user_type: GOV.MATCHED_USER_TYPE,
   all: GOV.MATCHED_ALL,
 };
 
@@ -195,7 +196,7 @@ export function AssignmentsBlock({
               className={buttonVariants({ variant: "outline" })}
               onClick={(e) => {
                 e.preventDefault();
-                if (toRemove) remove(toRemove);
+                if (toRemove) void remove(toRemove);
               }}
             >
               {busy ? <Loader2 className="size-4 animate-spin" /> : null}
@@ -222,7 +223,7 @@ function AddAssignmentForm({
   teal: boolean;
   onAdded: () => void;
 }) {
-  const [subjectType, setSubjectType] = React.useState<CapabilitySubjectType>("group");
+  const [subjectType, setSubjectType] = React.useState<PickableSubjectType>("group");
   const [subject, setSubject] = React.useState("");
   const [profileID, setProfileID] = React.useState("");
   const [priority, setPriority] = React.useState("0");

@@ -56,7 +56,7 @@ func TestSetupStatus_FailedRosterReadNeverResolvesToTheOperatorNamespace(t *test
 	srv.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
 	putAWSSSOBlob(t, srv, awsSSOTestFixedNow.Add(time.Hour)) // the OPERATOR namespace
 
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	// Control: with the roster READABLE, per_user already binds the read to the
 	// member's own namespace. If this fails the fixture proves nothing below.
@@ -94,7 +94,7 @@ func TestRedactSetupStatusForMember_SourceRunIDOnlyOnTheCallersOwnRow(t *testing
 		{Provider: "anthropic", Captured: true, SourceRunID: runID, Aging: true},
 	}}
 
-	own := redactSetupStatusForMember(full, true, false)
+	own := redactSetupStatusForUser(full, true, false)
 	if own.Harness[0].SourceRunID != runID {
 		t.Errorf("per_user aws row source_run_id = %q, want %q — a member cannot corroborate their own sign-in without it",
 			own.Harness[0].SourceRunID, runID)
@@ -107,7 +107,7 @@ func TestRedactSetupStatusForMember_SourceRunIDOnlyOnTheCallersOwnRow(t *testing
 		t.Errorf("the rest of the lifecycle detail rode through: %+v", own.Harness[0])
 	}
 
-	shared := redactSetupStatusForMember(full, false, false)
+	shared := redactSetupStatusForUser(full, false, false)
 	for _, h := range shared.Harness {
 		if h.SourceRunID != "" {
 			t.Errorf("shared/legacy row %q kept source_run_id %q — that is the ADMIN's login run", h.Provider, h.SourceRunID)
@@ -128,7 +128,7 @@ func TestRedactSetupStatusForMember_BearerPresentOnlyOnTheCallersOwnBearerRow(t 
 		Region: "us-east-1", Model: "anthropic.claude", Ready: true, BearerPresent: true,
 	}}
 
-	own := redactSetupStatusForMember(full, true, true)
+	own := redactSetupStatusForUser(full, true, true)
 	if !own.Bedrock.BearerPresent {
 		t.Error("a member on their own per_user bearer row: bearer_present = false, want true — bedrockBearerFor already scoped this to their own namespace")
 	}
@@ -143,11 +143,11 @@ func TestRedactSetupStatusForMember_BearerPresentOnlyOnTheCallersOwnBearerRow(t 
 	// (ownAWSRow=false too) and a per_user row whose mechanism is bedrock_sso,
 	// not bedrock_bearer (ownAWSRow=true, ownBearerRow=false — the caller owns
 	// the AWS harness row, e.g. for SourceRunID, but not a bearer lane).
-	shared := redactSetupStatusForMember(full, false, false)
+	shared := redactSetupStatusForUser(full, false, false)
 	if shared.Bedrock.BearerPresent {
 		t.Error("a member on a shared row: bearer_present = true, want false — that would be the OPERATOR's key read as the member's own")
 	}
-	ssoRow := redactSetupStatusForMember(full, true, false)
+	ssoRow := redactSetupStatusForUser(full, true, false)
 	if ssoRow.Bedrock.BearerPresent {
 		t.Error("a member on a per_user SSO row: bearer_present = true, want false — that row has no bearer lane of its own")
 	}
@@ -166,7 +166,7 @@ func TestRedactSetupStatusForMember_BearerAbsentDespiteOperatorSecretPresent(t *
 		Bedrock: SetupBedrock{Ready: true, BearerPresent: false},
 		Secrets: SetupSecrets{Present: []string{"bedrock-api-key"}},
 	}
-	out := redactSetupStatusForMember(full, true, true)
+	out := redactSetupStatusForUser(full, true, true)
 	if out.Bedrock.BearerPresent {
 		t.Error("bearer_present = true, want false — nothing in this fixture says the CALLER stored one")
 	}

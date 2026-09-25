@@ -5,7 +5,9 @@ anything with a docker daemon) with **no pre-running Wardyn, no UI, and no
 human**. One script brings up a fresh control plane, launches one governed
 run, waits for its outcome, collects artifacts, tears everything down, and
 exits with the run's exit code — so your pipeline's pass/fail is the sandboxed
-task's pass/fail.
+task's pass/fail. Pointed at a control plane you already run (`WARDYN_URL`), the
+same script launches there instead, as a dedicated CI principal — which is where
+an agent run, with its model credential, belongs (see "CI's identity" below).
 
 This is a **BYOA (bring your own agent/container)** surface: you supply the
 image — an agent harness, your test container, or any stock image — and Wardyn
@@ -35,9 +37,9 @@ scripts/ci-run.sh
 ### Pin the wardyn checkout
 
 Step two **executes shell out of that checkout** — `scripts/ci-run.sh`, and
-everything it sources — inside the same job the same file tells you to seed
-with `secrets.ANTHROPIC_API_KEY`. Fetched at tip of Wardyn's default branch,
-that is a job where a push to a repository you do not control runs in front of
+everything it sources — inside the same job the same file hands your secrets
+(`secrets.WARDYN_CI_TOKEN`). Fetched at tip of Wardyn's default branch, that is
+a job where a push to a repository you do not control runs in front of
 your credentials, on your runner, with your network position.
 
 So both examples pin it: `ref: v<release>` on the Actions checkout,
@@ -58,12 +60,18 @@ carry versions rather than floating refs.
 | `WARDYN_CI_AGENT` | agent for harness mode / runner-tools source | `claude-code` |
 | `WARDYN_CI_REPO` | `org/name` cloned into the workspace (needs egress + creds, see below) | unset (ephemeral scratch) |
 | `WARDYN_CI_POLICY_FILE` | `RunPolicySpec` JSON | `examples/policies/ci.json` |
-| `WARDYN_CI_SECRETS` | `name=value[,name=value...]` seeded into the secret store pre-run | unset |
+| `WARDYN_URL` | an existing control plane to launch on, instead of a throwaway stack (see "CI's identity" below) | unset (throwaway stack) |
+| `WARDYN_CI_TOKEN` | with `WARDYN_URL`: the CI principal's own `wdn_` token — every `wardyn` call authenticates as it | **required** with `WARDYN_URL` |
+| `WARDYN_CI_MODEL_PROVIDER` | with `WARDYN_URL`, harness mode: the model provider the run uses, checked before launch | **required** there |
 | `WARDYN_CI_TIMEOUT` | `wardyn run --wait` bound | `30m` |
 | `WARDYN_CI_OUT` | artifact dir (`run.json`, `audit.json`, `run.log`, `session.cast` — the run's terminal recording, when it has one) | `./ci-artifacts` |
-| `WARDYN_CI_KEEP` | `1` = leave the stack up for debugging | unset |
-| `WARDYN_CI_SKIP_BUILD` | `1` = reuse existing local images | unset |
-| `WARDYN_DOCKER_SOCK` | which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
+| `WARDYN_CI_KEEP` | throwaway stack: `1` = leave it up for debugging | unset |
+| `WARDYN_CI_SKIP_BUILD` | throwaway stack: `1` = reuse existing local images | unset |
+| `WARDYN_DOCKER_SOCK` | throwaway stack: which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
+| `WARDYN_ADMIN_TOKEN` | throwaway stack: its own bootstrap bearer, gone with the stack; never sent to `WARDYN_URL` | `demo-admin-token` |
+
+`WARDYN_CI_SECRETS` is gone: `ci-run.sh` refuses it rather than seed a
+credential into the operator's namespace for every run to share.
 
 **If this deployment has an agent roster, the CI agent needs a row in it.**
 `ci-run.sh` defaults `WARDYN_CI_AGENT` to `claude-code`, and since 0.7.2 a
@@ -76,6 +84,36 @@ Either give the agent CI uses an enabled row (`PUT /api/v1/agent-providers`, or
 the Providers screen) or point `WARDYN_CI_AGENT` at one that has one. A
 deployment with NO `agent_providers` block refuses nothing — which is every
 install upgraded from 0.7.1 until someone writes the first row.
+
+### CI's identity
+
+A run's model credential is its owner's, and CI is no exception. So `ci-run.sh`
+has two modes:
+
+- **A throwaway stack** (the default). `ci-run.sh` brings up its own control
+  plane from nothing and drives it with that stack's own bootstrap bearer
+  (`WARDYN_ADMIN_TOKEN`, which dies with the stack). Nobody is signed in to it,
+  so nobody's model credential is there: it runs **`exec` mode only**, and
+  refuses a harness run up front.
+- **An existing control plane** (`WARDYN_URL` set). No stack, no build; the
+  `wardyn` CLI must be on `PATH`. Every call authenticates as `WARDYN_CI_TOKEN`
+  — a **dedicated CI principal**'s own `wdn_` token — and `WARDYN_ADMIN_TOKEN`
+  is cleared for those calls, since the CLI would otherwise try it first. A
+  harness run needs `WARDYN_CI_MODEL_PROVIDER`: `ci-run.sh` reads that
+  identity's `provider_access` (`wardyn setup status --json`), stores nothing,
+  and fails naming the provider unless its credential is `live` or `expiring`
+  (it warns on `expiring`). It then launches on exactly that provider
+  (`--model-provider`).
+
+The CI principal is a user in your IdP (or a local user) who signs in once,
+mints their own token (`POST /api/v1/me/tokens`, or the console), and stores
+their model-provider credential once (`PUT /model-providers/{id}/credential`,
+or the console) — see "Provisioning the CI principal" below. Its audit trail
+then says "CI", and it can be scoped with `capModelProvider`/`capAgent` like any
+other person, rather than one human's token paying for and being blamed for
+every pipeline run. The deployment's admin token is no substitute: under OIDC
+it holds no model credential, and `ci-run.sh` says so if it is handed one. The
+Claude subscription kind stays unavailable to CI either way (below).
 
 ### Exit codes
 
@@ -123,8 +161,8 @@ unattended baseline — and add exactly what the task needs:
   list) means the sandbox can reach nothing. GitHub is the exception: it is
   reached through the Wardyn git-broker (see below), not via `allowed_domains`.
 - **No `requires_approval: true` grants** — an approval-gated credential
-  never mints without a human. Use `requires_approval: false` grants with
-  secrets seeded via `WARDYN_CI_SECRETS`.
+  never mints without a human. Use `requires_approval: false` grants whose
+  secret the CI principal already holds on the control plane.
 - **Bound the run** — `auto_stop_after_sec` (ci.json: 1 hour) is the reaper
   backstop behind `WARDYN_CI_TIMEOUT`.
 
@@ -133,24 +171,18 @@ Cloning a **GitHub** repo (`WARDYN_CI_REPO`) does **not** put `github.com` in
 `github_token` grant and the run reaches only that repo (via `wardyn-proxy`,
 token minted proxy-side, never in the sandbox). An un-granted GitHub repo is
 denied. A non-GitHub SCM host still needs its own `allowed_domains` entry plus a
-`git_pat`/`ssh_key` grant whose secret you seed via `WARDYN_CI_SECRETS`.
+`git_pat`/`ssh_key` grant whose secret the CI principal holds on the control
+plane (`WARDYN_URL`).
 
 ### Model access for harness mode (running a real agent)
 
-Two paths work from zero prior state:
-
-- **API key** (simplest): policy grants an `api_key` scoped to
-  `api.anthropic.com` (see
-  [`examples/policies/ci-claude-llm.json`](../examples/policies/ci-claude-llm.json)
-  — `ci.json` plus exactly that grant and egress entry, so it's CI-safe as-is;
-  `examples/policies/claude-llm.json` is a DEV ceiling, not a CI policy —
-  `deny_with_review`, an approval-gated grant, and an unbounded run all need
-  stripping before it belongs in a pipeline) and the pipeline seeds it:
-  `WARDYN_CI_SECRETS=anthropic-api-key=$KEY`. The key is injected proxy-side;
-  the sandbox only ever holds a placeholder.
-- **AWS Bedrock**: set `WARDYN_BEDROCK_REGION`/`WARDYN_BEDROCK_MODEL` on the
-  stack and seed a `bedrock-api-key` bearer secret (never-resident,
-  proxy-injected).
+Model access is the CI principal's own credential for a model provider on the
+control plane `WARDYN_URL` names (see "CI's identity" above): it stores it once,
+through `PUT /model-providers/{id}/credential` (or the console), and the
+pipeline sets `WARDYN_CI_MODEL_PROVIDER` to that provider's id. Nothing is
+seeded pre-run and the policy carries no key; there is no key on the pipeline's
+env block to rotate or leak. The throwaway stack has no such credential, so it
+runs `exec` mode only.
 
 - **Claude subscription: not available in CI, deliberately.** A subscription
   credential belongs to one human, and CI runs work on behalf of everyone who can
@@ -162,9 +194,8 @@ Two paths work from zero prior state:
 
   Wardyn now refuses it structurally: shared subscription injection is limited to a
   single-user desktop posture (see `WARDYN_ALLOW_SHARED_SUBSCRIPTION` in
-  [`ENV.md`](ENV.md)), and CI is not one. Use an **API key** or **Bedrock** above —
-  both are per-deployment credentials that belong to the organisation rather than to
-  a person, which is what a pipeline actually wants.
+  [`ENV.md`](ENV.md)), and CI is not one. Give the CI principal an **API-key** or
+  **Bedrock** provider instead, with its own credential.
 
 ### Least-privilege, derived not guessed
 
@@ -279,8 +310,8 @@ its entry says so:
   scripts below — starts no control plane of its own. That is setup this
   repo does not put on every PR, so it runs in `nightly.yml`'s `byoi-e2e-live`
   job (which boots the compose stack first, the way `ci.yml`'s
-  `desktop-envelope` does) rather than in `ci.yml`, and remains runnable by
-  hand. See RELEASING.md when re-validating BYOI.
+  `helm-install-test` job does in its desktop-envelope half) rather than in
+  `ci.yml`, and remains runnable by hand. See RELEASING.md when re-validating BYOI.
 - **`scripts/run-e2e-subscription.sh`** (`make test-e2e-subscription`) — live
   subscription proxy-injection proof. It needs a real operator
   `claude setup-token`; no repository secret carries one. Run by hand before a
@@ -302,7 +333,7 @@ its entry says so:
   the interactive shell reaching tmux, the `ssh.exec` /
   `session.attach{transport:ssh}` rows for both, and both authorization arms —
   a second principal's `member` key refused on a run it does not own (audited
-  `ssh.auth` failure) and a third principal's `admin` key reaching that same
+  `ssh.authenticate` failure) and a third principal's `admin` key reaching that same
   run with `data.override=true`. Those two principals go in through
   `kubectl exec deploy/postgres`, because the API only ever stamps the
   *caller's* key and this install has one credential. It does **not** create or
@@ -349,8 +380,16 @@ The after runner-minutes are the same 26 runs without the three
 remains is unchanged, so its measured time carries over. No run is shorter than
 its longest job, so 19 minutes is the floor while `build` is the critical path.
 
-**Where `build`'s time goes**, in one green run (35555137810): `make test-race`
-537 s, `make cover-check` 395 s, `make lint` 120 s.
+**Where `build`'s time goes**, in one green run (35555137810, pre-#467): `make test-race`
+537 s, `make cover-check` 395 s, `make lint` 120 s — two full passes over the same three tag sets
+(coverage, then race). #467 merged them: `cover-check`'s three `test-report` suites now run under
+`-race -covermode=atomic` in one pass each, and the `build` job no longer runs `make test-race` or
+`make build-docker` as separate steps (`cover-check` already compiles and races those tag sets).
+Re-measure `cover-check`'s new time once green runs accumulate on this workflow; it should land
+below the old 537+395=932 s combined, not above it.
+`make lint` has since gained the console's ESLint (`ui/eslint.config.js`), so
+the `go (lint)` leg also sets up pnpm and node; that install and lint pass are not in the
+120 s above.
 
 **Why `ui-e2e` is one job.** In the same run its Playwright step took 492 s:
 Playwright itself 418 s, the backend and UI build plus the first seed 32 s, and
@@ -373,8 +412,7 @@ measured maximum with a ten-minute floor. Minutes, successful runs only:
 | `conformance` | 60 | 4.2 | 4.7 | 45 |
 | `envbuild-integration` | 60 | 3.6 | 4.0 | 20 |
 | `gates (staticcheck)` | 60 | 2.7 | 2.9 | 15 |
-| `helm-install-test` | 60 | 2.6 | 3.2 | 15 |
-| `desktop-envelope` | 60 | 2.2 | 2.5 | 15 |
+| `helm-install-test` | – | pending | pending | 20 |
 | `trivy (wardynd)` | 60 | 1.8 | 2.0 | 40 |
 | `notices` | 60 | 1.5 | 1.9 | 15 |
 | `gates (licenses)` | 60 | 1.4 | 2.0 | 15 |
@@ -393,6 +431,11 @@ measured maximum with a ten-minute floor. Minutes, successful runs only:
 | `multi-arch build (wardynd)`, nightly | 60 | 3.1 | 3.5 | 45 |
 | `multi-arch build (agent-aws-sso)`, nightly | 60 | 2.9 | 4.0 | 45 |
 
+`helm-install-test` now also runs the old `desktop-envelope` job's proof
+(#472). Before the merge the two took 3.2 and 2.5 minutes at most, so 20
+minutes clears twice their sum. Fill in its row once the merged job has about
+ten green runs.
+
 Re-measure (job name, runs, median and maximum over successful jobs):
 
 ```sh
@@ -409,11 +452,104 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 `make ci`, the local merge gate, prints the same kind of table for its own
 targets when it finishes or stops.
 
+### Incremental CI
+
+Three mechanisms (#932), on top of the per-job Go cache (#470) and the single
+race + coverage pass per tag set (#467):
+
+1. **Tag sets in parallel.** The `go` matrix job runs `go (lint)` (`make build tidy-check lint`),
+   `go (unit)`, `go (docker)` and `go (k8s)` (`make test-report`, `-docker`, `-k8s`) on four
+   runners instead of one after another. Each test leg uploads its reports as
+   `go-test-reports-<suite>`. `build` waits for all four, downloads the three profiles and
+   runs `make cover-union`, the same `COVER_MIN` floor over the same union that
+   `make cover-check` enforces locally.
+2. **Skip what a change cannot affect.** The `changes` job classifies the pull request's
+   changed paths (`git diff --name-only --no-renames HEAD^1 HEAD` on GitHub's merge commit,
+   so a moved file counts at both its old and its new path):
+
+   | Class | Paths | Skipped |
+   |---|---|---|
+   | docs | `docs/**`, `threatmodel/**`, any `*.md` | `ui-e2e`, `helm-install-test`, plus everything the ui class skips. `go (unit)`, `go (docker)` and `go (k8s)` run only the guard packages, and `build` skips the union (see below) |
+   | ui | `ui/**` | `conformance`, `conformance-k8s`, `test-pg`, `envbuild-integration`, `helm`, and `helm-install-test`'s kind half |
+   | backend | everything else, including Go, `deploy/**`, `scripts/**` and `.github/**` | nothing |
+
+   A job is skipped only when every changed path falls in a class that skips it, so a
+   docs-plus-ui change skips only the ui column. A path that matches no pattern counts as
+   backend, so a new directory runs everything until someone classifies it. A push, a merge
+   queue run and a pull request from a `train/*` branch always run everything.
+   The Go jobs (`go`, `build`) never skip, whatever changed. Dozens of Go test files read
+   the docs, the CHANGELOG, `ui/src` or the workflows (the citation, CHANGELOG-freeze,
+   RELEASING job-list and copy-parity guards among them), so skipping Go on a docs-only
+   change would let a docs change break the guards that check docs.
+
+   **Docs-only: guard packages only.** A docs-only change cannot change compiled code, race
+   behaviour or coverage. So when `code` is `false`, the three test legs do not run the race
+   and coverage suites. They run plain `go test -count=1`, with no race detector and no
+   coverage, over the guard packages only. Those are the directories of every `*_test.go`
+   file that names `docs/`, `threatmodel/`, `ui/`, `.github/`, `CHANGELOG.md`, `RELEASING.md`,
+   `AGENTS.md` or any `.md` file. The step finds them from the test sources at run time, so a
+   new guard is picked up without a list to maintain. `go (unit)` runs them with no tags.
+   `go (docker)` and `go (k8s)` run, with their tag, only the packages whose guard files carry
+   that build tag. Today that is `./internal/runner/docker` for docker (`hardening_test.go`
+   reads `threatmodel/THREAT-MODEL.md`) and none for k8s, so the k8s leg says so and passes.
+   If the tagless leg finds no guard file at all, it fails: that would mean the search
+   pattern broke. `build` then needs every leg green and skips the coverage union, since no
+   profiles were written. `go (lint)` runs in full on every change.
+3. **Docker layer cache.** `helm-install-test` (wardynd, wardyn-proxy), `conformance-k8s` (wardyn-proxy) and
+   `conformance` (wardyn-proxy, agent-claude-code) build through `docker/build-push-action`
+   with `cache-from: type=gha,scope=<image>`. `cache-to` (`mode=max`) is written only from a
+   push to `main`, like the Go caches, so pull requests read main's layers and add no cache
+   entries of their own. Not cached: `trivy` (a cached `apt-get` layer would scan older
+   packages than the release builds, which changes what the gate says), the conformance agent image (`make build-conformance-agent-image`)
+   and `trivy`'s `agent-vscode`/`agent-novnc` rows, which build `FROM` a local image that a
+   buildx builder cannot see.
+
+**Required checks and skipped jobs.** GitHub reports a job skipped by a job-level `if:` as
+"skipped". Branch protection can count that as passing, which is the risk: a required check
+that is skipped because `changes` *failed* would pass without running anything. So no
+required job is skipped at the job level:
+
+- `test-pg`, `conformance`, `conformance-k8s` and `helm` always run (`if: !cancelled()`) and
+  put `if: needs.changes.outputs.backend != 'false'` on every step. When a change cannot affect
+  them the job still reports success after a few seconds with its steps skipped. The
+  comparison is `!= 'false'`, so a failed or missing classification runs the work.
+- `build` needs every `go` leg and runs with `if: !cancelled()`. Its first step fails unless
+  every leg passed, so the `build` context is green only when all four legs and the union floor
+  are. The union steps carry `if: needs.changes.outputs.code != 'false'`, so only an explicit
+  docs-only classification skips them. A failed or missing classification runs the full
+  suites in the legs and requires the union.
+- Non-required jobs (`ui-e2e`, `helm-install-test`, `envbuild-integration`)
+  skip at the job level and free their runner. They too use `!cancelled()` and `!= 'false'`.
+  `helm-install-test` skips on `code` and puts `backend != 'false'` on its kind half's steps,
+  so a ui-only change runs just its desktop-envelope half.
+- Every other required context (`ui`, `compose`, `dco`, `notices`, `gates (…)`, `trivy (…)`)
+  does not read the classification and runs on every change.
+
+**Before and after.** "Before" is main's last green run before this change, 35918188245
+(a push: every job ran). Wall time runs from the first job's start to the last job's end.
+The 7.3 minutes the run queued before any job started are not included. `build` itself queued
+26.5 minutes for a runner. On this repository, runner slots and not job length set the wall
+time (see above), so the "after" rows are measured, not predicted.
+
+| Run | `build` | `conformance-k8s` | `ui-e2e` | `test-pg` | Wall |
+|---|---|---|---|---|---|
+| Before: 35918188245, push to main | 22.0 min | 13.1 min | 8.0 min | 6.2 min | 41.1 min |
+| After: 36043678020, full pull-request run | `go` legs: 3.2 (lint), 6.0 (unit), 5.1 (docker), 5.8 (k8s) min | 13.0 min | 11.2 min | 7.0 min | 14.0 min |
+| After: docs-only pull request | to be measured | | | | |
+| After: ui-only pull request | to be measured | | | | |
+
+Run 36043678020 changed Go and `ci.yml`, so every job ran. A pull request that touches one Go
+package, or a train pull request, runs the same full set of jobs. `build` is now only the
+aggregator, and `conformance-k8s` is the new critical path. The docs-only and ui-only rows
+are still to be measured.
+
 ## Driving an existing control plane instead
 
-If you already run wardynd somewhere, skip `ci-run.sh` and use the CLI
-directly — it is fully non-interactive with `WARDYN_URL` +
-`WARDYN_ADMIN_TOKEN`:
+If you already run wardynd somewhere, set `WARDYN_URL` + `WARDYN_CI_TOKEN` and
+`ci-run.sh` launches there (see "CI's identity" above). Or use the CLI directly —
+it is fully non-interactive with `WARDYN_URL` + `WARDYN_TOKEN`, the CI
+principal's own `wdn_` token (not the shared `WARDYN_ADMIN_TOKEN`, which under
+OIDC holds no model credential to launch a model run with):
 
 `--task-mode exec` runs the task as a plain shell command, so **no `--agent` is
 needed** — the image is what the run needs, and naming an agent it never invokes
@@ -434,13 +570,31 @@ launch resolution that mints nothing and prints the `setup_items` blockers plus
 the confinement class that would be enforced. `ci-run.sh` calls the same
 endpoint before launching.
 
+**Provisioning the CI principal, once, against this deployment:**
+
+```sh
+# 1. Sign in to the console once as the CI principal and create its own token
+#    from Account (POST /api/v1/me/tokens behind it) — shown exactly once.
+#    Store it as the pipeline secret WARDYN_CI_TOKEN; export it as WARDYN_TOKEN
+#    for the calls below.
+
+# 2. Store its model-provider credential once (repeat per provider CI needs):
+curl -sS -X PUT "$WARDYN_URL/api/v1/model-providers/$PROVIDER_ID/credential" \
+  -H "Authorization: Bearer $WARDYN_TOKEN" -d '{"value":"'"$KEY"'"}'
+
+# 3. Confirm it is live before wiring the pipeline up to launch anything:
+wardyn setup status --json | jq --arg p "$PROVIDER_ID" \
+  '.provider_access[] | select(.provider == $p)'
+```
+
 ## Images
 
-`wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` on every push to `main`
+`wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` after CI passes on `main`
 ([.github/workflows/publish-image.yml](../.github/workflows/publish-image.yml));
-every release tag publishes all five images (`wardynd`, `wardyn-proxy`,
-`agent-base`, `agent-codex-cli`, `agent-aws-sso`) cosign-signed, each with an
-attested SBOM and build provenance — see [VERIFY.md](VERIFY.md) to check them —
+every release tag publishes all seven images (`wardynd`, `wardyn-proxy`,
+`agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode`,
+`agent-novnc`) cosign-signed, each with an attested SBOM and build
+provenance — see [VERIFY.md](VERIFY.md) to check them —
 ([.github/workflows/release.yml](../.github/workflows/release.yml) — see
 [RELEASING.md](../RELEASING.md) and the Helm chart's
 [README](../deploy/helm/wardyn/README.md)). This BYOA pipeline (`ci-run.sh`)

@@ -4,7 +4,6 @@
 package api
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -20,8 +19,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -302,18 +301,18 @@ const harnessTokenAging = 11 * 30 * 24 * time.Hour
 // for a usable credential. label names the credential in the log line and in
 // both error strings. st is always the operator-wide store (harness names are
 // RESERVED — secrets.go — never per-principal), so no caller scopes it by owner.
-func readHarnessBlob[T any](ctx context.Context, st secretstore.Store, provider, label string, usable func(T) bool) (T, bool, error) {
+func readHarnessBlob[T any](ctx context.Context, st secretstore.Store, name, label string, usable func(T) bool) (T, bool, error) {
 	var zero T
 	if st == nil {
 		return zero, false, nil
 	}
-	raw, err := st.Get(ctx, harnessCredSecretName(provider))
+	raw, err := st.Get(ctx, name)
 	if errors.Is(err, secretstore.ErrNotFound) {
 		return zero, false, nil // absent == not connected (not an error)
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: read "+label+" from secret store failed",
-			slog.String("provider", provider), slog.Any("err", err))
+			slog.String("secret", name), slog.Any("err", err))
 		return zero, false, fmt.Errorf("read %s: %w", label, err)
 	}
 	var blob T
@@ -329,7 +328,7 @@ func readHarnessBlob[T any](ctx context.Context, st secretstore.Store, provider,
 // readManagedBlob loads a provider's captured setup-token blob; usable = a
 // non-blank token.
 func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedCredBlob, bool, error) {
-	return readHarnessBlob(ctx, s.cfg.Secrets, provider, "managed credential",
+	return readHarnessBlob(ctx, s.cfg.Secrets, harnessCredSecretName(provider), "managed credential",
 		func(b managedCredBlob) bool { return strings.TrimSpace(b.Token) != "" })
 }
 
@@ -358,11 +357,11 @@ func (s *Server) readAWSSSOBlob(ctx context.Context, scope awsSSOScope) (awsSSOB
 		if lerr != nil {
 			return awsSSOBlob{}, false, fmt.Errorf("list own aws sso credential: %w", lerr)
 		}
-		if !slices.Contains(own, harnessCredSecretName(awsSSOProvider)) {
+		if !slices.Contains(own, scope.ssoSecret()) {
 			return awsSSOBlob{}, false, nil
 		}
 	}
-	return readHarnessBlob(ctx, st, awsSSOProvider, "aws sso credential", awsSSOBlob.valid)
+	return readHarnessBlob(ctx, st, scope.ssoSecret(), "aws sso credential", awsSSOBlob.valid)
 }
 
 // storeAWSSSOBlob persists a captured AWS SSO credential under the reserved
@@ -377,18 +376,56 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 	if s.cfg.Secrets == nil {
 		return fmt.Errorf("no secret store configured")
 	}
-	st := s.cfg.Secrets
+	st, owner := s.cfg.Secrets, ""
 	if scope.perUser {
 		if !scope.namespaced() {
 			return fmt.Errorf("a per-user aws sso credential has no owner to store it under")
 		}
-		st = st.For(scope.owner)
+		st, owner = st.For(scope.owner), scope.owner
 	}
 	raw, err := json.Marshal(blob)
 	if err != nil {
 		return fmt.Errorf("marshal aws sso credential blob: %w", err)
 	}
-	return st.Put(ctx, harnessCredSecretName(awsSSOProvider), raw)
+	if at := blob.lastUsable(); !at.IsZero() {
+		ctx = secretstore.WithExpiry(ctx, at)
+	}
+	err = st.Put(ctx, scope.ssoSecret(), raw)
+	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, scope.ssoSecret())
+	return err
+}
+
+// lastUsable is the latest time this sign-in can still be used or renewed,
+// the row's expires_at: the access token's expiry without a refresh token, the
+// registration's with one. Zero when that is unknown (a refresh token and no
+// registration expiry), so the row is never swept on a guess.
+func (b awsSSOBlob) lastUsable() time.Time {
+	if b.RefreshToken == "" {
+		return b.ExpiresAt
+	}
+	if b.RegistrationExpiresAt.IsZero() {
+		return time.Time{}
+	}
+	if b.ExpiresAt.After(b.RegistrationExpiresAt) {
+		return b.ExpiresAt
+	}
+	return b.RegistrationExpiresAt
+}
+
+// deleteSpentAWSSSOBlob deletes the stored AWS SSO sign-in in scope's
+// namespace once AWS has refused its refresh token (deleteDeadCredential).
+func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
+	st, owner := s.cfg.Secrets, ""
+	if st == nil {
+		return
+	}
+	if scope.perUser {
+		if !scope.namespaced() {
+			return
+		}
+		st, owner = st.For(scope.owner), scope.owner
+	}
+	s.deleteDeadCredential(ctx, st, owner, scope.ssoSecret(), awsSSOProvider)
 }
 
 // Login run launch
@@ -400,7 +437,7 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 // the interactive OAuth. Modeled on launchRecordRun, minus workspace/claim.
 //
 // It stops at the audit stamp. Everything up to and including CreateRun +
-// harness.login.started is what the CALLER must have before it answers — the
+// harness.login.start is what the CALLER must have before it answers — the
 // run id, and the launch-time scope/pin the capture upload binds to. The rest
 // of the launch (the dispatch ceiling, dispatchRun's blocking CreateSandbox) is
 // finishHarnessLoginLaunch's, on a detached context, in harnesscred_launch.go.
@@ -413,16 +450,15 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 // newSessionRecorder (attach.go) drops the recorder entirely for a run where
 // runIsUnrecordable(run) is true (run.Task == harnessLoginTask), so no replayable
 // asciicast is ever persisted. The gate lives at that single call site so a future
-// second attach path cannot miss it. (harness.login.started and session.attach
+// second attach path cannot miss it. (harness.login.start and session.attach
 // still record who attached, when, and why — no provenance is lost.)
-// ssoStartURL (AWS only, "" for every other provider) is the operator's IAM
-// Identity Center access-portal URL. It is seeded into the sandbox as a
-// pre-login ~/.aws/config so the auto-typed `aws sso login --sso-session wardyn`
-// has an sso_start_url/sso_region to read — see awsSSOLoginConfigFileContents.
-// There is no server-side start-URL config to read it from (deliberately: it is
-// per-organization and this is the only flow that needs it), so it arrives with
-// the login request and is validated by the caller.
-func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, ssoStartURL string, pin awsSSOPin, scope awsSSOScope) (types.AgentRun, harnessLoginDispatch, error) {
+// t.startURL (AWS only, "" for every other provider) is the IAM Identity
+// Center access-portal URL. It is seeded into the sandbox as a pre-login
+// ~/.aws/config so the auto-typed `aws sso login --sso-session wardyn` has an
+// sso_start_url/sso_region to read — see awsSSOLoginConfigFileContents. The
+// caller decides it (the roster row or the request on the legacy door, the
+// provider record on the provider door) and validates it.
+func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, t loginTarget) (types.AgentRun, harnessLoginDispatch, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf("no runner configured")
 	}
@@ -468,10 +504,14 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// supersede pass, the insert, and the SECOND pass after it are independent
 	// statements, and two launches interleaving through them leave two live
 	// sandboxes each holding a captured AWS SSO session. lockLoginSupersede
-	// carries the interleaving and why the lock fails open; released on every
-	// path, including the refusals and the error returns between here and the
-	// second pass.
-	releaseLoginLock := s.lockLoginSupersede(ctx, actor)
+	// carries the interleaving and why a lock that cannot be taken refuses
+	// (errSignInBusy) before anything is superseded or created; released on
+	// every path, including the refusals and the error returns between here and
+	// the second pass.
+	releaseLoginLock, lerr := s.lockLoginSupersede(ctx, actor, runID)
+	if lerr != nil {
+		return types.AgentRun{}, harnessLoginDispatch{}, lerr
+	}
 	defer releaseLoginLock()
 	// One live sign-in sandbox per person, and it happens HERE — before
 	// newStepRun, where the concurrency quota is counted — so a member capped at
@@ -486,12 +526,10 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	if err != nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, err
 	}
-	// Region-scoped SSO endpoints are resolved from the operator's boot config —
-	// the SSO region if set, else the Bedrock region (same precedence
-	// resolveBedrockAuth uses). Empty means "not configured": the flow's regional
-	// hosts are then left to first-use approval rather than pre-allowed wide.
-	ssoRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion)
-	egress := hl.loginEgress(ssoRegion, s.cfg.AWSSSOEndpointOverride)
+	// Region-scoped SSO endpoints come from the target's region. Empty means
+	// "not configured": the flow's regional hosts are then left to first-use
+	// approval rather than pre-allowed wide.
+	egress := hl.loginEgress(t.region, s.cfg.AWSSSOEndpointOverride)
 	policy := types.RunPolicySpec{
 		MinConfinementClass: cc,
 		// Default-deny, limited to the OAuth hosts. An off-policy host the login
@@ -523,7 +561,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// materialize_aws_sso_config in agent-run-lib.sh). Non-secret: an sso-session
 	// block with the start URL + region and NO token cache — the login sandbox
 	// must not receive a credential, it exists to produce one.
-	extraEnv := hl.loginEnv(ssoStartURL, ssoRegion, pin, s.cfg.AWSSSOEndpointOverride)
+	extraEnv := hl.loginEnv(t.startURL, t.region, t.pin, s.cfg.AWSSSOEndpointOverride)
 
 	// The launch-time credential scope, stamped — the one authorizeHarnessLogin's
 	// roster read PROVED, passed in, never re-resolved. Re-resolving it at upload
@@ -531,18 +569,20 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// OPERATOR-WIDE credential; re-resolving it HERE, through the fail-open
 	// resolver, would let a mere store blip stamp the same `shared`/"" pair the
 	// stamp exists to prevent.
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.started",
-		runID.String(), "success", mustJSON(map[string]any{
-			"provider": hl.provider, "egress": egress,
-			"sso_start_url": ssoStartURL, // operator config, not a credential
-			// WHOSE credential this run may capture, decided HERE and read back by
-			// handleUploadSSOToken — never recomputed there.
-			"credential_source": awsSSOCredentialSourceLabel(scope),
-			"owner":             scope.owner,
-			// The pin as it read at launch — what the upload binds to.
-			"sso_account_id": pin.AccountID,
-			"sso_role_name":  pin.RoleName,
-		})))
+	stamp := map[string]any{
+		"provider": hl.provider, "egress": egress,
+		"sso_start_url": t.startURL, // operator config, not a credential
+		// WHOSE credential this run may capture, decided HERE and read back by
+		// handleUploadSSOToken — never recomputed there.
+		"credential_source": awsSSOCredentialSourceLabel(t.scope),
+		"owner":             t.scope.owner,
+		// The pin as it read at launch — what the upload binds to.
+		"sso_account_id": t.pin.AccountID,
+		"sso_role_name":  t.pin.RoleName,
+	}
+	t.stampProvider(stamp)
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.start",
+		runID.String(), "success", mustJSON(stamp)))
 
 	image := agentImage(hl.agent, s.cfg.AgentImages)
 	if hl.loginImageKey != "" {
@@ -556,7 +596,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	}, nil
 }
 
-// maxLoginStartAuditScan bounds the read-back below. harness.login.started is
+// maxLoginStartAuditScan bounds the read-back below. harness.login.start is
 // written by launchHarnessLoginRun immediately after CreateRun, so it is among
 // the FIRST events a login run ever has and QueryAuditEvents returns a run's
 // events chronologically (store.QueryAuditEventsPage) — a small window always
@@ -564,7 +604,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 const maxLoginStartAuditScan = 100
 
 // loginRunStamp is the launch-time state launchHarnessLoginRun wrote onto THIS
-// login run's harness.login.started audit row (ActorSystem/"wardynd" —
+// login run's harness.login.start audit row (ActorSystem/"wardynd" —
 // server-set at launch, never sandbox input): the operator-declared AWS
 // access-portal URL, the credential scope this run may capture under, and the
 // account/role pin. The audit log is the system of record (Invariant 6), and
@@ -588,6 +628,17 @@ type loginRunStamp struct {
 	// in flight. Empty means "launched unpinned", which the upload accepts.
 	SSOAccountID string `json:"sso_account_id,omitempty"`
 	SSORoleName  string `json:"sso_role_name,omitempty"`
+	// The model provider a sign-in through its own door is for, "" on the
+	// legacy door: the capture lands under that provider's UID-keyed name, and
+	// SSORegion/Model are the provider's as they read at launch — what an AWS
+	// upload binds to in place of the boot config (provider_signin.go).
+	// ModelProviderAddress is providerAddressDigest at launch: a capture after
+	// the address moved is refused on both doors.
+	ModelProvider        string `json:"model_provider,omitempty"`
+	ModelProviderUID     string `json:"model_provider_uid,omitempty"`
+	ModelProviderAddress string `json:"model_provider_address,omitempty"`
+	SSORegion            string `json:"sso_region,omitempty"`
+	Model                string `json:"model,omitempty"`
 }
 
 func (s *Server) loginRunStamp(ctx context.Context, runID uuid.UUID) (loginRunStamp, error) {
@@ -600,7 +651,7 @@ func (s *Server) loginRunStamp(ctx context.Context, runID uuid.UUID) (loginRunSt
 		return out, fmt.Errorf("read login run audit trail: %w", err)
 	}
 	for _, ev := range events {
-		if ev.Action != "harness.login.started" || ev.Outcome != "success" {
+		if ev.Action != "harness.login.start" || ev.Outcome != "success" {
 			continue
 		}
 		var data loginRunStamp
@@ -709,7 +760,7 @@ const (
 // aws-sso image: what a grant bounds is which agent's runs a member may launch,
 // and the credential this captures is for the row's agent.
 //
-// The login lane never passes denyMemberRequest: there is no policy, image,
+// The login lane never passes denyUserRequest: there is no policy, image,
 // workspace or integration in this request to narrow.
 //
 // Returns ok=false when it has already written the refusal.
@@ -724,6 +775,14 @@ func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, p
 		writeError(w, http.StatusServiceUnavailable, harnessLoginRosterUnavailable)
 		return types.AgentProvider{}, awsSSOScope{}, false
 	}
+	// Once a model-provider block exists every sign-in is a provider's own
+	// (POST /model-providers/{id}/sign-in): the two doors never both answer.
+	// Decided on this same read, so a blip cannot let one read say "no block"
+	// and another authorize.
+	if sc.ModelProviders != nil {
+		writeError(w, http.StatusConflict, mpsLegacyDoor)
+		return types.AgentProvider{}, awsSSOScope{}, false
+	}
 	// WHOSE credential this may capture, from THIS proved read.
 	scope := awsSSOScopeFor(sc, modelAccessAgent, runIdentitySubject(r.Context(), principalFromRequest(r)))
 	row, perUser := perUserLoginRow(sc, provider)
@@ -735,10 +794,9 @@ func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, p
 		return row, scope, true
 	}
 	if !perUser {
-		return types.AgentProvider{}, awsSSOScope{}, !s.denyMemberField(w, r, "setup.harness_login",
-			"harness_login_not_per_user", harnessLoginNotPerUserRefusal)
+		return types.AgentProvider{}, awsSSOScope{}, !s.refuse(w, r, authz.Deny(authz.ReasonHarnessLoginNotPerUser, "setup.harness_login", harnessLoginNotPerUserRefusal))
 	}
-	if s.denyMemberCapability(w, r, capAgent, row.ID, "setup.harness_login",
+	if s.denyUserCapability(w, r, capAgent, row.ID, "setup.harness_login",
 		fmt.Sprintf(harnessLoginAgentRefusal, row.ID)) {
 		return types.AgentProvider{}, awsSSOScope{}, false
 	}
@@ -784,6 +842,7 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	blob := managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC()}
 	raw, _ := json.Marshal(blob)
 	if err := s.cfg.Secrets.Put(r.Context(), hl.secretName, raw); err != nil { // operator-wide route (operatorOnly), not per-principal
+		s.auditRowNotWritten(r.Context(), err, actorTypeFromRequest(r), principalFromRequest(r), "", hl.secretName)
 		writeServerError(w, r, "store managed credential", err)
 		return
 	}
@@ -796,10 +855,11 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	// OWN asciicast has already buffered the `claude setup-token` output verbatim
 	// by the time this handler runs, so this does not redact that cast — see
 	// launchHarnessLoginRun for why the login terminal must not be recorded at all.
-	s.cfg.MaskRegistry.AddGlobal([]byte(token)) // nil-safe
+	s.cfg.MaskRegistry.AddGlobal("", hl.secretName, s.cfg.Now(), []byte(token)) // nil-safe
+	s.evictManagedToken()
 
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"harness.credential.captured", hl.secretName, "success",
+		"harness.credential.capture", hl.secretName, "success",
 		mustJSON(map[string]any{"provider": hl.provider, "source": "paste"})))
 	writeJSON(w, http.StatusOK, map[string]any{"provider": hl.provider, "captured": true})
 }
@@ -833,7 +893,7 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "unknown provider: "+provider)
 		return
 	}
-	st := s.cfg.Secrets
+	st, owner := s.cfg.Secrets, ""
 	if hl.provider == awsSSOProvider {
 		// Only the AWS lane can be per-user (per_user is bedrock_sso-only,
 		// types.AgentProvider); every other provider keeps the operator-wide row
@@ -847,78 +907,16 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if scope.namespaced() {
-			st = st.For(scope.owner)
+			st, owner = st.For(scope.owner), scope.owner
 		}
 	}
 	if err := st.Delete(r.Context(), hl.secretName); err != nil {
 		writeServerError(w, r, "delete managed credential", err)
 		return
 	}
+	s.forgetCredential(owner, hl.secretName)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"harness.credential.disconnected", hl.secretName, "success",
+		"harness.credential.disconnect", hl.secretName, "success",
 		mustJSON(map[string]any{"provider": hl.provider})))
 	writeJSON(w, http.StatusOK, map[string]any{"provider": hl.provider, "captured": false})
-}
-
-// Managed provider (subscription.Provider over the stored blob)
-
-// managedCredProvider serves the Wardyn-managed captured token through the SAME
-// subscription.Provider interface the resident host token uses, so the injection
-// sink treats them identically. It depends ONLY on the secret store (not the
-// Server), so it can be constructed in main.go BEFORE api.New builds the Server
-// — no construction cycle.
-//
-// No refresh path (v1): setup-token tokens are long-lived and Wardyn is not
-// their owner, so Current never mutates state — it returns the stored token and
-// lets Anthropic reject it on the wire if it has been revoked (fail closed at
-// the sink, surfaced as a run failure + an aging warning in setup status).
-type managedCredProvider struct {
-	store    secretstore.Store
-	provider string
-}
-
-// NewManagedCredProvider builds a managed subscription provider over store for a
-// provider id (e.g. "anthropic"). Returns nil when store is nil (managed mode
-// simply unavailable).
-func NewManagedCredProvider(store secretstore.Store, provider string) subscription.Provider {
-	if store == nil {
-		return nil
-	}
-	return &managedCredProvider{store: store, provider: provider}
-}
-
-func (p *managedCredProvider) read() (subscription.Token, error) {
-	// p.store is the operator-wide managed credential (NewManagedCredProvider's
-	// caller passes the raw, unscoped store) — not per-principal.
-	raw, err := p.store.Get(context.Background(), harnessCredSecretName(p.provider))
-	if errors.Is(err, secretstore.ErrNotFound) {
-		return subscription.Token{}, fmt.Errorf("no managed %s credential connected", p.provider)
-	}
-	if err != nil {
-		// A store-layer failure (decrypt/age-key mismatch, backend down) is NOT
-		// "not connected" — surface it distinctly so the sink fails closed on a
-		// real error rather than silently reading as "unconfigured".
-		return subscription.Token{}, fmt.Errorf("read managed %s credential: %w", p.provider, err)
-	}
-	var blob managedCredBlob
-	if uerr := json.Unmarshal(raw, &blob); uerr != nil {
-		return subscription.Token{}, fmt.Errorf("parse managed credential: %w", uerr)
-	}
-	if strings.TrimSpace(blob.Token) == "" {
-		return subscription.Token{}, fmt.Errorf("managed %s credential is empty; reconnect via container login", p.provider)
-	}
-	// ExpiresAt zero = "no machine-readable expiry" — the sink omits expires_at so
-	// the proxy treats the token as static (setup-token is long-lived; a revoked
-	// one fails on the wire, not on a clock).
-	return subscription.Token{Value: blob.Token}, nil
-}
-
-// Current returns the managed token (no refresh — see type doc).
-func (p *managedCredProvider) Current(ctx context.Context) (subscription.Token, error) {
-	return p.read()
-}
-
-// Peek is identical to Current here (no refresh side effect to avoid).
-func (p *managedCredProvider) Peek() (subscription.Token, error) {
-	return p.read()
 }

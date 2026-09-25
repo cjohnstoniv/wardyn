@@ -19,7 +19,8 @@ import (
 // down at all, which is the difference between a refusal and an artifact nobody
 // notices for a year.
 func TestSynthesize_DropsSharedSubscriptionSentinelGrants(t *testing.T) {
-	for _, sentinel := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
+	for _, sentinel := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret,
+		types.ModelProviderSecretPrefix + uuid.NewString() + "-oauth"} {
 		run := types.AgentRun{ID: uuid.New()}
 		id := uuid.New()
 		spec := types.GrantSpec{
@@ -34,7 +35,7 @@ func TestSynthesize_DropsSharedSubscriptionSentinelGrants(t *testing.T) {
 		if len(got.EligibleGrants) != 0 {
 			t.Fatalf("%s: sentinel grant was copied into the profile: %+v", sentinel, got.EligibleGrants)
 		}
-		if !containsSubstr(warns, "shared subscription OAuth sentinel") {
+		if !containsSubstr(warns, "subscription OAuth sentinel") {
 			t.Fatalf("%s: dropped silently; a synthesize that quietly removes a grant is worse than one that says so. warns=%v", sentinel, warns)
 		}
 	}

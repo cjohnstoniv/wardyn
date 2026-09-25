@@ -34,7 +34,7 @@ func seedReauthRun(t *testing.T, st store.PG) uuid.UUID {
 	return runID
 }
 
-// THE ROUND TRIP. The enum-parity guards compare a migration's CHECK against
+// The round trip. The enum-parity guards compare a migration's CHECK against
 // the Go set by PARSING; this one writes the value and reads it back, which is
 // the only thing that proves the constraint the database is actually enforcing
 // admits it.
@@ -83,7 +83,7 @@ func TestPG_ResolveReauthApproval_IsAOneWayCASWithItsAuditRow(t *testing.T) {
 		return types.AuditEvent{
 			ID: uuid.New(), Time: time.Now().UTC(), RunID: &runID,
 			ActorType: types.ActorHuman, Actor: "alice@corp.example",
-			Action: "credential.reauth.resolved", Target: created.ID.String(), Outcome: "success",
+			Action: "credential.reauth.resolve", Target: created.ID.String(), Outcome: "success",
 			Data: json.RawMessage(`{"owner":"alice@corp.example"}`),
 		}
 	}
@@ -102,12 +102,12 @@ func TestPG_ResolveReauthApproval_IsAOneWayCASWithItsAuditRow(t *testing.T) {
 	}
 	n := 0
 	for _, r := range rows {
-		if r.Action == "credential.reauth.resolved" {
+		if r.Action == "credential.reauth.resolve" {
 			n++
 		}
 	}
 	if n != 1 {
-		t.Fatalf("credential.reauth.resolved rows = %d, want exactly 1", n)
+		t.Fatalf("credential.reauth.resolve rows = %d, want exactly 1", n)
 	}
 
 	// The SECOND resolver loses, and writes nothing.
@@ -117,7 +117,7 @@ func TestPG_ResolveReauthApproval_IsAOneWayCASWithItsAuditRow(t *testing.T) {
 	rows, _ = st.QueryAuditEvents(ctx, runID, 50)
 	n = 0
 	for _, r := range rows {
-		if r.Action == "credential.reauth.resolved" {
+		if r.Action == "credential.reauth.resolve" {
 			n++
 		}
 	}
@@ -152,7 +152,7 @@ func TestPG_ResolveReauthApproval_RefusesAnotherAuditAction(t *testing.T) {
 }
 
 // …and it is kind-scoped: an egress_domain row cannot be resolved through the
-// re-auth transition, which would put a credential.reauth.resolved row on a
+// re-auth transition, which would put a credential.reauth.resolve row on a
 // decision that is a real human decision.
 func TestPG_ResolveReauthApproval_RefusesAnotherKind(t *testing.T) {
 	pool := runsPGPool(t)
@@ -169,16 +169,16 @@ func TestPG_ResolveReauthApproval_RefusesAnotherKind(t *testing.T) {
 	if _, err := st.ResolveReauthApproval(ctx, created.ID, types.ApprovalDecision{State: types.ApprovalApproved},
 		types.AuditEvent{
 			ID: uuid.New(), Time: time.Now().UTC(), RunID: &runID, ActorType: types.ActorHuman, Actor: "a",
-			Action: "credential.reauth.resolved", Target: created.ID.String(), Outcome: "success",
+			Action: "credential.reauth.resolve", Target: created.ID.String(), Outcome: "success",
 		}); !errors.Is(err, store.ErrAlreadyDecided) {
 		t.Fatalf("resolving an egress_domain row through the re-auth transition returned %v, want ErrAlreadyDecided", err)
 	}
 }
 
-// THE INDEX, UNDER CONCURRENCY (patch-review batch E). Migration 0064's own
-// comment claims the 0022 partial unique index "now also covers this kind ...
-// One lapsed credential per run is one request, however many of the sandbox's
-// concurrent calls discover it" — and nothing proved it. The index is
+// The index, under concurrency. Migration 0064's own comment claims the 0022
+// partial unique index "now also covers this kind ... One lapsed credential per
+// run is one request, however many of the sandbox's concurrent calls discover
+// it"; this proves it. The index is
 // `(run_id, kind, requested_scope) WHERE state='PENDING' AND kind <> 'credential'`,
 // so the claim rests on `credential_reauth` being a kind OTHER than `credential`,
 // which is the kind of thing a reader agrees with and a database decides.

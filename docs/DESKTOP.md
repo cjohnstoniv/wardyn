@@ -40,7 +40,7 @@ RBAC, no shared docker socket). This tier sits below both.
   │                                                 │
   └─────────┬────────────────────────────┬──────────┘
             │ audit fanout               │ m′ only (WARDYN_ORG_URL +
-            │ (webhook,                  │ WARDYN_MEMBER_MODE): enrol
+            │ (webhook,                  │ WARDYN_USER_DESKTOP): enrol
             │ ?device=<serial>)          │ once, then audit rows
             ▼                            │ forward every 15s from a
         org SIEM                         │ durable cursor
@@ -88,8 +88,8 @@ prevent an edit in between, and re-asserting a file cannot un-run a run.
 If your threat model *does* include the developer, this tier is the wrong one —
 the agent has to execute somewhere the developer does not administer, which is
 [the Kubernetes shape](../deploy/helm/wardyn/README.md), where the runner talks
-to an API server under scoped RBAC and the human gets a member role rather than
-admin.
+to an API server under scoped RBAC and the human signs in as a user rather than
+an admin.
 
 See also [the threat model](../threatmodel/THREAT-MODEL.md) for what Wardyn as
 a whole does not defend against.
@@ -118,7 +118,7 @@ console/API path, without touching a single MDM-managed file.
 **What still holds when that happens:**
 
 - **It is on the record.** The unclamped inline spec is written to the audit
-  feed as `policy.inline`, followed by `run.create`
+  feed as `policy.inline.apply`, followed by `run.create`
   ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)) — and `WARDYN_AUDIT_SINKS` fans both to
   the org SIEM, tagged with the device serial and the operator principal. A
   developer who widens their own ceiling produces evidence that they did, on a
@@ -199,7 +199,7 @@ It works today on a **developer checkout** (`make agent-images` then
 
 ## The member-mode profile (topology m′)
 
-> The developer's own page for this profile is MEMBERS.md; this section
+> The developer's own page for this profile is USERS.md; this section
 > is the operator's.
 
 Everything above describes **topology a′: the developer is the operator**. It is
@@ -217,13 +217,13 @@ the developer is a **member**.
 | Setting | a′ (default) | m′ (member mode) |
 |---|---|---|
 | `WARDYN_LOCAL_MODE` | `true` — loopback callers are always admins | **`false`**, mandatory. Local mode bypasses public-API auth and would hand the developer admin outright |
-| OIDC | absent | **required** — the org IdP authenticates the developer and `deriveRole` maps them to `member`. `WARDYN_OIDC_ROLE_MAP` / `WARDYN_OIDC_OPERATOR_EMAILS` are MDM-set, and the developer is on neither |
+| OIDC | absent | **required** — the org IdP authenticates the developer and `deriveRole` maps them to `user`. `WARDYN_OIDC_ROLE_MAP` / `WARDYN_OIDC_OPERATOR_EMAILS` are MDM-set, and the developer is on neither |
 | `WARDYN_ADMIN_TOKEN` | not used | a **process credential** MDM injects and the developer does not read. It is never surfaced to the browser UI |
-| `WARDYN_MEMBER_MODE` | unset | **`true`** — asserts the above rather than enforcing anything new |
+| `WARDYN_USER_DESKTOP` | unset | **`true`** — asserts the above rather than enforcing anything new |
 | `WARDYN_ORG_URL` | not used | **optional.** Set it to enrol this laptop into a remote org control plane — see [Enrolling into an org control plane](#enrolling-into-an-org-control-plane) below. Unset (the default) is m′ with no hybrid posture at all: the laptop still keeps its own runs and its own audit table, forwarding nothing upward |
 
 The invariant the whole profile turns on is: **`isOperator(ctx)` is false for the
-developer's every request.** `WARDYN_MEMBER_MODE` adds no middleware — the
+developer's every request.** `WARDYN_USER_DESKTOP` adds no middleware — the
 admin/member split in `internal/api` already does the enforcement — it makes the
 assumption *checkable*, refusing to boot when local mode is on or OIDC is
 unconfigured, either of which would silently make the developer an admin again.
@@ -246,8 +246,9 @@ things stay admin-only inside that: the operator's `""` namespace itself, the
 three AWS SigV4 names (`aws-access-key-id`, `aws-secret-access-key`,
 `aws-session-token`), which a non-operator `PUT`/`DELETE`
 refuses with a `403` because dispatch always signs with them out of the operator
-namespace, and `?owner=<principal>` — the cross-namespace write — which answers
-`403 ?owner= is admin-only` to a member. A run resolves its own owner's row and
+namespace, and `?owner=<principal>` — reaching into another namespace — which
+answers `403 ?owner= is admin-only` to a member (and on a `PUT`, `403` to an admin
+too: a credential is set only by the person it belongs to). A run resolves its own owner's row and
 falls back to the operator's, never to another member's.
 
 The fourth Bedrock name is the exception, and it is one name: a member may store
@@ -267,10 +268,10 @@ operator/MDM-set env, never by anything the developer writes:
 
 | Variable | What it bounds |
 |---|---|
-| `WARDYN_MEMBER_WORKSPACE_ROOTS` | the absolute host directories a member's `local_dir` source may resolve into. **Unset = members may not mount host directories at all** (repos and operator-owned workspaces still work) |
-| `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP` | per-member roots, JSON `{"<principal>": ["/abs/root"]}`. An entry **REPLACES** the shared list for that principal — per-member exists to narrow |
-| `WARDYN_MEMBER_WRITABLE_ROOTS` | where a member may mark their own mount writable. **Unset = every member mount is read-only** |
-| `WARDYN_MEMBER_WRITABLE_DENY` | carve-outs from the line above. **Deny wins**, and is checked first |
+| `WARDYN_USER_WORKSPACE_ROOTS` | the absolute host directories a member's `local_dir` source may resolve into. **Unset = members may not mount host directories at all** (repos and operator-owned workspaces still work) |
+| `WARDYN_USER_WORKSPACE_ROOTS_MAP` | per-member roots, JSON `{"<principal>": ["/abs/root"]}`. An entry **REPLACES** the shared list for that principal — per-member exists to narrow |
+| `WARDYN_USER_WRITABLE_ROOTS` | where a member may mark their own mount writable. **Unset = every member mount is read-only** |
+| `WARDYN_USER_WRITABLE_DENY` | carve-outs from the line above. **Deny wins**, and is checked first |
 
 Point the roots at a dedicated projects directory. **Never `$HOME`, never `/`** —
 boot warns and starts anyway (a malformed root, by contrast, refuses boot), and a
@@ -295,7 +296,7 @@ per-run placement work planned for 0.9
 is a separate, earlier step. An org admin mints a single-use token
 (`POST /api/v1/admin/devices/enrolment-tokens`, valid for 72 hours) and MDM
 renders it into the laptop's `secret.env` as `WARDYN_ORG_ENROLMENT_TOKEN`, and
-sets `WARDYN_ORG_URL` alongside `WARDYN_MEMBER_MODE=true` (`wardynd` refuses
+sets `WARDYN_ORG_URL` alongside `WARDYN_USER_DESKTOP=true` (`wardynd` refuses
 `WARDYN_ORG_URL` without member mode). At boot, with no device credential
 stored yet, `wardynd` posts the token to `WARDYN_ORG_URL` and stores the
 device credential the organisation returns in the laptop's age-encrypted
@@ -381,7 +382,7 @@ policy-authored `disk_mib` is **refused at container create**, because a promise
 cap must not silently evaporate; an org-default-FILLED size instead **runs
 uncapped with a warning** — a `slog.Warn` carrying `enforcement: none`, the same
 word the admin setup status reports for this host's disk cap. The bit that tells
-the two cases apart is on the run's own record: `run.policy.effective` carries
+the two cases apart is on the run's own record: `run.policy.resolve` carries
 `disk_mib_filled`, so a reader can see whether the number came from the request
 or from the org.
 
@@ -437,7 +438,7 @@ answer for anything that decides what this daemon *is* rather than what the org
 
 **On `a′`, MDM overwrites what the developer changed in the console.** The
 developer is the admin on this tier, so they can edit the provider policy at
-`/providers` — and `wardyn-desktop.sh` re-applies `/etc/wardyn/site-config.json`
+`/admin/providers` — and `wardyn-desktop.sh` re-applies `/etc/wardyn/site-config.json`
 on **every converge tick** (every 5 minutes; the file is a full-document replace,
 so re-applying the same file is a safe no-op rather than accumulation). If the
 MDM file NAMES `workspace_providers` or `agent_providers`, the org's copy wins
@@ -469,7 +470,7 @@ once, before MDM has delivered anything. Which image:
 | | |
 |---|---|
 | Default | `ghcr.io/cjohnstoniv/wardynd:latest` |
-| What that tag is | the **continuous, main-tip** half of image publishing — [`publish-image.yml`](../.github/workflows/publish-image.yml) pushes it on every merge to `main`. It is **not** cosign-signed, and it is not a release. |
+| What that tag is | the **continuous, main-tip** half of image publishing — [`publish-image.yml`](../.github/workflows/publish-image.yml) pushes it after CI passes on a push to `main`, so it lags `main` by one CI run. It is **not** cosign-signed, and it is not a release. |
 | Verification | none. Nothing in this lane checks a signature or a digest, and no repo gate covers it: `scripts/check-image-pins.sh` reads Dockerfile `FROM`s and `deploy/compose/*.yaml`, so a `docker run` in a shell script is outside it by construction. |
 | Override | `WARDYN_INSTALL_IMAGE` (also in [ENV.md](ENV.md)) — `sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh` |
 
@@ -505,7 +506,7 @@ run the same `install.sh`; only the path it registers differs.
 **Enrolment runs one container image, as root.** `install.sh` mints `age.key` by
 running `wardynd -gen-age-key`, and the image it pulls for that defaults to
 `ghcr.io/cjohnstoniv/wardynd:latest` — the CONTINUOUS, main-tip tag
-`.github/workflows/publish-image.yml` pushes on every merge, which is **not**
+`.github/workflows/publish-image.yml` pushes after CI passes on `main`, which is **not**
 cosign-signed and is not the digest the envelope then pins. That is the one
 place on this page where a tag does move under the fleet, and it is bounded to
 first-device enrolment. A fleet that will not accept it sets
@@ -520,12 +521,13 @@ Everything the plist and the wrapper do is exercised, machine-verifiable and
 daemon-free: `scripts/test-desktop-profile.sh` (wired into `make test-scripts`)
 checks the envelope parses, every variable it sets is a real documented one,
 the policy path and the compose mount agree, the plist is valid XML, and — where `systemd-analyze` is present — the rendered systemd units verify.
-`.github/workflows/ci.yml`'s `desktop-envelope` job goes further and actually
-boots the compose profile with this commit's example envelope, then proves the
-three things this document claims: `/policies/default` really does serve the
-managed file, a run naming no policy really does resolve to that ceiling, and
-a synthesized profile really is clamped to it (see "Tamper posture" above for
-what "clamped" does and does not mean once the caller is an admin).
+`.github/workflows/ci.yml`'s `helm-install-test` job (its desktop-envelope
+half) goes further and actually boots the compose profile with this commit's
+example envelope, then proves the three things this document claims:
+`/policies/default` really does serve the managed file, a run naming no policy
+really does resolve to that ceiling, and a synthesized profile really is
+clamped to it (see "Tamper posture" above for what "clamped" does and does not
+mean once the caller is an admin).
 
 ## Model access on m′
 
@@ -534,8 +536,8 @@ member writes their OWN `PUT /secrets/<name>` row (no admin action), and an
 inline `api_key` grant naming a model-provider host (the anthropic.com/
 openai.com convention, or a configured internal gateway) that pairs with a
 secret the member OWNS is admitted with no operator eligible-grant pairing
-at all — see [MEMBERS.md § Your model key](MEMBERS.md#your-model-key). The
-secret-exfil guard `filterMemberGrants` exists for is unaffected: the arm
+at all — see [USERS.md § Your model key](USERS.md#your-model-key). The
+secret-exfil guard `filterUserGrants` exists for is unaffected: the arm
 requires PROVABLE ownership (a names-only `Store.For(<member>).List`, never a
 value read, never another member's row) and a model-provider host the run's
 own already-clamped egress allows — an arbitrary stored secret paired with
@@ -568,14 +570,14 @@ credential is never resident: a Bedrock API key is a static `Authorization`
 header, so the proxy TLS-MITMs `bedrock-runtime` and injects it, and the
 sandbox holds only a placeholder — the same trust parity as the api-key and
 subscription lanes. No member grant, no workspace requirement, and nothing that
-`filterMemberGrants` can drop.
+`filterUserGrants` can drop.
 
 **Constraint:** Bedrock resolution is scoped to the `claude-code` agent. A
 member running `codex-cli` on m′ still needs an operator-provided OpenAI
 credential.
 
 **Superseded on the record:** an earlier draft of this page rejected re-running
-the provider-convention model grant after `filterMemberGrants` as reopening
+the provider-convention model grant after `filterUserGrants` as reopening
 the secret-exfil guard. Per-principal secrets closed that: the own-key arm
 requires PROVABLE ownership of the exact secret name, not merely that it
 matches the convention, so a member still cannot pair an arbitrary stored
@@ -602,7 +604,7 @@ the file:
 ```sh
 # MDM-scheduled, e.g. daily. The admin token is MDM-held; the developer never
 # reads it, and on m′ they could not use it anyway.
-wardyn support-bundle --out "/var/log/wardyn/support-$(date +%F).tar.gz"
+wardyn support-bundle --output "/var/log/wardyn/support-$(date +%F).tar.gz"
 ```
 
 **Leaked sandboxes.** A run row that is terminal but still carries a sandbox ref
@@ -804,8 +806,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.10|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.10|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.12|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.12|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

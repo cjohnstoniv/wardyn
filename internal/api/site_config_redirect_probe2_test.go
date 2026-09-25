@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -61,6 +62,7 @@ func bareCurlExit(t *testing.T, url string) int {
 // exit 0 (reached/enforced), which is also the pin against over-correcting the
 // other way and calling a genuinely blocked host a bypass.
 func TestRedirectProbe2_ClassifiesAnsweredVsUnreachable(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
 	}
@@ -100,6 +102,7 @@ func TestRedirectProbe2_ClassifiesAnsweredVsUnreachable(t *testing.T) {
 // shapes here are ones a real network produces — a TLS-intercepting middlebox
 // (untrusted cert) and a port that is not speaking TLS at all.
 func TestRedirectProbe2_TLSLevelAnswerIsBypass(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
 	}
@@ -143,6 +146,7 @@ func TestRedirectProbe2_TLSLevelAnswerIsBypass(t *testing.T) {
 // the status code and must NOT carry -f, which turns an answer into a failure.
 // Probe 1 keeps -f — there an HTTP error IS the mirror being unreachable.
 func TestRedirectProbeScript_Probe2DoesNotFailOnHTTPErrors(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	var probe2 string
 	for _, line := range strings.Split(redirectProbeScript, "\n") {
 		if strings.Contains(line, "--noproxy") {
@@ -163,6 +167,23 @@ func TestRedirectProbeScript_Probe2DoesNotFailOnHTTPErrors(t *testing.T) {
 	}
 }
 
+// TestRedirectProbeScript_ProductionValueUnchanged pins the probe's curl
+// budgets: unset, WARDYN_PROBE_CONNECT_TIMEOUT/WARDYN_PROBE_MAX_TIME must still
+// default to the production 5s/15s, and both curl legs must use them.
+func TestRedirectProbeScript_ProductionValueUnchanged(t *testing.T) {
+	for _, want := range []string{
+		`ct=${WARDYN_PROBE_CONNECT_TIMEOUT:-5}` + "\n",
+		`mt=${WARDYN_PROBE_MAX_TIME:-15}` + "\n",
+	} {
+		if !strings.Contains(redirectProbeScript, want) {
+			t.Errorf("redirectProbeScript lost the production default %q", strings.TrimSpace(want))
+		}
+	}
+	if n := strings.Count(redirectProbeScript, `--connect-timeout "$ct" --max-time "$mt"`); n != 2 {
+		t.Errorf("curl legs using the $ct/$mt budgets = %d, want 2 (probe 1 and probe 2)", n)
+	}
+}
+
 // TestRedirectProbe2_AcceptAndHoldIsBypass drives the SHIPPED script against a
 // public "From" that accepts the TCP connection and then says nothing — a
 // tarpit, an accept-and-hold load balancer, or simply a host slower than the
@@ -173,9 +194,17 @@ func TestRedirectProbeScript_Probe2DoesNotFailOnHTTPErrors(t *testing.T) {
 // block, as the refused row of TestRedirectProbe2_ClassifiesAnsweredVsUnreachable
 // keeps proving), so the verdict must follow it: bypass.
 func TestRedirectProbe2_AcceptAndHoldIsBypass(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
 	}
+	// Shrink the wait: the property under test is "curl reports bypass", not
+	// the real production budget each held curl stalls against (unset,
+	// redirectProbeScript keeps its 5s/15s defaults — see the doc comment on
+	// redirectProbeScript).
+	t.Setenv("WARDYN_PROBE_CONNECT_TIMEOUT", "1")
+	t.Setenv("WARDYN_PROBE_MAX_TIME", "1")
+
 	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -226,6 +255,7 @@ func TestRedirectProbe2_AcceptAndHoldIsBypass(t *testing.T) {
 // "correctly blocked when dialed directly (redirect enforced)" for a redirect
 // nothing had tested. The verdict must be the inconclusive sentinel instead.
 func TestRedirectProbe2_NoConnectionFactIsNotEnforcement(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	if _, err := exec.LookPath("curl"); err != nil {
 		t.Skip("curl not on PATH")
 	}
@@ -274,6 +304,7 @@ func TestClassifyRedirectProbe_InconclusiveIsNeverReached(t *testing.T) {
 // bypass arms must still be matched FIRST so a dial that DID connect can never
 // be downgraded to "untested".
 func TestRedirectProbeScript_NoConnectionFactExitsInconclusive(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	if !strings.Contains(redirectProbeScript, `[ -z "$conns" ] && exit 252`) {
 		t.Errorf("an empty %%{num_connects} is not a block — the script must exit the inconclusive sentinel:\n%s", redirectProbeScript)
 	}
@@ -292,6 +323,7 @@ func TestRedirectProbeScript_NoConnectionFactExitsInconclusive(t *testing.T) {
 // for num_connects, and the script must have an arm that exits the bypass
 // sentinel on a non-zero count.
 func TestRedirectProbeScript_Probe2ReadsTheConnectFact(t *testing.T) {
+	testfloor.Mark(t, "unit")
 	var probe2 string
 	for _, line := range strings.Split(redirectProbeScript, "\n") {
 		if strings.Contains(line, "--noproxy") {

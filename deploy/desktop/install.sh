@@ -205,8 +205,8 @@ else
   # This is NOT the image the fleet then runs: wardyn.env pins
   # WARDYN_WARDYND_IMAGE by DIGEST (wardyn.env.example), while the default here
   # is the CONTINUOUS main-tip tag :latest that
-  # .github/workflows/publish-image.yml pushes on every merge and does not
-  # cosign-sign. Enrolment therefore pulls and runs unsigned main-tip code as
+  # .github/workflows/publish-image.yml pushes after CI passes on main and does
+  # not cosign-sign. Enrolment therefore pulls and runs unsigned main-tip code as
   # root, once, on this device. A fleet that will not accept that sets
   # WARDYN_INSTALL_IMAGE to the release digest it already pins in the envelope,
   # or to its corporate mirror of it — see docs/DESKTOP.md "The install lane".
@@ -222,7 +222,7 @@ else
       echo "install.sh: WARNING — ${IMG} is a MUTABLE tag, not a digest." >&2
       echo "  This step runs that image AS ROOT to mint ${AGE_FILE}, the only" >&2
       echo "  identity that can decrypt this device's secret store. The default is" >&2
-      echo "  the CONTINUOUS main-tip tag publish-image.yml pushes on every merge;" >&2
+      echo "  the CONTINUOUS main-tip tag publish-image.yml pushes after CI passes;" >&2
       echo "  it is not cosign-signed, so nothing verifies what gets pulled." >&2
       echo "  Pin it to the digest wardyn.env already pins for WARDYN_WARDYND_IMAGE:" >&2
       echo "    sudo WARDYN_INSTALL_IMAGE=ghcr.io/cjohnstoniv/wardynd@sha256:<digest> ./install.sh" >&2

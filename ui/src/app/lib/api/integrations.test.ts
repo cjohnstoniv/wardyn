@@ -8,6 +8,7 @@ import { baseStatus } from "../../lib/test-fixtures";
 import { T } from "../integrations";
 import { aiServerId, deriveIntegrations } from "./integrations";
 import type { SiteConfig } from "../types";
+import { aheadByHours } from "../test-clock";
 
 // The Add dialog resolves which wire row to adopt/PUT via this helper,
 // BEFORE its first reload can hand it a derived IntegrationRow of its own —
@@ -128,14 +129,15 @@ describe("deriveIntegrations — AI providers", () => {
     expect(row.posture).toEqual({ kind: "region_model_unset" });
   });
 
-  it("Bedrock: a member's redacted status ({ready} only) still renders the row as configured (RIDER B7-F6)", () => {
+  it("Bedrock: a member's redacted status ({ready} only) still renders the row as configured", () => {
+    // ticket: B7-F6 (rider)
     const [row] = deriveIntegrations(baseStatus({ bedrock: { ready: true, creds_present: false } }), null, []).ai;
     expect(row.id).toBe("ai:bedrock");
     expect(row.posture).toEqual({ kind: "configured" });
     // The member's OWN captured session still drives the SSO posture.
     const sso = baseStatus({
       bedrock: { ready: true, creds_present: false },
-      harness: [{ provider: "aws", captured: true, expires_at: "2026-01-01T14:20:00Z", expired: false }],
+      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(1), expired: false }],
     });
     expect(deriveIntegrations(sso, null, []).ai[0].posture.kind).toBe("session_expires");
     // Negative control: ready:false with region/model unset still reads region_model_unset.
@@ -153,7 +155,7 @@ describe("deriveIntegrations — AI providers", () => {
   it("Bedrock: an unexpired AWS SSO session reads 'Session expires HH:MM'", () => {
     const status = baseStatus({
       bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: false },
-      harness: [{ provider: "aws", captured: true, expires_at: "2026-01-01T14:20:00Z", expired: false }],
+      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(1), expired: false }],
     });
     const [row] = deriveIntegrations(status, null, []).ai;
     expect(row.bedrockLane).toBe("sso");
@@ -219,7 +221,8 @@ describe("deriveIntegrations — SCM hosts", () => {
     expect(row.canReCheck).toBeFalsy();
   });
 
-  it("a github-pat secret yields a resident_env row when siteConfig reports the broker OFF (#381 F8)", () => {
+  it("a github-pat secret yields a resident_env row when siteConfig reports the broker OFF (#381)", () => {
+    // ticket: F8
     const data = deriveIntegrations(
       baseStatus(),
       { scm_hosts: ["github.com"], workspace_providers: { git_pat_broker_enabled: false } },

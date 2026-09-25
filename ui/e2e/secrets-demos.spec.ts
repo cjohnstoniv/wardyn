@@ -7,9 +7,14 @@ import { test, expect, ADMIN_TOKEN } from "./fixtures";
 
 // The eight secrets demos (demo-catalog.ts's "secrets" section), against the
 // seeded e2e backend (real wardynd + Postgres + `-runner none`, admin-token
-// auth — scripts/e2e-backend.sh). This spec drives the three that teach the
-// MECHANISM (write-only / injected / approval-gated); the five per-KIND cards
-// added alongside them split by walkability rather than by subject, so they are
+// auth — scripts/e2e-backend.sh). M-6 (D5) moved every demo out of the admin
+// funnel into User Getting Started (member-getting-started.tsx) — see
+// demos.spec.ts's own header for the shape that changed (a row, not a
+// rail-driven funnel step) and why /setup shows that page even to this
+// backend's admin-token principal (D1, single-operator: the URL alone
+// decides the view). This spec drives the three that teach the MECHANISM
+// (write-only / injected / approval-gated); the five per-KIND cards added
+// alongside them split by walkability rather than by subject, so they are
 // covered where that distinction lives: the three needsSecret ones drop from
 // the walk exactly like key-never-in-the-box does below, and the two that gate
 // on neither (github-app-broker, sts-fail-closed) are deep-linked in
@@ -84,7 +89,10 @@ test.describe("Secrets demos", () => {
     page,
   }) => {
     await page.goto("/setup?step=write-only-by-design");
-    await expect(page.getByRole("heading", { name: "Write-only, even for you", level: 2 })).toBeVisible();
+    // The row's own title (member-getting-started.tsx's DemoRow), pre-opened
+    // by the ?step= deep link — never a level-2 heading, which was the
+    // funnel step's own SetupLayout chrome, gone with the funnel (M-6).
+    await expect(page.getByText("Write-only, even for you", { exact: true })).toBeVisible();
     await expect(page.getByTestId("demo-card-write-only-by-design")).toBeVisible();
     await expect(page.getByTestId("demos-step-not-ready")).toBeVisible();
     await expect(page.getByTestId("demo-start-write-only-by-design")).toBeDisabled();
@@ -93,31 +101,29 @@ test.describe("Secrets demos", () => {
     await expect(page.getByText(/no read-back route for a stored secret/)).toBeVisible();
   });
 
-  test("the two granted demos are dropped from the walk without their secret", async ({ page }) => {
+  test("the two granted demos have no row without their secret", async ({ page }) => {
     await page.goto("/setup?step=key-never-in-the-box");
-    // stepOrder(status) excludes it (needsSecret unmet) — the re-correct
-    // effect falls back to the nearest surviving step, write-only-by-design.
-    await expect(
-      page.getByRole("heading", { name: "Write-only, even for you", level: 2 }),
-    ).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole("heading", { name: "The key that never enters the box" })).toHaveCount(0);
+    // walkableDemos(status) excludes it (needsSecret unmet, steps.ts) — the
+    // page simply never offers it a row, unlike write-only-by-design (no
+    // secret needed), which renders regardless of the deep link naming a
+    // different, absent demo.
+    await expect(page.getByText("Write-only, even for you", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("The key that never enters the box", { exact: true })).toHaveCount(0);
 
     await page.goto("/setup?step=authorized-not-issued");
-    await expect(
-      page.getByRole("heading", { name: "Write-only, even for you", level: 2 }),
-    ).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole("heading", { name: "Authorized, not issued" })).toHaveCount(0);
+    await expect(page.getByText("Write-only, even for you", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Authorized, not issued", { exact: true })).toHaveCount(0);
   });
 
-  test("storing the secret unlocks both granted demo steps, honestly gated on the runner", async ({
+  test("storing the secret unlocks both granted demo rows, honestly gated on the runner", async ({
     page,
   }) => {
     await putSecret(page, SECRET_NAME, "e2e-demo-key-value");
 
     await page.goto("/setup?step=key-never-in-the-box");
-    await expect(
-      page.getByRole("heading", { name: "The key that never enters the box", level: 2 }),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("The key that never enters the box", { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
     await expect(page.getByTestId("demo-card-key-never-in-the-box")).toBeVisible();
     await expect(page.getByTestId("demos-step-not-ready")).toBeVisible();
     await expect(page.getByTestId("demo-start-key-never-in-the-box")).toBeDisabled();
@@ -128,9 +134,7 @@ test.describe("Secrets demos", () => {
     await expect(policy).toContainText("api_key");
 
     await page.goto("/setup?step=authorized-not-issued");
-    await expect(
-      page.getByRole("heading", { name: "Authorized, not issued", level: 2 }),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Authorized, not issued", { exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId("demo-card-authorized-not-issued")).toBeVisible();
     await expect(page.getByTestId("demos-step-not-ready")).toBeVisible();
     await expect(page.getByTestId("demo-start-authorized-not-issued")).toBeDisabled();

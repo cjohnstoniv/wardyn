@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"path"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -28,38 +28,15 @@ import (
 // mountLibraryRoutes registers the tier-1 source library and tier-2 base-image
 // catalog endpoints: a repo/dir configured once (its own contract + scan,
 // attached to many workspaces) and the shared registry/custom/byo images
-// ("recommended" is derived per workspace, never a row). Reads humanOrAdmin,
-// writes operatorOnly — the workspaces block's exact posture.
+// ("recommended" is derived per workspace, never a row).
 //
-// DEADCODE-1: there is no PUT /sources/{id} or GET /base-images/{id} — a
-// source's own contract is authored through POST /sources instead:
-// re-POSTing an existing identity with a new requirements body now APPLIES
-// it (WSPIPE-8), so a contract edit lands on the SAME endpoint console/CLI/
-// SDK already call to create a source, rather than a second route no
-// console button, CLI flag or SDK method ever reached (the SDK's
-// client.SourceRequest already carries Requirements; a CLI flag to drive it
-// is the remaining gap, tracked separately). The write-once,
-// discard-on-conflict handler that route used to be (handleUpdateSource) and
-// its base-image GET-by-id twin (handleGetBaseImage, whose only caller was
-// its own now-removed route) are gone, not stubbed.
-// The reads are operatorOnly too, matching their writes. They were the member
-// group's, and the split was made by VERB rather than by what the document
-// carries: a Source row carries Locator — the host filesystem path of a
-// local_dir source — and Requirements keyed `secret:<name>` / `egress:<host>`,
-// so a plain member GET returned the operator's on-disk layout and the NAMES of
-// the secrets and internal hosts every library entry needs. A BaseImageEntry
-// carries Image and Steps: the internal registry host and the bootstrap URLs
-// fetched to build it. No secret VALUES (those are write-only), so this is
-// topology and credential-REF disclosure, which is a target list rather than a
-// key.
-//
-// Reclassified rather than projected, and the question was asked before it was
-// answered: NOTHING member-facing consumes either route. The console has no
-// client method for /sources or /base-images at all (ui/src/app/lib/api), and
-// the CLI's only callers are `wardyn source list` and `wardyn site-config get`,
-// both under operator management verbs whose siblings are already operatorOnly.
-// A projection would have been three response types' worth of new code to serve
-// no caller. The cheapest redaction is a field nobody asked for.
+// DEADCODE-1: no PUT /sources/{id} or GET /base-images/{id} (gone, not stubbed):
+// a source's contract is authored by re-POSTing its identity to POST /sources,
+// which APPLIES the new requirements body.
+// Reads AND writes are operatorOnly: a Source carries Locator (a local_dir's host
+// path) and `secret:<name>` / `egress:<host>` requirement NAMES, and a
+// BaseImageEntry the internal registry host and bootstrap URLs — topology and
+// credential-REF disclosure. Nothing member-facing consumes either route.
 func (s *Server) mountLibraryRoutes(r chi.Router, operatorOnly chi.Router) {
 	operatorOnly.Get("/sources", s.handleListSources)
 	operatorOnly.Post("/sources", s.handleCreateSource)
@@ -90,22 +67,25 @@ func canonicalSourceIdentity(kind types.SourceKind, locator, ref string) (string
 }
 
 // canonicalRepoLocator lowercases ONLY the scheme+host of a repo locator,
-// leaving the path verbatim: a case-sensitive forge (self-hosted GitLab/
-// Gitea/Bitbucket, or any case-sensitive path segment) needs the operator's
-// clone path preserved exactly as authored, while scheme/host is
-// case-insensitive by definition — so "https://Git.Corp.Example/MyGroup/
-// MyRepo.git" dedupes with the lowercase spelling but hydrate always serves
-// "MyGroup/MyRepo.git" back, not "mygroup/myrepo.git". A bare "<org>/<name>"
-// GitHub slug has no host component in the string itself and passes through
-// unchanged.
+// leaving the path verbatim: a case-sensitive forge needs the operator's clone
+// path preserved exactly as authored, while scheme/host is case-insensitive —
+// so "https://Git.Corp.Example/MyGroup/MyRepo.git" dedupes with the lowercase
+// spelling but hydrate serves "MyGroup/MyRepo.git" back. A bare "<org>/<name>"
+// GitHub slug has no host and passes through unchanged.
+//
+// It is STRING SURGERY, not a url.Parse/String round trip: the round trip
+// re-escapes a path holding a raw non-ASCII character wholesale ("é" to %C3%A9,
+// then "(" to %28 too), a second spelling of the same repository that
+// repoLocatorPathSafe refuses for an Azure DevOps name. The path's one spelling
+// is canonicalRepoAddress's, which the doors apply before this.
 func canonicalRepoLocator(locator string) string {
-	if strings.Contains(locator, "://") {
-		if u, err := url.Parse(locator); err == nil && u.Host != "" {
-			u.Scheme = strings.ToLower(u.Scheme)
-			u.Host = strings.ToLower(u.Host)
-			return u.String()
+	if i := strings.Index(locator, "://"); i >= 0 {
+		end := len(locator)
+		if j := strings.IndexByte(locator[i+3:], '/'); j >= 0 {
+			end = i + 3 + j
 		}
-		return locator
+		host := max(i+3, strings.LastIndexByte(locator[:end], '@')+1)
+		return strings.ToLower(locator[:i+3]) + locator[i+3:host] + strings.ToLower(locator[host:end]) + locator[end:]
 	}
 	// scp-form user@host:path (no scheme) — lowercase only the host between
 	// '@' and the following ':'.
@@ -133,7 +113,7 @@ func canonicalRepoLocator(locator string) string {
 // narrowing: a source's contract may not carry integration:<id> keys.
 // Integrations compose at the aggregate (tier 3, owner decision); the fold
 // would pass them through unharmed, so relaxing later is this one branch.
-func validateSourceWrite(src types.Source) string {
+func validateSourceWrite(src types.Source, adoServerHosts []string) string {
 	switch src.Kind {
 	case types.SourceLocalDir:
 		if src.Locator == "" {
@@ -156,7 +136,7 @@ func validateSourceWrite(src types.Source) string {
 		// The write-door half of the traversal guard: refused here as
 		// a 400 regardless of provider mode, so a never-clonable locator cannot be
 		// AUTHORED and sit in the library waiting for a provider row to widen.
-		if !repoLocatorPathSafe(src.Locator) {
+		if !repoLocatorPathSafe(src.Locator, adoServerHosts) {
 			return fmt.Sprintf(repo400LocatorShape, "locator")
 		}
 		if repoCloneURL(src.Locator) == "" {
@@ -233,6 +213,10 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	ado, adoErr := s.adoHostsLoader(r.Context()).forAddresses(req.Locator)
+	if req.Kind == types.SourceRepo {
+		req.Locator = canonicalRepoAddress(strings.TrimSpace(req.Locator), ado)
+	}
 	locator, ref := canonicalSourceIdentity(req.Kind, req.Locator, req.Ref)
 	// explicitName is captured BEFORE the lastPathSegment default below fills
 	// req.Name in — the identity-hit branch needs to tell "the operator typed
@@ -241,15 +225,15 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	// is indistinguishable from one that happens to equal the locator's tail.
 	explicitName := strings.TrimSpace(req.Name)
 	if req.Name == "" {
-		req.Name = lastPathSegment(locator)
+		req.Name = lastPathSegment(locator, ado)
 	}
 	src := types.Source{
 		ID: uuid.New(), Kind: req.Kind, Locator: locator, Ref: ref, Name: strings.TrimSpace(req.Name),
 		Requirements: req.Requirements, Status: types.WorkspacePendingScan,
 		CreatedAt: s.cfg.Now().UTC(), UpdatedAt: s.cfg.Now().UTC(),
 	}
-	if msg := validateSourceWrite(src); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+	if msg := validateSourceWrite(src, ado); msg != "" {
+		writeError(w, http.StatusBadRequest, storeNamedLocatorRefusal(msg, "locator", src.Locator, adoErr))
 		return
 	}
 	// Provider admission on the LIBRARY door, not only the workspace one. This is
@@ -340,14 +324,11 @@ type deleteSourceResponse struct {
 // handleDeleteSource removes a library source — LOUDLY refusing while
 // workspaces attach it: in-use is a 409 naming every attaching workspace;
 // ?force=1 is the explicit detach-everywhere escape. Forcing does NOT make a
-// workspace's next run fail loudly (the mount gate has no check for
-// a source that used to be there): it un-mounts the source and the workspace's
-// remaining sources mount as normal, so DetachedFrom above is the only signal
-// the operator gets that anything changed. The in-use gate and the delete are
-// ONE atomic statement in the store (DeleteSource): WorkspacesAttaching here
-// only names who's attached for the 409/200 body, it does not decide the
-// outcome, so a workspace attaching between this call and the delete can
-// never slip through.
+// workspace's next run fail (the mount gate has no check for a vanished
+// source), so DetachedFrom is the only signal the operator gets. The in-use
+// gate and the delete are ONE atomic statement in the store (DeleteSource);
+// WorkspacesAttaching only names who's attached for the body, so a concurrent
+// attach can never slip through.
 //
 //	DELETE /api/v1/sources/{id}[?force=1]
 func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
@@ -391,12 +372,20 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 }
 
 // lastPathSegment names a source from its locator when the caller didn't:
-// the trailing path/slug segment, or the locator itself when there is none.
-func lastPathSegment(locator string) string {
+// the trailing path/slug segment, or the locator itself when there is none. An
+// Azure DevOps repository is named by its decoded name — "Card Auth
+// (v2).Service", never "Card%20Auth%20(v2).Service".
+func lastPathSegment(locator string, adoServerHosts []string) string {
 	if locator == "" {
 		return locator
 	}
-	return path.Base(locator)
+	base := path.Base(locator)
+	if _, ado := adoscope.CanonicalRepoURL(locator, adoServerHosts); ado {
+		if name, err := adoscope.UnescapeName(base); err == nil {
+			return name
+		}
+	}
+	return base
 }
 
 // overridesBySourceID indexes existing's per-source Overrides by source id —
@@ -422,19 +411,15 @@ func overridesBySourceID(existing []types.WorkspaceAttachment) map[uuid.UUID]map
 // A registry/custom/byo base image upserts into the catalog; "recommended"/nil
 // yields a nil id — NULL is the derived-build marker.
 //
-// existing is the workspace's CURRENT attachments before this edit (nil for a
-// brand-new workspace) — its per-source Overrides carry forward by SourceID
-// (WSPIPE-7) onto a source the request doesn't explicitly set Overrides for.
-//
-// r (not a bare ctx) so a genuinely NEW library row can be audited under the
-// request's own actor (WSPIPE-4): a plain "sources": <count> on
-// workspace.create/update names no host path, so an incident review asking
-// which directory was exposed, and whether read-write, had no answer in the
-// trail besides the mutable workspace row itself.
+// existing is the workspace's CURRENT attachments (nil for a new workspace); its
+// per-source Overrides carry forward by SourceID where the request sets none.
+// Takes r, not a bare ctx, so a NEW library row is audited under the request's
+// own actor: the workspace audit row names no host path.
 func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, baseImage *types.WorkspaceBaseImage, existing []types.WorkspaceAttachment) ([]types.WorkspaceAttachment, *uuid.UUID, error) {
 	ctx := r.Context()
 	now := s.cfg.Now().UTC()
 	carried := overridesBySourceID(existing)
+	ado := s.adoHostsLoader(ctx)
 	atts := make([]types.WorkspaceAttachment, 0, len(srcs))
 	for _, src := range srcs {
 		switch src.Type {
@@ -452,9 +437,12 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 		}
 		locator, ref := canonicalSourceIdentity(kind, locator, src.Ref)
 		newID := uuid.New()
+		// Only the default display name: decodeWorkspaceRequest already refused an
+		// address the read error left undecided.
+		hosts, _ := ado.forAddresses(locator)
 		row, err := s.cfg.Store.UpsertSource(ctx, types.Source{
 			ID: newID, Kind: kind, Locator: locator, Ref: ref,
-			Name: lastPathSegment(locator), Status: types.WorkspacePendingScan,
+			Name: lastPathSegment(locator, hosts), Status: types.WorkspacePendingScan,
 			CreatedAt: now, UpdatedAt: now,
 		})
 		if err != nil {
@@ -482,7 +470,7 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 	var baseImageID *uuid.UUID
 	if baseImage != nil && baseImage.Kind != "" && baseImage.Kind != "recommended" {
 		row, err := s.cfg.Store.UpsertBaseImage(ctx, types.BaseImageEntry{
-			ID: uuid.New(), Kind: baseImage.Kind, Name: lastPathSegment(baseImage.Image),
+			ID: uuid.New(), Kind: baseImage.Kind, Name: lastPathSegment(baseImage.Image, nil),
 			Image: baseImage.Image, Steps: baseImage.Steps,
 			CreatedAt: now, UpdatedAt: now,
 		})

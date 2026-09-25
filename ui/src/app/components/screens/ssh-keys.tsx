@@ -35,6 +35,9 @@ import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { absoluteTime, relativeTime } from "../../lib/format";
+import { capabilityAllowed, useMyCapabilities } from "../../lib/capabilities";
+import { DENIED } from "../../lib/permissions-copy";
+import { useOperator } from "../wardyn/operator-context";
 
 // The page at /ssh-keys. The body is SshKeysPane so Settings can render the
 // same card ("Your SSH keys") without a second copy of the list, the dialogs,
@@ -53,6 +56,11 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [addOpen, setAddOpen] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<SSHPublicKey | null>(null);
+  // Advisory: the server's `feature` check is the wall (handleAddSSHKey). A
+  // super admin is exempt there, so the set is not even fetched for one.
+  const operator = useOperator();
+  const caps = useMyCapabilities(!operator);
+  const addBlocked = !capabilityAllowed(caps, "feature", "ssh_key");
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -73,11 +81,17 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
         title="Your SSH keys"
         description="Public keys only — Wardyn never stores or asks for a private key. Keys are yours alone; there is no admin view of anyone else's."
         actions={
-          <Button onClick={() => setAddOpen(true)}>
+          <Button onClick={() => setAddOpen(true)} disabled={addBlocked}>
             <Plus className="size-4" /> Add key
           </Button>
         }
       />
+
+      {addBlocked && (
+        <p role="status" className="mb-3 text-sm text-muted-foreground">
+          {DENIED.SSH_KEY_FEATURE}
+        </p>
+      )}
 
       <div className="overflow-hidden rounded-xl border border-border bg-card">
         {status === "loading" ? (
@@ -90,7 +104,7 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
             title="No keys yet."
             description="Add your public key to connect over SSH."
             action={
-              <Button onClick={() => setAddOpen(true)}>
+              <Button onClick={() => setAddOpen(true)} disabled={addBlocked}>
                 <Plus className="size-4" /> Add key
               </Button>
             }
@@ -123,6 +137,14 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
                           title="Registered while you were an admin, so this key reaches runs you do not own. Refreshed automatically each time you sign in, and expires on its own if you don't; delete and re-register the key to drop the override immediately."
                         >
                           Admin override
+                        </Chip>
+                      )}
+                      {/* #584: added in the user view, so capped at member
+                          rights for good (docs/SSH.md §Bounds). Frozen strings:
+                          docs/design/admin-access-canon.md. */}
+                      {k.capped && (
+                        <Chip title="Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH.">
+                          Member access
                         </Chip>
                       )}
                     </span>
@@ -299,7 +321,7 @@ function RemoveSSHKeyDialog({
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
-              confirmRemove();
+              void confirmRemove();
             }}
             disabled={removing}
             className="bg-danger text-danger-foreground hover:bg-danger/90"

@@ -24,6 +24,7 @@ import { ModelAccessProvider, useClaimModelAccessDoor, useModelAccessDoor } from
 import { OperatorProvider } from "./operator-context";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { absoluteTime } from "../../lib/format";
+import { aheadByHours } from "../../lib/test-clock";
 import { baseStatus } from "../../lib/test-fixtures";
 import type { SetupHarnessTool, SetupModelAccess, SetupStatus } from "../../lib/types";
 
@@ -58,6 +59,7 @@ function renderStrip({
   operator = false,
   principal = "member@corp.example",
   path = "/runs",
+  view,
   onRefresh = vi.fn(),
   claimed = false,
 }: {
@@ -66,6 +68,7 @@ function renderStrip({
   operator?: boolean;
   principal?: string;
   path?: string;
+  view?: "admin" | "user";
   onRefresh?: () => void;
   claimed?: boolean;
 }) {
@@ -78,7 +81,7 @@ function renderStrip({
               EAGERLY around this lazy chunk, and the skip-to-main target focus
               lands on when the strip that opened the door is gone. */}
           <div role="status">
-            <ModelAccessBanner />
+            <ModelAccessBanner view={view} />
           </div>
           <main id="main-content" tabIndex={-1}>
             screen
@@ -97,13 +100,6 @@ beforeEach(() => {
   }
 });
 afterEach(() => vi.restoreAllMocks());
-
-// aheadByHours is the deadline fixture for every "lapses in …" case: a stamp
-// the reader's clock will always see as the future. A hardcoded one cannot be —
-// it is a future date only until it isn't.
-function aheadByHours(h: number): string {
-  return new Date(Date.now() + h * 60 * 60 * 1000).toISOString();
-}
 
 describe("the strip says nothing when there is nothing to say", () => {
   it.each([["live"], ["not_applicable"]])("state %s renders no sentence", (state) => {
@@ -169,6 +165,8 @@ describe("the per-person states", () => {
   });
 
   it("expiring against a daemon that sends no deadline falls back to the server's sentence", () => {
+    // passthrough, never compared to the clock — an older daemon's opaque
+    // action sentence, rendered verbatim with no deadline field to parse.
     const action = "Sign in again before 2026-09-19T14:03:22Z";
     renderStrip({ access: { state: "expiring", action } });
     expect(screen.getByText(action)).toBeInTheDocument();
@@ -334,7 +332,8 @@ describe("'Not now' is per viewer, per browsing context", () => {
   });
 });
 
-describe("before /me answers, the strip says nothing (S2)", () => {
+describe("before /me answers, the strip says nothing", () => {
+  // ticket: S2
   // useOperator()'s default is fail-OPEN, so a MEMBER under a dead shared row
   // would otherwise read the ADMIN's sentence with a button the server refuses
   // — and usePrincipal() is "" in the same window, so a "Not now" there would
@@ -376,13 +375,39 @@ describe("where the strip is withheld", () => {
     expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
   });
 
-  it.each([["/settings"], ["/providers"]])("not on %s for an OPERATOR — those pages mount the pane", (path) => {
+  it.each([["/admin/settings"], ["/admin/providers"], ["/account"]])("not on %s for an OPERATOR — those pages mount the pane", (path) => {
     renderStrip({ access: { state: "not_configured" }, path, operator: true });
     expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
   });
 
-  it("but a MEMBER keeps it on /settings — the card's AWS button is admin-only there", () => {
-    renderStrip({ access: { state: "not_configured" }, path: "/settings" });
+  it("but a user keeps it on /account — the card's AWS button is admin-only there", () => {
+    renderStrip({ access: { state: "not_configured" }, path: "/account" });
+    expect(screen.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
+  });
+});
+
+// §4.2 (M-3) — a per-user deployment's states are each person's own credential,
+// which belongs to the User view; the Admin view keeps only what a
+// shared-credential deployment would show, until MP-4b gives it its own
+// per-person screen.
+describe("the Admin view keeps only the shared-credential branch (§4.2, M-3)", () => {
+  it("withholds a per-user deployment's strip in the Admin view", () => {
+    renderStrip({ access: { state: "not_configured" }, row: PER_USER_ROW, view: "admin", operator: true });
+    expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
+  });
+
+  it("keeps a shared-credential deployment's strip in the Admin view", () => {
+    renderStrip({
+      access: { state: "shared_expired", action: SHARED_EXPIRED_ACTION },
+      row: SHARED_ROW,
+      view: "admin",
+      operator: true,
+    });
+    expect(screen.getByText(MODEL_ACCESS_BANNER.SHARED_ADMIN_EXPIRED)).toBeInTheDocument();
+  });
+
+  it("keeps a per-user deployment's strip in the User view (the default)", () => {
+    renderStrip({ access: { state: "not_configured" }, row: PER_USER_ROW });
     expect(screen.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
 });

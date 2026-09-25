@@ -17,18 +17,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// THE EVICTION SEAM, END TO END (plan §coordination, patch-review A / R076-010).
+// The eviction seam, end to end.
 //
-// Everything in this chain was pinned in pieces and nowhere together. The runner
-// package proves a k8s pod evicted out from under a run reads TERMINAL
-// (internal/runner/k8s/terminal_pod_test.go, lifecycle_test.go). This package
-// proves a terminal transition cancels an EGRESS_DOMAIN approval
-// (approvals_cancel_terminal_test.go) and that cancelRunApprovals counts a
-// credential_reauth row when it is CALLED (credential_reauth_metrics_test.go).
-// Nothing drove a runner-reported eviction through the completion watcher into
-// finalizeRunTail and asked what happened to a HELD credential_reauth row —
-// which is the row a person is being asked to sign in for, on a screen that
-// would otherwise keep asking after the sandbox it would serve is gone.
+// The pieces are pinned elsewhere: the runner package proves a k8s pod evicted
+// out from under a run reads terminal (internal/runner/k8s/terminal_pod_test.go,
+// lifecycle_test.go), and this package proves a terminal transition cancels an
+// EGRESS_DOMAIN approval (approvals_cancel_terminal_test.go) and that
+// cancelRunApprovals counts a credential_reauth row when it is called
+// (credential_reauth_metrics_test.go). This drives a runner-reported eviction
+// through the completion watcher into finalizeRunTail and asks what happens to a
+// held credential_reauth row — the row a person is being asked to sign in for,
+// on a screen that would otherwise keep asking after the sandbox it would serve
+// is gone.
 
 // evictedExitCode is what Wait reports at THIS package's boundary when a pod is
 // evicted: internal/runner/k8s/exec.go's terminalExecStatus sees PodFailed with
@@ -54,7 +54,7 @@ func (r *evictedRunner) Wait(context.Context, string) (int, error) { return evic
 // `WHERE state='PENDING'` CAS (anything else is ErrAlreadyDecided, exactly as
 // store.PG.DecideApproval answers), and a recorder.
 //
-// It exists because this test has to see the approval.cancelled AUDIT row, and
+// It exists because this test has to see the approval.cancel AUDIT row, and
 // that row is written inside approval.CancelForRun over the STORE's recorder.
 // The package's own fakeApprovals mirrors the FSM faithfully but is the service,
 // not the store, so it emits nothing — which is why every existing terminal
@@ -142,8 +142,12 @@ func (a evictionApprovals) List(ctx context.Context, state types.ApprovalState) 
 	return a.st.ListApprovals(ctx, state)
 }
 
-func (a evictionApprovals) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
+func (a evictionApprovals) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	return approval.CancelForRun(ctx, a.st, runID, reason)
+}
+
+func (a evictionApprovals) ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error {
+	return approval.ExpireOne(ctx, a.st, id, actor, reason)
 }
 
 func (a evictionApprovals) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
@@ -172,7 +176,7 @@ var _ ApprovalService = evictionApprovals{}
 //  2. the credential_reauth row is CANCELLED with reason=run_failed, so the
 //     console stops asking a person to sign in for a sandbox that is gone and
 //     the 24h sweeper never gets to record it as "nobody answered";
-//  3. an approval.cancelled audit row landed — the REAL one, from the shipping
+//  3. an approval.cancel audit row landed — the REAL one, from the shipping
 //     FSM — so the queue's emptying is explained;
 //  4. wardyn_credential_reauth_total{outcome="cancelled"} moved by exactly one.
 //
@@ -194,11 +198,12 @@ func TestEvictedSandbox_CancelsAHeldCredentialReauthAndShutsTheInternalDoor(t *t
 	}}
 
 	// The held sign-in request: raised while the run was RUNNING, still PENDING
-	// when the node evicted the pod.
+	// when the node evicted the pod. The scope is the AWS raise's own shape
+	// (holdOrRefuseCredentialReauth), which is what the metric counts (#151).
 	apID := uuid.New()
 	if _, err := approvals.Request(context.Background(), types.ApprovalRequest{
 		ID: apID, RunID: runID, Kind: types.ApprovalCredentialReauth,
-		RequestedScope: json.RawMessage(`{"provider":"aws_sso","owner":"alice@example.com"}`),
+		RequestedScope: json.RawMessage(`{"mechanism":"bedrock_sso","credential_source":"per_user","owner":"alice@example.com"}`),
 		RequestedAt:    time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("seed the held re-auth request: %v", err)
@@ -257,21 +262,21 @@ func TestEvictedSandbox_CancelsAHeldCredentialReauthAndShutsTheInternalDoor(t *t
 			ap.DecidedBy, ap.Reason)
 	}
 
-	// 3 — the REAL approval.cancelled row, once, carrying this run and count 1.
+	// 3 — the REAL approval.cancel row, once, carrying this run and count 1.
 	rows := cancelledRows(audit, runID)
 	if len(rows) != 1 {
-		t.Fatalf("approval.cancelled rows = %d, want exactly 1 — one run transition is one fact in the "+
+		t.Fatalf("approval.cancel rows = %d, want exactly 1 — one run transition is one fact in the "+
 			"trail, and an unexplained emptying of the queue is what this row exists to prevent", len(rows))
 	}
 	var data map[string]any
 	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
-		t.Fatalf("approval.cancelled data is not JSON: %v", err)
+		t.Fatalf("approval.cancel data is not JSON: %v", err)
 	}
 	if data["reason"] != "run_failed" {
-		t.Errorf("approval.cancelled reason = %v, want run_failed", data["reason"])
+		t.Errorf("approval.cancel reason = %v, want run_failed", data["reason"])
 	}
 	if n, ok := data["count"].(float64); !ok || int(n) != 1 {
-		t.Errorf("approval.cancelled count = %v, want 1", data["count"])
+		t.Errorf("approval.cancel count = %v, want 1", data["count"])
 	}
 
 	// 4 — the metric moved by exactly one.

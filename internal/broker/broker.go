@@ -600,9 +600,12 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 
 	// The durable record is committed above (in-tx). Fan the SAME event out to the
 	// SIEM sinks — best-effort, primary store NOT re-written (see the siem field
-	// doc). The Fanout logs any per-child failure itself.
+	// doc). The Fanout logs any per-child failure itself. WithoutCancel: the
+	// credential is already the caller's, so a client hanging up now must not
+	// cost its SIEM record (SyslogSink.Emit skips on a done ctx). Every sink
+	// enqueues or writes locally, so detaching cannot pin the request.
 	if b.siem != nil {
-		_ = b.siem.Emit(ctx, mintEv)
+		_ = b.siem.Emit(context.WithoutCancel(ctx), mintEv)
 	}
 
 	// Register the minted token — and, for ssh_key, its known_hosts material —
@@ -857,6 +860,7 @@ var reservedBrokerSecretNames = map[string]bool{
 	"github-app-id":         true,
 	"github-app-key":        true,
 	"wardyn-ssh-host-key":   true,
+	"wardyn-internal-ca":    true,
 	"bedrock-api-key":       true,
 	// The hybrid device credential: no grant may hand it into a sandbox.
 	"wardyn-org-device-credential": true,
@@ -864,15 +868,22 @@ var reservedBrokerSecretNames = map[string]bool{
 
 // reservedBrokerSecret mirrors internal/api.reservedSecret (secrets.go): the
 // static keys above PLUS the managed-harness OAuth-blob pattern
-// (wardyn-harness-<provider>-oauth). The static map alone missed the pattern, so
+// (wardyn-harness-<provider>-oauth) PLUS every model-provider credential name. The static map alone missed the pattern, so
 // a policy could name e.g. "wardyn-harness-anthropic-oauth" as a git_pat/ssh_key
 // secret and have the broker resolve the resident OAuth token into the sandbox.
 func reservedBrokerSecret(name string) bool {
 	if reservedBrokerSecretNames[name] {
 		return true
 	}
-	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth")
+	return strings.HasPrefix(name, "wardyn-harness-") && strings.HasSuffix(name, "-oauth") ||
+		strings.HasPrefix(name, providerSecretPrefix)
 }
+
+// providerSecretPrefix mirrors internal/api's: every per-person model-provider
+// credential (wardyn-provider-<uid>-{key,oauth,sso}). A model key is injected
+// proxy-side as a header, never minted, so a git_pat/ssh_key grant naming one
+// could only hand the person's own API key to the sandbox as a git password.
+const providerSecretPrefix = "wardyn-provider-"
 
 // ReservedSecretName reports whether name is a key the broker must never
 // resolve into a sandbox. Exported for the same single caller

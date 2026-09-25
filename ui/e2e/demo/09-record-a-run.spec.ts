@@ -409,7 +409,7 @@ test("cold open + B1 — the card that learns", async () => {
     .poll(() => page.evaluate(() => typeof (window as unknown as Record<string, unknown>).__demo), { timeout: 15_000 })
     .toBe("object");
 
-  // OWNER SLOTS (drafted — local/episode-09-rework-proposal.md, "Cold open").
+  // OWNER SLOTS (drafted — the episode-09 rework proposal, "Cold open").
   // The old opening conceded that allowlists are the problem; they aren't. When
   // you know what a job needs, you write the policy and you're done — episode 08
   // just filmed exactly that. Recording is the answer to NOT knowing, and saying

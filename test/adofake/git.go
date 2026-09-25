@@ -13,6 +13,15 @@ import (
 	"testing"
 )
 
+// SpacedProject and SpacedRepo are a project and a repository named the way
+// Azure DevOps permits and field reports broke on (#485): a space in both,
+// and parentheses and a dot in the repository. The cmd registers them beside
+// its -project/-repo pair, so every lane driving the fake reaches one.
+const (
+	SpacedProject = "Payments Platform"
+	SpacedRepo    = "Card Auth (v2).Service"
+)
+
 // RegisterRepo makes barePath (a bare git repository — see NewFixtureRepo, or
 // a caller-built one) reachable at /{org}/{project}/_git/{repo}, the real
 // Azure DevOps git smart-HTTP URL shape. It sets http.receivepack=true on

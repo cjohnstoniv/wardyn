@@ -12,7 +12,7 @@ import type { AuditEvent, EgressDecision, Outcome, RunEnding, RunEndingKind, Run
 import { toolRuleDecision } from "../types";
 import { asJson, num, str, unwrapList, wfetch, withLimit } from "./core";
 
-// Project egress.allow / egress.deny / egress.pending audit events into
+// Project egress.allow / egress.deny / egress.hold audit events into
 // the EgressDecision shape the run-detail screen renders. Exported so callers
 // that already hold a run's audit events can derive egress WITHOUT a second
 // /audit round-trip.
@@ -20,7 +20,7 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
   const map: Record<string, "allow" | "deny" | "pending"> = {
     "egress.allow": "allow",
     "egress.deny": "deny",
-    "egress.pending": "pending",
+    "egress.hold": "pending",
   };
   return events
     // A tool call the run's own tool_rules answered is NOT a connection: its
@@ -40,7 +40,7 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
         domain,
         decision: map[e.action],
         bytes: num(d.bytes),
-        // B3: only egress.pending stamps one (docs/AUDIT-ACTIONS.md); str()
+        // B3: only egress.hold stamps one (docs/AUDIT-ACTIONS.md); str()
         // answers undefined for the other two actions and for an older trail.
         approval_id: str(d.approval_id),
       } satisfies EgressDecision;
@@ -242,7 +242,11 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
       // NO detail: this row's `error` is byte-identical to the run's own
       // failure_hint, which the failure block already renders for an ending
       // with no copy of its own — printing it here would say it twice.
-      mechanism: str(credential.data?.mechanism),
+      // A provider row (#532) also writes its kind as `mechanism`, for readers
+      // that predate `provider`; this one reads `provider` there instead.
+      ...(str(credential.data?.provider)
+        ? { provider: str(credential.data?.provider) }
+        : { mechanism: str(credential.data?.mechanism) }),
     };
   }
   return { kind: "unknown", action: "" };

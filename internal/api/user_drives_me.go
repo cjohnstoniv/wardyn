@@ -168,7 +168,7 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 // resolver's token in me.go, which closes that for the population where the
 // drive resolve also fails and changes nothing for this one.
 //
-// It reads driveDoorProfile — the SAME predicate denyMemberDrive enforces with,
+// It reads driveDoorProfile — the SAME predicate denyUserDrive enforces with,
 // whose keying (operator exempt, unassigned member has no door) is documented
 // there. A ceiling that cannot be resolved reports "" for resolveMeUserDrive's
 // own reason — /me is a display read, and the ENFORCEMENT path answers the same

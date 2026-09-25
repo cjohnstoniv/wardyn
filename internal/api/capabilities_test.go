@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the store double ─────────────────────────────────────────────────────────
+// the store double
 
 // noGovernanceStore is store.Store with the two governance-resolver reads AND
 // the two user-drive-resolver reads answered as "this deployment has adopted
@@ -38,13 +38,49 @@ import (
 // ⇒ Config.DefaultPolicy" is exactly what that deployment does.
 type noGovernanceStore struct{ store.Store }
 
-func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
 
 func (noGovernanceStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
 
-func (noGovernanceStore) ResolveUserDrive(context.Context, []string, []string) (
+// seededUserTypes is the user_types table as the migration leaves it: the
+// built-in type alone. The two methods below answer from it for the base
+// doubles most handler tests compose (/me names the session's type, GET
+// /access lists them).
+var seededUserTypes = []types.UserType{{ID: types.UserTypeStandard, Name: "Standard user", BuiltIn: true}}
+
+func seededUserType(id string) (types.UserType, error) {
+	for _, t := range seededUserTypes {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return types.UserType{}, store.ErrNotFound
+}
+
+func (noGovernanceStore) ListUserTypes(context.Context) ([]types.UserType, error) {
+	return seededUserTypes, nil
+}
+
+func (noGovernanceStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	return seededUserType(id)
+}
+
+func (*capStore) ListUserTypes(context.Context) ([]types.UserType, error) {
+	return seededUserTypes, nil
+}
+
+func (s *capStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	for _, t := range s.userTypes {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return seededUserType(id)
+}
+
+func (noGovernanceStore) ResolveUserDrive(context.Context, []string, []string, string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	return nil, nil, "", store.ErrNotFound
 }
@@ -83,7 +119,7 @@ func (noGovernanceStore) LatestAuditEventByAction(context.Context, string) (type
 // double that is non-nil but incomplete must answer the SAME way rather than
 // panic on the call capSeamAllowed's non-nil branch (capAllowed -> capScan)
 // then makes (#338).
-func (noGovernanceStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (noGovernanceStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 
@@ -94,6 +130,10 @@ func (noGovernanceStore) ListCapabilityGrantsFor(context.Context, []string, []st
 // seams ListCapabilityGrantsFor's comment does not cover (#338).
 func (noGovernanceStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return map[string]bool{}, nil
+}
+
+func (noGovernanceStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 
 // ListGroupDenyGrants answers no group-deny rows — capUnresolvableGroupDeny's
@@ -174,9 +214,20 @@ type capStore struct {
 	// this knob is what a test for it needs.
 	driveErr             error
 	driveHasGroupTierErr error
+
+	// userTypes are the custom types GetUserType finds beside the seeded
+	// built-in one; a stamped type absent from both is a deleted type.
+	userTypes []types.UserType
+
+	// restricted is capability_restrictions: kind -> restricted values.
+	restricted map[string]map[string]bool
+	// restrictErr fails ListCapabilityRestrictions alone, distinct from the
+	// general s.err every other method checks — so a test can fail JUST the
+	// restriction read and see whether that alone can turn into an allow.
+	restrictErr error
 }
 
-func (s *capStore) ResolveUserDrive(context.Context, []string, []string) (
+func (s *capStore) ResolveUserDrive(context.Context, []string, []string, string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	if s.driveErr != nil {
 		return nil, nil, "", s.driveErr
@@ -203,7 +254,7 @@ func (s *capStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.site, nil
 }
 
-func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string, _ string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if s.govErr != nil {
 		return nil, "", s.govErr
 	}
@@ -220,9 +271,9 @@ func (s *capStore) HasGroupTierAssignments(context.Context) (bool, error) {
 	return s.govHasGroupTier, nil
 }
 
-// ListCapabilityGrants is the WHOLE fake table — the ADMIN LISTING, and now
-// nothing else. The resolver used to reach it on every unanswerable-snapshot
-// check; the counter is what keeps it from creeping back. Embedding store.Store
+// ListCapabilityGrants is the whole fake table — the admin listing, and nothing
+// else. The resolver must not reach it on an unanswerable-snapshot check; the
+// counter is what keeps it from creeping back. Embedding store.Store
 // makes an unimplemented method a nil-pointer panic rather than a silent
 // answer, which is why this one is spelled out here rather than left to the
 // embed.
@@ -252,7 +303,7 @@ func (s *capStore) ListGroupDenyGrants(_ context.Context, capability string) ([]
 	return out, nil
 }
 
-func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -267,6 +318,10 @@ func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []st
 			}
 		case types.CapabilitySubjectGroup:
 			if slices.Contains(groups, g.Subject) {
+				out = append(out, g)
+			}
+		case types.CapabilitySubjectUserType:
+			if userType != "" && g.Subject == userType {
 				out = append(out, g)
 			}
 		}
@@ -284,7 +339,38 @@ func (s *capStore) GetCapabilityEnforcement(context.Context) (map[string]bool, e
 	return s.enf, nil
 }
 
-// ─── fixtures ─────────────────────────────────────────────────────────────────
+func (s *capStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	if s.restrictErr != nil {
+		return nil, s.restrictErr
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.restricted == nil {
+		return map[string]map[string]bool{}, nil
+	}
+	return s.restricted, nil
+}
+
+func (s *capStore) SetCapabilityRestriction(_ context.Context, kind, value string, restricted bool, _ string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.restricted == nil {
+		s.restricted = map[string]map[string]bool{}
+	}
+	if s.restricted[kind] == nil {
+		s.restricted[kind] = map[string]bool{}
+	}
+	if restricted {
+		s.restricted[kind][value] = true
+	} else {
+		delete(s.restricted[kind], value)
+	}
+	return nil
+}
+
+// fixtures
 
 const (
 	capSub   = "sub-bob"
@@ -294,7 +380,7 @@ const (
 // memberCtx is what humanOrAdminAuth publishes for a signed-in MEMBER, group
 // snapshot included. Passing nil groups models a pre-0.6 cookie.
 func memberCtx(groups []string) context.Context {
-	return withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleMember), groups)
+	return withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleUser), groups)
 }
 
 func grant(st types.CapabilitySubjectType, subject, kind, value string, effect types.CapabilityEffect) types.CapabilityGrant {
@@ -306,7 +392,7 @@ func grant(st types.CapabilitySubjectType, subject, kind, value string, effect t
 
 func capServer(st store.Store) *Server { return &Server{cfg: Config{Store: st}} }
 
-// ─── the matrix ───────────────────────────────────────────────────────────────
+// the matrix
 
 // TestCapAllowedMatrix walks the precedence rules capAllowed documents. Each
 // row names the real-world outcome, because every one of them is either a
@@ -564,13 +650,13 @@ func TestCapAllowedEnforcementReadIsSkippedOnAllow(t *testing.T) {
 	}
 }
 
-// ─── subjects ─────────────────────────────────────────────────────────────────
+// subjects
 
 // TestCapabilitySubjects: both identities are offered, lowercased, and never
 // duplicated — an admin who wrote the grant against the email must get the same
 // answer as one who wrote it against the sub.
 func TestCapabilitySubjects(t *testing.T) {
-	ctx := withOIDCGroups(operatorCtx("Sub-BOB", "BOB@Corp.Example", oidc.RoleMember), []string{"eng"})
+	ctx := withOIDCGroups(operatorCtx("Sub-BOB", "BOB@Corp.Example", oidc.RoleUser), []string{"eng"})
 	users, groups, stale := capabilitySubjects(ctx)
 	if !slices.Equal(users, []string{"sub-bob", "bob@corp.example"}) {
 		t.Errorf("users = %v, want the lowercased sub then email", users)
@@ -585,7 +671,7 @@ func TestCapabilitySubjects(t *testing.T) {
 	// A session whose sub and email are the same string must not offer it twice
 	// — a duplicated subject would double-count nothing today but makes the
 	// eventual /me/capabilities listing lie about where a grant came from.
-	same := withOIDCGroups(operatorCtx("bob@corp.example", "bob@corp.example", oidc.RoleMember), []string{})
+	same := withOIDCGroups(operatorCtx("bob@corp.example", "bob@corp.example", oidc.RoleUser), []string{})
 	users, _, _ = capabilitySubjects(same)
 	if len(users) != 1 {
 		t.Errorf("users = %v, want one entry when sub and email are identical", users)
@@ -606,7 +692,7 @@ func TestCapabilitySubjectsStaleSnapshot(t *testing.T) {
 	}
 }
 
-// ─── the closed kind set ──────────────────────────────────────────────────────
+// the closed kind set
 
 // TestCapabilityKindsAreTheClosedSet: with no CHECK in the schema, this slice
 // IS the validation, so it has to stay in step with the console's own list
@@ -614,7 +700,7 @@ func TestCapabilitySubjectsStaleSnapshot(t *testing.T) {
 // devcontainer_repo, which is deliberately NOT a capability: it executes
 // attacker-authored build config and stays unconditionally admin-only.
 func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
-	want := []string{"egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider"}
+	want := []string{"egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider", "model_provider", "feature", "policy"}
 	if !slices.Equal(capabilityKinds, want) {
 		t.Errorf("capabilityKinds = %v, want %v (and ui/src/app/lib/permissions-copy.ts must match)", capabilityKinds, want)
 	}
@@ -638,7 +724,7 @@ func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
 // DEFAULT arm — nothing was added for them, so nothing but a test proves the
 // default is what they got.
 func TestCapValueMatchesIsExactOffTheHostLane(t *testing.T) {
-	for _, kind := range []string{capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider} {
+	for _, kind := range []string{capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capModelProvider, capFeature, capPolicy} {
 		if capValueMatches(kind, "*.corp", "api.corp") {
 			t.Errorf("%s: a wildcard-looking grant matched a suffix; only egress_host may do that", kind)
 		}

@@ -8,16 +8,21 @@ import { test, expect } from "./fixtures";
 // Demo sandboxes — hermetic walk against the seeded backend (real wardynd +
 // Postgres + `none` runner, admin-token auth). /demos DIED with the Getting
 // Started consolidation (App.tsx redirects it into the funnel, replay
-// 10a2e144); every demo is now a setup sub-step reachable at
-// `/setup?step=<id>` (DemoDetail, setup/demos-step.tsx) — the deep-link
-// corrector deliberately exempts demo steps from the corp_network gate
-// (steps.ts's refuseSelect), so a bare `?step=` visit opens the demo
-// directly, no bounce. The unit suites cover the catalog invariants and the
-// card's start/poll logic; this spec proves the real wiring: the redirect
-// lands where it says, each keyless demo renders at its deep link, and —
-// because the seeded backend is `-runner none` — starting one is honestly
-// GATED (disabled + hint). That gating IS the contract on this host; if it
-// ever gains a runner, this is the spec to revisit.
+// 10a2e144); M-6 (D5, admin-member-modes-design.md §4.8) then moved every
+// demo OUT of the admin funnel and into User Getting Started
+// (member-getting-started.tsx) — a demo is a sandbox run, a user act. Each
+// one is still reachable at `/setup?step=<id>` (App.tsx's /demos redirect is
+// unchanged), but the id now opens a ROW on that page (DemoRow), not a
+// rail-driven single-step view — there is no funnel here any more, no "Step N
+// of M", no per-demo <h2>. This backend's admin-token auth is a
+// single-operator (D1) principal, so /setup shows this page for it too — the
+// URL alone decides the view (console-view.tsx). The unit suites cover the
+// catalog invariants and the card's start/poll logic; this spec proves the
+// real wiring: the redirect lands where it says, each keyless demo's row
+// opens at its deep link, and — because the seeded backend is `-runner
+// none` — starting one is honestly GATED (disabled + hint). That gating IS
+// the contract on this host; if it ever gains a runner, this is the spec to
+// revisit.
 
 // Demos this backend can honestly deep-link to: no model, no stored secret.
 // The last two are the per-KIND cards that gate on NEITHER — github-app-broker
@@ -58,11 +63,15 @@ test.describe("Demo sandboxes", () => {
   for (const { id, title } of KEYLESS_DEMOS) {
     test(`${title} renders at its deep link, Start gated on -runner none`, async ({ page }) => {
       await page.goto(`/setup?step=${id}`);
-      await expect(page.getByRole("heading", { name: title, level: 2 })).toBeVisible();
+      // The row's own title (member-getting-started.tsx's DemoRow), pre-opened
+      // by the ?step= deep link — never a level-2 heading, which was the
+      // funnel step's own SetupLayout chrome, gone with the funnel.
+      await expect(page.getByText(title, { exact: true })).toBeVisible();
+      await expect(page.getByTestId(`demo-card-${id}`)).toBeVisible();
       // Browsing works, but no barrier is ready → Start is closed, with a hint.
       // The needsModel/needsSecret demos (agent-in-the-box, plus the five that
-      // name a stored secret) are NOT walked here: they're dropped from
-      // stepOrder entirely without a connected model / stored secret — that
+      // name a stored secret) are NOT walked here: walkableDemos (steps.ts)
+      // drops them entirely without a connected model / stored secret — that
       // gating is deterministic unit coverage instead (steps.test.ts). The
       // needsGitHubApp one is walked precisely BECAUSE it is not dropped.
       await expect(page.getByTestId("demos-step-not-ready")).toBeVisible();

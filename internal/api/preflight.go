@@ -35,7 +35,7 @@ type preflightResponse struct {
 	OverallRisk    composer.RiskLevel  `json:"overall_risk"`
 	// Warnings is resolveRunPolicy's clamp-warning list — non-empty only when a
 	// MEMBER authored an inline_policy that composer.Clamp bounded or
-	// filterMemberGrants dropped a grant from. Surfaced here (never at launch, per
+	// filterUserGrants dropped a grant from. Surfaced here (never at launch, per
 	// resolveRunPolicy's doc comment) so Review tells the member WHY their
 	// inline_policy differs from what they typed, before they launch.
 	Warnings []string `json:"warnings,omitempty"`
@@ -86,7 +86,7 @@ type preflightResponse struct {
 //
 // It does persist one thing. Every gate it
 // reproduces is a real gate, and a gate that REFUSES a member writes its
-// authz.denied audit row — denyMemberField, from inside the shared code path.
+// authz.denied audit row — refuse, from inside the shared code path.
 // So a dry run that is refused (task_mode, the drive door, any other profile
 // limit) leaves exactly one row per refused door per call, with run_id NULL
 // because there is no run. A dry run that PASSES writes nothing at all.
@@ -123,6 +123,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))
 	// The order of the five gates below is create's own order, and it is
 	// load-bearing rather than tidy. The structural parity guard
 	// (TestPreflightMirrorsLaunchGates) can see the gate SET but not the
@@ -150,7 +151,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// BYOI/devcontainer_repo/ungranted-workspace request with the SAME 403
 	// create would, not preview a rosier checklist for a request that would be
 	// denied at launch.
-	ceiling, denied := s.denyMemberRequest(w, r, req)
+	ceiling, denied := s.denyUserRequest(w, r, req)
 	if denied {
 		return
 	}
@@ -165,9 +166,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// refusals.
 	//
 	// It can write one audit row on the grace lane
-	// (workspace.provider.legacy_host, from admitRepoSources) — the same "a
+	// (workspace.provider.admit, from admitRepoSources) — the same "a
 	// refused dry run leaves the record of the refusal" rule this handler's doc
-	// comment already states for denyMemberField. In legacy open mode (no
+	// comment already states for refuse. In legacy open mode (no
 	// provider rows) it reads the site config and returns having refused,
 	// audited and warned nothing.
 	if s.requestRepoProviderRefusals(w, r, req, false) { // false: Review never gates on git_credential (F2)
@@ -224,9 +225,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Which secrets actually exist (names only) — the SAME map compose builds.
-	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
-
 	// Fold the run's model-access binding AND each referenced workspace's
 	// requirements contract into the spec BEFORE computing the enforced confinement
 	// class and grading — the SAME order launch now uses (SPINE-2/SPINE-6), so a
@@ -238,7 +236,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// a bedrock integration that supplies the region/model must reach
 	// resolveBedrockAuth below, or the checklist previews "no model access" for a
 	// run launch credentials fine. No audit event — preflight persists nothing
-	// (the run.workspace.creds audit is the create path's launch-only half).
+	// (the run.workspace_cred.resolve audit is the create path's launch-only half).
 	wsRefs := s.referencedWorkspaces(ctx, spec)
 	// Widen the spec's egress from onboarded-workspace registries +
 	// clone hosts the SAME way launch-time unionRunEgress does (runs.go),
@@ -255,6 +253,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	for _, ws := range wsRefs {
 		unionAllowedDomains(&spec, workspaceCloneEgress(ws))
 	}
+	// Which secrets actually exist (names only) — the SAME map compose builds,
+	// read where launch reads it (TestPreflightMirrorsLaunchGates pins the order).
+	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
 	_, _, bedrockRef := s.foldRunIntegration(ctx, s.secretOwnerFromRequest(r), &spec, req, wsRefs)
 	_ = s.applyWorkspaceRequirementsFor(ctx, presentSecrets, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 
@@ -288,6 +289,35 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Create/Review parity on the declared model-access mechanism: Review answers
+	// the SAME 422 launch would, from the same predicate — a checklist that said
+	// "ready" for a run create refuses is the worse of the two lies. Writes its
+	// own 422; see enforceCreateLLMMechanism.
+	// The caller's own run-identity subject, for the reason named at the create
+	// door (runs.go): a per_user lane resolves against the principal's namespace,
+	// and secretOwnerFromRequest's "" for an operator would preview "sign in
+	// again" for an admin whose own capture is right there.
+	//
+	// The out-param is this handler's ONE resolution of the run's credential
+	// lanes: the gate already resolves them to judge the declared mechanism, and
+	// grading residency from a second resolution would both cost another
+	// secret-store read and let the rail describe a lane the gate did not judge.
+	// The autonomy gate below grades the same resolution, which is why this
+	// sits ahead of it — in launch's order.
+	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
+	// The model-provider choice, where launch makes it (runs.go). Review has no
+	// run row to freeze the choice onto; it keeps it only for the model-access
+	// row below, which under a provider block is the provider's verdict, and
+	// for the model credential the autonomy gate grades with.
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
+	if !ok {
+		return
+	}
+	modelCred := mpChoice.modelCredential()
+	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
+		return
+	}
+
 	// The SAME autonomy gate launch runs, in the same place in the order
 	// (runs.go) and on the same folded spec + enforced class — called, not
 	// re-implemented, because a Review that previewed a level launch then
@@ -297,7 +327,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// copy and is discarded with it (preflight dispatches nothing); the 201
 	// warnings belong to the launch channel, and the site-config snapshot to
 	// launch's egress union, so both are dropped here too.
-	autonomy, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
+	// The frozen Azure DevOps and Bedrock grades are dropped with the rest:
+	// preflight dispatches nothing, so there is no dispatch for them to bind.
+	autonomy, _, _, _, _, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred)
 	if !ok {
 		return
 	}
@@ -334,25 +366,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	riskItems := composer.Grade(runInput, gspec)
 	overallRisk := composer.OverallLevel(riskItems)
 
-	// Create/Review parity on the declared model-access mechanism: Review answers
-	// the SAME 422 launch would, from the same predicate — a checklist that said
-	// "ready" for a run create refuses is the worse of the two lies. Writes its
-	// own 422; see enforceCreateLLMMechanism.
-	// The caller's own run-identity subject, for the reason named at the create
-	// door (runs.go): a per_user lane resolves against the principal's namespace,
-	// and secretOwnerFromRequest's "" for an operator would preview "sign in
-	// again" for an admin whose own capture is right there.
-	//
-	// The out-param is this handler's ONE resolution of the run's credential
-	// lanes: the gate already resolves them to judge the declared mechanism, and
-	// grading residency from a second resolution would both cost another
-	// secret-store read and let the rail describe a lane the gate did not judge.
-	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	var modelCred modelCredentialFacts
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
-		return
-	}
-
 	// LLM-access verdict on the resolved spec — the SAME computation the create path
 	// warns from (resolveRunLLMAccess), so this checklist row and the launch-time
 	// warning can never disagree. The helper clones internally: reconcileLLMAccess
@@ -365,7 +378,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// a false "missing model access" blocker on every CI exec job's --dry-run.
 	var llmAccess *composeLLMAccess
 	if req.TaskMode != "exec" {
-		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef, ssoSubject)
+		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef, ssoSubject, mpChoice)
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)

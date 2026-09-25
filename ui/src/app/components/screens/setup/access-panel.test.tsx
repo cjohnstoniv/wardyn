@@ -42,6 +42,13 @@ import { AccessCollisionError, AccessPostureFlipRequiredError } from "../../../l
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import type { AccessResponse } from "../../../lib/types";
 import { AccessPanel } from "./access-panel";
+import { aheadByHours } from "../../../lib/test-clock";
+
+const orgTypes = [
+  { id: "standard", name: "Standard user", description: "", priority: 0, built_in: true },
+  { id: "portfolio-manager", name: "Portfolio manager", description: "", priority: 10, built_in: false },
+  { id: "analyst", name: "Analyst", description: "", priority: 10, built_in: false },
+];
 
 function baseAccess(over: Partial<AccessResponse> = {}): AccessResponse {
   return {
@@ -54,17 +61,18 @@ function baseAccess(over: Partial<AccessResponse> = {}): AccessResponse {
         source: "console",
         shadowed: false,
         shadow_cause: "",
-        created_at: "2026-08-28T00:00:00Z",
+        created_at: aheadByHours(-1),
         created_by: "admin",
       },
     ],
-    default_role: "member",
+    default_role: "user",
     operator_emails_present: true,
     operator_emails: ["ops@corp.example"],
     allow_email_mappings: false,
     email_domains_configured: false,
     provider: "Microsoft Entra ID",
     posture: { map_empty: false, before: "an admin", after: "sign in as a member", changes: true },
+    user_types: [{ id: "standard", name: "Standard user", description: "", priority: 0, built_in: true }],
     ...over,
   };
 }
@@ -130,15 +138,15 @@ describe("AccessPanel — merged table (Variant A)", () => {
     renderPanel(
       baseAccess({
         mappings: [
-          { value: "Wardyn.Contractors", role: "member", source: "chart", shadowed: false, shadow_cause: "" },
+          { value: "Wardyn.Contractors", role: "user", source: "chart", shadowed: false, shadow_cause: "" },
           {
             id: "c2",
             value: "Wardyn.Contractors",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: true,
             shadow_cause: "chart",
-            created_at: "2026-08-30T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -154,11 +162,11 @@ describe("AccessPanel — merged table (Variant A)", () => {
           {
             id: "c3",
             value: "carol@corp.example",
-            role: "member",
+            role: "user",
             source: "console",
             shadowed: true,
             shadow_cause: "operator_allowlist",
-            created_at: "2026-08-30T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -169,11 +177,11 @@ describe("AccessPanel — merged table (Variant A)", () => {
   const emailRow = {
     id: "c4",
     value: "bob@corp.example",
-    role: "member" as const,
+    role: "user" as const,
     source: "console" as const,
     shadowed: false,
     shadow_cause: "" as const,
-    created_at: "2026-08-30T00:00:00Z",
+    created_at: aheadByHours(-1),
   };
 
   it("an email-shaped console row gets NO unverified-claim badge when allow_email_mappings is false", () => {
@@ -200,8 +208,33 @@ describe("AccessPanel — merged table (Variant A)", () => {
   });
 
   it("Defaults block: a set default role renders as a chip", () => {
-    renderPanel(baseAccess({ default_role: "member" }));
-    expect(within(screen.getByTestId("access-defaults")).getByText(PEOPLE.ROLE_MEMBER)).toBeInTheDocument();
+    renderPanel(baseAccess({ default_role: "user" }));
+    expect(within(screen.getByTestId("access-defaults")).getByText("Standard user")).toBeInTheDocument();
+  });
+
+  it("Defaults block: a default naming a user type shows the type's name", () => {
+    renderPanel(baseAccess({ default_role: "portfolio-manager", user_types: orgTypes }));
+    expect(within(screen.getByTestId("access-defaults")).getByText("Portfolio manager")).toBeInTheDocument();
+  });
+
+  // UT-2b, packet A's People rows: a user row shows its TYPE's name; an admin
+  // row keeps the tier; a type the list lacks shows its id rather than a name
+  // it doesn't have.
+  it("a user row's chip names its user type", () => {
+    renderPanel(
+      baseAccess({
+        user_types: orgTypes,
+        mappings: [
+          { value: "Wardyn.Admin", role: "admin", source: "chart", shadowed: false, shadow_cause: "" },
+          { value: "Wardyn.Member", role: "user", user_type: "standard", source: "chart", shadowed: false, shadow_cause: "" },
+          { id: "c1", value: "pm-group", role: "user", user_type: "portfolio-manager", source: "console", shadowed: false, shadow_cause: "" },
+          { value: "ghost-group", role: "user", user_type: "contractor", source: "chart", shadowed: false, shadow_cause: "" },
+        ],
+      }),
+    );
+    for (const label of [PEOPLE.ROLE_ADMIN, "Standard user", "Portfolio manager", "contractor"]) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    }
   });
 
   it("Defaults block: an unset default role renders DEFAULT_ROLE_UNSET", () => {
@@ -229,7 +262,7 @@ describe("AccessPanel — merged table (Variant A)", () => {
 // non-"admin" role "Member", so a security_admin mapping was rendered as the
 // least-privileged role on the very screen that assigns roles.
 describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
-  it("a security_admin mapping's chip reads ROLE_SECURITY_ADMIN, never ROLE_MEMBER", () => {
+  it("a security_admin mapping's chip reads ROLE_SECURITY_ADMIN, never ROLE_USER", () => {
     renderPanel(
       baseAccess({
         mappings: [
@@ -240,7 +273,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
             source: "console",
             shadowed: false,
             shadow_cause: "",
-            created_at: "2026-09-01T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
         // Unset so the Defaults block renders DEFAULT_ROLE_UNSET rather than
@@ -253,11 +286,11 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
     // filter those out — this asserts on the row's chip specifically.
     const chip = (label: string) => screen.queryAllByText(label).filter((el) => el.tagName !== "BUTTON");
     expect(chip(PEOPLE.ROLE_SECURITY_ADMIN)).toHaveLength(1);
-    expect(chip(PEOPLE.ROLE_MEMBER)).toHaveLength(0);
+    expect(chip(PEOPLE.ROLE_USER)).toHaveLength(0);
   });
 
   // R4/F033: the SIBLING call site the roleLabel() move missed —
-  // renderPreviewResult kept `role === "admin" ? "admin" : "member"`, so the
+  // renderPreviewResult kept `role === "admin" ? "admin" : "user"`, so the
   // one surface an operator uses to CHECK a mapping before trusting it called
   // a security_admin a member. Casing is §7.2's: lowercase mid-sentence.
   it("a security_admin preview verdict says so — never 'member'", async () => {
@@ -271,7 +304,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
     await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
 
     expect(await screen.findByText(PREVIEW.RESULT_MATCHED("security admin", "sec-team"))).toBeInTheDocument();
-    expect(screen.queryByText(PREVIEW.RESULT_MATCHED("member", "sec-team"))).toBeNull();
+    expect(screen.queryByText(PREVIEW.RESULT_MATCHED("user", "sec-team"))).toBeNull();
   });
 
   it("a security_admin default-role verdict says so too", async () => {
@@ -281,7 +314,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
     await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
 
     expect(await screen.findByText(PREVIEW.RESULT_DEFAULT("security admin"))).toBeInTheDocument();
-    expect(screen.queryByText(PREVIEW.RESULT_DEFAULT("member"))).toBeNull();
+    expect(screen.queryByText(PREVIEW.RESULT_DEFAULT("user"))).toBeNull();
   });
 
   // An unrecognized wire role renders ITSELF rather than falling through to a
@@ -320,7 +353,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
   // handleUpsertRoleMapping now embeds the count, and the console renders it.
   it("shows the tokens-revoked receipt after a demotion that revoked some", async () => {
     upsertMappingMock.mockResolvedValue({
-      mapping: { id: "m1", value: "eng-team", role: "member" },
+      mapping: { id: "m1", value: "eng-team", role: "user" },
       created: false,
       tokensRevoked: 3,
     });
@@ -333,7 +366,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
   });
 
   it("shows no receipt when the write revoked nothing", async () => {
-    upsertMappingMock.mockResolvedValue({ mapping: { id: "m1", value: "eng-team", role: "member" }, created: true });
+    upsertMappingMock.mockResolvedValue({ mapping: { id: "m1", value: "eng-team", role: "user" }, created: true });
     renderPanel(baseAccess());
 
     await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "eng-team");
@@ -346,7 +379,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
 
 describe("AccessPanel — add mapping, posture guard (§2.1/§7.3)", () => {
   it("submits directly when the write would NOT flip posture (map already non-empty)", async () => {
-    upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "eng-team", role: "member" }, created: true });
+    upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "eng-team", role: "user" }, created: true });
     const onReload = vi.fn();
     renderPanel(baseAccess({ posture: { map_empty: false, before: "an admin", after: "sign in as a member", changes: true } }), "ready", onReload);
 
@@ -358,7 +391,7 @@ describe("AccessPanel — add mapping, posture guard (§2.1/§7.3)", () => {
   });
 
   it("shows the FIRST_ROW ack dialog pre-emptively when the map is empty and the flip changes the outcome — blocks submit until acked", async () => {
-    upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "eng-team", role: "member" }, created: true });
+    upsertMappingMock.mockResolvedValue({ mapping: { id: "new", value: "eng-team", role: "user" }, created: true });
     renderPanel(baseAccess({ mappings: [], posture: { map_empty: true, before: "an admin", after: "be denied", changes: true } }));
 
     await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "eng-team");
@@ -511,7 +544,7 @@ describe("AccessPanel — delete mapping", () => {
             source: "console",
             shadowed: false,
             shadow_cause: "",
-            created_at: "2026-08-28T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -581,22 +614,74 @@ function chartPlusTwoConsole(): AccessResponse {
         source: "console",
         shadowed: false,
         shadow_cause: "",
-        created_at: "2026-08-28T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
       {
         id: "c2",
         value: "eng-team",
-        role: "member",
+        role: "user",
         source: "console",
         shadowed: false,
         shadow_cause: "",
-        created_at: "2026-08-29T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
     ],
   });
 }
 
 describe("AccessPanel — preview panel", () => {
+  const runPreview = async () => {
+    await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "pm-group");
+    await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
+  };
+
+  it("a custom user type reads as its name, and says the built-in type lost", async () => {
+    previewRoleMock.mockResolvedValue({
+      role: "user",
+      user_type: "portfolio-manager",
+      ok: true,
+      matched: [
+        { value: "pm-group", role: "user", user_type: "portfolio-manager", source: "map_row" },
+        { value: "Wardyn.Member", role: "user", user_type: "standard", source: "map_row" },
+      ],
+    });
+    renderPanel(baseAccess({ user_types: orgTypes }));
+    await runPreview();
+    expect(
+      await screen.findByText(
+        `${PREVIEW.RESULT_MATCHED("Portfolio manager", "pm-group, Wardyn.Member")} ${PREVIEW.STANDARD_LOST("Wardyn.Member")}`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("a tie names both values, both types and the priority", async () => {
+    previewRoleMock.mockResolvedValue({
+      role: "",
+      ok: false,
+      denial: "user_type_ambiguous",
+      tied: ["analyst", "portfolio-manager"],
+      matched: [
+        { value: "pm-group", role: "user", user_type: "portfolio-manager", source: "map_row" },
+        { value: "quant-group", role: "user", user_type: "analyst", source: "map_row" },
+      ],
+    });
+    renderPanel(baseAccess({ user_types: orgTypes }));
+    await runPreview();
+    expect(
+      await screen.findByText(
+        "Two types tie. quant-group (Analyst) and pm-group (Portfolio manager) both match at priority 10, so this sign-in would be refused. Give one a higher priority.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("a missing type says so instead of 'nothing matched'", async () => {
+    previewRoleMock.mockResolvedValue({ role: "", ok: false, denial: "user_type_unknown", unknown: ["contractor"], matched: [] });
+    renderPanel(baseAccess({ user_types: orgTypes }));
+    await runPreview();
+    expect(await screen.findByText(PREVIEW.RESULT_TYPE_MISSING('"contractor"'))).toBeInTheDocument();
+    expect(screen.queryByText(PREVIEW.RESULT_DENIED)).toBeNull();
+  });
+
   it("RESULT_MATCHED for an ok+matched response", async () => {
     previewRoleMock.mockResolvedValue({ role: "admin", ok: true, matched: [{ value: "Wardyn.Admin", role: "admin", source: "chart" }] });
     renderPanel(baseAccess());
@@ -606,11 +691,11 @@ describe("AccessPanel — preview panel", () => {
   });
 
   it("RESULT_DEFAULT when ok, nothing matched, and the combined map is non-empty", async () => {
-    previewRoleMock.mockResolvedValue({ role: "member", ok: true, matched: [] });
+    previewRoleMock.mockResolvedValue({ role: "user", ok: true, matched: [] });
     renderPanel(baseAccess({ posture: { map_empty: false, before: "x", after: "y", changes: false } }));
     await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "nobody");
     await userEvent.click(screen.getByRole("button", { name: PREVIEW.RUN_CTA }));
-    expect(await screen.findByText(PREVIEW.RESULT_DEFAULT("member"))).toBeInTheDocument();
+    expect(await screen.findByText(PREVIEW.RESULT_DEFAULT("user"))).toBeInTheDocument();
   });
 
   it("RESULT_LEGACY (distinct from RESULT_DEFAULT) when ok, nothing matched, and the combined map is EMPTY", async () => {

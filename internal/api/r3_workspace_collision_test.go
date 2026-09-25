@@ -28,7 +28,7 @@ func collisionRequest() *http.Request {
 // memberRequest is a plain member SSO session, the caller F336 is about.
 func collisionMemberRequest(sub string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
-	return r.WithContext(withOIDCRole(withOIDCHuman(r.Context(), sub), string(oidc.RoleMember)))
+	return r.WithContext(withOIDCRole(withOIDCHuman(r.Context(), sub), string(oidc.RoleUser)))
 }
 
 // fallbackCollisionStore has NO ActiveRunsAtWorkspacePath, so it takes the in-Go
@@ -85,7 +85,7 @@ func TestWorkspaceCollisionNamesOnlyRunsTheCallerMaySee(t *testing.T) {
 				"sentence names its ids", warnings)
 		}
 		// The operator's record is complete regardless.
-		ev := lastAuditEvent(t, rec.events, "run.workspace.collision")
+		ev := lastAuditEvent(t, rec.events, "run.workspace.collide")
 		var data map[string]any
 		if err := json.Unmarshal(ev.Data, &data); err != nil {
 			t.Fatal(err)
@@ -143,7 +143,7 @@ func TestWorkspaceCollisionNamesOnlyRunsTheCallerMaySee(t *testing.T) {
 		}
 	})
 
-	// THE SAME GAP EXISTED ON BOTH BRANCHES, so the pin covers both: a store
+	// The same gap existed on both branches, so the pin covers both: a store
 	// without ActiveRunsAtWorkspacePath falls back to ListRuns + an in-Go
 	// filter, which appended ids just as unfiltered.
 	t.Run("the in-Go fallback branch filters too", func(t *testing.T) {

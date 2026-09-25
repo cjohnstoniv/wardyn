@@ -137,8 +137,61 @@ func execCmdStdin(t *testing.T, in string, args ...string) error {
 }
 
 // --------------------------------------------------------------------------
-// run command
+// #200: one CLI output contract
 // --------------------------------------------------------------------------
+
+// TestCLIOutput_WritesThroughCommandWriter pins #200: emitJSON and newTab
+// write through the writer their caller passes them (cmd.OutOrStdout()),
+// never straight to the process's own os.Stdout. That is what lets a caller
+// capture a *cobra.Command's output by setting its writer — as every other
+// test in this file does — instead of redirecting the real file descriptor.
+// The real os.Stdout is redirected here as the independent check: if either
+// helper ever regresses back to a bare os.Stdout write, this test catches the
+// leak even though the assertion above would also pass by accident.
+func TestCLIOutput_WritesThroughCommandWriter(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		body any
+	}{
+		{"json (emitJSON)", []string{"policy", "list", "--json"}, []types.RunPolicy{{ID: uuid.New(), Name: "p"}}},
+		{"table (newTab)", []string{"policy", "list"}, []types.RunPolicy{{ID: uuid.New(), Name: "p"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newCmdServer(t, http.StatusOK, tc.body)
+
+			origStdout := os.Stdout
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatalf("pipe: %v", err)
+			}
+			os.Stdout = w
+			leakCh := make(chan []byte, 1)
+			go func() { b, _ := io.ReadAll(r); leakCh <- b }()
+
+			out := &strings.Builder{}
+			root := rootCmd()
+			root.SetArgs(append(append([]string{}, tc.args...), "--url", srv.URL, "--token", "tok"))
+			root.SetOut(out)
+			root.SetErr(&strings.Builder{})
+			execErr := root.Execute()
+
+			_ = w.Close()
+			os.Stdout = origStdout
+			leaked := <-leakCh
+
+			if execErr != nil {
+				t.Fatalf("%s: %v", tc.name, execErr)
+			}
+			if out.Len() == 0 {
+				t.Fatalf("%s: cmd.OutOrStdout() (cobra's SetOut sink) got nothing", tc.name)
+			}
+			if len(leaked) != 0 {
+				t.Errorf("%s: output leaked to the real os.Stdout instead of cmd.OutOrStdout(): %q", tc.name, leaked)
+			}
+		})
+	}
+}
 
 func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{
@@ -244,19 +297,21 @@ func TestRunCmd_DryRunPrintsSetupItemLabel(t *testing.T) {
 		},
 	})
 
-	out := captureStdout(t, func() {
-		if err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
-			"--agent", "claude-code", "--dry-run"); err != nil {
-			t.Fatalf("run --dry-run returned error: %v", err)
-		}
-	})
-	if !strings.Contains(out, "Workspace secret: GITHUB_TOKEN") {
-		t.Errorf("printPreflight output missing setup item label, got:\n%s", out)
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--dry-run"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("run --dry-run returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "Workspace secret: GITHUB_TOKEN") {
+		t.Errorf("printPreflight output missing setup item label, got:\n%s", out.String())
 	}
 }
 
 // run grants reaches the SDK's ListGrants route (the eligibility records the
-// console shows and the CLI previously could not reach at all).
+// console shows).
 func TestRunCmd_Grants(t *testing.T) {
 	id := uuid.New()
 	srv := newCmdServer(t, http.StatusOK, []types.CredentialGrant{
@@ -394,11 +449,11 @@ func TestRunCmd_PolicyFileParseError(t *testing.T) {
 	}
 }
 
-// TestRunCmd_PolicyFileRejectsUnknownField is the W14-S1-2 regression: a
-// misspelled/unknown spec field in --policy-file used to be silently dropped
-// (json.Unmarshal ignores what it doesn't recognize), so the run launched
-// under a policy the operator believed enforced a setting it never carried.
-// It must now fail locally, before any request, exactly like `policy render`.
+// TestRunCmd_PolicyFileRejectsUnknownField pins that a misspelled/unknown
+// spec field in --policy-file fails locally, before any request, exactly like
+// `policy render`. json.Unmarshal ignores what it doesn't recognize, so a
+// lenient decode would launch the run under a policy the operator believed
+// enforced a setting it never carried.
 func TestRunCmd_PolicyFileRejectsUnknownField(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
 
@@ -436,6 +491,21 @@ func TestRunCmd_ImageAndTaskModeInBody(t *testing.T) {
 	}
 	if body["image"] != "ubuntu:24.04" || body["task_mode"] != "exec" {
 		t.Errorf("run body image/task_mode wrong: %v", body)
+	}
+}
+
+func TestRunCmd_ModelProviderInBody(t *testing.T) {
+	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{ID: uuid.New(), State: types.RunPending})
+	if err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
+		"--agent", "claude-code", "--task", "t", "--model-provider", "corp-gateway"); err != nil {
+		t.Fatalf("run command returned error: %v", err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(srv.last().body, &body); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if body["model_provider"] != "corp-gateway" {
+		t.Errorf("run body model_provider = %v, want corp-gateway", body["model_provider"])
 	}
 }
 
@@ -561,6 +631,28 @@ func TestRunFailureReason(t *testing.T) {
 	})
 	if got := runFailureReason(t.Context(), sdk.New(srv2.URL, "tok"), runID); got != "" {
 		t.Errorf("runFailureReason on a plain exit = %q, want empty", got)
+	}
+}
+
+// TestRunGetCmd_FailedShowsFailureReason pins #200: `run get` on a FAILED run
+// prints its failure reason on the default (non-JSON) surface, through
+// cmd.OutOrStdout() — not just at exit code time, and not only through --wait.
+func TestRunGetCmd_FailedShowsFailureReason(t *testing.T) {
+	runID := uuid.New()
+	srv := waitServer(t, runID, []types.RunState{types.RunFailed}, []types.AuditEvent{
+		{Action: "run.dispatch", Outcome: "failure", Data: json.RawMessage(`{"error":"pull ghcr.io/x/agent-oracle:latest: not found"}`)},
+	})
+
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"run", "get", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("run get returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "failed:") {
+		t.Errorf("run get output missing the \"failed:\" pin, got:\n%s", out.String())
 	}
 }
 
@@ -715,7 +807,7 @@ func TestDenyCmd_PostsDeny(t *testing.T) {
 }
 
 // TestApprovalsListCmd_RunFlagReachesServer pins that `approvals list --run`
-// actually uses the server's ?run_id= filter (W19-S1-4 / W20-hold-fsm-7)
+// actually uses the server's ?run_id= filter
 // instead of silently discarding it.
 func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{})
@@ -734,19 +826,23 @@ func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
 
 // TestApprovalsListCmd_PrintsHostAndHoldHint pins the HOST and HOLD columns:
 // a live wait_for_review egress hold must show its requested host and a
-// "time left" hint, not the pre-fix blank cells that left the CLI decide
-// loop unable to tell a live 30s hold from an ordinary up-to-24h pendency.
+// "time left" hint; blank cells would leave the CLI decide loop unable to
+// tell a live 30s hold from an ordinary up-to-24h pendency.
 func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{{
 		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
 		State: types.ApprovalPending, RequestedAt: time.Now(),
 		RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`),
 	}})
-	got := captureStdout(t, func() {
-		if err := execCmd(t, "approvals", "list", "--url", srv.URL, "--token", "tok"); err != nil {
-			t.Fatalf("approvals list returned error: %v", err)
-		}
-	})
+	gotBuf := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"approvals", "list", "--url", srv.URL, "--token", "tok"})
+	root.SetOut(gotBuf)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("approvals list returned error: %v", err)
+	}
+	got := gotBuf.String()
 	if !strings.Contains(got, "pkg.example.com") {
 		t.Errorf("output = %q, want it to contain the requested host", got)
 	}
@@ -949,7 +1045,7 @@ func TestAuditCmd_RequiresRun(t *testing.T) {
 	}
 }
 
-// TestAuditCmd_LimitOffsetFlagsPage pins W16-S1-2's core fix: before this,
+// TestAuditCmd_LimitOffsetFlagsPage pins core fix: before this,
 // `wardyn audit` had no way to page past the per-run 1000-event cap, so a run
 // with more events than that silently dropped its newest ones (including
 // run.complete) with no flag to ask for the rest.
@@ -966,7 +1062,7 @@ func TestAuditCmd_LimitOffsetFlagsPage(t *testing.T) {
 }
 
 // TestAuditCmd_FilterFlagsReachServer pins the "documented filter flags" half
-// of W16-S1-2's fix: docs/sdk.md already claimed the CLI mirrors the server's
+// of fix: docs/sdk.md already claimed the CLI mirrors the server's
 // since/until/action_prefix/actor_type/outcome predicates, but auditCmd had no
 // such flags at all — the doc overclaimed. This locks the flags to the wire.
 func TestAuditCmd_FilterFlagsReachServer(t *testing.T) {
@@ -995,7 +1091,7 @@ func TestAuditCmd_FilterFlagsReachServer(t *testing.T) {
 
 // TestAuditCmd_TruncatedPageWarnsOnStderr pins that a truncated page (server
 // sets X-Wardyn-Truncated) is surfaced, not silently indistinguishable from a
-// complete trail — the exact harm W16-S1-2 named. The warning goes to
+// complete trail. The warning goes to
 // cmd.ErrOrStderr(), never mixed into the events themselves: emitJSON encodes
 // straight from the server-decoded slice, so there is no string path by which
 // this text could land inside the --json array.
@@ -1028,7 +1124,7 @@ func TestAuditCmd_TruncatedPageWarnsOnStderr(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// logTail (W22-S1-4: `wardyn logs`)
+// logTail (`wardyn logs`)
 // --------------------------------------------------------------------------
 
 // TestLogTail_Filter_DedupesSameSecondBoundary is the real bug this type
@@ -1227,7 +1323,7 @@ func TestRunRecordingCmd_DefaultsToBareRunID(t *testing.T) {
 	}
 }
 
-// W21-S1-6: --session fetches an interactive run's OTHER recordings — an
+// --session fetches an interactive run's other recordings — an
 // attach session's cast is stored server-side under the composite key
 // "<run-id>~<session>" (recording.CastKey), which the server has always
 // served, but nothing on the CLI/SDK side could ever request one before this.
@@ -1296,6 +1392,45 @@ func TestSecretRmCmd(t *testing.T) {
 	got := srv.last()
 	if got.method != http.MethodDelete || got.path != "/api/v1/secrets/gh-token" {
 		t.Errorf("got %s %s, want DELETE /api/v1/secrets/gh-token", got.method, got.path)
+	}
+}
+
+// --------------------------------------------------------------------------
+// ssh-key delete (#206 slice a: the gap ssh-key had no delete)
+// --------------------------------------------------------------------------
+
+func TestSSHKeyDeleteCmd(t *testing.T) {
+	srv := newCmdServer(t, http.StatusNoContent, nil)
+
+	var buf strings.Builder
+	root := rootCmd()
+	root.SetArgs([]string{"ssh-key", "delete", "SHA256:abcdef1234567890", "--url", srv.URL, "--token", "tok"})
+	root.SetIn(strings.NewReader(""))
+	root.SetOut(&buf)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("ssh-key delete returned error: %v", err)
+	}
+	got := srv.last()
+	want := "/api/v1/me/ssh-keys/SHA256:abcdef1234567890"
+	if got.method != http.MethodDelete || got.path != want {
+		t.Errorf("got %s %s, want DELETE %s", got.method, got.path, want)
+	}
+	if want := "ssh key \"SHA256:abcdef1234567890\" deleted\n"; buf.String() != want {
+		t.Errorf("stdout = %q, want %q", buf.String(), want)
+	}
+}
+
+func TestSSHKeyRmCmd_Alias(t *testing.T) {
+	srv := newCmdServer(t, http.StatusNoContent, nil)
+
+	if err := execCmd(t, "ssh-key", "rm", "SHA256:abcdef1234567890", "--url", srv.URL, "--token", "tok"); err != nil {
+		t.Fatalf("ssh-key rm returned error: %v", err)
+	}
+	got := srv.last()
+	want := "/api/v1/me/ssh-keys/SHA256:abcdef1234567890"
+	if got.method != http.MethodDelete || got.path != want {
+		t.Errorf("got %s %s, want DELETE %s", got.method, got.path, want)
 	}
 }
 
@@ -1451,7 +1586,7 @@ func TestURL_FlagOverridesEnv(t *testing.T) {
 
 // With no WARDYN_ADMIN_TOKEN and no --token, do() proceeds WITHOUT an
 // Authorization header rather than erroring client-side — a loopback wardynd in
-// LOCAL HOST MODE accepts unauthenticated requests; an auth-gated server returns
+// Local host mode accepts unauthenticated requests; an auth-gated server returns
 // a clear 401 instead.
 func TestToken_MissingProceedsUnauthenticated(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AgentRun{})
@@ -1663,30 +1798,12 @@ func TestRecordSaveCmd_RequiresName(t *testing.T) {
 	}
 }
 
-// captureStdout runs fn with os.Stdout redirected and returns what it printed.
-// The table writers target os.Stdout directly (newTab), not cobra's out sink,
-// so the cobra SetOut in execCmd cannot see them.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	orig := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stdout = w
-	done := make(chan string, 1)
-	go func() { b, _ := io.ReadAll(r); done <- string(b) }()
-	fn()
-	_ = w.Close()
-	os.Stdout = orig
-	return <-done
-}
-
 // An ACTIONABLE id must print in full. `run kill` / `approve` / `deny` / `--policy`
 // all parse a full UUID and reject a truncated one ("invalid UUID length: 8"), so
 // truncating the ID column here would break the obvious list → copy → act flow.
-// Found by running the CLI e2e: `run list` printed 790047a8 and `run kill 790047a8`
-// then failed. Context-only columns (an approval's RUN, an audit target) may stay short.
+// A truncated id in `run list` would make `run kill <id>` fail on the very value the
+// list printed. Context-only columns (an approval's RUN, an audit target) may stay
+// short.
 func TestListCmds_PrintFullActionableIDs(t *testing.T) {
 	runID := uuid.New()
 	apprID, apprRun := uuid.New(), uuid.New()
@@ -1709,13 +1826,15 @@ func TestListCmds_PrintFullActionableIDs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newCmdServer(t, http.StatusOK, tc.body)
-			var execErr error
-			out := captureStdout(t, func() {
-				execErr = execCmd(t, append(tc.args, "--url", srv.URL, "--token", "tok")...)
-			})
-			if execErr != nil {
-				t.Fatalf("%s: %v", tc.name, execErr)
+			outBuf := &strings.Builder{}
+			root := rootCmd()
+			root.SetArgs(append(tc.args, "--url", srv.URL, "--token", "tok"))
+			root.SetOut(outBuf)
+			root.SetErr(&strings.Builder{})
+			if err := root.Execute(); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
 			}
+			out := outBuf.String()
 			if !strings.Contains(out, tc.want.String()) {
 				t.Errorf("%s must print the FULL actionable id %s (a truncated id is rejected by the action subcommands); got:\n%s",
 					tc.name, tc.want, out)
@@ -1755,6 +1874,48 @@ func TestWorkspaceCreateCmd(t *testing.T) {
 	}
 	if body["name"] != "/home/you/svc" {
 		t.Errorf("name = %v, want it defaulted to --source", body["name"])
+	}
+}
+
+// TestWorkspaceGetCmd_JSONDefaultsFalse pins #200's clean break: `workspace
+// get` used to default --json to true (the CLI's one command that disagreed
+// with the other 23), which this command now matches — plain --json=false
+// output unless the flag is passed.
+func TestWorkspaceGetCmd_JSONDefaultsFalse(t *testing.T) {
+	id := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, types.Workspace{
+		ID: id, Kind: types.WorkspaceKindLocalDir, Source: "/home/you/svc", Status: types.WorkspaceScanned,
+	})
+
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"workspace", "get", id.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("workspace get returned error: %v", err)
+	}
+	if strings.HasPrefix(strings.TrimSpace(out.String()), "{") {
+		t.Errorf("workspace get with no --json printed JSON, want the one-line composition table: %q", out.String())
+	}
+	if !strings.Contains(out.String(), id.String()) {
+		t.Errorf("workspace get table output missing id: %q", out.String())
+	}
+
+	jsonOut := &strings.Builder{}
+	root = rootCmd()
+	root.SetArgs([]string{"workspace", "get", id.String(), "--json", "--url", srv.URL, "--token", "tok"})
+	root.SetOut(jsonOut)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("workspace get --json returned error: %v", err)
+	}
+	var ws types.Workspace
+	if err := json.Unmarshal([]byte(jsonOut.String()), &ws); err != nil {
+		t.Fatalf("workspace get --json output not valid JSON: %v (%q)", err, jsonOut.String())
+	}
+	if ws.ID != id {
+		t.Errorf("workspace get --json id = %s, want %s", ws.ID, id)
 	}
 }
 
@@ -1810,10 +1971,11 @@ func TestApprovalsGetCmd_PagesPastTheFirstPage(t *testing.T) {
 	}
 }
 
-// TestLogsCmd_NonFollowUnknownRunErrors: `logs --follow=false` used to skip
-// GetRun entirely, so a typo'd run id printed nothing and exited 0 — the audit
-// endpoint answers 200 [] for an id that does not exist. Both modes now check
-// the run first, so an unknown or unauthorized id is an error in both.
+// TestLogsCmd_NonFollowUnknownRunErrors: `logs --follow=false` checks the run
+// with GetRun first, like follow mode, because the audit endpoint answers 200
+// [] for an id that does not exist — skipping the check would print nothing
+// and exit 0 for a typo'd run id. An unknown or unauthorized id is an error in
+// both modes.
 func TestLogsCmd_NonFollowUnknownRunErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2120,10 +2282,10 @@ func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
 	}
 }
 
-// TestNoArgsLeavesRejectAnExtraArg is B12a-F8's tree-walk extension: it
-// covers LEAF commands (Runnable, no subcommands of their own) that declare
-// `Args: cobra.NoArgs` — e.g. `setup wall`/`setup vault` (previously
-// undeclared: a stray positional was silently accepted and ignored). Unlike
+// TestNoArgsLeavesRejectAnExtraArg extends the tree walk to leaf commands
+// (Runnable, no subcommands of their own) that declare `Args: cobra.NoArgs`
+// — e.g. `setup wall`/`setup vault`, where an undeclared validator would
+// silently accept and ignore a stray positional. Unlike
 // TestUnknownSubcommandUnderEveryGroupIsAnError's grouping commands, a leaf's
 // Args validator is NOT dead code (it IS Runnable, so cobra's execute()
 // reaches ValidateArgs before RunE) — this proves the declared contract

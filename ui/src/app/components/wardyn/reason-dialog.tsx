@@ -67,7 +67,7 @@ export function ReasonDialog({
 }) {
   // useSecurityOperator, not useOperator (0.7 §B): decision_scope=always is
   // gated by isSecurityOperator (approvals.go:604), in LOCKSTEP with
-  // authorizeMemberDecision — same power, same tier. This dialog's ONLY
+  // authorizeUserDecision — same power, same tier. This dialog's ONLY
   // role-aware control is that scope.
   const securityOperator = useSecurityOperator();
   const [reason, setReason] = React.useState("");
