@@ -385,17 +385,17 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// once per login beside RoleMappings and failing the login closed
 			// the same way. store.PG already has the one method it needs.
 			UserTypes: store.NewPG(pool),
-			// OnLogin (migration 0046, widened by #152): every successful login
+			// OnLogin (migration 0046, widened by #152 and #611): every successful login
 			// re-stamps role+role_checked_at on every ssh_public_keys row this
 			// principal owns — the bounded-stale re-check sshAuth's admin-override
-			// path reads (WARDYN_SSH_ROLE_TTL) — and role+groups+groups_truncated
-			// on every api_tokens row they hold. store.NewPG(pool) is a cheap value
+			// path reads (WARDYN_SSH_ROLE_TTL) — and role+user_type+groups+
+			// groups_truncated on every api_tokens row they hold. store.NewPG(pool) is a cheap value
 			// wrapper (constructed the same way elsewhere in this file), not a
 			// connection of its own. Best-effort: a store hiccup here logs and
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for
 			// why that contract lives on the callback side, not here.
-			OnLogin: func(ctx context.Context, sub, role string, groups []string, groupsTruncated bool) {
-				refreshLoginStamps(ctx, store.NewPG(pool), sub, role, groups, groupsTruncated, time.Now().UTC())
+			OnLogin: func(ctx context.Context, sub, role, userType string, groups []string, groupsTruncated bool) {
+				refreshLoginStamps(ctx, store.NewPG(pool), sub, role, userType, groups, groupsTruncated, time.Now().UTC())
 			},
 		}, sessKey)
 		if err != nil {
@@ -816,7 +816,7 @@ func buildDirectoryConnector(f *bootFlags) (directory.Directory, error) {
 // asserted by grepping this file for a method name.
 type loginStampStore interface {
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
-	RefreshAPITokenIdentity(ctx context.Context, principal, role string, groups []string, truncated bool) error
+	RefreshAPITokenIdentity(ctx context.Context, principal, role, userType string, groups []string, truncated bool) error
 }
 
 // refreshLoginStamps re-stamps the identity a login just derived onto both
@@ -847,11 +847,11 @@ type loginStampStore interface {
 // lives on the callback side), and a failure of the FIRST stamp must not skip the
 // SECOND — they bound two independent credential lanes and one being unreachable
 // is no reason to leave the other stale.
-func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role string, groups []string, groupsTruncated bool, now time.Time) {
+func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role, userType string, groups []string, groupsTruncated bool, now time.Time) {
 	if err := st.RefreshSSHKeyRoles(ctx, sub, role, now); err != nil {
 		slog.Warn("wardynd: ssh key role refresh at login failed", slog.String("err", err.Error()))
 	}
-	if err := st.RefreshAPITokenIdentity(ctx, sub, role, groups, groupsTruncated); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, sub, role, userType, groups, groupsTruncated); err != nil {
 		slog.Warn("wardynd: api token identity refresh at login failed", slog.String("err", err.Error()))
 	}
 }

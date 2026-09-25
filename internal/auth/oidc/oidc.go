@@ -164,20 +164,20 @@ type Config struct {
 
 	// OnLogin, when set, is called synchronously from CallbackHandler after a
 	// login is APPROVED (role derived, session about to be issued) with the
-	// ID token's sub, the freshly-derived role, and the SAME group snapshot
-	// (plus its completeness bit) the new session itself carries — the exact
-	// values sessionGroups just computed, not a second derivation. It exists
-	// for exactly one caller today — internal/api wires it to refresh
-	// ssh_public_keys.role/role_checked_at (migration 0046) and api_tokens'
-	// role/groups/groups_truncated (#152) for every credential this principal
-	// owns, the bounded-stale re-check the SSH gateway's admin override reads
+	// ID token's sub, the freshly-derived role and user type, and the SAME
+	// group snapshot (plus its completeness bit) the new session itself
+	// carries — the exact values sessionGroups just computed, not a second
+	// derivation. It exists for exactly one caller today — internal/api wires
+	// it to refresh ssh_public_keys.role/role_checked_at (migration 0046) and
+	// api_tokens' role/user_type/groups/groups_truncated (#152, #611) for
+	// every credential this principal owns, the bounded-stale re-check the SSH gateway's admin override reads
 	// and the snapshot every wdn_ token replays — but this package stays
 	// store-agnostic: it knows nothing about SSH keys or tokens, only that a
 	// login happened. A failure inside OnLogin must never fail the login
 	// itself (the integrator is expected to log-and-continue, not panic);
 	// CallbackHandler does not inspect its return because it has none. nil
 	// (the default) is a plain no-op, so every existing caller is unaffected.
-	OnLogin func(ctx context.Context, sub, role string, groups []string, groupsTruncated bool)
+	OnLogin func(ctx context.Context, sub, role, userType string, groups []string, groupsTruncated bool)
 }
 
 // SessionRevocations is the store D16's revoke-a-human-now admin action

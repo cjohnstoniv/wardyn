@@ -855,6 +855,10 @@ type SSHPublicKey struct {
 // oidcGroupsCtxKey in internal/api/http.go): nil means "snapshot unavailable",
 // empty means "the IdP sent no usable groups".
 //
+// UserType is the user type of the minting session (migration 0076), stamped
+// and re-stamped beside Role. A person whose type changes on the People page
+// has their tokens revoked rather than re-stamped (revokeDemotedRoleSnapshots).
+//
 // Token carries the PLAINTEXT credential and is populated on exactly one
 // response — the create call — and is never stored, listed or logged. Every
 // other path leaves it empty, and `omitempty` keeps it out of those bodies.
@@ -875,6 +879,7 @@ type APIToken struct {
 	Principal       string     `json:"principal"`
 	Email           string     `json:"email,omitempty"`
 	Role            string     `json:"role"`
+	UserType        string     `json:"user_type"`
 	Groups          []string   `json:"groups,omitempty"`
 	GroupsTruncated *bool      `json:"groups_truncated,omitempty"`
 	Name            string     `json:"name"`

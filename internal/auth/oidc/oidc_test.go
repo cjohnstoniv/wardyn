@@ -1713,7 +1713,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 // newAuthWithOnLogin is newAuth plus Config.OnLogin (migration 0046's
 // callback-refresh hook), for TestCallbackInvokesOnLoginWithSubAndRole.
-func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, string, string, []string, bool)) *writoidc.Authenticator {
+func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, string, string, string, []string, bool)) *writoidc.Authenticator {
 	t.Helper()
 	rt := &rewriteTokenRT{
 		base:          http.DefaultTransport,
@@ -1749,13 +1749,13 @@ func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, 
 func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
 	env := newIdPEnv(t)
 	var gotCtx context.Context
-	var gotSub, gotRole string
+	var gotSub, gotRole, gotUserType string
 	var gotGroups []string
 	var gotTruncated bool
 	calls := 0
-	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, sub, role string, groups []string, truncated bool) {
+	auth := env.newAuthWithOnLogin(t, func(ctx context.Context, sub, role, userType string, groups []string, truncated bool) {
 		calls++
-		gotCtx, gotSub, gotRole, gotGroups, gotTruncated = ctx, sub, role, groups, truncated
+		gotCtx, gotSub, gotRole, gotUserType, gotGroups, gotTruncated = ctx, sub, role, userType, groups, truncated
 	})
 
 	loginReq := httptest.NewRequest(http.MethodGet, "/auth/login", nil)
@@ -1792,6 +1792,11 @@ func TestCallbackInvokesOnLoginWithSubAndRole(t *testing.T) {
 	if gotRole != writoidc.RoleAdmin {
 		t.Errorf("OnLogin role = %q, want %q", gotRole, writoidc.RoleAdmin)
 	}
+	// #611: the user type the session carries rides along too, so the token
+	// re-stamp learns it. No role map puts everyone on the built-in type.
+	if gotUserType != types.UserTypeStandard {
+		t.Errorf("OnLogin user type = %q, want %q", gotUserType, types.UserTypeStandard)
+	}
 	// #152: OnLogin's groups/truncated are the SAME values the session carries
 	// (sessionGroups run once, not re-derived) — no roles/groups claim in this
 	// fixture's ID token, so the snapshot is empty and complete.
@@ -1821,7 +1826,7 @@ func TestCallbackDeniedLoginNeverInvokesOnLogin(t *testing.T) {
 		ClientSecret: "secret",
 		RedirectURL:  "http://localhost/auth/callback",
 		RoleMap:      map[string]string{"some-other-role": writoidc.RoleAdmin},
-		OnLogin:      func(context.Context, string, string, []string, bool) { calls++ },
+		OnLogin:      func(context.Context, string, string, string, []string, bool) { calls++ },
 	}, testHMACKey)
 	if err != nil {
 		t.Fatalf("writoidc.New: %v", err)

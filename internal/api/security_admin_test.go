@@ -172,7 +172,7 @@ func TestSecurityAdminTokenGrantsNoForeignRunReach(t *testing.T) {
 	// The context a security-admin TOKEN publishes (withHumanIdentity, the
 	// same function the session branch uses) must read as not-an-operator, so
 	// every isOperator-gated lane refuses it identically to a member's.
-	ctx := withHumanIdentity(context.Background(), secAdminSub, secAdminMail, oidc.RoleSecurityAdmin, "", nil, false)
+	ctx := withHumanIdentity(context.Background(), secAdminSub, secAdminMail, oidc.RoleSecurityAdmin, "standard", nil, false)
 	s := &Server{}
 	if s.isOperator(ctx) {
 		t.Fatal("a security_admin token context reads as a super admin")

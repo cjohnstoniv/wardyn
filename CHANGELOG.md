@@ -366,6 +366,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   process ended in `exec sleep infinity`; as PID 1, `sleep` ignores SIGTERM, so every stop
   (k8s and docker, task mode and interactive `agent-run --idle`) sat out the whole grace period
   before the runtime force-killed it. It now traps TERM/INT and exits immediately.
+- **API tokens carry a user type (#611).** Migration `0076_api_tokens_user_type` adds
+  `api_tokens.user_type`: a new token is stamped with its session's user type (every existing
+  token becomes Standard user), the holder's next sign-in re-stamps it beside the role and
+  groups, and every request the token authenticates carries it — `/me` now reports `user_type`
+  through a token too, and `token.create` audit rows name it. A People-page edit that changes the
+  type a value derives revokes every live token still carrying the old type that names the value,
+  or whose group snapshot can't say whether it does, and counts them in `tokens_revoked`; the
+  holder mints a new one after signing in. On the first type assignment to a value that derived
+  Standard user before, that is every token minted before 0.7 whose holder hasn't signed in since
+  and every truncated-snapshot token, whoever holds it. A type change made in the chart reaches a token only at
+  its holder's next sign-in (threat model #38). `DELETE /user-types/{id}` is refused (`409`) while
+  a live token carries the type, and the database now refuses a token with an empty `user_type`.
 - **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
   `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
   `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →

@@ -878,7 +878,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the model providers — `GET /model-providers` and `PUT /model-providers` (0.8): which kinds of model credential this deployment supports, where each sends requests (gateway addresses, Bedrock region and data plane), the AWS access portal and account pin a Bedrock SSO provider signs in against, and which agents each may serve. Configuration only — no credential lives on a record. `GET` also answers `connected_people`: per provider id, how many distinct people hold a credential of their own for it (a count, never who; 0 included), which `PUT` refuses. Both verbs, for the agent roster's reason. Removing a provider (or unticking the agent it is the default for) is refused while the roster names it as a default; turning it off is not. A person is served a narrower document instead — `model_providers` on `GET /setup/status`: the providers serving the agents they may launch, each with its kind, the agents it is the default for, and the one host their own credential would be sent to (the host only, never a path, start URL or pin). Members also receive `provider_access`: one row per granted provider (state, action, deadline) graded against their OWN credential, whose pin-mismatch action names the pinned account and role, as `model_access`'s already does | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
-| the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
+| the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, or a live API token carries it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
 | the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
@@ -2085,6 +2085,30 @@ that demotion — a promotion, an unrelated value, and a member-stamped
 credential naming the same group are all left alone — and a token whose group
 snapshot is missing or partial cannot be re-derived, so an elevated stamp in
 that state is revoked rather than assumed safe.
+
+**A token carries its holder's user type too** (`api_tokens.user_type`,
+stamped at mint and re-stamped with the role at the next sign-in), and a
+type change made on the People page revokes rather than waits: when a
+role-mapping write or delete changes the user type a value derives, Wardyn
+revokes every live token still carrying the old type that names the value
+(by principal, email or group) or whose group snapshot is missing or
+partial, and counts them in the same `tokens_revoked`. On the first type
+assignment to a value that derived Standard user before, that last arm is
+every Standard-user token whose snapshot is missing or partial — every token
+minted before 0.7 whose holder has not signed in since, and every
+truncated-snapshot token — whether or not its holder has anything to do with
+the value; `stale_token_snapshots` counts only the tokens that name the value,
+so `tokens_revoked` can exceed it. The holder mints a new token after signing
+in. A type change made in `WARDYN_OIDC_ROLE_MAP`
+has no People-page edit to act on, so it reaches a token only at its
+holder's next sign-in — revoke explicitly when that is too late. A user type
+a live token still carries cannot be deleted (`409`, naming the count).
+The type arm only compares the edited value's own before/after type against
+a token's stamp, so a holder whose effective type shifts because a
+different, higher-priority group is the one actually edited — or because
+the edited value's own prior derivation was empty rather than `standard` —
+keeps a stale stamp until that holder's next sign-in or an explicit revoke,
+the same as a `WARDYN_OIDC_ROLE_MAP` edit above.
 
 That matters most for the tier 0.7 added. A human demoted out of `security_admin`
 keeps, through any token they minted while they held it, exactly what the tier
