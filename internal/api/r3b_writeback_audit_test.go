@@ -52,22 +52,23 @@ func r3bAuditDetail(t *testing.T, ev types.AuditEvent) string {
 	return data.Detail
 }
 
-// TestLearnVerifyEgressAuditsEveryGiveUp is F146's pin.
+// TestLearnVerifyEgressAuditsEveryGiveUp pins the write-back
+// contract.
 //
 // approvals_writeback.go's file header states the contract these functions
 // share and the rest of the package does not: FAIL SILENT BUT AUDITED. The
 // decision already stands by the time the write-back runs, so no give-up may
 // fail the request — which means every give-up has to leave an audit row
 // instead, "or the operator gets a green UI and a workspace that learned
-// nothing". Two arms broke it by returning bare:
+// nothing". Two arms must not return bare:
 //
 //   - the GetRun error, folded in with the two NOT-APPLICABLE conditions beside
 //     it (no workspace link, not a record run) so an unreadable run answered
 //     exactly like an ordinary dev-task approval;
 //   - the nil Store, folded in with the kind check at the top.
 //
-// The control is the junk-host arm, which has audited its miss since W19-W19b-5
-// and is what makes this a contract rather than one branch's taste. The
+// The control is the junk-host arm, which audits its miss and is what
+// makes this a contract rather than one branch's taste. The
 // not-applicable conditions must STILL stay silent — a failure row on every
 // plain-run approval would drown the two that mean something — so this pins
 // both directions.

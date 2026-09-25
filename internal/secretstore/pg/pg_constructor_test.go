@@ -11,10 +11,10 @@ import (
 	"filippo.io/age"
 )
 
-// Regression: New must accept a generated *age.X25519Identity. The original
-// implementation asserted an anonymous interface with the WRONG Recipient()
-// return type (the age.Recipient interface instead of the concrete
-// *age.X25519Recipient), which can never match and broke wardynd boot.
+// New must accept a generated *age.X25519Identity. An anonymous interface
+// asserting the wrong Recipient() return type (the age.Recipient interface
+// instead of the concrete *age.X25519Recipient) can never match, and breaks
+// wardynd boot.
 func TestNew_AcceptsX25519Identity(t *testing.T) {
 	id, err := age.GenerateX25519Identity()
 	if err != nil {

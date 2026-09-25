@@ -91,11 +91,11 @@ func effectiveAgentRunStates(t *testing.T) map[string]bool {
 	return allowed
 }
 
-// TestAgentRunStateCheckCoversAllStates is the always-on regression guard for
-// the COMPLETED-state cluster: the completion watcher transitions runs to
-// COMPLETED, but the original CHECK omitted it, so the UPDATE was rejected by
-// Postgres and runs never reached terminal (credentials never revoked). This
-// test fails if any types.RunState is not permitted by the effective CHECK.
+// TestAgentRunStateCheckCoversAllStates is the always-on guard for the
+// COMPLETED state: the completion watcher transitions runs to COMPLETED, so a
+// CHECK that omits it rejects the UPDATE in Postgres and runs never reach
+// terminal (credentials never revoked). This test fails if any types.RunState
+// is not permitted by the effective CHECK.
 func TestAgentRunStateCheckCoversAllStates(t *testing.T) {
 	allowed := effectiveAgentRunStates(t)
 	if allowed == nil {
@@ -256,7 +256,7 @@ func columnCheckValues(expr, column string) (map[string]bool, error) {
 // agent_runs.state to the closed enums below. Reuses readMigrationNames
 // (db_test.go).
 //
-// IT PARSES THE WHOLE EXPRESSION, not the first IN-list. Reading only the list
+// It parses the whole expression, not the first IN-list. Reading only the list
 // made this guard blind in the direction its own test states explicitly ("the
 // CHECK must not allow values the code does not define"): a disjunct outside the
 // list was never seen, and approvals.decision_scope already carries one. A

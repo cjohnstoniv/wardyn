@@ -21,7 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ── adoAccessState: the pure per-user-row grader ───────────────────────────
+// adoAccessState: the pure per-user-row grader
 
 func TestAdoAccessState(t *testing.T) {
 	cases := []struct {
@@ -57,7 +57,7 @@ func TestScmAccessSourceFor(t *testing.T) {
 	}
 }
 
-// ── fixtures shared by every test below ─────────────────────────────────────
+// fixtures shared by every test below
 
 // scmTestStore is the minimal store.Store the PURE grading functions read:
 // one SiteConfig, nothing else — the embed answers every other method with a
@@ -121,7 +121,7 @@ func adoTestEntraSource(context.Context) (ADOEntraConfig, bool, error) {
 	}, true, nil
 }
 
-// ── computeSCMAccessRowsFor / scmAccessValue — row-shaped grading ─────────
+// computeSCMAccessRowsFor / scmAccessValue — row-shaped grading
 
 func TestComputeSCMAccessRowsFor(t *testing.T) {
 	t.Run("no Azure DevOps row: empty", func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestScmAccessValue(t *testing.T) {
 	})
 }
 
-// ── the wire handler: GET /me/scm-access is an ARRAY (review finding F6) ──
+// the wire handler: GET /me/scm-access is an array (review finding F6)
 
 func TestHandleGetSCMAccess(t *testing.T) {
 	sc := adoTestSiteConfig(false)
@@ -267,7 +267,7 @@ func TestHandleGetSCMAccess_NoRowConfigured_AnswersEmptyArrayNot404(t *testing.T
 	}
 }
 
-// ── the informational, per-run preflight fact (review finding F2) ─────────
+// the informational, per-run preflight fact (review finding F2)
 
 func TestGitCredentialFactForRepos(t *testing.T) {
 	sc := adoTestSiteConfig(false)
@@ -302,7 +302,7 @@ func TestGitCredentialFactForRepos(t *testing.T) {
 	})
 }
 
-// ── the launch door's 422 (review findings F1, F7) ─────────────────────────
+// the launch door's 422 (review findings F1, F7)
 
 func TestGitCredentialRefusal(t *testing.T) {
 	t.Run("per-user row, no captured sign-in: 422 with the org, no row id (F1, N3)", func(t *testing.T) {
@@ -411,9 +411,9 @@ func TestGitCredentialRefusalMatchesCanon(t *testing.T) {
 	}
 }
 
-// ── HTTP-level integration: the gate at every door a repo reaches a run
+// HTTP-level integration: the gate at every door a repo reaches a run
 // through (review finding F5), and the byte-identical requirement for a
-// deployment with no per-user row (review finding F4). ──────────────────────
+// deployment with no per-user row (review finding F4).
 
 // adoRunHarness wires a full Server (real routing, real OIDC session
 // cookies) over ownerStore — the package's own comprehensive Store double
@@ -691,8 +691,8 @@ func TestByteIdentical_NoADORowAtAll(t *testing.T) {
 	}
 }
 
-// ── review follow-up N4: the same gate at the other doors that clone a
-// repo server-side — the Build step, the Scan step, and a record session. ──
+// review follow-up N4: the same gate at the other doors that clone a
+// repo server-side — the Build step, the Scan step, and a record session.
 
 func adoWorkspaceWithADORepo(t *testing.T, st *ownerStore) string {
 	t.Helper()

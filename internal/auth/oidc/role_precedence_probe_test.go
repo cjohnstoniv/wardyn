@@ -7,7 +7,7 @@
 // role_mappings_test.go / derive_rank_test.go. Pure table test — no store, no
 // signed ID token, no IdP.
 //
-// INVARIANT UNDER TEST: role precedence across the THREE config sources and the
+// Invariant under test: role precedence across the three config sources and the
 // IdP's claims is exactly (deriveRole and mergeRoleMaps in derive.go):
 //
 //	source:  operator allowlist  >  chart WARDYN_OIDC_ROLE_MAP  >  console rows

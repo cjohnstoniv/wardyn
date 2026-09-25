@@ -19,7 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── In-memory fake store ────────────────────────────────────────────────────
+// In-memory fake store
 
 type fakeStore struct {
 	mu      sync.Mutex
@@ -95,7 +95,7 @@ func (f *fakeStore) Record(_ context.Context, ev types.AuditEvent) error {
 	return nil
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// Helpers
 
 func newReq(runID uuid.UUID, kind types.ApprovalKind, scope json.RawMessage) types.ApprovalRequest {
 	return types.ApprovalRequest{
@@ -105,7 +105,7 @@ func newReq(runID uuid.UUID, kind types.ApprovalKind, scope json.RawMessage) typ
 	}
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// Tests
 
 func TestRequestApproval_Creates(t *testing.T) {
 	ctx := context.Background()
@@ -233,12 +233,10 @@ func TestDecide_AdminTokenRecordsAsSystem(t *testing.T) {
 	}
 }
 
-// TestDecide_AuditDataIncludesRequestedScopeHost is W20-hold-fsm-1's companion
-// fix: approval.Decide's audit event now surfaces the approval's own
-// requested_scope host at the top level (when it has one), so a SIEM consumer
-// can join "who decided this" straight to "which host" without parsing the
-// nested requested_scope JSON itself. Fails on base 6d76911, whose audit data
-// carries only approval_id/decision/reason.
+// TestDecide_AuditDataIncludesRequestedScopeHost: approval.Decide's audit
+// event surfaces the approval's own requested_scope host at the top level
+// (when it has one), so a SIEM consumer can join "who decided this" straight
+// to "which host" without parsing the nested requested_scope JSON itself.
 func TestDecide_AuditDataIncludesRequestedScopeHost(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}
@@ -386,7 +384,7 @@ func TestExpireStale_AlreadyDecidedRace(t *testing.T) {
 	}
 }
 
-// ─── ExpireOne (#811: the client that raised the row closes it itself) ──────
+// ExpireOne (#811: the client that raised the row closes it itself)
 
 // TestExpireOne_MovesPendingToExpired is the happy path: a PENDING row is
 // EXPIRED immediately, with no age check (unlike ExpireStale), and the same
@@ -461,7 +459,7 @@ func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
 	}
 }
 
-// ─── CancelForRun (B4: a run's terminal transition ends its open questions) ──
+// CancelForRun (B4: a run's terminal transition ends its open questions)
 
 // TestCancelForRun_MovesOnlyThisRunsPending is the whole contract in one drive:
 // only PENDING rows move, only this run's, they land on CANCELLED with
@@ -675,13 +673,13 @@ func TestExpireStale_LeavesCancelledAlone(t *testing.T) {
 	}
 }
 
-// ─── Helper ──────────────────────────────────────────────────────────────────
+// Helper
 
 func isAlreadyDecided(err error) bool {
 	return err != nil && err == approval.ErrAlreadyDecided
 }
 
-// ─── the unique index's loser (patch-review batch E) ─────────────────────────
+// The unique index's loser
 
 // racyDupStore is the TOCTOU window itself, made deterministic.
 //

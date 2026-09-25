@@ -68,12 +68,12 @@ func TestParseUserDriveHostRoots(t *testing.T) {
 		}
 	})
 
-	// A root under a DENIED BIND PREFIX is dead exactly as "/" is, and used to
-	// be the silent one (F13 H2): UserDriveHostRootCheck runs ValidateMountSource
-	// before it ever compares against the roots, so /dev/shm, a share mounted
-	// under /var/run, or a relocated Docker data-root under /var/lib/docker
-	// parses clean and then refuses every drive authored inside it. The
-	// operator's first signal was a 422 on a form they believed was right.
+	// A root under a denied bind prefix is dead exactly as "/" is, and must be
+	// refused as loudly: UserDriveHostRootCheck runs ValidateMountSource before
+	// it ever compares against the roots, so /dev/shm, a share mounted under
+	// /var/run, or a relocated Docker data-root under /var/lib/docker would
+	// otherwise parse clean and then refuse every drive authored inside it —
+	// the operator's first signal a 422 on a form they believed was right.
 	t.Run("a root under a denied bind prefix WARNs that it matches nothing", func(t *testing.T) {
 		for _, dead := range []string{"/dev/shm", "/var/run/shares", "/var/lib/docker/homes"} {
 			roots, warns, err := ParseUserDriveHostRoots(dead + ",/srv/homes")
@@ -195,7 +195,7 @@ func TestUserDriveHostRootCheck(t *testing.T) {
 		t.Error("a symlink out of the ceiling was accepted — a lexical match would have missed it")
 	}
 
-	// THE SPELLING TABLE. withinAnyRoot resolves BOTH sides, so a ceiling and a
+	// The spelling table. withinAnyRoot resolves both sides, so a ceiling and a
 	// drive row may name one tree by two different paths — which is the ordinary
 	// operator shape rather than an edge case: /srv/homes is a symlink to the
 	// mount point on plenty of hosts, and an admin fills the form in from
@@ -353,7 +353,7 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 		t.Errorf("resolved path = %q, want the link's target %q", got, wantElsewhere)
 	}
 
-	// THE SAME SPELLING TABLE AS THE AUTHORING CHECK, plus the rule only a BIND
+	// The same spelling table as the authoring check, plus the rule only a bind
 	// has: the root is resolved before the comparison, so a ceiling naming the
 	// link and a source naming the real tree (or the other way round) agree —
 	// and the strict-subdirectory rule survives that resolution, which is the
@@ -399,7 +399,7 @@ func TestUserDriveMountSourceCheck(t *testing.T) {
 		})
 	}
 
-	// THE DENY LIST RUNS ON THE RESOLVED PATH, so listing a denied tree as a
+	// The deny list runs on the resolved path, so listing a denied tree as a
 	// root buys nothing: ValidateMountSource resolves the source and re-runs
 	// deniedSource on what it found, which is why ParseUserDriveHostRoots warns
 	// that such a root matches NOTHING rather than treating it as an escape
@@ -483,7 +483,7 @@ func TestUserDriveHomeWithinItsRoot(t *testing.T) {
 	if crossDrive == nil {
 		t.Fatal("a home resolving into ANOTHER drive's root was accepted — that binds the other drive's directory")
 	}
-	// AND THE REFUSAL IS MEMBER-SAFE. Every driver refusal on this path becomes
+	// And the refusal is member-safe. Every driver refusal on this path becomes
 	// the run's failure_hint, read by the run's CREATOR — so the message names
 	// the drive and the directory (driveVolumeAdoptable's shape) and neither the
 	// drive's root nor the resolved real path. The operator reads those from the
@@ -523,8 +523,8 @@ func TestUserDriveHomeWithinItsRoot(t *testing.T) {
 		t.Errorf("%q was treated as inside %q — the prefix match must be separator-anchored", rootA+"2", rootA)
 	}
 	// FAIL CLOSED on an absent root: "" means the mount was built by something
-	// that does not carry the field, and falling through would be the pre-fix
-	// behaviour reappearing where nobody would look for it.
+	// that does not carry the field, and falling through would skip the root
+	// check where nobody would look for it.
 	for _, missing := range []string{"", "   "} {
 		if err := within(missing, filepath.Join(rootA, "alice")); err == nil {
 			t.Errorf("an empty host_root (%q) was accepted — an absent per-drive bound must refuse, never skip", missing)

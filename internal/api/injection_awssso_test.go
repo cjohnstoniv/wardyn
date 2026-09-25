@@ -678,7 +678,7 @@ func TestResolveAWSSSOInjection_ConcurrentResolversRaiseOneRequest(t *testing.T)
 	if n != 1 {
 		t.Fatalf("pending credential_reauth rows = %d, want exactly 1 for 16 concurrent resolvers", n)
 	}
-	// …AND ONE TRAIL ENTRY, AND ONE COUNT (W6-S F4). RequestApproval's dedup
+	// …and one trail entry, and one count. RequestApproval's dedup
 	// answers the loser with the WINNER'S row, silently, so a caller that cannot
 	// tell them apart audits and counts a request it did not raise — 16 rows
 	// naming one approval id on a hash-chained log, and a `requested` counter
@@ -747,11 +747,11 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		t.Fatalf("first resolve: code = %d, want 423", w.Code)
 	}
 	ap := onlyReauthRow(t, f.srv)
-	// BOTH TIERS (security NIT-5). The admin token is the security tier; the
-	// run's own member token is the other. The plan's promise is 409 on EVERY
-	// tier, and behind the member gate a member used to get that gate's refusal
-	// instead — refused either way, but for the wrong reason: "you may not use
-	// this verb" rather than "this verb does not exist for this kind".
+	// Both tiers. The admin token is the security tier; the run's own member
+	// token is the other. The plan's promise is 409 on every tier, so a member
+	// must get the 409 and not the member gate's refusal — refused either way,
+	// but "you may not use this verb" is the wrong reason where "this verb does
+	// not exist for this kind" is the right one.
 	for _, verb := range []string{"approve", "deny"} {
 		w := do(t, f.srv, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/"+verb, adminToken, "")
 		if w.Code != http.StatusConflict {
@@ -762,7 +762,7 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		}
 	}
 
-	// THE MEMBER TIER, through a real OIDC session — and the two halves of it
+	// The member tier, through a real OIDC session — and the two halves of it
 	// (security round-2 SHOULD-1). The run's OWNER is told the same thing the
 	// security operator is: the verb does not exist for this kind. A member who
 	// does NOT own the run is told nothing at all, because a 409 there would
@@ -835,7 +835,7 @@ func onlyPendingReauthRow(t *testing.T, srv *Server) types.ApprovalRequest {
 	return types.ApprovalRequest{}
 }
 
-// THE RAISE REASON IS THE SPENT ONE when the session's refresh token is gone —
+// The raise reason is the spent one when the session's refresh token is gone —
 // and this case exists because a MERGE broke it silently.
 //
 // The run-credential-door lane turned awsSSORefreshSpentSentence into a FORMAT
@@ -889,9 +889,9 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 	t.Fatal("no credential.reauth.requested row")
 }
 
-// ─── legacy open mode: no roster (W6-S F1) ───────────────────────────────────
+// legacy open mode: no roster
 
-// THE TWO HALVES, JOINED. Dispatch and resolve each had thorough tests and they
+// The two halves, joined. Dispatch and resolve each had thorough tests and they
 // disagreed about the same deployment, because no test ever ran both: every
 // resolver case seeds a roster row (reauthRosterRow) and every no-roster case
 // stops at dispatch.
@@ -988,7 +988,7 @@ func (d *dedupApprovals) Get(_ context.Context, id uuid.UUID) (types.ApprovalReq
 	return types.ApprovalRequest{}, errStoreNotFound
 }
 
-// THE LOSER AUDITS NOTHING AND COUNTS NOTHING (W6-S F4).
+// The loser audits nothing and counts nothing.
 //
 // It still gets its 423 naming the winner's approval id — the row is real, it is
 // PENDING, and the sidecar's hold joins the same workflow by that id — but

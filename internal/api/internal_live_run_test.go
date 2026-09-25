@@ -48,10 +48,10 @@ func (s terminalRunStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRu
 }
 
 // internalDoors is every /internal/* route a run token can open, with a body
-// that gets past decoding. The TABLE is the point: B2-F3 is an instance of "one
-// door got the fix, its siblings did not" (only handleInternalTokenRenew
-// re-checked run state), so the pin has to be over the whole surface rather
-// than over the door that happened to be reported.
+// that gets past decoding. The table is the point: a run-state re-check added to
+// one door (handleInternalTokenRenew, say) and not its siblings leaves the
+// surface open, so the pin has to be over the whole surface rather than over
+// any one door.
 func internalDoors(runID, grantID uuid.UUID) []struct {
 	name, method, path, body string
 } {

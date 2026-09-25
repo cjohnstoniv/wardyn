@@ -364,9 +364,10 @@ func withRawHeader(r Request, key, value string) Request {
 	return r
 }
 
-// F6 — git-over-HTTP. Both verbs used to answer CapUnclassifiedWrite, so a
-// consumer could not tell a clone from a push. The transport is OUT OF SCOPE
-// for this catalogue and is now refused by name, which a consumer can act on.
+// Git-over-HTTP. The transport is out of scope for this catalogue and is
+// refused by name, which a consumer can act on; answering
+// CapUnclassifiedWrite for both verbs would leave a consumer unable to tell a
+// clone from a push.
 func TestGitOverHTTPIsOutOfScope(t *testing.T) {
 	runCases(t, []caseT{
 		{name: "a push", req: adoReq(http.MethodPost, "/acme/proj/_git/repo/git-receive-pack", "PACK"), wantErr: true},
@@ -407,7 +408,7 @@ func TestBatchOperationURIShapes(t *testing.T) {
 	})
 }
 
-// EDGE WHITESPACE AND TRAILING DOTS. The service trims a segment's trailing
+// Edge whitespace and trailing dots. The service trims a segment's trailing
 // spaces and dots before routing it — Windows path canonicalisation — so ".. "
 // is ".." to Azure DevOps and "hooks." is "hooks". The dot-segment refusal
 // compared the untrimmed text and missed both. Each spelling has its encoded

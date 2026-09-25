@@ -17,18 +17,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// THE EVICTION SEAM, END TO END (plan §coordination, patch-review A / R076-010).
+// The eviction seam, end to end.
 //
-// Everything in this chain was pinned in pieces and nowhere together. The runner
-// package proves a k8s pod evicted out from under a run reads TERMINAL
-// (internal/runner/k8s/terminal_pod_test.go, lifecycle_test.go). This package
-// proves a terminal transition cancels an EGRESS_DOMAIN approval
-// (approvals_cancel_terminal_test.go) and that cancelRunApprovals counts a
-// credential_reauth row when it is CALLED (credential_reauth_metrics_test.go).
-// Nothing drove a runner-reported eviction through the completion watcher into
-// finalizeRunTail and asked what happened to a HELD credential_reauth row —
-// which is the row a person is being asked to sign in for, on a screen that
-// would otherwise keep asking after the sandbox it would serve is gone.
+// The pieces are pinned elsewhere: the runner package proves a k8s pod evicted
+// out from under a run reads terminal (internal/runner/k8s/terminal_pod_test.go,
+// lifecycle_test.go), and this package proves a terminal transition cancels an
+// EGRESS_DOMAIN approval (approvals_cancel_terminal_test.go) and that
+// cancelRunApprovals counts a credential_reauth row when it is called
+// (credential_reauth_metrics_test.go). This drives a runner-reported eviction
+// through the completion watcher into finalizeRunTail and asks what happens to a
+// held credential_reauth row — the row a person is being asked to sign in for,
+// on a screen that would otherwise keep asking after the sandbox it would serve
+// is gone.
 
 // evictedExitCode is what Wait reports at THIS package's boundary when a pod is
 // evicted: internal/runner/k8s/exec.go's terminalExecStatus sees PodFailed with

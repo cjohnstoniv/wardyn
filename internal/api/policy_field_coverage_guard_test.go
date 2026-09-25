@@ -17,16 +17,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// This guard closes the question B11b-F2/F10/F11 all landed on from different
-// directions: which RunPolicySpec fields does anything actually BOUND?
+// This guard answers one question: which RunPolicySpec fields does anything
+// actually bound?
 //
-// The answer used to be discoverable only by reading two files side by side,
-// and the three findings above are what that costs — max_holds and
-// first_use_hold_seconds were visited by neither door until a member could
-// author a million held goroutines with them; workspace_repos passes the
-// composer clamp untouched while its sibling workspace_mounts is dropped
-// entirely, with nothing saying whether that is a decision or an omission;
-// git_push_any_branch is clamped as a privilege and graded nowhere.
+// Reading two files side by side is the only other way to find out, and that
+// is how a field slips through: max_holds and first_use_hold_seconds, left
+// unbounded by both doors, would let a member author a million held
+// goroutines; workspace_repos passes the composer clamp untouched while its
+// sibling workspace_mounts is dropped entirely, which has to read as a
+// decision rather than an omission; git_push_any_branch is clamped as a
+// privilege and graded nowhere.
 //
 // So the table below is the answer, in code: every field of RunPolicySpec
 // carries a row saying whether validatePolicySpec bounds it, whether
@@ -86,7 +86,7 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 }
 
 func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
-	// W6-05: strip comments first — a bare substring match is satisfied by a
+	// Strip comments first — a bare substring match is satisfied by a
 	// field mentioned only in a comment, which would let a row read "bounded"
 	// for a field the source only talks about. See stripGoComments below.
 	policySrc := stripGoComments(t, readRepoFile(t, "internal", "api", "policy.go"))
@@ -187,7 +187,7 @@ func stripGoComments(t *testing.T, src string) string {
 	return out.String()
 }
 
-// W6-05 negative control: a field named only inside a comment must NOT count
+// Negative control: a field named only inside a comment must not count
 // as bounded once stripGoComments runs — proving the strip actually closes
 // the loophole the guard's own doc comment declares ("It reads the SOURCE
 // rather than exercising behaviour deliberately").

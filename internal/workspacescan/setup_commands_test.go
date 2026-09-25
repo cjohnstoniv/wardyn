@@ -27,12 +27,12 @@ func findStage(cmds []SetupCommand, stage string) string {
 	return ""
 }
 
-// TestDeriveSetupCommands_PipUsesVenv is the P0.4 regression: the sandbox agent
+// TestDeriveSetupCommands_PipUsesVenv: the sandbox agent
 // is non-root against a PEP-668 externally-managed system Python, so the pip
 // branch MUST emit a venv-based install (never a bare `pip install`), prefer an
 // editable project install with a requirements.txt fallback, pin
 // SETUPTOOLS_SCM_PRETEND_VERSION for shallow clones, and run pytest FROM the
-// venv. A regression to `pip install -r requirements.txt` / bare `pytest` breaks
+// venv. Falling back to `pip install -r requirements.txt` / bare `pytest` breaks
 // every real Python workspace in the sandbox.
 func TestDeriveSetupCommands_PipUsesVenv(t *testing.T) {
 	cmds := deriveSetupCommands(mgrSet("pip"), mgrSet(), nil, nil, false, false)

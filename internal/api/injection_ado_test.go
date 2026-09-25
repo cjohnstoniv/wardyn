@@ -83,7 +83,7 @@ func (rf *adoResolveFixture) failureReason(t *testing.T) map[string]any {
 	return d
 }
 
-// THE GRANTED SCOPE STRING REACHES THE AUDIT ROW, and the response carries the
+// The granted scope string reaches the audit row, and the response carries the
 // organisation and capabilities the proxy pins and gates on.
 func TestResolveADOInjection_LiveRecordsGrantedScope(t *testing.T) {
 	rf := newADOResolveFixture(t)

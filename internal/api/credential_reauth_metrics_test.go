@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// EVERY LABEL AT ITS OWN TRANSITION (general S1, security NIT-3). The first
+// Every label at its own transition (general S1, security NIT-3). The first
 // shape bumped expired/cancelled at a later RESOLVE that happened to meet a
 // terminal row — which counts retries rather than outcomes (the measured SDK
 // cadence is ~30 s, so one row scored dozens) and never fires at all once the
@@ -54,7 +54,7 @@ func TestCredentialReauthMetrics_EveryPlannedLabelIsExposed(t *testing.T) {
 	}
 }
 
-// A HOLD EXPIRY IS NOT A POLICY DENIAL. Policy allowed the host and allowed the
+// A hold expiry is not a policy denial. Policy allowed the host and allowed the
 // request; what ran out was a person's time. Counting it on
 // wardyn_egress_denies_total — the series whose HELP promises "denial by
 // policy" and which operators alert on — pages security for somebody at lunch.
@@ -74,7 +74,7 @@ func TestCredentialReauthMetrics_TimeoutIsNotAPolicyDenial(t *testing.T) {
 // expiry happens in the sidecar and the approval row deliberately stays
 // PENDING, so this decision row is the only signal that reaches the daemon.
 //
-// DRIVEN THROUGH THE REAL INGEST (round-2 F2). The first shape called the
+// Driven through the real ingest (round-2 F2). The first shape called the
 // recorder directly and then re-implemented the ingest predicate in the test,
 // so deleting the wiring in handlePostDecision left it green — a pin that
 // cannot see the thing it pins.
@@ -153,7 +153,7 @@ func TestCredentialReauthMetrics_CancelledCountedWhenTheRunEnds(t *testing.T) {
 	if after == before {
 		t.Fatalf("cancelling a held run's request did not move the cancelled label (%s -> %s)", before, after)
 	}
-	// A LATER RESOLVE meeting the now-terminal row must NOT count again: with
+	// A later resolve meeting the now-terminal row must not count again: with
 	// the measured ~30 s retry cadence that is dozens of "outcomes" for one row.
 	if w := f.resolve(t); w.Code != http.StatusForbidden {
 		t.Fatalf("resolve after the cancel: code = %d, want 403", w.Code)

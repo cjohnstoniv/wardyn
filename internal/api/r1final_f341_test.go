@@ -15,13 +15,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// F341: an admin's cross-principal ?owner= took the raw query string as the
-// namespace key, with no canonicalization and no resolution. Naming a real
-// member by their EMAIL (or by a case-variant of their subject) answered 204
-// with an outcome=success audit row while the PUT landed in a namespace nobody
-// reads and the DELETE left the live secret in place.
+// An admin's cross-principal ?owner= must not be used as a raw namespace key,
+// with no canonicalization and no resolution: naming a real member by their
+// email (or by a case-variant of their subject) would answer 204 with an
+// outcome=success audit row while the PUT lands in a namespace nobody reads and
+// the DELETE leaves the live secret in place.
 //
-// The shipped contract, pinned below: ?owner= names a HUMAN, and is resolved to
+// The contract, pinned below: ?owner= names a human, and is resolved to
 // the namespace key that human's own writes land in — matched case-insensitively
 // against the principals this deployment knows, and mapped from the email form
 // through the SAME (principal, email) pairing revokeAPITokensFor already matches

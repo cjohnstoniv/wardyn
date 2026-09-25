@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the autonomy fixture ─────────────────────────────────────────────────────
+// the autonomy fixture
 
 // autonomyRubric returns a rubric that resolves to level WHATEVER the posture
 // is: all nine fields set to the same value.
@@ -87,7 +87,7 @@ func autonomyCreateAudit(t *testing.T, st *govEscapeStore, audit *recRecorder) m
 	return data
 }
 
-// ─── the ladder table ─────────────────────────────────────────────────────────
+// the ladder table
 
 // TestRunAutonomyLadder is the gate's behaviour table: four levels against the
 // request shapes the rungs are defined in terms of, driven end to end through
@@ -246,7 +246,7 @@ func TestRunAutonomyFreezesTheLevelOnTheRun(t *testing.T) {
 	}
 }
 
-// ─── Review and launch answer with the same object ────────────────────────────
+// Review and launch answer with the same object
 
 // TestAutonomyReviewMatchesLaunch is the property the whole design is shaped
 // around: POST /runs/preflight returns the SAME autonomy object POST /runs
@@ -334,7 +334,7 @@ func autonomyBoundBy(t *testing.T, resolution map[string]any) []string {
 	return out
 }
 
-// ─── every tied cause is named ────────────────────────────────────────────────
+// every tied cause is named
 
 // TestAutonomyBoundByNamesEveryTiedCause is the #96 wire ruling, asserted
 // where it is load-bearing: bound_by is a LIST, and a member capped by a
@@ -469,7 +469,7 @@ func TestAutonomyReviewRefusesWhatLaunchRefuses(t *testing.T) {
 // launch handed the member L3, the rung that permits `task_mode=exec`.
 //
 // The rubric therefore names the two egress postures with DIFFERENT levels, so
-// a regression shows up as a wrong level and not merely a wrong label.
+// a mistake shows up as a wrong level and not merely a wrong label.
 func TestAutonomyPostureIncludesWorkspaceEgressAtBothDoors(t *testing.T) {
 	const beyondBaselineHost = "forge.corp.example"
 	// workspace_repos, the same second door into the workspace lane row 10 of
@@ -691,7 +691,7 @@ func TestAutonomyPostureIncludesGrantLanesAtBothDoors(t *testing.T) {
 	}
 }
 
-// ─── the absent-row rule ──────────────────────────────────────────────────────
+// the absent-row rule
 
 // TestAutonomyAbsentRowChangesNothing pins the promise every GovernanceLimits
 // field makes and this one has the most to lose by breaking: a member with no
@@ -789,7 +789,7 @@ func bytesContainsKey(body []byte, key string) bool {
 	return ok
 }
 
-// ─── the two sentences on the 201 ─────────────────────────────────────────────
+// the two sentences on the 201
 
 // TestAutonomyWarningsOnTheCreatedRun pins the gate's advisory half, which the
 // audit row cannot speak for: the run was CREATED, so the only thing that
@@ -966,20 +966,21 @@ func TestAutonomyUndefinedLevelFailsClosed(t *testing.T) {
 	}
 }
 
-// ─── the per-person Azure DevOps lane (#474) ──────────────────────────────────
+// the per-person Azure DevOps lane (#474)
 
-// TestAutonomyPostureGradesTheADOEntraCredentialAtCreate is the security
-// review's probe, kept: the posture graded at create for a run on the
+// TestAutonomyPostureGradesTheADOEntraCredentialAtCreate compares the
+// posture graded at create for a run on the
 // per-person Azure DevOps lane, against the same run once dispatch has written
 // the api_key grants createADOEntraGrants authors for it.
 //
 // The two must fold to the SAME level, and the reason is the whole gate: the
 // level is frozen at create (resolveRunAutonomy) and the credential is
 // authored at dispatch (authorADOEntraLane), so a secrets axis reading
-// spec.EligibleGrants alone graded this run `none` — and launched it on the
-// autonomous rung while it carried the person's Entra bearer proxy-side.
+// spec.EligibleGrants alone would grade this run `none` — and launch it on
+// the autonomous rung while it carries the person's Entra bearer
+// proxy-side.
 //
-// The rubric names the secrets rows apart from the egress one so a regression
+// The rubric names the secrets rows apart from the egress one so a mistake
 // shows up as a wrong LEVEL, not merely a wrong label: the workspace's own
 // clone host already makes this run `open`, and with every row at one level
 // the miss would be invisible.

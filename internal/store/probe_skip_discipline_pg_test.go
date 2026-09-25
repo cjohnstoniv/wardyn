@@ -3,7 +3,7 @@
 
 package store_test
 
-// THE SKIP DISCIPLINE FOR THIS PACKAGE'S PROBES, derived rather than declared.
+// The skip discipline for this package's probes, derived rather than declared.
 //
 // A test that skips produces `--- SKIP` -> `ok` -> exit 0, scripts/test-report.sh
 // graded on the exit code alone, and nothing inspected the JSON stream for
@@ -13,7 +13,7 @@ package store_test
 // treatment; this package's were not, and its tamper probes skip on precisely
 // the precondition CI's lane always satisfies.
 //
-// DERIVED FROM THE CONNECTION, not only from a marker: a role that can bypass
+// Derived from the connection, not only from a marker: a role that can bypass
 // the append-only triggers, over a URL-form DSN, can satisfy every precondition
 // these probes guard on, and any failure after that is a real one. Requiring an
 // env marker alone would leave the hole open on every lane nobody remembered to

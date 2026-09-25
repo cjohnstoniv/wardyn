@@ -46,11 +46,11 @@ func minimalBlobPack(n int) []byte {
 	return append(commandSection("report-status", cmd), append(pack, sum[:]...)...)
 }
 
-// TestPackCeiling_ObjectCountIsRefused pins the object ceiling (#250). The
-// issue's pack — 1,048,576 minimal blobs, a legal 16.8 MB body — used to be
-// inspected, and holding its Result kept 656 MiB live. It is refused now, as is
-// one object past the ceiling, because per-object bookkeeping is what the
-// ceiling bounds.
+// TestPackCeiling_ObjectCountIsRefused pins the object ceiling (#250). A pack
+// of 1,048,576 minimal blobs is a legal 16.8 MB body, and inspecting it —
+// holding its Result — keeps 656 MiB live. It is refused, as is one object
+// past the ceiling, because per-object bookkeeping is what the ceiling
+// bounds.
 func TestPackCeiling_ObjectCountIsRefused(t *testing.T) {
 	for _, n := range []int{1 << 20, maxObjects + 1} {
 		body := minimalBlobPack(n)

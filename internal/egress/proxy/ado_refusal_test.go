@@ -51,7 +51,7 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 	return buf
 }
 
-// THE REST DOOR: every refusal shape is recorded under its class and carries
+// The REST door: every refusal shape is recorded under its class and carries
 // its sentence; the body of a 401/403/404 reaches the client unchanged, and a
 // 203 sign-in page reaches it as a 401 in Azure DevOps' JSON error shape, so no
 // client reads HTML as success.
@@ -142,7 +142,7 @@ func TestADORefusal_RESTUnclassifiedPassesThrough(t *testing.T) {
 	}
 }
 
-// THE GIT DOOR, upload-pack side: every refusal shape on the advertisement
+// The git door, upload-pack side: every refusal shape on the advertisement
 // reaches git as its sentence in plain text — never a credential prompt, never
 // a 203 page taken as an answer — under its class's rule source.
 func TestADORefusal_GitUploadPack(t *testing.T) {
@@ -165,7 +165,7 @@ func TestADORefusal_GitUploadPack(t *testing.T) {
 	}
 }
 
-// THE GIT DOOR, receive-pack side: a refusal of the pack upload reaches git
+// The git door, receive-pack side: a refusal of the pack upload reaches git
 // through the receive-pack result, as a rejected ref carrying the sentence.
 func TestADORefusal_GitReceivePack(t *testing.T) {
 	for _, tc := range adoRefusalCases {

@@ -19,7 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
-// ─── validateConfig: DSN required + TLS both-or-neither + Secure-cookie posture ──
+// validateConfig: DSN required + TLS both-or-neither + Secure-cookie posture
 
 // TestValidateConfig is the P0 config-validation contract: Postgres DSN is
 // mandatory, the TLS cert/key pair is both-or-neither (a half-set pair fails
@@ -188,7 +188,7 @@ func TestValidateConfig(t *testing.T) {
 // TestValidateConfig_SecureCookiesNeverOnPlainHTTP pins the most security-
 // sensitive invariant on its own: with no built-in TLS and no terminating
 // proxy, Secure cookies MUST be false (a Secure cookie is never sent over plain
-// HTTP and would break login). Asserted directly so a regression that flips the
+// HTTP and would break login). Asserted directly so a change that flips the
 // default can never hide inside the larger table.
 func TestValidateConfig_SecureCookiesNeverOnPlainHTTP(t *testing.T) {
 	posture, err := validateConfig("postgres://localhost/wardyn", "", "", "", false, false)
@@ -203,10 +203,10 @@ func TestValidateConfig_SecureCookiesNeverOnPlainHTTP(t *testing.T) {
 	}
 }
 
-// ─── validateOperatorPosture: SSO with no operator allowlist fails closed ────
+// validateOperatorPosture: SSO with no operator allowlist fails closed
 
 // TestValidateOperatorPosture is the second boot refusal's contract: configuring
-// OIDC SSO IS the declaration that more than one human exists, so an empty
+// OIDC SSO is the declaration that more than one human exists, so an empty
 // operator allowlist (which makes every signed-in human admin-equivalent) is
 // refused unless WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST overrides it. Unconditional:
 // no bind-address escape, unlike the plaintext rule above.
@@ -235,7 +235,7 @@ func TestValidateOperatorPosture(t *testing.T) {
 			name: "override with a list set is still fine", oidcConfigured: true, operatorEmails: []string{"ops@corp.example"}, allowNoList: true,
 		},
 		{
-			// W25-S1-1: the in-repo Entra recipe (SKILL.md step 3) sets
+			// The in-repo Entra recipe (SKILL.md step 3) sets
 			// WARDYN_OIDC_ROLE_MAP and nothing else — deriveRole switches to
 			// claim-based admin/member and no longer needs the allowlist, so
 			// this must boot, not crash-loop.
@@ -275,7 +275,7 @@ func TestValidateOperatorPosture(t *testing.T) {
 	}
 }
 
-// ─── flag vs env precedence for the flagEnv/flagBool/flagDuration helpers ────────
+// flag vs env precedence for the flagEnv/flagBool/flagDuration helpers
 //
 // These helpers seed a flag's DEFAULT from the documented env var, then register
 // it on flag.CommandLine. So precedence is: an explicit command-line value wins
@@ -311,7 +311,7 @@ func ensureUnset(t *testing.T, key string) {
 // flagEnv/flagBool/flagDuration are cliutil aliases (main.go); their contracts
 // are tested on the real symbols in internal/cliutil.
 
-// ─── -local-trust-forwarder bind cross-check ──
+// -local-trust-forwarder bind cross-check
 
 // TestListenBindsSpecificRoutable pins the fail-closed gate for
 // -local-trust-forwarder: because that flag DISABLES the loopback-peer check,
@@ -422,15 +422,15 @@ func TestResolveLocalModeRefusesPublishedDemoToken(t *testing.T) {
 	}
 }
 
-// TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC is the bug-rbac-1
-// regression: humanOrAdminAuth branches on LocalMode FIRST and bypasses OIDC
-// entirely without ever consulting it, so an explicit -local-mode alongside a
-// configured -oidc-issuer used to boot clean and silently disable the whole
-// configured SSO/RBAC deployment — every request became the fixed
-// local:operator, full admin. Refused unless allowLocalModeWithOIDC
-// (WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC) explicitly overrides it; the AUTO-
-// enable heuristic (no explicit flag, no admin token, loopback bind) is
-// untouched — it already excludes a configured issuer on its own.
+// TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC: humanOrAdminAuth
+// branches on LocalMode first and bypasses OIDC entirely without ever
+// consulting it, so an explicit -local-mode alongside a configured
+// -oidc-issuer would silently disable the whole configured SSO/RBAC
+// deployment — every request the fixed local:operator, full admin. It is
+// refused unless allowLocalModeWithOIDC (WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC)
+// explicitly overrides it; the auto-enable heuristic (no explicit flag, no
+// admin token, loopback bind) is untouched — it already excludes a configured
+// issuer on its own.
 func TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -474,7 +474,7 @@ func TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC(t *testing.T) {
 	}
 }
 
-// ─── standard-AWS fallback for the Bedrock selectors ────────────────────────────
+// standard-AWS fallback for the Bedrock selectors
 //
 // WARDYN_BEDROCK_REGION / _AWS_PROFILE stay authoritative; the standard AWS env
 // fills in only where they resolve empty, so a machine already configured for
@@ -560,7 +560,7 @@ func TestBedrockAWSProfile_FallsBackToStandardAWSProfile(t *testing.T) {
 	}
 }
 
-// ─── validateUISandboxConfig: the second origin must actually be a second one ──
+// validateUISandboxConfig: the second origin must actually be a second one
 
 // TestValidateUISandboxConfig is the UI-sandbox gateway's boot contract. The
 // same-address case is the one that matters: the gateway relays the SANDBOX's
@@ -800,7 +800,7 @@ func TestValidateSSOOnlyPosture(t *testing.T) {
 	}
 }
 
-// ─── validateSSOOnlyPosture, end to end through the real boot path ──────────
+// validateSSOOnlyPosture, end to end through the real boot path
 
 // memSecretStore is a minimal in-memory secretstore.Store good enough for
 // buildOptionalFeatures to construct a REAL oidc.Authenticator (session key
@@ -935,9 +935,9 @@ func TestSSOOnlyPosture_WiredThroughTheRealBootPath(t *testing.T) {
 	})
 }
 
-// ─── the O-10 kill switch, end to end through the real boot path ────────────────
+// the O-10 kill switch, end to end through the real boot path
 
-// THE ONE CONSTANT (general N-new-1). `awsSSOProxyInjectDefaultOn` in
+// The one constant (general N-new-1). `awsSSOProxyInjectDefaultOn` in
 // internal/api/runs_dispatch_sso_inject.go is the whole rollback for Phase B:
 // flipping it to false must turn a daemon booted with NOTHING set — no flag, no
 // env, which is every deployment that has not opted in — back to the pre-0.7.6

@@ -81,14 +81,14 @@ func TestScanBudgetStopsFurtherScanning(t *testing.T) {
 	}
 }
 
-// TestAttachmentDecodeFailureRecordedHonestly pins F056: a base64
-// attachment block extractAnthropicAttachments could not decode used to be
-// silently dropped (bare `continue`, no Skipped/SkipReason) and the result
-// still came back Scanned=true/Skipped=false — an undecodable-but-secret-
-// carrying attachment passed as "inspected clean" even under block +
-// on_scanner_error=block. The fix must (a) also try the non-StdEncoding
-// alphabets a real client may use before declaring failure, and (b) report a
-// genuine failure honestly so block+on_scanner_error=block refuses it.
+// TestAttachmentDecodeFailureRecordedHonestly: a base64 attachment block
+// extractAnthropicAttachments cannot decode must not be silently dropped
+// (bare `continue`, no Skipped/SkipReason) with the result still
+// Scanned=true/Skipped=false — an undecodable-but-secret-carrying attachment
+// would pass as "inspected clean" even under block + on_scanner_error=block.
+// The extractor must (a) also try the non-StdEncoding alphabets a real client
+// may use before declaring failure, and (b) report a genuine failure honestly
+// so block+on_scanner_error=block refuses it.
 func TestAttachmentDecodeFailureRecordedHonestly(t *testing.T) {
 	// ticket: F056
 	eng, err := NewEngine(types.LLMInspectionSpec{
@@ -189,21 +189,21 @@ func TestFindingsCapDoesNotSuppressBlocking(t *testing.T) {
 	}
 }
 
-// TestFindingsCapTruncationArmExaminesEachFindingOnce pins B6: B5's
-// keep-back arm re-slices `res.Findings[:maxFindings]` and re-walks the
-// retained tail on EVERY subsequent span once the cap first fires (the
-// retained tail sits between maxFindings and 2*maxFindings, so
-// `len(res.Findings) > e.maxFindings` stays true on every later span), making
-// the arm's own cost O(span_count x maxFindings) with span_count unbounded by
-// the scan_budget (which counts scanned TEXT, not span count). The visible
-// symptom is Result.FindingsDropped re-counting the SAME already-vetted
-// findings once per remaining span instead of counting each dropped finding
-// exactly once. This places 2000 SevLow email (PII) findings — every one
-// block-relevant under the default block_min_severity=low, so the old code's
-// keep-back exemption applies to all of them and the re-walk fires on every
-// one of the ~1500 spans after the cap trips — followed by one SevHigh
-// AKIA... access-key-id finding, under ModeBlock with DetectPII +
-// DetectSecretPatterns and default block_min_severity.
+// TestFindingsCapTruncationArmExaminesEachFindingOnce: once the cap first
+// fires, a keep-back arm that re-slices `res.Findings[:maxFindings]` and
+// re-walks the retained tail on every subsequent span (the retained tail sits
+// between maxFindings and 2*maxFindings, so `len(res.Findings) >
+// e.maxFindings` stays true on every later span) costs O(span_count x
+// maxFindings), with span_count unbounded by the scan_budget (which counts
+// scanned text, not span count). The visible symptom is
+// Result.FindingsDropped re-counting the same already-vetted findings once
+// per remaining span instead of counting each dropped finding exactly once.
+// This places 2000 SevLow email (PII) findings — every one block-relevant
+// under the default block_min_severity=low, so the keep-back exemption
+// applies to all of them and a re-walk would fire on every one of the ~1500
+// spans after the cap trips — followed by one SevHigh AKIA... access-key-id
+// finding, under ModeBlock with DetectPII + DetectSecretPatterns and default
+// block_min_severity.
 func TestFindingsCapTruncationArmExaminesEachFindingOnce(t *testing.T) {
 	// ticket: B6
 	eng, err := NewEngine(types.LLMInspectionSpec{

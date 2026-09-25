@@ -1,29 +1,14 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F6 PROBE — record → promote → confined verify (lane F6-record-promote-verify).
+// Record → promote → confined verify. These reuse record_test.go's recordStore /
+// importStateFake / egressAllowEvent / newTestSrv helpers and need no Postgres: every store
+// touch is the record_test.go fake.
 //
-// INTENDED DESTINATION: internal/api/record_probe_f6_test.go
-// (package api — it reuses record_test.go's recordStore / importStateFake /
-// egressAllowEvent / newTestSrv helpers, so it MUST live in that directory).
+// Two families, both pinning invariants the code enforces:
 //
-// RUN (no Postgres needed — every store touch is the record_test.go fake):
-//
-//	cd <repo root> && \
-//	cp local/review-0.7/deep/F6-record-promote-verify/record_probe_f6_test.go internal/api/ && \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'TestRecordPromote_' -count=1 -v ; \
-//	rm -f internal/api/record_probe_f6_test.go
-//
-// Two families:
-//
-//	probes    the first two tests pin invariants the code ENFORCES today —
-//	          expected GREEN on fa910735 (base 80538b10); a RED here is a
-//	          regression.
-//	gaps      the tests tagged H1..H6 pin invariants the trace doc says the
-//	          code does NOT enforce (hypotheses H1..H6 in
-//	          F6-record-promote-verify.md) — expected RED on fa910735; a GREEN
-//	          here means the hypothesis is wrong (or the gap was closed) and
-//	          the doc must be corrected.
+//   - Probe family (the first two tests): what a capture and its verdict may claim.
+//   - Gap family (the rest): what promote must refuse to make durable.
 package api
 
 import (
@@ -59,9 +44,7 @@ func f6PromoteURL(wsID uuid.UUID, task string) string {
 	return "/api/v1/workspaces/" + wsID.String() + "/record/" + task + "/promote-egress"
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PROBE family — expected GREEN.
-// ─────────────────────────────────────────────────────────────────────────────
+// Probe family: what a capture and its verdict may claim.
 
 // TestRecordPromote_ControlPlaneHostNeverPromotable: the control plane's own host is
 // never promotable — neither wholesale nor by explicit {"hosts":[...]} — even
@@ -191,14 +174,12 @@ func TestRecordPromote_TruncatedCaptureIsNeverClean(t *testing.T) {
 	})
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GAP family — expected RED on fa910735. Each names the hypothesis it probes.
-// ─────────────────────────────────────────────────────────────────────────────
+// Gap family: what promote must refuse to make durable.
 
-// TestRecordPromote_TruncatedOpenCapturePromotesNothing — H1. handlePromoteRecordEgress
-// never reads the truncation caveat; a truncated OPEN recording promotes its
-// (incomplete) allowed set wholesale. The coordinator's stated invariant is
-// "a truncated observation set promotes NO host"; the code has no such gate.
+// TestRecordPromote_TruncatedOpenCapturePromotesNothing: a truncated open recording's
+// (incomplete) allowed set must not be promoted wholesale —
+// handlePromoteRecordEgress reads the truncation caveat, and a truncated
+// observation set promotes no host.
 func TestRecordPromote_TruncatedOpenCapturePromotesNothing(t *testing.T) {
 	// ticket: F6 H1
 	runID, wsID := uuid.New(), uuid.New()
@@ -215,11 +196,12 @@ func TestRecordPromote_TruncatedOpenCapturePromotesNothing(t *testing.T) {
 	}
 }
 
-// TestRecordPromote_ConfinedVerifyEntryIsNotPromotable — H5. The promote route accepts
-// the "verify:<key>" entry of a CONFINED replay; an allow released there by a
-// live first-use approval (rule_source approval:<id> → ApprovalCount>0) is
-// promotable, even though learnVerifyEgress deliberately refuses to durably
-// learn a once/until-scoped approval.
+// TestRecordPromote_ConfinedVerifyEntryIsNotPromotable: the promote route must not
+// accept the "verify:<key>" entry of a confined replay — an allow released
+// there by a live first-use approval (rule_source approval:<id> →
+// ApprovalCount>0) would otherwise become durable, even though
+// learnVerifyEgress deliberately refuses to durably learn a once/until-scoped
+// approval.
 func TestRecordPromote_ConfinedVerifyEntryIsNotPromotable(t *testing.T) {
 	// ticket: F6 H5
 	runID, wsID := uuid.New(), uuid.New()
@@ -240,10 +222,10 @@ func TestRecordPromote_ConfinedVerifyEntryIsNotPromotable(t *testing.T) {
 	}
 }
 
-// TestRecordPromote_WildcardCeilingPlumbingIsSkipped — H3. promoteSkipHosts keys on the
-// ceiling's entries VERBATIM; a "*.anthropic.com" ceiling (the canonical
-// spelling llmcred.go documents) does not skip api.anthropic.com, and the
-// "*.githubusercontent.com" broker entry does not skip raw.githubusercontent.com.
+// TestRecordPromote_WildcardCeilingPlumbingIsSkipped: promoteSkipHosts must honour the
+// ceiling's wildcard entries, not match them verbatim — a "*.anthropic.com"
+// ceiling (the canonical spelling llmcred.go documents) skips api.anthropic.com,
+// and the "*.githubusercontent.com" broker entry skips raw.githubusercontent.com.
 func TestRecordPromote_WildcardCeilingPlumbingIsSkipped(t *testing.T) {
 	// ticket: F6 H3
 	runID, wsID := uuid.New(), uuid.New()
@@ -273,11 +255,11 @@ func TestRecordPromote_WildcardCeilingPlumbingIsSkipped(t *testing.T) {
 	}
 }
 
-// TestRecordPromote_DeniedEgressHostIsNotPromotable — H6. A host the operator has
-// since put on deny·always (ws.DeniedEgress) is still promotable from an
-// older recording, producing a contract that declares egress:X required while
-// X is permanently denied — the exact contradiction denyAlwaysReject's M1 rule
-// refuses in the other direction.
+// TestRecordPromote_DeniedEgressHostIsNotPromotable: a host the operator has since put
+// on deny·always (ws.DeniedEgress) must not be promotable from an older
+// recording — that would produce a contract that declares egress:X required
+// while X is permanently denied, the exact contradiction denyAlwaysReject's M1
+// rule refuses in the other direction.
 func TestRecordPromote_DeniedEgressHostIsNotPromotable(t *testing.T) {
 	// ticket: F6 H6
 	runID, wsID := uuid.New(), uuid.New()
@@ -294,11 +276,11 @@ func TestRecordPromote_DeniedEgressHostIsNotPromotable(t *testing.T) {
 	}
 }
 
-// TestRecordPromote_EmptyControlPlaneURLStillExcludesSelf — H2. controlPlaneHost("")
-// is "", and promotableHosts' guard is `selfHost != "" && host == selfHost`, so
-// an unset/unparseable ControlPlaneURL disables the control-plane exclusion
-// entirely (zero-value fails open). Only the undotted default "wardynd" is
-// saved by the host-shape rule; a dotted control-plane name is not.
+// TestRecordPromote_EmptyControlPlaneURLStillExcludesSelf: an unset/unparseable
+// ControlPlaneURL (controlPlaneHost("") is "") must not disable the
+// control-plane exclusion — a guard shaped `selfHost != "" && host == selfHost`
+// fails open on the zero value, and only the undotted default "wardynd" would
+// then be saved by the host-shape rule; a dotted control-plane name would not.
 func TestRecordPromote_EmptyControlPlaneURLStillExcludesSelf(t *testing.T) {
 	// ticket: F6 H2
 	runID, wsID := uuid.New(), uuid.New()
@@ -316,11 +298,11 @@ func TestRecordPromote_EmptyControlPlaneURLStillExcludesSelf(t *testing.T) {
 	}
 }
 
-// TestRecordPromote_PublicIPLiteralIsNotPromotable — H4. record.go's comment says an
-// IP literal fails the approve-lane shape; hostrules.ValidApprovedHost's regex
-// accepts dotted digits, so a PUBLIC IP literal reached under allow-all is
-// promotable (private/metadata literals are deny-only by the builtin guard and
-// so are excluded by AllowCount, not by shape).
+// TestRecordPromote_PublicIPLiteralIsNotPromotable: record.go's comment says an IP
+// literal fails the approve-lane shape, but hostrules.ValidApprovedHost's
+// regex accepts dotted digits, so a public IP literal reached under allow-all
+// must be refused explicitly (private/metadata literals are deny-only by the
+// builtin guard and so are excluded by AllowCount, not by shape).
 func TestRecordPromote_PublicIPLiteralIsNotPromotable(t *testing.T) {
 	// ticket: F6 H4
 	runID, wsID := uuid.New(), uuid.New()

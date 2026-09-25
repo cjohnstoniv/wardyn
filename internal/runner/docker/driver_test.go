@@ -71,8 +71,8 @@ func TestCreateSandbox_FailsClosedOnUnenforceableCaps(t *testing.T) {
 // counterpart of TestCreateSandbox_FailsClosedOnUnenforceableCaps: the
 // exec-based path checks verifyCapsEnforced right after ContainerCreate
 // (in CreateSandbox), but the exec-less path defers ContainerCreate+Start to
-// runAsMainProcess (invoked from Exec) — which used to skip the check
-// entirely and start the untrusted workload uncapped. Locks in that
+// runAsMainProcess (invoked from Exec), which must not skip the check and
+// start the untrusted workload uncapped. Locks in that
 // runAsMainProcess applies the identical fail-closed gate (and honors the
 // same AllowUnenforceableCaps override) before ever starting the container.
 func TestExecLess_FailsClosedOnUnenforceableCaps(t *testing.T) {
@@ -143,7 +143,7 @@ func newTestDriver(f *fakeDocker) *Driver {
 	return newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
 }
 
-// TestDriver_ImageRemove is the bug-workspace-1 regression at the driver
+// TestDriver_ImageRemove pins image reclaim at the driver
 // level: runner.ImageRemover must actually reclaim a present image and treat
 // an already-absent one as a no-op (idempotent, same StopSandbox-style
 // contract), never surfacing "not found" as an error to a best-effort caller.
@@ -295,7 +295,7 @@ func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
 
 	// Proxy env carries the FULL sidecar config as one JSON var: run token,
 	// control-plane URL, and the run's egress policy (a proxy without a
-	// policy fails closed — the GAP-1 regression this guards against).
+	// policy fails closed, which this guards).
 	var cfgJSON string
 	for _, e := range proxy.cfg.Env {
 		if strings.HasPrefix(e, "WARDYN_PROXY_CONFIG_JSON=") {
@@ -533,22 +533,21 @@ func TestTeardown_UnresolvableRunReportsError(t *testing.T) {
 	}
 }
 
-// TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork is
-// W15-W15c-terminal-lifecycle-2: when the agent container is ALREADY GONE
-// (crashed, OOM-killed, or a concurrent teardown beat this one to it),
-// ContainerInspect returns not-found and the label/name recovery on the
-// err==nil branch never runs at all — teardown used to report success
-// without ever trying to resolve the run id, leaking the sibling proxy
-// sidecar (still holding the run's credentials) and the per-run network.
-// Ref must recover via runIDFromAgentName(ref) on BOTH substrates:
-//   - krun (exec-less/CC3): ref was already the deterministic agent name
-//     (agentContainerName(runID)) even before this fix.
+// TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork: when the agent
+// container is already gone (crashed, OOM-killed, or a concurrent teardown
+// beat this one to it), ContainerInspect returns not-found and the label/name
+// recovery on the err==nil branch never runs at all — so teardown must still
+// resolve the run id, or it reports success while leaking the sibling proxy
+// sidecar (still holding the run's credentials) and the per-run network. Ref
+// must recover via runIDFromAgentName(ref) on both substrates:
+//   - krun (exec-less/CC3): ref is the deterministic agent name
+//     (agentContainerName(runID)).
 //   - runc/gVisor (exec-based, the DEFAULT/common substrate): CreateSandbox
-//     used to return the daemon's own opaque agentResp.ID as Ref instead —
-//     unrelated to the run id — so this fallback silently no-op'd for every
-//     ordinary run. createIDOverride makes the fake hand back an ID that
-//     actually diverges from the name (fakeDocker's default id==name
-//     simplification would otherwise mask this exact regression).
+//     must return that name as Ref too, not the daemon's own opaque
+//     agentResp.ID — unrelated to the run id — or this fallback silently
+//     no-ops for every ordinary run. createIDOverride makes the fake hand
+//     back an ID that actually diverges from the name (fakeDocker's default
+//     id==name simplification would otherwise mask exactly that).
 func TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -807,15 +806,16 @@ func TestExecLess_MainProcessLifecycle(t *testing.T) {
 	}
 }
 
-// TestAgentStatus_MainProcessSentinelFallsBackToContainerStatus pins driver.go's
-// half of W15-c: AgentStatus must treat the mainProcessExecID sentinel exactly
-// like "" — fall back to container Status — never probe it as a real docker
-// exec id, since "main-process" is never actually passed to ExecCreate.
-// f.execGone models that truthfully (the daemon has never heard of this id).
+// TestAgentStatus_MainProcessSentinelFallsBackToContainerStatus pins
+// driver.go's half of the exec-less sentinel: AgentStatus must treat
+// mainProcessExecID exactly like "" — fall back to container Status — never
+// probe it as a real docker exec id, since "main-process" is never actually
+// passed to ExecCreate. f.execGone models that truthfully (the daemon has
+// never heard of this id).
 //
-// Counterfactual (base 6d76911, which has no sentinel case): AgentStatus tries
-// ExecInspect("main-process"), the fake reports it not-found, and — because the
-// container is still RUNNING — the AMBIGUOUS-404 branch (GAP-RECONCILE-1)
+// Counterfactual: without the sentinel case AgentStatus tries
+// ExecInspect("main-process"), the fake reports it not-found, and — because
+// the container is still RUNNING — the ambiguous-404 branch (GAP-RECONCILE-1)
 // returns an ERROR instead of a live status, so this test's `err != nil` check
 // fails red.
 func TestAgentStatus_MainProcessSentinelFallsBackToContainerStatus(t *testing.T) {
@@ -893,7 +893,7 @@ func TestAttach_OpensInteractiveShellNotTrackedAsAgentExec(t *testing.T) {
 	}
 	// Pin the GOTMPDIR prep guard on the RECORDED exec argv itself — not just
 	// against the attachShell var (which the check above already compares
-	// against itself and so can never catch a regression in attachShell's own
+	// against itself and so can never catch a change in attachShell's own
 	// content). Session prep in agent-run-lib.sh does the same work, but only
 	// after slower steps, so this shell must run it too or `go build` fails in
 	// the attach terminal on an envbuilt/BYO image whose GOTMPDIR dir was never

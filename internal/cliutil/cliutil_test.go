@@ -87,7 +87,7 @@ func assertLoud(t *testing.T, out *bytes.Buffer, code *int, env, val string) {
 	}
 }
 
-// ─── FlagEnv ──
+// FlagEnv
 //
 // FlagEnv has no parse step, so there is no loud/fatal contract to assert here
 // (every string is a valid value) — only the default/env/flag precedence.
@@ -137,7 +137,7 @@ func TestFlagEnv_Precedence(t *testing.T) {
 	// every other helper in this file), and `-name=` is the explicit blank.
 }
 
-// ─── FlagBool ──
+// FlagBool
 
 func TestFlagBool_UnsetKeepsDefaultQuietly(t *testing.T) {
 	for _, def := range []bool{false, true} {
@@ -202,8 +202,8 @@ func TestFlagBool_ValidValuesParse(t *testing.T) {
 	}
 }
 
-// THE BUG: a typo used to map to false through the default branch, silently
-// disabling whatever the operator was enabling (e.g. WARDYN_ENVBUILD=treu).
+// A typo must not map to false through the default branch, silently disabling
+// whatever the operator was enabling (e.g. WARDYN_ENVBUILD=treu).
 func TestFlagBool_InvalidIsLoud(t *testing.T) {
 	for _, val := range []string{"treu", "banana", "2", "yes please", "-1"} {
 		t.Run(val, func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestFlagBool_FlagOverridesEnv(t *testing.T) {
 	}
 }
 
-// ─── FlagDuration ──
+// FlagDuration
 
 func TestFlagDuration_UnsetKeepsDefaultQuietly(t *testing.T) {
 	out := resetFlags(t)
@@ -259,9 +259,9 @@ func TestFlagDuration_ValidParses(t *testing.T) {
 	}
 }
 
-// THE BUG: an unparseable duration used to keep the compiled default, so
-// WARDYN_AUTOSTOP_INTERVAL=30 (no unit) ran the reaper on the wrong interval
-// with no signal at all.
+// An unparseable duration must not keep the compiled default:
+// WARDYN_AUTOSTOP_INTERVAL=30 (no unit) would run the reaper on the wrong
+// interval with no signal at all.
 func TestFlagDuration_InvalidIsLoud(t *testing.T) {
 	for _, val := range []string{"not-a-duration", "30", "5 minutes"} {
 		t.Run(val, func(t *testing.T) {
@@ -286,7 +286,7 @@ func TestFlagDuration_FlagOverridesEnv(t *testing.T) {
 	}
 }
 
-// ─── FlagIntEnv ──
+// FlagIntEnv
 
 func TestFlagIntEnv_UnsetKeepsDefaultQuietly(t *testing.T) {
 	out := resetFlags(t)
@@ -317,7 +317,7 @@ func TestFlagIntEnv_ValidParses(t *testing.T) {
 	}
 }
 
-// THE BUG: WARDYN_GROUNDTRUTH_BUFFER=4o96 used to silently keep 4096.
+// WARDYN_GROUNDTRUTH_BUFFER=4o96 must not silently keep 4096.
 func TestFlagIntEnv_InvalidIsLoud(t *testing.T) {
 	for _, val := range []string{"4o96", "many", "1.5", "64k"} {
 		t.Run(val, func(t *testing.T) {
@@ -330,7 +330,7 @@ func TestFlagIntEnv_InvalidIsLoud(t *testing.T) {
 	}
 }
 
-// ─── EnvBool / EnvDuration (non-flag twins) ──
+// EnvBool / EnvDuration (non-flag twins)
 //
 // These register no flag, so there is no flag.Parse() step — the return value
 // is read directly. The loudness contract is identical to FlagBool/FlagDuration.
@@ -369,8 +369,8 @@ func TestEnvBool_UnsetAndValid(t *testing.T) {
 	}
 }
 
-// THE BUG: a typo used to map to the default branch, silently disabling a
-// security toggle (WARDYN_SUBSCRIPTION_INJECT=of would have stayed ON).
+// A typo must not map to the default branch and silently disable a security
+// toggle (WARDYN_SUBSCRIPTION_INJECT=of would stay on).
 func TestEnvBool_InvalidIsLoud(t *testing.T) {
 	for _, val := range []string{"treu", "banana", "2", "yes please", "-1"} {
 		t.Run(val, func(t *testing.T) {
@@ -400,8 +400,9 @@ func TestEnvDuration_UnsetAndValid(t *testing.T) {
 	}
 }
 
-// THE BUG: an unparseable duration used to keep the compiled default, so
-// WARDYN_APPROVAL_TIMEOUT=30 (no unit) ran on the wrong timeout with no signal.
+// An unparseable duration must not keep the compiled default:
+// WARDYN_APPROVAL_TIMEOUT=30 (no unit) would run on the wrong timeout with no
+// signal.
 func TestEnvDuration_InvalidIsLoud(t *testing.T) {
 	for _, val := range []string{"not-a-duration", "30", "5 minutes"} {
 		t.Run(val, func(t *testing.T) {

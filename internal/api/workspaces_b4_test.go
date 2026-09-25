@@ -24,11 +24,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
 )
 
-// B4: the workspace lane's admission/build/observed-egress regressions. Each
-// test here was written RED against the unfixed tree and names the finding it
-// pins, so a later reader can tell a deliberate rule from an accident.
+// The workspace lane's admission/build/observed-egress rules. Each test here
+// names the rule it pins, so a reader can tell a deliberate rule from an
+// accident.
 
-// ─── B4-F1: the failed build's raw builder error is the operator's ──────────
+// B4-F1: the failed build's raw builder error is the operator's
 
 // TestWorkspaceBuild_FailedDetailIsTieredLikeTheLog pins that the ONE non-static
 // Detail resolveBuildView can answer — the builder's own error text, which
@@ -58,7 +58,7 @@ func TestWorkspaceBuild_FailedDetailIsTieredLikeTheLog(t *testing.T) {
 	}
 }
 
-// ─── B4-F2: the in-memory tracker outranked the row it was caching ─────────
+// B4-F2: the in-memory tracker outranked the row it was caching
 
 // b4BuildStore serves one workspace for the /build handlers and is safe for the
 // detached build goroutine to write while the test reads.
@@ -151,14 +151,13 @@ func (failingImageBuilder) BuildFromDevcontainerFiles(context.Context, map[strin
 	return "", errors.New("step 3/7 : RUN go build — exit code 2")
 }
 
-// TestWorkspaceBuild_TrackerIsSubordinateToTheRow is the invalidation regression: the
-// in-memory buildState is this daemon's MEMORY of a build, while the workspace
-// row is what a run actually resolves. The tracker answered "done" from
-// st.Image before anything consulted the row, so an image invalidated
-// underneath it (a PUT that removeStaleImage'd the ref, a rescan that changed
-// the profile hash) still read `done` with a ref no run would ever resolve —
-// and POST /build short-circuited on that same view, so the workspace could
-// never be rebuilt until wardynd restarted.
+// TestWorkspaceBuild_TrackerIsSubordinateToTheRow: the in-memory buildState is this
+// daemon's memory of a build, while the workspace row is what a run actually
+// resolves. If the tracker answered "done" from st.Image before consulting the
+// row, an image invalidated underneath it (a PUT that removeStaleImage'd the
+// ref, a rescan that changed the profile hash) would still read `done` with a
+// ref no run would ever resolve — and POST /build, short-circuiting on that
+// same view, could never rebuild the workspace until wardynd restarted.
 func TestWorkspaceBuild_TrackerIsSubordinateToTheRow(t *testing.T) {
 	// ticket: B4-F2
 	h := newHarness(t)
@@ -227,14 +226,14 @@ func TestWorkspaceBuild_TrackerIsSubordinateToTheRow(t *testing.T) {
 	t.Fatal("the detached build never finished")
 }
 
-// ─── B4-F3: a respelling of the same source wiped every reviewed field ─────
+// B4-F3: a respelling of the same source wiped every reviewed field
 
-// TestWorkspaceSource_RespellingKeepsEveryReviewedField is the data-loss
-// regression: sourcesChanged compared the request's RAW source against the
-// store's CANONICAL one, so re-PUTting the identical composition with a
-// trailing slash or a differently-cased repo slug read as a content change and
-// threw away ApprovedEgress, Requirements, RecordResults and the built image —
-// with a 200 and nothing anywhere saying it had happened.
+// TestWorkspaceSource_RespellingKeepsEveryReviewedField: sourcesChanged
+// must compare canonical forms on both sides. Comparing the request's raw
+// source against the store's canonical one would read a re-PUT of the identical
+// composition with a trailing slash or a differently-cased repo slug as a
+// content change, and throw away ApprovedEgress, Requirements, RecordResults
+// and the built image — with a 200 and nothing anywhere saying it had happened.
 func TestWorkspaceSource_RespellingKeepsEveryReviewedField(t *testing.T) {
 	// ticket: B4-F3
 	for _, tc := range []struct {
@@ -279,7 +278,7 @@ func TestWorkspaceSource_RespellingKeepsEveryReviewedField(t *testing.T) {
 	}
 }
 
-// ─── B4-F4: an uncapped source list ────────────────────────────────────────
+// B4-F4: an uncapped source list
 
 // TestWorkspaceSource_CountIsCapped pins the missing sibling of
 // maxWorkspaceRequirements/maxApprovedEgress: every source in the body costs an
@@ -311,7 +310,7 @@ func TestWorkspaceSource_CountIsCapped(t *testing.T) {
 	}
 }
 
-// ─── B4-F6 + B4-F9: observed egress offered candidates that can never work ──
+// B4-F6 + B4-F9: observed egress offered candidates that can never work
 
 // TestWorkspaceObservedEgress_WithholdsWhatApprovingCannotHelp pins the two classes
 // of candidate a promotion can never make work: a host the git broker or the
@@ -373,7 +372,7 @@ func (s *b4PagerStore) ListRunsPage(_ context.Context, p store.Page) ([]types.Ag
 }
 
 // TestWorkspaceObservedEgress_ReadsABoundedPage pins the bound on a member-reachable
-// route that used to read the WHOLE runs table before windowing it in Go.
+// route: it must not read the whole runs table and window it in Go.
 func TestWorkspaceObservedEgress_ReadsABoundedPage(t *testing.T) {
 	// ticket: B4-F9
 	h := newHarness(t)
@@ -410,7 +409,7 @@ func TestWorkspaceObservedEgress_ReadsABoundedPage(t *testing.T) {
 	}
 }
 
-// ─── B4-F7: DELETE stranded a live sandbox ─────────────────────────────────
+// B4-F7: DELETE stranded a live sandbox
 
 // b4DeleteStore serves one workspace and records whether the delete happened.
 type b4DeleteStore struct {
@@ -481,7 +480,7 @@ func TestWorkspaceDelete_RefusesWhileARunHoldsTheWorkspace(t *testing.T) {
 	}
 }
 
-// ─── B4-F8: the repo ref was validated at neither door ─────────────────────
+// B4-F8: the repo ref was validated at neither door
 
 // TestWorkspaceRef_IsValidatedAtBothDoors: buildRepoRecords (runs_scm.go) DROPS a
 // repo whose ref is not repoFieldSafe by a bare return — the agent then starts
@@ -532,7 +531,7 @@ func TestWorkspaceRef_IsValidatedAtBothDoors(t *testing.T) {
 	}
 }
 
-// ─── F-1: the custom-base lane had no row-backed answer at all ─────────────
+// F-1: the custom-base lane had no row-backed answer at all
 
 // TestWorkspaceBuild_CustomBaseImageReadsDoneFromTheRow closes the hole the row-decides
 // rule opened: resolveBuildView's "nothing_to_build" early return deliberately
@@ -577,7 +576,7 @@ func TestWorkspaceBuild_CustomBaseImageReadsDoneFromTheRow(t *testing.T) {
 	}
 }
 
-// ─── F-2: drop must not release a live single-flight slot ──────────────────
+// F-2: drop must not release a live single-flight slot
 
 // TestWorkspaceBuild_DropNeverReleasesALiveBuildSlot: the invalidators drop the tracker
 // entry, and an edit DURING a build would otherwise hand the single-flight slot
@@ -646,7 +645,7 @@ func TestWorkspaceBuild_DropNeverReleasesALiveBuildSlot(t *testing.T) {
 	t.Fatal("the detached build never finished")
 }
 
-// ─── F-3: a failed build outlived the composition it failed against ────────
+// F-3: a failed build outlived the composition it failed against
 
 // TestWorkspaceBuild_RescanRetiresThePreviousBuildFailure: the tracker's `failed` arm is
 // consulted BEFORE the row, so a build failure survived every invalidation the

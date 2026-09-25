@@ -1,24 +1,13 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// F5 PROBE — SSH attach -> session takeover -> PTY writer race.
+// SSH attach -> session takeover -> PTY writer race. These use the same
+// fakes/helpers as attach_holder_test.go (holderOwner, dialAttach,
+// readAttachMode, waitFor, doSSO, ssoSession, newFakeSSHChannel, fakeRunner,
+// authzStore, touchCountingStore, sshTestRecorder). No Postgres is needed: every
+// store here is the package's in-memory authzStore. Run them under -race.
 //
-// INTENDED DESTINATION: internal/api/attach_takeover_f5_probe_test.go
-// (package api; same fakes/helpers as attach_holder_test.go: holderOwner,
-// dialAttach, readAttachMode, waitFor, doSSO, ssoSession, newFakeSSHChannel,
-// fakeRunner, authzStore, touchCountingStore, sshTestRecorder).
-//
-// RUN (from the repo root, after copying this file to the destination above):
-//
-//	nice -n 10 GOMAXPROCS=8 go test -race -count=1 -p 4 ./internal/api \
-//	    -run 'TestTakeover_' -v
-//
-// No Postgres is needed: every store here is the package's in-memory authzStore.
-// (If the coordinator wants the PG-backed sibling suites in the same run,
-// export WARDYN_TEST_PG='postgres://USER:PASS@127.0.0.1:55432/DB?sslmode=disable'
-// — unused by these probes.)
-//
-// H1 (in-flight write) has NO probe here: its strict zero-residual form — "a
+// An in-flight write has no test here: its strict zero-residual form — "a
 // frame already inside the runner Session's Write is not delivered" — is
 // unsatisfiable, because bytes already inside that Write cannot be recalled by
 // any gate, and a fake that records every Write it enters can never represent
@@ -28,14 +17,18 @@
 // TestAttachWS_EvictionStopsAPasteMidFlight (attach_holder_test.go) over
 // attachHolder.writeGated, the eviction-aware write path both pumps now share.
 //
-// Expected verdicts on fa910735 (see F5-ssh-attach-takeover-race.md §4):
+// What each test pins:
 //
-//	TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction          GREEN  (pins attachPump's per-frame canWrite gate)
-//	(H1 has no probe — unsatisfiable as stated; see the note above)
-//	TestTakeover_SSHPumpDropsKeystrokesAfterEviction               GREEN  (pins sshShellPump's canWrite gate)
-//	TestTakeover_SSHPumpDropsResizeAfterEviction                   RED    (H2: sshShellPump's resize goroutine gates on holder==nil, not canWrite)
-//	TestTakeover_SSHDisplaceBlockedStderrDoesNotStrandEvictedPump  RED    (H3: bridgeSSHShell's displace() writes stderr BEFORE cancel, unbounded)
-//	TestTakeover_SecurityAdminCannotEvictForeignHolder             RED    (H4 policy: ownsRunOrAdmin's isSecurityOperator arm reaches the takeover)
+//   - TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction: attachPump's
+//     per-frame canWrite gate.
+//   - TestTakeover_SSHPumpDropsKeystrokesAfterEviction: sshShellPump's canWrite
+//     gate.
+//   - TestTakeover_SSHPumpDropsResizeAfterEviction: sshShellPump's resize
+//     goroutine gates on canWrite, not on holder == nil.
+//   - TestTakeover_SSHDisplaceBlockedStderrDoesNotStrandEvictedPump: a displaced
+//     client that stops reading cannot strand the evicted pump.
+//   - TestTakeover_SecurityAdminCannotEvictForeignHolder: a
+//     security_admin cannot take over a run it does not own.
 package api
 
 import (
@@ -56,7 +49,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fakes ─────────────────────────────────────────────────────────────────
+// fakes
 
 // gatedSession is a runner.Session whose Write PARKS (after signalling
 // `entered`) until the test closes `release`, and records a chunk as
@@ -168,7 +161,7 @@ func (c *blockingStderrChannel) Stderr() io.ReadWriter { return blockingStderr{c
 
 var _ ssh.Channel = (*blockingStderrChannel)(nil)
 
-// ─── harness ───────────────────────────────────────────────────────────────
+// harness
 
 // f5Server mirrors holderTestServer (attach_holder_test.go) with the gated
 // runner swapped in.
@@ -234,7 +227,7 @@ func wsPing(t *testing.T, c *websocket.Conn) {
 	}
 }
 
-// ─── web lane ──────────────────────────────────────────────────────────────
+// web lane
 
 // TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction: a keystroke frame the
 // displaced client DISPATCHED before the take-over was decided — already on the
@@ -305,7 +298,7 @@ func TestTakeover_WebPumpDropsFrameOnTheWireBeforeEviction(t *testing.T) {
 	}
 }
 
-// ─── SSH lane ──────────────────────────────────────────────────────────────
+// SSH lane
 
 // startSSHShell drives bridgeSSHShell directly (the pattern
 // TestSSHAttachHolder_RegistersAndIsDisplaced uses) and returns the bridge's
@@ -359,12 +352,12 @@ func TestTakeover_SSHPumpDropsKeystrokesAfterEviction(t *testing.T) {
 	}
 }
 
-// TestTakeover_SSHPumpDropsResizeAfterEviction (expected RED on fa910735 = H2):
-// sshShellPump's resize goroutine gates on `holder == nil`
-// (in sshgateway_channels.go), NOT holder.canWrite(), so an EVICTED ssh
-// holder keeps resizing the shared tmux window under the new holder until its
-// channel actually dies. The web lane gates the same frame on canWrite()
-// (attachPump in attach.go); this is the asymmetry.
+// TestTakeover_SSHPumpDropsResizeAfterEviction: sshShellPump's resize goroutine
+// must gate on holder.canWrite(), not `holder == nil` (in
+// sshgateway_channels.go), or an evicted ssh holder keeps resizing the shared
+// tmux window under the new holder until its channel actually dies. The web
+// lane gates the same frame on canWrite() (attachPump in attach.go); the two
+// lanes must agree.
 func TestTakeover_SSHPumpDropsResizeAfterEviction(t *testing.T) {
 	// ticket: F5 H2
 	srv, gr, _, run := f5Server(t)
@@ -402,16 +395,16 @@ func TestTakeover_SSHPumpDropsResizeAfterEviction(t *testing.T) {
 	}
 }
 
-// TestTakeover_SSHDisplaceBlockedStderrDoesNotStrandEvictedPump (expected RED on
-// fa910735 = H3): the SSH displace() prints the reason on the channel's stderr
-// and only THEN cancels the pump (bridgeSSHShell in sshgateway_channels.go),
-// on a goroutine with no deadline. A displaced client whose channel window is
-// exhausted (stopped reading — a suspended ssh(1)) parks that goroutine forever:
-// cancel() never runs, the evicted pump keeps its exec (a tmux client on the
-// shared session), its TouchRun keepalive (the idle reaper never fires) and one
-// of the run's four channel slots until the TCP connection dies. Write
-// authority IS revoked (evicted=true) — this probe is about the stranded
-// session, not a second writer.
+// TestTakeover_SSHDisplaceBlockedStderrDoesNotStrandEvictedPump: the SSH displace()
+// prints the reason on the channel's stderr (bridgeSSHShell in
+// sshgateway_channels.go). If it printed and only then cancelled the pump, on a
+// goroutine with no deadline, a displaced client whose channel window is
+// exhausted (stopped reading — a suspended ssh(1)) would park that goroutine
+// forever: cancel() would never run, and the evicted pump would keep its exec (a
+// tmux client on the shared session), its TouchRun keepalive (the idle reaper
+// never fires) and one of the run's four channel slots until the TCP connection
+// dies. Write authority is revoked either way (evicted=true) — this is about the
+// stranded session, not a second writer.
 func TestTakeover_SSHDisplaceBlockedStderrDoesNotStrandEvictedPump(t *testing.T) {
 	// ticket: F5 H3
 	srv, gr, audit, run := f5Server(t)
@@ -446,17 +439,15 @@ func TestTakeover_SSHDisplaceBlockedStderrDoesNotStrandEvictedPump(t *testing.T)
 	}
 }
 
-// ─── takeover authorization ────────────────────────────────────────────────
+// takeover authorization
 
-// TestTakeover_SecurityAdminCannotEvictForeignHolder (POLICY probe, expected
-// RED on fa910735 = H4): handleAttachTakeover gates on getRunAuthorized ->
-// ownsRunOrAdmin (helpers.go), whose 0.7 arm is isSecurityOperator — so a
-// security_admin, who can neither mint an attach ticket for a foreign run
+// TestTakeover_SecurityAdminCannotEvictForeignHolder: handleAttachTakeover
+// gates on getRunAuthorized -> ownsRunOrAdmin (helpers.go), and a
+// security_admin — who can neither mint an attach ticket for a foreign run
 // (handleAttachTicket in attach_ticket.go) nor SSH into it (handleAddSSHKey in
-// sshkeys.go stamps member), CAN evict its live holder. The three-tier doctrine
-// says the security tier never reaches INTO a run; ending another human's
-// terminal is a kick, not a read. The owner decides whether this is intended;
-// the probe pins the current answer either way.
+// sshkeys.go stamps member) — must not be able to evict its live holder either.
+// The three-tier doctrine says the security tier never reaches into a run;
+// ending another human's terminal is a kick, not a read.
 func TestTakeover_SecurityAdminCannotEvictForeignHolder(t *testing.T) {
 	// ticket: F5 H4
 	srv, gr, audit, run := f5Server(t)
