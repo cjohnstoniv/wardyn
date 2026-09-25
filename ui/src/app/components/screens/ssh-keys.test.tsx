@@ -26,12 +26,30 @@ vi.mock("../../lib/api/ssh-keys", () => ({
   },
 }));
 
+let mockCaps: MeCapabilities = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false };
+vi.mock("../../lib/api/permissions", () => ({
+  permissions: { getMyCapabilities: () => Promise.resolve(mockCaps) },
+}));
+
 import { SSHKeysScreen } from "./ssh-keys";
+import { OperatorProvider } from "../wardyn/operator-context";
+import { DENIED } from "../../lib/permissions-copy";
+import type { MeCapabilities } from "../../lib/types";
 
 function renderScreen() {
   return render(
     <MemoryRouter>
       <SSHKeysScreen />
+    </MemoryRouter>,
+  );
+}
+
+function renderAsUser() {
+  return render(
+    <MemoryRouter>
+      <OperatorProvider operator={false} securityOperator={false}>
+        <SSHKeysScreen />
+      </OperatorProvider>
     </MemoryRouter>,
   );
 }
@@ -243,5 +261,52 @@ describe("SSHKeysScreen — capped-key chip", () => {
       "title",
       "Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH.",
     );
+  });
+});
+
+// UT-12: the `feature` kind. The server's check is the wall; the pane only
+// says so before the click, with the server's own sentence.
+describe("SSHKeysScreen — ssh_key feature not available", () => {
+  beforeEach(() => {
+    listKeysMock.mockResolvedValue([]);
+    mockCaps = { grants: [], enforcement: {}, session_groups: [], groups_snapshot_stale: false };
+  });
+
+  it("disables Add key with the sentence when the feature is enforced and not granted", async () => {
+    mockCaps = { ...mockCaps, enforcement: { feature: true } };
+    renderAsUser();
+    await screen.findByText(DENIED.SSH_KEY_FEATURE);
+    for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeDisabled();
+  });
+
+  it("disables Add key when a deny row names ssh_key, even unenforced", async () => {
+    mockCaps = {
+      ...mockCaps,
+      grants: [{ id: "g1", subject_type: "user_type", subject: "portfolio-manager", capability: "feature", value: "ssh_key", effect: "deny", created_at: "" }],
+    };
+    renderAsUser();
+    await screen.findByText(DENIED.SSH_KEY_FEATURE);
+    for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeDisabled();
+  });
+
+  it("leaves Add key alone when only api_token is denied", async () => {
+    mockCaps = {
+      ...mockCaps,
+      grants: [{ id: "g2", subject_type: "all", subject: "", capability: "feature", value: "api_token", effect: "deny", created_at: "" }],
+    };
+    renderAsUser();
+    await screen.findByText("No keys yet.");
+    await waitFor(() => {
+      for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeEnabled();
+    });
+    expect(screen.queryByText(DENIED.SSH_KEY_FEATURE)).not.toBeInTheDocument();
+  });
+
+  it("never fetches or disables for a super admin", async () => {
+    mockCaps = { ...mockCaps, enforcement: { feature: true } };
+    renderScreen();
+    await screen.findByText("No keys yet.");
+    for (const b of screen.getAllByRole("button", { name: /add key/i })) expect(b).toBeEnabled();
+    expect(screen.queryByText(DENIED.SSH_KEY_FEATURE)).not.toBeInTheDocument();
   });
 });

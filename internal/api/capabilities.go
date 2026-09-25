@@ -17,13 +17,13 @@ import (
 
 // the closed kind set
 //
-// Eight kinds, and this slice is the ONLY place the set is written down —
+// Nine kinds, and this slice is the ONLY place the set is written down —
 // migration 0042 deliberately puts no CHECK on capability_grants.capability, so
-// a ninth kind is a constant here plus its enforcement call site, with no DDL.
+// a tenth kind is a constant here plus its enforcement call site, with no DDL.
 // The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
 // mirrors these ids and must not drift.
 //
-// Seven of the eight NARROW what a member may already do; capImage WIDENS (a
+// Eight of the nine NARROW what a member may already do; capImage WIDENS (a
 // member cannot name a custom image at all today). Both directions resolve
 // through the one resolver below (capBatch.decide) — the difference is the
 // kind's row in capKinds.
@@ -111,23 +111,47 @@ const (
 	// member access they could not otherwise get; a pin naming an ungranted
 	// provider is refused, never exempt (enforceRunModelProvider).
 	capModelProvider = "model_provider"
+	// capFeature NARROWS: it bounds whether a person may MINT a personal
+	// credential at all. Two values, a closed set (featureValues), plus `*`:
+	// featureSSHKey gates POST /me/ssh-keys and featureAPIToken gates POST
+	// /me/tokens, one check at each mint door (the token door also keeps
+	// member mode's 409; the SSH door stores a capped key instead, #564).
+	//
+	// Narrowing, on capAgent's rule: every signed-in person could already add a
+	// key and mint a token, so the unenforced default stays ALLOWED and an
+	// upgraded deployment is unchanged. A DENY row bites at once, which is how
+	// one user type is turned off ("SSH keys: Blocked" for a Portfolio manager).
+	//
+	// Mint only. A key or token that already exists keeps working until it is
+	// removed or revoked; the kind decides what may be ADDED, never re-checks
+	// what is there.
+	capFeature = "feature"
 )
 
+// The closed value set of capFeature. canonicalGrantValue refuses any other
+// value, so a misspelt row can never sit in the table protecting nothing.
+const (
+	featureSSHKey   = "ssh_key"
+	featureAPIToken = "api_token"
+)
+
+var featureValues = []string{featureSSHKey, featureAPIToken}
+
 // capabilityKinds is the closed set, in the order the admin surface shows them.
-var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capModelProvider}
+var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capModelProvider, capFeature}
 
 // capKindsVersion numbers the kind table, and GET /me/capabilities returns it so
 // a client holding a copy of the set (the console's CAPABILITY_KINDS) can tell
 // its copy is stale. Monotonic: a change to capKinds — a kind added, or a row's
 // direction changed — bumps it by one and it never goes down.
 // TestCapKindsVersionPinsTheTable fails on a table change that forgets to.
-const capKindsVersion = 2
+const capKindsVersion = 3
 
-// validCapabilityKind reports whether kind is one of the eight. The API write
+// validCapabilityKind reports whether kind is one of the nine. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
 func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }
 
-// capWildcard matches every value of its kind. Spelled the same for all eight so
+// capWildcard matches every value of its kind. Spelled the same for all nine so
 // an admin does not have to learn a per-kind syntax for "all of them".
 const capWildcard = "*"
 
@@ -241,9 +265,10 @@ type capKind struct {
 	// offered). Read by capBatch.decide's step 3 and the availability write.
 	restrictable bool
 	// gatesAdminPins: the kind also bounds a value an ADMIN pinned, not only the
-	// member's own choice. False for the first seven — "a capability bounds what
-	// a member chose, never what an admin pre-authorized" (capIntegration); true
-	// for capModelProvider, whose workspace pin enforceRunModelProvider checks.
+	// member's own choice. False for every kind but capModelProvider — "a
+	// capability bounds what a member chose, never what an admin pre-authorized"
+	// (capIntegration); true for capModelProvider, whose workspace pin
+	// enforceRunModelProvider checks.
 	gatesAdminPins bool
 	// reason is the authz.denied reason a refusal of this kind carries. The
 	// widening kind's refusal is the BYOI one: image is refused as a member
@@ -262,6 +287,7 @@ var capKinds = map[string]capKind{
 	capIntegration:       {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityIntegration},
 	capWorkspaceProvider: {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspaceProvider},
 	capModelProvider:     {direction: capNarrowing, restrictable: true, gatesAdminPins: true, reason: authz.ReasonCapabilityModelProvider},
+	capFeature:           {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityFeature},
 }
 
 // the wrappers

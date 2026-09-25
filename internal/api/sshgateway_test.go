@@ -120,6 +120,23 @@ func (s *sshMemStore) DeleteSSHKey(_ context.Context, fingerprint, principal str
 	return nil
 }
 
+// GetCapabilityEnforcement and ListCapabilityGrantsFor are the two reads
+// handleAddSSHKey's capFeature gate makes (denyMemberCapability ->
+// capSeamAllowed). No enforcement row and no grants: capFeature is a
+// narrowing kind, so this test's door stays open exactly as before the gate
+// was added.
+func (s *sshMemStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
+	return map[string]bool{}, nil
+}
+
+func (s *sshMemStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
+func (s *sshMemStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
+	return nil, nil
+}
+
 // sshFakeRunner is Attach/ExecStream-capable (the brief's explicit "fake
 // ExecStream/Attach" ask); the rest of runner.Runner is unused by this test
 // and errors loudly if reached. execFn/attachFn are set per (sub)test to

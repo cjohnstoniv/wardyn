@@ -763,6 +763,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   rather than answered as the admin, and the view turns off; `GET /me` answers the real tier with
   `user_view_dropped`. A run records the type it was launched as (`agent_runs.user_type`, and
   `user_type` / `user_view` on `run.create`); the switch is audited as `auth.user_view`.
+- **SSH keys and API tokens can be turned off per person, group or user type (#614).** A new
+  capability kind `feature` (values `ssh_key` and `api_token`, or `*`) is checked at `POST
+  /me/ssh-keys` and `POST /me/tokens`. It narrows: until an admin enforces it on the Permissions
+  page nothing changes, and a deny bites at once, so a deny on a user type turns the feature off
+  for everyone of that type. A refused mint is a `403` (`SSH keys aren't available to you. Ask your
+  admin.` / `API tokens aren't available to you. Ask your admin.`) with an `authz.denied` row
+  (reason `capability_feature`, target `me.ssh_keys` or `me.tokens`) and writes nothing. A super
+  admin is exempt; a security admin is bounded like anyone. It gates new keys and tokens only:
+  ones that already exist keep working until removed or revoked. Your SSH keys disables Add key
+  and shows the same sentence. Any other grant value is refused (`400`).
+
 - **A user type is a subject (#610).** Migration `0076_user_type_subject` lets a capability
   grant, a governance assignment and a drive grant name `subject_type: "user_type"` with a type's
   id. A grant on a type is one more subject beside user and group: an allow lets that type's

@@ -55,6 +55,16 @@
     "sentence": "fmt.Sprintf(harnessLoginAgentRefusal, row.ID)"
   },
   {
+    "reason": "capKinds[capFeature].reason",
+    "target": "\"me.ssh_keys\"",
+    "sentence": "sshKeyFeatureRefusal"
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
+    "target": "\"me.tokens\"",
+    "sentence": "apiTokenFeatureRefusal"
+  },
+  {
     "reason": "capKinds[capIntegration].reason",
     "target": "\"runs.integration\"",
     "sentence": "\"you are not granted integration \" + req.IntegrationID + \" — ask an admin to grant it, or launch without integration_id\""
