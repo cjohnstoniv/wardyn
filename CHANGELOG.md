@@ -32,6 +32,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   stays up and other agent images stay warn-only. Setting `WARDYN_UP_SKIP_RUN_IMAGES=1` now says
   explicitly that adding a Claude subscription is refused and claude-code runs fail until the
   sign-in image is built.
+- **An Azure DevOps capability escalation kept reading "sandbox held" after its own card said the
+  opposite.** The proxy releases that specific hold after 4 minutes (the same window the capability
+  card's own countdown already used); the Runs board and run cockpit read it as held for as long as
+  the row stayed pending, so the board chip, the cockpit header and the strip icon disagreed with
+  the card sitting right beside them. Both now read one shared window (#725).
+- **A Codex (or any non-Claude-Code) launch refused for its own model-credential reason could open
+  "Sign in to AWS"** on a deployment that also has a working Bedrock SSO Claude Code row — a
+  sign-in that repairs nothing for the agent that was actually refused. The door now opens only
+  for a refused Claude Code launch (#725).
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console

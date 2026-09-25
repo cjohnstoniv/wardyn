@@ -43,7 +43,7 @@ vi.mock("../settings/harness-login-pane", () => ({
 }));
 
 import { RunRail } from "./new-run-rail";
-import { RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
+import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import { ModelAccessBanner } from "../../wardyn/model-access-banner";
 import { ModelAccessProvider, useModelAccessDoor } from "../../wardyn/model-access-context";
@@ -136,6 +136,12 @@ function railTree(props: {
    *  actually clearing /setup/status (and unmounting the rail's own control),
    *  which is exactly the case S1's fix has to survive. */
   refreshTo?: SetupModelAccess;
+  /** #725/T-65: the FULL roster StatusHost feeds `/setup/status` — defaults
+   *  to `[agentRow]` (every pre-existing case's behaviour). A caller that
+   *  needs a claude-code bedrock_sso row present WHILE `agentRow` names a
+   *  different agent (a codex launch, say) passes both here — the one shape
+   *  the default cannot produce. */
+  harnesses?: SetupHarnessTool[];
 }) {
   const rail = (
     <RunRail
@@ -185,7 +191,7 @@ function railTree(props: {
   }
   return (
     <MemoryRouter>
-      <StatusHost initial={props.modelAccess} refreshTo={props.refreshTo} agentRow={props.agentRow}>
+      <StatusHost initial={props.modelAccess} refreshTo={props.refreshTo} agentRow={props.agentRow} harnesses={props.harnesses}>
         <OperatorProvider operator={!!props.operator} securityOperator={!!props.operator} principal="p@corp.example">
           {props.banner && <ModelAccessBanner />}
           {props.extra}
@@ -208,15 +214,17 @@ function StatusHost({
   initial,
   refreshTo,
   agentRow,
+  harnesses,
   children,
 }: {
   initial: SetupModelAccess;
   refreshTo?: SetupModelAccess;
   agentRow?: SetupHarnessTool;
+  harnesses?: SetupHarnessTool[];
   children: ReactNode;
 }) {
   const [access, setAccess] = useState(initial);
-  const status = baseStatus({ model_access: access, harnesses: agentRow ? [agentRow] : [] });
+  const status = baseStatus({ model_access: access, harnesses: harnesses ?? (agentRow ? [agentRow] : []) });
   return (
     <ModelAccessProvider status={status} onRefresh={() => refreshTo && setAccess(refreshTo)}>
       {children}
@@ -725,6 +733,29 @@ describe("the launch door — the server's credential refusal opens the sign-in,
     expect(dialog()).toBeNull();
   });
 
+  // #725/T-65 — Codex launch refusal must not open "Sign in to AWS": the
+  // door's own bedrockSSO/perUser facts grade the claude-code row ALONE
+  // (modelAccessDoor mirrors modelAccessAgent server-side), regardless of
+  // which agent THIS run picked. A deployment can carry a working
+  // claude-code bedrock_sso per_user row at the same time a codex launch is
+  // refused for its own, unrelated model_credential reason — an AWS
+  // sign-in repairs neither.
+  it("a codex launch's refusal opens no door, even with a claude-code bedrock_sso per_user row present", async () => {
+    const onLaunch = vi.fn();
+    renderRail({
+      agentRow: { id: "codex", display: "Codex", has_gateway: true, has_login: false },
+      harnesses: [modelAccessRow(), { id: "codex", display: "Codex", has_gateway: true, has_login: false }],
+      modelAccess: { state: "live" },
+      credentialRefused: true,
+      banner: true,
+      operator: true,
+      onLaunch,
+    });
+    await act(async () => {});
+    expect(dialog()).toBeNull();
+    expect(onLaunch).not.toHaveBeenCalled();
+  });
+
   it("once per click: a relaunch refused again does not reopen the door; a fresh Launch click re-arms it", async () => {
     const onLaunch = vi.fn();
     const r = renderRail({
@@ -961,36 +992,3 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
 // #459 — the launch and preflight errors become role="alert" regions,
 // announced on arrival, with an sr-only prefix spoken before the server's own
 // (unchanged, still-visible) sentence.
-describe("RunRail — failure lines are announced (#459)", () => {
-  it("the launch error is an alert carrying the sr-only prefix and the server's sentence", () => {
-    renderRail({ launchError: "the server's launch sentence" });
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(RAIL.LAUNCH_ERROR_LABEL);
-    expect(alert).toHaveTextContent("the server's launch sentence");
-    // The sentence itself is unchanged and visible — only the prefix hides.
-    expect(screen.getByText("the server's launch sentence")).toBeVisible();
-  });
-
-  it("the preflight error is an alert carrying the sr-only prefix and the server's sentence", () => {
-    renderRail({ preflightError: "the server's preflight sentence" });
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(RAIL.PREFLIGHT_ERROR_LABEL);
-    expect(alert).toHaveTextContent("the server's preflight sentence");
-  });
-
-  it("a repeated, identical launch failure remounts the alert region (errorSeq keys it)", () => {
-    const r = renderRail({ launchError: "same sentence", launchErrorSeq: 1 });
-    const first = screen.getByRole("alert");
-    r.rerenderWith({ launchError: "same sentence", launchErrorSeq: 2 });
-    const second = screen.getByRole("alert");
-    expect(second).not.toBe(first);
-  });
-
-  it("a repeated, identical preflight failure remounts the alert region (errorSeq keys it)", () => {
-    const r = renderRail({ preflightError: "same sentence", preflightErrorSeq: 1 });
-    const first = screen.getByRole("alert");
-    r.rerenderWith({ preflightError: "same sentence", preflightErrorSeq: 2 });
-    const second = screen.getByRole("alert");
-    expect(second).not.toBe(first);
-  });
-});

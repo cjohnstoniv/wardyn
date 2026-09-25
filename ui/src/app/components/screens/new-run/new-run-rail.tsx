@@ -396,14 +396,21 @@ export function RunRail({
   React.useEffect(() => {
     if (!launch.credentialRefused || autoOpened.current) return;
     autoOpened.current = true;
-    // The audience rule modelAccessDoor already states: a sign-in repairs a
-    // bedrock_sso lane for its per_user owner, or for any operator (a shared
-    // row); a member under a shared row keeps the server's sentence, no door.
-    if (door.open || !door.bedrockSSO || !(door.perUser || door.operator)) return;
+    // #725/T-65: door.bedrockSSO grades the claude-code row ALONE
+    // (modelAccessDoor mirrors internal/api/modelaccess.go's
+    // modelAccessAgent) — it says nothing about which agent THIS run
+    // picked. Without the agentRow check, a codex launch refused for its
+    // OWN model_credential reason on a deployment that also has a
+    // claude-code bedrock_sso per_user row would open "Sign in to AWS" for
+    // a refusal an AWS sign-in cannot repair. The audience rule
+    // modelAccessDoor otherwise states: a sign-in repairs a bedrock_sso
+    // lane for its per_user owner, or for any operator (a shared row); a
+    // member under a shared row keeps the server's sentence, no door.
+    if (agentRow?.id !== MODEL_ACCESS_AGENT || door.open || !door.bedrockSSO || !(door.perUser || door.operator)) return;
     door.openDoor(launchRef.current, () => onLaunchRef.current());
     // The strip and the line above catch up with what the server just said.
     void door.refresh();
-  }, [launch.credentialRefused, door]);
+  }, [launch.credentialRefused, agentRow?.id, door]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise

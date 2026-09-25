@@ -74,11 +74,12 @@ const (
 	// limit, because a restarted sidecar starts it at zero.
 	maxCapabilityHolds = 16
 	// maxCapabilityHoldTimeout clamps a capability hold: how long a person's
-	// answer is waited for on a parked request (the console's HOLD_WINDOW_MS
-	// mirrors it). It is NOT what keeps a held request's body readable — a
-	// request whose body the gate did not peek is read after the hold, and
-	// ReadTimeout counts from its headers, so serveMITMRequest re-arms the
-	// read deadline after each point that can hold (rearmBodyDeadline).
+	// answer is waited for on a parked request (ADO_HOLD_WINDOW_MS in the
+	// console's ui/src/app/lib/types/approvals.ts mirrors it). It is NOT what
+	// keeps a held request's body readable — a request whose body the gate did
+	// not peek is read after the hold, and ReadTimeout counts from its headers,
+	// so serveMITMRequest re-arms the read deadline after each point that can
+	// hold (rearmBodyDeadline).
 	maxCapabilityHoldTimeout = 240 * time.Second
 )
 

@@ -126,6 +126,20 @@ export function decisionArgs(scope: ApprovalScope, until?: string): [] | [Decisi
 
 const HOLD_TIMEOUT_MS = 30_000;
 
+// The proxy's own ceiling for an Azure DevOps capability escalation
+// (internal/egress/proxy/credhold.go's maxCapabilityHoldTimeout) — exported
+// so ado-capability-card.tsx's stillHeld() and isHeld() below read ONE
+// number instead of two independently-maintained 240_000s that could drift.
+export const ADO_HOLD_WINDOW_MS = 240_000;
+
+// True once `requestedAt` is old enough to cross `ceilingMs` — and only once:
+// an unparseable timestamp fails TOWARD showing the hold (not stale), the same
+// direction isHeld's own unparseable case below takes.
+function isStale(requestedAt: string, ceilingMs: number): boolean {
+  const t = Date.parse(requestedAt);
+  return !Number.isNaN(t) && Date.now() - t >= ceilingMs;
+}
+
 // A held request is one the sandbox is still parked on. TWO shapes reach that
 // state and only one of them carries a mode:
 //
@@ -226,6 +240,14 @@ export function canDecideAdoCapability(securityOperator: boolean, isRunOwner: bo
 }
 
 export function isHeld(a: ApprovalRequest): boolean {
+  // An Azure DevOps capability escalation is a tool_call row, but the proxy
+  // releases ITS hold after ADO_HOLD_WINDOW_MS (credhold.go's
+  // maxCapabilityHoldTimeout) while the row stays PENDING —
+  // ado-capability-card.tsx counts down the same ADO_HOLD_WINDOW_MS and
+  // already flips its own text to "no longer waiting" at that point. Without
+  // this arm the board and the cockpit header kept saying "sandbox held" after
+  // the card itself said the opposite (#725/F1).
+  if (isAdoCapabilityRequest(a)) return a.state === "PENDING" && !isStale(a.requested_at, ADO_HOLD_WINDOW_MS);
   // #509 — PENDING alone is live for both of these, at any age: see the
   // tool_call bullet above for why no client ceiling belongs here.
   if (a.kind === "tool_call") return a.state === "PENDING";
