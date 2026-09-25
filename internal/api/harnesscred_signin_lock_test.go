@@ -150,12 +150,12 @@ func TestUploadSSOToken_ALockWaitThatExpiresStoresNothing(t *testing.T) {
 	}
 	var refused *types.AuditEvent
 	for _, ev := range h.audit.events {
-		if ev.Action == "harness.credential.refused" {
+		if ev.Action == "harness.credential.refuse" {
 			refused = &ev
 		}
 	}
 	if refused == nil {
-		t.Fatal("no harness.credential.refused row for a refused capture")
+		t.Fatal("no harness.credential.refuse row for a refused capture")
 	}
 	if data := killData(t, *refused); data["reason"] != refuseReasonSignInBusy {
 		t.Errorf("refusal reason = %v, want %q", data["reason"], refuseReasonSignInBusy)

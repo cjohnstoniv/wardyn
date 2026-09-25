@@ -35,7 +35,7 @@ Deserialization error: to see the raw response, inspect the hidden field {error}
 The run's own egress panel and audit trail show the real story — a tight loop, 20+ pairs in seconds:
 
 ```
-03:36:26  run.llm.bedrock    mode: sso-inject-proxy
+03:36:26  run.bedrock.configure    mode: sso-inject-proxy
 03:36:31  egress.allow  CORP_PROXY_HOST                        builtin:upstream-proxy
 03:36:45  egress.allow  portal.sso.<region>.amazonaws.com      policy:allowed
 03:36:46  egress.deny   portal.sso.<region>.amazonaws.com      builtin:dial-failed

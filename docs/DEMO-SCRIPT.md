@@ -212,7 +212,7 @@ Two things to know before rolling:
 | **Stack** | the `make kind-quickstart` cluster, **not** `make setup`'s compose stack. Preflight asserts `/healthz` reports `runner=k8s`, because both publish `127.0.0.1:8080` and a 200 says nothing about who answered |
 | **Auth** | the install's own admin token, read from `Secret wardyn-auth` and **exported, never typed** — `wardyn audit` takes it from `WARDYN_ADMIN_TOKEN`. Never film a `--help`: cobra renders that flag's default, and the default *is* the token |
 | **Key** | the operator's own `~/.ssh/id_ed25519.pub`, registered silently (201, or 409 on a retake). Key management is V12's subject, not this one's |
-| **Verifier** | `WARDYN_DEMO_VIDEO=13` → three audit checks: the `ssh.exec` row for `hostname`, the one carrying `exit 37`, and every `ssh.auth` success attributed to the run's owner |
+| **Verifier** | `WARDYN_DEMO_VIDEO=13` → three audit checks: the `ssh.exec` row for `hostname`, the one carrying `exit 37`, and every `ssh.authenticate` success attributed to the run's owner |
 | **Knobs** | four, all with a default that is what the table above describes — set one only when your cluster is not the quickstart's. `WARDYN_V13_CONTEXT` (default `kind-wardyn-quickstart`) and `WARDYN_V13_NAMESPACE` (default `wardyn`) name the kube context and namespace both the beat script and the verifier read the admin token from; `WARDYN_V13_DIR` (default `/tmp/wardyn-v13`) is where preflight writes its log; `WARDYN_V13_PUBKEY` (default `~/.ssh/id_ed25519.pub`) is the key beat 3 registers and authenticates with. `WARDYN_URL` (default `http://127.0.0.1:8080`) and `WARDYN_DEMO_RUN_ID` are the shared knobs, not V13's own |
 
 Staging, once, before rolling — `preflight` checks every item and films nothing:
@@ -272,7 +272,7 @@ stays **V08**, 09 → **V11**, 10 → **V12**.
 beat script and the verifier agree byte-for-byte on the handoff path
 (`${WARDYN_DEMO_WORK_DIR:-…/demo-video-13}/v13-run-id.txt`), and the verifier's
 three audit assertions — `ssh.exec` for argv `hostname` at exit 0, an
-`ssh.exec` row carrying exit 37, and every `ssh.auth` success attributed to the
+`ssh.exec` row carrying exit 37, and every `ssh.authenticate` success attributed to the
 run's owner — are exactly the beats the script films.
 
 `check_video_13` has been exercised end to end once: the campaign's live lane
@@ -730,7 +730,7 @@ assumes the obvious thing:
   `example.com` is held open at the proxy and the on-camera approval completes
   that same in-flight request. Two consequences worth pinning: the UI renders
   "Sandbox is waiting" with a WAITING badge (narration must agree), and an
-  approved hold logs **only `egress.allow`** — asserting `egress.pending`
+  approved hold logs **only `egress.allow`** — asserting `egress.hold`
   would fail a correct take. `DEMO_TASK`'s retry instruction stays as
   belt-and-braces for a missed 30s window, not as the primary mechanic.
 - `new-run-screen.tsx` never loaded the workspace list. `useWorkspaceList` does
@@ -777,7 +777,7 @@ code, and exits non-zero if any of it fails. The list below is the walkthrough's
 (see "The series harness" above):
 
 - the act-5 run exists and `api.anthropic.com` was allowed (the model path worked)
-- `example.com` went `egress.pending` → `approval.decide` → `egress.allow`
+- `example.com` went `egress.hold` → `approval.decide` → `egress.allow`
   (held, decided on camera, and the retry actually landed), with its decision scope printed
 - **no telemetry host was approved** — the `.first()` trap that once approved
   Claude Code's Datadog endpoint while the intended host sat pending
@@ -803,7 +803,7 @@ code, and exits non-zero if any of it fails. The list below is the walkthrough's
    encodes exactly that.
 3. Confirm the two new scope beats, the same way — exit 0 is the least
    reliable signal here too:
-   - On the Act 3 once-or-for-good run's audit, a SECOND `egress.pending` for
+   - On the Act 3 once-or-for-good run's audit, a SECOND `egress.hold` for
      `example.com` after the `approval.decide outcome=approved
      decision_scope=once` — the re-raise is the entire point of that demo, so
      its absence means the demo silently taught the wrong lesson.

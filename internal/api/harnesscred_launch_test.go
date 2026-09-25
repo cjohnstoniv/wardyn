@@ -141,14 +141,14 @@ func TestHandleHarnessLogin_ReturnsBeforeTheSandboxIsUp(t *testing.T) {
 	}
 	// The launch-time stamp is written BEFORE the answer: the upload binds to
 	// it, so it can never be a thing the goroutine might not get to.
-	if n := len(audit.find("harness.login.started")); n != 1 {
-		t.Fatalf("harness.login.started rows = %d at response time, want 1", n)
+	if n := len(audit.find("harness.login.start")); n != 1 {
+		t.Fatalf("harness.login.start rows = %d at response time, want 1", n)
 	}
 
 	released = true
 	close(gr.gate)
-	waitForAuditRows(t, audit, "run.interactive", 1)
-	waitForAuditRows(t, audit, "harness.login.started", 1)
+	waitForAuditRows(t, audit, "run.interactive.start", 1)
+	waitForAuditRows(t, audit, "harness.login.start", 1)
 }
 
 // ceilingBlipStore is integStore with two additions the ceiling arm below needs:

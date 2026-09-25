@@ -166,7 +166,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// refusals.
 	//
 	// It can write one audit row on the grace lane
-	// (workspace.provider.legacy_host, from admitRepoSources) — the same "a
+	// (workspace.provider.admit, from admitRepoSources) — the same "a
 	// refused dry run leaves the record of the refusal" rule this handler's doc
 	// comment already states for refuse. In legacy open mode (no
 	// provider rows) it reads the site config and returns having refused,
@@ -236,7 +236,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// a bedrock integration that supplies the region/model must reach
 	// resolveBedrockAuth below, or the checklist previews "no model access" for a
 	// run launch credentials fine. No audit event — preflight persists nothing
-	// (the run.workspace.creds audit is the create path's launch-only half).
+	// (the run.workspace_cred.resolve audit is the create path's launch-only half).
 	wsRefs := s.referencedWorkspaces(ctx, spec)
 	// Widen the spec's egress from onboarded-workspace registries +
 	// clone hosts the SAME way launch-time unionRunEgress does (runs.go),

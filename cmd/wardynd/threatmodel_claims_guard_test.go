@@ -49,6 +49,9 @@ var (
 	capKindsDecl  = regexp.MustCompile(`(?m)^var capabilityKinds = \[\]string\{([^}]*)\}`)
 	capKindConst  = regexp.MustCompile(`(?m)^\t(cap[A-Za-z]+) = "([a-z_]+)"`)
 	closedKindsRe = regexp.MustCompile(`(?m)^(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten) closed kinds`)
+	// docs/OPERATIONS.md's "**The ten kinds**" heading and its wildcard sentence.
+	opsKindsHeadRe     = regexp.MustCompile(`\*\*The ([a-z]+) kinds\*\*`)
+	opsKindsWildcardRe = regexp.MustCompile("`\\*` as a value matches everything of that kind, spelled the same way for all\\s+([a-z]+)\\.")
 )
 
 func TestThreatModelDocCapabilityKindsMatchCode(t *testing.T) {
@@ -88,6 +91,13 @@ func TestThreatModelDocCapabilityKindsMatchCode(t *testing.T) {
 	for _, k := range kinds {
 		if !strings.Contains(doc, "`"+k+"`") {
 			t.Errorf("capability kind %q ships in capabilityKinds but is named nowhere in threatmodel/THREAT-MODEL.md", k)
+		}
+	}
+	// OPERATIONS' capability table states the count twice, in words.
+	ops := readRepoFile(t, "docs/OPERATIONS.md")
+	for _, re := range []*regexp.Regexp{opsKindsHeadRe, opsKindsWildcardRe} {
+		if got := re.FindStringSubmatch(ops); got == nil || !strings.EqualFold(got[1], want) {
+			t.Errorf("docs/OPERATIONS.md %s: got %q, want %q — internal/api/capabilities.go ships %d kinds", re, got, want, len(kinds))
 		}
 	}
 	// The §4 attack row states the same number in words; it drifted separately.

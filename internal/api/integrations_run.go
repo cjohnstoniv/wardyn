@@ -88,7 +88,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 	}
 	_, header, _, _ := integ.HeaderSecret()
 	return requirementAuditEntry{
-		action: "run.workspace.requirement.integration", target: id,
+		action: "run.requirement.inject", target: id,
 		data: map[string]any{
 			"integration_id": id, "added_domains": addedEgress,
 			"injected_hosts": grantedHosts, "header": header,

@@ -14,7 +14,7 @@
 #     lane
 #   - the second origin IS a boundary: /__wardyn/enter 404s on the console
 #     listener (those routes exist only on the UI handler)
-#   - ui.auth / ui.start / ui.open / ui.close audit rows, and NO session.attach
+#   - ui.authorize / ui.start / ui.open / ui.close audit rows, and NO session.attach
 #     row (a relay session must never appear in the recording picker)
 #   - an undeclared app is refused 403 naming the ui_apps policy field, and the
 #     denial is audited
@@ -399,7 +399,7 @@ fi
 # ── 7. the audit trail ──────────────────────────────────────────────────────
 api GET "/api/v1/audit?run_id=${RUN_ID}" >/dev/null
 cp "${TMPDIR}/resp.json" "${TMPDIR}/audit.json"
-for action in ui.auth ui.start ui.open ui.close; do
+for action in ui.authorize ui.start ui.open ui.close; do
   count="$(jq --arg a "${action}" '[.[] | select(.action==$a and .outcome=="success")] | length' "${TMPDIR}/audit.json")"
   if [[ "${count}" -ge 1 ]]; then
     pass "audit: ${count} successful ${action} row(s)"
@@ -407,11 +407,11 @@ for action in ui.auth ui.start ui.open ui.close; do
     fail "audit: no successful ${action} row found"
   fi
 done
-denied="$(jq '[.[] | select(.action=="ui.auth" and .outcome=="denied" and (.data.reason | test("not declared")))] | length' "${TMPDIR}/audit.json")"
+denied="$(jq '[.[] | select(.action=="ui.authorize" and .outcome=="denied" and (.data.reason | test("not declared")))] | length' "${TMPDIR}/audit.json")"
 if [[ "${denied}" -ge 1 ]]; then
-  pass "audit: the undeclared-app denial is recorded as ui.auth/denied"
+  pass "audit: the undeclared-app denial is recorded as ui.authorize/denied"
 else
-  fail "audit: no ui.auth denial row for the undeclared app"
+  fail "audit: no ui.authorize denial row for the undeclared app"
 fi
 attach="$(jq '[.[] | select(.action=="session.attach")] | length' "${TMPDIR}/audit.json")"
 if [[ "${attach}" -eq 0 ]]; then
