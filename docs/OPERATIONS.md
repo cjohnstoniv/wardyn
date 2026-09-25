@@ -6173,9 +6173,10 @@ Two supported wirings, and the chart refuses both ways of getting it wrong
 `secrets.ageKey` defaults to empty and `ageKeyFromSecret` to `false`, so an
 external-DSN install wiring neither would get **no** stable identity: wardynd
 mints an ephemeral one per boot. That install works perfectly once; its second
-boot cannot decrypt what its first wrote, and because the control plane loads its
-own keys during startup (`loadOrCreateSecret`, `cmd/wardynd/main.go`) it fails
-closed there, before serving — a `CrashLoopBackOff`, not a degraded pod. Hence the
+boot cannot decrypt what its first wrote, and because the control plane readies
+its stored secrets during startup, before it loads its own keys
+(`convertSecretStore`, `cmd/wardynd/secret_store.go`), it fails closed there,
+before serving — a `CrashLoopBackOff`, not a degraded pod. Hence the
 fourth row: the chart stops the install at render.
 
 ```console
@@ -6194,17 +6195,31 @@ broken install, which then `CrashLoopBackOff`s on boot 2 with:
 ```console
 $ kubectl -n wardyn logs -l app.kubernetes.io/name=wardyn --tail=2
 WARN wardynd: generated ephemeral age identity; secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY public_recipient=age1qgu93czj2ksk2g3j4x3rq52kyaw5xkjetd7g38cn63gdl2az4eqsyztpgs
-ERROR wardynd: fatal err="load secret \"wardyn-signing-key\": pg secretstore: decrypt wardyn-signing-key: age decrypt: no identity matched any of the recipients"
+ERROR wardynd: fatal err="refusing to start: WARDYN_AGE_KEY is unset, but […] stored secrets are sealed under an age key — an ephemeral key would make every one unreadable; […] delete them (DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%') and boot with a persistent key from `wardynd -gen-age-key`"
 ```
 
-That is the correct behaviour — `loadOrCreateSecret` fails closed on a decrypt
-error rather than minting a fresh key over the existing one, which would strand
-the old ciphertext permanently instead of loudly. But it is unrecoverable from
-inside the cluster: [Rotating the age key](#rotating-the-age-key) re-encrypts a
-store you can still *read*, and the key that reads this one is exactly what is
-missing. The fix is always "put the original Secret back", never "generate a new
-one". Back the Secret up off-cluster, wherever the DSN Secret is backed up, and
-treat deleting it as equivalent to deleting the database.
+That is the correct behaviour — the boot refuses rather than mint a fresh key
+over rows no key it holds can open, which would strand them permanently instead
+of loudly. But it is unrecoverable from inside the cluster:
+[Rotating the age key](#rotating-the-age-key) re-encrypts a store you can still
+*read*, and the key that reads this one is exactly what is missing. When that key
+was a Secret you deleted, the fix is "put the original Secret back", never
+"generate a new one". Back the Secret up off-cluster, wherever the DSN Secret is
+backed up, and treat deleting it as equivalent to deleting the database.
+
+When the key was ephemeral there is no original to put back: it lived only in
+the first pod's memory, so every row it sealed is lost. Delete those rows, wire a
+persistent key (`wardynd -gen-age-key`), and start again; Wardyn's own boot keys
+are among the rows and are minted afresh, and every stored secret has to be set
+again:
+
+```sh
+psql "$WARDYN_PG_DSN" -c "DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'"
+```
+
+If `WARDYN_PLATFORM_KEY_FILE` was set, keep that file: the boot-key rows under it
+are not lost — change `OR kek_id LIKE 'local/%'` to `OR kek_id LIKE 'local/cred:%'`
+in the statement, so it keeps the `local/platform:` rows.
 
 **Rotating it on k8s** uses the same runbook
 ([Rotating the age key](#rotating-the-age-key)), with two differences.

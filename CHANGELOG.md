@@ -378,6 +378,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The boot conversion of pre-envelope secrets records `purpose` `boot`, not `migrate` (#717).**
+  Each row the first boot converts to envelope v1 still writes one `secret.read`, naming the row
+  and never its value; its `purpose` is now `boot`, so `migrate` is left to
+  `wardynd -migrate-secrets`, whose rows carry `actor` `wardyn/migrate-secrets`. There is no
+  separate conversion action. A consumer that counted conversion reads under `migrate` should
+  count `purpose=boot` rows with no `ref` instead. OPERATIONS.md's ephemeral-key section now shows
+  the boot refusal a second boot hits today and carries the statement it names for deleting the
+  rows no key can open.
 - **`wardynd -h` reads like a product, and the hybrid-boot org control-plane check now runs before
   migration (#197).** Every flag's usage string was rewritten to say what it does, its default and
   its unit, with internal ids and version history dropped; no flag was added, removed or renamed.
