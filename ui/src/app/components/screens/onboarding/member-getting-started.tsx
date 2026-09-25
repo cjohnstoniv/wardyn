@@ -714,7 +714,7 @@ function DemoRow({
     // Deliberately once, on mount only — `open` toggling later (the member
     // closing/reopening the row by hand) must not re-scroll them away from
     // wherever they are.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately once, on mount only; `open` must not re-trigger the scroll
   }, []);
   return (
     <div ref={rowRef} className="border-b border-border py-3 last:border-b-0">

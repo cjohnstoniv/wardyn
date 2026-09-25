@@ -77,7 +77,7 @@ encrypted. Full role map, substrate and values table:
 
 ### Joining a Wardyn someone else runs
 
-Install nothing — sign in with SSO and read **[`docs/MEMBERS.md`](docs/MEMBERS.md)**: what a member can do, your first run, and what to ask your admin for.
+Install nothing — sign in with SSO and read **[`docs/USERS.md`](docs/USERS.md)**: what a member can do, your first run, and what to ask your admin for.
 
 **Building from source is a contributor path** — see [`CONTRIBUTING.md`](CONTRIBUTING.md). Clone, then `make setup`
 (a failed image pull falls back to building from this checkout; `WARDYN_BUILD_LOCAL=1` forces it).

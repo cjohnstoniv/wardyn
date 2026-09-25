@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -167,7 +168,7 @@ func runCmd(client clientFn) *cobra.Command {
 			// an XOR violation / unknown secret / non-onboarded workspace fails
 			// here exactly as it would at create) and mints nothing.
 			if dryRun {
-				return printPreflight(cmd.Context(), client(), body, createJSON)
+				return printPreflight(cmd.Context(), cmd.OutOrStdout(), client(), body, createJSON)
 			}
 			run, err := client().CreateRun(cmd.Context(), body)
 			if err != nil {
@@ -176,26 +177,26 @@ func runCmd(client clientFn) *cobra.Command {
 			if createJSON {
 				// waitForRun prints and warnings go to stderr, so stdout stays
 				// exactly one JSON object (the created run) for scripts to parse.
-				if err := emitJSON(run.AgentRun); err != nil {
+				if err := emitJSON(cmd.OutOrStdout(), run.AgentRun); err != nil {
 					return err
 				}
 			} else {
-				fmt.Printf("created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
-				fmt.Printf("  spiffe id: %s\n", run.SPIFFEID)
+				fmt.Fprintf(cmd.OutOrStdout(), "created run %s (state %s, confinement %s)\n", run.ID, run.State, run.ConfinementClass)
+				fmt.Fprintf(cmd.OutOrStdout(), "  spiffe id: %s\n", run.SPIFFEID)
 				// The image is resolved after the 201 (the build runs server-side),
 				// so it is read back later with `wardyn run get`, never printed here.
 				if interactive {
-					fmt.Printf("  interactive: sandbox is idle; attach with `wardyn attach %s`\n", run.ID)
+					fmt.Fprintf(cmd.OutOrStdout(), "  interactive: sandbox is idle; attach with `wardyn attach %s`\n", run.ID)
 				}
 			}
 			// Advisory server warnings (workspace collision, dropped ssh grant):
 			// the run is live either way, so silence here is a degraded run no
 			// CI artifact records.
 			for _, w := range run.Warnings {
-				fmt.Fprintf(os.Stderr, "  warning: %s\n", w)
+				fmt.Fprintf(cmd.ErrOrStderr(), "  warning: %s\n", w)
 			}
 			if wait {
-				return waitForRun(cmd.Context(), client(), run.ID, timeout)
+				return waitForRun(cmd.Context(), cmd.ErrOrStderr(), client(), run.ID, timeout)
 			}
 			return nil
 		},
@@ -227,19 +228,19 @@ func runCmd(client clientFn) *cobra.Command {
 
 // printPreflight renders the --dry-run checklist: one row per setup item plus
 // the confinement class the run would actually enforce.
-func printPreflight(ctx context.Context, c *sdk.Client, body sdk.CreateRunRequest, asJSON bool) error {
+func printPreflight(ctx context.Context, w io.Writer, c *sdk.Client, body sdk.CreateRunRequest, asJSON bool) error {
 	pf, err := c.Preflight(ctx, body)
 	if err != nil {
 		return err
 	}
 	if asJSON {
-		return emitJSON(pf)
+		return emitJSON(w, pf)
 	}
-	fmt.Printf("dry run: not launched (enforced confinement %s)\n", pf.EnforcedConfinementClass)
+	fmt.Fprintf(w, "dry run: not launched (enforced confinement %s)\n", pf.EnforcedConfinementClass)
 	for _, warn := range pf.Warnings {
-		fmt.Printf("warning: %s\n", warn)
+		fmt.Fprintf(w, "warning: %s\n", warn)
 	}
-	tw := newTab()
+	tw := newTab(w)
 	fmt.Fprintln(tw, "STATUS\tLABEL\tKIND\tREQUIRED_BY\tDETAIL")
 	for _, it := range pf.SetupItems {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", it.Status, orDash(it.Label), it.Kind, orDash(it.RequiredBy), orDash(it.Detail))
@@ -261,9 +262,9 @@ func runListCmd(client clientFn) *cobra.Command {
 			}
 			warnListTruncated(cmd, truncated, "run", len(runs), listOffset)
 			if listJSON {
-				return emitJSON(runs)
+				return emitJSON(cmd.OutOrStdout(), runs)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tAGENT\tREPO\tCC\tSTATE\tCREATED_BY\tCREATED")
 			for _, r := range runs {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -295,9 +296,9 @@ func runGetCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if getJSON {
-				return emitJSON(run)
+				return emitJSON(cmd.OutOrStdout(), run)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tAGENT\tREPO\tCC\tSTATE\tIMAGE\tCREATED")
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				run.ID, run.Agent, run.Repo, run.ConfinementClass, run.State,
@@ -310,9 +311,9 @@ func runGetCmd(client clientFn) *cobra.Command {
 			// user is never left with a bare "FAILED".
 			if run.State == types.RunFailed {
 				if reason := runFailureReason(cmd.Context(), client(), run.ID); reason != "" {
-					fmt.Printf("\nfailed: %s\n", reason)
+					fmt.Fprintf(cmd.OutOrStdout(), "\nfailed: %s\n", reason)
 				} else {
-					fmt.Printf("\nfailed — full detail: wardyn audit %s --json\n", run.ID)
+					fmt.Fprintf(cmd.OutOrStdout(), "\nfailed — full detail: wardyn audit %s --json\n", run.ID)
 				}
 			}
 			return nil
@@ -335,7 +336,7 @@ func runKillCmd(client clientFn) *cobra.Command {
 			if _, err := client().KillRun(cmd.Context(), id); err != nil {
 				return err
 			}
-			fmt.Printf("kill requested for run %s\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "kill requested for run %s\n", args[0])
 			return nil
 		},
 	}
@@ -357,9 +358,9 @@ func runGrantsCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if grantsJSON {
-				return emitJSON(gs)
+				return emitJSON(cmd.OutOrStdout(), gs)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			// Full grant id, not short(): this is the row's own identity, not a
 			// context column. APPROVAL is the load-bearing column — these are
 			// ELIGIBILITY records, and a requires-approval grant mints nothing
@@ -386,9 +387,9 @@ var waitPollInterval = 2 * time.Second
 // waitForRun polls the run until it is terminal and maps the outcome to the
 // CLI's exit code: COMPLETED→0, FAILED→the agent's real exit code from the
 // run.complete audit event (fallback 1), KILLED/STOPPED/ARCHIVED→2, timeout→124.
-func waitForRun(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout time.Duration) error {
+func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.UUID, timeout time.Duration) error {
 	// Progress goes to stderr so `run --json` keeps stdout to a single object.
-	fmt.Fprintf(os.Stderr, "waiting for run %s (timeout %s)\n", runID, timeout)
+	fmt.Fprintf(errW, "waiting for run %s (timeout %s)\n", runID, timeout)
 	deadline := time.Now().Add(timeout)
 	consecutiveErrs := 0
 	var lastState types.RunState
@@ -412,7 +413,7 @@ func waitForRun(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout tim
 					time.Sleep(waitPollInterval)
 					code = agentExitCode(ctx, c, runID)
 				}
-				fmt.Fprintf(os.Stderr, "run %s finished: state %s, agent exit code %d\n", runID, run.State, code)
+				fmt.Fprintf(errW, "run %s finished: state %s, agent exit code %d\n", runID, run.State, code)
 				switch run.State {
 				case types.RunCompleted:
 					return nil
@@ -424,7 +425,7 @@ func waitForRun(ctx context.Context, c *sdk.Client, runID uuid.UUID, timeout tim
 					// failure has no agent exit and would otherwise read as an
 					// opaque "FAILED (agent exit code 1)".
 					if reason := runFailureReason(ctx, c, runID); reason != "" {
-						fmt.Fprintf(os.Stderr, "  reason: %s\n", reason)
+						fmt.Fprintf(errW, "  reason: %s\n", reason)
 					}
 					return &exitError{code: code, err: fmt.Errorf("run %s FAILED (agent exit code %d)", runID, code)}
 				default: // KILLED / STOPPED / ARCHIVED: lifecycle termination, not an agent result
@@ -582,9 +583,9 @@ func approvalsCmd(client clientFn) *cobra.Command {
 			}
 			warnListTruncated(cmd, truncated, "approvals", len(aps), listOffset)
 			if asJSON {
-				return emitJSON(aps)
+				return emitJSON(cmd.OutOrStdout(), aps)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			// SCOPE and HOLD are appended last, not inserted, so a script scraping
 			// the first N columns by position is unaffected. SCOPE prints "" for a
 			// still-PENDING row or a credential/tool_call approval — neither has a
@@ -650,7 +651,7 @@ func approvalsCmd(client clientFn) *cobra.Command {
 						continue
 					}
 					if getJSON {
-						return emitJSON(a)
+						return emitJSON(cmd.OutOrStdout(), a)
 					}
 					fmt.Fprintf(cmd.OutOrStdout(), "ID:        %s\nRUN:       %s\nKIND:      %s\nSTATE:     %s\nHOST:      %s\nREQUESTED: %s\nSCOPE:     %s\nHOLD:      %s\n",
 						a.ID, a.RunID, a.Kind, a.State, approvalHost(a),
@@ -715,7 +716,7 @@ func approvalDecisionCmd(client clientFn, verb, short string,
 			if err != nil {
 				return err
 			}
-			fmt.Printf("approval %s -> %s\n", ap.ID, ap.State)
+			fmt.Fprintf(cmd.OutOrStdout(), "approval %s -> %s\n", ap.ID, ap.State)
 			return nil
 		},
 	}
@@ -927,15 +928,20 @@ func listPageOptsAt(limit, offset int) []sdk.ListOpts {
 	return []sdk.ListOpts{{Limit: limit, Offset: offset}}
 }
 
-// emitJSON writes v to stdout as indented JSON (the CLI's --json output shape).
-func emitJSON(v any) error {
-	enc := json.NewEncoder(os.Stdout)
+// emitJSON writes v to w as indented JSON (the CLI's --json output shape).
+// Callers pass cmd.OutOrStdout() so output is captured wherever the caller
+// redirected it (cobra's SetOut in tests, a pipe, a file) instead of always
+// landing on the process's own standard output (#200).
+func emitJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
 
-func newTab() *tabwriter.Writer {
-	return tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+// newTab returns a tabwriter over w. Callers pass cmd.OutOrStdout() for the
+// same reason emitJSON does (#200).
+func newTab(w io.Writer) *tabwriter.Writer {
+	return tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 }
 
 // short truncates an id-like string to its first segment for table density.

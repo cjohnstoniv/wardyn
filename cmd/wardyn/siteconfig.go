@@ -91,7 +91,7 @@ func siteConfigGetCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitJSON(cfg)
+			return emitJSON(cmd.OutOrStdout(), cfg)
 		},
 	}
 }
@@ -170,7 +170,7 @@ func siteConfigApplyCmd(client clientFn) *cobra.Command {
 			if onboardingIgnored {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: onboarding_completed_at in this file was not applied — the setup flow owns that mark on this install; the stored one is left as it is\n")
 			}
-			return emitJSON(out)
+			return emitJSON(cmd.OutOrStdout(), out)
 		},
 	}
 }

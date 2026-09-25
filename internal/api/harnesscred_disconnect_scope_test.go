@@ -10,6 +10,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -29,7 +30,7 @@ func perUserDisconnectSrv(t *testing.T, admin, member string) (*Server, *memSecr
 	sec := &memSecrets{m: map[string][]byte{}}
 	for _, owner := range []string{admin, member} {
 		blob := []byte(`{"access_token":"` + owner + `-token","start_url":"` + perUserPortal +
-			`","region":"us-east-1","account_id":"123456789012","role_name":"R","expires_at":"2100-01-01T00:00:00Z"}`)
+			`","region":"us-east-1","account_id":"123456789012","role_name":"R","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`)
 		if err := sec.For(owner).Put(t.Context(), harnessCredSecretName(awsSSOProvider), blob); err != nil {
 			t.Fatalf("seed %s: %v", owner, err)
 		}

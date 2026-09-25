@@ -28,7 +28,7 @@
 # admin/member RBAC + SSO shipped in v0.5 — see docs/OPERATIONS.md §Multi-user
 # and deploy/compose/README.md for the admin's recipe (Dex/OIDC +
 # WARDYN_OIDC_ROLE_MAP). Joining a deployment someone else runs, not setting
-# one up? You don't need this script — see docs/MEMBERS.md.
+# one up? You don't need this script — see docs/USERS.md.
 # WARDYN_SETUP_MODE=team prints that notice and exits.
 #
 # Barriers (Fence/Wall/Vault) that need a package install (gVisor, Kata) require sudo —
@@ -210,7 +210,7 @@ fi
 # ask (Enter = containerized); headless defaults to containerized too. TEAM (a
 # packaged one-command multi-user setup) does not exist, but admin/member RBAC
 # + SSO shipped in v0.5 — see docs/OPERATIONS.md §Multi-user for the recipe,
-# or docs/MEMBERS.md if you're joining a deployment someone else runs.
+# or docs/USERS.md if you're joining a deployment someone else runs.
 if [ -z "${WARDYN_SETUP_MODE:-}" ] && [ -t 0 ]; then
   hd "Where should the control plane run?"
   say "    1) containerized — the compose stack (default, recommended)"
@@ -286,7 +286,7 @@ case "${WARDYN_SETUP_MODE:-container}" in
     warn "There is no team-mode installer here — but admin/member RBAC + SSO (Dex/OIDC,"
     warn "WARDYN_OIDC_ROLE_MAP) shipped in v0.5 on top of the same compose control plane."
     warn "See docs/OPERATIONS.md §Multi-user and deploy/compose/README.md for the admin's recipe."
-    warn "Joining a deployment someone else runs, not setting one up? See docs/MEMBERS.md — you"
+    warn "Joining a deployment someone else runs, not setting one up? See docs/USERS.md — you"
     warn "don't need this script at all."
     warn "What this script sets up today, both single-user: CONTAINERIZED mode ('make setup' /"
     warn "Enter at the prompt — the compose stack, the default) and HOST mode"

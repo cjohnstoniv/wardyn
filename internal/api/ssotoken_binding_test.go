@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -91,7 +92,7 @@ func ssoBlobBody(startURL, region, accessToken string) string {
 		"region": "` + region + `",
 		"account_id": "123456789012",
 		"role_name": "WardynBedrockRole",
-		"expires_at": "2100-01-01T00:00:00Z"
+		"expires_at": "` + testutil.FutureRFC3339(24*30) + `"
 	}`
 }
 
@@ -217,7 +218,7 @@ func ssoBlobFor(accountID, roleName string) string {
 		"region": "` + operatorRegion + `",
 		"account_id": "` + accountID + `",
 		"role_name": "` + roleName + `",
-		"expires_at": "2100-01-01T00:00:00Z"
+		"expires_at": "` + testutil.FutureRFC3339(24*30) + `"
 	}`
 }
 
@@ -366,22 +367,22 @@ func TestUploadSSOToken_EveryRefusalPathIsAudited(t *testing.T) {
 			body: `{"access_token": `, wantStatus: http.StatusBadRequest, wantReason: refuseReasonBlobShape,
 		},
 		"a structurally incomplete blob": {
-			body:       `{"access_token":"tok","region":"` + operatorRegion + `","expires_at":"2100-01-01T00:00:00Z"}`,
+			body:       `{"access_token":"tok","region":"` + operatorRegion + `","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
 			wantStatus: http.StatusBadRequest, wantReason: refuseReasonBlobShape,
 		},
 		"a region that is not the one this run was launched with": {
 			body: `{"access_token":"tok","start_url":"` + operatorStartURL + `","region":"eu-central-1",` +
-				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"2100-01-01T00:00:00Z"}`,
+				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
 			wantStatus: http.StatusBadRequest, wantReason: refuseReasonRegionMismatch,
 		},
 		"a start URL that is not the one this run was launched with": {
 			body: `{"access_token":"tok","start_url":"https://attacker.example.com/start","region":"` + operatorRegion + `",` +
-				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"2100-01-01T00:00:00Z"}`,
+				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
 			wantStatus: http.StatusBadRequest, wantReason: refuseReasonStartURLMismatch,
 		},
 		"a control character in a field baked into ~/.aws/config": {
 			body: `{"access_token":"tok","start_url":"` + operatorStartURL + `","region":"` + operatorRegion + `",` +
-				`"account_id":"111111111111","role_name":"Bedrock\nRunner","expires_at":"2100-01-01T00:00:00Z"}`,
+				`"account_id":"111111111111","role_name":"Bedrock\nRunner","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`,
 			wantStatus: http.StatusBadRequest, wantReason: refuseReasonFieldUnsafe,
 		},
 		"an account the configured model does not live in": {

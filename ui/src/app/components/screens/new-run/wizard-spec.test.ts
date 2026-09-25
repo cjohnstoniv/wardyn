@@ -18,7 +18,7 @@ import {
 } from "./wizard-types";
 import { mergeRunSelections } from "./wizard-spec";
 import type { WizardState } from "./wizard-types";
-import type { Workspace, WorkspaceKind, WorkspaceRequirementsMap } from "../../../lib/types";
+import type { Workspace, WorkspaceRequirementsMap } from "../../../lib/types";
 import { makeWorkspace } from "../../../../test/factories";
 
 function localDirWorkspace(id: string, requirements: WorkspaceRequirementsMap = {}): Workspace {
@@ -428,7 +428,7 @@ describe("buildSpec — multi-source workspaces (PARITY-2)", () => {
     name: "monorepo-plus-scratch",
     // The single-mirror fields a real multi-source record leaves EMPTY —
     // asserting the fix does NOT read these.
-    kind: "" as unknown as WorkspaceKind,
+    kind: "",
     source: "",
     sources: [
       { type: "local_dir", path: "/home/me/api" },

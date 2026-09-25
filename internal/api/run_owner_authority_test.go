@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -207,6 +208,116 @@ func TestRevive_HonoursAvailableTo(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// ownerUserTypes are the user types the #1019 fixtures' GetUserType finds;
+// unreadableUserType is one it cannot read.
+var ownerUserTypes = []string{"contractor", "partner"}
+
+const unreadableUserType = "unreadable"
+
+func getOwnerUserType(id string) (types.UserType, error) {
+	if id == unreadableUserType {
+		return types.UserType{}, errors.New("user types store: connection reset")
+	}
+	if slices.Contains(ownerUserTypes, id) {
+		return types.UserType{ID: id}, nil
+	}
+	return types.UserType{}, store.ErrNotFound
+}
+
+// userTypeReviveStore and userTypeLeaseStore are the revive and end-wait
+// fixtures' stores with ownerUserTypes.
+type userTypeReviveStore struct{ *reviveStore }
+
+func (userTypeReviveStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	return getOwnerUserType(id)
+}
+
+type userTypeLeaseStore struct{ *leaseStore }
+
+func (userTypeLeaseStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	return getOwnerUserType(id)
+}
+
+// TestReviveRestartExtend_AnAdminCountsTheOwnersStampedUserType (#1019): an admin's
+// revive, restart with current limits or extension knows the owner by sub and
+// by the user type stamped on the run, so an allow row for that type lets the
+// owner's restricted value in. Another type, a stamp naming a type deleted
+// since, or no stamp (a pre-0080 run, which is not the built-in type) is
+// refused, and a type store that cannot answer refuses as unanswerable.
+func TestReviveRestartExtend_AnAdminCountsTheOwnersStampedUserType(t *testing.T) {
+	otherAdmin := ssoSession(t, "sub-other-admin", "admin@corp.example", oidc.RoleAdmin)
+	for _, tc := range []struct {
+		name, stamp string
+		want        int // revive and extend; a restart's result is ok only at 200
+	}{
+		{"owner stamped the allowed type", "contractor", http.StatusOK},
+		{"owner stamped another type", "partner", http.StatusForbidden},
+		{"stamped type deleted", "contractor-old", http.StatusForbidden},
+		{"no stamp", "", http.StatusForbidden},
+		{"type store unreadable", unreadableUserType, http.StatusServiceUnavailable},
+	} {
+		want := tc.want
+		// arrange restricts the agent to user type allow rows: the allowed
+		// type's, plus the stamped type's own where only its lookup should
+		// refuse (deleted, unreadable), or the built-in type's for no stamp.
+		arrange := func(st *leaseStore) {
+			st.run.UserType = tc.stamp
+			st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, "contractor", capAgent, "claude-code", types.CapabilityAllow)}
+			extra := tc.stamp
+			if extra == "" {
+				extra = types.UserTypeStandard
+			}
+			if extra != "contractor" && extra != "partner" {
+				st.caps = append(st.caps, grant(types.CapabilitySubjectUserType, extra, capAgent, "claude-code", types.CapabilityAllow))
+			}
+			st.enf = map[string]bool{capAgent: true}
+			st.restricted = map[string]map[string]bool{capAgent: {"claude-code": true}}
+		}
+		t.Run("revive/"+tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			f.srv.cfg.Store = userTypeReviveStore{f.rs}
+			arrange(f.st)
+			code, body := f.reviveAs(t, false)
+			if code != want {
+				t.Fatalf("admin revive = %d %s, want %d", code, body, want)
+			}
+			switch want {
+			case http.StatusForbidden:
+				f.assertReviveRefused(t, "capability_"+capAgent)
+			case http.StatusServiceUnavailable:
+				if !strings.Contains(body, "resolve user type") || len(f.rr.replaced) != 0 {
+					t.Errorf("revive = %s, replaced %d; want the type read named and the proxy kept", body, len(f.rr.replaced))
+				}
+			}
+		})
+		t.Run("restart/"+tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			f.srv.cfg.Store = userTypeReviveStore{f.rs}
+			arrange(f.st)
+			f.st.run.LostAt, f.st.run.LostReason = nil, ""
+			w := doSSO(t, f.srv, http.MethodPost, "/api/v1/admin/runs/restart", otherAdmin, `{"run_ids":["`+f.run.ID.String()+`"]}`)
+			var out struct {
+				Results []adminRestartResult `json:"results"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK || len(out.Results) != 1 {
+				t.Fatalf("restart = %d %s (%v), want 200 with one result", w.Code, w.Body.String(), err)
+			}
+			wantErr := map[int]string{http.StatusForbidden: "the agent capability for claude-code", http.StatusServiceUnavailable: "resolve user type"}[want]
+			if r := out.Results[0]; r.OK != (want == http.StatusOK) || !strings.Contains(r.Error, wantErr) {
+				t.Fatalf("result = %+v; want ok=%v, error naming %q", r, want == http.StatusOK, wantErr)
+			}
+		})
+		t.Run("extend/"+tc.name, func(t *testing.T) {
+			f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+			f.srv.cfg.Store = userTypeLeaseStore{f.st}
+			arrange(f.st)
+			if code, _ := f.patch(t, otherAdmin, endsAtBody(f.now.Add(7*24*time.Hour))); code != want {
+				t.Fatalf("admin extend = %d, want %d", code, want)
+			}
+		})
 	}
 }
 

@@ -169,6 +169,13 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 	return s, nil
 }
 
+// ephemeralKeyRecoverySQL deletes every row sealed under a local key: the way
+// out when the age key they were written under was ephemeral and is gone. Its
+// local/platform: rows under a separate WARDYN_PLATFORM_KEY_FILE key are still
+// recoverable with that file (docs/OPERATIONS.md says how to keep them). The
+// refusal below names it, and docs/OPERATIONS.md carries it verbatim.
+const ephemeralKeyRecoverySQL = "DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'"
+
 // convertSecretStore readies the pg store's rows before anything reads them —
 // before loadOrCreateSecret above all, whose boot keys share the table. It
 // converts every legacy (v0) row to envelope v1, aborting boot on one that will
@@ -178,7 +185,7 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 // service that wraps every write, it refuses an age key no row is sealed
 // under any more (refuseIdleAgeKey). An alternate
 // backend keeps its own format and is left alone. Each converted row was a
-// read of its value, recorded as a secret.read with purpose migrate.
+// read of its value, recorded as a secret.read with purpose boot.
 func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519Identity, ephemeral bool, rec audit.Recorder) error {
 	ps, ok := s.(*secretstorepg.Store)
 	if !ok {
@@ -207,16 +214,16 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 			return fmt.Errorf("refusing to start: WARDYN_AGE_KEY is unset, but %d stored secrets are sealed under an age key — "+
 				"an ephemeral key would make every one unreadable; set WARDYN_AGE_KEY to the key they were written with. "+
 				"If they were written under an earlier ephemeral key, no such key exists and they are unrecoverable: "+
-				"delete them (DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%%' OR kek_id LIKE 'local/%%') and boot with a persistent key from `wardynd -gen-age-key`", n)
+				"delete them (%s) and boot with a persistent key from `wardynd -gen-age-key`", n, ephemeralKeyRecoverySQL)
 		}
 		return nil
 	}
-	converted, err := ps.ConvertV0(secretstore.WithPurpose(ctx, secretstore.PurposeMigrate), id)
+	converted, err := ps.ConvertV0(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), id)
 	if err != nil {
 		return fmt.Errorf("refusing to start: %w", err)
 	}
 	for _, row := range converted {
-		secretstore.RecordRead(ctx, rec, secretstore.PurposeMigrate, row.Owner, row, nil)
+		secretstore.RecordRead(ctx, rec, secretstore.PurposeBoot, row.Owner, row, nil)
 	}
 	if len(converted) > 0 {
 		slog.Info("wardynd: converted stored secrets to envelope v1; an older wardynd can no longer read them", slog.Int("secrets", len(converted)))

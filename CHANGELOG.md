@@ -101,11 +101,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   revive is also refused when the model credential its proxy would inject has been erased or its
   integration disabled, and the revived proxy takes the upstream proxy, trusted CA and model
   gateways from the current configuration rather than its old rendered copy. When anyone but the
-  owner asks, the owner is known by sub alone: any deny row covering the value refuses, and only
-  `all` rows or allow rows for the owner's sub count, not the owner's admin role. So under an
-  enforced kind, an admin-owned run can be revived, restarted or extended only by its owner, or
-  with an allow row for the owner's sub. Each refusal is audited `denied` with the owner as
-  `subject` (#679).
+  owner asks, the owner is known by sub and by the user type stamped on the run: any deny row
+  covering the value refuses, and only `all` rows or allow rows for the owner's sub or stamped type
+  count, not the owner's admin role. A stamp naming a type deleted since refuses; a run with no
+  stamp counts no type rows (#1019). So under an enforced kind, an admin-owned run can be revived,
+  restarted or extended only by its owner, or with an allow row for the owner's sub or type. Each
+  refusal is audited `denied` with the owner as `subject` (#679).
 - **The idle reaper is now hold-aware: it no longer stops a run out from under an open
   push/egress/ADO/credential/tool-call request that is still within its wait.** The idle-stop
   CAS (`UpdateRunStateIfIdle`) now also checks for a PENDING approval whose own
@@ -378,6 +379,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The boot conversion of pre-envelope secrets records `purpose` `boot`, not `migrate` (#717).**
+  Each row the first boot converts to envelope v1 still writes one `secret.read`, naming the row
+  and never its value; its `purpose` is now `boot`, so `migrate` is left to
+  `wardynd -migrate-secrets`, whose rows carry `actor` `wardyn/migrate-secrets`. There is no
+  separate conversion action. A consumer that counted conversion reads under `migrate` should
+  count `purpose=boot` rows with no `ref` instead. OPERATIONS.md's ephemeral-key section now shows
+  the boot refusal a second boot hits today and carries the statement it names for deleting the
+  rows no key can open.
 - **`wardynd -h` reads like a product, and the hybrid-boot org control-plane check now runs before
   migration (#197).** Every flag's usage string was rewritten to say what it does, its default and
   its unit, with internal ids and version history dropped; no flag was added, removed or renamed.
@@ -589,6 +598,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   literal date.
 
 ### Added
+
+- **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
+  remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
+  `secret delete`'s pattern.
 
 - **Settings → Model providers lists the org's model providers (#536).** In the Admin view,
   `/admin/settings` shows one row per provider: its name, its kind, what each person provides,
@@ -816,6 +829,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shows verbatim under "This provider can't be saved as written". Settings → Model providers
   (#536) opens it from "Add model provider" or a provider's row, replacing that list's stub page
   (`settings/model-provider-editor.tsx`).
+
+- **The model-provider editor gains the Bedrock and Claude subscription kinds (#538).** Amazon
+  Bedrock adds a "How people sign in" choice (SSO sign-in or Bearer key) and, for SSO, an AWS IAM
+  Identity Center block (region, access portal start URL, and an optional account/role pin) —
+  Model is required per agent, an inference profile id, and Region and the access portal start URL
+  are required the same way, so Save is withheld until each is filled. Claude subscription is
+  configuration-only (each person signs in with their own subscription) and is disabled on the kind
+  step with its own reason — "Claude subscriptions need the Claude Code sign-in image, which this
+  install hasn't built yet" — until `/setup/status`'s `claude_signin_image` check resolves (#524). A
+  change to Bedrock's region or endpoint, or switching How people sign in between SSO and Bearer on
+  a stored provider, now also asks before deleting everyone's credential — a kind switch mints a
+  fresh id for the same reason a changed address does, and drops the SSO-only fields (the access
+  portal, and the account/role pin) once confirmed. Every row in Settings → Model providers now
+  opens the editor; #537 had left Bedrock and Claude subscription rows inert.
 
 - **A regression fixture pins `scripts/nightly-migration-merge-check.sh` (#864).**
   `make test-scripts` now runs `scripts/test-nightly-migration-merge-check.sh`,
@@ -1127,6 +1154,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **`env_secret` and `llm_inspection` can no longer read a model-provider credential (#1035).**
+  Both resolve an authored secret name through the run owner's namespace, falling back to the
+  operator's, and only the `-oauth` and `-sso` provider names were reserved, so an `env_secret`
+  grant naming `wardyn-provider-<uid>-key` put a model key, the operator's included, into the
+  sandbox env. Every `wardyn-provider-*` name, whatever its suffix, is now refused by the policy
+  validators (stored policies, and inline policy at launch and in Review) and skipped, with an
+  audit event, at dispatch.
 - **"Available to" now also hides the resource from people it leaves out, and blocks storing a key for it (#612, #923).**
   `GET /policies` leaves out a stored policy the caller isn't listed for. It filters before the
   page window, so neither the page nor `X-Wardyn-Truncated` counts a hidden policy, and a
@@ -2121,6 +2155,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   required-check failure, and the re-point-at-rebase step for those two documents is retired. The
   tree-wide ban on `file.go:NNN` (`TestCommentsCiteSymbolsNotLineNumbers`) now covers both documents
   too.
+- **Two clean breaks, no alias window (owner ruling 2026-09-22): `workspace get --json` now
+  defaults to `false`, and `support-bundle`'s output flag is spelled `--output`/`-o` (#200).**
+  `workspace get` was the CLI's only command defaulting `--json` to `true` — every other command
+  defaults it `false`. `support-bundle --out` was the CLI's only flag spelled `--out` instead of
+  `--output`/`-o` (`run recording`'s download flag already used that spelling). Both now match the
+  rest of the CLI. Neither old spelling is accepted.
 
 ### Security
 
@@ -2194,6 +2234,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Upgrading
 
+- **`wardyn workspace get` now prints the one-line table by default (#200).** A script that parsed
+  its default JSON must pass `--json`.
+- **`wardyn support-bundle --out` is gone; use `--output` or `-o` (#200).** There is no alias — a
+  script or cron job passing `--out` now fails at the flag parser instead of silently continuing.
 - **61 audit action names changed (#205), clean break, no alias period.** Wardyn has no users yet
   (owner ruling, #205/#203/#206), so a consumer keyed on an old name — a SIEM rule, a saved filter,
   a dashboard query — starts missing rows the moment this ships; there is no dual-emission window to
@@ -2208,6 +2252,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   snake_case (`host-not-organisation` → `host_not_organisation`, `sso-host-not-portal` →
   `sso_host_not_portal`, and six more the appendix lists); a consumer matching an old spelling needs
   the same update.
+- **`docs/MEMBERS.md` is renamed `docs/USERS.md` (#620).** `member` is the built-in `standard`
+  user type — see #608's entry above — and every doc citation is re-pointed to the new path. The
+  chart alias (`WARDYN_OIDC_ROLE_MAP`/`WARDYN_OIDC_DEFAULT_ROLE` still accepting `member`,
+  `WARDYN_MEMBER_MODE` and its sibling `WARDYN_MEMBER_*` variables) keeps working and warns at
+  boot through 0.8.x; it is removed in 0.9.
 
 ## [0.7.12] — 2026-09-23
 
