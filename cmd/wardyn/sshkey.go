@@ -34,7 +34,7 @@ func sshKeyCmd(client clientFn) *cobra.Command {
 		Use:   "ssh-key",
 		Short: "Manage the SSH keys the gateway trusts for your account",
 	}
-	cmd.AddCommand(sshKeyEnsureCmd(client), sshKeyListCmd(client))
+	cmd.AddCommand(sshKeyEnsureCmd(client), sshKeyListCmd(client), sshKeyDeleteCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -162,6 +162,26 @@ func sshKeyListCmd(client clientFn) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
+	return cmd
+}
+
+// sshKeyDeleteCmd returns `ssh-key delete <fingerprint>`: remove one of the
+// caller's own registered keys, following secret.go's delete pattern
+// (an --rm alias, a plain confirmation line on success).
+func sshKeyDeleteCmd(client clientFn) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "delete <fingerprint>",
+		Aliases: []string{"rm"},
+		Short:   "Delete one of your registered SSH gateway keys",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := client().DeleteSSHKey(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "ssh key %q deleted\n", args[0])
+			return nil
+		},
+	}
 	return cmd
 }
 
