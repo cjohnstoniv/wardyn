@@ -486,14 +486,16 @@ func (s PG) ListAPITokensByPrincipalPage(ctx context.Context, principal string, 
 // list route answers ?limit=&offset= and X-Wardyn-Truncated) rather than
 // because production grant lists are expected to routinely truncate.
 type CapabilityGrantsForPager interface {
-	ListCapabilityGrantsForPage(ctx context.Context, users, groups []string, p Page) ([]types.CapabilityGrant, error)
+	ListCapabilityGrantsForPage(ctx context.Context, users, groups []string, userType string, p Page) ([]types.CapabilityGrant, error)
 }
 
 // Compile-time assertion: PG satisfies CapabilityGrantsForPager.
 var _ CapabilityGrantsForPager = PG{}
 
-// ListCapabilityGrantsForPage is ListCapabilityGrantsFor bounded by p.
-func (s PG) ListCapabilityGrantsForPage(ctx context.Context, users, groups []string, p Page) ([]types.CapabilityGrant, error) {
+// ListCapabilityGrantsForPage is ListCapabilityGrantsFor bounded by p: the
+// same four subject arms, so a page never drops a `user_type` grant the
+// unpaged read returns (TestPG_ListCapabilityGrantsForPage_MatchesUnpaged).
+func (s PG) ListCapabilityGrantsForPage(ctx context.Context, users, groups []string, userType string, p Page) ([]types.CapabilityGrant, error) {
 	if users == nil {
 		users = []string{}
 	}
@@ -504,7 +506,8 @@ func (s PG) ListCapabilityGrantsForPage(ctx context.Context, users, groups []str
 		WHERE subject_type = 'all'
 		   OR (subject_type = 'user'  AND subject = ANY($1::text[]))
 		   OR (subject_type = 'group' AND subject = ANY($2::text[]))
-		ORDER BY capability, subject_type, subject, value`, []any{users, groups})
+		   OR (subject_type = 'user_type' AND subject = $3)
+		ORDER BY capability, subject_type, subject, value`, []any{users, groups, userType})
 	return collect(ctx, s.Pool, "list", "capability grants for subject", q, args, scanCapabilityGrant)
 }
 

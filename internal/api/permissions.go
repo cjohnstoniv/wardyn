@@ -492,7 +492,7 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 	var pageFn func(store.Page) ([]types.CapabilityGrant, error)
 	if pg, capable := s.cfg.Store.(store.CapabilityGrantsForPager); capable {
 		pageFn = func(p store.Page) ([]types.CapabilityGrant, error) {
-			return pg.ListCapabilityGrantsForPage(ctx, subj.users, subj.groups, p)
+			return pg.ListCapabilityGrantsForPage(ctx, subj.users, subj.groups, subj.userType, p)
 		}
 	}
 	grants, truncated, err := pagedItems(page, pageFn, func() ([]types.CapabilityGrant, error) {
