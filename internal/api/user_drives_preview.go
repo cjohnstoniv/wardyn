@@ -210,7 +210,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	// display endpoint would be the alternative, and this is the cheaper one.
 	ceiling, err := s.driveSizeCeilingFor(r.Context(), 0)
 	if err != nil {
-		writeDriveError(w, err)
+		writeDriveError(w, r, err)
 		return
 	}
 	// (1) The door, for the claims that were TYPED — the launch path's second
@@ -226,7 +226,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	// answer the group tier at all.
 	resolved, err := s.previewResolveUserDrive(r.Context(), users, groups, ceiling)
 	if err != nil {
-		writeDriveError(w, err)
+		writeDriveError(w, r, err)
 		return
 	}
 	if resolved == nil {
@@ -329,7 +329,7 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 		ceiling, err = s.ceilingFromProfile(p, rerr, deployment)
 	}
 	if err != nil {
-		writeCeilingError(w, err)
+		writeCeilingError(w, r, err)
 		return governanceCeiling{}, false
 	}
 	if name, shut := driveDoorShut(ceiling); shut {

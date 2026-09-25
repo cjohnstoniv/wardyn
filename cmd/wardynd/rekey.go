@@ -73,6 +73,12 @@ func rotateAgeKeyMode(f *bootFlags, keyPath string) error {
 	if err != nil {
 		return fmt.Errorf("parse the current age identity (WARDYN_AGE_KEY): %w", err)
 	}
+	// The boot keys under a separate platform key are not under this age key,
+	// and stay where they are.
+	platform, err := readPlatformKey(*f.platformKeyFile, oldKey)
+	if err != nil {
+		return err
+	}
 
 	prev, err := readAgeKeyFile(keyPath)
 	if err != nil {
@@ -125,7 +131,7 @@ func rotateAgeKeyMode(f *bootFlags, keyPath string) error {
 		return fmt.Errorf("stage the new key file: %w", err)
 	}
 
-	n, err := secretstorepg.Rekey(ctx, pool, oldID, newID)
+	n, err := secretstorepg.Rekey(ctx, pool, oldID, newID, optionalIdentity(platform))
 	if err != nil {
 		_ = os.Remove(staged) // nothing was committed; the staged key is dead
 		return err

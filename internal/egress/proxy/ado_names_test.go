@@ -27,7 +27,7 @@ var adoNamePairs = []struct{ project, repo, path string }{
 	{"100% Done", "Half 50%", "100%25%20Done/_git/Half%2050%25"},
 }
 
-// A SPACED REPOSITORY CLONES, FETCHES AND PUSHES THROUGH THE BROKER: the real
+// A spaced repository clones, fetches and pushes through the broker: the real
 // agent-run rewrite, the real proxy, and a real git http-backend behind a fake
 // that looks the repository up by its literal names, as Azure DevOps does.
 func TestADONames_GitBrokerCloneFetchPush(t *testing.T) {
@@ -57,7 +57,7 @@ func TestADONames_GitBrokerCloneFetchPush(t *testing.T) {
 	h.finish(t)
 }
 
-// ONE REPOSITORY IS ONE APPROVAL KEY, whichever door asks and however the
+// One repository is one approval key, whichever door asks and however the
 // client spelled it: the git broker's held push and the REST gate's
 // repositories route name the same repository the same way, so a sticky deny
 // on one spelling is not reopened by another.
@@ -84,9 +84,20 @@ func TestADONames_ApprovalRepoKeyIsOneSpelling(t *testing.T) {
 	if got := adoRepoOf("/acme/_apis/git/repositories/a%252Fb/pushes"); got != "" {
 		t.Errorf("adoRepoOf of a doubly-encoded separator = %q, want none", got)
 	}
+
+	// A repository name holding a literal "%" (spelled %25 on the wire) is one
+	// key at both doors, decoded exactly once — not the doubly-decoded
+	// spelling a %2550 would read as if a door decoded twice.
+	const pct = "growth%50"
+	if got := adoRepoOf("/acme/Payments%20Platform/_apis/git/repositories/Growth%2550/pushes"); got != pct || got == "growthp" {
+		t.Errorf("REST door: adoRepoOf(%%-bearing name) = %q, want %q", got, pct)
+	}
+	if got := adoGitAsk(mustLocalReq(t, http.MethodPost, "/wardyn/git/dev.azure.com/acme/Payments%20Platform/_git/Growth%2550/git-receive-pack", nil)).repo; got != pct || got == "growthp" {
+		t.Errorf("git door: adoGitAsk(%%-bearing name).repo = %q, want %q", got, pct)
+	}
 }
 
-// A HELD PUSH on a spaced repository asks the control plane about the
+// A held push on a spaced repository asks the control plane about the
 // repository by its name, and the query carries the space intact.
 func TestADONames_HeldPushAsksByName(t *testing.T) {
 	h := newADOGitHarness(t, adoscope.CapRead)
@@ -105,7 +116,7 @@ func TestADONames_HeldPushAsksByName(t *testing.T) {
 	h.finish(t)
 }
 
-// A SPELLING THE REST GATE REFUSES IS REFUSED AT THE GIT DOOR TOO — a trailing
+// A spelling the REST gate refuses is refused at the git door too — a trailing
 // dot or an edge space the service trims away, an escaped separator, a double
 // encoding — rather than keyed there as a second repository whose sticky deny
 // the real one would not inherit.

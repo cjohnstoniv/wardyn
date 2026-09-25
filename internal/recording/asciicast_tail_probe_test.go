@@ -59,7 +59,8 @@ func castLines(t *testing.T, cast string) []string {
 	return out
 }
 
-func TestProbeF4_CastWriter_MidEscapeSequenceTailIsFlushed(t *testing.T) {
+func TestCastWriter_MidEscapeSequenceTailIsFlushed(t *testing.T) {
+	// ticket: F4
 	for _, tc := range []struct {
 		name string
 		last string // the final write, ending mid-escape-sequence
@@ -108,14 +109,15 @@ func TestProbeF4_CastWriter_MidEscapeSequenceTailIsFlushed(t *testing.T) {
 	}
 }
 
-// TestProbeF4_CastWriter_MidRuneTailDoesNotCorruptPrecedingEvents pins the
+// TestCastWriter_MidRuneTailDoesNotCorruptPrecedingEvents pins the
 // DOCUMENTED residual (CastWriter's doc comment in asciicast.go): a final
 // write ending in a lone UTF-8 lead byte drops THAT byte (there is no Flush),
 // but everything before it must still be a complete, valid event and the cast
 // must still end on a line boundary. If a Flush is ever added this test still
 // passes (it asserts the prefix, not the drop); if the pending logic ever starts
 // corrupting the line BEFORE the lead byte, it fails.
-func TestProbeF4_CastWriter_MidRuneTailDoesNotCorruptPrecedingEvents(t *testing.T) {
+func TestCastWriter_MidRuneTailDoesNotCorruptPrecedingEvents(t *testing.T) {
+	// ticket: F4
 	var buf bytes.Buffer
 	cw := NewCastWriter(&buf, 80, 24, time.Now())
 	rune3 := []byte("世") // 3 bytes

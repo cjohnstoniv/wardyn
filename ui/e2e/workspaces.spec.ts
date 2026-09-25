@@ -141,9 +141,10 @@ test.describe("Add workspace dialog", () => {
   // content) — it only reproduces once Advanced is expanded (~910px), which
   // this test does. ui/dialog.tsx's primitive-level max-h-[calc(100dvh-2rem)]
   // + overflow-y-auto (this lane) is what keeps Add workspace reachable here.
-  test("F3-F8: 400x640, Advanced expanded — Add workspace stays reachable, not clipped off-screen", async ({
+  test("400x640, Advanced expanded — Add workspace stays reachable, not clipped off-screen", async ({
     page,
   }) => {
+    // ticket: F3-F8
     // gotoConsole waits on the DESKTOP sidebar link — below md that aside is
     // hidden entirely (md:flex), so the viewport switch has to come AFTER
     // landing, not before.

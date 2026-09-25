@@ -220,4 +220,11 @@ type AgentProvider struct {
 	// the start URL is: the sign-in proposes, the roster disposes.
 	SSOAccountID string `json:"sso_account_id,omitempty"`
 	SSORoleName  string `json:"sso_role_name,omitempty"`
+	// DefaultProvider names the model provider (SiteConfig.ModelProviders) a
+	// new run of this agent uses unless the person chooses another. It must
+	// name a provider enabled for this agent. That provider may be turned off:
+	// the default is then a sentinel whose runs are refused, never moved to
+	// another provider. Empty is today; nothing at run create or dispatch reads
+	// it yet.
+	DefaultProvider string `json:"default_provider,omitempty"`
 }

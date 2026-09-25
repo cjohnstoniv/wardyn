@@ -3,12 +3,13 @@
 
 package db
 
-// SQL-level migration regression tests. These are PURE unit tests: they parse
+// SQL-level migration tests. These are pure unit tests: they parse
 // the embedded migration .sql via the same migrationFS the production Migrate()
 // uses -- no Postgres, no network. They complement migrations_check_test.go
 // (which cross-checks the effective agent_runs.state CHECK against
 // types.RunState); here we assert structural invariants of the migration set
-// and pin the specific 0003 (COMPLETED) and 0004 (BEFORE TRUNCATE) fixes.
+// and pin the specific 0003 (COMPLETED) and 0004 (BEFORE TRUNCATE)
+// migrations.
 
 import (
 	"regexp"
@@ -149,12 +150,12 @@ func TestEveryMigrationIsWellFormedDDL(t *testing.T) {
 	}
 }
 
-// TestMigration0003AddsCompletedState is the SQL-level regression for the
-// COMPLETED critical. migrations_check_test.go proves the *effective* CHECK
-// covers all RunStates; here we pin the fix to its OWNING migration: 0003 must
-// drop the old constraint and re-add one that explicitly lists COMPLETED. If a
-// future edit removes COMPLETED from 0003 (or moves the fix out of 0003 without
-// keeping it), this fails even if some other migration happens to compensate.
+// TestMigration0003AddsCompletedState pins COMPLETED to its owning migration.
+// migrations_check_test.go proves the *effective* CHECK covers all RunStates;
+// here 0003 must drop the old constraint and re-add one that explicitly lists
+// COMPLETED. If a future edit removes COMPLETED from 0003 (or moves it out of
+// 0003 without keeping it), this fails even if some other migration happens to
+// compensate.
 func TestMigration0003AddsCompletedState(t *testing.T) {
 	const fname = "0003_run_state_completed.sql"
 	names := readMigrationNames(t)
@@ -190,9 +191,9 @@ func TestMigration0003AddsCompletedState(t *testing.T) {
 	}
 }
 
-// TestMigration0004AddsBeforeTruncateTrigger is the regression for the
+// TestMigration0004AddsBeforeTruncateTrigger closes the
 // append-only TRUNCATE gap. The 0001 trigger fires BEFORE UPDATE OR DELETE
-// FOR EACH ROW, which does NOT block `TRUNCATE audit_events` (a statement-level
+// For each row, which does not block `TRUNCATE audit_events` (a statement-level
 // DDL that bypasses row triggers). 0004 must add a statement-level
 // BEFORE TRUNCATE trigger on audit_events.
 func TestMigration0004AddsBeforeTruncateTrigger(t *testing.T) {
@@ -246,12 +247,11 @@ func TestNoOtherMigrationGuardsTruncate(t *testing.T) {
 	}
 }
 
-// TestMigration0007RevokesAuditDDLPrivileges is the SQL-level regression for N4:
-// migration 0007 must establish the least-privilege posture by REVOKEing the
-// mutation/DDL privileges on audit_events from PUBLIC. This is defense-in-depth
-// (the guard only bites when wardynd connects as a NON-owner role — the honest
-// residual documented in the migration and in cmd/wardynd/main.go). Red-first:
-// before 0007 exists this test fails (file missing).
+// TestMigration0007RevokesAuditDDLPrivileges: migration 0007 must establish the
+// least-privilege posture by REVOKEing the mutation/DDL privileges on
+// audit_events from PUBLIC. This is defense-in-depth (the guard only bites when
+// wardynd connects as a non-owner role — the honest residual documented in the
+// migration and in cmd/wardynd/main.go).
 func TestMigration0007RevokesAuditDDLPrivileges(t *testing.T) {
 	const fname = "0007_audit_least_privilege.sql"
 	names := readMigrationNames(t)
