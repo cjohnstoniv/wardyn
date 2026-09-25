@@ -148,11 +148,14 @@ describe("PhaseRail", () => {
   });
 
   // F3-F3: the rail is the SAME crossing predicate the footer's Next button
-  // already renders disabled+titled — without this, a rail click past an
-  // ungated corp_network read as a live, clickable step whose onSelect just
-  // silently no-oped (a dead click, not a disabled one). Wired identically on
-  // both rails (compact + full); this exercises the full one.
-  it("a step refused by refuseNext renders disabled with the refusal as its title, on both rails", () => {
+  // already renders disabled — without this, a rail click past an ungated
+  // corp_network read as a live, clickable step whose onSelect just silently
+  // no-oped (a dead click, not a disabled one). Wired identically on both
+  // rails (compact + full). #497: the reason is never title-only — the full
+  // rail shows it as visible text, the icon-only compact rail (no room for a
+  // caption) folds it into the button's accessible name and keeps the title
+  // for a sighted mouse user (in the lg band it is the only rail rendered).
+  it("a step refused by refuseNext renders disabled, its reason visible/accessible — never title-only, on both rails", () => {
     // ticket: F3-F3
     cleanup();
     const refuseNext = (next: SetupStepId) =>
@@ -170,10 +173,20 @@ describe("PhaseRail", () => {
     const fullRail = within(navs[navs.length - 1]);
     const compactRail = within(navs[0]);
     for (const rail of [fullRail, compactRail]) {
-      const workspaces = rail.getByRole("button", { name: /workspaces/i });
-      expect(workspaces).toBeDisabled();
-      expect(workspaces).toHaveAttribute("title", "Prove network access first.");
+      expect(rail.getByRole("button", { name: /workspaces/i })).toBeDisabled();
     }
+    expect(fullRail.getByRole("button", { name: /workspaces/i })).not.toHaveAttribute("title");
+    expect(compactRail.getByRole("button", { name: /workspaces/i })).toHaveAttribute(
+      "title",
+      "Prove network access first.",
+    );
+    // Full rail: the reason is its own visible line under the badge (both
+    // refused steps render one — hence getAllByText, not getByText).
+    expect(fullRail.getAllByText("Prove network access first.").length).toBeGreaterThan(0);
+    // Compact rail: no caption room — the reason is in the accessible name.
+    expect(
+      compactRail.getByRole("button", { name: /workspaces.*prove network access first\./i }),
+    ).toBeInTheDocument();
     // Negative control: an earlier step (environment, at-or-before current)
     // and a demo step (never gated by the crossing predicate) both stay live.
     for (const rail of [fullRail, compactRail]) {

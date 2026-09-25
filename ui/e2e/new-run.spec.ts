@@ -21,7 +21,7 @@
 // are configured for the roster-pin e2e), so the model-provider warning
 // below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
+import { RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
@@ -697,7 +697,7 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await expect(page.getByText(refusal)).toBeVisible();
     // #459: the refusal is an announced alert region, sr-only prefix + the
     // server's own sentence, unchanged. No dialog opens here to aria-hide it.
-    await expect(page.getByRole("alert")).toContainText("Launch failed");
+    await expect(page.getByRole("alert")).toContainText(RAIL.LAUNCH_ERROR_LABEL);
     await expect(page.getByRole("alert")).toContainText(refusal);
     await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);

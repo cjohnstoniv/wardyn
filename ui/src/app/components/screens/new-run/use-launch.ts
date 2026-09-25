@@ -182,7 +182,9 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     try {
       setPreflightResult(await runsApi.preflightRun(body));
     } catch (e) {
-      setPreflightError(getErrorMessage(e) || "Preflight failed.");
+      // The alert already speaks RAIL.PREFLIGHT_ERROR_LABEL first; a fallback
+      // that repeats it read "Preflight failed Preflight failed." (#497).
+      setPreflightError(getErrorMessage(e) || "No reason was given.");
       setPreflightErrorSeq((n) => n + 1);
     } finally {
       setPreflightedBody(key);
