@@ -71,6 +71,11 @@
   },
   {
     "reason": "capKinds[capModelProvider].reason",
+    "target": "\"model_provider.credential\"",
+    "sentence": "fmt.Sprintf(mpcNotGranted, p.ID)"
+  },
+  {
+    "reason": "capKinds[capModelProvider].reason",
     "target": "\"model_provider.sign_in\"",
     "sentence": "fmt.Sprintf(mpsNotGranted, p.ID)"
   },
