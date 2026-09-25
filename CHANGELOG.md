@@ -8,6 +8,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Security
+
+- wardynd refuses to start on a database a newer wardynd migrated; `--allow-unknown-migrations` /
+  `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` is the break-glass (#1002).
+
 ## [0.7.12] — 2026-09-23
 
 ### Security
