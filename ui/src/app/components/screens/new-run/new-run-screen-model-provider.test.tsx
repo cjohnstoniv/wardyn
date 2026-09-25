@@ -210,6 +210,64 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].model_provider).toBe(claude.id);
   });
+
+  // Conductor follow-up (train 21 gap) — `explicitPick.current = true` in
+  // onModelProviderChange has no screen-level coverage; only the pure lane
+  // unit test exercises the rule. This proves it end to end: the automatic
+  // default lands, the PERSON overrides it, and a THIRD candidate's pin
+  // arriving afterward must not un-pick the person's own choice — pin beats
+  // an AUTOMATIC previousId (the earlier test above), but an EXPLICIT one
+  // always outranks the pin (model-provider-lane.ts's doc comment).
+  it("an explicit pick survives a workspace pin that arrives ~800ms later", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      providerStatus([
+        { provider: gateway, defaultFor: ["claude-code"], state: "live" },
+        { provider: claude, state: "live" },
+        { provider: anthropicKey, state: "live" },
+      ]),
+    );
+    listWorkspacesMock.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve([
+                {
+                  id: "ws1",
+                  name: "repo-a",
+                  kind: "local_dir",
+                  source: "/home/agent/repo-a",
+                  status: "scanned",
+                  llm_cred: { provider_ref: anthropicKey.id }, // a THIRD candidate, never picked by the person
+                },
+              ]),
+            800,
+          ),
+        ),
+    );
+    renderScreenWithWorkspace("ws1");
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    // 1. The roster default is auto-selected first.
+    await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(gateway.id));
+
+    // 2. The person explicitly picks a DIFFERENT candidate.
+    await user.click(screen.getByRole("combobox", { name: RAIL_PROVIDER.LABEL }));
+    await user.click(await screen.findByRole("option", { name: RAIL_PROVIDER.OPTION("Claude subscription", "sign-in", "signed in") }));
+    await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(claude.id));
+
+    // 3. ~800ms later the workspace resolves, pinning a THIRD candidate the
+    // person never touched. Waiting past that instant (a real timer, not a
+    // fake one — the mock's own setTimeout(800) above) is the only way to
+    // prove the pin actually arrived and was still overridden, not merely
+    // that it never got a chance to run.
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    // 4. The explicit pick stands — never displaced by the late pin.
+    expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(claude.id);
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    expect(createRunMock.mock.calls[0][0].model_provider).toBe(claude.id);
+  });
 });
 
 describe("NewRunScreen — R6 (QC-4): no default among several candidates — Launch waits for a choice", () => {
