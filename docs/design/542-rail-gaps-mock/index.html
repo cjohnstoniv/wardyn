@@ -1,0 +1,62 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rail gaps — the problem and decisions</title>
+<!--
+  #542 gap-mock: PR #1036 built the New Run rail's provider picker (states
+  R1-R4, R6-R9) from the approved packet C
+  (~/wardyn-archive/mock-08/mp-packet-C.html §5.6) and flagged two shapes
+  with no canon sentence of their own. This is a SMALL follow-up mock for
+  those two gaps only — not a new feature, not a re-litigation of packet C's
+  five questions. Owner approves this packet before ui/src changes.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>New Run rail — the #542 gaps</h1>
+    <div class="sub">Two shapes PR #1036 built with no line of their own. One small approval: say "approve packet 542-gaps", or name the strings you'd change.</div>
+  </div>
+  <nav><a class="cur" href="index.html">Problem + decisions</a><a href="rail.html">The states</a><a href="canon.md">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<section class="state" style="margin-top:20px">
+<div class="tag"><span>The gap</span><b>What ships silent today</b></div>
+<p class="lead">PR #1036 drew R1&ndash;R4 and R6&ndash;R9 of the rail's provider picker, but two shapes reach the person with no sentence explaining themselves. First: when the admin's default provider is disabled, or this person has been granted none of the harness's providers at all, the picker falls through to R6's shape &mdash; no preselection, Launch just sits disabled &mdash; with nothing on screen saying <em>why</em> nothing was chosen for them. Second: R3's "you picked this, but it isn't connected yet" warning was drawn for exactly two provider kinds (bedrock_sso, custom_endpoint); the other three kinds a person can pick &mdash; an Anthropic API key, an OpenAI API key, or a Claude subscription &mdash; reach Launch with no warning line and no connect button at all.</p>
+<p class="lead" style="margin-top:10px">Packet C already drafted R5b/R5c's sentences when it defined R1&ndash;R9 (frozen-strings table, &sect;5.6) &mdash; the owner ruled R5 out of THAT build, not out of canon. This packet re-proposes those sentences unchanged, plus two new ones for R3's missing kinds, drawn from the same wire vocabulary the server's own model-provider refusal already uses (<code class="mono">docs/design/model-providers-mock/canon.html</code>'s <code class="mono">LLM_PROVIDER_REFUSAL</code> states: "you are not signed in to Claude for it", "you have not added your key for it").</p>
+</section>
+
+<section class="state">
+<div class="tag"><span>Decisions</span><b>At most 3, each with a recommendation</b></div>
+<ol class="decisions">
+<li><b>D1 &middot; Does R5c name the admin who turned the default off, or just "your admin"?</b>
+<p><b>Recommended: just "your admin."</b> <code class="mono">SetupModelProvider</code> carries no admin-identity field to name one, <code class="mono">RAIL_PROVIDER.NOT_GRANTED</code> and <code class="mono">AGENTS.NO_PROVIDER</code> already say "ask your admin" with no name, and an org with several admins has no single right name to print.</p></li>
+<li><b>D2 &middot; One shared sentence for both API-key kinds (anthropic_api_key, openai_api_key), or one per kind?</b>
+<p><b>Recommended: one shared <code class="mono">RAIL_PROVIDER.NO_KEY(name)</code>.</b> <code class="mono">model-provider-lane.ts</code>'s <code class="mono">providerWhatWord</code>/<code class="mono">providerStateWord</code> already treat every non-sign-in, non-token kind as plain "key" with no branch between the two &mdash; a second near-identical sentence would be the second answer to a question <code class="mono">RAIL_PROVIDER.OPTION</code> already answered once.</p></li>
+<li><b>D3 &middot; Does the new anthropic_subscription line name the provider ("for {name}"), or drop the name the way the shell banner (<code class="mono">BANNER.B5</code>: "you're not signed in to Claude") does?</b>
+<p><b>Recommended: keep "for {name}."</b> This sentence sits in <code class="mono">RAIL_PROVIDER</code> beside <code class="mono">NOT_SIGNED_IN</code> and <code class="mono">NO_TOKEN</code>, which both name the provider because a person can be offered more than one candidate of the same kind (two Claude subscriptions an admin set up differently, for instance). <code class="mono">BANNER.B5</code> is one shell-wide banner with no list to disambiguate &mdash; a different surface, not a precedent to match.</p></li>
+</ol>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>
