@@ -197,7 +197,7 @@ func isWSLProcVersion(procVersion string) bool {
 }
 
 // SCMPosture is a presence-only snapshot of the host's existing git-credential
-// habits, used to recommend a safer rung of the credential ladder — never to
+// habits, read to recommend a safer rung of the credential ladder — never to
 // import anything. No file under $HOME is ever read for values; the
 // credential.helper NAME comes from `git config`, never the credentials it
 // manages. Best-effort like the CLI probe: a CONTAINERIZED wardynd cannot see

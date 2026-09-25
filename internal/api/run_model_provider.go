@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -179,7 +180,7 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		writeServerError(w, r, "resolve capability", err)
 		return false
 	case choice.notGranted:
-		s.denyMemberField(w, r, "runs.model_provider", "capability_model_provider", choice.refusal)
+		s.refuse(w, r, authz.Deny(authz.ReasonCapabilityModelProvider, "runs.model_provider", choice.refusal))
 		return false
 	case choice.refusal != "":
 		writeError(w, http.StatusUnprocessableEntity, choice.refusal)

@@ -85,8 +85,8 @@ func createdSandbox(t *testing.T, d *Driver, cs *fake.Clientset) runner.SandboxS
 
 func alwaysOrphan(uuid.UUID) bool { return true }
 
-// TestSweepOrphanedSandboxes_ReclaimsAnEvictedRunsProxyAndSecret is the 0.7.2
-// regression: disk_mib is now the agent container's ephemeral-storage limit, so
+// TestSweepOrphanedSandboxes_ReclaimsAnEvictedRunsProxyAndSecret: disk_mib is the
+// agent container's ephemeral-storage limit, so
 // the kubelet evicts the agent pod on a path no Wardyn code is on. Both shapes
 // of the aftermath must be reclaimed — the evicted pod still sitting there
 // Failed, and the pod already reaped by the kubelet's terminated-pod GC with
@@ -365,7 +365,7 @@ func TestSweepOrphanedSandboxes_NeverTouchesACanarysNetPol(t *testing.T) {
 // upgrade day. Returns a function that lifts it, so the test's own assertions
 // can read the policies back afterwards.
 //
-// NetworkPolicies, not Secrets: the sweep never lists a Secret (W6-S4 — `list`
+// NetworkPolicies, not Secrets: the sweep never lists a Secret (`list`
 // returns its body, so no configuration of the chart grants it).
 func forbidNetPolList(cs *fake.Clientset) (lift func()) {
 	forbidden := true
@@ -384,7 +384,7 @@ func forbidNetPolList(cs *fake.Clientset) (lift func()) {
 // half of the widened sweep that has to survive contact with a real cluster.
 //
 // Listing NetworkPolicies is the ONE new privilege this release asks for
-// (W6-S4: `list` on secrets is not granted in any configuration — it returns
+// (`list` on secrets is not granted in any configuration — it returns
 // the body). An operator who writes their own Role (k8s.rbac.create=false) has
 // a pre-0.7.4 one, and the chart cannot upgrade it for them, so on upgrade day
 // that list 403s. If a 403 aborts sweepCandidates, the whole sweep dies with
@@ -417,7 +417,7 @@ func TestSweepOrphanedSandboxes_StillReclaimsWhenNetPolListIsForbidden(t *testin
 // list degrades to the pod-only candidate set (err == nil) while any other list
 // error still fails the sweep honestly (err != nil).
 //
-// The two `secrets` rows are the W6-S4 pin in table form: the sweep does not
+// The two `secrets` rows are the no-Secret-list pin in table form: the sweep does not
 // list Secrets AT ALL, so neither a 403 nor an etcd outage on that call can
 // reach it. They are wantErr=false for the reason the netpol rows are not —
 // the call is never made.

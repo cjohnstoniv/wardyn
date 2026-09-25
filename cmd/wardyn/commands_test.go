@@ -256,7 +256,7 @@ func TestRunCmd_DryRunPrintsSetupItemLabel(t *testing.T) {
 }
 
 // run grants reaches the SDK's ListGrants route (the eligibility records the
-// console shows and the CLI previously could not reach at all).
+// console shows).
 func TestRunCmd_Grants(t *testing.T) {
 	id := uuid.New()
 	srv := newCmdServer(t, http.StatusOK, []types.CredentialGrant{
@@ -394,11 +394,11 @@ func TestRunCmd_PolicyFileParseError(t *testing.T) {
 	}
 }
 
-// TestRunCmd_PolicyFileRejectsUnknownField is the W14-S1-2 regression: a
-// misspelled/unknown spec field in --policy-file used to be silently dropped
-// (json.Unmarshal ignores what it doesn't recognize), so the run launched
-// under a policy the operator believed enforced a setting it never carried.
-// It must now fail locally, before any request, exactly like `policy render`.
+// TestRunCmd_PolicyFileRejectsUnknownField pins that a misspelled/unknown
+// spec field in --policy-file fails locally, before any request, exactly like
+// `policy render`. json.Unmarshal ignores what it doesn't recognize, so a
+// lenient decode would launch the run under a policy the operator believed
+// enforced a setting it never carried.
 func TestRunCmd_PolicyFileRejectsUnknownField(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{})
 
@@ -730,7 +730,7 @@ func TestDenyCmd_PostsDeny(t *testing.T) {
 }
 
 // TestApprovalsListCmd_RunFlagReachesServer pins that `approvals list --run`
-// actually uses the server's ?run_id= filter (W19-S1-4 / W20-hold-fsm-7)
+// actually uses the server's ?run_id= filter
 // instead of silently discarding it.
 func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{})
@@ -749,8 +749,8 @@ func TestApprovalsListCmd_RunFlagReachesServer(t *testing.T) {
 
 // TestApprovalsListCmd_PrintsHostAndHoldHint pins the HOST and HOLD columns:
 // a live wait_for_review egress hold must show its requested host and a
-// "time left" hint, not the pre-fix blank cells that left the CLI decide
-// loop unable to tell a live 30s hold from an ordinary up-to-24h pendency.
+// "time left" hint; blank cells would leave the CLI decide loop unable to
+// tell a live 30s hold from an ordinary up-to-24h pendency.
 func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.ApprovalRequest{{
 		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
@@ -964,7 +964,7 @@ func TestAuditCmd_RequiresRun(t *testing.T) {
 	}
 }
 
-// TestAuditCmd_LimitOffsetFlagsPage pins W16-S1-2's core fix: before this,
+// TestAuditCmd_LimitOffsetFlagsPage pins core fix: before this,
 // `wardyn audit` had no way to page past the per-run 1000-event cap, so a run
 // with more events than that silently dropped its newest ones (including
 // run.complete) with no flag to ask for the rest.
@@ -981,7 +981,7 @@ func TestAuditCmd_LimitOffsetFlagsPage(t *testing.T) {
 }
 
 // TestAuditCmd_FilterFlagsReachServer pins the "documented filter flags" half
-// of W16-S1-2's fix: docs/sdk.md already claimed the CLI mirrors the server's
+// of fix: docs/sdk.md already claimed the CLI mirrors the server's
 // since/until/action_prefix/actor_type/outcome predicates, but auditCmd had no
 // such flags at all — the doc overclaimed. This locks the flags to the wire.
 func TestAuditCmd_FilterFlagsReachServer(t *testing.T) {
@@ -1010,7 +1010,7 @@ func TestAuditCmd_FilterFlagsReachServer(t *testing.T) {
 
 // TestAuditCmd_TruncatedPageWarnsOnStderr pins that a truncated page (server
 // sets X-Wardyn-Truncated) is surfaced, not silently indistinguishable from a
-// complete trail — the exact harm W16-S1-2 named. The warning goes to
+// complete trail. The warning goes to
 // cmd.ErrOrStderr(), never mixed into the events themselves: emitJSON encodes
 // straight from the server-decoded slice, so there is no string path by which
 // this text could land inside the --json array.
@@ -1043,7 +1043,7 @@ func TestAuditCmd_TruncatedPageWarnsOnStderr(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// logTail (W22-S1-4: `wardyn logs`)
+// logTail (`wardyn logs`)
 // --------------------------------------------------------------------------
 
 // TestLogTail_Filter_DedupesSameSecondBoundary is the real bug this type
@@ -1242,7 +1242,7 @@ func TestRunRecordingCmd_DefaultsToBareRunID(t *testing.T) {
 	}
 }
 
-// W21-S1-6: --session fetches an interactive run's OTHER recordings — an
+// --session fetches an interactive run's other recordings — an
 // attach session's cast is stored server-side under the composite key
 // "<run-id>~<session>" (recording.CastKey), which the server has always
 // served, but nothing on the CLI/SDK side could ever request one before this.
@@ -1466,7 +1466,7 @@ func TestURL_FlagOverridesEnv(t *testing.T) {
 
 // With no WARDYN_ADMIN_TOKEN and no --token, do() proceeds WITHOUT an
 // Authorization header rather than erroring client-side — a loopback wardynd in
-// LOCAL HOST MODE accepts unauthenticated requests; an auth-gated server returns
+// Local host mode accepts unauthenticated requests; an auth-gated server returns
 // a clear 401 instead.
 func TestToken_MissingProceedsUnauthenticated(t *testing.T) {
 	srv := newCmdServer(t, http.StatusOK, []types.AgentRun{})
@@ -1700,8 +1700,9 @@ func captureStdout(t *testing.T, fn func()) string {
 // An ACTIONABLE id must print in full. `run kill` / `approve` / `deny` / `--policy`
 // all parse a full UUID and reject a truncated one ("invalid UUID length: 8"), so
 // truncating the ID column here would break the obvious list → copy → act flow.
-// Found by running the CLI e2e: `run list` printed 790047a8 and `run kill 790047a8`
-// then failed. Context-only columns (an approval's RUN, an audit target) may stay short.
+// A truncated id in `run list` would make `run kill <id>` fail on the very value the
+// list printed. Context-only columns (an approval's RUN, an audit target) may stay
+// short.
 func TestListCmds_PrintFullActionableIDs(t *testing.T) {
 	runID := uuid.New()
 	apprID, apprRun := uuid.New(), uuid.New()
@@ -1825,10 +1826,11 @@ func TestApprovalsGetCmd_PagesPastTheFirstPage(t *testing.T) {
 	}
 }
 
-// TestLogsCmd_NonFollowUnknownRunErrors: `logs --follow=false` used to skip
-// GetRun entirely, so a typo'd run id printed nothing and exited 0 — the audit
-// endpoint answers 200 [] for an id that does not exist. Both modes now check
-// the run first, so an unknown or unauthorized id is an error in both.
+// TestLogsCmd_NonFollowUnknownRunErrors: `logs --follow=false` checks the run
+// with GetRun first, like follow mode, because the audit endpoint answers 200
+// [] for an id that does not exist — skipping the check would print nothing
+// and exit 0 for a typo'd run id. An unknown or unauthorized id is an error in
+// both modes.
 func TestLogsCmd_NonFollowUnknownRunErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -2135,10 +2137,10 @@ func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
 	}
 }
 
-// TestNoArgsLeavesRejectAnExtraArg is B12a-F8's tree-walk extension: it
-// covers LEAF commands (Runnable, no subcommands of their own) that declare
-// `Args: cobra.NoArgs` — e.g. `setup wall`/`setup vault` (previously
-// undeclared: a stray positional was silently accepted and ignored). Unlike
+// TestNoArgsLeavesRejectAnExtraArg extends the tree walk to leaf commands
+// (Runnable, no subcommands of their own) that declare `Args: cobra.NoArgs`
+// — e.g. `setup wall`/`setup vault`, where an undeclared validator would
+// silently accept and ignore a stray positional. Unlike
 // TestUnknownSubcommandUnderEveryGroupIsAnError's grouping commands, a leaf's
 // Args validator is NOT dead code (it IS Runnable, so cobra's execute()
 // reaches ValidateArgs before RunE) — this proves the declared contract

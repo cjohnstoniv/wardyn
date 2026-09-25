@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -130,6 +131,14 @@ func (s *Server) startCompletionWatcher(runID uuid.UUID, ref, agentExecID string
 		if exitCode != 0 {
 			terminal = types.RunFailed
 			outcome = "failure"
+		}
+
+		// A run its lease ended is KEPT with its agent stopped on purpose: that
+		// stop is what ended this Wait, and finalizing here would tear down the
+		// files the run is kept for. The end marks the run before it stops the
+		// agent, so this read always sees it.
+		if cur, gerr := s.cfg.Store.GetRun(base, runID); gerr == nil && runIsKept(cur) {
+			return
 		}
 
 		// KILLED-race guard: transition ONLY from RUNNING. If a kill/stop already
@@ -253,13 +262,17 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 	if s.cfg.Approvals == nil {
 		return
 	}
-	// Counted BEFORE the cancel, because after it there is nothing of this kind
-	// left PENDING to count: wardyn_credential_reauth_total{outcome="cancelled"}
-	// is a STATE-TRANSITION counter, and the first shape bumped it at a later
-	// resolve that happened to meet a terminal row — which counts retries, and
-	// never fires at all once the sidecar has given up.
-	reauth := s.countPendingReauth(ctx, runID)
-	n, err := s.cfg.Approvals.CancelForRun(ctx, runID, s.terminalCancelReason(ctx, runID))
+	// wardyn_credential_reauth_total{outcome="cancelled"} is a STATE-TRANSITION
+	// counter, so it counts the credential_reauth rows the cancel actually MOVED
+	// — not a pre-read of PENDING rows, which also counted one a human decided
+	// between the read and the CAS (#151). Counting at a later resolve that
+	// meets a terminal row counts retries instead, and never fires once the
+	// sidecar has given up. AWS SSO re-auth rows only, the series' HELP: an
+	// Azure DevOps sign-in or consent row is credential_reauth too, and is not.
+	byKind, err := s.cfg.Approvals.CancelForRun(ctx, runID, s.terminalCancelReason(ctx, runID))
+	for range byKind[approval.TallyReauthAWSSSO] {
+		s.metrics.credentialReauthRecorded(credentialReauthOutcomeCancelled)
+	}
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not cancel a terminal run's pending approvals",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
@@ -267,8 +280,9 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 			runID.String(), "failure", mustJSON(map[string]any{"approval_cancel_error": err.Error()})))
 		return
 	}
-	for i := 0; i < reauth; i++ {
-		s.metrics.credentialReauthRecorded(credentialReauthOutcomeCancelled)
+	n := 0
+	for _, c := range byKind {
+		n += c
 	}
 	if n > 0 {
 		slog.InfoContext(ctx, "wardynd: cancelled a terminal run's pending approvals",
@@ -276,25 +290,9 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 	}
 }
 
-// countPendingReauth is how many credential_reauth rows this run still has
-// open. Best-effort: a read that fails costs a metric, never a cancellation.
-func (s *Server) countPendingReauth(ctx context.Context, runID uuid.UUID) int {
-	rows, err := s.runApprovals(ctx, runID, types.ApprovalPending)
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, ap := range rows {
-		if ap.Kind == types.ApprovalCredentialReauth {
-			n++
-		}
-	}
-	return n
-}
-
 // CancelTerminalRunApprovals is cancelRunApprovals' exported seam for the THIRD
 // terminal writer: cmd/wardynd's idle reaper (lifecycleStopper.StopRun) is the
-// only writer of RunState=STOPPED, it lives outside this package, and before
+// then-only writer of RunState=STOPPED, it lives outside this package, and before
 // this it ran the revoke half of the cascade and none of the approval half — so
 // an idle-stopped run's PENDING approvals sat in the queue until the 24h
 // ExpireStale sweep, logged "nobody answered" rather than "the run stopped",
@@ -308,7 +306,8 @@ func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID
 
 // terminalCancelReason is the reason string stamped on a cancelled approval and
 // on its audit row: "run_killed", "run_completed", "run_failed", "run_stopped",
-// or (for an archived row, or a state the read could not resolve)
+// "run_ended" (the lease ran out: kept, or torn down at its end or after the
+// grace), or (for an archived row, or a state the read could not resolve)
 // "run_terminated" — never a guess that names the wrong transition.
 func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) string {
 	if s.cfg.Store == nil {
@@ -317,6 +316,9 @@ func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) stri
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		return "run_terminated"
+	}
+	if run.LostReason == types.LostEnded && run.State != types.RunKilled {
+		return "run_ended"
 	}
 	switch run.State {
 	case types.RunKilled:
@@ -526,14 +528,14 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		// failed dispatch that can only ever find nothing.
 		//
 		// The census of transitions that can strand an approval is four:
-		// finalizeRunTail's (the completion watcher, the boot reconciler and the
-		// probe reclaim all route through it), handleKillRun's,
-		// lifecycleStopper.StopRun's RUNNING->STOPPED in cmd/wardynd (the ONLY
-		// writer of STOPPED, which reaches the cascade through
+		// finalizeRunTail's (the completion watcher, the boot reconciler, the
+		// probe reclaim and the lease's stopEndedRun all route through it),
+		// handleKillRun's, lifecycleStopper.StopRun's RUNNING->STOPPED in
+		// cmd/wardynd (which reaches the cascade through
 		// CancelTerminalRunApprovals below — an idle-stopped run is typically idle
 		// BECAUSE its agent is parked on a wait_for_review hold), and this one on
 		// its RUNNING arm. TestTerminalRunStateWriterCensus (cmd/wardynd) freezes
-		// them so a fifth writer reds instead of silently stranding.
+		// them so a new writer reds instead of silently stranding.
 		if hint != "" {
 			// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
 			// the ~30 test doubles that embed store.Store never implement it, so a
@@ -647,34 +649,63 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 // start a new one — rather than a second, drifting copy of a cascade whose
 // ORDER is the security property.
 //
+// It is claimKillTransition then killTeardownTail, called back to back UNDER
+// ONE SHARED context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+// — the same single killCascadeTimeout budget the undivided cascade always
+// gave the whole kill, claim and teardown together. Establishing it once here,
+// rather than letting each half detach+bound itself, is deliberate: a caller
+// that reaches both halves through THIS function (handleKillRun) must see the
+// exact same 30s window it always had, not two. Callers that reach the halves
+// SEPARATELY — supersedeOneLoginRun claims synchronously and later runs
+// killTeardownTail on its own detached goroutine — establish their own
+// bound at each call site instead; see their own doc comments.
+//
 // Returns whether the KILLED transition was ours (a lost CAS is `false`, with
 // nothing torn down) and the per-step error map, so the caller decides what a
 // partial cascade means for IT: the handler answers 500 with a run.revoke row,
 // the supersede logs and proceeds — a new sign-in must not be blocked because
 // the old run's revoke failed.
-//
-// `extra` rides the run.kill row's DATA and is deliberately NOT merged into the
-// error map: outcome is computed from the errors ALONE, so a supersede's
-// `reason` cannot make a clean kill audit as a failure (and conjure a
-// run.revoke row for a run that was torn down correctly).
 func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) (bool, map[string]any, error) {
-	id := run.ID
-	// The cascade detaches itself. Once a kill begins it must finish
-	// even if the CALLER's context dies, or a half-applied kill strands exactly
-	// what a kill exists to remove: past the CAS the row reads KILLED while
-	// KillSandbox is cancelled, retryQuick bails on ctx.Done() without revoking
-	// the identity, and the run.kill row itself fails to write — a terminal state
-	// change nothing revisits, since the idle reaper lists RUNNING and the next
-	// supersede selects non-terminal runs only.
-	//
-	// It belongs HERE, not in each caller: the login supersede runs inside the
-	// launch POST, and a person closing that tab mid-launch is the very
-	// orphan-making behaviour that lane exists to end. handleKillRun keeps its
-	// own detach — a second WithoutCancel is a no-op, and the handler's
-	// post-cascade run.revoke row needs a live context too.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
-	// (1) Win the terminal transition first. Revoking before this CAS meant a
+	applied, serr := s.claimKillTransition(ctx, run)
+	if serr != nil {
+		return false, nil, serr
+	}
+	if !applied {
+		return false, nil, nil
+	}
+	killData := s.killTeardownTail(ctx, run, killerType, killer, extra)
+	return true, killData, nil
+}
+
+// claimKillTransition is the CLAIM half of the kill cascade: it wins the
+// KILLED compare-and-swap and cancels the run's pending approvals — the two
+// steps that free the run's max_concurrent_runs slot and silence a queue a
+// human may be looking at. Nothing here can block on the runner or a
+// credential provider, so it is cheap enough to run SYNCHRONOUSLY on a request
+// path.
+//
+// Split out so supersedeOneLoginRun (harnesscred_supersede.go) can claim the
+// KILLED transition inline — its three-attempt CAS re-read loop needs to see
+// whether THIS attempt landed before deciding whether to retry — while handing
+// the slow half (killTeardownTail: KillSandbox, both revocations, the
+// run.kill row) to a tracked goroutine. Moving the CAS out of this half would
+// re-open the quota race the supersede exists to close: the concurrency slot
+// is not free until this returns applied==true.
+//
+// Takes ctx AS GIVEN — it does not detach or bound it itself. killRunCascade
+// wraps ONE shared context.WithTimeout(context.WithoutCancel(ctx),
+// killCascadeTimeout) around this call and killTeardownTail's together (its
+// own doc comment); supersedeOneLoginRun, which calls this alone, wraps its
+// own per-attempt bound at its call site — the login supersede runs on the
+// launch POST's own context, and a person closing that tab mid-launch must
+// not cancel a CAS that has already started.
+//
+// Returns whether the KILLED transition was ours (a lost CAS is `false`, with
+// nothing else touched).
+func (s *Server) claimKillTransition(ctx context.Context, run types.AgentRun) (bool, error) {
+	// Win the terminal transition first. Revoking before this CAS meant a
 	// kill that then LOST the CAS to a concurrent dispatch forward-transition
 	// (PENDING->STARTING) had already revoked the run's credentials — leaving a live
 	// RUNNING run with dead creds behind a silent 409. Own the KILLED transition
@@ -682,22 +713,55 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 	// from the (non-terminal) state we read, so a completion watcher winning
 	// RUNNING->COMPLETED is not clobbered. A re-kill of an already-KILLED run still
 	// CASes KILLED->KILLED (applied), re-running the idempotent teardown.
-	applied, serr := s.casRunState(ctx, id, run.State, types.RunKilled)
+	applied, serr := s.casRunState(ctx, run.ID, run.State, types.RunKilled)
 	if serr != nil {
-		return false, nil, serr
+		return false, serr
 	}
 	if !applied {
-		return false, nil, nil
+		return false, nil
 	}
+	// Approvals: the transition is unambiguously ours, so the run's outstanding
+	// questions are cancelled here — BEFORE teardown, because a PENDING approval
+	// is the one piece of this cascade a human is looking at, and after the CAS
+	// for the same reason revocation is (a kill that lost the CAS must not touch
+	// a still-live run). Kill does NOT route through finalizeRunTail, so this is
+	// the second call site of one function.
+	s.cancelRunApprovals(ctx, run.ID)
+	return true, nil
+}
 
+// killTeardownTail is the TEARDOWN half of the kill cascade, run only after
+// claimKillTransition has already won the KILLED transition: the runner
+// teardown, both revocations, the run.kill audit row, and the
+// workspace/record settlement. `extra` rides the run.kill row's DATA and is
+// deliberately NOT merged into the returned error map: outcome is computed
+// from the errors ALONE, so a supersede's `reason` cannot make a clean kill
+// audit as a failure (and conjure a run.revoke row for a run that was torn
+// down correctly).
+//
+// Takes ctx AS GIVEN — it does not detach or bound it itself; the CALLER
+// does, and has to: once a kill has been claimed this must finish even if the
+// caller's own context dies, or a half-applied kill strands exactly what a
+// kill exists to remove — past the CAS the row reads KILLED while KillSandbox
+// is cancelled, retryQuick bails on ctx.Done() without revoking the identity,
+// and the run.kill row itself fails to write. Nothing on the ordinary paths
+// revisits that state: the idle reaper lists RUNNING and the next supersede
+// selects non-terminal runs only. What does come back to it is
+// sweepOrphanedSandboxes (reconcile.go), at boot and every undispatchedGrace:
+// it tears down a terminal run's labelled containers, but writes no run.kill
+// row and revokes nothing — refuseTerminalRun (internal_live_run.go) is what
+// shuts every /internal door to the stranded token meanwhile. killRunCascade wraps
+// ONE shared context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+// around this call and claimKillTransition's together, so handleKillRun's
+// synchronous cascade keeps the single 30s budget it always had; its
+// post-cascade run.revoke row needs a live context regardless, which the
+// caller's own WithoutCancel already guarantees. supersedeOneLoginRun instead
+// runs this alone, on a goroutine tracked by goBackground (server.go) with its
+// own detach+bound, so the sign-in POST does not wait for it and an orderly
+// shutdown still does.
+func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) map[string]any {
+	id := run.ID
 	killData := map[string]any{}
-	// (1b) Approvals: the transition is unambiguously ours, so the run's
-	// outstanding questions are cancelled here — BEFORE teardown, because a
-	// PENDING approval is the one piece of this cascade a human is looking at,
-	// and after the CAS for the same reason revocation is (a kill that lost the
-	// CAS must not touch a still-live run). Kill does NOT route through
-	// finalizeRunTail, so this is the second call site of one function.
-	s.cancelRunApprovals(ctx, id)
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.
 	if s.cfg.Runner != nil && run.SandboxRef != "" {
 		if kerr := s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
@@ -745,7 +809,7 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 	s.reconcileWorkspaceRun(ctx, id)
 	s.reconcileRecordRun(ctx, id)
 
-	return true, killData, nil
+	return killData
 }
 
 // killCascadeTimeout bounds a detached kill cascade. The teardown and both

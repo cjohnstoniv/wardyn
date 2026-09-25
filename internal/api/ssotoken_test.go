@@ -168,15 +168,14 @@ func TestUploadSSOToken_InvalidBlobRejected(t *testing.T) {
 	}
 }
 
-// TestUploadSSOToken_HalfResolvedCaptureRejected is the W5-S1-4 regression:
-// wardyn-aws-sso's account/role resolution (`aws sso list-accounts` /
-// list-account-roles) is best-effort and can come up empty (no accounts, a
-// timeout, a malformed response) while every OTHER field is well-formed. Before
-// the fix, awsSSOBlob.valid() didn't require account_id/role_name, so this
-// half-resolved capture was accepted and stored — and resolveBedrockAuth
+// TestUploadSSOToken_HalfResolvedCaptureRejected: wardyn-aws-sso's account/role
+// resolution is best-effort and can come up empty (no accounts, a timeout, a
+// malformed response) while every other field is well-formed.
+// awsSSOBlob.valid() requires account_id/role_name because resolveBedrockAuth
 // selects a stored SSO credential ahead of the host-mode ~/.aws mount and
-// static-key lanes, so a capture that can never satisfy GetRoleCredentials
-// would silently pre-empt lanes that might have actually worked.
+// static-key lanes: a half-resolved capture that can never satisfy
+// GetRoleCredentials would silently pre-empt lanes that might have actually
+// worked.
 func TestUploadSSOToken_HalfResolvedCaptureRejected(t *testing.T) {
 	srv, sec, tok, runID := newSSOUploadSrv(t)
 	halfResolved := `{
@@ -195,15 +194,14 @@ func TestUploadSSOToken_HalfResolvedCaptureRejected(t *testing.T) {
 	}
 }
 
-// TestUploadSSOToken_MaliciousStartURLRejected is a W15-d defense-in-depth
-// regression: before the fix, only blob.valid()'s non-empty check ran on
-// start_url, so a newline-bearing value would later be baked VERBATIM, with no
-// escaping, into every subsequent Bedrock run's ~/.aws/config INI
-// (awsSSOConfigFileContents, runs_bedrock.go's fmt.Sprintf) — smuggling extra
-// INI keys/sections into a file shared across every run that credential mode
-// serves, since the blob is captured ONCE and reused thereafter. start_url now
-// takes the same https-URL/no-whitespace guard the operator's own pre-login
-// input already takes (validateSSOStartURL, harnesscred.go).
+// TestUploadSSOToken_MaliciousStartURLRejected is defense in depth: a
+// non-empty check alone on start_url would let a newline-bearing value be
+// baked verbatim, with no escaping, into every subsequent Bedrock run's
+// ~/.aws/config INI (awsSSOConfigFileContents, runs_bedrock.go's fmt.Sprintf)
+// — smuggling extra INI keys/sections into a file shared across every run that
+// credential mode serves, since the blob is captured once and reused
+// thereafter. start_url takes the same https-URL/no-whitespace guard the
+// operator's own pre-login input takes (validateSSOStartURL, harnesscred.go).
 func TestUploadSSOToken_MaliciousStartURLRejected(t *testing.T) {
 	srv, sec, tok, runID := newSSOUploadSrv(t)
 	malicious := `{
@@ -223,7 +221,7 @@ func TestUploadSSOToken_MaliciousStartURLRejected(t *testing.T) {
 }
 
 // TestUploadSSOToken_ControlCharsInAccountOrRoleRejected is the other half of
-// the same W15-d defense-in-depth guard: sso_account_id, sso_role_name, and
+// the same defense-in-depth guard: sso_account_id, sso_role_name, and
 // sso_region ride the identical unescaped INI template near start_url
 // (awsSSOConfigFileContents), so a newline in any is exactly as dangerous
 // and must be rejected the same way (repoFieldSafe — the same control-
