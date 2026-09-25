@@ -19,10 +19,12 @@ import (
 	"strings"
 	"testing"
 
+	"filippo.io/age"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/secretstoretest"
 )
 
@@ -114,5 +116,39 @@ path "%[1]s/decrypt/rsa" { capabilities = ["update"] }
 		}
 		pool := throwawayDB(t)
 		secretstoretest.RunConformance(t, func(t *testing.T) secretstore.Store { return pgStore(t, pool, nil, tr, true) })
+	})
+
+	// `wardynd -rewrap`'s body on the live server: local rows move onto
+	// Transit, a rotation then moves them to the new version, and with the
+	// old version retired every row still reads.
+	t.Run("rewrap_onto_transit_and_its_latest_version", func(t *testing.T) {
+		if os.Getenv("WARDYN_TEST_PG") == "" {
+			t.Skip("WARDYN_TEST_PG not set")
+		}
+		pool := throwawayDB(t)
+		id, _ := age.GenerateX25519Identity()
+		for _, n := range []string{"a", "b"} {
+			if err := pgStore(t, pool, id, nil, false).Put(ctx, n, []byte("v-"+n)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		latest, err := tr.LatestVersion(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res, err := secretstorepg.RewrapKeys(ctx, keys(pool, id, tr, true)); err != nil || res.Rewrapped != 2 || res.KeyVersion != latest {
+			t.Fatalf("RewrapKeys onto Transit = (%+v, %v), want 2 rows at v%d", res, err, latest)
+		}
+		a.must(http.MethodPost, mount+"/keys/wardyn/rotate", nil)
+		res, err := secretstorepg.RewrapKeys(ctx, keys(pool, nil, tr, true))
+		if err != nil || res.Rewrapped != 2 || res.KeyVersion != latest+1 {
+			t.Fatalf("RewrapKeys after a rotation = (%+v, %v), want 2 rows at v%d", res, err, latest+1)
+		}
+		a.must(http.MethodPost, mount+"/keys/wardyn/config", map[string]any{"min_decryption_version": res.KeyVersion})
+		for _, n := range []string{"a", "b"} {
+			if v, err := pgStore(t, pool, nil, tr, true).Get(ctx, n); err != nil || string(v) != "v-"+n {
+				t.Fatalf("Get(%s) with the older versions retired = (%q, %v)", n, v, err)
+			}
+		}
 	})
 }

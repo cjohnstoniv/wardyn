@@ -17,8 +17,8 @@ import (
 )
 
 // ConvertV0 re-seals every legacy (enc_version 0, age-encrypted) row as an
-// envelope v1 row under this store's KEK, and returns the rows it converted —
-// each one a read of a stored value, which the caller records.
+// envelope v1 row under the KEK of its purpose, and returns the rows it
+// converted — each one a read of a stored value, which the caller records.
 // wardynd runs it at boot BEFORE the boot keys are read (they share the
 // table), so there is no v0 read path anywhere else.
 //
@@ -74,23 +74,20 @@ func (s *Store) convertRow(ctx context.Context, tx pgx.Tx, legacy age.Identity, 
 	if err != nil {
 		return fmt.Errorf("does not decrypt with WARDYN_AGE_KEY: %w", err)
 	}
-	wrapped, ct, err := seal(ctx, s.kek, e.ownedBy, e.name, plain)
+	k := s.writer(e.ownedBy, e.name)
+	wrapped, ct, err := seal(ctx, k, e.ownedBy, e.name, plain)
 	if err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx,
 		`UPDATE secrets SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6
 		  WHERE owned_by=$1 AND name=$2 AND enc_version=0`,
-		e.ownedBy, e.name, encVersion, s.kek.ID(), wrapped, ct)
+		e.ownedBy, e.name, encVersion, k.ID(), wrapped, ct)
 	if err != nil {
 		return fmt.Errorf("update: %w", err)
 	}
 	return nil
 }
-
-// localRowsWhere selects the rows sealed under an age key: v0, or v1 under a
-// local KEK.
-const localRowsWhere = `(enc_version=0 OR kek_id LIKE 'local:%')`
 
 // LocalRows counts rows only a local KEK (or the age key itself, for v0) can
 // open. wardynd refuses to boot on an ephemeral age key while any exist:
@@ -98,7 +95,7 @@ const localRowsWhere = `(enc_version=0 OR kek_id LIKE 'local:%')`
 func (s *Store) LocalRows(ctx context.Context) (int, error) {
 	var n int
 	if err := s.pool.QueryRow(ctx,
-		`SELECT count(*) FROM secrets WHERE `+localRowsWhere,
+		`SELECT count(*) FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'`,
 	).Scan(&n); err != nil {
 		return 0, fmt.Errorf("pg secretstore: count local rows: %w", err)
 	}

@@ -20,15 +20,20 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/secretstoretest"
 )
 
-// pgStore builds the registered "pg" store. id may be nil (no age key); tr
-// may be nil (no key service), and writes says whether it wraps new rows.
-func pgStore(t *testing.T, pool *pgxpool.Pool, id age.Identity, tr *Transit, writes bool) *secretstorepg.Store {
-	t.Helper()
+// keys are the Deps of a pg store. id may be nil (no age key); tr may be nil
+// (no key service), and writes says whether it wraps new rows.
+func keys(pool *pgxpool.Pool, id age.Identity, tr *Transit, writes bool) secretstore.Deps {
 	d := secretstore.Deps{Pool: pool, AgeIdentity: id, KEKWrites: writes}
 	if tr != nil {
 		d.KEK = tr
 	}
-	s, err := secretstore.New("pg", d)
+	return d
+}
+
+// pgStore builds the registered "pg" store over keys(pool, id, tr, writes).
+func pgStore(t *testing.T, pool *pgxpool.Pool, id age.Identity, tr *Transit, writes bool) *secretstorepg.Store {
+	t.Helper()
+	s, err := secretstore.New("pg", keys(pool, id, tr, writes))
 	if err != nil {
 		t.Fatalf("secretstore.New(pg): %v", err)
 	}
@@ -115,14 +120,14 @@ func TestTransitKEK_OnlineMigrationBothWays(t *testing.T) {
 			t.Fatalf("Get(%s) = (%q, %v)", n, v, err)
 		}
 	}
-	res, err := both.Rewrap(ctx)
-	if err != nil || res.Rewrapped != 2 || res.KEK != tr.ID() || res.KeyVersion != 1 {
+	res, err := secretstorepg.RewrapKeys(ctx, keys(pool, id, tr, true))
+	if err != nil || res.Rewrapped != 2 || res.KeyService != tr.ID() || res.KeyVersion != 1 {
 		t.Fatalf("Rewrap = (%+v, %v), want 2 rows to %s v1", res, err, tr.ID())
 	}
 	if n, _ := both.LocalRows(ctx); n != 0 {
 		t.Fatalf("%d local rows left after -rewrap", n)
 	}
-	if res, err := both.Rewrap(ctx); err != nil || res.Rewrapped != 0 {
+	if res, err := secretstorepg.RewrapKeys(ctx, keys(pool, id, tr, true)); err != nil || res.Rewrapped != 0 {
 		t.Fatalf("second Rewrap = (%+v, %v), want nothing to do", res, err)
 	}
 	transitOnly := pgStore(t, pool, nil, tr, true)
@@ -139,9 +144,8 @@ func TestTransitKEK_OnlineMigrationBothWays(t *testing.T) {
 	}
 
 	// Back: the key service read-only, the local key writing.
-	back := pgStore(t, pool, id, tr, false)
-	res, err = back.Rewrap(ctx)
-	if err != nil || res.Rewrapped != 3 || !strings.HasPrefix(res.KEK, "local:") || res.KeyVersion != 0 {
+	res, err = secretstorepg.RewrapKeys(ctx, keys(pool, id, tr, false))
+	if err != nil || res.Rewrapped != 3 || res.KeyService != "" || res.KeyVersion != 0 {
 		t.Fatalf("Rewrap back = (%+v, %v), want 3 rows to the local key", res, err)
 	}
 	for _, n := range []string{"a", "b", "c"} {
@@ -179,7 +183,7 @@ func TestTransitKEK_RewrapRetiresOldVersions(t *testing.T) {
 	f.mu.Lock()
 	f.transit.minDecrypt = 0
 	f.mu.Unlock()
-	res, err := s.Rewrap(ctx)
+	res, err := secretstorepg.RewrapKeys(ctx, keys(pool, nil, tr, true))
 	if err != nil || res.Rewrapped != 2 || res.KeyVersion != 2 {
 		t.Fatalf("Rewrap after a rotation = (%+v, %v), want 2 rows to v2", res, err)
 	}
@@ -227,7 +231,7 @@ func TestTransitKEK_RotateAgeKeyLeavesTransitRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, before := rowKEK(t, pool, "", "transit-row")
-	n, err := secretstorepg.Rekey(ctx, pool, oldID, newID)
+	n, err := secretstorepg.Rekey(ctx, pool, oldID, newID, nil)
 	if err != nil || n != 1 {
 		t.Fatalf("Rekey = (%d, %v), want the one local row", n, err)
 	}

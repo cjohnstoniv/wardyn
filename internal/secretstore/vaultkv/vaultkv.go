@@ -23,6 +23,11 @@
 // name. A pointer moved under another person's row therefore derives a path
 // that holds nothing, or a value bound to someone else: a refusal either way.
 //
+// With a second Kubernetes-auth role (RolePlatform, the recommended
+// configuration) wardynd holds two tokens: the platform role's reaches only
+// <prefix>/platform/, the other role's everything else, so a leak of the
+// credentials token reaches no signing or session key (design §2.13 b).
+//
 // Wardyn only ever calls data/ and metadata/ (and auth/): never destroy/,
 // undelete/ or a DELETE on data/, so the policy grants none of them. "Remove"
 // is DELETE metadata/, which drops every version.
@@ -59,6 +64,9 @@ type Config struct {
 	// Auth is AuthKubernetes (Role, AuthMount, K8sTokenFile) or AuthTokenFile
 	// (TokenFile). There is no token-in-env option, by design.
 	Auth, AuthMount, Role, K8sTokenFile, TokenFile string
+	// RolePlatform is the optional second Kubernetes-auth role every
+	// <prefix>/platform/ call is made as; Role then serves the rest.
+	RolePlatform string
 	// CACertFile is added to the system roots for this client only.
 	CACertFile string
 	// Mount is the KV v2 mount; Prefix the per-install path prefix.
@@ -72,7 +80,9 @@ type Config struct {
 
 // Store is the Vault KV v2 implementation of secretstore.External.
 type Store struct {
-	c           *client
+	c *client
+	// platform is the RolePlatform client, or nil: then c serves every path.
+	platform    *client
 	mount       string
 	prefix      string
 	maxVersions int
@@ -97,15 +107,19 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	if cfg.Auth == AuthKubernetes && cfg.Role == "" {
 		return nil, fmt.Errorf("WARDYN_VAULT_ROLE is required with WARDYN_VAULT_AUTH=%s", AuthKubernetes)
 	}
-	c, err := newClient(cfg)
+	if cfg.RolePlatform != "" && cfg.Auth != AuthKubernetes {
+		return nil, fmt.Errorf("WARDYN_VAULT_ROLE_PLATFORM needs WARDYN_VAULT_AUTH=%s", AuthKubernetes)
+	}
+	if cfg.RolePlatform != "" && cfg.RolePlatform == cfg.Role {
+		return nil, fmt.Errorf("WARDYN_VAULT_ROLE_PLATFORM is the same role as WARDYN_VAULT_ROLE, which separates nothing; name the second role, or unset it")
+	}
+	c, err := loggedIn(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	if err := c.login(ctx); err != nil {
-		return nil, fmt.Errorf("vault at %s: %w", c.base.Host, err)
-	}
 	// A KV v2 mount answers GET <mount>/config; a mistyped mount, or an engine
-	// not yet enabled, answers 404.
+	// not yet enabled, answers 404. Asked as WARDYN_VAULT_ROLE only: the
+	// platform role's policy reaches <prefix>/platform/ alone.
 	status, err := c.call(ctx, http.MethodGet, cfg.Mount+"/config", nil, nil)
 	if err == nil && status == http.StatusNotFound {
 		err = fmt.Errorf("no KV v2 engine is mounted there (GET %s/config answered 404)", cfg.Mount)
@@ -113,8 +127,38 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("WARDYN_VAULT_KV_MOUNT %q at %s: %w", cfg.Mount, c.base.Host, err)
 	}
+	s := &Store{c: c, mount: cfg.Mount, prefix: cfg.Prefix, maxVersions: cfg.MaxVersions}
+	if cfg.RolePlatform != "" {
+		cfg.Role = cfg.RolePlatform
+		if s.platform, err = loggedIn(ctx, cfg); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}
+
+// loggedIn builds a client for cfg, logs it in and keeps its token alive
+// until ctx ends.
+func loggedIn(ctx context.Context, cfg Config) (*client, error) {
+	c, err := newClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.login(ctx); err != nil {
+		return nil, fmt.Errorf("vault at %s: %w", c.base.Host, err)
+	}
 	go c.keepAlive(ctx)
-	return &Store{c: c, mount: cfg.Mount, prefix: cfg.Prefix, maxVersions: cfg.MaxVersions}, nil
+	return c, nil
+}
+
+// as is the client a call on rel (a path, or a list directory, under the
+// mount) is made with: the platform role's for the platform kind, when that
+// role is configured.
+func (s *Store) as(rel string) *client {
+	if s.platform != nil && strings.HasPrefix(rel, s.prefix+"/platform/") {
+		return s.platform
+	}
+	return s.c
 }
 
 // Name implements secretstore.External.
@@ -233,7 +277,7 @@ func (s *Store) metadata(ctx context.Context, rel string) (m kvMeta, found bool,
 	var r struct {
 		Data kvMeta `json:"data"`
 	}
-	status, err := s.c.call(ctx, http.MethodGet, s.mount+"/metadata/"+rel, nil, &r)
+	status, err := s.as(rel).call(ctx, http.MethodGet, s.mount+"/metadata/"+rel, nil, &r)
 	if err != nil || status == http.StatusNotFound {
 		return kvMeta{}, false, err
 	}
@@ -265,7 +309,7 @@ func (s *Store) Put(ctx context.Context, owner, name, _ string, value []byte, cr
 	want := binding(owner, name)
 	if !found || m.MaxVersions != s.maxVersions || !sameMap(m.CustomMetadata, want) {
 		body := map[string]any{"max_versions": s.maxVersions, "custom_metadata": want}
-		if _, err := s.c.call(ctx, http.MethodPost, s.mount+"/metadata/"+rel, body, nil); err != nil {
+		if _, err := s.as(rel).call(ctx, http.MethodPost, s.mount+"/metadata/"+rel, body, nil); err != nil {
 			return "", fmt.Errorf("write %s in mount %q: %w", s.ref(rel), s.mount, err)
 		}
 	}
@@ -273,7 +317,7 @@ func (s *Store) Put(ctx context.Context, owner, name, _ string, value []byte, cr
 		"data":    map[string]string{"value": base64.StdEncoding.EncodeToString(value)},
 		"options": map[string]int{"cas": m.CurrentVersion},
 	}
-	if _, err := s.c.call(ctx, http.MethodPost, s.mount+"/data/"+rel, body, nil); err != nil {
+	if _, err := s.as(rel).call(ctx, http.MethodPost, s.mount+"/data/"+rel, body, nil); err != nil {
 		return "", fmt.Errorf("write %s in mount %q: %w", s.ref(rel), s.mount, err)
 	}
 	return s.ref(rel), nil
@@ -305,7 +349,7 @@ func (s *Store) Get(ctx context.Context, owner, name, ref string) ([]byte, error
 			} `json:"metadata"`
 		} `json:"data"`
 	}
-	status, err := s.c.call(ctx, http.MethodGet, s.mount+"/data/"+rel, nil, &r)
+	status, err := s.as(rel).call(ctx, http.MethodGet, s.mount+"/data/"+rel, nil, &r)
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +393,7 @@ func (s *Store) Delete(ctx context.Context, owner, name, _ string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.c.call(ctx, http.MethodDelete, s.mount+"/metadata/"+rel, nil, nil)
+	_, err = s.as(rel).call(ctx, http.MethodDelete, s.mount+"/metadata/"+rel, nil, nil)
 	return err
 }
 
@@ -391,7 +435,7 @@ func (s *Store) list(ctx context.Context, dir string) ([]string, error) {
 			Keys []string `json:"keys"`
 		} `json:"data"`
 	}
-	status, err := s.c.call(ctx, http.MethodGet, s.mount+"/metadata/"+dir+"?list=true", nil, &r)
+	status, err := s.as(dir).call(ctx, http.MethodGet, s.mount+"/metadata/"+dir+"?list=true", nil, &r)
 	if err != nil || status == http.StatusNotFound {
 		return nil, err
 	}

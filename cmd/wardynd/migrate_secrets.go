@@ -25,27 +25,30 @@ import (
 )
 
 // maintenanceMode runs the one-shot maintenance mode the flags select, if any
-// (-rotate-age-key, -migrate-secrets, -reconcile, -rewrap), and reports
-// whether one ran.
+// (-rotate-age-key, -rewrap, -migrate-secrets, -reconcile), and reports whether
+// one ran.
 func maintenanceMode(f *bootFlags) (bool, error) {
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
 		return true, rotateAgeKeyMode(f, p)
 	}
-	if *f.migrateSecrets || *f.reconcile || *f.rewrap {
+	if *f.rewrap {
+		return true, rewrapMode(f)
+	}
+	if *f.migrateSecrets || *f.reconcile {
 		return true, secretStoreMaintenance(f)
 	}
 	return false, nil
 }
 
-// secretStoreMaintenance runs `wardynd -migrate-secrets -to=<target>`,
-// `wardynd -reconcile` or `wardynd -rewrap` (credential-storage design
-// §2.3a.9, §2.3a.1, §2.3) and exits. Each opens the store exactly as a serving
-// boot does (the same conversion and refusals), serves nothing, and is safe
-// beside a serving daemon: a read follows each row wherever it points, and
-// the migrator and the rewrap move one locked row at a time.
+// secretStoreMaintenance runs `wardynd -migrate-secrets -to=<target>` or
+// `wardynd -reconcile` (credential-storage design §2.3a.9, §2.3a.1) and exits.
+// Both open the store exactly as a serving boot does (the same conversion and
+// refusals), serve nothing, and are safe beside a serving daemon: a read
+// follows each row wherever it points, and the migrator moves one locked row
+// at a time.
 func secretStoreMaintenance(f *bootFlags) error {
 	if strings.TrimSpace(*f.dsn) == "" {
-		return fmt.Errorf("refusing to run: -migrate-secrets, -reconcile and -rewrap need the secret store's database; set WARDYN_PG_DSN")
+		return fmt.Errorf("refusing to run: -migrate-secrets and -reconcile need the secret store's database; set WARDYN_PG_DSN")
 	}
 	ctx := context.Background()
 	connCtx, cancel := context.WithTimeout(ctx, rekeyConnectTimeout)
@@ -64,26 +67,27 @@ func secretStoreMaintenance(f *bootFlags) error {
 	if fan != nil {
 		defer func() { _ = fan.Close() }()
 	}
-	// The store bare (newSecretStore), not audited: no mode reads through Get.
-	// Migrate's reads are recorded one by one (migrateMode), Reconcile reads
-	// store metadata only, and Rewrap moves data keys, never opening a value.
+	// The store bare (newSecretStore), not audited: neither mode reads through
+	// Get. Migrate's reads are recorded one by one (migrateMode), and
+	// Reconcile reads store metadata only, never a value.
+	platform, err := readPlatformKey(*f.platformKeyFile, *f.ageKey)
+	if err != nil {
+		return err
+	}
 	c, err := buildStoreClients(ctx, f)
 	if err != nil {
 		return err
 	}
-	s, err := newSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, c, rec)
+	s, err := newSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
 	if err != nil {
 		return err
 	}
 	ps, ok := s.(*secretstorepg.Store)
 	if !ok {
-		return fmt.Errorf("refusing to run: secret store %q has no rows to migrate, reconcile or rewrap", s.Name())
+		return fmt.Errorf("refusing to run: secret store %q has no pointer rows to migrate or reconcile", s.Name())
 	}
 	if *f.reconcile {
 		return reconcileMode(ctx, ps, rec)
-	}
-	if *f.rewrap {
-		return rewrapMode(ctx, ps, rec)
 	}
 	return migrateMode(ctx, ps, rec, strings.TrimSpace(*f.migrateTo))
 }
@@ -157,35 +161,7 @@ func reconcileMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recor
 	return nil
 }
 
-// rewrapMode runs `wardynd -rewrap`: every sealed row's data key moves to the
-// key WARDYN_KEK selects, at its latest version. One secret.rewrap row records
-// the key, the version and the count — never a name or a value. An abort is
-// recorded as a failure with the count committed before it, as migrateMode's is.
-func rewrapMode(ctx context.Context, ps *secretstorepg.Store, rec audit.Recorder) error {
-	res, err := ps.Rewrap(ctx)
-	data := map[string]any{"kek_id": res.KEK, "count": res.Rewrapped}
-	if res.KeyVersion > 0 {
-		data["key_version"] = res.KeyVersion
-	}
-	if err != nil {
-		data["reason"] = "aborted"
-		emitMaintenanceAudit(ctx, rec, rewrapActor, "secret.rewrap", res.KEK, "failure", data)
-		return err
-	}
-	emitMaintenanceAudit(ctx, rec, rewrapActor, "secret.rewrap", res.KEK, "success", data)
-	slog.Info("wardynd: every sealed secret's data key is wrapped under the configured key", slog.String("kek_id", res.KEK), slog.Int("rewrapped", res.Rewrapped))
-	if res.KeyVersion > 0 {
-		fmt.Fprintf(os.Stdout, "every sealed secret is wrapped under %s version %d; raising the Transit key's min_decryption_version to %d now retires the older versions\n", res.KEK, res.KeyVersion, res.KeyVersion)
-	}
-	return nil
-}
-
-// The audit actors of the maintenance modes: one-shot processes, not the
-// serving daemon, with no authenticated human principal.
-const (
-	migrateActor = "wardyn/migrate-secrets"
-	rewrapActor  = "wardyn/rewrap"
-)
+const migrateActor = "wardyn/migrate-secrets"
 
 // emitMaintenanceAudit writes one audit row from a maintenance mode. Data
 // carries names, owners and counts, never a value.

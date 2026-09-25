@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -141,9 +142,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// auditor should be able to see a security admin refused a foreign PTY
 	// without inferring it from the path.
 	if !s.isOperator(r.Context()) && run.CreatedBy != principalFromRequest(r) {
-		writeError(w, http.StatusNotFound, "run not found")
-		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", run.ID.String(), "denied", mustJSON(map[string]any{"reason": "attach_ticket_foreign_run"})))
+		s.refuse(w, r, authz.Deny(authz.ReasonAttachTicketForeignRun, run.ID.String(), "run not found").OnRun(run.ID))
 		return
 	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run

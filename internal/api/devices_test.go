@@ -335,7 +335,7 @@ func auditReason(t *testing.T, ev types.AuditEvent) string {
 	return reason
 }
 
-// ─── the no-run invariant: a device token authenticates a daemon, never a person ───
+// the no-run invariant: a device token authenticates a daemon, never a person
 
 // TestDevices_DeviceTokenIs401OnMe: the device credential must never reach the
 // human routes — humanOrAdminAuth republishes a HUMAN through withHumanIdentity,
@@ -508,7 +508,7 @@ func TestDevices_EnrolmentTokenDoubleConsumeFails(t *testing.T) {
 	})
 }
 
-// ─── the rest of the contract ────────────────────────────────────────────────
+// the rest of the contract
 
 // TestDevices_PathIDMustMatchTheTokensDevice: a live token on any id but its
 // own is 404 — never 403, which would confirm the other device exists.

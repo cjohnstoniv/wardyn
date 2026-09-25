@@ -363,7 +363,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// subscription sentinel, the Bedrock bearer and the artifact tokens are all
 	// consequences of that one decision, each failing the run closed on its own
 	// authoring failure. ok=false means the run is already marked FAILED.
-	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject, siteCfg, siteCfgErr == nil, adoInject)
+	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject, siteCfg, siteCfgErr == nil, adoInject, ceiling.bedrock)
 	if !ok {
 		return
 	}
@@ -518,6 +518,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// with nothing behind it — compiled at dispatch because the sidecar
 			// knows only that no injection matched (see llmUnavailableDetail).
 			LLMUnavailableDetail: plan.llmUnavailableDetail,
+			// Nobody drives a task run, so a push its push_rules would hold
+			// for review is refused instead (push_hold.go).
+			Unattended: !p.Interactive,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/
@@ -786,7 +789,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			// above uses, so a FAILED run never leaves a live agent behind.
 			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
 			s.failAndRevoke(ctx, run.ID, types.RunRunning,
-				"the agent started but its exec id could not be persisted, so the run could not be tracked: "+xerr.Error())
+				"the agent started but its exec id could not be persisted, so the run could not be tracked")
 			return
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",

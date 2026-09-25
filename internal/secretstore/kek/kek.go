@@ -8,9 +8,10 @@
 // A KEK never sees a credential value: it wraps and unwraps a 32-byte DEK,
 // bound to the row's owner and name. Each provider is one implementation of
 // KEK; the row records the provider's ID as kek_id, and a read picks the KEK by
-// that id. `local` lives here; Vault Transit (package vaultkv, which holds the
-// Vault client) wraps through the service's own encrypt and decrypt. WARDYN_KEK
-// selects the one every write uses.
+// that id. `local` lives here, one key per purpose (NewLocalPurpose); Vault
+// Transit (package vaultkv, which holds the Vault client) wraps through the
+// service's own encrypt and decrypt. WARDYN_KEK selects the one every write
+// uses.
 package kek
 
 import (
@@ -124,12 +125,21 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCMWithRandomNonce(block)
 }
 
-// localInfo is the HKDF info string and the AAD domain label of a local wrap.
+// localInfo is the AAD domain label of every local wrap, and the HKDF info
+// of the pre-split KEK (NewLocal).
 const localInfo = "wardyn/kek/v1"
 
-// Local is the default KEK: a symmetric key derived from WARDYN_AGE_KEY. Being
-// symmetric is what closes forgery — the age recipient is public, this key is
-// not.
+// The purposes a local KEK serves (design §2.13 c). A platform KEK wraps the
+// boot keys (secretstore.PlatformNames); a credential KEK wraps every other
+// row.
+const (
+	PurposePlatform = "platform"
+	PurposeCred     = "cred"
+)
+
+// Local is the default KEK: a symmetric key derived from WARDYN_AGE_KEY (or,
+// for the platform purpose, from WARDYN_PLATFORM_KEY_FILE). Being symmetric is
+// what closes forgery — the age recipient is public, this key is not.
 type Local struct {
 	id  string
 	key []byte
@@ -137,25 +147,38 @@ type Local struct {
 
 var _ KEK = (*Local)(nil)
 
-// NewLocal derives the local KEK from an age identity:
+// NewLocal derives the pre-split local KEK, which wrote every row before the
+// purpose split and now only reads them:
 // HKDF-SHA256(IKM = identity.String(), salt = empty, info = "wardyn/kek/v1").
 // String() is the canonical "AGE-SECRET-KEY-1…" form ParseX25519Identity
 // round-trips to; age exposes no raw scalar. The id is "local:" plus the first
 // 8 bytes of SHA-256 over the public recipient, hex — so a row names which
 // age key sealed it without naming the key.
 func NewLocal(identity *age.X25519Identity) (*Local, error) {
-	return newLocal(identity.String(), identity.Recipient().String())
+	return newLocal(identity.String(), identity.Recipient().String(), "local:", localInfo)
 }
 
-// newLocal is NewLocal over the two strings it reads, so the golden vectors can
+// NewLocalPurpose derives the local KEK of one purpose: HKDF info
+// "wardyn/kek/v1/<purpose>" and id "local/<purpose>:<fingerprint>". Two
+// purposes derived from one identity are two unrelated keys, and the id each
+// wrap is bound to (AAD_kek) names the purpose, so a wrap made for one never
+// opens as the other.
+func NewLocalPurpose(identity *age.X25519Identity, purpose string) (*Local, error) {
+	if purpose != PurposePlatform && purpose != PurposeCred {
+		return nil, fmt.Errorf("local KEK: unknown purpose %q", purpose)
+	}
+	return newLocal(identity.String(), identity.Recipient().String(), "local/"+purpose+":", localInfo+"/"+purpose)
+}
+
+// newLocal is NewLocal over the strings it reads, so the golden vectors can
 // pin the derivation without committing an age secret key.
-func newLocal(ikm, recipient string) (*Local, error) {
-	key, err := hkdf.Key(sha256.New, []byte(ikm), nil, localInfo, DEKSize)
+func newLocal(ikm, recipient, idPrefix, info string) (*Local, error) {
+	key, err := hkdf.Key(sha256.New, []byte(ikm), nil, info, DEKSize)
 	if err != nil {
 		return nil, fmt.Errorf("derive the local KEK: %w", err)
 	}
 	fp := sha256.Sum256([]byte(recipient))
-	return &Local{id: "local:" + hex.EncodeToString(fp[:8]), key: key}, nil
+	return &Local{id: idPrefix + hex.EncodeToString(fp[:8]), key: key}, nil
 }
 
 // ID implements KEK.
@@ -196,9 +219,10 @@ func (l *Local) aad(bind map[string]string) ([]byte, error) {
 }
 
 // WrapAAD is AAD_kek = Encode("wardyn/kek/v1", owner, name, kek_id): what every
-// provider binds a wrap to, as associated data (local, Transit). A bind missing
-// either key is refused rather than defaulted: a zero value here would seal a
-// DEK to the wrong row.
+// provider binds a wrap to, as associated data (local, Transit). The kek_id
+// carries the purpose, so the label stays one for every local KEK. A bind
+// missing either key is refused rather than defaulted: a zero value here would
+// seal a DEK to the wrong row.
 func WrapAAD(bind map[string]string, kekID string) ([]byte, error) {
 	owner, okO := bind[BindOwner]
 	name, okN := bind[BindName]

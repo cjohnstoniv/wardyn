@@ -32,7 +32,7 @@ func r3bTruncatedServer(t *testing.T, truncated bool) *client.Client {
 	return client.New(srv.URL, "tok")
 }
 
-// TestR3BListFamiliesSurfaceTruncation is F265's pin.
+// TestListFamiliesSurfaceTruncation is F265's pin.
 //
 // The package doc names X-Wardyn-Truncated as THE pagination contract for "the
 // list endpoints and the audit trail", but only AuditEventsPage honoured it:
@@ -41,7 +41,8 @@ func r3bTruncatedServer(t *testing.T, truncated bool) *client.Client {
 // one — the CLI printed it with exit 0, nothing on stderr and no marker in
 // --json. Every list family now has a *Page variant returning the bool, and the
 // plain forms stay as thin wrappers so existing callers are unchanged.
-func TestR3BListFamiliesSurfaceTruncation(t *testing.T) {
+func TestListFamiliesSurfaceTruncation(t *testing.T) {
+	// ticket: R3B
 	ctx := context.Background()
 
 	for _, tc := range []struct {

@@ -490,8 +490,12 @@ func ageKeyCheck(durable bool) SetupCheck {
 // the organisation's store; kek_service when a key service wraps every data
 // key; otherwise the age-key row, plus kek_local (SETUP_CHECK.KEK_LOCAL) on a
 // multi-user install, where whoever holds both the database and the local key
-// reads every person's credentials.
-func secretStoreChecks(external, keyService string, durable, multiUser bool) []SetupCheck {
+// reads every person's credentials, and platform_shared
+// (SETUP_CHECK.PLATFORM_SHARED) while no WARDYN_PLATFORM_KEY_FILE is set
+// (§2.13 c): the age key then protects wardynd's own signing and session keys
+// and people's credentials alike, so one leak of it forges run identities and
+// sessions.
+func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate bool) []SetupCheck {
 	switch {
 	case external != "":
 		return []SetupCheck{{
@@ -510,6 +514,13 @@ func secretStoreChecks(external, keyService string, durable, multiUser bool) []S
 			ID: "kek_local", Label: "Credential key", Status: "warn",
 			Detail: "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart.",
 			Fix:    "Set WARDYN_KEK=transit with a Vault Transit key (docs/OPERATIONS.md), then run `wardynd -rewrap`.",
+		})
+	}
+	if !platformSeparate {
+		checks = append(checks, SetupCheck{
+			ID: "platform_shared", Label: "Platform key separation", Status: "warn",
+			Detail: "Wardyn's own signing and session keys are protected by the same key as people's credentials.",
+			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap` once, then restart wardynd with it set.",
 		})
 	}
 	return checks

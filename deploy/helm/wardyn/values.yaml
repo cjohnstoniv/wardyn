@@ -171,7 +171,8 @@ auth:
   # (plus WARDYN_OIDC_OPERATOR_EMAILS or WARDYN_OIDC_ROLE_MAP) and refuses to
   # render — same as wardynd itself refuses to boot (validateSSOOnlyPosture,
   # cmd/wardynd/boot_posture.go) — alongside adminToken above, or
-  # env.WARDYN_LOCAL_MODE / WARDYN_MEMBER_MODE / WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
+  # env.WARDYN_LOCAL_MODE / WARDYN_USER_DESKTOP (deprecated alias WARDYN_MEMBER_MODE,
+  # removed in 0.9) / WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
   ssoOnly: false
 
 secrets:
@@ -240,6 +241,12 @@ secretStore:
     # Kubernetes-auth role; bind it to this chart's service account and the
     # release namespace, with audience = tokenAudience.
     role: ""
+    # Recommended: a second Kubernetes-auth role, bound to the same service
+    # account, whose policy covers only <kvPrefix>/platform/* — wardynd reads
+    # and writes its own signing, session and SSH host keys as this role, and
+    # everything else as role, whose policy then leaves platform/ out
+    # (docs/OPERATIONS.md, "Two Vault roles"). Empty = one role for both.
+    rolePlatform: ""
     tokenAudience: vault
     tokenExpirationSeconds: 3600
     tokenFile: ""

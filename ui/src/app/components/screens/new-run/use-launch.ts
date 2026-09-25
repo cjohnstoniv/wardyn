@@ -137,7 +137,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
         setLaunchedRunId(created.id);
         setLaunching(false); // nothing reads it once onOpenRun is set.
       } else {
-        navigate(`/runs/${encodeURIComponent(created.id)}`);
+        void navigate(`/runs/${encodeURIComponent(created.id)}`);
       }
     } catch (e) {
       setError(getErrorMessage(e) || "Failed to launch run.");

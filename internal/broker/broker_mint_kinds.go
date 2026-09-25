@@ -34,7 +34,7 @@ import (
 // steer this very namespace, since pg.Store.Get's `ORDER BY (owned_by = $1)
 // DESC` makes the named owner's row win over the operator's. api.runIdentitySubject
 // (internal/api/runs_policy.go) mints the subject from the INJECTED local
-// principal, not the raw header, which carries attribution only (F099).
+// principal, not the raw header, which carries attribution only.
 func ownerOf(caller *identity.Claims) string {
 	if caller == nil {
 		return ""

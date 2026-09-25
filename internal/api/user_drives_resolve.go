@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -290,14 +291,8 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, ce
 		// different things: one is "your profile shuts the drive door", the
 		// other "nobody can tell whether it is shut", and an operator filtering
 		// by target is asking about the drive either way.
-		//
-		// Guarded on the SINK for the reason the twin states: auditEvent is
-		// evaluated as recordAudit's ARGUMENT, so a Server assembled without
-		// New() would still build the row and stamp it from a nil cfg.Now.
-		if s.cfg.Audit != nil && !isDisplayRead(ctx) {
-			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
-				"authz.denied", "runs.drive", "denied",
-				mustJSON(map[string]any{"reason": "groups_snapshot_stale"})))
+		if !isDisplayRead(ctx) {
+			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonGroupsSnapshotStale, "runs.drive", ""))
 		}
 		return nil, errGroupsSnapshotStale
 	}

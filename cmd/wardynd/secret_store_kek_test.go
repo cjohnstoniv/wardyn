@@ -34,3 +34,15 @@ func TestBuildKEK_FailsClosed(t *testing.T) {
 		t.Fatalf("WARDYN_KEK=local with no Transit key = (%v, %v, %v); want no key service", k, writes, err)
 	}
 }
+
+// TestRewrapMode_KeyServiceNeedsNoAgeKey: with WARDYN_KEK=transit, -rewrap
+// needs no age key (every row may already be under the key service), so the
+// age-key refusal gives way to the key service's own checks, which still run
+// before the database is touched.
+func TestRewrapMode_KeyServiceNeedsNoAgeKey(t *testing.T) {
+	f := rekeyFlags("postgres://nobody@127.0.0.1:1/nope?connect_timeout=1", "", "")
+	*f.vault.kek = kekTransit
+	if err := rewrapMode(f); err == nil || !strings.Contains(err.Error(), "needs WARDYN_VAULT_TRANSIT_KEY") {
+		t.Fatalf("-rewrap with WARDYN_KEK=transit and no Transit key = %v; want the key service's refusal", err)
+	}
+}

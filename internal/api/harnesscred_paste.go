@@ -38,22 +38,13 @@ const (
 // harnessPasteRefusal validates an operator-pasted harness credential and
 // returns the 400 sentence, or "" when the paste may proceed.
 //
-// The first check is the point. `captureViaHelper` is a real field on the
-// provider row (harnesscred.go): it says this credential is written to a file
-// inside a login sandbox and uploaded by an in-sandbox helper, never printed to
-// a PTY and scraped. aws is such a row, and it also has no tokenPrefix, so the
-// existing format guard let a paste straight through to
-// Secrets.Put(harness-credential-aws) — overwriting the reserved, structured SSO
-// blob with {"token":…}. Bedrock then fell through to the ~/.aws mount or static
-// keys with no refusal anywhere, and the arbitrary pasted string was added to
-// the process-global mask corpus for the life of the daemon, which is the exact
-// abuse ssotoken.go's upload path already defends itself against.
-//
-// The paste door is the only writer refused here. DISCONNECT is untouched: it
-// deletes through the caller's own scope (handleHarnessDisconnect resolves the
-// per_user namespace), so removing a helper-captured session is a legitimate,
-// already-scoped operation — and with paste refused, the unscoped For("") write
-// that made the two disagree can no longer happen at all.
+// The first check is the point: a `captureViaHelper` row (aws) is uploaded by an
+// in-sandbox helper, never pasted, and has no tokenPrefix, so a paste would
+// overwrite the reserved, structured SSO blob in harness-credential-aws with
+// {"token":…} and add an arbitrary string to the process-global mask corpus —
+// the abuse ssotoken.go's upload path already defends against. Only the paste
+// door is refused: DISCONNECT deletes through the caller's own scope
+// (handleHarnessDisconnect resolves the per_user namespace), which is legitimate.
 func harnessPasteRefusal(hl harnessLogin, token string) string {
 	if hl.captureViaHelper {
 		return fmt.Sprintf(harnessPasteViaHelperRefusal, hl.provider)

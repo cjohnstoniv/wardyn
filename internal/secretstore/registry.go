@@ -16,16 +16,20 @@ import (
 // Deps are the platform primitives a secretstore.Store constructor may use. The
 // age identity is parsed (and the demo-key guard applied) by the control plane
 // before construction, and is nil in store mode when no WARDYN_AGE_KEY is set.
+// PlatformIdentity is WARDYN_PLATFORM_KEY_FILE's, or nil: set, the boot keys
+// are wrapped under a KEK of their own rather than one the age key derives
+// (design §2.13 c).
 // External is the configured external store client, or nil: store mode writes
 // to it, and every mode reads the pointer rows it names (design §2.2).
 type Deps struct {
-	Pool        *pgxpool.Pool
-	AgeIdentity age.Identity
+	Pool             *pgxpool.Pool
+	AgeIdentity      age.Identity
+	PlatformIdentity age.Identity
 	// KEK is the configured key service (Vault Transit), or nil. It reads the
 	// rows sealed under it; with KEKWrites (WARDYN_KEK=transit) it also wraps
-	// every data key the store writes, while the local KEK keeps reading the
-	// rows sealed under that (design §2.3). Read-only, it lets an install move
-	// back to the local key.
+	// every data key the store writes, boot keys included, while the local
+	// KEKs keep reading the rows sealed under them (design §2.3). Read-only,
+	// it lets an install move back to the local key.
 	KEK       kek.KEK
 	KEKWrites bool
 	External  External

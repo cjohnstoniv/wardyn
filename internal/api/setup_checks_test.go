@@ -160,14 +160,14 @@ func TestTlsCookiePostureCheck(t *testing.T) {
 // success) and "" (indeterminate — an old daemon build, or in principle any
 // unproven state; see the field's doc for why a genuinely indeterminate LIVE
 // canary can never reach here). Never confuses Indeterminate with Enforcing.
-// TestSiteConfigCheck_DanglingSecretRef pins W26-S1-2: on base 763beb5,
-// siteConfigCheck graded "info" ("every run inherits it") purely off whether
-// UpstreamProxySecretRef/EgressRedirects/ScmHosts were SET — never whether the
-// secret they name is actually present. After the documented reset+apply
-// recovery (`wardyn site-config get > f` before a reset, `wardyn site-config
-// apply f` after) with the referenced secret never restored, that read as
-// fully configured while the credentialed path was dead. It must now grade
-// "warn" and name the missing secret.
+// TestSiteConfigCheck_DanglingSecretRef pins that siteConfigCheck grades on
+// whether the secret UpstreamProxySecretRef/EgressRedirects/ScmHosts name is
+// actually present, not only on whether those fields are set. After the
+// documented reset+apply recovery (`wardyn site-config get > f` before a
+// reset, `wardyn site-config apply f` after) with the referenced secret never
+// restored, "info" ("every run inherits it") would read as fully configured
+// while the credentialed path is dead. It must grade "warn" and name the
+// missing secret.
 func TestSiteConfigCheck_DanglingSecretRef(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -228,11 +228,11 @@ func TestSiteConfigCheck_DanglingSecretRef(t *testing.T) {
 	}
 }
 
-// TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured is B7-F5: a document
+// TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured: a document
 // declaring ONLY InternalHosts (the one override that LIFTS the proxy's
-// private/reserved-IP SSRF guard) used to read as "No operator-wide site
-// config yet (optional)" — the emptiness test never looked at InternalHosts,
-// UpstreamProxyNoProxy or WorkspaceProviders.
+// private/reserved-IP SSRF guard) must not read as "No operator-wide site
+// config yet (optional)" — the emptiness test has to look at InternalHosts,
+// UpstreamProxyNoProxy and WorkspaceProviders too.
 func TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured(t *testing.T) {
 	cases := []struct {
 		name string
@@ -284,8 +284,8 @@ func TestInternalHostsCheck(t *testing.T) {
 	}
 }
 
-// TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly is B7-F10:
-// every redirect network-only used to render "(ecosystems: ; 2
+// TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly: when every
+// redirect is network-only, the row must not render "(ecosystems: ; 2
 // network-only)" — a bare, truncated-looking clause. The ecosystems: segment
 // must be OMITTED, not empty, when there are no ecosystem-tagged rows.
 func TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly(t *testing.T) {
@@ -384,12 +384,12 @@ func TestK8sEgressContainmentCheck_Acknowledged(t *testing.T) {
 	}
 }
 
-// TestRunnerCheckCC1OnlyFixIsDriverAware (W4-S1-5/W27-S1-4): a CC1-only host's
-// Fix used to unconditionally read "run `wardyn setup wall` (or `wardyn setup
-// vault`)" — a DOCKER host command that means nothing on a k8s runner, where
-// the actual lever is pinning a cluster-registered RuntimeClass via Helm
-// (k8s.runtimeClasses.CC2/.CC3). The docker driver keeps the original command;
-// only k8s swaps to the Helm-shaped fix.
+// TestRunnerCheckCC1OnlyFixIsDriverAware: a CC1-only host's Fix must not
+// unconditionally read "run `wardyn setup wall` (or `wardyn setup vault`)" — a
+// Docker host command that means nothing on a k8s runner, where the actual
+// lever is pinning a cluster-registered RuntimeClass via Helm
+// (k8s.runtimeClasses.CC2/.CC3). The docker driver keeps that command; only
+// k8s swaps to the Helm-shaped fix.
 func TestRunnerCheckCC1OnlyFixIsDriverAware(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -418,7 +418,7 @@ func TestRunnerCheckCC1OnlyFixIsDriverAware(t *testing.T) {
 	}
 }
 
-// TestPermissionsPostureCheck is the #19b regression: the row must always be
+// TestPermissionsPostureCheck: the row must always be
 // "info" (a posture choice, never a misconfiguration to warn/fail about — an
 // operator may legitimately leave every kind fail-open) and must name exactly
 // which of the four capability kinds are enforced vs left at the fail-open
@@ -544,22 +544,14 @@ func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
 	}
 }
 
-// TestAgeKeyCheckFixSteersToASecretBackedKey is R5 F159/F190. The warn arm's Fix
-// used to offer `helm: env.WARDYN_AGE_KEY` — which renders the secret store's
-// MASTER key as a plaintext literal in the Deployment object, readable by
-// anything with `get deploy` and captured in every `helm get manifest`. The
-// chart has two Secret-backed doors (deploy/helm/wardyn/values.yaml's
-// secrets.ageKeyFromSecret over the postgres.dsn.secretRef Secret's `age-key`
-// entry, and secrets.ageKeySecretRef.name for a separate Secret), and the
-// console's own remedy has to name them.
 // In store mode there is no local key to be durable: the age-key row gives
 // way to store_external, which names the store (design §3).
 func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
-	chks := secretStoreChecks("Vault at vault.example:8200", "", true, true)
+	chks := secretStoreChecks("Vault at vault.example:8200", "", true, true, false)
 	if len(chks) != 1 || chks[0].ID != "store_external" || chks[0].Status != "ok" || !strings.Contains(chks[0].Detail, "Vault at vault.example:8200") {
 		t.Fatalf("store mode rows = %+v", chks)
 	}
-	if got := secretStoreChecks("", "", false, false); len(got) != 1 || got[0].ID != "age_key" || got[0].Status != "warn" {
+	if got := secretStoreChecks("", "", false, false, true); len(got) != 1 || got[0].ID != "age_key" || got[0].Status != "warn" {
 		t.Fatalf("local mode rows = %+v, want the age-key warning unchanged", got)
 	}
 }
@@ -568,20 +560,57 @@ func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
 // install adds the amber kek_local row (design §3, K3), and a single-user one
 // does not.
 func TestSecretStoreChecks_KeyServiceAndLocalKey(t *testing.T) {
-	chks := secretStoreChecks("", "Vault Transit at vault.example:8200", true, true)
+	chks := secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false)
 	if len(chks) != 1 || chks[0].ID != "kek_service" || chks[0].Status != "ok" || !strings.Contains(chks[0].Detail, "Vault Transit at vault.example:8200") {
 		t.Fatalf("key service rows = %+v", chks)
 	}
-	chks = secretStoreChecks("", "", true, true)
+	chks = secretStoreChecks("", "", true, true, true)
 	if len(chks) != 2 || chks[0].ID != "age_key" || chks[1].ID != "kek_local" || chks[1].Status != "warn" ||
 		chks[1].Detail != "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart." {
 		t.Fatalf("multi-user local key rows = %+v", chks)
 	}
-	if got := secretStoreChecks("", "", true, false); len(got) != 1 || got[0].ID != "age_key" {
+	if got := secretStoreChecks("", "", true, false, true); len(got) != 1 || got[0].ID != "age_key" {
 		t.Fatalf("single-user local key rows = %+v, want the age-key row alone", got)
 	}
 }
 
+// TestSecretStoreRows_PlatformShared is SETUP_CHECK.PLATFORM_SHARED (design
+// §3): amber in local mode while the age key protects the boot keys too, gone
+// once they have a key of their own, live in the organisation's store, or are
+// wrapped by a key service.
+func TestSecretStoreRows_PlatformShared(t *testing.T) {
+	rows := secretStoreChecks("", "", true, false, false)
+	if len(rows) != 2 || rows[0].ID != "age_key" {
+		t.Fatalf("local mode, one key = %+v, want the age-key row then platform_shared", rows)
+	}
+	chk := rows[1]
+	if chk.ID != "platform_shared" || chk.Status != "warn" ||
+		chk.Detail != "Wardyn's own signing and session keys are protected by the same key as people's credentials." ||
+		!strings.Contains(chk.Fix, "WARDYN_PLATFORM_KEY_FILE") || !strings.Contains(chk.Fix, "wardynd -rewrap") {
+		t.Fatalf("platform_shared = %+v", chk)
+	}
+	for label, c := range map[string]struct {
+		external, keyService string
+		separate             bool
+	}{
+		"a separate platform key": {"", "", true},
+		"store mode":              {"Vault at vault.example:8200", "", false},
+		"a key service":           {"", "Vault Transit at vault.example:8200", false},
+	} {
+		if rows := secretStoreChecks(c.external, c.keyService, true, false, c.separate); len(rows) != 1 {
+			t.Errorf("%s: rows %+v, want only the store's own row", label, rows)
+		}
+	}
+}
+
+// TestAgeKeyCheckFixSteersToASecretBackedKey: the warn arm's Fix must not offer
+// `helm: env.WARDYN_AGE_KEY` — that renders the secret store's master key as a
+// plaintext literal in the Deployment object, readable by anything with `get
+// deploy` and captured in every `helm get manifest`. The chart has two
+// Secret-backed doors (deploy/helm/wardyn/values.yaml's secrets.ageKeyFromSecret
+// over the postgres.dsn.secretRef Secret's `age-key` entry, and
+// secrets.ageKeySecretRef.name for a separate Secret), and the console's own
+// remedy has to name them.
 func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	if fix := ageKeyCheck(true).Fix; fix != "" {
 		t.Errorf("durable arm carries a Fix (%q) — an ok row has nothing to fix", fix)
@@ -614,13 +643,13 @@ func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	}
 }
 
-// TestAgeKeyCheckDetailNamesUnrecoverableConsequence is #755 (0.7.12 release
-// review, F3). The warn arm's Detail said secrets "become unreadable after a
-// restart", which reads as a one-time, future event. The row only shows while
-// wardynd runs on an ephemeral key, and convertSecretStore refuses that boot
-// whenever age-sealed rows exist, so no earlier ephemeral key's rows can be
-// present here: what the operator must hear is that what is stored NOW is lost
-// at the next restart, and that the next boot refuses to start over it.
+// TestAgeKeyCheckDetailNamesUnrecoverableConsequence (#755): the warn arm's
+// Detail must not read as a one-time, future event ("become unreadable after a
+// restart"). The row only shows while wardynd runs on an ephemeral key, and
+// convertSecretStore refuses that boot whenever age-sealed rows exist, so no
+// earlier ephemeral key's rows can be present here: what the operator must hear
+// is that what is stored now is lost at the next restart, and that the next
+// boot refuses to start over it.
 func TestAgeKeyCheckDetailNamesUnrecoverableConsequence(t *testing.T) {
 	detail := ageKeyCheck(false).Detail
 	for _, want := range []string{"lost at the next restart", "no key set afterward", "next boot refuses to start"} {
@@ -630,7 +659,7 @@ func TestAgeKeyCheckDetailNamesUnrecoverableConsequence(t *testing.T) {
 	}
 }
 
-// ── finding 3: bedrock_provider / llm_provider under a per-principal caller ──
+// finding 3: bedrock_provider / llm_provider under a per-principal caller
 
 // bedrockRowVia is bedrockProviderCheck fed the SAME setupBedrock a real
 // request would compute for scope — real per_user zeroing included — so
@@ -683,9 +712,8 @@ func TestBedrockProviderCheck_MechanismPrincipalIsInfoNotWarn(t *testing.T) {
 	}
 }
 
-// TestBedrockProviderCheck_SharedRowUnchanged pins the load-bearing regression:
-// the ORIGINAL shared-row text, byte-for-byte, through the per_user/mechanism
-// refactor.
+// TestBedrockProviderCheck_SharedRowUnchanged pins the load-bearing shared-row
+// text, byte-for-byte, through the per_user/mechanism split.
 func TestBedrockProviderCheck_SharedRowUnchanged(t *testing.T) {
 	chk := bedrockRowVia(t, awsSSOScope{})
 	want := SetupCheck{
@@ -699,7 +727,7 @@ func TestBedrockProviderCheck_SharedRowUnchanged(t *testing.T) {
 }
 
 // TestLLMProviderCheck_NoBedrockRowUnchanged pins the OTHER load-bearing
-// regression: an install with no Bedrock row at all keeps today's exact
+// text: an install with no Bedrock row at all keeps the exact
 // optional-provider sentence.
 func TestLLMProviderCheck_NoBedrockRowUnchanged(t *testing.T) {
 	got := llmProviderCheck("", SetupBedrock{})
@@ -768,7 +796,7 @@ var setupCheckBlockingStatus = map[string]string{
 // Blocking decision recorded here must fail the build, not default quietly
 // to non-blocking.
 var setupCheckNeverBlocks = map[string]bool{
-	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true,
+	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_shared": true,
 	"kek_service": true, "kek_local": true,
 	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
@@ -845,9 +873,9 @@ func TestSetupCheckBlocking(t *testing.T) {
 	assertSetupCheckBlocking(t, ageKeyCheck(true))
 	assertSetupCheckBlocking(t, ageKeyCheck(false))
 	for _, chks := range [][]SetupCheck{
-		secretStoreChecks("Vault at vault.example:8200", "", true, true),
-		secretStoreChecks("", "Vault Transit at vault.example:8200", true, true),
-		secretStoreChecks("", "", true, true),
+		secretStoreChecks("Vault at vault.example:8200", "", true, true, false),
+		secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false),
+		secretStoreChecks("", "", true, true, false),
 	} {
 		for _, chk := range chks {
 			assertSetupCheckBlocking(t, chk)

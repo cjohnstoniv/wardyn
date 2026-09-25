@@ -459,6 +459,7 @@ func run() error {
 		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),
 		SecretStoreExternal:   storesExternally(secrets),
 		SecretKeyService:      keyService(secrets),
+		PlatformKeySeparate:   strings.TrimSpace(*f.platformKeyFile) != "",
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",

@@ -20,7 +20,7 @@ import (
 	"testing"
 )
 
-// ─── fixtures built by real git ─────────────────────────────────────────────
+// fixtures built by real git
 //
 // Every non-hostile fixture in this file is a receive-pack request body that a
 // real `git push` produced. The trick is --receive-pack: git speaks the same
@@ -134,7 +134,7 @@ func (r *repo) push(refspec string, extra ...string) []byte {
 	return body
 }
 
-// ─── assertions ─────────────────────────────────────────────────────────────
+// assertions
 
 // paths renders a change set as one "path mode size" line per change, in the
 // order Inspect returned it.
@@ -153,7 +153,7 @@ func wantChanges(t *testing.T, got []Change, want ...string) {
 	}
 }
 
-// ─── the change set ─────────────────────────────────────────────────────────
+// the change set
 
 // TestPackInspect_SelfContainedPackReportsChangedPaths pins the whole answer for
 // an ordinary second push, INCLUDING both documented over-reports:
@@ -276,7 +276,7 @@ func TestPackInspect_ResolvesAnOffsetDeltaAgainstItsBase(t *testing.T) {
 	)
 }
 
-// ─── the refusals ───────────────────────────────────────────────────────────
+// the refusals
 
 // TestPackInspect_ThinPackIsUninspectable is the first-class refusal: --thin
 // deltas against a base that lives only on the receiving side, and chasing it
@@ -482,7 +482,7 @@ func TestPackInspect_DirectoryModeIsMaskedLikeGit(t *testing.T) {
 	}
 }
 
-// ─── the wire ───────────────────────────────────────────────────────────────
+// the wire
 
 // TestPackInspect_SkipsThePushOptionsSection: `git push -o` puts a second
 // pkt-line section between the commands and the pack. Reading it as pack bytes
@@ -537,7 +537,7 @@ func TestPackInspect_UnknownObjectFormatIsRefused(t *testing.T) {
 	}
 }
 
-// ─── the delta applier ──────────────────────────────────────────────────────
+// the delta applier
 //
 // The dangerous failure is an applier that quietly produces a short or over-long
 // buffer: the object then hashes to nothing the tree names, the path is still
@@ -633,7 +633,7 @@ func TestPackInspect_LyingDeltaFailsClosed(t *testing.T) {
 	}
 }
 
-// ─── the tree diff ──────────────────────────────────────────────────────────
+// the tree diff
 
 // TestPackTree_DiffReportsOnlyWhatChanged pins the diff directly. It is not
 // observable through Inspect: the oldest new commit in any pack has no
@@ -834,7 +834,7 @@ func TestPackChange_UnknownSizeIsNeverWithinALimit(t *testing.T) {
 	}
 }
 
-// ─── the walk's ceilings ────────────────────────────────────────────────────
+// the walk's ceilings
 //
 // Real git cannot build these: every one is a tree object naming another tree
 // object that was never written to describe a directory.
@@ -1104,7 +1104,7 @@ func TestPackTree_MergeIsChargedOnlyForItsOwnComparisons(t *testing.T) {
 	}
 }
 
-// ─── hand-built hostile fixtures ────────────────────────────────────────────
+// hand-built hostile fixtures
 //
 // Only the fixtures a real git will never produce are assembled here.
 
