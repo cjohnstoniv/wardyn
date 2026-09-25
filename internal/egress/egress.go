@@ -114,7 +114,7 @@ type ScanSummary struct {
 	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel" | "findings_capped"
 	Findings   []ScanFinding `json:"findings,omitempty"`
 	// FindingsCapped and FindingsPastCap put the per-request findings cap ON
-	// THE WIRE (F075).
+	// THE WIRE.
 	//
 	// Findings above carries at most the cap's worth of rows, so a truncated
 	// scan would otherwise be indistinguishable in the audit from one that
@@ -156,7 +156,7 @@ type InjectionRule struct {
 	// Format wraps the secret, e.g. "Bearer %s".
 	Format string `json:"format"`
 	// RequireTLS declares that this rule's credential may ride ONLY a transport
-	// the proxy runs TLS on (F110's residual half). It is the operator's
+	// the proxy runs TLS on. It is the operator's
 	// transport intent, which no other field could carry: injectableTransport
 	// (internal/egress/proxy/inject.go) can rule out cleartext to :443 and to a
 	// host the proxy itself only ever speaks TLS to, but a plaintext connector on

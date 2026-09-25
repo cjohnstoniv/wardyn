@@ -48,6 +48,7 @@ describe("RequireSetup — a re-render before the redirect lands (#469)", () => 
   // after the router has queued the route change as a transition, so React
   // re-renders the wrapper at the OLD location first.
   function Bump({ onBump }: { onBump: () => void }) {
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once: one bump, in the gate's own commit
     React.useEffect(onBump, []);
     return null;
   }

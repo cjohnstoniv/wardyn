@@ -26,7 +26,7 @@ import type {
   SCMAccess,
   SetupHarnessTool,
 } from "../../../lib/types";
-import { Button } from "../../ui/button";
+import { Button, buttonVariants } from "../../ui/button";
 import { AutonomyChip, Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
@@ -403,7 +403,7 @@ export function RunRail({
     door.openDoor(launchRef.current, () => onLaunchRef.current());
     // The strip and the line above catch up with what the server just said.
     void door.refresh();
-  }, [launch.credentialRefused, door.open, door.bedrockSSO, door.perUser, door.operator, door.openDoor, door.refresh]);
+  }, [launch.credentialRefused, door]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
@@ -701,10 +701,10 @@ export function RunRail({
                 href={adoDialog.blockedUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-medium text-info hover:underline"
+                className={buttonVariants({ variant: "outline", size: "sm" })}
                 onClick={adoDialog.onFallbackClick}
               >
-                {ADO.CONNECT_CTA}
+                {ADO.CONNECT_POPUP_OPEN}
               </a>
             </p>
           )}

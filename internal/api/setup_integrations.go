@@ -274,6 +274,14 @@ func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 	return out
 }
 
+// setupIntegrationID is the capIntegration value a row is offered under — the
+// id a run names in req.IntegrationID.
+func setupIntegrationID(in SetupIntegration) string { return in.ID }
+
+// setupHarnessToolID is the capAgent value a harness is offered under — the
+// run's --agent string.
+func setupHarnessToolID(t SetupHarnessTool) string { return t.ID }
+
 // handleListIntegrations returns the effective integration set (stored ∪
 // legacy-derived) with each row's live capabilities. Read-only, humanOrAdmin.
 //
@@ -290,7 +298,7 @@ func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 //	GET /api/v1/integrations
 func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) {
 	present := s.presentSecretNamesFor(r.Context(), s.secretOwnerFromRequest(r))
-	rows := s.integrationsWithCapabilities(r.Context(), present)
+	rows := capVisible(r.Context(), s, capIntegration, s.integrationsWithCapabilities(r.Context(), present), setupIntegrationID)
 	if !s.isOperator(r.Context()) {
 		rows = memberSafeIntegrations(rows)
 	}

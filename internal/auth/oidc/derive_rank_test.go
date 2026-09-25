@@ -140,11 +140,12 @@ func TestDeriveRoleArm1UntouchedBySecurityAdmin(t *testing.T) {
 
 // TestDeriveRoleUnknownMapValueIsInert: a value that is not a valid role
 // contributes nothing to the fold AND produces no Match — the exhaustive-case
-// behavior of the pre-0.7 switch, now expressed as a ValidRole guard. Without
+// behavior of the pre-0.7 switch, now expressed as a SplitMappingTarget guard
+// (a lowercase slug would be a user type id, so the garbage here is not one). Without
 // it, a garbage row would rank 0 yet still appear in the provenance list as if
 // it had been consulted.
 func TestDeriveRoleUnknownMapValueIsInert(t *testing.T) {
-	roleMap := map[string]string{"eng-team": oidc.RoleUser, "weird": "superadmin"}
+	roleMap := map[string]string{"eng-team": oidc.RoleUser, "weird": "Super_Admin"}
 	role, matches, ok := oidc.DeriveRoleForTest([]string{"weird"}, []string{"eng-team"}, "", roleMap, nil, "")
 	if !ok || role != oidc.RoleUser {
 		t.Fatalf("role = %q ok=%v, want %q true", role, ok, oidc.RoleUser)
@@ -169,7 +170,7 @@ func TestDeriveRoleDefaultRoleFallthroughUnchanged(t *testing.T) {
 	}
 }
 
-// TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03 pins the exact hazard the
+// TestDeriveRoleComposeDefaultDeniesUnlistedLogin pins the exact hazard the
 // blind review (R-03) caught before it shipped: giving WARDYN_OIDC_ROLE_MAP a
 // RUNTIME `:-` default on the compose stack — demo@wardyn.local=admin,
 // member@wardyn.local=member — would have applied to every EXISTING deployment
@@ -184,18 +185,19 @@ func TestDeriveRoleDefaultRoleFallthroughUnchanged(t *testing.T) {
 // than as a docker-compose.yaml runtime default; this test pins the underlying
 // deriveRole behavior directly against the literal string, so the hazard stays
 // provable even if the shape of the fix changes later.
-func TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03(t *testing.T) {
+func TestDeriveRoleComposeDefaultDeniesUnlistedLogin(t *testing.T) {
+	// ticket: R03
 	const composeDefault = "demo@wardyn.local=admin,member@wardyn.local=user"
 	roleMap, err := oidc.ParseRoleMap(composeDefault)
 	if err != nil {
 		t.Fatalf("ParseRoleMap(%q): %v", composeDefault, err)
 	}
 
-	// (a) An allowlist-only deployment: today bob@corp.com is a MEMBER with a
+	// (a) An allowlist-only deployment: bob@corp.com is a member with a
 	// working login via arm 1's legacy-allowlist branch (alice is admin,
 	// everyone else who signs in is a member). Under the compose default, bob
 	// matches neither the chart map nor the allowlist, and no DefaultRole is
-	// set — the login that used to succeed is now denied.
+	// set — so the same login is denied.
 	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "bob@corp.com", roleMap, []string{"alice@corp.com"}, ""); ok {
 		t.Fatalf("bob@corp.com resolved to %q under the compose default role map — want deny (ok=false); this is the allowlist-only lockout R-03 exists to prevent", role)
 	}
@@ -231,7 +233,7 @@ func TestParseRoleMapAcceptsSecurityAdmin(t *testing.T) {
 	if m["wardyn.security"] != oidc.RoleSecurityAdmin {
 		t.Fatalf("parsed map = %v, want wardyn.security => %q", m, oidc.RoleSecurityAdmin)
 	}
-	_, err = oidc.ParseRoleMap("x=superadmin")
+	_, err = oidc.ParseRoleMap("x=Super_Admin")
 	if err == nil {
 		t.Fatal("ParseRoleMap accepted an invalid role")
 	}

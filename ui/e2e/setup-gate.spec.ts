@@ -224,6 +224,30 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await page.waitForURL(/\/setup/);
   });
 
+  test("a gated redirect paints the funnel from the status that fired the gate, not a second read (#806)", async ({
+    page,
+  }) => {
+    // SetupScreen used to show "Checking Wardyn's setup…" with no rail until its
+    // OWN /setup/status read answered: a second round trip, serialized after the
+    // one that fired the gate. Every read after the gate's is held here, so the
+    // rail can only appear from the status the console already had. (The
+    // setup-gate CI flake family that raised #806 traced to the gate's redirect
+    // race instead, #469.)
+    await mockGatedStatus(page);
+    let reads = 0;
+    // Registered last, so it sees every read first; the first falls through to
+    // mockGatedStatus, every later one is never answered.
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      reads += 1;
+      if (reads === 1) await route.fallback();
+    });
+    await skipHero(page);
+    await page.goto("/");
+    await page.waitForURL(/\/setup/);
+    await expect(page.getByRole("navigation", { name: "Setup steps" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /pick your barrier/i })).toBeVisible();
+  });
+
   test("negative control: an ONBOARDED install with the same warn is never gated", async ({
     page,
   }) => {
@@ -540,7 +564,8 @@ test.describe("setup counter and rail — three categories, not two (#213)", () 
 // to force horizontal scroll on the WHOLE page the moment it opened, not just
 // clip the popover. ui/popover.tsx's primitive-level
 // max-w-[calc(100vw-2rem)] (this lane) is what keeps it inside the viewport.
-test.describe("egress-redirect endpoint picker at 390px (F3-F8/F7-F7)", () => {
+test.describe("egress-redirect endpoint picker at 390px", () => {
+  // ticket: F3-F8/F7-F7
   test("390px: opening the From picker does not force horizontal scroll", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await skipHero(page);

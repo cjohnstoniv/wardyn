@@ -602,11 +602,11 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	granted := strings.Fields(resp.Scope)
+	granted := adoCaptureScopes(resp.Scope, cfg.Scopes)
 	if resp.RefreshToken == "" || len(granted) == 0 {
 		// No refresh token means nothing to store and nothing to renew; no
-		// granted scope means the authority told us nothing about what this
-		// credential may do. Either way there is no usable capture.
+		// granted scope inside the row's ceiling means this credential may do
+		// nothing a run could use. Either way there is no usable capture.
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
 			"reason": "unusable_grant", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
@@ -629,8 +629,12 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 	unlock := s.adoEntra.lock(subject, cfg.RowID)
 	defer unlock()
 	if err := s.storeADOEntraBlob(ctx, subject, cfg.RowID, blob); err != nil {
+		// The cause is logged, never put on the row: the trail and its SIEM
+		// export carry a fixed reason only, like every other store failure.
+		slog.ErrorContext(ctx, "wardynd: storing the captured Azure DevOps sign-in failed",
+			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "store_error", "error": err.Error(), "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
+			"reason": "store_error", "tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
 		http.Error(w, "storing the captured Azure DevOps sign-in failed", http.StatusInternalServerError)
 		return

@@ -179,7 +179,10 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		}
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", types.ADOEntraAccessTokenSecret, "failure", mustJSON(data)))
-		writeError(w, status, body)
+		// reason reaches the wire now (#204): the same machine class already
+		// recorded on the audit row, so the proxy can branch on it instead of
+		// string-matching the human sentence in body.
+		writeJSON(w, status, errorBody{Error: body, Reason: reason})
 		return true
 	}
 
@@ -204,7 +207,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
 	if !slices.ContainsFunc(adoEntraHosts(snapshot.Organisation), func(h string) bool { return hostEqual(h, minted.Injection.Host) }) {
-		return fail(http.StatusForbidden, "host-not-organisation", adoResolveHostPinRefusal,
+		return fail(http.StatusForbidden, "host_not_organisation", adoResolveHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
 	}
 	cfg, status, reason, body := s.adoEntraConfigFor(ctx, snapshot)

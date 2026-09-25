@@ -10,23 +10,11 @@
 // app-shell.tsx, which SidebarNav also relies on for its own trust-domain
 // panel.
 import { Link, useNavigate } from "react-router-dom";
-import {
-  ChevronsUpDown,
-  Compass,
-  Fingerprint,
-  FlaskConical,
-  KeyRound,
-  LogOut,
-  Moon,
-  Plus,
-  Settings,
-  Sun,
-} from "lucide-react";
+import { ChevronsUpDown, Fingerprint, LogOut, Moon, Plus, Sun } from "lucide-react";
 import { WardynWordmark } from "../wardyn/logo";
 import { Chip } from "../wardyn/primitives";
 import { useTheme } from "../wardyn/theme-provider";
 import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
-import { NAV } from "../../lib/unsaved-copy";
 import { Button } from "../ui/button";
 import {
   DropdownMenu,
@@ -36,7 +24,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import { MemberModeMenuItem } from "../wardyn/member-mode-banner";
+import { useShellView, ViewSwitch } from "../wardyn/view-switch";
+import { viewHome } from "../wardyn/console-view";
 import {
   isCustomIdentityProvider,
   isCustomTrustDomain,
@@ -70,18 +59,14 @@ export function TopBar({
 }) {
   // What the header calls "you": the IdP's display name, else the session
   // email, else the principal itself (an admin token or local mode has
-  // neither). Display only — PrincipalContext below keeps meta.principal.
+  // neither). Display only — usePrincipal() still reads meta.principal.
   const display = meta.name || meta.email || meta.principal;
   const { theme, toggle } = useTheme();
+  const { access, view, hasSwitch } = useShellView(meta);
   // #460 review — every plain <Link> in this header can navigate away from a
-  // dirty editor (app-shell.tsx#SidebarNav's own guardedClick precedent);
-  // this menu is the one place besides the sidebar the console offers that.
+  // dirty editor (app-shell.tsx#SidebarNav's own guardedClick precedent).
   const navigate = useNavigate();
   const guardedClick = useGuardedNavClick(navigate);
-  // M-1b: /settings is deleted — Settings now lives at /admin/settings, Your
-  // account at /account (both still mount the unsplit SettingsScreen until
-  // M-5 splits it).
-  const settingsTarget = meta.role === "user" ? "/account" : "/admin/settings";
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
       <MobileNav
@@ -90,13 +75,16 @@ export function TopBar({
         meta={meta}
       />
       <Link
-        to="/runs"
-        onClick={guardedClick("/runs")}
+        to={viewHome(view)}
+        onClick={guardedClick(viewHome(view))}
         className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
       >
         {/* F7-F2: icon-only below sm, so New run + the user menu stay onscreen. */}
         <WardynWordmark compact="sm" />
       </Link>
+      {/* Beside the wordmark (packet M-A QM-1): which console you are in is the
+          first thing read on every page. Below sm it moves into the nav sheet. */}
+      {hasSwitch && <ViewSwitch access={access} view={view} className="hidden sm:flex" />}
 
       {/* Shown ONLY when non-default. A default install is always
           wardyn.local / embedded, so these chips would be four constants nobody
@@ -135,9 +123,12 @@ export function TopBar({
           )}
         </Button>
 
-        <Button onClick={onNewRun} size="sm" aria-label="New run">
-          <Plus className="size-4" /> <span className="hidden sm:inline">New run</span>
-        </Button>
+        {/* The Admin view never launches (§3's fourth cue). */}
+        {view === "user" && (
+          <Button onClick={onNewRun} size="sm" aria-label="New run">
+            <Plus className="size-4" /> <span className="hidden sm:inline">New run</span>
+          </Button>
+        )}
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -200,60 +191,10 @@ export function TopBar({
                       : ""}
               </div>
             </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {/* The guided Getting Started funnel — an operator-chosen route
-                (setup-gate.ts has no hard gate any more), not the eight-item
-                sidebar: this menu entry and the Runs empty state's "guided
-                tour" link (runs-first-run.tsx) are the two ways in. */}
-            <DropdownMenuItem asChild>
-              <Link to="/setup" onClick={guardedClick("/setup")}>
-                <Compass className="size-4" /> Getting started
-              </Link>
-            </DropdownMenuItem>
-            {/* Settings is the one home for connections — Host · Model provider ·
-                Providers · Your SSH keys. M-1b: /settings and /integrations are
-                both deleted (clean break) — an admin tier lands on
-                /admin/settings, a member on their own /account. Hidden on a
-                SETTLED-but-unknown identity: this is the two-click route to the
-                operator-only Model-provider Connect/Disconnect card and the
-                Providers card into /admin/providers, and the shell paints no
-                route at all in that state, so the link would be an invitation
-                to a blank page. Sign out below stays — it is the one control
-                that still works. */}
-            {!(meta.resolved && !meta.identityResolved) && (
-              <DropdownMenuItem asChild>
-                <Link to={settingsTarget} onClick={guardedClick(settingsTarget)}>
-                  <Settings className="size-4" /> {NAV.SETTINGS}
-                </Link>
-              </DropdownMenuItem>
-            )}
-            <MemberModeMenuItem meta={meta} />
-            <DropdownMenuItem asChild>
-              <Link to="/ssh-keys" onClick={guardedClick("/ssh-keys")}>
-                <KeyRound className="size-4" /> SSH keys
-              </Link>
-            </DropdownMenuItem>
-            {/* Demos has no server-side role gate (routes.go), so admins keep
-                the same reasoning the old sidebar carried — it points into
-                Getting Started's first demo step, the one demos surface now
-                (/demos only redirects here). Hidden for members (Phase 5):
-                /setup?step=sealed-box is meaningless on the member's own
-                Getting Started (member-getting-started.tsx) — a member never
-                reaches the admin welcome hero or its step query at all, and
-                its own episode catalog is a single flat "Watch" list at the
-                bottom of the page, not a step deep link.
-                `!== "admin"`, never `=== "user"`. Only the SUPER admin's
-                SetupScreen honours ?step — a security admin's /setup/status is
-                redacted on the same !isOperator predicate (internal/api/setup.go)
-                and App.tsx hands them the same Getting Started, so the deep link
-                is exactly as dead for them. */}
-            {meta.role === "admin" && (
-              <DropdownMenuItem asChild>
-                <Link to="/setup?step=sealed-box" onClick={guardedClick("/setup?step=sealed-box")}>
-                  <FlaskConical className="size-4" /> Demos
-                </Link>
-              </DropdownMenuItem>
-            )}
+            {/* Slimmed to identity and Sign out (packet M-A): Getting started,
+                Setup, Settings and Your account live in the sidebar, the view
+                is the switch, and Preview as a new user is on the Permissions
+                header. */}
             {/* Local mode has no session to sign out of — humanOrAdminAuth
                 (internal/api/http.go) bypasses auth entirely, so "Sign out" would drop
                 the client to a SignIn screen whose admin-token field is unchecked

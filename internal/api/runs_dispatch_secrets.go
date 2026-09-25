@@ -125,7 +125,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 // dropped by filterMemberGrants even when the operator's ceiling lists the exact
 // (name, secret) pairing. An operator's own runs are unaffected — the ceiling
 // authority is never clamped by its own ceiling.
-const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"
+const envAllowMemberEnvSecret = "WARDYN_ALLOW_USER_ENV_SECRET"
 
 // resolveEnvSecretGrants resolves this run's env_secret grants store->sandbox
 // env at dispatch: each grant's scope names a stored secret and the variable to

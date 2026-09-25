@@ -105,6 +105,18 @@ func modelProviderRows(sc types.SiteConfig) []types.ModelProvider {
 	return sc.ModelProviders.Providers
 }
 
+// modelProviderByID returns the provider named id, and whether one exists.
+func modelProviderByID(block *types.ModelProviders, id string) (types.ModelProvider, bool) {
+	if block != nil {
+		for _, p := range block.Providers {
+			if p.ID == id {
+				return p, true
+			}
+		}
+	}
+	return types.ModelProvider{}, false
+}
+
 // enabledModelProviderCount is site_config.write's count of providers that are
 // not turned off.
 func enabledModelProviderCount(sc types.SiteConfig) int {

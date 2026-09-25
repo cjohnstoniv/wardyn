@@ -19,7 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fixtures ─────────────────────────────────────────────────────────────────
+// fixtures
 
 // govDeployment is the DEPLOYMENT ceiling (Config.DefaultPolicy) every case
 // below falls through to when no assignment applies. Deliberately WIDER than
@@ -70,7 +70,7 @@ func govMemberCtx(groups []string, truncated bool) context.Context {
 		truncated)
 }
 
-// ─── the precedence table ─────────────────────────────────────────────────────
+// the precedence table
 
 // TestEffectiveCeilingPrecedence walks effectiveCeiling's resolution order. It
 // is the pin on the one function every routed site now trusts, and each case is
@@ -216,7 +216,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 		}
 	})
 
-	// ─── the stale/truncated 403 and its scoping ──────────────────────────────
+	// the stale/truncated 403 and its scoping
 	//
 	// Four cases, and the three that DO NOT refuse are the point: a blanket
 	// refusal here would lock every pre-0.6 cookie out of every deployment,
@@ -324,12 +324,11 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 	})
 
 	// The two governance reads ceilingWithUnusableGroups makes fail
-	// INDEPENDENTLY, and each needs its own case. They used to share one
-	// fixture field, which meant the second could never be reached: the
-	// resolver errors and returns before the gate is ever asked, so the case
-	// named for the gate was re-testing the resolver. Deleting the gate's
-	// error check left the ENTIRE package green — executed, 53s — with this
-	// subtest still passing under its old name.
+	// independently, and each needs its own case with its own fixture field:
+	// with one shared field the second can never be reached — the resolver
+	// errors and returns before the gate is ever asked, so the case named
+	// for the gate re-tests the resolver, and deleting the gate's error
+	// check leaves the entire package green.
 	t.Run("ResolveGovernanceProfile failing is an error, not a pass", func(t *testing.T) {
 		boom := errors.New("pg: connection refused")
 		st := &capStore{govErr: boom}
@@ -337,7 +336,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 			t.Fatalf("err = %v, want the store failure — a failed resolve must never read as `no assignment matched`", err)
 		}
 
-		// AND IT MUST NOT BE MASKED AS A REFUSAL. Deleting
+		// And it must not be masked as a refusal. Deleting
 		// ceilingWithUnusableGroups' own resolve-error check does NOT fail-open
 		// — ceilingFromProfile re-checks the same error downstream, which is
 		// why the arm above passes without it — but with a group-tier row
@@ -356,7 +355,7 @@ func TestEffectiveCeilingPrecedence(t *testing.T) {
 	})
 
 	t.Run("HasGroupTierAssignments failing is an error, not a pass", func(t *testing.T) {
-		// THE GATE ITSELF, reached at last: an unreadable "does a group row
+		// The gate itself, reached at last: an unreadable "does a group row
 		// exist" is not evidence that none does. The fixture is the ordinary
 		// production shape this branch exists for — the resolver answers
 		// ErrNotFound (nobody has a user-tier assignment) while the gate's own
@@ -388,7 +387,7 @@ func containsAll(s string, subs ...string) bool {
 	return true
 }
 
-// ─── PF-22, resolve-time ──────────────────────────────────────────────────────
+// PF-22, resolve-time
 
 // TestEffectiveCeilingReintersectsGrants is PF-22's second half. The write-time
 // monotone-⊆ bound (governance_grantbound.go) cannot be the whole story:
@@ -434,7 +433,7 @@ func TestEffectiveCeilingReintersectsGrants(t *testing.T) {
 	if len(got.Spec.EligibleGrants) != 0 {
 		t.Errorf("eligible_grants = %+v, want empty — the deployment no longer provisions this pairing", got.Spec.EligibleGrants)
 	}
-	// DROPPED WITH A WARNING, not refused: a redeploy is somebody else's act
+	// Dropped with a warning, not refused: a redeploy is somebody else's act
 	// arriving between a member's two runs, and failing their run for it turns
 	// one env edit into an outage.
 	if !containsAll(strings.Join(got.Warnings, "\n"), "has-a-grant", "api_key") {
@@ -496,7 +495,7 @@ func TestEffectiveCeilingWarnsOnDroppedPushRules(t *testing.T) {
 	})
 }
 
-// ─── the routed read surfaces ─────────────────────────────────────────────────
+// the routed read surfaces
 
 // TestGovernanceRoutedReadSites covers the two routed sites the escape table
 // cannot reach through a run create: GET /policies/default (which its own
