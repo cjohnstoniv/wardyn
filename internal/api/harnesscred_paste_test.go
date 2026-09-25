@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// TestHarnessPaste_RefusedForAHelperCapturedProvider is B2-F5.
-//
 // `aws` is a captureViaHelper row with no tokenPrefix, so the paste door's only
 // guard let {"token":…} straight through to Secrets.Put on the RESERVED SSO
 // secret: the structured blob wardyn-aws-sso captured was overwritten, Bedrock
@@ -50,7 +48,7 @@ func TestHarnessPaste_RefusedForAHelperCapturedProvider(t *testing.T) {
 	}
 }
 
-// TestHarnessPaste_EmptyAndOverlongTokens is B2-F5's shape half: neither may
+// TestHarnessPaste_EmptyAndOverlongTokens is the shape half: neither may
 // reach the store or MaskRegistry.AddGlobal.
 func TestHarnessPaste_EmptyAndOverlongTokens(t *testing.T) {
 	for name, body := range map[string]string{
@@ -71,7 +69,7 @@ func TestHarnessPaste_EmptyAndOverlongTokens(t *testing.T) {
 	}
 }
 
-// TestHarnessPaste_AnthropicUnchanged is B2-F5's negative control: the provider
+// TestHarnessPaste_AnthropicUnchanged is the negative control: the provider
 // the paste door exists for is untouched.
 func TestHarnessPaste_AnthropicUnchanged(t *testing.T) {
 	secrets := &memSecrets{m: map[string][]byte{}}

@@ -272,7 +272,7 @@ func TestPG_ListApprovalsPageByRunCreator(t *testing.T) {
 	}
 }
 
-// TestPG_ListApprovalsPageByRun pins the SQL behind the ?run_id= list (F072):
+// TestPG_ListApprovalsPageByRun pins the SQL behind the ?run_id= list:
 // the WHERE runs at the DB, the state filter composes with it rather than
 // replacing it, and LIMIT/OFFSET window the RUN's set. Before this method
 // existed, that request went through ListApprovals -> Page{} -> no LIMIT clause
@@ -370,7 +370,7 @@ func TestPG_ListApprovalsPageByRun(t *testing.T) {
 }
 
 // TestPG_ListApprovalsPageByRunCreatorReadsTheWholeApprovalRow is the pin for
-// B8-F7: the member's unscoped GET /approvals is the ONE approvals reader that
+// the member's unscoped GET /approvals is the ONE approvals reader that
 // hand-wrote its thirteen columns instead of splicing approvalCols, the const
 // every other reader shares. scanApproval is shared, so the next column appended
 // to approvalCols — the documented way to add one, "APPENDED to the const and to

@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestRegistryMaskerIsCachedPerGeneration pins F076's rebuild half: the two
+// TestRegistryMaskerIsCachedPerGeneration pins the rebuild half: the two
 // masking consumers (api's liveMaskWriter on every PTY chunk, wardynd's
 // maskingRecorder on every audit event) called NewMasker(Snapshot(id)) per
 // event, which clones the corpus twice and sorts it. The registry now derives

@@ -49,7 +49,7 @@ func mustNotSay(t *testing.T, doc, name string, claims ...string) {
 	}
 }
 
-// TestMigrationFailureIsDocumentedAsHalfApplied (F165) pins the upgrade
+// TestMigrationFailureIsDocumentedAsHalfApplied pins the upgrade
 // runbook to what the migration loop actually leaves behind.
 //
 // The runbook told operators that per-migration transactions mean wardynd
@@ -98,7 +98,7 @@ func TestMigrationFailureIsDocumentedAsHalfApplied(t *testing.T) {
 	)
 }
 
-// TestDesktopDocSecretTierMatchesTheRouter (F224) pins the member-tier doc's
+// TestDesktopDocSecretTierMatchesTheRouter pins the member-tier doc's
 // secret claim to where the routes are actually registered.
 //
 // DESKTOP.md listed "secret writes" among the powers that "stay admin-only",
@@ -179,7 +179,7 @@ func bedrockReservedSecretNames(t *testing.T) []string {
 	return out
 }
 
-// TestAuthzDeniedGovernanceProfileRowNamesEveryTarget (F179) closes the level
+// TestAuthzDeniedGovernanceProfileRowNamesEveryTarget closes the level
 // the reason-set guard cannot see.
 //
 // docs/OPERATIONS.md's denial table declares itself the source of record for
@@ -248,7 +248,7 @@ func opsTableRow(t *testing.T, doc, key string) string {
 	return rest
 }
 
-// TestManagedObjectNameRationaleMatchesTheNamingFunction (F189) pins the
+// TestManagedObjectNameRationaleMatchesTheNamingFunction pins the
 // runbook's REASONING about managed object names, which the name-token guard
 // structurally cannot see.
 //
@@ -279,7 +279,7 @@ func TestManagedObjectNameRationaleMatchesTheNamingFunction(t *testing.T) {
 	)
 }
 
-// TestThreatModelDrivePreviewResidualMatchesTheHandler (F190) pins §4.6's
+// TestThreatModelDrivePreviewResidualMatchesTheHandler pins §4.6's
 // published residual to what the preview handler actually runs.
 //
 // The residual said the preview skips the governance door, the stale-snapshot
@@ -294,7 +294,7 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 	// crossed the 1000-line ceiling; the resolver it calls into stayed behind.
 	resolve := readSrc(t, "internal", "api", "user_drives_preview.go")
 	preview := methodBody(t, resolve, "handlePreviewUserDrive")
-	// driveBindFailureHere rather than driveIsMountableHere since B5-F4: the
+	// driveBindFailureHere rather than driveIsMountableHere since the
 	// preview runs the same DECISION and writes the same sentence, without the
 	// enforcement door's metric and WARN — which describe a run a preview never
 	// creates. §4.6 is re-worded to match, and the chain check below still pins
@@ -313,7 +313,7 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 	// The substrate half: a share's home is really stat'd, and a MANAGED
 	// backend short-circuits before any of that, which is why the Kubernetes
 	// half of the residual survives.
-	// F269 (round 3) split the bindability check into a pure DECISION,
+	// Round 3 split the bindability check into a pure DECISION,
 	// driveShareBindFailure, reached from driveIsMountableHere via driveBindFailureHere, so
 	// /me and the preview can ask the same question without paying the writer's
 	// metric and WARN. The substrate facts §4.6 publishes now live in the
@@ -343,7 +343,7 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 	)
 }
 
-// TestMembersDocStatesTheThreeKeyDriveContract (F169) pins the member-facing
+// TestMembersDocStatesTheThreeKeyDriveContract pins the member-facing
 // doc to the shape GET /me actually returns.
 //
 // MEMBERS.md calls /me "the ground truth" and described the two-state contract
@@ -409,7 +409,7 @@ const (
 	nestedMembershipRule = "nested groups are not included and the user must be a direct member of the group assigned to the application"
 )
 
-// TestGroupClaimCaveatCitesThePageThatCarriesIt (F103) pins WHERE the runbook's
+// TestGroupClaimCaveatCitesThePageThatCarriesIt pins WHERE the runbook's
 // load-bearing Entra quote comes from.
 //
 // The overage remedy carries a verbatim quotation, and the whole point of the
@@ -446,11 +446,11 @@ var ruleSourceConst = regexp.MustCompile(`(?m)^\truleSource[A-Za-z]*\s+= "([a-z0
 // family the doc tables (the "evaluator's own inline sources" table).
 var inlineRuleSourceLiteral = regexp.MustCompile(`decisionLog\([^,]+,\s*egress\.[A-Za-z]+,\s*"([a-z:-]+)"\)`)
 
-// TestAuditActionsDocEnumeratesEveryRuleSource (F093) pins the new
+// TestAuditActionsDocEnumeratesEveryRuleSource pins the new
 // egress.*'s rule_source values table to the actual closed set of
 // ruleSource* constants — a new constant with no doc row fails here instead
 // of silently drifting, the same guard the finding's remediation asked for.
-// It also pins the second family (F093 B1): the inline literals evaluate()
+// It also pins the second family (B1): the inline literals evaluate()
 // itself writes at its decisionLog call sites in proxy.go, plus the
 // "approval:"+approvalID concatenation form.
 func TestAuditActionsDocEnumeratesEveryRuleSource(t *testing.T) {
@@ -495,7 +495,7 @@ func TestAuditActionsDocEnumeratesEveryRuleSource(t *testing.T) {
 	}
 	values = append(values, "approval:<approval-id>")
 
-	// F093 B1 premise: the branch-ns-off row's Meaning cell claims both APP-LANE
+	// Premise: the branch-ns-off row's Meaning cell claims both APP-LANE
 	// switches — the deployment-wide env and the per-run git_push_any_branch
 	// policy field — feed the SAME branch of this condition, so the marker cannot
 	// say which was set. Re-derive the row before trusting this guard if the
@@ -545,7 +545,7 @@ func TestAuditActionsDocEnumeratesEveryRuleSource(t *testing.T) {
 	)
 }
 
-// TestTestGapsDocReflectsCoverpkgCoverage (F092, closed) pins docs/TEST-GAPS.md's
+// TestTestGapsDocReflectsCoverpkgCoverage pins docs/TEST-GAPS.md's
 // "Untested" bucket claim to test-report.sh's actual go test invocation, now
 // that -coverpkg=./... makes cross-package coverage count.
 //
@@ -591,7 +591,7 @@ func TestTestGapsDocReflectsCoverpkgCoverage(t *testing.T) {
 	)
 }
 
-// TestAuditActionsDocNamesTheDroppedDecisionSummary (F067) pins the
+// TestAuditActionsDocNamesTheDroppedDecisionSummary pins the
 // egress.* row to the synthetic egress.decisions.dropped marker
 // droppedSummaryLog posts on buffer overflow — a Deny with an empty target
 // that lands as an ordinary egress.deny row.
@@ -642,7 +642,7 @@ func TestLiteralIPRedirectDocsNameThePortScope(t *testing.T) {
 	)
 }
 
-// TestOperationsDocNamesTheUnscopedNetworkRedirectDeny (F052) pins the
+// TestOperationsDocNamesTheUnscopedNetworkRedirectDeny pins the
 // "Egress redirects: two tiers" section to appendNetworkRedirectDenials'
 // actual scope — or rather its absence.
 //
@@ -672,11 +672,11 @@ func TestOperationsDocNamesTheUnscopedNetworkRedirectDeny(t *testing.T) {
 	)
 }
 
-// TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun (F042, re-derived at
+// TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun (re-derived at
 // the R3 credentials merge) pins the credential.revoke row to what
 // Broker.RevokeRun actually emits.
 //
-// The credentials lane (F096/F122/F013) moved RevokeRun to internal/broker/revoke.go,
+// The credentials lane moved RevokeRun to internal/broker/revoke.go,
 // replaced the approvals-only MintedJTIs bulk read with MintedCredentials
 // (mintedCredentialsSQL: the approvals burn UNION the run's successful
 // credential.mint audit rows), and replaced the one GitHub-shaped note with the
@@ -754,7 +754,7 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 	)
 
 	// R-06. Once the mint HAS a discard door that calls GitHub's endpoint
-	// (B11a-F1), the row's revocation story is incomplete unless it names the
+	//, the row's revocation story is incomplete unless it names the
 	// carve-out — otherwise the scoping above reads as a typo rather than a
 	// deliberate limit. Gated on the door existing, so this guard is inert until
 	// the code it describes is there.
@@ -769,7 +769,7 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 	}
 }
 
-// TestAuditActionsDocNamesTheErrorScanAction (F041) pins AUDIT-ACTIONS.md's
+// TestAuditActionsDocNamesTheErrorScanAction pins AUDIT-ACTIONS.md's
 // llm.scan.* suffix enumeration, and egress.ScanSummary.Action's own comment,
 // to the literal `scanSummaryFrom` actually assigns on a scanner error or an
 // unparsed body.
@@ -810,7 +810,7 @@ var maxAuditFindingsConst = regexp.MustCompile(`(?m)^const maxAuditFindings = (\
 // pins AUDIT-ACTIONS.md's llm.scan.* row's Data column to every key
 // recordLLMScanAudit actually marshals onto the wire.
 //
-// F075 added findings_capped, findings_past_cap and findings_reported to the
+// The fix added findings_capped, findings_past_cap and findings_reported to the
 // emit site's map[string]any{...} literal, and repointed finding_count away
 // from len(sc.Findings) to the pre-cap total — a SIEM rule author reading only
 // the doc would never learn either fact, which is exactly the case an auditor
@@ -895,7 +895,7 @@ func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
 	}
 }
 
-// TestArchitectureDocGitPATProxyInjectionClaimMatchesTheBroker (F040) pins
+// TestArchitectureDocGitPATProxyInjectionClaimMatchesTheBroker pins
 // ARCHITECTURE.md's git-egress prose to the PAT broker's default-on posture.
 //
 // The section's table row already named the PAT broker, but the paragraph right
@@ -924,7 +924,7 @@ func TestArchitectureDocGitPATProxyInjectionClaimMatchesTheBroker(t *testing.T) 
 	)
 }
 
-// TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual (F114, RE-DERIVED
+// TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual (RE-DERIVED
 // in the adversarial fix-up round) pins the upstream corp-proxy residual's
 // bound (3) to what the step-0 guard actually parses.
 //
@@ -932,7 +932,7 @@ func TestArchitectureDocGitPATProxyInjectionClaimMatchesTheBroker(t *testing.T) 
 // still denied at the literal-IP guard". Before R3's fix wave that promise held
 // only for spellings net.ParseIP accepts; the POSIX inet_aton forms (127.1,
 // 0x7f000001, 2130706433, 0251.0376.0.1) proceeded as ordinary hostnames and,
-// on the corp-upstream lane, reached the corp proxy verbatim. F105 closed that,
+// on the corp-upstream lane, reached the corp proxy verbatim. The first fix closed that,
 // and the adversarial round found the SAME assumption still open on a second
 // axis — a zone-suffixed IPv6 literal (fe80::1%eth0, and the RFC 6874
 // authority spelling fe80::1%25eth0), which net.ParseIP refuses, netip.ParseAddr
@@ -1038,7 +1038,7 @@ func TestThreatModelDocLiteralIPBoundNamesNonCanonicalResidual(t *testing.T) {
 	}
 }
 
-// TestDataFlowAuditSinkRowCarriesTheOutageQualifier (F048, round-2 residue)
+// TestDataFlowAuditSinkRowCarriesTheOutageQualifier (a round-2 residue)
 // extends the audit-sink guard's AUDIT-ACTIONS.md-style assertion to the third
 // file that makes the same off-box promise.
 //
@@ -1066,7 +1066,7 @@ func TestDataFlowAuditSinkRowCarriesTheOutageQualifier(t *testing.T) {
 	)
 }
 
-// TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite (F114 item 4, and the
+// TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite (item 4, and the
 // adversarial fix-up's own correction of the same shape) pins the two
 // rule_source rows whose citations the R3 wave moved.
 //

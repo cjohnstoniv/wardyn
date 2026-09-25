@@ -116,7 +116,7 @@ func (s *supersedeStore) seed(run types.AgentRun) types.AgentRun {
 
 // ctxAwareIdentity is the harness identity plus the two things the cascade's
 // contract needs a test to see: WHETHER RevokeRun ran, and whether it ran on a
-// LIVE context. The ctx check is what makes R1-F1 testable at all — a kill that
+// LIVE context. The ctx check is what makes the detached cascade testable at all — a kill that
 // leaked the caller's cancellation would reach RevokeRun with a dead context,
 // which in production (a store write) fails exactly like this.
 type ctxAwareIdentity struct {
@@ -176,7 +176,7 @@ func waitForRevoke(t *testing.T, idp *ctxAwareIdentity, runID uuid.UUID) {
 
 // ctxAwareAudit drops a row written on a dead context, which is what the real
 // sink does — recordAudit passes the context straight to a store write. Without
-// it a cancelled cascade still "audits" in these tests and R1-F1 is unprovable.
+// it a cancelled cascade still "audits" in these tests and the detached cascade is unprovable.
 type ctxAwareAudit struct{ *memAudit }
 
 func (a *ctxAwareAudit) Record(ctx context.Context, ev types.AuditEvent) error {
@@ -857,7 +857,7 @@ func waitForKillRow(t *testing.T, audit *memAudit, runID string) types.AuditEven
 	return types.AuditEvent{}
 }
 
-// TestKillRunCascade_PartialCascadeIsHonest is R1-F2: the branch where a
+// TestKillRunCascade_PartialCascadeIsHonest covers the branch where a
 // teardown step FAILS had no test in either caller, and this lane both moved it
 // and gave it a second consumer.
 //

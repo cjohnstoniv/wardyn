@@ -46,7 +46,7 @@ func TestRunRecording_InterruptedDownloadLeavesNoFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("an interrupted download returned nil — the CLI reported success for a partial cast")
 	}
-	// Pins the exact wrapped shape (review R-05): finalizePartFile is shared
+	// Pins the exact wrapped shape: finalizePartFile is shared
 	// with support-bundle's writer, and it is this wrap —
 	// "recording download for run %s did not complete: %w" — that a future
 	// refactor of the shared helper could silently drop.
@@ -65,7 +65,7 @@ func TestRunRecording_InterruptedDownloadLeavesNoFile(t *testing.T) {
 	}
 }
 
-// B12a-F6 (review R-05): a RENAME failure is a distinct code path from the
+// A RENAME failure is a distinct code path from the
 // copy/close failure above — pre-lane, run recording's own .part+rename
 // block returned the bare os.Rename error; it now flows through the shared
 // finalizePartFile and is wrapped the same way. Occupying the destination
@@ -98,7 +98,7 @@ func TestRunRecording_RenameFailureIsWrappedAndLeavesNoPartFile(t *testing.T) {
 	}
 }
 
-// B12a-F2: a peer that sends headers then never finishes the body (a dead
+// a peer that sends headers then never finishes the body (a dead
 // connection TCP keepalive won't catch for minutes) otherwise hangs `run
 // recording` forever — pkg/client's stream_timeout_test.go FORBIDS fixing
 // this by re-imposing Client.Timeout (that cuts off a legitimately large,

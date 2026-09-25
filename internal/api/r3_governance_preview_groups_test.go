@@ -10,8 +10,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
 
-// TestGovernancePreviewGroupNormalizationMatchesEnforcement is F154.
-//
 // POST /governance/preview answers ONE question — "which profile would bind a
 // principal presenting this claim" — so there has to be ONE answer. It
 // re-implemented the group fold as a plain strings.ToLower with no ASCII guard,

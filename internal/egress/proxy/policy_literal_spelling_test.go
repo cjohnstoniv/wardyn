@@ -9,7 +9,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestLiteralIPDenyCoversEverySpellingOfTheSameAddress (F130) pins the deny
+// TestLiteralIPDenyCoversEverySpellingOfTheSameAddress pins the deny
 // side of the policy matcher against equivalent spellings of one address.
 //
 // evalHost keyed every lookup on the raw request STRING while AllowsLiteralIP —

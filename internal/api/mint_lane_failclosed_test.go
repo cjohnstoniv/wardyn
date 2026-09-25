@@ -98,7 +98,7 @@ func TestInternalMint_GrantListErrorFailsClosed(t *testing.T) {
 	})
 }
 
-// TestInternalMintConflictCodesAreTheWireContract pins F134. The four mint-409
+// TestInternalMintConflictCodesAreTheWireContract. The four mint-409
 // "code" values are the discriminator cmd/wardyn-git-helper switches on to name
 // the real cause of a conflict. Every server-side assertion compared the decoded
 // JSON against the SAME package constant the handler had written, so all four

@@ -84,8 +84,6 @@ func abortHarness(t *testing.T, wrap func(store.Store) store.Store) (*Server, *f
 	return srv, brk, audit, pool
 }
 
-// TestCreateRun_GrantFailureAfterCreateRunFinalizesTheRun is B1-F1.
-//
 // handleCreateRun's post-CreateRun early returns answered 500 and walked away:
 // the run row stayed PENDING, the identity minted one line earlier was never
 // revoked and no run.create row was ever written — a ghost run holding a live
@@ -117,7 +115,7 @@ func TestCreateRun_GrantFailureAfterCreateRunFinalizesTheRun(t *testing.T) {
 	}
 }
 
-// TestCreateRun_HappyPathStillAnswers201WithOneCreateRow is B1-F1's negative
+// TestCreateRun_HappyPathStillAnswers201WithOneCreateRow is the negative
 // control: the compensator must not fire, and the trail must carry exactly one
 // run.create row for the run.
 func TestCreateRun_HappyPathStillAnswers201WithOneCreateRow(t *testing.T) {

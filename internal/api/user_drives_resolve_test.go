@@ -89,7 +89,7 @@ type driveStore struct {
 	sawUsers  [][]string
 	sawGroups [][]string
 	// sawGovUsers / sawGovGroups are the same for the GOVERNANCE twin, and they
-	// exist for the identical reason (R1 F349). The drive resolver's arguments
+	// exist for the identical reason (R1). The drive resolver's arguments
 	// were already recorded; the ceiling resolver's were taken as `_`, so
 	// nothing in the package could see WHICH identity a ceiling was resolved on
 	// — and the fail-closed rule ceilingWithUnusableGroups exists to hold is
@@ -664,7 +664,7 @@ func TestResolveUserDrive(t *testing.T) {
 		if !strings.Contains(err.Error(), "drive: this deployment cannot mount your drive (") {
 			t.Errorf("err = %v, want the frozen REFUSED_BACKEND shape", err)
 		}
-		// F056's residue. The parenthesised half — the ONLY half a member reads
+		// A residue. The parenthesised half — the ONLY half a member reads
 		// for a reason — said "its directory name comes from your email address".
 		// For a `sub` row that is simply false: the email claim had no part in
 		// it, and a member told to look at their email address cannot act on the
@@ -957,9 +957,9 @@ func TestPreviewUserDrive(t *testing.T) {
 		}
 	})
 
-	// AN EMAIL-LOCAL PREVIEW, restored here by R1 F294's fixture change rather
+	// AN EMAIL-LOCAL PREVIEW, restored here by R1's fixture change rather
 	// than lost with it. The subtest above previewed `email_local` until that
-	// pairing became the shape F294 refuses, and retargeting it to `sub` left
+	// pairing became a refused shape, and retargeting it to `sub` left
 	// the endpoint with no email-local coverage at all — so the template most
 	// share deployments actually use would have had its preview answered by
 	// nothing.
@@ -1722,7 +1722,7 @@ func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
 	}
 }
 
-// TestPreviewUnmountableDriveCountsNoRefusal is B5-F4: POST /drives/preview is a
+// TestPreviewUnmountableDriveCountsNoRefusal is POST /drives/preview is a
 // DISPLAY READ by an admin about somebody else, and it ran the LAUNCH DOOR's
 // refusal writer.
 //
@@ -1730,7 +1730,7 @@ func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
 // logs WARN "a run was refused its drive" — for a run that never existed. An
 // operator watching either signal saw members being turned away from their
 // drives every time an admin opened the drives screen; /me was converted to the
-// decision (driveBindFailureHere) by F269 and pinned by
+// decision (driveBindFailureHere) earlier and pinned by
 // r3_me_unbindable_drive_test.go, and the preview was the last caller left.
 //
 // The BODY must not move: an admin checking why a member cannot mount a drive

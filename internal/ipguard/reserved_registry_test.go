@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestReservedCoversTheIANANonGloballyReachableBlocks (F115, F131) diffs the
+// TestReservedCoversTheIANANonGloballyReachableBlocks diffs the
 // reserved tables against their canonical surface — the IANA special-purpose
 // address registries — rather than against a remembered list of RFCs.
 //

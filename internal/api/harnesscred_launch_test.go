@@ -38,7 +38,7 @@ type coldPullRunner struct {
 	gate chan struct{}
 	// entered, when non-nil, is closed the FIRST time CreateSandbox is actually
 	// reached: the only way a test can know the detached launch goroutine is
-	// inside the pull rather than not there yet (R1-F3). waitForSandbox cannot
+	// inside the pull rather than not there yet. waitForSandbox cannot
 	// serve — it counts calls the fakeRunner records only AFTER the gate opens.
 	// Optional, so the cases that need the gate alone construct this as before.
 	entered     chan struct{}

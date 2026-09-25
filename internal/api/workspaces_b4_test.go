@@ -28,7 +28,7 @@ import (
 // names the rule it pins, so a reader can tell a deliberate rule from an
 // accident.
 
-// B4-F1: the failed build's raw builder error is the operator's
+// the failed build's raw builder error is the operator's
 
 // TestWorkspaceBuild_FailedDetailIsTieredLikeTheLog pins that the ONE non-static
 // Detail resolveBuildView can answer — the builder's own error text, which
@@ -58,7 +58,7 @@ func TestWorkspaceBuild_FailedDetailIsTieredLikeTheLog(t *testing.T) {
 	}
 }
 
-// B4-F2: the in-memory tracker outranked the row it was caching
+// the in-memory tracker outranked the row it was caching
 
 // b4BuildStore serves one workspace for the /build handlers and is safe for the
 // detached build goroutine to write while the test reads.
@@ -226,7 +226,7 @@ func TestWorkspaceBuild_TrackerIsSubordinateToTheRow(t *testing.T) {
 	t.Fatal("the detached build never finished")
 }
 
-// B4-F3: a respelling of the same source wiped every reviewed field
+// a respelling of the same source wiped every reviewed field
 
 // TestWorkspaceSource_RespellingKeepsEveryReviewedField: sourcesChanged
 // must compare canonical forms on both sides. Comparing the request's raw
@@ -278,7 +278,7 @@ func TestWorkspaceSource_RespellingKeepsEveryReviewedField(t *testing.T) {
 	}
 }
 
-// B4-F4: an uncapped source list
+// an uncapped source list
 
 // TestWorkspaceSource_CountIsCapped pins the missing sibling of
 // maxWorkspaceRequirements/maxApprovedEgress: every source in the body costs an
@@ -310,7 +310,7 @@ func TestWorkspaceSource_CountIsCapped(t *testing.T) {
 	}
 }
 
-// B4-F6 + B4-F9: observed egress offered candidates that can never work
+// observed egress offered candidates that can never work
 
 // TestWorkspaceObservedEgress_WithholdsWhatApprovingCannotHelp pins the two classes
 // of candidate a promotion can never make work: a host the git broker or the
@@ -409,7 +409,7 @@ func TestWorkspaceObservedEgress_ReadsABoundedPage(t *testing.T) {
 	}
 }
 
-// B4-F7: DELETE stranded a live sandbox
+// DELETE stranded a live sandbox
 
 // b4DeleteStore serves one workspace and records whether the delete happened.
 type b4DeleteStore struct {
@@ -480,7 +480,7 @@ func TestWorkspaceDelete_RefusesWhileARunHoldsTheWorkspace(t *testing.T) {
 	}
 }
 
-// B4-F8: the repo ref was validated at neither door
+// the repo ref was validated at neither door
 
 // TestWorkspaceRef_IsValidatedAtBothDoors: buildRepoRecords (runs_scm.go) DROPS a
 // repo whose ref is not repoFieldSafe by a bare return — the agent then starts

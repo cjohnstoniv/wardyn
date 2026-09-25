@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestEvaluate_MethodRefusalRaisesNoApproval pins F032: the method restriction
+// TestEvaluate_MethodRefusalRaisesNoApproval: the method restriction
 // is decided BEFORE the first-use approval flow, so a request whose method can
 // never pass raises no ApprovalRequest and (under wait_for_review) takes no
 // hold slot. The sandbox picks the method, so the old ordering let it pick how

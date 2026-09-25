@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// TestLoadConfigBytesRefusesUnknownKeys pins F029: the sidecar image is pinned
+// TestLoadConfigBytesRefusesUnknownKeys: the sidecar image is pinned
 // by the OPERATOR, independently of wardynd, so a config written by a NEWER
 // control plane routinely meets an OLDER proxy binary. A key this binary cannot
 // honour must fail startup loudly rather than be silently discarded — the

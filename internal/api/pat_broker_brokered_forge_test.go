@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestBrokeredForgePATIsWithheldFromBothHalvesOfDispatch (F216-R1) pins the two
+// TestBrokeredForgePATIsWithheldFromBothHalvesOfDispatch pins the two
 // halves of dispatch to ONE answer to "which PAT may this run use for this
 // forge?".
 //

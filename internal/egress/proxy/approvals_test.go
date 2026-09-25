@@ -272,7 +272,7 @@ func TestResolveWaitHold(t *testing.T) {
 	})
 }
 
-// F070: the hold deadline must bound the WHOLE of ResolveWait, not just the
+// the hold deadline must bound the WHOLE of ResolveWait, not just the
 // parked wait at the end of it.
 //
 // The 30s timer was armed only after the concurrent-raise retry loop, and
@@ -319,7 +319,7 @@ func TestResolveWaitBoundsTheWholeHoldAgainstAHungControlPlane(t *testing.T) {
 	}
 }
 
-// F071: one run must not be able to grow the approval cache — and the approvals
+// one run must not be able to grow the approval cache — and the approvals
 // table behind it — without bound from inside the sandbox.
 //
 // Nothing capped either side: a.hosts had no cap and its entries are never

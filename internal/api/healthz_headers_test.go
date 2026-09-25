@@ -19,9 +19,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// B6-F6: the anonymous /healthz stops publishing fleet volumes
+// the anonymous /healthz stops publishing fleet volumes
 
-// TestHealthzEbpfPublishesNoCounters pins B6-F6. /metrics is operator-gated
+// TestHealthzEbpfPublishesNoCounters pins the following. /metrics is operator-gated
 // precisely because "a member … would learn operational volumes", and the
 // anonymous /healthz was publishing the eBPF sensor's cumulative
 // observed_total / dropped_total / observed_by_kind to anyone who could reach
@@ -61,9 +61,9 @@ func TestHealthzEbpfPublishesNoCounters(t *testing.T) {
 	}
 }
 
-// B6-F8: authenticated API responses are not cacheable
+// authenticated API responses are not cacheable
 
-// TestAPIResponsesAreNoStore pins B6-F8. The OIDC lane authenticates by COOKIE,
+// TestAPIResponsesAreNoStore pins the following. The OIDC lane authenticates by COOKIE,
 // not by Authorization, so a 200 `GET /runs` carried no validator and no
 // Cache-Control at all — heuristically cacheable by any interposed shared
 // cache, which is one member's run list served to another.
@@ -77,7 +77,7 @@ func TestAPIResponsesAreNoStore(t *testing.T) {
 	}
 }
 
-// TestHashedAssetsStayImmutable is B6-F8's negative control: content-addressed
+// TestHashedAssetsStayImmutable is the negative control: content-addressed
 // bundles under /assets/ are safe to cache forever and MUST keep doing so, or
 // every console load re-downloads the whole bundle. The SPA shell keeps
 // no-cache so a redeploy's new hashed bundle is picked up.
@@ -107,7 +107,7 @@ func TestHashedAssetsStayImmutable(t *testing.T) {
 	}
 }
 
-// B6-F7: a handler's doc comment may not misstate its tier
+// a handler's doc comment may not misstate its tier
 
 // handlerDocRE finds one handler's doc comment block plus its func line.
 var handlerDocRE = regexp.MustCompile(`(?s)((?://[^\n]*\n)+)func \(s \*Server\) (handle\w+)\(`)
@@ -122,7 +122,7 @@ var handlerDocTiers = []struct{ fn, route string }{
 	{"handleMetrics", "GET /metrics"},
 }
 
-// TestHandlerDocsMatchTheRegisteredTier is B6-F7. audit.go's two comments were
+// TestHandlerDocsMatchTheRegisteredTier. audit.go's two comments were
 // both wrong: handleVerifyAuditChain claimed operator-only when it is
 // securityOps, and handleQueryAudit said the audit log "is never gated" when it
 // is authenticated AND row-scoped per principal. A doc comment is where the

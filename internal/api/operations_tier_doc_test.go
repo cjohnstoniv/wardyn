@@ -40,7 +40,7 @@ var docTierGate = map[routeClass]string{
 var docTierRows = []struct{ route, token string }{
 	// operatorOnly (SUPER)
 	{"PUT /api/v1/site-config", "`PUT /site-config`"},
-	// R1 F316's four operator-topology reads: re-tiered to admin this wave and
+	// R1's four operator-topology reads: re-tiered to admin this wave and
 	// filed as docTierUndocumented until the docs pass landed the row naming
 	// them. Now that it has, they move here keyed on the row's own token.
 	{"GET /api/v1/site-config", "the operator-topology READS"},
@@ -98,7 +98,7 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/drives/grants/{id}", "`DELETE /drives/grants/{id}`"},
 	{"POST /api/v1/drives/preview", "`POST /drives/preview`"},
 
-	// the rest of the gated surface (R1 F316)
+	// the rest of the gated surface (R1)
 	//
 	// Through 0.7 this list was 22 hand-picked representatives out of 59 gated
 	// routes, and nothing bounded it: the guard checked that the rows we had
@@ -221,7 +221,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 	}
 
 	// The reverse direction, which is what makes this a guard rather than a
-	// spot-check (R1 F316). Everything above asks "are the rows we listed
+	// spot-check (R1). Everything above asks "are the rows we listed
 	// right"; this asks "is every gated route listed", which is what the
 	// section claims to be. Without it the list was 22 of 59 and a re-tiering
 	// could land in routeMatrix with no doc row and nothing to say so — exactly

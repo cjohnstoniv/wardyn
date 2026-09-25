@@ -366,7 +366,7 @@ func TestRedirectLiteralIP_TrustedForItsRunOnly(t *testing.T) {
 		}
 	}
 
-	// B10-F2: THE SAME ANSWER UNDER A CORPORATE UPSTREAM. The upstream branch
+	// THE SAME ANSWER UNDER A CORPORATE UPSTREAM. The upstream branch
 	// returned before the exact-literal trust below it, so on a corp-proxy estate
 	// with no bypass entry — the normal private-endpoint shape — evaluate() ALLOWED
 	// the redirect's literal (literal_ip_guard.go) and then every re-vet path
@@ -475,7 +475,7 @@ func TestLiteralIPDenialNamesTheCause(t *testing.T) {
 	}
 }
 
-// F008: under a corporate upstream the vetted-IP PIN is relaxed, but the SSRF
+// under a corporate upstream the vetted-IP PIN is relaxed, but the SSRF
 // guard itself must still bind the HOSTNAME.
 //
 // egressTarget's upstream branch returned before p.vetHost, and evaluate step 0

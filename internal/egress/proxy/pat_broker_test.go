@@ -36,7 +36,7 @@ func newPATBrokerUpstream(t *testing.T, token, username string) *gitBrokerUpstre
 // operator's GrantSpec.TTLSeconds up to the 1h cap, so an operator can author a
 // grant whose whole life is shorter than a cache margin. The fixture that
 // stated NO expiry exercised only brokeredToken's unparseable-response arm
-// (expiresAt == 0, cache forever), which is why the 5-minute margin bug (F120)
+// (expiresAt == 0, cache forever), which is why the 5-minute margin bug
 // survived a green cache pin.
 func newPATBrokerUpstreamTTL(t *testing.T, token, username string, ttl time.Duration) *gitBrokerUpstream {
 	t.Helper()
@@ -132,7 +132,7 @@ func TestPATBrokerClonesGrantedHost(t *testing.T) {
 	if up.mintCalls != 1 {
 		t.Fatalf("mintCalls = %d, want 1 (the PAT is minted server-side and cached per grant)", up.mintCalls)
 	}
-	// F014: the row must name the FORGE it dialled. Logged through
+	// the row must name the FORGE it dialled. Logged through
 	// emitLocalDecision it named the CONTROL PLANE, so a clone of gitlab.com and
 	// a credential mint were the same row, and two granted forges could not be
 	// told apart at all — in the one stream an egress review reads.
@@ -433,7 +433,7 @@ func TestPATBrokerCachesAShortTTLMintAcrossOneClone(t *testing.T) {
 	}
 }
 
-// F120: a PENDING credential approval must be waited out, not returned as a 502.
+// a PENDING credential approval must be waited out, not returned as a 502.
 //
 // The broker mints server-side with no caller able to retry, so the GitHub lane
 // polls the same approval itself. patToken returned an

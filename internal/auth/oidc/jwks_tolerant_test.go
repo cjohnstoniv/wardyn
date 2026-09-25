@@ -49,7 +49,7 @@ const (
 
 // TestTolerantJWKSSurvivesAMalformedSupportedKey drives a REAL
 // gooidc.RemoteKeySet through the client production uses, against the same
-// one-good-ES256-key JWKS helper F242's pin uses.
+// one-good-ES256-key JWKS helper the dependency-floor pin uses.
 //
 // Counterfactual: swap NewTolerantJWKSClientForTest for a plain &http.Client{}
 // (which is what go-oidc gets without this wiring) and every "malformed

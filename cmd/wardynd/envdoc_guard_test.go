@@ -58,7 +58,7 @@ var envDocAllow = map[string]bool{
 	// enforce these stay documented; test scaffolding rather than operator
 	// config is why they are allowlisted rather than in the registry proper.
 	"WARDYN_E2E_ADDR": true, "WARDYN_E2E_UI_ADDR": true,
-	// F063: the REST of the e2e backend's shell-only knobs (e2e-backend.sh,
+	// the REST of the e2e backend's shell-only knobs (e2e-backend.sh,
 	// run-ui-e2e.sh, screenshots.sh, test/e2e/e2e.sh) — none read by Go, so
 	// TestEnvDoc_E2EShellVarsAreDocumented below is what actually enforces these
 	// stay documented in ENV.md's Test/internal-only table; ten of the eleven
@@ -69,7 +69,7 @@ var envDocAllow = map[string]bool{
 	"WARDYN_E2E_SKIP_BUILD": true, "WARDYN_E2E_NO_UI_BUILD": true,
 	"WARDYN_E2E_KEEP": true, "WARDYN_E2E_NO_BUILD": true,
 	"WARDYN_E2E_ANTHROPIC_KEY": true,
-	// F061: run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
+	// run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
 	// file, and screenshots.sh's own self-set gate for docs.spec.ts.
 	"WARDYN_E2E_ALLOW_ALL_SKIPPED": true, "WARDYN_SCREENSHOTS": true,
 	// scripts/lib/common.sh's log() prefix, set by each e2e script that sources it.
@@ -409,7 +409,7 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 }
 
 // envDocE2EShellFiles are the Playwright-e2e-backend shell scripts whose
-// WARDYN_E2E_* reads must also stay documented — F063. readVars above walks
+// WARDYN_E2E_* reads must also stay documented. readVars above walks
 // only non-test .go under envDocRoots, so a var read EXCLUSIVELY by one of
 // these scripts (WARDYN_E2E_PG_HOSTPORT chief among them: the one var an
 // operator must set to run the UI e2e gate on a shared box) was invisible to
@@ -420,7 +420,7 @@ func TestEnvDoc_ReverseEveryRowHasReader(t *testing.T) {
 // Deliberately a curated FILE list, not a recursive scripts/+test/ walk: the
 // rest of scripts/ (the demo-recording and ci-run harnesses chief among them)
 // reads dozens of its own WARDYN_* vars that are real, but out of scope for
-// F063 and not audited here — documenting those is separate work with its
+// this guard and not audited here — documenting those is separate work with its
 // own review, not a side effect of closing this gap.
 var envDocE2EShellFiles = []string{
 	"scripts/e2e-backend.sh",
@@ -480,7 +480,7 @@ func readEnvDoc(t *testing.T, root string) string {
 	return readRepo(t, filepath.Join(root, "docs", "ENV.md"))
 }
 
-// TestEnvDoc_ComposeForwardsProxySidecarEnvKnobs — B12b-F3+F8: a knob
+// TestEnvDoc_ComposeForwardsProxySidecarEnvKnobs: a knob
 // runner.ProxySidecarEnvKnobs forwards to a sidecar (docker Env / k8s pod
 // Env — see that function's doc comment) first has to reach wardynd's OWN
 // process env, and compose never inherits the operator's shell: unless

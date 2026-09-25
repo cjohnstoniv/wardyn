@@ -44,7 +44,7 @@ func TestValidateBuildInput(t *testing.T) {
 		// Input-length bound.
 		{"over-long repo url", BuildSpec{RepoURL: "https://example.com/" + strings.Repeat("a", maxBuildInputLen), OutputImageTag: "x"}, true},
 
-		// B9-F9: the output tag is a caller-supplied string that reaches
+		// the output tag is a caller-supplied string that reaches
 		// envbuilder's environment and the finalize Dockerfile, and the
 		// generated-files entry point has run it through validateGeneratedTag
 		// since it was written. The git path bounded its LENGTH and nothing

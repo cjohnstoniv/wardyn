@@ -36,8 +36,6 @@ func firePreflightAndCreate(t *testing.T, sc types.SiteConfig, repo, body string
 	return fire("/api/v1/runs/preflight"), fire("/api/v1/runs")
 }
 
-// TestPreflightAnswersTheSameProviderRefusalAsCreate is B1-F3.
-//
 // handlePreflightRun reproduced resolveRunPolicy's 4xx set, the workspace seed
 // and the confinement floor — but NOT requestRepoProviderRefusals, the gate
 // over the two FREE-TEXT repository fields. So Review showed a clean checklist
@@ -100,7 +98,7 @@ func TestPreflightAndCreateRefuseInTheSameORDER(t *testing.T) {
 	}
 }
 
-// TestPreflightUnchangedInLegacyOpenMode is B1-F3's negative control: with NO
+// TestPreflightUnchangedInLegacyOpenMode is the negative control: with NO
 // provider rows admission is a no-op (legacy open mode, byte-identical to
 // 0.7.1), so preflight must still answer 200 for the same repo.
 func TestPreflightUnchangedInLegacyOpenMode(t *testing.T) {

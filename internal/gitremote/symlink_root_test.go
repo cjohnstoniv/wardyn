@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// TestDetect_SymlinkedRootIsWalked pins the gitremote half of B11b-F1. The
+// TestDetect_SymlinkedRootIsWalked pins the gitremote half of the symlink guard. The
 // walk's first callback is the ROOT, which filepath.WalkDir reports from an
 // LSTAT — so a scan root that is itself a symlink (~/work -> /mnt/d/work) took
 // the "never follow a symlink" arm and the walk ended before it looked at

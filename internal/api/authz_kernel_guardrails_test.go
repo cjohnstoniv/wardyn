@@ -26,7 +26,7 @@ import (
 // ─── G1: every classOwner route reaches the ownership gate its entity names ──
 //
 // classOwner is the tight, already-declared slice of routeMatrix G1 can check
-// today: each entry already carries a `routeEntity` (F155) naming which seeded
+// today: each entry already carries a `routeEntity` naming which seeded
 // fixture — run, workspace, approval — its {id} is checked against, which is
 // exactly "the kernel Action(s) it must call" for that route, stated by data
 // rather than read off a comment. classMember has no such column yet (most of

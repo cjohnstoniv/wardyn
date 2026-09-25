@@ -16,7 +16,7 @@ import (
 // `/` and `@` — so a region of `x.attacker.com/` yields the host
 // `oidc.x.attacker.com` and POSTs the client secret and the refresh token to it.
 //
-// Not sandbox-reachable today (the F006 binding pins an uploaded blob's region
+// Not sandbox-reachable today (the binding pins an uploaded blob's region
 // to the operator's own boot config), so this is defence in depth for a
 // pre-0.7.2 blob, a direct store write, or an operator typo.
 func TestAWSSSORegion_HostShapeIsValidatedBeforeTheURLIsBuilt(t *testing.T) {

@@ -110,7 +110,7 @@ func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 	}
 }
 
-// TestScanSlotWaitIsContextBoundAndFailsClosed pins the OTHER half of F074's
+// TestScanSlotWaitIsContextBoundAndFailsClosed pins the OTHER half of the fix's
 // bound: the slot maxConcurrentScans hands out has to be taken through a wait
 // that ENDS, and ending has to mean Deny.
 //
@@ -121,8 +121,8 @@ func TestScanBufferedBodyBoundsConcurrentBuffering(t *testing.T) {
 // internal/egress/proxy/server.go); only the inner MITM server carries one. So a
 // single slow-loris POST holding the process-wide slot would park every other
 // inspected request of the run in the semaphore send FOREVER — each retaining a
-// goroutine and a socket in a 256 MiB sidecar, the same retention class F079 is
-// about, now reachable through the inspection path and triggerable by the
+// goroutine and a socket in a 256 MiB sidecar — a retention class
+// now reachable through the inspection path and triggerable by the
 // untrusted sandbox.
 //
 // Bounded, the wait must fail CLOSED (a Deny + an error response), like the
@@ -204,7 +204,7 @@ func TestScanSlotWaitIsContextBoundAndFailsClosed(t *testing.T) {
 	}
 }
 
-// TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease pins the F074 fix-up:
+// TestScanBufferedBodyHoldsTheBufferBudgetUntilRelease pins the fix-up:
 // the bound has to cover the buffer's LIFETIME, not just the window in which it
 // is extracted and scanned.
 //

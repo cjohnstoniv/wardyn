@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// TestApprovalScopeIsDocumentedAsPortWide (F001) pins POLICIES.md's approval
+// TestApprovalScopeIsDocumentedAsPortWide pins POLICIES.md's approval
 // scope table to the fact that an egress approval has no port in it anywhere.
 //
 // The human is shown a bare host, the proxy caches the answer under that bare
@@ -181,7 +181,7 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 		// intro fifteen lines above and the Bedrock recipe below both deny.
 		"**reaches the endpoint** through the corp proxy",
 		"is the one field that admits a private address",
-		// Retired with F008's guard-runs-here semantics: the section intro promised a
+		// Retired with the guard-runs-here semantics: the section intro promised a
 		// timeout for the case the matrix immediately below says is refused.
 		"every one of them times out",
 	)
@@ -190,7 +190,7 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 		"a name that resolves here is refused",
 	)
 
-	// The ProxyConfig field comment is the sixth copy of the pre-F008 narrative;
+	// The ProxyConfig field comment is the sixth copy of the earlier narrative;
 	// it must describe the guard-runs-here branch and never the timeout story.
 	cfg := readSrc(t, "internal", "egress", "proxy", "config.go")
 	mustSay(t, cfg, "internal/egress/proxy/config.go",
@@ -229,7 +229,7 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 	mustSay(t, egt,
 		"internal/egress/proxy/egress_target.go upstream branch",
 		"the guard binds the name at CHECK time only — the corp proxy resolves again for the dial",
-		// The file header's own composition paragraph, re-derived for post-F008
+		// The file header's own composition paragraph, re-derived for the newer
 		// behaviour: the guard runs on the upstream branch too, InternalHosts
 		// lifts it THERE, and routing stays the estate's.
 		"the guard runs on BOTH branches and InternalHosts is what lifts it on either",
@@ -238,7 +238,7 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 	)
 	mustNotSay(t, egt,
 		"internal/egress/proxy/egress_target.go upstream branch",
-		// Pre-F008: the guard ran on the local-dial path only, so the header
+		// Before: the guard ran on the local-dial path only, so the header
 		// could describe the upstream hop purely as a routing failure.
 		"neither alone suffices",
 		"cannot CONNECT to an internal address (it times out)",
@@ -254,7 +254,7 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 	)
 }
 
-// TestBranchNSScopeRationaleMatchesThePATLane (F015, re-derived in 0.7.2) pins
+// TestBranchNSScopeRationaleMatchesThePATLane (re-derived in 0.7.2) pins
 // the two comments that scope push confinement per lane, plus docs/ENV.md's
 // rows, to what the git_pat lane actually is.
 //
@@ -321,7 +321,7 @@ func TestBranchNSScopeRationaleMatchesThePATLane(t *testing.T) {
 	)
 }
 
-// TestGatewayPredicateHasOneBody (F089) keeps the model-gateway refusal
+// TestGatewayPredicateHasOneBody keeps the model-gateway refusal
 // predicate structurally single, not "mirrored" by a comment.
 //
 // api.llmGatewayIPRefused (the boot validator) and proxy.trustedGatewayIPRefused
@@ -355,7 +355,7 @@ func TestGatewayPredicateHasOneBody(t *testing.T) {
 	}
 }
 
-// TestPATPushIsNotDocumentedAsAnImpossibility (F121, re-derived in 0.7.2) pins
+// TestPATPushIsNotDocumentedAsAnImpossibility (re-derived in 0.7.2) pins
 // the THREAT-MODEL's half of the branch-namespace scope claim to the same
 // premise its code sibling is pinned to above.
 //
@@ -406,12 +406,12 @@ func TestPATPushIsNotDocumentedAsAnImpossibility(t *testing.T) {
 	)
 }
 
-// TestAllowAllPublicOnlyClaimNamesTheUpstreamResidual (F118) keeps evalHost's
+// TestAllowAllPublicOnlyClaimNamesTheUpstreamResidual keeps evalHost's
 // allow-all comment honest about the one lane where its claim does not hold.
 //
 // The comment told a reader of the policy code that allow-all "reaches PUBLIC
 // hosts only" because the unconditional IP guard is "applied later in the
-// pipeline". Under a configured corporate upstream that guard now runs (F008)
+// pipeline". Under a configured corporate upstream that guard now runs
 // but deliberately excuses ONE denial — a name this proxy cannot resolve at all
 // is forwarded to the corp proxy unvetted — and, the target being sent by name,
 // binds what it does check at CHECK time only, because the corp proxy resolves
@@ -442,7 +442,7 @@ func TestAllowAllPublicOnlyClaimNamesTheUpstreamResidual(t *testing.T) {
 	)
 }
 
-// TestApprovalPortBlindnessIsStatedInCode (F108) is the code-side half of the
+// TestApprovalPortBlindnessIsStatedInCode is the code-side half of the
 // port-wide approval claim POLICIES.md now carries.
 //
 // The behaviour is a property of three places at once — the raise body the human

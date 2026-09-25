@@ -25,7 +25,7 @@ const (
 	govCorpDeny      = "*.corp.example"
 	govCorpMirror    = "mirror.corp.example"
 	// govCorpMirrorEntry is the ALLOWLIST form of that mirror: substituteArtifactEgress
-	// adds the redirect's To port-qualified (F106), so an egress entry is
+	// adds the redirect's To port-qualified, so an egress entry is
 	// "host:port" while an injection host stays bare.
 	govCorpMirrorEntry = govCorpMirror + ":443"
 )

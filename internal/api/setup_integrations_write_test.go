@@ -467,7 +467,7 @@ func auditCount(audit *recRecorder, action string) int {
 	return n
 }
 
-// R5 F028: putIntegrationRequest's doc comment prescribed a procedure the
+// R5: putIntegrationRequest's doc comment prescribed a procedure the
 // handler rejects — "a caller must round-trip a GET first to preserve fields it
 // does not intend to change", while decodeStrict 400s the very first field
 // every GET emits ("unknown field \"id\""). The contract chosen is the strict

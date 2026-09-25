@@ -10,7 +10,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestGrade_GitPushAnyBranch pins B11b-F11. git_push_any_branch turns OFF
+// TestGrade_GitPushAnyBranch pins the following. git_push_any_branch turns OFF
 // branch-namespace confinement for a run's brokered pushes: with it on, the
 // broker forwards a push only under refs/heads/wardyn/<run-id>/, which is what
 // stops an agent rewriting main. Clamp already treats it as a privilege and

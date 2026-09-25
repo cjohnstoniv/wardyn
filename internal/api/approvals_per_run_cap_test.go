@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// R3-F071 — the per-run approval cap. The SANDBOX picks the hosts and tools it
+// The per-run approval cap. The SANDBOX picks the hosts and tools it
 // asks about, and the dedup guard only collapses repeats of the SAME scope, so a
 // run walking a thousand different unknown hosts wrote a thousand approvals and
 // put a thousand entries in front of a human. The bound did not exist for a

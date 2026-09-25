@@ -48,7 +48,7 @@ func driveRunServer(st *driveStore, runnerTarget string) (*Server, *recRecorder)
 // Nil roots is the deployment that has un-set the variable since the drive was
 // authored.
 //
-// It carries an AdminToken (R1 F321) purely so /metrics can be read. The
+// It carries an AdminToken (R1) purely so /metrics can be read. The
 // refusal-metric assertions in this family scrape the same Server the refusal
 // happened on, and /metrics is operator-gated: without a token the scrape
 // answered 401 and every counter read back as 0, which is a pin that cannot
@@ -371,7 +371,7 @@ func TestSeedRequestDrive422Matrix(t *testing.T) {
 				"(on a Kubernetes deployment the rule is stricter: no _, and it may not end in - or .)",
 		},
 		{
-			// THE ADMIN'S VALUE, BLAMED ON THE MEMBER — F137's surviving half,
+			// THE ADMIN'S VALUE, BLAMED ON THE MEMBER — the surviving half,
 			// pinned here because nothing exercised an INVALID override at all
 			// (every other test stores a legal one).
 			//
@@ -1602,7 +1602,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 			reason: driveRefusalBackendElsewhere,
 		},
 		{name: "the home directory is missing from the share", build: shareStore, reason: driveRefusalHomeMissing},
-		// The four arms the table never exercised (R1 F310). Every one of them
+		// The four arms the table never exercised (R1). Every one of them
 		// is a reachable deployment failure whose whole point is that an
 		// operator sees it, and not one of them had ever emitted its own series
 		// in a test — so the reason constant, the WARN and the counter could
@@ -1652,7 +1652,7 @@ func TestDriveRefusalLeavesAnOperatorVisibleRecord(t *testing.T) {
 				srv, _ := driveShareServer(st, []string{root})
 				// A probe on this root already outstanding past its bound: the
 				// hung-mount state, reached without hanging the test on a real
-				// five-second syscall (see driveShareProbes, R1 F295).
+				// five-second syscall (see driveShareProbes, R1).
 				driveShareProbes.Store("root:"+root, time.Now().Add(-time.Minute))
 				t.Cleanup(func() { driveShareProbes.Delete("root:" + root) })
 				return st, srv

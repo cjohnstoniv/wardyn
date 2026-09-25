@@ -84,7 +84,7 @@ func TestRun_NeverInvokesAWSCLIForAccountRoleLookup(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("the aws CLI stub was invoked — the live SSO access token would have been placed on its argv (F160)")
+		t.Fatal("the aws CLI stub was invoked — the live SSO access token would have been placed on its argv")
 	}
 	if uploaded == nil {
 		t.Fatal("expected an sso-token upload to have happened")

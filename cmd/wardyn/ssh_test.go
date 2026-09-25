@@ -292,7 +292,7 @@ func TestRunSSH_EnabledButNoAdvertiseAddr(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// The run-id is argv (F198)
+// The run-id is argv
 // --------------------------------------------------------------------------
 //
 // `wardyn ssh <run-id>` splices its argument into ssh(1)'s argv as
@@ -358,7 +358,7 @@ func TestRunSSH_AcceptsARealRunID(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// B12a-F4: ssh(1)'s own exit status is docs/CI.md's documented taxonomy for
+// ssh(1)'s own exit status is docs/CI.md's documented taxonomy for
 // this command — it passes straight through as the process's exit code
 // (never re-labelled 1, the generic local-failure code) — EXCEPT a
 // signal-killed child, whose exec.ExitError.ExitCode() is -1: os.Exit with a

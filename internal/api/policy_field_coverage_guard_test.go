@@ -56,9 +56,9 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 	"FirstUseApproval": {validated: true, clamped: true,
 		why: "closed enum; raised to the ceiling's stricter mode by firstUseApprovalRank"},
 	"FirstUseHoldSeconds": {validated: true, clamped: false,
-		why: "B11b-F2: bounded non-negative and <= maxFirstUseHoldSeconds here, and clamped AGAIN in the proxy's configureHold for a stored policy that never re-crosses this door. Not a composer.Clamp field: there is no ceiling to intersect against — the bound is absolute, not per-operator"},
+		why: "bounded non-negative and <= maxFirstUseHoldSeconds here, and clamped AGAIN in the proxy's configureHold for a stored policy that never re-crosses this door. Not a composer.Clamp field: there is no ceiling to intersect against — the bound is absolute, not per-operator"},
 	"MaxHolds": {validated: true, clamped: false,
-		why: "B11b-F2: same pair of doors, same reason. max_holds is a channel capacity in the proxy, so the cap is a resource bound rather than a privilege ceiling"},
+		why: "same pair of doors, same reason. max_holds is a channel capacity in the proxy, so the cap is a resource bound rather than a privilege ceiling"},
 	"AllowedMethods": {validated: false, clamped: true,
 		why: "intersected down to the ceiling's method list. Unvalidated by design: an unrecognised method matches no request and so denies rather than widens — it can only ever narrow this run"},
 	"MinConfinementClass": {validated: true, clamped: true,
@@ -70,7 +70,7 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 	"WorkspaceMounts": {validated: true, clamped: true,
 		why: "runner.ValidateMount plus the unique-target invariant; DROPPED entirely by the clamp — a host bind mount is operator-authored and must never arrive from a composer fed untrusted input"},
 	"WorkspaceRepos": {validated: true, clamped: false,
-		why: "B11b-F10, answered deliberately: runner.ValidateTarget plus the same unique-target invariant, and NOT dropped like its WorkspaceMounts sibling. A repo is cloned into the sandbox rather than bound to a host path, so it carries no host-filesystem authority to drop; the authority it does carry is the workspace ONBOARDING check, which narrowMemberInlinePolicy applies on the member lane"},
+		why: "answered deliberately: runner.ValidateTarget plus the same unique-target invariant, and NOT dropped like its WorkspaceMounts sibling. A repo is cloned into the sandbox rather than bound to a host path, so it carries no host-filesystem authority to drop; the authority it does carry is the workspace ONBOARDING check, which narrowMemberInlinePolicy applies on the member lane"},
 	"LLMInspection": {validated: true, clamped: true,
 		why: "mode/marker/sidecar-URL shape; replaced wholesale by the operator's configured mode, or cleared when the operator configures none"},
 	"UIApps": {validated: true, clamped: true,
@@ -80,7 +80,7 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 	"ToolRules": {validated: true, clamped: true,
 		why: "closed effect enum, name charset/length, count cap; a proposal may narrow the ceiling's rules and never widen them"},
 	"GitPushAnyBranch": {validated: false, clamped: true,
-		why: "forced false unless the ceiling sets it — a boolean with no shape to validate. B11b-F11 added the Grade item so the human is told when it is on"},
+		why: "forced false unless the ceiling sets it — a boolean with no shape to validate. Grade adds the item so the human is told when it is on"},
 	"PushRules": {validated: true, clamped: true,
 		why: "#176: deny_paths per-entry byte/charset shape (no count cap — see maxPushRulesPathBytes' own doc for why, same stance as denied_domains), max_inspect_pack_mib range-checked. It only NARROWS what a push may touch, so an operator-silent ceiling leaves a proposal's own push_rules untouched; a ceiling that sets one (PushRulesSpec.IsSet — an all-zero push_rules:{} does not count) is a FLOOR — an unset proposal inherits it wholesale, a set one gets the ceiling's deny_paths unioned in EXACT-STRING (unionPaths, not union — a git path is case-sensitive) and max_inspect_pack_mib capped. composer.Grade adds a medium-risk item when it is set (same PushRulesSpec.IsSet guard) and the run's only git grant is ssh_key (unenforceable, not unsafe). #180: require_review_paths takes deny_paths' per-entry checks and unions the same exact-string way; hold_seconds is range-checked 0..600 (the proxy's maxHoldTimeout, which also clamps it sidecar-side) and clamps to the shorter of two authored holds"},
 }
@@ -104,7 +104,7 @@ func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
 		row, ok := runPolicySpecCoverage[f.Name]
 		if !ok {
 			t.Errorf("RunPolicySpec.%s has no coverage row: say whether validatePolicySpec bounds it, "+
-				"whether composer.Clamp bounds it, and why — a field nothing visits is how B11b-F2 happened", f.Name)
+				"whether composer.Clamp bounds it, and why — a field nothing visits is how a gap like this happened", f.Name)
 			continue
 		}
 		seen[f.Name] = true

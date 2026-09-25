@@ -29,8 +29,6 @@ func (b fakeDevcontainerBuilder) BuildFromDevcontainerFiles(context.Context, map
 	return b.tag, nil
 }
 
-// TestCreateRun_DevcontainerWithoutBuilderWarnsOnThe201 is B1-F9.
-//
 // resolveCreateRunImage fails a workspace base_image CLOSED when no
 // ImageBuilder is wired (PARITY-4) but lets devcontainer_repo fall through to
 // the convention image. The fall-through is correct — a hard refusal would
@@ -56,7 +54,7 @@ func TestCreateRun_DevcontainerWithoutBuilderWarnsOnThe201(t *testing.T) {
 	}
 }
 
-// TestCreateRun_DevcontainerWithABuilderCarriesNoWarning is B1-F9's negative
+// TestCreateRun_DevcontainerWithABuilderCarriesNoWarning is the negative
 // control: with a builder wired the build really happened, so the sentence
 // would be a lie.
 func TestCreateRun_DevcontainerWithABuilderCarriesNoWarning(t *testing.T) {

@@ -162,7 +162,7 @@ func TestPG_AuditChain_DetectsTamperedMiddleRow(t *testing.T) {
 		t.Helper()
 		if _, err := pool.Exec(ctx,
 			`ALTER TABLE audit_events DISABLE TRIGGER audit_events_no_update`); err != nil {
-			// The last self-skip in this package the F11 skip floor cannot see:
+			// The last self-skip in this package the skip floor cannot see:
 			// this test never calls testfloor.Mark, so a lane that CAN own the
 			// table and silently stopped tampering would still report `ok`.
 			// Routed through the same derived discipline.

@@ -521,7 +521,7 @@ func TestInjectionResolve_OperatorRunUnchanged(t *testing.T) {
 	}
 }
 
-// ---- F133 pins: the H2 OAuth host pin (both halves) and the sentinel success path ----
+// ---- The H2 OAuth host pin (both halves) and the sentinel success path ----
 //
 // handleInternalInjection's OAuth HOST PIN (H2) and its write-time sibling in
 // validateInlineSecretRefs were both unheld: short-circuiting either comparison

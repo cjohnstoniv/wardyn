@@ -41,7 +41,7 @@ func putAWSSSOBlob(t *testing.T, s *Server, expiresAt time.Time) awsSSOBlob {
 		// registrationLapsed answers exactly what the ZERO value here answered
 		// before: live. Carrying it makes this fixture the ORDINARY shape, so a
 		// test asserting the refresh row NAMES the registration expiry asserts
-		// the ordinary case rather than the zero-value one B2-F8 omits the key
+		// the ordinary case rather than the zero-value one this test omits the key
 		// for. The cases that want a zero value still set it explicitly.
 		RegistrationExpiresAt: awsSSOTestFixedNow.Add(90 * 24 * time.Hour),
 	}

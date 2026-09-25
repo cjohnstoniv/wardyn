@@ -337,7 +337,7 @@ func TestDriveObjectNameIDScheme(t *testing.T) {
 // drive it was reclaiming.
 func TestDriveObjectNameSeparatesTwoDrivesOnOneHome(t *testing.T) {
 	// What a user-tier home_override derives on ANY drive, unchanged by the
-	// template, which is why the F034 template rule does not cover this.
+	// template, which is why the template rule does not cover this.
 	const home = "bsmith"
 
 	for _, backend := range []DriveBackend{DriveBackendDockerVolume, DriveBackendK8sPVC} {

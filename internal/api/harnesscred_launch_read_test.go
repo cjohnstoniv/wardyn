@@ -54,7 +54,7 @@ func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
 		t.Fatalf("decode launch: %v (%s)", err, w.Body.String())
 	}
 
-	// THE PREMISE, ESTABLISHED (R1-F3): wait until the detached launch goroutine
+	// THE PREMISE, ESTABLISHED: wait until the detached launch goroutine
 	// is actually INSIDE CreateSandbox. Without this the ten reads below most
 	// likely finish before dispatch ever reaches the runner, and the test would
 	// prove nothing about reading a run mid-pull. What it still cannot speak for

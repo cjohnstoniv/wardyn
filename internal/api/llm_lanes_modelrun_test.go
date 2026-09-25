@@ -16,8 +16,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestResolveRunLLMLanes_HonoursTheRunsOwnModelRunAnswer is B2-F7.
-//
 // resolveRunLLMLanes probed Bedrock with modelRun hard-coded true while the
 // managed lane one line below used the REAL isModelRun. So a scan run
 // (workspace_id + non-interactive — the shape isModelRun exists to exclude) got
@@ -87,8 +85,6 @@ func TestPreflight_ScanRunDoesNotClaimBedrock(t *testing.T) {
 	}
 }
 
-// TestAWSSSORefresh_ZeroRegistrationExpiryIsOmittedFromTheAuditRow is B2-F8.
-//
 // The harness.credential.refresh row formatted a ZERO RegistrationExpiresAt as
 // 0001-01-01T00:00:00Z, which reads as "the client registration lapsed long
 // ago" — the exact opposite of registrationLapsed's rule that a zero value
@@ -120,7 +116,7 @@ func TestAWSSSORefresh_ZeroRegistrationExpiryIsOmittedFromTheAuditRow(t *testing
 	}
 }
 
-// TestAWSSSORefresh_RegistrationExpiryStillRecordedWhenKnown is B2-F8's
+// TestAWSSSORefresh_RegistrationExpiryStillRecordedWhenKnown is the
 // negative control.
 func TestAWSSSORefresh_RegistrationExpiryStillRecordedWhenKnown(t *testing.T) {
 	s, audit, _ := ssoRefreshServer(t)

@@ -16,8 +16,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestCeilingMemoIsSingleFlight is F174.
-//
 // The memo released its lock between the check and the fill, so two concurrent
 // callers both missed, both resolved, and the LOSER returned its own pair rather
 // than the memo's: the store was asked twice and the two callers received

@@ -60,7 +60,7 @@ func kernelExecEvent(runID uuid.UUID, argv0 string) types.AuditEvent {
 }
 
 // TestReconcileRecordRun_CorroborationIsPerCapture pins the first half of
-// B11b-F7. The kernel-ground-truth caveat read the newest GLOBAL heartbeat as
+// the following. The kernel-ground-truth caveat read the newest GLOBAL heartbeat as
 // of NOW and then said "this capture" about it. So a capture with real kernel
 // evidence of its own, reviewed while the host sensor happens to be idle,
 // claimed to have "no kernel-level corroboration" — about a capture that is
@@ -152,7 +152,7 @@ func TestReconcileRecordRun_OrdinaryHostDropsAreNotAnAnomaly(t *testing.T) {
 	}
 }
 
-// TestReconcileRecordRun_DroppedUnmappedInWindowIsAnAnomaly pins B11b-F4. The
+// TestReconcileRecordRun_DroppedUnmappedInWindowIsAnAnomaly pins the following. The
 // "possible proxy bypass" anomaly could never fire: an unmapped kernel event
 // carries a nil run_id, the gated mapper drops it, and Capture reads only
 // events already scoped to this run. The signal comes from the sensor's own

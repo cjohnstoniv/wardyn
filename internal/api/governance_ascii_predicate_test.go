@@ -25,7 +25,7 @@ var asciiOnlyPredicates = map[string]func(string) bool{
 	"types.ASCIIOnlySubject": types.ASCIIOnlySubject,
 }
 
-// TestASCIIOnlyPredicatesHaveOneAnswer is R1 F342.
+// TestASCIIOnlyPredicatesHaveOneAnswer is R1.
 //
 // The ASCII guard is the ORDER half of a security property, not a formatting
 // nicety. canonicalUserSubject (capabilities.go) runs it BEFORE strings.ToLower

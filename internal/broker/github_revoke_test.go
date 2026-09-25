@@ -23,7 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// B11a-F1. mint() talks to GitHub BEFORE the single-use burn, so every arm that
+// mint() talks to GitHub BEFORE the single-use burn, so every arm that
 // returns an error AFTER mintKind succeeded is holding a real, live ghs_… with
 // contents:write for GitHub's full ~1h — and with no committed credential.mint
 // row, that token has no jti, so mintedCredentialsSQL cannot see it and
@@ -60,7 +60,7 @@ func TestMint_CommitFailure_RevokesDiscardedGitHubToken(t *testing.T) {
 	}
 }
 
-// NEGATIVE CONTROL for B11a-F1: the WINNER's token is never revoked. A revoke
+// NEGATIVE CONTROL for the WINNER's token is never revoked. A revoke
 // on the success path would hand back the very credential the run is about to
 // use.
 func TestMint_Success_NeverRevokes(t *testing.T) {
@@ -151,7 +151,7 @@ func newTestGitHubMinter(t *testing.T, baseURL string, budget time.Duration) *gi
 	return m
 }
 
-// B11a-F2. A never-responding api.github.com must not pin the mint (and with it
+// A never-responding api.github.com must not pin the mint (and with it
 // the grant row's FOR UPDATE lock and a pooled connection) for longer than the
 // client's own budget. The caller here passes context.Background() ON PURPOSE:
 // the residual the finding names is exactly a caller with no deadline of its
@@ -253,7 +253,7 @@ func TestGitHubMinter_MintCeilingIsOneBudgetNotTwo(t *testing.T) {
 	}
 }
 
-// NEGATIVE CONTROL for B11a-F2: a merely SLOW GitHub still mints. The deadline
+// NEGATIVE CONTROL for a merely SLOW GitHub still mints. The deadline
 // is a ceiling on a hung server, not a latency budget that fails ordinary
 // round trips.
 func TestGitHubMinter_SlowGitHubStillMints(t *testing.T) {

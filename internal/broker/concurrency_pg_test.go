@@ -373,7 +373,7 @@ func TestPG_ConcurrentMint_ExactlyOnceWins(t *testing.T) {
 	if gh.Calls < 1 {
 		t.Fatalf("github minter calls = %d, want >= 1 (winner must mint)", gh.Calls)
 	}
-	// B11a-F1: every loser's token is a REAL ghs_… with contents:write, live for
+	// every loser's token is a REAL ghs_… with contents:write, live for
 	// GitHub's full ~1h, and it never reaches a committed credential.mint row —
 	// so it has no jti, mintedCredentialsSQL cannot see it and RevokeRun cannot
 	// reach it. The only door back is the broker handing it to GitHub at the
@@ -541,7 +541,7 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 	if gh.Calls < 1 {
 		t.Fatalf("github minter calls = %d, want >= 1 (winner must mint)", gh.Calls)
 	}
-	// B11a-F1: every loser's token is a REAL ghs_… with contents:write, live for
+	// every loser's token is a REAL ghs_… with contents:write, live for
 	// GitHub's full ~1h, and it never reaches a committed credential.mint row —
 	// so it has no jti, mintedCredentialsSQL cannot see it and RevokeRun cannot
 	// reach it. The only door back is the broker handing it to GitHub at the

@@ -347,7 +347,7 @@ func TestApiserverHostPort_ParsesSchemeHost(t *testing.T) {
 }
 
 // TestNewWithClient_CanaryPodDisablesServiceLinks is the canary's share of
-// B9-F7: the canary runs the wardyn-proxy image with one job — dial the
+// the canary runs the wardyn-proxy image with one job — dial the
 // apiserver host:port it was handed — and reads no environment at all. Leaving
 // enableServiceLinks at its default true would put every Service in the
 // operator's namespace into its env for nothing, and would drift the one pod

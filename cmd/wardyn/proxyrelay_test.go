@@ -129,7 +129,7 @@ func TestRelayConn_UnreachableUpstreamClosesTheClient(t *testing.T) {
 }
 
 // The default is a SECURITY decision that TestProxyRelay_ListenDefaults pins,
-// and F202's point is that it was nowhere in the operator's view: the caveat
+// and it was nowhere in the operator's view: the caveat
 // ("this exposes the corp proxy to anything that can reach the listen address")
 // lived only in a source comment, so `--help` described 0.0.0.0 as merely
 // "address to listen on" and the running relay printed only which ports it was
@@ -168,7 +168,7 @@ func TestProxyRelay_WarnsOnANonLoopbackBind(t *testing.T) {
 	}
 }
 
-// B12a-F5: the running relay's exposure warning was printed to stdout, next
+// the running relay's exposure warning was printed to stdout, next
 // to informational lines a script piping stdout (to a log, to `tee`) would
 // otherwise capture cleanly — a WARNING has no business there. The listen
 // bind default (0.0.0.0) is untouched; only where this one line goes moves.

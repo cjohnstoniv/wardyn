@@ -10,8 +10,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestMeUnavailableReasonPrecedence is F273.
-//
 // PF-26's own motivating case is a TRUNCATED group snapshot, and it fails BOTH
 // resolves: the drive resolver names it groups_snapshot_stale — the same token
 // the launch path's 403 carries, whose remedy the member can perform — and the
@@ -116,8 +114,6 @@ func TestMeUnavailableReasonPrecedence(t *testing.T) {
 	})
 }
 
-// TestMeBlankNamedDenyProfile is F274.
-//
 // governance_profiles.name is TEXT NOT NULL UNIQUE with no non-empty CHECK, so a
 // profile with DenyUserDrive set and a blank name reports ("", true) from
 // driveDoorProfile. userDriveDeniedByProfile discarded the bool, so the name key

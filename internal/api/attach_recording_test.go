@@ -178,7 +178,7 @@ func TestNewSessionRecorder_MasksSecretSplitAcrossWrites(t *testing.T) {
 	cast := string(body)
 
 	// THE headline assertion of this test, and the one that could not fire
-	// before F147: the secret is split across two writes, so it lands in two
+	// against the raw framed bytes: the secret is split across two writes, so it lands in two
 	// different "o" events and never appears contiguously in the framed bytes.
 	// It has to be looked for in the reassembled output.
 	assertCastHasNoSecret(t, cast, secret, "boundary-split secret")
@@ -315,7 +315,7 @@ func TestNewSessionRecorder_ConcurrentWriteAndFinishRaceFree(t *testing.T) {
 // searches BOTH forms of the recording: the framed bytes as stored, and the
 // REASSEMBLED output payload decodeCastOutput rebuilds from the "o" events.
 //
-// The reassembled half is the load-bearing one and it was missing (F147). A
+// The reassembled half is the load-bearing one and it was missing. A
 // secret that straddles two PTY writes — the exact scenario the split test
 // constructs — lands in two different "o" events separated by `"]\n[t,"o","`,
 // so the contiguous secret NEVER appears in the framed bytes whether masking

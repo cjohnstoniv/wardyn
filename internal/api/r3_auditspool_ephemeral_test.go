@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// TestAuditSpoolEphemeralWarnsAtBoot is F199.
-//
 // auditspool.go and docs/OPERATIONS.md both promised, without qualification,
 // that the quarantine alert survives a deploy / crash loop / pod reschedule. On
 // the Helm chart's DEFAULT (persistence.enabled=false) WARDYN_AUDIT_SPOOL is

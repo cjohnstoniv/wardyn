@@ -261,8 +261,8 @@ func ageRunSecretsAndNetPols(t *testing.T, cs *fake.Clientset, runID uuid.UUID, 
 	}
 }
 
-// TestSweepOrphanedSandboxes_ReclaimsARunWhoseBothPodsAreGone is the B9-F5
-// rider on B9-F1: the sweep listed PODS only, so a run reachable solely through
+// TestSweepOrphanedSandboxes_ReclaimsARunWhoseBothPodsAreGone documents the
+// following: the sweep listed PODS only, so a run reachable solely through
 // its Secret and NetworkPolicies was invisible to it — permanently. Both pods
 // gone before teardown is an ordinary aftermath (a deleted node takes them
 // together; an eviction plus terminated-pod GC gets there on its own), and what

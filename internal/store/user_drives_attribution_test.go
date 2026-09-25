@@ -3,7 +3,7 @@
 
 package store
 
-// PIN for B5-F5: the refusal-attribution fallback answered
+// PIN for the refusal-attribution fallback answered
 // ErrDriveHomeNamespaceConflict unconditionally, so a drive the ALLOCATION guard
 // refused could be reported with the home-namespace sentence — which names a
 // rule that does not exist for its backend ("another host_path drive on …" for a

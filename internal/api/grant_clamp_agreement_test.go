@@ -12,8 +12,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestClampAndComparatorAgreeOnEveryCeilingShape is F014's cross-package pin,
-// widened after round 2 reopened the finding.
+// TestClampAndComparatorAgreeOnEveryCeilingShape pins clamp/comparator agreement across packages,
+// widened after round 2 reopened it.
 //
 // TestClampAndComparatorAreOneRule (governance_grantbound_test.go) pins ONE
 // input — pairing A asking for pairing B's TTL headroom. Round 1 closed that
@@ -21,7 +21,7 @@ import (
 // rules: the comparator asks "does SOME single ceiling grant dominate this
 // proposal on every axis", the clamp MET every candidate. Meeting can only
 // narrow, so neither residual was a widening — but a rule that gives one input
-// two answers is the defect F014 names, whichever direction it errs in.
+// two answers is the defect, whichever direction it errs in.
 //
 // The agreement is stated as two directions, and both are asserted for every
 // shape below:
@@ -95,7 +95,7 @@ func TestClampAndComparatorAgreeOnEveryCeilingShape(t *testing.T) {
 			pairingInCeiling: true,
 		},
 		{
-			// F014's ORIGINAL fixture, kept so round 1's fix cannot regress: the
+			// The ORIGINAL fixture, kept so round 1's fix cannot regress: the
 			// comparator refuses pairing A at pairing B's TTL, so only D2 applies —
 			// the clamp must bound it to pairing A's own 60s.
 			name: "api_key: pairing A asking for pairing B's TTL headroom",
@@ -107,7 +107,7 @@ func TestClampAndComparatorAgreeOnEveryCeilingShape(t *testing.T) {
 			pairingInCeiling: true,
 		},
 		{
-			// F014's other original consequence: a proposal naming the STRICT
+			// The other original consequence: a proposal naming the STRICT
 			// forge's pairing must not pick up the permissive forge's approval
 			// posture. requires_approval=false auto-mints the injection at proxy
 			// boot with no human in the loop.
@@ -120,7 +120,7 @@ func TestClampAndComparatorAgreeOnEveryCeilingShape(t *testing.T) {
 			pairingInCeiling: true,
 		},
 		{
-			// R1 F292, shape (a), handed over by lane core: the two ceiling
+			// R1, shape (a), handed over by lane core: the two ceiling
 			// shapes the COMPOSER-side mutants live under, asserted here for the
 			// half the composer cannot reach. composer/grantbound_test.go pins
 			// what Clamp PRODUCES for these (repos [org/alpha], ttl 300,
@@ -146,7 +146,7 @@ func TestClampAndComparatorAgreeOnEveryCeilingShape(t *testing.T) {
 			pairingInCeiling: true,
 		},
 		{
-			// R1 F292, shape (b). The same overlap with the NEGATIVE ttl the
+			// R1, shape (b). The same overlap with the NEGATIVE ttl the
 			// case below covers for api_key — and it is worth having twice,
 			// because the two kinds clamp their scope by different code
 			// (clampGitHubScope re-marshals a repo list; api_key's scope is

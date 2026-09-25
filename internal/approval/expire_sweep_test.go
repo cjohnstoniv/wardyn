@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestExpireStale_OnePoisonRowDoesNotStrandTheRest pins B3-F6: ExpireStale
+// TestExpireStale_OnePoisonRowDoesNotStrandTheRest pins ExpireStale
 // aborted the whole sweep on the first non-ErrAlreadyDecided error, and the
 // sweeper re-lists in the SAME order every tick (ORDER BY requested_at DESC) —
 // so one permanently failing PENDING row stranded every approval sorted after
@@ -45,7 +45,7 @@ func TestExpireStale_OnePoisonRowDoesNotStrandTheRest(t *testing.T) {
 	}
 }
 
-// TestExpireStale_AlreadyDecidedStaysSilent is B3-F6's negative control: a race
+// TestExpireStale_AlreadyDecidedStaysSilent is the negative control: a race
 // with a concurrent human decision is NOT an error and must not surface in the
 // joined error, or every sweep on a busy deployment would report a failure.
 func TestExpireStale_AlreadyDecidedStaysSilent(t *testing.T) {

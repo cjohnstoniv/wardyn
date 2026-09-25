@@ -12,7 +12,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestFindingsCapBoundsRequest pins F075: nothing capped how many
+// TestFindingsCapBoundsRequest: nothing capped how many
 // Findings one ScanRequest could return, so a body split into many spans (a
 // JSON connector body with many string leaves, in this test) fanned out into
 // one finding per span with no upper bound — every one destined to be copied
@@ -47,7 +47,7 @@ func TestFindingsCapBoundsRequest(t *testing.T) {
 	}
 }
 
-// TestScanBudgetStopsFurtherScanning pins F073: the per-span
+// TestScanBudgetStopsFurtherScanning: the per-span
 // max_scan_bytes cap does nothing to bound the TOTAL bytes scanned across a
 // request's many sub-cap spans. This test places ten 500,000-byte padding
 // blocks (5,000,000 bytes total, each individually well under the 1 MiB
@@ -129,7 +129,7 @@ func TestAttachmentDecodeFailureRecordedHonestly(t *testing.T) {
 	}
 }
 
-// TestOpenAIChatScansSystemPromptMessage pins F049: THREAT-MODEL.md
+// TestOpenAIChatScansSystemPromptMessage: THREAT-MODEL.md
 // 5.1a's "Only the system prompt + the last message of each turn are
 // scanned" is true for the Anthropic channel (top-level `system` field) but
 // was false for OpenAI/Codex, which carries the system prompt as a

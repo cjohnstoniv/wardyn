@@ -3,7 +3,7 @@
 
 package db
 
-// PIN for B8-F1: the boot-time audit-trigger restore replayed its four files as
+// PIN for the boot-time audit-trigger restore replayed its four files as
 // four independent Execs, so a failure partway through COMMITTED a superseded
 // definition of the chain function and left it there.
 //

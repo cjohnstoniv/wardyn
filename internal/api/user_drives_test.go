@@ -61,7 +61,7 @@ type driveCRUDStore struct {
 	// second healthy, so the 500 can only have come from the gate under test.
 	listErrOnce bool
 	// upsertErr replaces the write's answer, so a caller can be shown the
-	// SPECIFIC conflict sentinels UpsertUserDrive returns (R1 F177 / F284).
+	// SPECIFIC conflict sentinels UpsertUserDrive returns (R1).
 	// Without it only UNIQUE(name) was reachable from an api-side test, which is
 	// exactly why the other two 409s shipped the name-taken sentence.
 	upsertErr error
@@ -802,7 +802,7 @@ func TestUpdateAllocatedUserDriveGuardsTheRehome(t *testing.T) {
 		if data["rehomed"] != true {
 			t.Errorf("drive.write rehomed = %v, want true", data["rehomed"])
 		}
-		// And which objects it orphaned (B5-F6): `rehomed:true` alone cannot
+		// And which objects it orphaned: `rehomed:true` alone cannot
 		// answer the only question a re-home raises afterwards. The refusal this
 		// confirmation overrode named both facts and the row discarded them.
 		if got, want := data["rehomed_fields"], []any{`name "Corp NAS" → "Corp NAS archive"`}; !reflect.DeepEqual(got, want) {

@@ -254,7 +254,7 @@ func TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured(t *testing.T) {
 	}
 }
 
-// TestInternalHostsCheck is B7-F5's dedicated row: absent when InternalHosts
+// TestInternalHostsCheck is the dedicated row: absent when InternalHosts
 // is empty, present and "info" (never warn/fail — the neg control: the setup
 // gate only fires on warn/fail, so an install with nothing else configured
 // stays gate-inactive with only this row) when it is set, and its Detail is
@@ -470,7 +470,7 @@ func TestPermissionsPostureCheck(t *testing.T) {
 // the bare form hands the operator a command that cannot run.
 var helmUpgradeWithArgs = regexp.MustCompile(`helm(?:\s+-n\s+\S+)?\s+upgrade\s+[^-\s]\S*\s+[^-\s]\S*`)
 
-// assertHelmFixRunnable is the R5 F236 (deduped twin ADV3-05) invariant, applied
+// assertHelmFixRunnable is the R5 (deduped twin ADV3-05) invariant, applied
 // to one SetupCheck.Fix. Three rules, each one a shape a reviewer found shipped:
 //
 //  1. never the bare `helm upgrade --set` — it exits "requires 2 arguments";

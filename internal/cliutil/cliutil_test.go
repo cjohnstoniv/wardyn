@@ -506,7 +506,7 @@ func TestScrubChildEnv(t *testing.T) {
 	}
 }
 
-// TestFlagEnv_EmptyEnvKeepsTheDefault pins F011's root cause. FlagEnv was the
+// TestFlagEnv_EmptyEnvKeepsTheDefault pins the root cause. FlagEnv was the
 // ONE helper in this file that let an explicitly-empty env var blank a
 // compiled-in default — FlagBool, FlagDuration, FlagIntEnv, EnvBool,
 // EnvDuration and EnvOr all read empty as "unset, keep the default", precisely

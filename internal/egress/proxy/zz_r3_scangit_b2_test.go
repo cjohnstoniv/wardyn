@@ -48,9 +48,9 @@ func TestScanSummaryFrom_FindingsCappedStillAlerts(t *testing.T) {
 	}
 }
 
-// TestScanSummaryFrom_SkipReasonsWithFindingsStillAlert pins B4 (F073/F056
-// fix-up): B2 fixed findings_capped only, but scan_budget (F073) and
-// attachment_decode_error (F056) fall into the identical `case res.Skipped`
+// TestScanSummaryFrom_SkipReasonsWithFindingsStillAlert pins B4 (the
+// fix-up): B2 fixed findings_capped only, but scan_budget and
+// attachment_decode_error fall into the identical `case res.Skipped`
 // arm and flip a genuinely finding-bearing scan's audit action from
 // llm.scan.alert to llm.scan.skipped — the same sibling-caller class B2
 // declared blocking, with two of three siblings missed.

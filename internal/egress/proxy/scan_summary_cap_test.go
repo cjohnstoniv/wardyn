@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestScanSummaryPutsTheTruncationOnTheWire pins the F075 fix-up's third and
+// TestScanSummaryPutsTheTruncationOnTheWire pins the fix-up's third and
 // fourth items: a capped scan has to be DISTINGUISHABLE, in the audit, from one
 // that happened to find exactly the cap's worth of findings.
 //

@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// upstreamAllowAllProxy builds the exact shape F105 is about: a corp upstream
+// upstreamAllowAllProxy builds the exact shape at risk: a corp upstream
 // configured (so egressTarget hands the destination to the corp proxy BY NAME,
 // unresolved and unpinned) with allow_all_egress, so nothing but the
 // unconditional literal-IP guard stands between the sandbox and the target.

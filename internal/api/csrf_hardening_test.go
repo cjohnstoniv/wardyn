@@ -117,7 +117,7 @@ func TestAttachOrigin_RedirectHostIsNotAGlob(t *testing.T) {
 	}
 }
 
-// TestAttachOrigin_LocalModeHasNoSecondName (review R-6). attachOriginRefused
+// TestAttachOrigin_LocalModeHasNoSecondName. attachOriginRefused
 // and the LocalMode REST arm must make the SAME decision, which is what
 // originNamesThisDeployment's doc promises ("so 'which origins are us' cannot
 // diverge"). LocalMode has no ingress and no IdP in front of it, so the

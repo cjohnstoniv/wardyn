@@ -2030,7 +2030,7 @@ func TestRunFailureReason_SurvivesACappedAuditTrail(t *testing.T) {
 	}
 }
 
-// TestUnknownSubcommandUnderEveryGroupIsAnError is F009: `wardyn secret ste`
+// TestUnknownSubcommandUnderEveryGroupIsAnError: `wardyn secret ste`
 // printed help on STDOUT and exited 0, so a mistyped subcommand reported
 // SUCCESS to a script, a CI step, or a pasted instruction. Wardyn sells the exit
 // code as the contract (README, docs/CI.md's exit-code taxonomy,

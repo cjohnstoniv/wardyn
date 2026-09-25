@@ -244,7 +244,7 @@ func (s *workspaceStoreFake) ListWorkspaces(context.Context) ([]types.Workspace,
 // the CANONICAL spelling upsertAndAttach wrote (canonicalSourceIdentity) —
 // never the raw spelling a caller last typed. Without it, a test comparing a
 // request body against "what the store serves" was comparing against a shape
-// production never returns, which is how B4-F3's data loss stayed invisible to
+// production never returns, which is how the data loss stayed invisible to
 // this file's own update tests.
 func hydratedFakeWorkspace(ws types.Workspace) types.Workspace {
 	if ws.Sources == nil {
@@ -359,7 +359,7 @@ func TestUpdateWorkspace_ContentChangeStampsTheEgressEdit(t *testing.T) {
 	if got.EgressEditedAt == nil || !got.EgressEditedAt.After(before) {
 		t.Errorf("EgressEditedAt = %v, want a stamp newer than the pre-edit %v — without it the boot heal re-applies every `always` approval onto the list this edit just cleared", got.EgressEditedAt, before)
 	}
-	// And the stamp is the store's, not this handler's clock (B8-F3). The value
+	// And the stamp is the store's, not this handler's clock. The value
 	// is compared against approvals.decided_at, which Postgres stamps, so a
 	// handler-side time.Now() put the daemon/DB skew inside the boot heal's only
 	// newer-action guard — fail-OPEN when wardynd runs behind. The handler asks;

@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestBlindCapSuppressionIsAccountedNotSilent pins F066: emitLLMBlindOnce
+// TestBlindCapSuppressionIsAccountedNotSilent: emitLLMBlindOnce
 // bounds its per-run dedup set at maxBlindHosts, and past that cap the
 // llm.scan.blind coverage row — the ONLY honest report that an
 // inspection-enabled run reached a model host over a tunnel nothing could look

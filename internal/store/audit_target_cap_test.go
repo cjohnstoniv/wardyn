@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestCapAuditTarget is B6-F1's unit half — the rule, without a database.
+// TestCapAuditTarget is the unit half — the rule, without a database.
 //
 // The audit `target` is `r.URL.Path` on the authz.denied / auth.failed lanes,
 // and chi matches a path of any length up to MaxHeaderBytes+4096 (~1 MiB).

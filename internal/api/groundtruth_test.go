@@ -335,8 +335,8 @@ func TestHealthzEbpfIdleNamesBrokenCorrelation(t *testing.T) {
 	if gt["state"] != "idle" {
 		t.Fatalf("ebpf_groundtruth.state = %v, want idle", gt["state"])
 	}
-	// The dropped_unmapped COUNTER moved to the operator-gated /metrics with
-	// B6-F6 (wardyn_groundtruth_dropped_unmapped_total): the anonymous /healthz
+	// The dropped_unmapped COUNTER moved to the operator-gated /metrics
+	// (wardyn_groundtruth_dropped_unmapped_total): the anonymous /healthz
 	// must not publish fleet volumes. What this test exists for is unchanged and
 	// asserted below — the anonymous probe still distinguishes a BROKEN
 	// CORRELATION from a blind sensor, and the count still reaches an operator

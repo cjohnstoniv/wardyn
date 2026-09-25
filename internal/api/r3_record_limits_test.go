@@ -25,8 +25,6 @@ func (s quotaRecordStore) CountActiveRunsBy(context.Context, string) (int, error
 	return s.active, nil
 }
 
-// TestRecordRunHonorsCeilingLimits is F153.
-//
 // launchRecordRun resolved the FULL governanceCeiling and applied only its deny
 // axis. The Limits axis was read at POST /runs and nowhere else, so a profile
 // setting deny_interactive or max_concurrent_runs bound a member's ordinary run

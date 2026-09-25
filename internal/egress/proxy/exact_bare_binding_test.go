@@ -16,7 +16,7 @@ import (
 )
 
 // TestPortQualifiedOnlyHostIsNotCredentialedOnPort80 pins the premise
-// the port-80 injection arm has always been written under and that B10-F1
+// the port-80 injection arm has always been written under and that the any-port arm
 // silently removed: that a host bound for injection had a BARE allowlist entry,
 // which is "silent about the port" and so reads port 80 as the default port of
 // a plaintext connector the operator authored on purpose.
@@ -75,7 +75,7 @@ func TestPortQualifiedOnlyHostIsNotCredentialedOnPort80(t *testing.T) {
 }
 
 // TestAllowedExactHostHonoursAPortQualifiedWildcardDeny closes the
-// asymmetry B10-F1's any-port arm left behind: it shadows a port-qualified
+// asymmetry the any-port arm left behind: it shadows a port-qualified
 // EXACT deny but not a port-qualified WILDCARD one, so `deny *.corp:8443`
 // could not cancel `allow m.corp:8443` at bind time — unlike AuthoredPortFor,
 // which consults both. Alone it is a mis-bind (evalHost still denies the

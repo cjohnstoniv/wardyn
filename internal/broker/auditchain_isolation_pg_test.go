@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// PIN for HANDOFF-1 (the F235/F201 class, handed to this lane by P1's storedb
+// PIN for HANDOFF-1 (a cross-cutting class, handed to this lane by P1's storedb
 // lane): the broker's mint transaction wrote its credential.mint row through
 // insertAuditEventTx on a transaction started with a BARE Begin, so the audit
 // hash chain's LINK correctness rested on default_transaction_isolation — a
