@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`wardynd -rotate-age-key` now stamps `updated_at` on every row it re-encrypts (#717).**
+  A rotation is a write, and least-retention sweeps read `updated_at` to decide what is
+  stale; the Postgres secret store's whole-table rewrap (shared by `-rotate-age-key` and
+  `-rewrap`) previously moved `wrapped_dek`/`kek_id` without touching the column, so a
+  rotated-but-otherwise-untouched secret could still be swept as stale.
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console

@@ -268,7 +268,7 @@ func TestRekeyStampsUpdatedAt(t *testing.T) {
 		t.Fatalf("read the database clock: %v", err)
 	}
 
-	if _, err := Rekey(ctx, pool, oldID, newID); err != nil {
+	if _, err := Rekey(ctx, pool, oldID, newID, nil); err != nil {
 		t.Fatalf("Rekey: %v", err)
 	}
 
