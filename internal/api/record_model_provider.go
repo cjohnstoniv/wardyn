@@ -73,10 +73,15 @@ func (s *Server) recordSessionModelAccess(ctx context.Context, runID uuid.UUID, 
 	ws types.Workspace, mp runProviderChoice, hadInjections bool,
 ) (string, *types.WorkspaceBedrockRef, []runner.InjectionGrant, error) {
 	if mp.governs {
-		if mp.chosen {
-			return "api-key", nil, nil, nil
+		switch {
+		case !mp.chosen:
+			return "none", nil, nil, nil
+		case mp.provider.Kind == types.ModelProviderAnthropicSubscription:
+			return "subscription", nil, nil, nil
+		case mp.provider.Kind.IsBedrock():
+			return "bedrock", nil, nil, nil
 		}
-		return "none", nil, nil, nil
+		return "api-key", nil, nil, nil
 	}
 	// llmGrantsBefore fences the fallback mint below to ONLY what IT adds: the
 	// fold above already minted and audited the requirement grants — reusing
