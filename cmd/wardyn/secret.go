@@ -61,7 +61,7 @@ func secretCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if asJSON {
-				return emitJSON(names)
+				return emitJSON(cmd.OutOrStdout(), names)
 			}
 			for _, n := range names {
 				fmt.Println(n)

@@ -39,7 +39,7 @@ func recordCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if synthJSON {
-				return emitJSON(p)
+				return emitJSON(cmd.OutOrStdout(), p)
 			}
 			printProfile(p)
 			return nil
@@ -67,7 +67,7 @@ func recordCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if saveJSON {
-				return emitJSON(pol)
+				return emitJSON(cmd.OutOrStdout(), pol)
 			}
 			printProfile(p)
 			fmt.Printf("\nsaved sandbox profile as policy %q (id %s)\n", pol.Name, pol.ID)
@@ -99,7 +99,7 @@ func recordCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if taskJSON {
-				return emitJSON(resp)
+				return emitJSON(cmd.OutOrStdout(), resp)
 			}
 			fmt.Printf("record run %s launched (task %s, mode %s)\n", resp.RecordRunID, resp.TaskKey, resp.Mode)
 			if resp.Detail != "" {

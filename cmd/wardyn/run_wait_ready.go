@@ -64,7 +64,7 @@ sandbox to an external tool over the SSH gateway.
 				return err
 			}
 			if asJSON {
-				return emitJSON(res)
+				return emitJSON(cmd.OutOrStdout(), res)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "run %s is %s; workspace %s (%s)\n", res.ID, res.State, res.Workspace.Path, res.Workspace.VCS)
 			return nil

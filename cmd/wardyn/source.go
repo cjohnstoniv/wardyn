@@ -68,9 +68,9 @@ func sourceCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if listJSON {
-				return emitJSON(srcs)
+				return emitJSON(cmd.OutOrStdout(), srcs)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tKIND\tLOCATOR\tREF\tSTATUS\tCONTRACT")
 			for _, src := range srcs {
 				ref := src.Ref
@@ -96,7 +96,7 @@ func sourceCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if createJSON {
-				return emitJSON(src)
+				return emitJSON(cmd.OutOrStdout(), src)
 			}
 			fmt.Printf("source %s (%s %s, status %s)\n", src.ID, src.Kind, src.Locator, src.Status)
 			return nil
@@ -127,7 +127,7 @@ func sourceCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitJSON(raw)
+			return emitJSON(cmd.OutOrStdout(), raw)
 		},
 	}
 

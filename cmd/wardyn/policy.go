@@ -41,9 +41,9 @@ func policyCmd(client clientFn) *cobra.Command {
 			}
 			warnListTruncated(cmd, truncated, "policy", len(policies), listOffset)
 			if listJSON {
-				return emitJSON(policies)
+				return emitJSON(cmd.OutOrStdout(), policies)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tNAME\tMIN_CC\tFIRST_USE\tGRANTS\tUPDATED")
 			for _, p := range policies {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\n",
@@ -71,7 +71,7 @@ func policyCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitJSON(p)
+			return emitJSON(cmd.OutOrStdout(), p)
 		},
 	}
 
@@ -87,7 +87,7 @@ func policyCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitJSON(spec)
+			return emitJSON(cmd.OutOrStdout(), spec)
 		},
 	}
 
@@ -107,7 +107,7 @@ func policyCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if createJSON {
-				return emitJSON(p)
+				return emitJSON(cmd.OutOrStdout(), p)
 			}
 			fmt.Printf("created policy %s (%q, min %s)\n", p.ID, p.Name, p.Spec.MinConfinementClass)
 			return nil
@@ -138,7 +138,7 @@ func policyCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if updateJSON {
-				return emitJSON(p)
+				return emitJSON(cmd.OutOrStdout(), p)
 			}
 			fmt.Printf("updated policy %s (%q, min %s)\n", p.ID, p.Name, p.Spec.MinConfinementClass)
 			return nil
