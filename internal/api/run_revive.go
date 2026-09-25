@@ -190,8 +190,6 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "encode proxy config: "+err.Error())
 	}
 
-	s.revokeRetiringToken(ctx, retiring, run.ID)
-
 	// F2 (Fable review): a slow first pull of the proxy image belongs BEFORE
 	// the claim below, never after — the claim is what makes a watcher sweep
 	// leave this run alone (keepRebootedRun's busy check only helps once the
@@ -230,17 +228,28 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		if run.LostAt == nil && !errors.Is(err, runner.ErrProxyReplaceFailed) {
 			// The old proxy was never touched (an image that cannot be pulled, a
 			// failed inspect): a live run keeps it, renewing its own token. Only
-			// the claim's token stamp moved.
+			// the claim's token stamp moved. Its retiring token must stay live
+			// too (F4, Fable review) — revoking it here would strand that kept,
+			// untouched proxy on a token that can neither renew nor decide,
+			// while its allowlisted egress keeps flowing audit-dark for up to
+			// the lapsed-token sweep's ~1h05m window.
 			s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 			return reviveResult{}, reviveRefused(http.StatusBadGateway,
 				"the run's proxy was not replaced, and the run keeps its current proxy: "+err.Error())
 		}
+		// The old proxy is, or may be, gone: nothing is left to serve on the
+		// retiring token, so revoking it here is safe (F4).
 		data["lost_again"] = true
+		s.revokeRetiringToken(ctx, retiring, run.ID)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(), "failure", mustJSON(data)))
 		s.reloseRun(ctx, run)
 		return reviveResult{}, &reviveError{status: http.StatusBadGateway, lost: true,
 			msg: "the run's proxy could not be replaced, so the run has no egress and is lost until revived: " + err.Error()}
 	}
+	// The new proxy is up behind the fresh token: the retiring one is no
+	// longer needed (O2), and only NOW is it safe to revoke (F4) — every
+	// return above this point leaves the old proxy running unrevoked.
+	s.revokeRetiringToken(ctx, retiring, run.ID)
 	if rebooted {
 		// F2: refresh the watcher lease right before starting the agent — on a
 		// multi-replica deployment the claim's own stamp can go stale while
@@ -317,13 +326,24 @@ func (s *Server) reviveNeedsAgentStart(ctx context.Context, run types.AgentRun) 
 	return err == nil && st.State != types.RunRunning
 }
 
-// revokeRetiringToken retires the OLD run token's own jti once a fresh one is
-// minted (O2, least-privilege credentials, owner law 2026-09-24): a live old
-// token must not go on answering /internal/* calls until its TTL lapses on
-// its own. Best-effort and silent on a miss: an already-expired retiring
-// token fails Verify on expiry before revocation is even reached, so there is
-// nothing to revoke, and a provider without single-jti revocation is not held
-// back.
+// revokeRetiringToken retires the OLD run token's own jti once its proxy is
+// confirmed gone or replaced (O2, least-privilege credentials, owner law
+// 2026-09-24): a live old token must not go on answering /internal/* calls
+// until its TTL lapses on its own. Best-effort and silent on a miss: an
+// already-expired retiring token fails Verify on expiry before revocation is
+// even reached, so there is nothing to revoke, and a provider without
+// single-jti revocation is not held back.
+//
+// CALLER MUST wait until ReplaceProxy has returned before calling this (F4,
+// Fable review): calling it any earlier — before the claim, before
+// EnsureProxyImage, before ReplaceProxy — can revoke a LIVE run's still-
+// serving old proxy's only token when the replace never even starts (a
+// refused claim, an image pull failure). That proxy would then be unable to
+// renew or answer a decision while its allowlisted egress keeps flowing,
+// audit-dark, until the lapsed-token sweep's ~1h05m window loses it. The one
+// call site that leaves an untouched live proxy running (reviveRunProxy's
+// "old proxy was never touched" arm) MUST NOT call this either, for the same
+// reason.
 func (s *Server) revokeRetiringToken(ctx context.Context, retiring string, runID uuid.UUID) {
 	claims, verr := s.cfg.Identity.Verify(ctx, retiring, internalAudience)
 	if verr != nil {

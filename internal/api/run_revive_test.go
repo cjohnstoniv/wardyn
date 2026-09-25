@@ -478,3 +478,38 @@ func TestReviveRun_RevokesTheRetiringToken(t *testing.T) {
 		t.Errorf("the fresh token does not verify: %v", verr)
 	}
 }
+
+// TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive is F4 (Fable
+// review of O2's placement): a LIVE run's restart whose ReplaceProxy fails
+// before the old proxy is touched (a plain inspect error, not
+// ErrProxyReplaceFailed) keeps that proxy running — it renews its own token
+// and stays that way. The retiring token must therefore still verify
+// afterwards: revoking it before ReplaceProxy is even attempted would strand
+// a proxy nobody replaced on a token that can neither renew nor decide,
+// while its allowlisted egress keeps flowing audit-dark until the
+// lapsed-token sweep's ~1h05m window catches it.
+func TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive(t *testing.T) {
+	f := newReviveFixture(t)
+	f.st.run.LostAt, f.st.run.LostReason = nil, "" // live
+	ctx := context.Background()
+	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience)
+	if err != nil {
+		t.Fatalf("mint the retiring token: %v", err)
+	}
+	cfg, err := proxy.LoadConfigBytes(f.rr.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RunToken = old.Token
+	if f.rr.cfg, err = json.Marshal(cfg); err != nil {
+		t.Fatal(err)
+	}
+	f.rr.replaceErr = errors.New("docker: inspect agent for its proxy address: boom") // old proxy untouched
+
+	if code := f.revive(t); code != http.StatusBadGateway {
+		t.Fatalf("revive: code %d, want 502 (the old proxy was never touched)", code)
+	}
+	if _, verr := f.srv.cfg.Identity.Verify(ctx, old.Token, internalAudience); verr != nil {
+		t.Errorf("the retiring token no longer verifies (%v); want it left alone — the old proxy it belongs to is still running", verr)
+	}
+}
