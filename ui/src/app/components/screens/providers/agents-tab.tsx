@@ -48,7 +48,8 @@ import { Field, Switch } from "../../wardyn/form-primitives";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
-import { HarnessLoginPane, isLikelyStartUrl } from "../settings/harness-login-pane";
+import { isLikelyStartUrl } from "../settings/harness-login-pane";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 
 // The two catalog agents whose declared lane folds to a coarse ai-integration
@@ -197,45 +198,27 @@ function ModelAccessNote({ access }: { access: SetupModelAccess }) {
 
 // The SIGNED-IN ADMIN'S OWN block (C4.2): the chip, the server's action line,
 // the ADMIN_OWN_CHIP_NOTE, and (for the three actionable states) the sign-in
-// CTA or the open login pane. Shared between the ordinary bottom placement
-// and the prominent per_user banner at the top of the row (Appendix A finding
-// 4) — the content is identical, only the wrapper around it differs.
-function ModelAccessSignIn({
-  access,
-  loginOpen,
-  setLoginOpen,
-  startURLManaged,
-}: {
-  access: SetupModelAccess;
-  loginOpen: boolean;
-  setLoginOpen: (open: boolean) => void;
-  startURLManaged: boolean;
-}) {
+// CTA, which opens the shell's one door (#544 — this tab mounted its own pane
+// before). Shared between the ordinary bottom placement and the prominent
+// per_user banner at the top of the row (Appendix A finding 4) — the content is
+// identical, only the wrapper around it differs.
+function ModelAccessSignIn({ access }: { access: SetupModelAccess }) {
+  const door = useModelAccessDoor();
   return (
     <>
       <ModelAccessNote access={access} />
       <p className="mt-1 text-meta text-muted-foreground">{AGENTS.ADMIN_OWN_CHIP_NOTE}</p>
-      {loginOpen ? (
-        <div className="mt-2">
-          {/* Under a per_user row the server signs in against THAT row's
-              stored sso_start_url and ignores a typed one, so the pane's
-              start-URL field is suppressed for a note (the member's CTA
-              does the same). A shared row has nothing stored, so the
-              ordinary flow still asks. */}
-          <HarnessLoginPane
-            provider="aws"
-            startURLManaged={startURLManaged}
-            onDone={() => setLoginOpen(false)}
-            onCancel={() => setLoginOpen(false)}
-          />
-        </div>
-      ) : (
-        MODEL_ACCESS_ACTIONABLE.has(access.state) && (
-          // outline, never a second teal — Save is the tab's one default.
-          <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setLoginOpen(true)}>
-            {AGENTS.SIGN_IN_AWS}
-          </Button>
-        )
+      {MODEL_ACCESS_ACTIONABLE.has(access.state) && (
+        // outline, never a second teal — Save is the tab's one default.
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-2"
+          onClick={() => door.openDoor({ for: { login: "aws" } })}
+        >
+          {AGENTS.SIGN_IN_AWS}
+        </Button>
       )}
     </>
   );
@@ -258,7 +241,6 @@ function Row({
   operator: boolean;
   onUpdate: (next: AgentProvider) => void;
 }) {
-  const [loginOpen, setLoginOpen] = React.useState(false);
   const choices = mechanismChoices(harness);
   const perUserAvailable = row.mechanism === "bedrock_sso";
   const credentialSource = row.credential_source || "shared";
@@ -348,21 +330,13 @@ function Row({
               data-testid="per-user-sign-in-banner"
             >
               {/* role="status" covers ONLY the title/body pair — NOT
-                  ModelAccessSignIn below, which can open HarnessLoginPane's
-                  own multi-step device-code/poll flow. A live region around
-                  that whole flow would re-announce it wholesale on every
-                  poll tick. */}
+                  ModelAccessSignIn below and the button that opens the door. */}
               <div role="status">
                 <p className="text-sm font-medium text-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE}</p>
                 <p className="mt-1 text-body text-muted-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_BODY}</p>
               </div>
               <div className="mt-2">
-                <ModelAccessSignIn
-                  access={modelAccess!}
-                  loginOpen={loginOpen}
-                  setLoginOpen={setLoginOpen}
-                  startURLManaged={perUserSaved}
-                />
+                <ModelAccessSignIn access={modelAccess!} />
               </div>
             </div>
           )}
@@ -514,12 +488,7 @@ function Row({
               actionable) keeps the block at the bottom, exactly as before. */}
           {showModelAccess && !modelAccessProminent && (
             <div className="border-t border-border pt-3">
-              <ModelAccessSignIn
-                access={modelAccess!}
-                loginOpen={loginOpen}
-                setLoginOpen={setLoginOpen}
-                startURLManaged={perUserSaved}
-              />
+              <ModelAccessSignIn access={modelAccess!} />
             </div>
           )}
         </div>

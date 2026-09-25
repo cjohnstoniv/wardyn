@@ -27,29 +27,26 @@
 // note nobody but an admin can act on.
 
 import * as React from "react";
-import { AlertTriangle, Clock, Loader2 } from "lucide-react";
-import { useLocation } from "react-router-dom";
+import { AlertTriangle, Clock } from "lucide-react";
+import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
-import type { HarnessLoginPaneHandle } from "../screens/settings/harness-login-pane";
 import { relativeTime, absoluteTime } from "../../lib/format";
-import type { ModelAccessDoor } from "../../lib/model-access";
+import {
+  MODEL_ACCESS_AGENT,
+  isPerUserSsoRow,
+  providerAttention,
+  type ModelAccessDoor,
+  type ProviderAttention,
+} from "../../lib/model-access";
+import type { SetupStatus } from "../../lib/types";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { useModelAccessDoor } from "./model-access-context";
-import { usePrincipal } from "./operator-context";
-import { screenPath, type ConsoleView } from "./console-view";
-
-// Lazy, and that is a gate rather than a nicety: this strip is mounted by
-// app-shell.tsx, which is in the entry chunk, and the login pane drags xterm +
-// addon-fit + its stylesheet behind it. A static import put ~200 kB of terminal
-// into the first paint of every screen — bundle-split.test.ts fails on exactly
-// that. The chunk is fetched when somebody opens the door, which is the same
-// rule App.tsx's lazy routes already follow for the same dependency.
-const HarnessLoginPane = React.lazy(() =>
-  import("../screens/settings/harness-login-pane").then((m) => ({ default: m.HarnessLoginPane })),
-);
+import { useModelAccessDoor, useShellSetupStatus } from "./model-access-context";
+import { useOperatorResolved, usePrincipal } from "./operator-context";
+import { screenPath, viewOfPath, type ConsoleView } from "./console-view";
+import { DoorDialog } from "./door-dialog";
+import { BANNER, CONNECTIONS } from "./copy/door";
 
 /** What the strip says for one door, for one viewer. Pure, and exported for
  *  the tests: the audience/state table is the feature. */
@@ -213,99 +210,92 @@ function useSessionDismissal(principal: string): [boolean, () => void] {
   return [dismissed, dismiss];
 }
 
-/**
- * ModelAccessSignInDialog — the door itself. One instance, mounted by the strip
- * (which the shell mounts once); every caller opens it through the context.
- *
- * The style override is connection-cards.tsx's, verbatim and for its reasons:
- * DialogContent's own `sm:max-w-lg` wins the cascade against any class, and
- * `translate`/`transform` are separate CSS properties in Tailwind v4, so the
- * centring has to be stated as a fact rather than raced. `min-w-0` lets the
- * 512-column login terminal (LOGIN_PTY_COLS) shrink inside the grid.
- */
-function ModelAccessSignInDialog({
-  open,
-  perUser,
-  onCancel,
-  onDone,
-  onCloseAutoFocus,
-}: {
-  open: boolean;
-  perUser: boolean;
-  onCancel: () => void;
-  onDone: () => void;
-  /** Where focus goes when the dialog closes. Radix's default returns it to the
-   *  trigger, which after a successful sign-in no longer exists (the strip is
-   *  gone) — and focusing anything from an onDone/onCancel handler is too early:
-   *  the FocusScope trap is still mounted and takes focus back, landing it on
-   *  <body>. This is the one callback that fires after the trap is released. */
-  onCloseAutoFocus: (event: Event) => void;
-}) {
-  const paneRef = React.useRef<HarnessLoginPaneHandle>(null);
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (next) return;
-        // Escape and an overlay click close the parent, and the pane's onCancel
-        // is child-to-parent: without routing through the pane's own handle a
-        // dismissal here would orphan a live "wardyn: sign-in running" run on
-        // the member's board for up to 30 minutes.
-        if (paneRef.current) paneRef.current.cancel();
-        else onCancel();
-      }}
-    >
-      <DialogContent
-        onCloseAutoFocus={onCloseAutoFocus}
-        className="scroll-thin inset-0 top-0 left-0 m-auto h-fit max-h-[92vh] overflow-y-auto"
-        style={{
-          width: "min(96vw, 72rem)",
-          maxWidth: "min(96vw, 72rem)",
-          translate: "none",
-          transform: "none",
-        }}
-      >
-        <DialogTitle>{MODEL_ACCESS_BANNER.DIALOG_TITLE}</DialogTitle>
-        <DialogDescription className="sr-only">
-          {MODEL_ACCESS_BANNER.DIALOG_DESCRIPTION}
-        </DialogDescription>
-        {open && (
-          <div className="min-w-0">
-            {/* The same mark + spinner App.tsx's RouteFallback shows for a lazy
-                route: a chunk in flight reads as the console still connecting,
-                never as a broken dialog. */}
-            <React.Suspense
-              fallback={
-                <div className="flex min-h-[8rem] items-center justify-center" role="status" aria-live="polite">
-                  <Loader2 className="size-5 animate-spin text-muted-foreground" />
-                  <span className="sr-only">Loading…</span>
-                </div>
-              }
-            >
-            <HarnessLoginPane
-              provider="aws"
-              // The same rule agents-tab.tsx and connection-cards.tsx already
-              // follow: under a per_user row the org's access portal is stored
-              // and the server uses it, so asking for one is a field whose
-              // value cannot take effect. A shared row has nothing stored.
-              startURLManaged={perUser}
-              paneRef={paneRef}
-              onDone={onDone}
-              onCancel={onCancel}
-            />
-            </React.Suspense>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
+/** One provider's line on the strip (§5.5, B1–B5), with the button that opens
+ *  its door. `harnesses` is the display names of the agents whose default it
+ *  is. Pure, and exported for the tests: the kind/state table is the feature.
+ *  null for a state packet D draws no line for. */
+export function providerStripLine(
+  a: ProviderAttention,
+  harnesses: string,
+): { sentence: string; button: string; title: string; tone: "warning" | "info"; dismissible: boolean } | null {
+  const name = a.provider.name || a.provider.id;
+  switch (a.provider.kind) {
+    case "bedrock_sso":
+      if (a.state === "expired_signin")
+        return { sentence: CONNECTIONS.C6_LINE(name), button: AGENTS.SIGN_IN_AWS, title: "", tone: "warning", dismissible: false };
+      if (a.state === "expiring") {
+        // {when} keeps its existing format (packet D): relative in the
+        // sentence, the absolute instant as its title.
+        const when = a.deadline ? relativeTime(a.deadline) : "";
+        const title = a.deadline ? absoluteTime(a.deadline) : "";
+        return when ? { sentence: BANNER.B3(name, when), button: AGENTS.SIGN_IN_AWS, title, tone: "info", dismissible: false } : null;
+      }
+      // B1 is the first-run state, the one line with "Not now".
+      return { sentence: BANNER.B1(harnesses, name), button: AGENTS.SIGN_IN_AWS, title: "", tone: "warning", dismissible: true };
+    case "anthropic_subscription":
+      return { sentence: BANNER.B5(harnesses), button: CONNECTIONS.SIGN_IN_CLAUDE, title: "", tone: "warning", dismissible: false };
+    default: {
+      const token = a.provider.kind === "custom_endpoint";
+      return {
+        sentence: BANNER.B4(harnesses, name, token),
+        button: token ? CONNECTIONS.ADD_TOKEN : CONNECTIONS.ADD_KEY,
+        title: "",
+        tone: "warning",
+        dismissible: false,
+      };
+    }
+  }
 }
 
+/** "Claude Code" / "Claude Code and Codex CLI", from the roster's own names. */
+function harnessNames(status: SetupStatus | null, ids: string[]): string {
+  return ids.map((id) => status?.harnesses?.find((h) => h.id === id)?.display || id).join(" and ");
+}
+
+/** "Not now", per provider (packet MP-D QD-3): dismissing one provider must not
+ *  hide another that needs the person later. Same keying and storage rules as
+ *  useSessionDismissal above. */
+function useProviderDismissals(principal: string): [(id: string) => boolean, (id: string) => void] {
+  const [local, setLocal] = React.useState<string[]>([]);
+  const key = (id: string) => `${dismissKey(principal)}.${id}`;
+  const dismissed = (id: string) => {
+    if (local.includes(id)) return true;
+    if (!principal) return false;
+    try {
+      return window.sessionStorage.getItem(key(id)) === "1";
+    } catch {
+      return false;
+    }
+  };
+  const dismiss = (id: string) => {
+    if (principal) {
+      try {
+        window.sessionStorage.setItem(key(id), "1");
+      } catch {
+        /* the in-memory hide below stands either way */
+      }
+    }
+    setLocal((ids) => [...ids, id]);
+  };
+  return [dismissed, dismiss];
+}
+
+const STRIP_CLASS = "relative z-50 flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2 text-sm ";
+const TONE_CLASS = {
+  info: "border-info/25 bg-info-subtle text-info",
+  warning: "border-border bg-warning-subtle text-warning",
+} as const;
+const LINK_CLASS = "font-medium underline underline-offset-2";
+
 /**
- * ModelAccessBanner — the strip, and the one dialog instance beside it.
+ * ModelAccessBanner — the strip, and the one door beside it (door-dialog.tsx).
  *
  * Renders nothing (but keeps its live region mounted) when there is nothing to
  * say, so the shell needs no conditional of its own.
+ *
+ * Two strips, never both: with a model-provider block the strip speaks per
+ * provider (packet MP-D §5.5), in the User view only; without one it is
+ * today's single AWS strip, graded from model_access.
  *
  * `view` (admin-member-modes-design.md §4.2, M-3) — the Admin view shows only
  * the pre-MP shared-credential branch, until MP-4b gives it its own per-person
@@ -317,6 +307,8 @@ function ModelAccessSignInDialog({
  */
 export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}) {
   const door = useModelAccessDoor();
+  const { status } = useShellSetupStatus();
+  const resolved = useOperatorResolved();
   // The door's own resolved answer, never a second useOperator(): that hook's
   // default is fail-open, and a suppression computed from it would withhold the
   // strip on /settings from the member it exists for, in exactly the window the
@@ -325,6 +317,7 @@ export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}
   const principal = usePrincipal();
   const { pathname } = useLocation();
   const [dismissed, dismiss] = useSessionDismissal(principal);
+  const [providerDismissed, dismissProvider] = useProviderDismissals(principal);
   // Whether this strip opened the door. A page surface that opened it restores
   // focus to its own neighbour (Launch, on New Run); the strip's own button no
   // longer exists once the state clears, and Radix would return focus to a
@@ -335,24 +328,38 @@ export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}
   // control exactly where it was, a completion takes the surface away.
   const completed = React.useRef(false);
 
-  const copy = modelAccessStripCopy(door, { operator }, door.claimed);
   // The same screen in either view (the Admin view's /admin/setup is /setup).
   const path = screenPath(pathname);
   const under = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
+  const userView = viewOfPath(pathname) === "user";
+  const providerMode = !!status?.model_providers;
+
+  const copy = modelAccessStripCopy(door, { operator }, door.claimed);
   // Never on /setup — the page is the door. On /settings, /providers and
-  // /account only for an operator: those pages already mount the same pane for
-  // the same states, and a second control named "Sign in to AWS" on one page is the U-13
-  // defect member-getting-started.tsx already fixed once. For a member the
-  // Settings card's AWS button is `disabled={!operator}` ("Requires the admin
-  // role."), so hiding the strip there would strand exactly the person the
-  // refusal sentence sends there.
+  // /account only for an operator: those pages carry their own sign-in button
+  // for the same states, and a second control named "Sign in to AWS" on one
+  // page is the U-13 defect member-getting-started.tsx already fixed once. For
+  // a member the Settings card's AWS button is `disabled={!operator}`
+  // ("Requires the admin role."), so hiding the strip there would strand
+  // exactly the person the refusal sentence sends there.
   const suppressed = under("/setup") || (operator && (under("/settings") || under("/providers") || under("/account")));
   // §4.2: a per-user deployment's states ("your own credentials") are a User-
   // view concern; the Admin view keeps only what a shared-credential
   // deployment would show (door.perUser is the deployment's own shape, not
   // this viewer's — see model-access.ts).
   const adminViewSuppressed = view === "admin" && door.perUser;
-  const show = door.needsAttention && !suppressed && !adminViewSuppressed && !(copy.dismissible && dismissed);
+  const show = !providerMode && door.needsAttention && !suppressed && !adminViewSuppressed && !(copy.dismissible && dismissed);
+
+  // Said nothing until /me answers, for the legacy strip's reason: the
+  // dismissal is keyed on who is looking.
+  const lines =
+    providerMode && userView && resolved && !under("/setup")
+      ? providerAttention(status).flatMap((a) => {
+          const line = providerStripLine(a, harnessNames(status, a.defaultFor));
+          return line && !(line.dismissible && providerDismissed(a.provider.id)) ? [{ a, line }] : [];
+        })
+      : [];
+  const one = lines.length === 1 ? lines[0] : null;
 
   return (
     // No live region of its own: app-shell.tsx mounts the `role="status"`
@@ -361,15 +368,52 @@ export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}
     // announces changes, and mount content is the one thing it does not
     // reliably announce (Codex #15).
     <>
+      {/* B9 (#146): a relaunch the server refused after its screen was gone.
+          The server's sentence, verbatim, and no heading (packet MP-E Q146-1). */}
+      {door.refusal && userView && (
+        <div className={STRIP_CLASS + TONE_CLASS.warning}>
+          <AlertTriangle className="size-4 shrink-0" />
+          <span>{door.refusal}</span>
+          <button type="button" onClick={door.dismissRefusal} className={LINK_CLASS}>
+            {MODEL_ACCESS_BANNER.REFUSAL_DISMISS}
+          </button>
+        </div>
+      )}
+      {lines.length > 1 && (
+        // B8: two or more collapse to a count (packet MP-D QD-2).
+        <div className={STRIP_CLASS + TONE_CLASS.warning}>
+          <AlertTriangle className="size-4 shrink-0" />
+          <span>{BANNER.B8(lines.length)}</span>
+          <Link to="/account" className={LINK_CLASS}>
+            {BANNER.REVIEW}
+          </Link>
+        </div>
+      )}
+      {one && (
+        <div className={STRIP_CLASS + TONE_CLASS[one.line.tone]}>
+          {one.line.tone === "info" ? <Clock className="size-4 shrink-0" /> : <AlertTriangle className="size-4 shrink-0" />}
+          <span title={one.line.title || undefined}>{one.line.sentence}</span>
+          {!door.claimed && (
+            <button
+              type="button"
+              onClick={() => {
+                openedHere.current = true;
+                door.openDoor({ for: { provider: one.a.provider.id } });
+              }}
+              className={LINK_CLASS}
+            >
+              {one.line.button}
+            </button>
+          )}
+          {one.line.dismissible && (
+            <button type="button" onClick={() => dismissProvider(one.a.provider.id)} className={LINK_CLASS + " opacity-75"}>
+              {MODEL_ACCESS_BANNER.NOT_NOW}
+            </button>
+          )}
+        </div>
+      )}
       {show && (copy.sentence || copy.action) && (
-        <div
-          className={
-            "relative z-50 flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-2 text-sm " +
-            (copy.tone === "info"
-              ? "border-info/25 bg-info-subtle text-info"
-              : "border-border bg-warning-subtle text-warning")
-          }
-        >
+        <div className={STRIP_CLASS + TONE_CLASS[copy.tone]}>
           {copy.tone === "info" ? (
             <Clock className="size-4 shrink-0" />
           ) : (
@@ -385,27 +429,29 @@ export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}
                 openedHere.current = true;
                 door.openDoor();
               }}
-              className="font-medium underline underline-offset-2"
+              className={LINK_CLASS}
             >
               {AGENTS.SIGN_IN_AWS}
             </button>
           )}
           {copy.dismissible && (
-            <button
-              type="button"
-              onClick={dismiss}
-              className="font-medium underline underline-offset-2 opacity-75"
-            >
+            <button type="button" onClick={dismiss} className={LINK_CLASS + " opacity-75"}>
               {MODEL_ACCESS_BANNER.NOT_NOW}
             </button>
           )}
         </div>
       )}
-      <ModelAccessSignInDialog
-        open={door.open}
-        perUser={door.perUser}
+      <DoorDialog
+        target={door.target}
+        // The rule the three pane mounts this one replaced followed (#544):
+        // Settings and the Agents tab read the settled claude-code row, not
+        // the graded door; Getting started, a member's page, never asked —
+        // only an admin can sign in under a shared row, the one row with no
+        // portal stored.
+        perUser={!operator || !!status?.harnesses?.some((h) => h.id === MODEL_ACCESS_AGENT && isPerUserSsoRow(h))}
+        focusSeq={door.focusSeq}
         onCancel={door.closeDoor}
-        onDone={() => {
+        onDone={(message) => {
           completed.current = true;
           // The completion path, not closeDoor(): it also runs what the opener
           // asked for on a completed sign-in (the New Run rail's relaunch).
@@ -414,7 +460,11 @@ export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}
           // CONSOLE-RULES §9's transient case: the only other evidence is a
           // strip that disappears, and a surface vanishing is not a
           // confirmation.
-          toast.success(MODEL_ACCESS_BANNER.SIGNED_IN_TOAST);
+          toast.success(message);
+        }}
+        onRemoved={() => {
+          door.closeDoor();
+          void door.refresh();
         }}
         onCloseAutoFocus={(event) => {
           // This handler owns the restore, always: Radix's default focuses the

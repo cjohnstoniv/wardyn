@@ -43,7 +43,11 @@ export interface UseLaunchResult {
   credentialRefused: boolean;
   launchWarnings: string[];
   launchedRunId: string | null;
-  launch: () => Promise<void>;
+  /** Resolves to the failure's sentence only when this screen had already
+   *  unmounted by the time it came back — the relaunch after a sign-in the
+   *  person started here and finished elsewhere (#146). The shell's strip
+   *  shows it then (B9); on screen, the rail's own alert does. */
+  launch: () => Promise<string | void>;
   preflighting: boolean;
   preflightResult: PreflightResult | null;
   preflightError: string | null;
@@ -61,6 +65,13 @@ export interface UseLaunchResult {
 // shows, so the screen and this hook can never author two different requests.
 export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLaunchError }: UseLaunchParams): UseLaunchResult {
   const navigate = useNavigate();
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const [launching, setLaunching] = React.useState(false);
   // Rulebook §7: disable Launch the instant it fires, but only show the
@@ -140,7 +151,12 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
         void navigate(`/runs/${encodeURIComponent(created.id)}`);
       }
     } catch (e) {
-      setError(getErrorMessage(e) || "Failed to launch run.");
+      const server = getErrorMessage(e);
+      // B9 renders the SERVER's sentence verbatim: with none, the strip says
+      // nothing rather than showing this screen's own fallback.
+      if (!mounted.current) return server || undefined;
+      const sentence = server || "Failed to launch run.";
+      setError(sentence);
       setErrorSeq((n) => n + 1);
       setCredentialRefused(isCredentialRefusal(e));
       onLaunchError?.(e);

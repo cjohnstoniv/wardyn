@@ -67,7 +67,9 @@ interface RunRailProps {
   /** The run's tool_rules in one line, or null when it has none. */
   toolRules: string | null;
   launch: {
-    onLaunch: () => void;
+    /** Resolves to the server's refusal when the screen was gone before the
+     *  answer came (use-launch.ts) — the strip shows it then (B9, #146). */
+    onLaunch: () => void | Promise<string | void>;
     /** useDeferredBusy: disabled the instant it fires. */
     disabled: boolean;
     /** useDeferredBusy: the spinner arrives ~200ms later. */
@@ -407,7 +409,7 @@ export function RunRail({
     // lane for its per_user owner, or for any operator (a shared row); a
     // member under a shared row keeps the server's sentence, no door.
     if (agentRow?.id !== MODEL_ACCESS_AGENT || door.open || !door.bedrockSSO || !(door.perUser || door.operator)) return;
-    door.openDoor(launchRef.current, () => onLaunchRef.current());
+    door.openDoor({ returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
     // The strip and the line above catch up with what the server just said.
     void door.refresh();
   }, [launch.credentialRefused, agentRow?.id, door]);
@@ -515,7 +517,7 @@ export function RunRail({
               sign-in at all"), independent of showModelWarning below (a
               deployment fact — some model path exists at all). */}
           {showModelAccess && (
-            <ModelAccessLine door={door} onSignIn={() => door.openDoor(launchRef.current)} />
+            <ModelAccessLine door={door} onSignIn={() => door.openDoor({ returnTo: launchRef.current })} />
           )}
           {/* The per-person line supersedes the deployment one when both would
               otherwise render: under a per_user row,
@@ -634,7 +636,7 @@ export function RunRail({
             disabled={launch.disabled || !!launch.problem}
             onClick={() => {
               autoOpened.current = false;
-              launch.onLaunch();
+              void launch.onLaunch();
             }}
           >
             {/* The icon slot always renders (never just on launching) so the

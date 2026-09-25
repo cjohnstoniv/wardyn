@@ -9,7 +9,7 @@
 // fields — a card that disagrees with the app-shell chip is the exact class of
 // bug the old two-model /integrations page kept producing.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const setSecretMock = vi.fn();
@@ -36,11 +36,18 @@ import { ModelProviderCard, S } from "./connection-cards";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type { SetupStatus } from "../../../lib/types";
+import { WithDoor } from "../../../../test/door-harness";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
-function model(status: SetupStatus = baseStatus()) {
-  return render(<ModelProviderCard status={status} siteConfig={null} onChanged={vi.fn()} />);
+// The card's sign-in buttons open the shell's one door (#544); the door reads
+// the shell's status, which is the same server answer the card renders.
+function model(status: SetupStatus = baseStatus(), onChanged: () => void = vi.fn()) {
+  return render(
+    <WithDoor status={status}>
+      <ModelProviderCard status={status} siteConfig={null} onChanged={onChanged} />
+    </WithDoor>,
+  );
 }
 
 // #337: renders as a MEMBER (operator=false) — every other test in this file
@@ -275,19 +282,18 @@ describe("ModelProviderCard", () => {
   });
 });
 
-// F2 (Appendix A #2): three call sites open HarnessLoginPane; two pass
-// startURLManaged, this card didn't — an admin signing in from Settings under
-// a per_user row was asked to retype the org's AWS access portal URL, and the
-// server (harnesscred.go:761) THROWS THE TYPED VALUE AWAY because the row's
-// own sso_start_url overrides it. Fix = pass the prop on the same condition
-// the Agents tab already uses.
+// F2 (Appendix A #2): an admin signing in from Settings under a per_user row
+// was asked to retype the org's AWS access portal URL, and the server
+// (harnesscred.go:761) THROWS THE TYPED VALUE AWAY because the row's own
+// sso_start_url overrides it. The card now opens the shell's one door (#544),
+// which passes startURLManaged on the same condition for every entrance.
 describe("ModelProviderCard — the sign-in door under a per_user row", () => {
   // ticket: F2
   it("passes startURLManaged so the dead start-URL prompt never renders", async () => {
     model(perUserStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
-    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: true }));
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: true })));
   });
 
   // R3: "no per_user row" covers two distinct cases — no `harnesses` field at
@@ -297,14 +303,14 @@ describe("ModelProviderCard — the sign-in door under a per_user row", () => {
     model();
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
-    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false })));
   });
 
   it("an explicit shared row still asks", async () => {
     model(sharedRowStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
-    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false })));
   });
 
   // R1: a disabled row prompts for the start URL again, exactly like a
@@ -313,7 +319,7 @@ describe("ModelProviderCard — the sign-in door under a per_user row", () => {
     model(disabledPerUserStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
-    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false })));
   });
 
   // R3: the `mechanism` conjunct has its own failing case — bedrock_bearer
@@ -327,7 +333,7 @@ describe("ModelProviderCard — the sign-in door under a per_user row", () => {
     );
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
-    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false })));
   });
 
   // F4: the card says the lane is declared elsewhere and read per-person.
@@ -729,6 +735,25 @@ describe("ModelProviderCard — not_applicable keeps no door it cannot open", ()
   });
 });
 
+// #544: the card mounts no pane of its own — each lane's button opens the
+// shell's one door for its own sign-in.
+describe("ModelProviderCard — both sign-in buttons open the one door", () => {
+  it("Claude subscription's Sign in opens the Claude door", async () => {
+    model();
+    await user.click(screen.getByRole("button", { name: /^sign in$/i }));
+    expect(await screen.findByRole("dialog", { name: "Sign in to Claude" })).toBeInTheDocument();
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ provider: "anthropic" })));
+  });
+
+  it("AWS Bedrock's Sign in with SSO opens the AWS door", async () => {
+    model();
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
+    expect(await screen.findByRole("dialog", { name: "Sign in to AWS" })).toBeInTheDocument();
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ provider: "aws" })));
+  });
+});
+
 // U2-09 (blind round 2, lens-U2): CAPTURE_CHECK_UNREACHABLE leaves the pane
 // on the error phase with the capture possibly landed — onDone never fires,
 // so the parent never refreshes and the card keeps reading not-connected
@@ -737,9 +762,10 @@ describe("ModelProviderCard — not_applicable keeps no door it cannot open", ()
 describe("ModelProviderCard — dismissing the login dialog re-reads status", () => {
   // ticket: U2-09
   async function openLogin(onChanged: () => void) {
-    render(<ModelProviderCard status={baseStatus()} siteConfig={null} onChanged={onChanged} />);
+    model(baseStatus(), onChanged);
     await user.click(screen.getByRole("button", { name: /^sign in$/i }));
     await screen.findByRole("dialog");
+    await waitFor(() => expect(loginPaneMock).toHaveBeenCalled());
     expect(onChanged).not.toHaveBeenCalled();
   }
 

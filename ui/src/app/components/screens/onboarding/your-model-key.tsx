@@ -76,8 +76,8 @@ export function YourModelKey({
    *  instead of `llmReady` whenever the governing harness row is per_user;
    *  see model-key-state.ts's total truth table. */
   modelAccess?: SetupModelAccess;
-  /** Opens the SAME HarnessLoginPane the chip row above already mounts (one
-   *  pane, two buttons) — required whenever a per_user state is actionable. */
+  /** Opens the SAME door the chip row above opens (the shell's one door, two
+   *  buttons) — required whenever a per_user state is actionable. */
   onSignInAws?: () => void;
   /** U-13 (a11y): whether that pane is already open. It mounts in a DIFFERENT
    *  card above this one and moves no focus, so a second enabled button saying
