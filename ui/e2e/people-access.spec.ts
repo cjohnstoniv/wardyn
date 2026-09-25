@@ -685,6 +685,27 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await expect(title).toHaveCount(0);
   });
 
+  // ---------------------------------------------------------------------
+  // (i2) #491 — the default-role-admin case: a role map IS set, but the
+  // sso_rbac row still warns (cause "default_role"), and the banner shows
+  // BODY_DEFAULT_ROLE in place of BODY — same title, same CTA.
+  // ---------------------------------------------------------------------
+  test("(i2) #491 default-role banner shows BODY_DEFAULT_ROLE, not BODY", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.auth = { ...json.auth, mode: "sso" };
+      const row = { id: "sso_rbac", label: "Who is an admin", status: "warn", blocking: true, cause: "default_role" };
+      json.checks = [...(json.checks ?? []).filter((c: { id: string }) => c.id !== "sso_rbac"), row];
+      await route.fulfill({ response, json });
+    });
+
+    await page.goto("/admin/setup?step=environment");
+    await expect(page.getByText(ADMIN_ACCESS_BANNER.TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(ADMIN_ACCESS_BANNER.BODY_DEFAULT_ROLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(ADMIN_ACCESS_BANNER.BODY, { exact: true })).toHaveCount(0);
+  });
+
   // (j) #484 — the help card saves through the REAL PUT /site-config (with
   // If-Match) and /healthz publishes it; the test clears it again so no other
   // spec sees it.

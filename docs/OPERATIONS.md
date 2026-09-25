@@ -2277,14 +2277,26 @@ credential lives.
 
 ### When everyone is an admin, and what a refused person is told
 
-**The everyone-is-an-admin warning.** With SSO configured, a person nobody has
-mapped derives `admin` only when there is **neither** a role map (the chart's
-`WARDYN_OIDC_ROLE_MAP` or a People-step row) **nor** an admin list (the operator
-allowlist, `WARDYN_OIDC_OPERATOR_EMAILS`). That one state — and only that one —
-grades the setup checklist's "Who is an admin" row `warn`, holds the console in
-the People step, and shows every admin a banner above every page until a mapping
-or an admin list exists. An admin list alone is enough: an unmatched person then
-derives `member`. Members see neither.
+**The everyone-is-an-admin warning.** With SSO configured, the setup checklist's
+"Who is an admin" row grades `warn` — holding the console in the People step and
+showing every admin a banner above every page — on either of two conditions
+(#491):
+
+- **No role map and no admin list.** A person nobody has mapped derives `admin`
+  when there is **neither** a role map (the chart's `WARDYN_OIDC_ROLE_MAP` or a
+  People-step row) **nor** an admin list (the operator allowlist,
+  `WARDYN_OIDC_OPERATOR_EMAILS`). An admin list alone is enough to clear this:
+  an unmatched person then derives `member`.
+- **A role map IS set (chart or People step), but `WARDYN_OIDC_DEFAULT_ROLE=admin`.**
+  Every sign-in the map doesn't match still falls through to `admin` — before
+  #491 this read `ok`, since a role map being set was all the check looked for.
+  Fix by setting `WARDYN_OIDC_DEFAULT_ROLE` to `user` or a user type instead.
+  An admin list alone does not trip this: with no role map, a sign-in the
+  (empty) map doesn't match derives `member` regardless of the default role.
+
+A deployment that hits BOTH conditions (no role map, no admin list, AND
+`WARDYN_OIDC_DEFAULT_ROLE=admin`) reads the first condition's own sentence —
+one banner, not two competing ones. Members see neither.
 
 **Request-access help (`sign_in_help_text`, `sign_in_help_url`).** Two optional
 SiteConfig fields, edited on the People step ("When someone can't sign in") or
