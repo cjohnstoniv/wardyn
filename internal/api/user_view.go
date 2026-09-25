@@ -285,8 +285,7 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request) *http.Requ
 	if !oidc.MemberModeFromContext(ctx) {
 		return r
 	}
-	switch r.URL.Path {
-	case "/api/v1/me/view", "/api/v1/me/member-mode":
+	if r.URL.Path == "/api/v1/me/view" {
 		return r
 	}
 	typeID := oidc.UserTypeFromContext(ctx)

@@ -282,11 +282,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   …) are renamed to their `*User*` counterparts (`SetMemberMode`/`handleSetMemberMode` were
   already renamed to `SetUserView`/`handleSetUserView` by #835's type-selecting `/me/view` route,
   which this sweep folds into rather than duplicating). See docs/OPERATIONS.md's "Renamed in 0.8"
-  appendix for the full old-name/new-name table. Three refusal sentences now say "the user view":
-  the no-SSO `400` ("The user view needs a signed-in SSO human…") and the two `409`s ("Exit the
-  user view to mint a token or register a key." and "Exit the user view to sign in to AWS…"); an
-  unrecognised `view` value refuses `400` with `The "view" field must be "user" or "admin".` The
-  console's own "Exit member mode" button keeps its name until #618.
+  appendix for the full old-name/new-name table. Refusal sentences now say "the user view": the
+  no-SSO `400` ("The user view needs a signed-in SSO human…"), the API-token mint `409` ("Exit
+  the user view to mint a token."), and "Exit the user view to sign in to AWS…"; an unrecognised
+  `view` value refuses `400` with `The "view" field must be "user" or "admin".` The SSH-key door
+  no longer refuses inside the view — a key registered there is stored capped instead (migration
+  0070), re-stamped to the caller's real role at their next sign-in.
 - **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
   `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
   `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →

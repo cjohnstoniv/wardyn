@@ -66,7 +66,7 @@ var refusals = map[Reason]Refusal{
 	ReasonSecurityAdminSurface:           {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
 	ReasonNotOwner:                       {Effect: EffectHidden, Audit: true},
 	ReasonAttachTicketForeignRun:         {Effect: EffectHidden, Audit: true},
-	ReasonBYOIUser:                     {Effect: EffectDeny, Audit: true},
+	ReasonBYOIUser:                       {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityAgent:                {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityEgressHost:           {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityIntegration:          {Effect: EffectDeny, Audit: true},

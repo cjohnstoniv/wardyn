@@ -2343,9 +2343,10 @@ screen, and **Admin view** is the way back; there is no band, because the User
 view is a normal state. Other tabs follow the session into the same view. Every
 audit row the session writes still names **your
 own sub** — this is not impersonation, and there is no way to become anybody
-else. The transition itself is audited as `auth.member_mode`
+else. The transition itself is audited as `auth.user_view` (`auth.member_mode`
+dual-emitted alongside it through 0.8.x, [Renamed in 0.8](#renamed-in-08))
 (`enabled`, `real_role`, and `no_credential` on the preview below), and each `403` an **admin-tier gate** raises while the
-mode is on carries `member_mode: true` on its `authz.denied` row — the two
+mode is on carries `user_view: true` on its `authz.denied` row — the two
 middleware chokepoints and every in-handler refusal that raises the same two
 reasons — so a reviewer reads the burst as an admin walking the member path
 rather than as an incident. (Denials with a *different* `reason` —
@@ -2358,7 +2359,7 @@ exiting restores whichever tier you were actually signed in as. The switch is
 shown on every install that has both views. On a single-operator install (local
 mode, or the admin token with no identity provider) it only changes the URL:
 that is one shared credential with no per-person role to pause, so nothing is
-clamped or POSTed, and `POST /me/member-mode` answers those callers `400` if
+clamped or POSTed, and `POST /me/view` answers those callers `400` if
 called directly.
 
 **Viewing as a user type (0.8).** `POST /me/view` with `{"view": "user",
@@ -2368,8 +2369,7 @@ a person of that type, beside your own user and group rows, while the tier stays
 clamped to `user` so no admin route opens whatever the type. With no
 `user_type`, the view uses your previous choice (remembered per person, so it
 follows you across devices), then your own mapped type, then the built-in one.
-`{"view": "admin"}` exits. `POST /me/member-mode` still works and uses the same
-default type. A run launched in the view records the type (`user_type` on the
+`{"view": "admin"}` exits. A run launched in the view records the type (`user_type` on the
 run and on its `run.create` row, with `user_view: true`). If the type is deleted
 while you are viewing as it, your next request is refused (`403`
 `user_view_type_deleted`, or `409` `admin_view` on a launch) and the view turns
@@ -2388,7 +2388,8 @@ a member who has not signed in meets, and `POST /setup/harness-login` answers
 `409` — *"Exit the user view to sign in to AWS — the capture would land on your
 own identity."* Nothing is deleted: your session sits untouched in the store
 and comes back the moment you exit. The transition is audited as
-`auth.member_mode` with `no_credential: true` beside `enabled` and `real_role`.
+`auth.user_view` (`auth.member_mode` dual-emitted alongside it through 0.8.x)
+with `no_credential: true` beside `enabled` and `real_role`.
 
 Inside the preview, **signing in is refused** — `POST /setup/harness-login`
 answers `409` while the posture is on, deliberately: the preview shows a new
@@ -2400,7 +2401,7 @@ again" for that refusal — the way out is to exit the mode.
 button is offered, and the posture granted, only when the model-access agent's
 roster row is `per_user` — on a `shared` deployment there is no per-member
 sign-in to be missing, so the entry does not exist and a request for it enters
-the plain mode instead (`GET /me` publishes `member_preview_available`, and the
+the plain mode instead (`GET /me` publishes `user_preview_available`, and the
 toggle refuses to grant the posture regardless of what the console sends). One
 residual, by design rather than by omission: an admin already inside the
 preview when somebody flips the roster `per_user` → `shared` keeps the variant
@@ -2463,7 +2464,7 @@ people's runs is registered outside the mode.
 > Permissions header in the **Admin view**: it is not offered from inside the
 > User view, and not at all on a deployment whose roster row is `shared` (there
 > is nothing for the preview to hide) or against a pre-0.7.5 daemon
-> (`member_preview_available`, `internal/api/me.go`, is ANDed with the caller's
+> (`user_preview_available`, `internal/api/me.go`, is ANDed with the caller's
 > EFFECTIVE (clamped) admin tier — the same clamp that made ceiling 4 true in
 > the first place, so the button is gone the instant either posture clamps
 > `isOperator`/`isSecurityOperator` false). Inside that second posture the ceiling reads
@@ -5285,9 +5286,8 @@ names forever; only what the server emits GOING FORWARD changed.
 
 `denyMemberField` — the old shared helper this table's first cut of the sweep
 named — does not appear in the 0.8 column: it is not renamed but RETIRED, folded
-into `refuse`/`authz.Deny` (`internal/api/refusal.go`) when #835/UT-13's
-type-selecting `/me/view` layered onto this route rather than duplicating it.
-Every site that called it (the `byoi_user` image/devcontainer doors, the four
+into `refuse`/`authz.Deny` (`internal/api/refusal.go`) by #736 (every refusal
+through one emitter). Every site that called it (the `byoi_user` image/devcontainer doors, the four
 `governance_profile` shape refusals, the `workspaces.llm_cred` admin-surface arm,
 `harness_login_not_per_user`) now calls `s.refuse(w, r, authz.Deny(...))`
 directly, and the `authz.denied` marker moved with it from the now-deleted
@@ -5295,14 +5295,10 @@ directly, and the `authz.denied` marker moved with it from the now-deleted
 
 **Not renamed in this pass** — each is a separate, later issue, so the old name
 is still correct until its own PR lands:
-- The `WARDYN_MEMBER_*` env vars (`WARDYN_MEMBER_MODE`, the workspace-root
-  family, `WARDYN_ALLOW_MEMBER_ENV_SECRET`) — #616, aliased one minor after it
-  lands, same pattern as the `member` role alias below.
 - `docs/MEMBERS.md`, the People/Getting-Started copy, and the rest of this
   file's own "view as member" prose ([Exercising member mode as an
   admin](#exercising-member-mode-as-an-admin)) — #620, the docs pass.
-- The console's own "View as member" control names and copy (`MemberModeBanner`,
-  `MemberModeMenuItem`, the `MEMBER_MODE` strings) — mock-gated, #618 (UT-7a).
+- The console's remaining "member" copy — #618.
 - `oidc.LegacyRoleMember`/`oidc.LegacyRoleMemberWarning` and the `member`
   role-map value itself, which keep working and warn through 0.8.x by design
   (see "A chart that still says `=member`" in the CHANGELOG's #608 entry) —
