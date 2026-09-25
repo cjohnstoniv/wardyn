@@ -97,7 +97,7 @@ func TestIntegrationsRouteNoteMatchesItsRealTier(t *testing.T) {
 	cfg := baseTestConfig(h, r3IntegStore{})
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
-	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser)
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/integrations", member, ""); w.Code != http.StatusOK {
 		t.Fatalf("member GET /integrations = %d, want 200 (the projected read)", w.Code)
 	}

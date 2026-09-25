@@ -86,12 +86,13 @@ func (c *renewCP) bearers() []string {
 
 func itoa(i int) string { return string(rune('0' + i)) }
 
-// TestRenewU070_RenewerRotatesTokenUsedByControlPlaneCalls is the proxy-side
+// TestRenewerRotatesTokenUsedByControlPlaneCalls is the proxy-side
 // counterfactual. It proves the renewed token actually REACHES the callers: the
 // decision sink must present the renewed bearer, not the startup one it was
 // constructed with. Before the change the sink captured the token string at
 // startup, so it presented the stale token forever and 401'd once the TTL lapsed.
-func TestRenewU070_RenewerRotatesTokenUsedByControlPlaneCalls(t *testing.T) {
+func TestRenewerRotatesTokenUsedByControlPlaneCalls(t *testing.T) {
+	// ticket: U070
 	cp := &renewCP{ttl: 2 * time.Second} // half-life 1s => renews promptly
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()
@@ -130,14 +131,15 @@ func TestRenewU070_RenewerRotatesTokenUsedByControlPlaneCalls(t *testing.T) {
 	}
 }
 
-// TestRenewU070_RenewerKeepsOldTokenWhenControlPlaneRefuses proves the loop is
+// TestRenewerKeepsOldTokenWhenControlPlaneRefuses proves the loop is
 // dumb and safe: when the control plane REFUSES a renew (a revoked or terminal
 // run gets 403), the renewer must not clobber the source with garbage or wedge —
 // it keeps the existing token. Authority lives on the control plane, never in
 // this loop. Since B5 the loop also STOPS on that 403 (the refusal is permanent
 // and the control plane has said so post-authentication), which the sibling test
 // below owns; what this one still pins is that the token is left intact.
-func TestRenewU070_RenewerKeepsOldTokenWhenControlPlaneRefuses(t *testing.T) {
+func TestRenewerKeepsOldTokenWhenControlPlaneRefuses(t *testing.T) {
+	// ticket: U070
 	cp := &renewCP{ttl: time.Hour, renewErr: http.StatusForbidden}
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()
@@ -153,7 +155,7 @@ func TestRenewU070_RenewerKeepsOldTokenWhenControlPlaneRefuses(t *testing.T) {
 	}
 }
 
-// ─── B5: the renew loop is what flooded the audit trail ──────────────────────
+// B5: the renew loop is what flooded the audit trail
 //
 // The field report: 999 of the last 1000 audit rows were `auth.failed` from this
 // loop, once a minute, forever, against a run the control plane would never renew
@@ -161,10 +163,11 @@ func TestRenewU070_RenewerKeepsOldTokenWhenControlPlaneRefuses(t *testing.T) {
 // window mid-investigation into who had admin. The loop retried ANY failure every
 // 60s with no give-up, and said so out loud in its own comment.
 
-// TestRenewB5_PermanentRefusalStopsAtOnce: a post-auth 403 is
+// TestRenewer_PermanentRefusalStopsAtOnce: a post-auth 403 is
 // handleInternalTokenRenew's OWN answer — the run is gone or terminal — so the
 // loop asks exactly once and exits. One request, not one a minute forever.
-func TestRenewB5_PermanentRefusalStopsAtOnce(t *testing.T) {
+func TestRenewer_PermanentRefusalStopsAtOnce(t *testing.T) {
+	// ticket: B5
 	for _, status := range []int{http.StatusForbidden} {
 		cp := &renewCP{ttl: time.Hour, renewErr: status}
 		srv := httptest.NewServer(cp.handler())
@@ -195,14 +198,15 @@ func TestRenewB5_PermanentRefusalStopsAtOnce(t *testing.T) {
 	}
 }
 
-// TestRenewB5_UnauthorizedBacksOffThenGivesUp is the case a first draft would
+// TestRenewer_UnauthorizedBacksOffThenGivesUp is the case a first draft would
 // have got wrong in the dangerous direction. A 401 is NOT proof of revocation:
 // the embedded provider treats ANY RevocationStore error as revoked, so a
 // Postgres blip answers 401 exactly like a real revocation, and giving up on the
 // first one would brick every healthy long run's /internal/* calls the moment a
 // read flickered. So the loop keeps trying with GROWING gaps — and stops once the
 // last token it actually held would have expired anyway.
-func TestRenewB5_UnauthorizedBacksOffThenGivesUp(t *testing.T) {
+func TestRenewer_UnauthorizedBacksOffThenGivesUp(t *testing.T) {
+	// ticket: B5
 	cp := &renewCP{ttl: time.Hour, renewErr: http.StatusUnauthorized}
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()
@@ -241,10 +245,11 @@ func TestRenewB5_UnauthorizedBacksOffThenGivesUp(t *testing.T) {
 	}
 }
 
-// TestRenewB5_TransientFailuresAlsoBackOff: a 5xx is the blip case, and it gets
+// TestRenewer_TransientFailuresAlsoBackOff: a 5xx is the blip case, and it gets
 // the same growing gaps — the point of the backoff is the AUDIT VOLUME at the
 // other end, which does not care which failure class caused it.
-func TestRenewB5_TransientFailuresAlsoBackOff(t *testing.T) {
+func TestRenewer_TransientFailuresAlsoBackOff(t *testing.T) {
+	// ticket: B5
 	cp := &renewCP{ttl: time.Hour, renewErr: http.StatusServiceUnavailable}
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()
@@ -271,10 +276,11 @@ func TestRenewB5_TransientFailuresAlsoBackOff(t *testing.T) {
 	}
 }
 
-// TestRenewB5_ASuccessfulRenewResetsTheGiveUpHorizon: the horizon is measured
+// TestRenewer_SuccessfulRenewResetsTheGiveUpHorizon: the horizon is measured
 // from the last token the loop actually HELD, not from startup — otherwise a run
 // longer than one token lifetime would give up while perfectly healthy.
-func TestRenewB5_ASuccessfulRenewResetsTheGiveUpHorizon(t *testing.T) {
+func TestRenewer_SuccessfulRenewResetsTheGiveUpHorizon(t *testing.T) {
+	// ticket: B5
 	cp := &renewCP{ttl: 80 * time.Millisecond} // half-life 40ms => renews promptly
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()
@@ -304,14 +310,15 @@ func TestRenewB5_ASuccessfulRenewResetsTheGiveUpHorizon(t *testing.T) {
 	}
 }
 
-// TestRenewU070_ServerStartsRenewerAndShutdownStopsIt drives the REAL lifecycle
+// TestServerStartsRenewerAndShutdownStopsIt drives the REAL lifecycle
 // the sidecar uses: NewServer, then ListenAndServe on one goroutine and Shutdown
 // from another (exactly cmd/wardyn-proxy's shape). It proves the renewer actually
 // runs for a Server built the production way — not just when a test calls
 // runTokenRenewer directly — and that Shutdown stops it rather than leaking it.
 // Under -race this also pins the renewer's fields as set-once-in-NewServer:
 // starting it from ListenAndServe would race the read in Shutdown.
-func TestRenewU070_ServerStartsRenewerAndShutdownStopsIt(t *testing.T) {
+func TestServerStartsRenewerAndShutdownStopsIt(t *testing.T) {
+	// ticket: U070
 	cp := &renewCP{ttl: 2 * time.Second}
 	cpSrv := httptest.NewServer(cp.handler())
 	defer cpSrv.Close()
@@ -365,9 +372,10 @@ func TestRenewU070_ServerStartsRenewerAndShutdownStopsIt(t *testing.T) {
 	}
 }
 
-// TestRenewU070_RenewTokenParsesFreshTokenAndExpiry covers the wire contract in
+// TestRenewTokenParsesFreshTokenAndExpiry covers the wire contract in
 // isolation: the fields the control plane returns are the fields the loop reads.
-func TestRenewU070_RenewTokenParsesFreshTokenAndExpiry(t *testing.T) {
+func TestRenewTokenParsesFreshTokenAndExpiry(t *testing.T) {
+	// ticket: U070
 	cp := &renewCP{ttl: 30 * time.Minute}
 	srv := httptest.NewServer(cp.handler())
 	defer srv.Close()

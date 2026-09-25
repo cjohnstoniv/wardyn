@@ -116,7 +116,7 @@ func TestPG_PolicyCRUD_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestPG_CreatePolicy_DuplicateName pins W20-S1-3 against the real driver: the
+// TestPG_CreatePolicy_DuplicateName pins against the real driver: the
 // run_policies.name UNIQUE constraint's 23505 must map to store.ErrConflict,
 // not surface as an opaque wrapped pgconn error the API layer can't classify.
 func TestPG_CreatePolicy_DuplicateName(t *testing.T) {

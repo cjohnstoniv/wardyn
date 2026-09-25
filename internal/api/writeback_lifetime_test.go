@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the decision's durable write-backs outlive the request ───────────
+// the decision's durable write-backs outlive the request
 
 // cancelOnDecide wraps the fixture's approval service so the client
 // "disconnects" the instant Decide() commits — the real shape of the defect:

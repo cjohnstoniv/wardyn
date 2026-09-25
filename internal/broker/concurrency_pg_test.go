@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 
@@ -218,11 +220,13 @@ func TestPG_RevokedRun_RefusesMint(t *testing.T) {
 	}
 
 	gh := &FakeGitHubMinter{Token: "ghs_should_not_mint"}
-	_, err := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, gh).
+	sink := &recordingSink{}
+	_, err := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, gh).WithSIEM(sink).
 		MintForGrant(ctx, callerFor(runID), grantID)
 	if !errors.Is(err, ErrRunRevoked) {
 		t.Fatalf("want ErrRunRevoked, got %v", err)
 	}
+	assertSIEMMints(t, sink, gh.Token) // a refused mint fans out nothing
 	if gh.Calls != 0 {
 		t.Fatalf("github minter called %d times, want 0 (revoked run must not mint)", gh.Calls)
 	}
@@ -259,12 +263,14 @@ func TestPG_NoWidening_ScopeMismatch(t *testing.T) {
 
 	gh := &FakeGitHubMinter{Token: "ghs_should_not_mint"}
 	au := &fakeAudit{}
-	b := New(NewPgxStore(pool), nil, au, nil, gh)
+	sink := &recordingSink{}
+	b := New(NewPgxStore(pool), nil, au, nil, gh).WithSIEM(sink)
 
 	_, err := b.MintForGrant(ctx, callerFor(runID), grantID)
 	if !errors.Is(err, ErrScopeMismatch) {
 		t.Fatalf("want ErrScopeMismatch, got %v", err)
 	}
+	assertSIEMMints(t, sink, gh.Token) // a refused mint fans out nothing
 	// Fail closed: no token minted, no jti persisted.
 	if gh.Calls != 0 {
 		t.Fatalf("github minter called %d times, want 0 (scope mismatch must not mint)", gh.Calls)
@@ -301,7 +307,8 @@ func TestPG_ConcurrentMint_ExactlyOnceWins(t *testing.T) {
 	// One shared FakeGitHubMinter (thread-safe via its mutex) so we can assert
 	// the kind-specific minter fired exactly once across all goroutines.
 	gh := &FakeGitHubMinter{Token: "ghs_concurrent"}
-	b := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, gh)
+	sink := &recordingSink{}
+	b := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, gh).WithSIEM(sink)
 
 	const n = 16
 	var (
@@ -349,6 +356,8 @@ func TestPG_ConcurrentMint_ExactlyOnceWins(t *testing.T) {
 	if got := readMintedJTI(ctx, t, pool, approvalID); got != winJTI {
 		t.Fatalf("persisted minted_jti = %q, want winner %q", got, winJTI)
 	}
+	// SIEM sees the winner's mint once; a loser's rolled-back mint never fans out.
+	assertSIEMMints(t, sink, gh.Token, winJTI)
 	// The winner minted. Losing goroutines that BLOCKED on the FOR UPDATE OF g
 	// lock resume on their original snapshot, read a stale minted_jti='' from the
 	// non-locked (nullable-side) approval row, pass the row.mintedJTI fast path,
@@ -382,8 +391,8 @@ func TestPG_ConcurrentMint_ExactlyOnceWins(t *testing.T) {
 // single-use approval row, so it is re-mintable BY DESIGN. We fire N concurrent
 // auto-mints for the same grant against the real pool and assert ALL succeed
 // (the grant-row FOR UPDATE serializes them but does not block re-mint), each
-// producing a distinct jti. This guards against a regression that would wrongly
-// extend single-use semantics to the auto-mint path.
+// producing a distinct jti. It guards against extending single-use semantics to
+// the auto-mint path.
 func TestPG_ConcurrentMint_AutoApprovalGrant_Independent(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()
@@ -402,7 +411,8 @@ func TestPG_ConcurrentMint_AutoApprovalGrant_Independent(t *testing.T) {
 	spec := types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, RequiresApproval: false, TTLSeconds: 600}
 	grantID := pgSeedGrant(ctx, t, pool, runID, spec)
 
-	b := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, nil)
+	sink := &recordingSink{}
+	b := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, nil).WithSIEM(sink)
 
 	const n = 8
 	var (
@@ -441,6 +451,8 @@ func TestPG_ConcurrentMint_AutoApprovalGrant_Independent(t *testing.T) {
 	if len(jtis) != n {
 		t.Fatalf("distinct jtis = %d, want %d (each mint a fresh jti)", len(jtis), n)
 	}
+	// Every mint won, so every mint fans out exactly once.
+	assertSIEMMints(t, sink, "", slices.Collect(maps.Keys(jtis))...)
 }
 
 // TestPG_ConcurrentMintOnApproval_ExactlyOnce is the tightest single-use race:
@@ -473,7 +485,8 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 	approvalID := pgSeedApproval(ctx, t, pool, runID, grantID, scope)
 
 	gh := &FakeGitHubMinter{Token: "ghs_moa"}
-	b := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, gh)
+	sink := &recordingSink{}
+	b := New(NewPgxStore(pool), nil, &fakeAudit{}, nil, gh).WithSIEM(sink)
 
 	const n = 16
 	var (
@@ -519,6 +532,7 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 	if got := readMintedJTI(ctx, t, pool, approvalID); got != winJTI {
 		t.Fatalf("persisted minted_jti = %q, want winner %q", got, winJTI)
 	}
+	assertSIEMMints(t, sink, gh.Token, winJTI)
 	// gh.Calls >= 1, not == 1: a lock-blocked stale-snapshot waiter legitimately
 	// passes the fast path and CALLS the minter before its rows-affected check
 	// returns 0 and fails it closed (that throwaway token is discarded, never
@@ -540,13 +554,13 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestPG_ExpiredApproval_ReRaisesPending is the REAL-SQL regression for
-// W19-W19c-2 (the fake-DB twin in broker_test.go exercises the fake's own
-// branch, not the query). The sweeper (approval.ExpireStale) EXPIREs a stale
-// PENDING credential approval; the next mint must raise a FRESH PENDING row a
-// human can still decide — not re-find the swept row forever and map it to
-// ErrApprovalDenied, wedging the run with nothing in the approval queue.
-// Fails RED against the pre-fix WHERE clause (no `state <> 'EXPIRED'`).
+// TestPG_ExpiredApproval_ReRaisesPending runs the real SQL (the fake-DB twin
+// in broker_test.go exercises the fake's own branch, not the query). The
+// sweeper (approval.ExpireStale) expires a stale PENDING credential approval;
+// the next mint must raise a fresh PENDING row a human can still decide — not
+// re-find the swept row forever and map it to ErrApprovalDenied, wedging the
+// run with nothing in the approval queue. A WHERE clause without `state <>
+// 'EXPIRED'` fails here.
 func TestPG_ExpiredApproval_ReRaisesPending(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()

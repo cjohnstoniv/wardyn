@@ -41,7 +41,7 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 		return root, &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
 	}
 	memberCtx := func(sub string) context.Context {
-		return withOIDCGroups(operatorCtx(sub, sub+"@corp.example", oidc.RoleMember), nil)
+		return withOIDCGroups(operatorCtx(sub, sub+"@corp.example", oidc.RoleUser), nil)
 	}
 
 	t.Run("/me and the launch agree about a missing home directory", func(t *testing.T) {
@@ -65,7 +65,7 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 			t.Errorf("user_drive_denied_by_profile = %q, want empty — no profile is involved", denied)
 		}
 
-		// AND THE LAUNCH REALLY DOES REFUSE IT, asserted here rather than
+		// And the launch really does refuse it, asserted here rather than
 		// assumed: a test where /me withheld a drive the launch would have
 		// mounted is the opposite defect.
 		mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
@@ -77,7 +77,7 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 		}
 	})
 
-	// THE POSITIVE CONTROL: a bindable share is still offered, or this "fix"
+	// The positive control: a bindable share is still offered, or this "fix"
 	// would be /me withholding every drive.
 	t.Run("a bindable drive is still offered", func(t *testing.T) {
 		root, st := newShare(t)
@@ -118,22 +118,16 @@ func TestMeWithholdsAnUnbindableDrive(t *testing.T) {
 
 // driveRefusedMetric reads the total across every reason from /metrics.
 //
-// R1: this helper could not fail. It scraped /metrics on a Server with no
-// AdminToken, so the response was a 401 whose 60-byte body contains no series at
-// all; it then matched the prefix `wardyn_user_drive_refused_total`, which
-// nothing emits — the exposition is `wardyn_drive_refusals_total`
-// (metrics.go). Two independent reasons to return 0 unconditionally, so the
-// subtest that reads "a /me read moves no refusal metric" passed with the
-// regression injected: adding s.metrics.driveRefused(...) to the top of
-// resolveMeUserDrive left it green.
-//
-// THE FATALS ARE THE FIX, not the prefix. A metric helper that silently returns
-// 0 when it read nothing is a helper that turns every assertion built on it into
-// a tautology, and the two defects above were each individually enough to do
-// that. So a non-200 and an empty match are now failures in their own right, and
-// the next way this helper stops seeing the series — a renamed metric, a
-// re-tiered /metrics, a harness that stops carrying the token — fails loudly
-// instead of quietly reporting that nothing happened.
+// It fails on a non-200 and on an empty match. A metric helper that silently
+// returns 0 when it read nothing turns every assertion built on it into a
+// tautology: scraping /metrics on a Server with no AdminToken yields a 401 whose
+// 60-byte body contains no series at all, and a wrong prefix (the exposition is
+// `wardyn_drive_refusals_total`, metrics.go) matches nothing — either would let
+// "a /me read moves no refusal metric" pass even with
+// s.metrics.driveRefused(...) added to the top of resolveMeUserDrive. So the
+// next way this helper stops seeing the series — a renamed metric, a re-tiered
+// /metrics, a harness that stops carrying the token — fails loudly instead of
+// quietly reporting that nothing happened.
 func driveRefusedMetric(t *testing.T, srv *Server) int {
 	t.Helper()
 	w := do(t, srv, http.MethodGet, "/metrics", adminToken, "")

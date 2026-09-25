@@ -26,7 +26,7 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
-// ─── redactSecrets: the test proving redaction (D11) ──────────────────────────
+// redactSecrets: the test proving redaction (D11)
 
 func TestRedactSecrets(t *testing.T) {
 	cases := []struct {
@@ -130,7 +130,7 @@ func TestRedactSecretsMultiLineDocument(t *testing.T) {
 	}
 }
 
-// ─── writeTarGz / gatherComposeConfig ──────────────────────────────────────────
+// writeTarGz / gatherComposeConfig
 
 func TestWriteTarGzRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -289,7 +289,7 @@ func TestGatherComposeConfigMissingFileReturnsNote(t *testing.T) {
 	}
 }
 
-// ─── gatherProxyDiagnostics: the corporate-proxy field-report triad ──────────
+// gatherProxyDiagnostics: the corporate-proxy field-report triad
 
 func TestGatherProxyDiagnostics(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +360,7 @@ func TestGatherProxyDiagnosticsUnreachableReturnsNote(t *testing.T) {
 	}
 }
 
-// ─── end-to-end: the CLI command wired through a fake control plane ───────────
+// end-to-end: the CLI command wired through a fake control plane
 
 func TestSupportBundleCmdEndToEnd(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -464,7 +464,7 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 	}
 }
 
-// ─── redactSecrets: the key names and value shapes the first pass missed ─────
+// redactSecrets: the key names and value shapes the first pass missed
 //
 // `support-bundle`'s own Long text promises "Never
 // includes a secret VALUE", and the bundle is gathered from `docker compose

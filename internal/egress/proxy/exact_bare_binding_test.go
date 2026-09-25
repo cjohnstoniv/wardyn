@@ -79,7 +79,7 @@ func TestPortQualifiedOnlyHostIsNotCredentialedOnPort80(t *testing.T) {
 // EXACT deny but not a port-qualified WILDCARD one, so `deny *.corp:8443`
 // could not cancel `allow m.corp:8443` at bind time — unlike AuthoredPortFor,
 // which consults both. Alone it is a mis-bind (evalHost still denies the
-// port); with W6-S3's port-80 arm it was the same leak one door over.
+// port); with the port-80 arm above it would be the same leak one door over.
 func TestAllowedExactHostHonoursAPortQualifiedWildcardDeny(t *testing.T) {
 	if CompilePolicy(types.RunPolicySpec{
 		AllowedDomains: []string{"m.corp:8443"}, DeniedDomains: []string{"*.corp:8443"},

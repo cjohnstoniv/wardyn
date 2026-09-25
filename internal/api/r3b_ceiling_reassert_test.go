@@ -31,7 +31,7 @@ func r3bWalledRun(t *testing.T, profile string, deny []string) ([]types.AuditEve
 	if profile != "" {
 		gc.Profile = &types.GovernanceProfile{Name: profile}
 	}
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 	})
 	return audit.events, run.ID
@@ -46,7 +46,8 @@ func r3bWalledRun(t *testing.T, profile string, deny []string) ([]types.AuditEve
 // that grants rather than denies. Nothing else in the dispatch says which
 // ceiling the run stood inside: run.policy.effective records a policy, not
 // whose walls they are.
-func TestR3BCeilingReassertAuditsEveryAssignedProfile(t *testing.T) {
+func TestCeilingReassertAuditsEveryAssignedProfile(t *testing.T) {
+	// ticket: R3B
 	t.Run("assigned profile with EMPTY denied_domains still records the row", func(t *testing.T) {
 		events, runID := r3bWalledRun(t, "grants-only", nil)
 		ev := findAudit(events, runID, "run.ceiling.reassert", "success")

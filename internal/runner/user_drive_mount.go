@@ -14,7 +14,7 @@
 // because the widening it would need is not in the database.
 //
 // Unset fails closed. With no roots configured, NO host_path drive may be
-// authored at all — byte-for-byte the WARDYN_MEMBER_WORKSPACE_ROOTS posture,
+// authored at all — byte-for-byte the WARDYN_USER_WORKSPACE_ROOTS posture,
 // and for the same reason: the safe default for "the operator has not said
 // where" is "nowhere", not "anywhere".
 package runner
@@ -37,7 +37,7 @@ import (
 //
 // It reuses parseRootList verbatim, so a root here can no more carry a
 // traversal segment than a member root can, and a malformed value REFUSES BOOT
-// exactly as WARDYN_MEMBER_WORKSPACE_ROOTS does: a ceiling the operator
+// exactly as WARDYN_USER_WORKSPACE_ROOTS does: a ceiling the operator
 // mistyped must not silently become a ceiling that bounds a different tree.
 //
 // THREE root values are permitted but WARNED about, the same allow-and-warn
@@ -102,12 +102,12 @@ func ParseUserDriveHostRoots(raw string) (roots []string, warnings []string, err
 // host_root is the mount point of a SHARE, and Wardyn binds only ONE PERSON's
 // subdirectory of it into a sandbox — the whole per-person isolation model, and
 // the reason UserDriveMountSourceCheck refuses a source that resolved TO a root.
-// WARDYN_MEMBER_WORKSPACE_ROOTS bounds a different thing entirely: directories a
+// WARDYN_USER_WORKSPACE_ROOTS bounds a different thing entirely: directories a
 // MEMBER may name as a workspace and bind WHOLE, writable where
-// WARDYN_MEMBER_WRITABLE_ROOTS allows it.
+// WARDYN_USER_WRITABLE_ROOTS allows it.
 //
 // Point the two at one tree and the second undoes the first. With
-// WARDYN_MEMBER_WORKSPACE_ROOTS=/srv/shares and a drive rooted at /srv/shares,
+// WARDYN_USER_WORKSPACE_ROOTS=/srv/shares and a drive rooted at /srv/shares,
 // a member onboards /srv/shares as a workspace and mounts EVERY person's home,
 // through a surface that never consults a drive allocation at all. Both ceilings
 // individually accept it; nothing compared them, so no boot line said so and no
@@ -134,15 +134,15 @@ func MountCeilingOverlapWarnings(member MemberMountPolicy, driveRoots []string) 
 			var msg string
 			switch {
 			case m == d:
-				msg = fmt.Sprintf("WARDYN_MEMBER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name %q: a member can onboard "+
+				msg = fmt.Sprintf("WARDYN_USER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name %q: a member can onboard "+
 					"that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive "+
 					"allocation. Point the drive ceiling at the share and the member ceiling somewhere else", m)
 			case strings.HasPrefix(d, m+string(filepath.Separator)):
-				msg = fmt.Sprintf("WARDYN_MEMBER_WORKSPACE_ROOTS contains %q, which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry %q: a member can onboard "+
+				msg = fmt.Sprintf("WARDYN_USER_WORKSPACE_ROOTS contains %q, which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry %q: a member can onboard "+
 					"that share as a workspace and bind it whole, every other person's home included, without a drive allocation. "+
 					"Point the member ceiling at a tree that does not contain the share", m, d)
 			case strings.HasPrefix(m, d+string(filepath.Separator)):
-				msg = fmt.Sprintf("WARDYN_MEMBER_WORKSPACE_ROOTS contains %q, which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry %q: member workspaces "+
+				msg = fmt.Sprintf("WARDYN_USER_WORKSPACE_ROOTS contains %q, which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry %q: member workspaces "+
 					"would be authored inside a share whose directories Wardyn hands out one person at a time. Point the member "+
 					"ceiling outside the share", m, d)
 			default:

@@ -383,8 +383,8 @@ func literalsAssignedTo(f *ast.File, name string) []string {
 }
 
 // TestAuditActionsDoc_EveryEmitHasRow is the forward ratchet: an audit action
-// emitted by non-test Go must have a row in docs/AUDIT-ACTIONS.md. Adding an
-// emit with a novel action name used to leave `go test ./cmd/wardynd/` green.
+// emitted by non-test Go must have a row in docs/AUDIT-ACTIONS.md, so adding
+// an emit with a novel action name and no row fails `go test ./cmd/wardynd/`.
 func TestAuditActionsDoc_EveryEmitHasRow(t *testing.T) {
 	root := repoRoot(t)
 	exact, prefixes := documentedAuditActions(t, root)

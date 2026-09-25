@@ -189,12 +189,12 @@ func TestCSRFGuard_RefusalNamesTheCSRFBoundary(t *testing.T) {
 	t.Fatal("no auth.failed row for a CSRF refusal")
 }
 
-// TestAttachWS_CrossOriginRefusalIsAudited. The attach socket is
-// the most dangerous cookie-authenticated capability in the product, and its
-// cross-origin refusal used to be SILENT: 403 and nothing in the trail, while
-// the REST guard emitted auth.failed/cross_origin_refused/wardyn/csrf at both
-// of its arms. Driven through the real router on the ?ticket= lane, which is
-// the browser's own.
+// TestAttachWS_CrossOriginRefusalIsAudited. The attach socket is the most
+// dangerous cookie-authenticated capability in the product, so its
+// cross-origin refusal must not be silent (403 and nothing in the trail): the
+// REST guard emits auth.failed/cross_origin_refused/wardyn/csrf at both of
+// its arms, and so does this one. Driven through the real router on the
+// ?ticket= lane, which is the browser's own.
 func TestAttachWS_CrossOriginRefusalIsAudited(t *testing.T) {
 	srv, _, _, audit, run := holderTestServer(t)
 	srv.cfg.OIDCRedirectURL = csrfRedirectURL

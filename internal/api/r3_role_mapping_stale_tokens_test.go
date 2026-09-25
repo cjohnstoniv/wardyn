@@ -95,7 +95,7 @@ func TestRoleMappingWriteReportsStaleTokenSnapshots(t *testing.T) {
 		// Bound by the GROUP snapshot — the case a mapping edit cannot reach.
 		{ID: uuid.New(), Principal: "sub-alice", Email: "alice@corp.example", Role: string(oidc.RoleAdmin), Groups: []string{group}, CreatedAt: now},
 		// Bound by EMAIL, for a deployment that opted into email-keyed rows.
-		{ID: uuid.New(), Principal: "sub-bob", Email: group + "@corp.example", Role: string(oidc.RoleMember), CreatedAt: now},
+		{ID: uuid.New(), Principal: "sub-bob", Email: group + "@corp.example", Role: string(oidc.RoleUser), CreatedAt: now},
 		// Already revoked: not a live credential, must not be counted.
 		{ID: uuid.New(), Principal: "sub-carol", Groups: []string{group}, RevokedAt: &revoked, CreatedAt: now},
 		// A different group entirely: the count must be about THIS value.
@@ -114,7 +114,7 @@ func TestRoleMappingWriteReportsStaleTokenSnapshots(t *testing.T) {
 	t.Run("an upsert reports the tokens it does not reach", func(t *testing.T) {
 		srv, _ := newSrv(t)
 		w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken,
-			`{"value":"`+group+`","role":"member"}`)
+			`{"value":"`+group+`","role":"user"}`)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
 		}
@@ -132,7 +132,7 @@ func TestRoleMappingWriteReportsStaleTokenSnapshots(t *testing.T) {
 		}
 		// STRICT SUPERSET: every field an existing client decodes is still
 		// there, which is what makes this additive rather than a wire break.
-		if got.Value != group || got.Role != string(oidc.RoleMember) || got.ID == uuid.Nil {
+		if got.Value != group || got.Role != string(oidc.RoleUser) || got.ID == uuid.Nil {
 			t.Errorf("the response is no longer a RoleMapping superset: %+v", got)
 		}
 	})
@@ -140,7 +140,7 @@ func TestRoleMappingWriteReportsStaleTokenSnapshots(t *testing.T) {
 	t.Run("the audit row carries the count", func(t *testing.T) {
 		srv, _ := newSrv(t)
 		if w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken,
-			`{"value":"`+group+`","role":"member"}`); w.Code != http.StatusCreated {
+			`{"value":"`+group+`","role":"user"}`); w.Code != http.StatusCreated {
 			t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
 		}
 		h, ok := srv.cfg.Audit.(*recRecorder)
@@ -184,7 +184,7 @@ func TestRoleMappingWriteReportsStaleTokenSnapshots(t *testing.T) {
 	t.Run("a value no token snapshot names reports zero", func(t *testing.T) {
 		srv, _ := newSrv(t)
 		w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken,
-			`{"value":"nobody-team","role":"member"}`)
+			`{"value":"nobody-team","role":"user"}`)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
 		}
@@ -235,7 +235,7 @@ func TestRoleMappingDemotionRevokesTheStampedTokens(t *testing.T) {
 				Groups: []string{demoted}, GroupsTruncated: &answerable, CreatedAt: now},
 			// Same group, MEMBER stamp: nothing was taken from it, so killing it
 			// would be the self-DoS the count's old doc feared.
-			{ID: uuid.New(), Principal: "sub-bob", Email: "bob@corp.example", Role: string(oidc.RoleMember),
+			{ID: uuid.New(), Principal: "sub-bob", Email: "bob@corp.example", Role: string(oidc.RoleUser),
 				Groups: []string{demoted}, GroupsTruncated: &answerable, CreatedAt: now},
 			// Admin stamp, DIFFERENT group: this edit does not move their
 			// derivation, so it is not this edit's business.
@@ -253,13 +253,13 @@ func TestRoleMappingDemotionRevokesTheStampedTokens(t *testing.T) {
 		t.Helper()
 		st := &roleMapTokenStore{toks: fixture()}
 		st.rows = rows
-		auth := newAccessAuth(t, map[string]string{"chart-admin": oidc.RoleAdmin}, oidc.RoleMember, nil, &st.roleMapStore)
+		auth := newAccessAuth(t, map[string]string{"chart-admin": oidc.RoleAdmin}, oidc.RoleUser, nil, &st.roleMapStore)
 		cfg := baseTestConfig(newHarness(t), st)
 		cfg.OIDC = auth
 		return New(cfg), st
 	}
 	wantRoles := map[string]string{
-		"sub-bob":   string(oidc.RoleMember),
+		"sub-bob":   string(oidc.RoleUser),
 		"sub-carol": string(oidc.RoleAdmin),
 	}
 	assertOutcome := func(t *testing.T, st *roleMapTokenStore, revokedWant []string) {
@@ -300,7 +300,7 @@ func TestRoleMappingDemotionRevokesTheStampedTokens(t *testing.T) {
 			t.Errorf("audit data = %v, want tokens_revoked 2 — the audit trail is the system of record for a demotion", data)
 		}
 
-		// AND THE COUNT IS NOT THE WHOLE RECORD (a residual case). The
+		// And the count is not the whole record (a residual case). The
 		// unanswerable-snapshot arm revokes EVERY elevated stamp it cannot
 		// re-derive — sub-dan's token names no group at all — so "2" alone
 		// cannot answer "whose credentials did that edit kill". Each revoked
@@ -341,7 +341,7 @@ func TestRoleMappingDemotionRevokesTheStampedTokens(t *testing.T) {
 		id := uuid.New()
 		srv, st := newSrv(t, []types.RoleMapping{{ID: id, Value: demoted, Role: oidc.RoleAdmin}})
 		w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken,
-			`{"value":"`+demoted+`","role":"member","acknowledge_access_change":true}`)
+			`{"value":"`+demoted+`","role":"user","acknowledge_access_change":true}`)
 		if w.Code != http.StatusOK && w.Code != http.StatusCreated {
 			t.Fatalf("upsert = %d; body=%s", w.Code, w.Body.String())
 		}
@@ -374,7 +374,7 @@ func TestRoleMappingDemotionRevokesTheStampedTokens(t *testing.T) {
 	// so it must not touch a single credential.
 	t.Run("a promotion revokes nothing", func(t *testing.T) {
 		id := uuid.New()
-		srv, st := newSrv(t, []types.RoleMapping{{ID: id, Value: demoted, Role: oidc.RoleMember}})
+		srv, st := newSrv(t, []types.RoleMapping{{ID: id, Value: demoted, Role: oidc.RoleUser}})
 		if w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken,
 			`{"value":"`+demoted+`","role":"admin","acknowledge_access_change":true}`); w.Code != http.StatusOK && w.Code != http.StatusCreated {
 			t.Fatalf("upsert = %d; body=%s", w.Code, w.Body.String())
@@ -388,7 +388,7 @@ func TestRoleMappingDemotionRevokesTheStampedTokens(t *testing.T) {
 	t.Run("an unrelated mapping edit revokes nothing", func(t *testing.T) {
 		srv, st := newSrv(t, []types.RoleMapping{{ID: uuid.New(), Value: demoted, Role: oidc.RoleAdmin}})
 		if w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken,
-			`{"value":"sales-team","role":"member","acknowledge_access_change":true}`); w.Code != http.StatusCreated {
+			`{"value":"sales-team","role":"user","acknowledge_access_change":true}`); w.Code != http.StatusCreated {
 			t.Fatalf("upsert = %d; body=%s", w.Code, w.Body.String())
 		}
 		if live := st.liveRoles(); len(live) != 4 {

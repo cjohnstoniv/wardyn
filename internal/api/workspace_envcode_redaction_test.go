@@ -56,7 +56,7 @@ func newEnvcodeRedirectServer(t *testing.T, ownedBy string) (*Server, string) {
 // EgressRedirects at all — so the artifact-registry half of the reason the tier
 // moved was pinned by nothing.
 func TestEnvAsCodeWithholdsTheArtifactRegistryFromNonFullReaders(t *testing.T) {
-	// THE POSITIVE CONTROL FIRST, and it is load-bearing twice over: it proves
+	// The positive control first, and it is load-bearing twice over: it proves
 	// the fixture really does emit the corporate base (so the refusals below are
 	// refusing something that exists), and it proves the tier move did not close
 	// the leak by breaking the feature. An env-as-code that emitted no artifact
@@ -79,7 +79,7 @@ func TestEnvAsCodeWithholdsTheArtifactRegistryFromNonFullReaders(t *testing.T) {
 	// operator": the security tier reads plenty of operator surfaces and this is
 	// deliberately not one of them.
 	for name, session := range map[string]*http.Cookie{
-		"plain member":   ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember),
+		"plain member":   ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser),
 		"security admin": ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin),
 	} {
 		t.Run(name+" is refused, and the refusal carries nothing", func(t *testing.T) {
@@ -111,7 +111,7 @@ func TestEnvAsCodeWithholdsTheArtifactRegistryFromNonFullReaders(t *testing.T) {
 	t.Run("the workspace's own member owner still gets it", func(t *testing.T) {
 		const owner = "sub-ws-owner"
 		srv, id := newEnvcodeRedirectServer(t, owner)
-		session := ssoSession(t, owner, "owner@corp.example", oidc.RoleMember)
+		session := ssoSession(t, owner, "owner@corp.example", oidc.RoleUser)
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/workspaces/"+id+"/env-as-code", session, "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET .../env-as-code as the owning member = %d, want 200: %s", w.Code, w.Body.String())

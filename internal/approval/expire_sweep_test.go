@@ -70,3 +70,46 @@ func TestExpireStale_AlreadyDecidedStaysSilent(t *testing.T) {
 		t.Fatalf("expired = %d, want 1", n)
 	}
 }
+
+// TestExpireStale_RunWaitAndEndBindBeforeTheDeploymentCutoff pins run limits
+// (#567): a request expires at min(requested_at + the run's wait, the run's
+// end), which the store hands over as ExpiresAt. A request far younger than the
+// deployment's cutoff whose run-level expiry has passed must expire; one whose
+// ExpiresAt is still ahead, or unset, waits for the deployment cutoff.
+func TestExpireStale_RunWaitAndEndBindBeforeTheDeploymentCutoff(t *testing.T) {
+	ctx := t.Context()
+	now := time.Now().UTC()
+	past, future := now.Add(-time.Minute), now.Add(time.Hour)
+
+	f := &fakeStore{}
+	seed := func(expiresAt *time.Time) uuid.UUID {
+		t.Helper()
+		ap, err := f.CreateApproval(ctx, types.ApprovalRequest{
+			ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalToolCall,
+			State: types.ApprovalPending, RequestedAt: now.Add(-10 * time.Minute), ExpiresAt: expiresAt,
+		})
+		if err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		return ap.ID
+	}
+	due := seed(&past)
+	notYet := seed(&future)
+	unbounded := seed(nil)
+
+	n, err := approval.ExpireStale(ctx, f, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("ExpireStale: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expired = %d, want 1 — only the request past its run's wait/end is due", n)
+	}
+	for id, want := range map[uuid.UUID]types.ApprovalState{
+		due: types.ApprovalExpired, notYet: types.ApprovalPending, unbounded: types.ApprovalPending,
+	} {
+		got, _ := f.GetApproval(ctx, id)
+		if got.State != want {
+			t.Errorf("approval %s state = %s, want %s", id, got.State, want)
+		}
+	}
+}

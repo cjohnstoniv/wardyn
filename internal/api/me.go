@@ -4,11 +4,14 @@
 package api
 
 import (
+	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // handleMe reports the authenticated principal, how they authenticated, their
@@ -101,6 +104,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"member_preview_available": (s.isOperator(r.Context()) || s.isSecurityOperator(r.Context())) &&
 			s.memberPreviewApplies(r.Context(), r),
 	}
+	body["user_type"] = s.meUserType(r)
 	// The AddWorkspaceDialog root-constraint hint (member-role-desktop.md
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for
 	// an operator (the dialog never renders the hint for one) and for a member
@@ -108,7 +112,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// contract). Presentational only — ValidateMemberMountSource, not this
 	// value, is what actually enforces the boundary at bind time.
 	//
-	// Keyed on !isOperator, NOT on role == RoleMember: the constraint follows
+	// Keyed on !isOperator, NOT on role == RoleUser: the constraint follows
 	// the workspace-OWNERSHIP namespace (secretOwnerFromRequest, deliberately
 	// still isOperator — see runs_policy.go), so a SECURITY ADMIN's workspaces
 	// are owner-stamped like a member's and are clamped by the same roots. This
@@ -231,4 +235,32 @@ func memberLocalDirRootLabel(roots []string) *string {
 	}
 	label := strings.Join(roots, " or ")
 	return &label
+}
+
+// meUserType is /me's user_type: the type stamped on this SSO session at
+// sign-in, with its display name. nil for a caller with no session type — the
+// admin token, local mode, and (until tokens carry a type) an API token. A
+// type the store no longer holds, or a failed read, still names the id with
+// an empty name: this is a label, and the controls that bind a type decide
+// for themselves what a missing one means.
+func (s *Server) meUserType(r *http.Request) *meUserTypeView {
+	id := oidc.UserTypeFromContext(r.Context())
+	if id == "" {
+		return nil
+	}
+	v := &meUserTypeView{ID: id}
+	if s.cfg.Store == nil {
+		return v
+	}
+	if t, err := s.cfg.Store.GetUserType(r.Context(), id); err == nil {
+		v.Name = t.Name
+	} else if !errors.Is(err, store.ErrNotFound) {
+		slog.WarnContext(r.Context(), "api: could not read the caller's user type for /me", "user_type", id, "error", err)
+	}
+	return v
+}
+
+type meUserTypeView struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }

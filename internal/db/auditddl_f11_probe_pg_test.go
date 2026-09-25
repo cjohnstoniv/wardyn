@@ -1,20 +1,16 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// db.AuditDDLProtected is 0% covered (docs/TEST-GAPS.md) because every live
-// lane connects as the container superuser and the split-role mode is never
-// exercised. This probe manufactures the split: it creates a throwaway LOGIN
-// role with only INSERT+SELECT on audit_events (0007's intended app role),
-// connects as it, and checks what the boot-time claim and the DB actually do.
+// db.AuditDDLProtected in the split-role mode. Every other live lane connects
+// as the container superuser, so that mode is exercised only here: this
+// creates a throwaway LOGIN role with only INSERT+SELECT on audit_events
+// (0007's intended app role), connects as it, and checks what the boot-time
+// claim and the DB actually do — including that a TRIGGER privilege on
+// audit_events counts against the claim, and that Migrate restores a dropped
+// chain trigger.
 //
 // Needs WARDYN_TEST_PG in URL form and a role with CREATEROLE/superuser (CI's
 // pg lane is `postgres`). Skips otherwise. Cleans the role up.
-//
-// Expected result on feat/v0.7-profiles @ fa910735:
-//
-//	TestPG_ProbeF11_AuditDDLProtected/…                     GREEN except the last subtest
-//	TestPG_ProbeF11_AuditDDLProtected/TRIGGER_privilege…    RED (hypothesis H4)
-//	TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate  RED (hypothesis H2)
 package db
 
 import (
@@ -29,6 +25,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
 func sqlState(err error) string {
@@ -39,7 +37,7 @@ func sqlState(err error) string {
 	return ""
 }
 
-// ─── skips that would hide a failure ─────────────────────────────────────────
+// skips that would hide a failure
 
 // probeSkipMarker lets an operator ASSERT that this lane is fully provisioned,
 // turning every precondition guard below into a failure instead of a skip. CI's
@@ -50,7 +48,7 @@ const probeSkipMarker = "WARDYN_TEST_PG_SUPERUSER"
 // probeMustNotSkip reports whether a skip from here on would be HIDING a
 // failure rather than reporting an unmet precondition.
 //
-// WHY IT IS DERIVED AND NOT ONLY DECLARED. Every guard in this file produces
+// Why it is derived and not only declared. Every guard in this file produces
 // `--- SKIP` -> `ok` -> exit 0, scripts/test-report.sh grades on the exit code,
 // and nothing inspects the JSON stream for skips — so a probe that quietly
 // stopped running looked exactly like a probe that passed, and the invariant it
@@ -81,12 +79,14 @@ func skipOrFatal(t *testing.T, mustNotSkip bool, format string, args ...any) {
 	t.Skipf(format, args...)
 }
 
-// TestPG_ProbeF11_LaneCannotSilentlySelfSkip pins the derivation itself. On the
+// TestPG_AuditDDL_LaneCannotSilentlySelfSkip pins the derivation itself. On the
 // lane CI actually runs — superuser, URL-form DSN — every probe in this file
 // MUST be in fail-not-skip mode; if that ever stops being true, the append-only
 // probes can go back to reporting `ok` while proving nothing, which is the whole
 // finding.
-func TestPG_ProbeF11_LaneCannotSilentlySelfSkip(t *testing.T) {
+func TestPG_AuditDDL_LaneCannotSilentlySelfSkip(t *testing.T) {
+	// ticket: F11
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 	var canCreateRole bool
@@ -104,7 +104,9 @@ func TestPG_ProbeF11_LaneCannotSilentlySelfSkip(t *testing.T) {
 	}
 }
 
-func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
+func TestPG_AuditDDL_Protected(t *testing.T) {
+	// ticket: F11
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 
@@ -267,17 +269,18 @@ func TestPG_ProbeF11_AuditDDLProtected(t *testing.T) {
 	})
 }
 
-// TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate — hypothesis H2.
+// TestPG_AuditDDL_DroppedChainTriggerIsRestoredByMigrate pins that Migrate
+// restores a dropped chain trigger.
 //
 // An owner/superuser drops the 0047 trigger. Migrate() records 0047 as applied
-// and skips it on every later boot (isMigrationApplied), and nothing at boot
-// reads pg_trigger — so the trigger stays gone across restarts and every row
-// written from then on is unchained (which H1 shows the sweep never reports).
-// The desired property asserted here — the next Migrate (or boot) restores or
-// at least refuses without the trigger — did not hold on the RC; it does now
-// (ensureAuditTriggers), so this is a GREEN regression pin. The
-// trigger is put back afterwards by re-executing 0047 (idempotent DDL).
-func TestPG_ProbeF11_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
+// and skips it on every later boot (isMigrationApplied), so without a
+// boot-time check the trigger would stay gone across restarts and every row
+// written from then on would be unchained. The next Migrate (or boot) must
+// restore it or refuse — ensureAuditTriggers restores it. The trigger is put
+// back afterwards by re-executing 0047 (idempotent DDL).
+func TestPG_AuditDDL_DroppedChainTriggerIsRestoredByMigrate(t *testing.T) {
+	// ticket: F11
+	testfloor.Mark(t, "pg")
 	pool := pgPool(t)
 	ctx := context.Background()
 

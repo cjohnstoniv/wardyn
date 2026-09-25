@@ -181,25 +181,24 @@ func TestGitHubMinter_MintReturnsInsideClientBudget(t *testing.T) {
 	}
 }
 
-// R-03. The client Timeout bounds ONE round trip, and a cold installByOrg makes
-// TWO (GetRepositoryInstallation, then CreateInstallationToken) — so a slow
-// first hop followed by a blackholed second used to hold the grant row's FOR
-// UPDATE lock and a pooled connection for ~2x the budget. The mint now derives
-// ONE ctx deadline for the whole call, so the in-transaction ceiling is 1x.
+// The client Timeout bounds one round trip, and a cold installByOrg makes two
+// (GetRepositoryInstallation, then CreateInstallationToken) — so per-hop
+// timeouts alone would let a slow first hop followed by a blackholed second
+// hold the grant row's FOR UPDATE lock and a pooled connection for ~2x the
+// budget. The mint derives one ctx deadline for the whole call, so the
+// in-transaction ceiling is 1x.
 //
 // The server here is the shape that separates the two: hop 1 answers just under
 // the budget, hop 2 never answers. Per-hop-only = ~1.8x; one ceiling = ~1x.
 //
-// W6-04: a raw hop-hit COUNT cannot discriminate the two shapes — hop 2's HTTP
-// request reaches this fake either way (measured both shapes directly,
-// reverting the ctx-sharing fix locally: hop1Hits/hop2Hits are 1/1 under BOTH
-// the fixed and the pre-fix code, since hop 1 succeeding at all means some of
-// its own per-hop budget is still left for hop 2 to dial, fixed or not). The
-// counters stay as an anti-vacuity floor — proving the fixture actually
-// exercised both hops, so the timing assertion below is proving something —
-// and the ceiling widens from 1.4x to 1.5x, comfortably between the two
-// measured shapes (~500ms fixed vs ~900ms reverted) with more headroom on
-// both sides than the old squeeze.
+// A raw hop-hit count cannot discriminate the two shapes — hop 2's HTTP
+// request reaches this fake either way (hop1Hits/hop2Hits are 1/1 under both,
+// since hop 1 succeeding at all means some of its own per-hop budget is still
+// left for hop 2 to dial). The counters stay as an anti-vacuity floor —
+// proving the fixture actually exercised both hops, so the timing assertion
+// below is proving something — and the ceiling sits at 1.5x, comfortably
+// between the two measured shapes (~500ms with one deadline vs ~900ms
+// per-hop) with headroom on both sides.
 func TestGitHubMinter_MintCeilingIsOneBudgetNotTwo(t *testing.T) {
 	const budget = 500 * time.Millisecond
 
@@ -283,7 +282,7 @@ func TestGitHubMinter_SlowGitHubStillMints(t *testing.T) {
 }
 
 // The production Revoke really issues DELETE /installation/token authenticated
-// AS THE DISCARDED TOKEN — the same call ruleset.go makes for its probe token.
+// As the discarded token — the same call ruleset.go makes for its probe token.
 func TestGitHubMinter_Revoke_DeletesInstallationToken(t *testing.T) {
 	var gotMethod, gotPath, gotAuth atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

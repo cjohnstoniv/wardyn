@@ -85,7 +85,7 @@ func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
 		t.Run("a member reading "+path, func(t *testing.T) {
 			srv := newSrv(t)
 			w := doSSO(t, srv, http.MethodGet, path,
-				ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember), "")
+				ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser), "")
 			if w.Code != http.StatusOK {
 				t.Fatalf("GET %s = %d, want 200; body=%s", path, w.Code, w.Body.String())
 			}
@@ -148,7 +148,7 @@ func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
 	t.Run("a member's capability reasons restate nothing withheld", func(t *testing.T) {
 		srv := newSrv(t)
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/integrations",
-			ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember), "")
+			ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser), "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("member GET /integrations = %d, want 200; body=%s", w.Code, w.Body.String())
 		}

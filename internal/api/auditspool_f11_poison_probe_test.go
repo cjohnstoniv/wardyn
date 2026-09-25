@@ -1,16 +1,15 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Hypothesis H7: AuditSpool.Drain stops at the FIRST replay error and keeps
-// that line at the head of the file (auditspool.go: `replayErr = err; break`,
-// then the remainder is rewritten from `consumed`). That is right for a store
-// that is DOWN (retry later) and wrong for a line the store will NEVER accept
-// (a CHECK-constraint violation, a payload the column type rejects, a line a
-// human edited): every event behind it is never replayed, forever, and the
-// only signal is wardyn_audit_spool_lines never returning to 0.
+// Poison line: AuditSpool.Drain must not stop at the first replay error and
+// keep that line at the head of the file forever. Keeping it is right for a
+// store that is down (retry later) and wrong for a line the store will never
+// accept (a CHECK-constraint violation, a payload the column type rejects, a
+// line a human edited): every event behind it would never be replayed, and
+// the only signal would be wardyn_audit_spool_lines never returning to 0.
+// Drain's poison probe + quarantine handle it.
 //
-// No Postgres needed. Red on feat/v0.7-profiles @ fa910735; GREEN since Drain
-// gained the poison probe + quarantine. A failure here is a REGRESSION.
+// No Postgres needed.
 package api
 
 import (
@@ -36,7 +35,8 @@ func (r *rejectingRecorder) Record(ctx context.Context, ev types.AuditEvent) err
 	return r.fakeRecorder.Record(ctx, ev)
 }
 
-func TestProbeF11_SpoolPoisonLineDoesNotWedgeLaterLines(t *testing.T) {
+func TestSpoolPoisonLineDoesNotWedgeLaterLines(t *testing.T) {
+	// ticket: F11
 	path := filepath.Join(t.TempDir(), "audit-spool.jsonl")
 	sp, err := NewAuditSpool(path)
 	if err != nil {

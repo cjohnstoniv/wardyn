@@ -76,13 +76,13 @@ func newBrokerUpstream(t *testing.T, mintJSON string) *gitBrokerUpstream {
 // newGitBrokerUpstream mints the PRODUCTION github_token shape — no `username`
 // key at all.
 //
-// internal/broker/broker_mint_kinds.go's mintGitHubToken leaves Minted.Username
-// empty for this kind (internal/broker/broker.go: "Empty for github_token"; the
-// caller authenticates as x-access-token), and internal/api serialises it as an
-// empty string. The fixture used to inject `"username":"x-access-token"`, a
-// shape the broker never emits — which made the mask pin green while the
-// rendering actually on the wire, base64("x-access-token:"+tok), was
-// unregistered: brokeredToken registered base64(":"+tok) instead.
+// internal/broker/broker_mint_kinds.go's mintGitHubToken leaves
+// Minted.Username empty for this kind (internal/broker/broker.go: "Empty for
+// github_token"; the caller authenticates as x-access-token), and
+// internal/api serialises it as an empty string. A fixture that injected
+// `"username":"x-access-token"` — a shape the broker never emits — would make
+// the mask pin green while the rendering actually on the wire,
+// base64("x-access-token:"+tok), went unregistered.
 func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
 	t.Helper()
 	exp := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
@@ -271,7 +271,7 @@ func TestGitBrokerRejectsBadRequests(t *testing.T) {
 	}
 }
 
-// ── push branch-namespace confinement ────────────────────────────────────────
+// push branch-namespace confinement
 
 // pkt frames one git pkt-line: 4 hex length digits that count themselves.
 func pkt(s string) string { return fmt.Sprintf("%04x%s", len(s)+4, s) }
@@ -503,8 +503,8 @@ func TestGitBrokerRejectsEncodedPushWhenEnforcing(t *testing.T) {
 // TestGitBrokerEnforcesPushByDefault: confinement is DEFAULT-ON — with the env
 // unset an out-of-namespace push is refused before the mint, and nothing reaches
 // github. agent-run puts the agent on `wardyn/<run-id>/work` (name_run_branch), so
-// the compliant push is the one a stock run makes. This is the regression pin for
-// the default posture; TestGitBrokerPushOptOut covers the escape hatch.
+// the compliant push is the one a stock run makes. This pins the default posture;
+// TestGitBrokerPushOptOut covers the escape hatch.
 func TestGitBrokerEnforcesPushByDefault(t *testing.T) {
 	t.Setenv(envEnforceBranchNS, "") // never inherit an operator's setting
 	up := newGitBrokerUpstream(t, "gh-inst-token")
@@ -657,12 +657,12 @@ func TestGitBrokerMintedTokenIsMaskRegistered(t *testing.T) {
 	}
 }
 
-// TestBrokerMintRefusesBrokeredGitGrant is the regression pin for the in-sandbox
-// token bypass. WARDYN_GITHUB_GRANT_ID rides the agent env, and the local mint
-// route is unauthenticated, so before this guard a single
+// TestBrokerMintRefusesBrokeredGitGrant closes the in-sandbox token bypass.
+// WARDYN_GITHUB_GRANT_ID rides the agent env, and the local mint route is
+// unauthenticated, so without this guard a single
 // `curl -XPOST .../wardyn/v1/credentials/mint -d '{"grant_id":"'$WARDYN_GITHUB_GRANT_ID'"}'`
-// handed the sandbox a live ghs_ installation token — and, because an
-// approval-gated grant is single-use, ALSO burnt the broker's one mint out from
+// would hand the sandbox a live ghs_ installation token — and, because an
+// approval-gated grant is single-use, also burn the broker's one mint out from
 // under the run's own clone/push.
 //
 // The four cases below are the whole contract: refuse the brokered grant, refuse
@@ -774,12 +774,12 @@ func newGitBrokerApprovalUpstream(t *testing.T, token string, approvalID uuid.UU
 	return u
 }
 
-// TestGitBrokerPollsPendingApproval is the regression for W23-S1-1 /
-// W19-W19a-1: the FIRST clone against an approval-gated github_token grant
-// used to 502 outright on the control plane's 409 (no wait, no retry) — the
-// documented quickstart's first clone always failed before a human could
-// possibly have approved it. The broker must now poll the SAME approval
-// server-side and re-mint once it clears, succeeding the original request.
+// TestGitBrokerPollsPendingApproval: the first clone against an
+// approval-gated github_token grant meets the control plane's 409 before a
+// human could possibly have approved it, so the broker must poll the same
+// approval server-side and re-mint once it clears, succeeding the original
+// request — not 502 outright (no wait, no retry), which would fail the
+// documented quickstart's first clone every time.
 func TestGitBrokerPollsPendingApproval(t *testing.T) {
 	orig := gitApprovalPollInterval
 	gitApprovalPollInterval = 5 * time.Millisecond

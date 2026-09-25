@@ -251,18 +251,17 @@ func pgApprovalsForRun(ctx context.Context, t *testing.T, pool *pgxpool.Pool, ru
 	return n
 }
 
-// TestNoStaleMintedJTIsReferences pins the rename this cascade required.
-// RevokeRun used to read approvals.minted_jti through a MintedJTIs bulk read;
-// sourcing the cascade from what the run ACTUALLY minted replaced that method on
-// both TxBeginner and PgxStore with MintedCredentials (mintedCredentialsSQL).
-// The method is gone, so any surviving mention of it in this package is a
-// comment describing code that no longer exists — which is how
-// concurrency_pg_test.go came to tell a reader that TestPG_MintRevokeRoundTrip
-// exercises "the real MintedJTIs bulk read" it cannot exercise.
+// TestNoStaleMintedJTIsReferences keeps the retired MintedJTIs name out of
+// this package. The cascade is sourced from what the run actually minted,
+// through MintedCredentials (mintedCredentialsSQL) on both TxBeginner and
+// PgxStore; there is no MintedJTIs bulk read, so any mention of it in this
+// package is a comment describing code that does not exist — the kind that
+// tells a reader TestPG_MintRevokeRoundTrip exercises "the real MintedJTIs
+// bulk read" it cannot exercise.
 //
 // The package's own directory is the whole scope on purpose: MintedJTIs was
-// never exported past internal/broker. This file is the one exclusion — it has
-// to write the retired name to name it.
+// never exported past internal/broker. This file is the one exclusion — it
+// has to write the retired name to name it.
 func TestNoStaleMintedJTIsReferences(t *testing.T) {
 	const self = "revoke_cascade_test.go"
 	ents, err := os.ReadDir(".")

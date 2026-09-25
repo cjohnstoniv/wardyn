@@ -158,7 +158,7 @@ func TestCeilingGrantsCoveringIsTheIdentityAxis(t *testing.T) {
 	}
 }
 
-// ─── THE TWO DOMINATION AXES A MUTATION COULD DELETE UNSEEN ──────────────────
+// The two domination axes a mutation could delete unseen
 //
 // grantDominatedBy asks three questions, and clampGrants' whole shape turns on
 // the answer: when ONE covering ceiling grant dominates the proposal the clamp

@@ -7,8 +7,6 @@
 // the CURRENT head — the INSERT statement never names those columns and the
 // 0047 BEFORE INSERT trigger overwrites them unconditionally. Guarded by
 // WARDYN_TEST_PG (db.Connect + db.Migrate, the pgHarness convention).
-//
-// Expected result on feat/v0.7-profiles @ fa910735: GREEN (pins the claim).
 package api
 
 import (
@@ -23,9 +21,12 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 )
 
-func TestPG_ProbeF11_SpoolReplayCannotForgeChain(t *testing.T) {
+func TestPG_AuditSpool_ReplayCannotForgeChain(t *testing.T) {
+	// ticket: F11
+	testfloor.Mark(t, "pg")
 	dsn := os.Getenv("WARDYN_TEST_PG")
 	if dsn == "" {
 		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed spool replay probe")

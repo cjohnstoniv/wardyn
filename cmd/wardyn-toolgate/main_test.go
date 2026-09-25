@@ -8,21 +8,45 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-// TestPollFailureDenyMessageNamesTheCause is the half of the fix's pin that
-// compiles unchanged against the pre-fix gate struct (no new field): it only
-// inspects the returned deny message, so red-here is a genuine assertion
-// failure, not a compile error — the sibling test below additionally proves
-// the stderr diagnostic exists, which needs the new field and so cannot
-// compile pre-fix (documented there).
+// TestDeadlineDefaultFromEnv pins RL-1: -deadline's default tracks
+// WARDYN_APPROVAL_EXPIRY_AFTER (dispatch's mirror of the operator's real
+// approval-expiry-after ceiling) instead of a bare 24h literal, so raising
+// the ceiling actually lets a tool call wait the full budget.
+func TestDeadlineDefaultFromEnv(t *testing.T) {
+	t.Run("unset falls back to the 24h default", func(t *testing.T) {
+		t.Setenv("WARDYN_APPROVAL_EXPIRY_AFTER", "")
+		if got := deadlineDefault(); got != defaultDeadline {
+			t.Fatalf("deadlineDefault() = %v, want %v", got, defaultDeadline)
+		}
+	})
+	t.Run("a valid duration overrides it", func(t *testing.T) {
+		t.Setenv("WARDYN_APPROVAL_EXPIRY_AFTER", "72h")
+		if got, want := deadlineDefault(), 72*time.Hour; got != want {
+			t.Fatalf("deadlineDefault() = %v, want %v", got, want)
+		}
+	})
+	t.Run("garbage falls back rather than failing the gate", func(t *testing.T) {
+		t.Setenv("WARDYN_APPROVAL_EXPIRY_AFTER", "not-a-duration")
+		if got := deadlineDefault(); got != defaultDeadline {
+			t.Fatalf("deadlineDefault() = %v, want %v (fallback)", got, defaultDeadline)
+		}
+	})
+}
+
+// TestPollFailureDenyMessageNamesTheCause is the half of the poll-failure
+// pin that needs no new gate field: it only inspects the returned deny
+// message, so on a gate without the diagnostic it fails as an assertion, not
+// a compile error — the sibling test below additionally proves the stderr
+// diagnostic exists, which needs the field.
 //
-// Red-first: pre-fix, every poll failure is silently treated as PENDING, so
-// the loop always exhausts the deadline and returns the generic
-// "approval wait deadline reached" message even though every poll failed —
-// the assertion below fails.
+// If every poll failure is treated as PENDING, the loop exhausts the
+// deadline and returns the generic "approval wait deadline reached" message
+// even though every poll failed, so the assertion below fails.
 func TestPollFailureDenyMessageNamesTheCause(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -48,15 +72,15 @@ func TestPollFailureDenyMessageNamesTheCause(t *testing.T) {
 	}
 }
 
-// TestPollFailuresAreLoggedAndNamedInDenyMessage: every poll
-// error was treated identically to PENDING with no log anywhere (stdout,
-// stderr, or the returned message), so a control-plane outage during the wait
-// parked the agent for the full deadline and then denied it with a message
-// that reads as "no human decided in time" when in fact every poll failed.
+// TestPollFailuresAreLoggedAndNamedInDenyMessage pins that a poll error is
+// never silently treated as PENDING: with no log anywhere (stdout, stderr, or
+// the returned message), a control-plane outage during the wait would park
+// the agent for the full deadline and then deny it with a message that reads
+// as "no human decided in time" when in fact every poll failed.
 //
-// Red-first: against the pre-fix decide() (bare `if err == nil {...}`, no
-// else) stderr stays empty and the deny message is the generic deadline
-// string, so both assertions below fail.
+// If decide() drops the error (a bare `if err == nil {...}` with no else),
+// stderr stays empty and the deny message is the generic deadline string, so
+// both assertions below fail.
 func TestPollFailuresAreLoggedAndNamedInDenyMessage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -90,6 +114,54 @@ func TestPollFailuresAreLoggedAndNamedInDenyMessage(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "consecutive poll failures") {
 		t.Fatalf("deny message does not name the real cause (poll failures), got %q", out.String())
+	}
+}
+
+// TestFinalPollCatchesLateDecision pins RL-1's final-poll fix: the wait loop
+// exits once time.Now() no longer precedes `end`, which — with the loop's own
+// last sleep landing past the deadline — can skip a state check that would
+// have found a decision the operator made just before the deadline. Without
+// one more check after the loop, that call is denied even though it was
+// actually decided in time.
+//
+// Red-first: with -deadline shorter than -poll the loop body runs exactly
+// once (PENDING, first GET) and then exits without ever seeing the second GET
+// (APPROVED) this stub serves — pre-fix that returns the generic deadline
+// deny; the final poll this test pins makes it see APPROVED instead.
+func TestFinalPollCatchesLateDecision(t *testing.T) {
+	var gets int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/wardyn/v1/approvals":
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "11111111-2222-3333-4444-555555555555"})
+		case r.Method == http.MethodGet:
+			gets++
+			state := "PENDING"
+			if gets > 1 {
+				state = "APPROVED"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"state": state})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	// deadline < poll: the wait loop's body runs exactly once (sees PENDING,
+	// then sleeps past the deadline), so only the final poll can see the
+	// second (APPROVED) GET.
+	g := &gate{base: srv.URL, poll: 100 * time.Millisecond, deadline: 20 * time.Millisecond,
+		client: &http.Client{Timeout: 2 * time.Second}}
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Bash","input":{},"tool_use_id":"t"}}}` + "\n")
+	var out strings.Builder
+	if err := g.serve(in, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	// The text content is JSON-stringified inside the JSON-RPC envelope
+	// (permissionResult), so its quotes arrive backslash-escaped — match the
+	// escaped form rather than assume raw JSON.
+	if !strings.Contains(out.String(), `\"behavior\":\"allow\"`) {
+		t.Fatalf("final poll did not see the late APPROVED decision, got %q", out.String())
 	}
 }
 
@@ -202,6 +274,85 @@ func TestUnreachablePlaneDeniesAtDeadline(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `\"behavior\":\"deny\"`) && !strings.Contains(out.String(), `"behavior":"deny"`) {
 		t.Fatalf("want deny from unreachable plane, got %q", out.String())
+	}
+}
+
+// TestDeadlineReachedExpiresTheApprovalRow is #811: a row still PENDING when
+// the gate's own -deadline is reached must not be left that way for the
+// server-side sweep (up to one sweep interval later) to catch up to — the
+// gate tells the control plane itself, the moment it gives up.
+//
+// Red-first: pre-fix, decide() returns straight from the deadline loop with no
+// call to the control plane beyond the polls already asserted above, so no
+// POST .../expire is ever seen.
+func TestDeadlineReachedExpiresTheApprovalRow(t *testing.T) {
+	var expireCalls []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/wardyn/v1/approvals":
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "11111111-2222-3333-4444-555555555555"})
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/wardyn/v1/approvals/"):
+			// Never resolves — the row stays PENDING for the whole wait.
+			_ = json.NewEncoder(w).Encode(map[string]string{"state": "PENDING"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/expire"):
+			mu.Lock()
+			expireCalls = append(expireCalls, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/wardyn/v1/approvals/"), "/expire"))
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	g := &gate{base: srv.URL, poll: 10 * time.Millisecond, deadline: 100 * time.Millisecond,
+		client: &http.Client{Timeout: 2 * time.Second}}
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Bash","input":{},"tool_use_id":"t"}}}` + "\n")
+	var out strings.Builder
+	if err := g.serve(in, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if !strings.Contains(out.String(), "deadline reached") {
+		t.Fatalf("want the deadline-reached deny, got %q", out.String())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(expireCalls) != 1 || expireCalls[0] != "11111111-2222-3333-4444-555555555555" {
+		t.Fatalf("want exactly one expire call for the raised approval, got %v", expireCalls)
+	}
+}
+
+// TestExpireLosingToAnApprovalHonoursIt pins the race #811's expire leaves
+// open: an operator approval that lands between the gate's last PENDING poll
+// and its expire POST wins the CAS, the expire answers the row's final state,
+// and the gate must honour that APPROVED rather than deny a call the console
+// shows as approved.
+func TestExpireLosingToAnApprovalHonoursIt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/wardyn/v1/approvals":
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "11111111-2222-3333-4444-555555555555"})
+		case r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]string{"state": "PENDING"})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/expire"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"state": "APPROVED"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	g := &gate{base: srv.URL, poll: 10 * time.Millisecond, deadline: 50 * time.Millisecond,
+		client: &http.Client{Timeout: 2 * time.Second}}
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"approve","arguments":{"tool_name":"Bash","input":{"command":"ls"},"tool_use_id":"t"}}}` + "\n")
+	var out strings.Builder
+	if err := g.serve(in, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if !strings.Contains(out.String(), `\"behavior\":\"allow\"`) {
+		t.Fatalf("want the approval that won the race honoured, got %q", out.String())
 	}
 }
 

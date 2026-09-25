@@ -10,14 +10,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestScanSummaryFrom_FindingsCappedStillAlerts pins B2 (the fix-up):
-// findings_capped sets Result.Skipped, and scanSummaryFrom used to resolve
-// `case res.Skipped` BEFORE ever reaching the "alert" default — so the
-// decision's Action flipped from "alert" to "skipped" exactly when the scan
-// produced the MOST findings. egress.ScanSummary.Action is the literal
-// audit-action suffix (docs/AUDIT-ACTIONS.md:71: llm.scan.alert vs
-// llm.scan.skipped), so a 500-finding capped body used to audit as
-// llm.scan.skipped instead of llm.scan.alert.
+// TestScanSummaryFrom_FindingsCappedStillAlerts: findings_capped sets
+// Result.Skipped, so scanSummaryFrom must not resolve `case res.Skipped`
+// before reaching the "alert" default — that would flip the decision's Action
+// from "alert" to "skipped" exactly when the scan produced the most findings.
+// egress.ScanSummary.Action is the literal audit-action suffix
+// (docs/AUDIT-ACTIONS.md:71: llm.scan.alert vs llm.scan.skipped), so a
+// 500-finding capped body would audit as llm.scan.skipped instead of
+// llm.scan.alert.
 //
 // A capped scan with findings must still alert; an uncapped scan with the
 // same finding must also alert (baseline); and a finding-free skip (e.g.

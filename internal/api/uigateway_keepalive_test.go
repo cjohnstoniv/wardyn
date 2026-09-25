@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// ─── a relayed WebSocket keeps its run alive ──────────────────────────
+// a relayed WebSocket keeps its run alive
 
 // upgradeBackend is the "sandbox app" half of the relayed-upgrade harness: it
 // answers ONE request with 101 Switching Protocols over a hijacked connection

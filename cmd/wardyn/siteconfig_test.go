@@ -120,7 +120,7 @@ func TestSiteConfigApply_WarnsIntegrationsNotRestored(t *testing.T) {
 // onboarding_completed_at on any install whose operator finished the Getting
 // Started funnel, and `apply` forwards that document VERBATIM — no client-side
 // strip stands between the operator's file and the handler. That is why the
-// server had to stop 400ing it (R3): the fix belongs in the one place
+// server must not 400 it: the tolerance belongs in the one place
 // every consumer routes through, and a strip added here instead would silently
 // re-break the hand-rolled curl and the MDM-delivered
 // /etc/wardyn/site-config.json, which no client of ours touches.

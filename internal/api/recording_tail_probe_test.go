@@ -45,7 +45,8 @@ import (
 
 const probeESC = "\x1b"
 
-func TestProbeF4_BuildMaskingBody_MidEscapeTailReachesStoreVerbatim(t *testing.T) {
+func TestBuildMaskingBody_MidEscapeTailReachesStoreVerbatim(t *testing.T) {
+	// ticket: F4
 	runID := uuid.New()
 	reg := secretmask.NewRegistry()
 	// Long secret => long retained tail (maxLen-1 bytes), so the ESC-terminated
@@ -86,11 +87,12 @@ func TestProbeF4_BuildMaskingBody_MidEscapeTailReachesStoreVerbatim(t *testing.T
 	}
 }
 
-// TestProbeF4_BuildMaskingBody_TailFlushBeforeError pins the ordering the
+// TestBuildMaskingBody_TailFlushBeforeError pins the ordering the
 // handler depends on: when the SOURCE errors (MaxBytesError shape), the
 // retained tail is still flushed first, and the reader sees the error — never a clean EOF
 // that would let a truncated cast be audited as `recording.upload success`.
-func TestProbeF4_BuildMaskingBody_TailFlushBeforeError(t *testing.T) {
+func TestBuildMaskingBody_TailFlushBeforeError(t *testing.T) {
+	// ticket: F4
 	runID := uuid.New()
 	reg := secretmask.NewRegistry()
 	reg.Add(runID, []byte("wardyn-long-secret-value-0123456789abcdef"))
@@ -108,7 +110,8 @@ func TestProbeF4_BuildMaskingBody_TailFlushBeforeError(t *testing.T) {
 	}
 }
 
-func TestProbeF4_SessionRecorder_MidEscapeTailWithheldThenFlushed(t *testing.T) {
+func TestSessionRecorder_MidEscapeTailWithheldThenFlushed(t *testing.T) {
+	// ticket: F4
 	store, err := recording.NewFSStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewFSStore: %v", err)

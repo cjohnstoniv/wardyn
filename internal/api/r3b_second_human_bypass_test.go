@@ -56,7 +56,8 @@ func r3bSecondHumanFixture(t *testing.T) (*harness, *Server, uuid.UUID) {
 //
 // Each arm below is one of those three, and the control is the real break-glass
 // — without it the whole thing passes by never writing the row at all.
-func TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
+func TestSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
+	// ticket: R3B
 	t.Run("control: a real egress break-glass is still recorded", func(t *testing.T) {
 		t.Setenv(envEgressSecondHuman, "1")
 		h, srv, runID := r3bSecondHumanFixture(t)
@@ -117,16 +118,15 @@ func TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
 		}
 	})
 
-	// This subtest used to require ZERO rows here, and the concern behind
-	// that is kept verbatim below: nothing was decided, so no row may CLAIM a
-	// decision. But the bypass itself did happen — the gate was passed, at the
-	// gate, before Decide was ever called — and docs/ENV.md promises the
+	// The concern that nothing was decided, so no row may claim a decision, is
+	// kept verbatim below. But the bypass itself happens — the gate is passed,
+	// at the gate, before Decide is ever called — and docs/ENV.md promises the
 	// operator that each admin-token bypass writes approval.second_human.bypass.
-	// An emit that fired only on success made the count of break-glass uses
-	// depend on whether the store answered, so a caller who never completes a
-	// decision left nothing behind at all. The OUTCOME is what tells the two
-	// apart, which is why the emit stays below Decide rather than moving back
-	// into the gate.
+	// An emit that fired only on success would make the count of break-glass
+	// uses depend on whether the store answered, so a caller who never completes
+	// a decision would leave nothing behind at all. The outcome is what tells
+	// the two apart, which is why the emit stays below Decide rather than in the
+	// gate.
 	for _, tc := range []struct {
 		name      string
 		decideErr error
@@ -152,7 +152,7 @@ func TestR3BSecondHumanBypassIsScopedToDecisionsTheGateGoverns(t *testing.T) {
 					"four-eyes gate, and docs/ENV.md says each one writes a row; a break-glass that leaves nothing "+
 					"behind when the store errors is a hole in the count an operator audits", len(rows))
 			}
-			// THE ORIGINAL ASSERTION, kept exactly: no row may say a four-eyes
+			// The original assertion, kept exactly: no row may say a four-eyes
 			// rule was bypassed on a decision that WAS made, because none was.
 			if rows[0].Outcome == "success" {
 				t.Errorf("the bypass row for a FAILED decision has outcome=success — it names a break-glass on a " +

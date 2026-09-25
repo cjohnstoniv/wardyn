@@ -12,15 +12,15 @@ import (
 )
 
 // TestSubstituteArtifactEgress_LiteralIPToIsPortScoped is the regression.
-// substituteArtifactEgress added the redirect's To as a BARE host, and a bare
-// allowlist entry matches on every port: Policy.AllowsLiteralIP answers true
-// from allowedExact before it ever consults the port-qualified map, so
-// egressTarget trusted (and dialled) the mirror's address on 22, 5432 and every
-// other port the operator never named — inside the private space the
+// substituteArtifactEgress adds the redirect's To port-qualified, because a
+// bare allowlist entry matches on every port: Policy.AllowsLiteralIP answers
+// true from allowedExact before it ever consults the port-qualified map, so
+// egressTarget would trust (and dial) the mirror's address on 22, 5432 and
+// every other port the operator never named — inside the private space the
 // unconditional private-IP guard exists to protect. The MITM/token half of the
-// same redirect has been port-exact since W13-S1-5 (planArtifactRedirect's
-// mitmHosts are net.JoinHostPort(host, redirectPort(r.To))), so the credential
-// was scoped to one port while the SSRF trust was not.
+// same redirect is port-exact too (planArtifactRedirect's mitmHosts are
+// net.JoinHostPort(host, redirectPort(r.To))), so the credential and the SSRF
+// trust are scoped to the same one port.
 func TestSubstituteArtifactEgress_LiteralIPToIsPortScoped(t *testing.T) {
 	sc := types.SiteConfig{EgressRedirects: []types.EgressRedirect{{
 		From: "https://pypi.org/simple/", To: "https://10.40.2.11:8443/pypi/", Ecosystem: "pip",

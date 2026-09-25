@@ -25,8 +25,8 @@
 // access-panel.tsx's withMono helper), not baked into the string itself.
 //
 // Casing rule (§7.2): a {role}/{defaultRole} interpolated INSIDE a sentence is
-// lowercase ("admin"/"security admin"/"member"). PEOPLE.ROLE_ADMIN /
-// ROLE_SECURITY_ADMIN / ROLE_MEMBER below are the ONLY title-case forms — the
+// lowercase ("admin"/"security admin"/"user"). PEOPLE.ROLE_ADMIN /
+// ROLE_SECURITY_ADMIN / ROLE_USER below are the ONLY title-case forms — the
 // chip/label shape — and a sentence takes the chip's LOWERCASE rather than the
 // chip as-is; access-panel.tsx's roleLabelInSentence is the one derivation that
 // owns that lowering (a fourth tier is one case there, not a new rule here).
@@ -34,7 +34,7 @@
 export const PEOPLE = {
   TABLE_TITLE: "Role mappings",
   TABLE_LEAD:
-    "A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or member.",
+    "A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or user.",
   EFFECT_NOTE:
     "Takes effect at next sign-in. A person already signed in keeps the role they were given until then.",
   COL_VALUE: "Value",
@@ -44,16 +44,19 @@ export const PEOPLE = {
   ROLE_ADMIN: "Admin",
   // The 0.7 third tier, frozen in docs/design/governance-prompt.md §7.9 as
   // DIRECTORY.ROLE_SECURITY_ADMIN. It lives HERE, next to ROLE_ADMIN/
-  // ROLE_MEMBER, because §7.9 says so in as many words ("one string for all
+  // ROLE_USER, because §7.9 says so in as many words ("one string for all
   // three" — picker option, table chip, mapped-role label — "next to
-  // PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_MEMBER, which is why it is title case AS
+  // PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_USER, which is why it is title case AS
   // THE CHIP/LABEL FORM"). A sentence takes its lowercase — see the casing
   // rule above.
   // When Phase 6's governance-copy.ts transcribes §7.9's DIRECTORY block for
   // the combobox, it re-exports this constant rather than retyping the
   // string: two homes for one frozen label is how they drift.
   ROLE_SECURITY_ADMIN: "Security admin",
-  ROLE_MEMBER: "Member",
+  ROLE_USER: "User",
+  // The built-in user type's name, for when GET /access carries no list to
+  // read it from. A "user" row's chip shows its type's name (UT-2b).
+  TYPE_STANDARD: "Standard user",
   SOURCE_CHART: "From your chart",
   SOURCE_CONSOLE: "Console",
   CHART_HINT: "Edit in your chart values.",
@@ -165,6 +168,13 @@ export const PREVIEW = {
   RESULT_LEGACY: (role: string) =>
     `Would sign in as ${role} — no mappings are configured; the operator allowlist decides.`,
   RESULT_UNKNOWN: "Couldn't check this against your mappings — try again.",
+  // 0.8 user types (packet A canon): the built-in type lost to a custom one,
+  // two custom types tie, or a mapping names a type that doesn't exist.
+  STANDARD_LOST: (values: string) => `${values} also matched, but Standard user never wins against another type.`,
+  RESULT_TIED: (count: number, pairs: string, priority: number) =>
+    `${count === 2 ? "Two" : count} types tie. ${pairs} ${count === 2 ? "both" : "all"} match at priority ${priority}, so this sign-in would be refused. Give one a higher priority.`,
+  RESULT_TYPE_MISSING: (ids: string) =>
+    `Would be denied at sign-in — ${ids} isn't a user type that exists. Create it, or change the mapping that names it.`,
 } as const;
 
 export const ACCESS_STATE = {

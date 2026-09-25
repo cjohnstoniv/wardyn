@@ -252,10 +252,10 @@ func TestPATBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
 	}
 }
 
-// the smart-HTTP verb check reads the DECODED path, so a '#' (%23) or '?'
-// (%3F) inside the sandbox-supplied rest used to satisfy the "/info/refs" suffix
-// and then re-split the concatenated upstream URL — the brokered PAT delivered
-// to an arbitrary path on the granted forge (the forge's REST API included),
+// The smart-HTTP verb check reads the decoded path, so a '#' (%23) or '?' (%3F)
+// inside the sandbox-supplied rest must not satisfy the "/info/refs" suffix and
+// then re-split the concatenated upstream URL — that would deliver the brokered
+// PAT to an arbitrary path on the granted forge (the forge's REST API included),
 // which is exactly what handlePATBroker's own comment forbids and what the
 // GitHub-lane sibling prevents by building the URL from validated pieces.
 //
@@ -364,15 +364,13 @@ func newPATApprovalUpstream(t *testing.T, token string, approvalID uuid.UUID, ap
 	return u
 }
 
-// ONE clone is ONE mint on the git_pat lane too.
+// One clone is one mint on the git_pat lane too.
 //
-// patToken used to call the control-plane mint route on every sub-request, and
-// a clone is two of them (GET info/refs, then POST git-upload-pack). An
-// approval-gated git_pat grant is SINGLE-USE, so the second mint 409s
-// ErrAlreadyMinted and the clone dies half-way — the default posture
-// (WARDYN_GIT_PAT_BROKER=on) for every ADO/GitLab run. The GitHub lane has
-// carried the per-grant cache + single-flight for exactly this reason since it
-// shipped; this pins that the sibling lane now shares it.
+// A clone is two sub-requests (GET info/refs, then POST git-upload-pack), and
+// an approval-gated git_pat grant is single-use, so minting per sub-request
+// would 409 the second mint ErrAlreadyMinted and kill the clone half-way —
+// the default posture (WARDYN_GIT_PAT_BROKER=on) for every ADO/GitLab run.
+// patToken shares the GitHub lane's per-grant cache + single-flight.
 func TestPATBrokerCachesTheMintAcrossOneClone(t *testing.T) {
 	up := newPATBrokerUpstream(t, "T", "oauth2")
 	p, _ := newPATBrokerProxy(t,
@@ -396,16 +394,16 @@ func TestPATBrokerCachesTheMintAcrossOneClone(t *testing.T) {
 	}
 }
 
-// TestPATBrokerCachesAShortTTLMintAcrossOneClone is the same contract for the
-// grant shape the cache used to fail on outright (the fix-up).
+// TestPATBrokerCachesAShortTTLMintAcrossOneClone is the same contract for a
+// short-TTL grant.
 //
-// The freshness margin was injectRefreshMargin (5m), sized for a rotating
-// INJECTED credential. A git_pat grant states a real expiry and an operator may
-// author ttl_seconds as low as they like, so any grant with ttl <= 5m was born
-// INSIDE the margin: `time.Now().Before(exp - 5m)` was false on the very next
-// sub-request, the second half of one clone re-minted, and a single-use grant
-// 409'd ErrAlreadyMinted. Two mints for one clone is exactly the failure this
-// lane's cache exists to prevent.
+// A git_pat grant states a real expiry and an operator may author ttl_seconds
+// as low as they like, so a freshness margin of injectRefreshMargin (5m) —
+// sized for a rotating injected credential — would leave any grant with ttl <=
+// 5m born inside the margin: `time.Now().Before(exp - 5m)` would be false on
+// the very next sub-request, the second half of one clone would re-mint, and a
+// single-use grant would 409 ErrAlreadyMinted. Two mints for one clone is
+// exactly the failure this lane's cache exists to prevent.
 func TestPATBrokerCachesAShortTTLMintAcrossOneClone(t *testing.T) {
 	for _, ttl := range []time.Duration{2 * time.Minute, 45 * time.Second, time.Hour} {
 		t.Run(ttl.String(), func(t *testing.T) {
@@ -438,7 +436,7 @@ func TestPATBrokerCachesAShortTTLMintAcrossOneClone(t *testing.T) {
 // a PENDING credential approval must be waited out, not returned as a 502.
 //
 // The broker mints server-side with no caller able to retry, so the GitHub lane
-// polls the same approval itself (W23-S1-1 / W19-W19a-1). patToken returned an
+// polls the same approval itself. patToken returned an
 // error on any non-200, which made the FIRST clone against an approval-gated
 // git_pat grant fail before a human could possibly have approved it.
 func TestPATBrokerWaitsOutAPendingApproval(t *testing.T) {

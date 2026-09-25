@@ -39,7 +39,8 @@ func r3bTruncatedServer(t *testing.T, truncated bool) *client.Client {
 // one — the CLI printed it with exit 0, nothing on stderr and no marker in
 // --json. Every list family now has a *Page variant returning the bool, and the
 // plain forms stay as thin wrappers so existing callers are unchanged.
-func TestR3BListFamiliesSurfaceTruncation(t *testing.T) {
+func TestListFamiliesSurfaceTruncation(t *testing.T) {
+	// ticket: R3B
 	ctx := context.Background()
 
 	for _, tc := range []struct {

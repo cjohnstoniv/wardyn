@@ -364,9 +364,10 @@ func withRawHeader(r Request, key, value string) Request {
 	return r
 }
 
-// F6 — git-over-HTTP. Both verbs used to answer CapUnclassifiedWrite, so a
-// consumer could not tell a clone from a push. The transport is OUT OF SCOPE
-// for this catalogue and is now refused by name, which a consumer can act on.
+// Git-over-HTTP. The transport is out of scope for this catalogue and is
+// refused by name, which a consumer can act on; answering
+// CapUnclassifiedWrite for both verbs would leave a consumer unable to tell a
+// clone from a push.
 func TestGitOverHTTPIsOutOfScope(t *testing.T) {
 	runCases(t, []caseT{
 		{name: "a push", req: adoReq(http.MethodPost, "/acme/proj/_git/repo/git-receive-pack", "PACK"), wantErr: true},
@@ -404,5 +405,42 @@ func TestBatchOperationURIShapes(t *testing.T) {
 		{name: "an encoded dot segment", req: batch("/proj/%2e%2e/evil/_apis/wit/workitems/1"), wantErr: true},
 		{name: "a dot segment walking out of the work-item area", req: batch("/proj/_apis/wit/../hooks/subscriptions"), wantErr: true},
 		{name: "an absolute URI", req: batch("https://dev.azure.com/evil/_apis/wit/workitems/1"), wantErr: true},
+	})
+}
+
+// Edge whitespace and trailing dots. The service trims a segment's trailing
+// spaces and dots before routing it — Windows path canonicalisation — so ".. "
+// is ".." to Azure DevOps and "hooks." is "hooks". The dot-segment refusal
+// compared the untrimmed text and missed both. Each spelling has its encoded
+// and backslash twins.
+func TestEvasionEdgeWhitespaceAndDots(t *testing.T) {
+	runCases(t, []caseT{
+		{name: "a trailing space after ..", req: adoReq(http.MethodPost, "/acme/_apis/wit/.. /hooks/subscriptions", `{}`), wantErr: true},
+		{name: "an encoded trailing space after ..", req: adoReq(http.MethodGet, "/acme/_apis/git/..%20/tokens/pats", ""), wantErr: true},
+		{name: "a leading space before ..", req: adoReq(http.MethodGet, "/acme/%20../evil/_apis/projects", ""), wantErr: true},
+		{name: "a trailing space after .", req: adoReq(http.MethodGet, "/acme/. /_apis/tokens/pats", ""), wantErr: true},
+		{name: "a trailing tab after ..", req: adoReq(http.MethodPost, "/acme/_apis/wit/..%09/hooks/subscriptions", `{}`), wantErr: true},
+		{name: "a double-encoded trailing space", req: adoReq(http.MethodPost, "/acme/_apis/wit/..%2520/hooks/subscriptions", `{}`), wantErr: true},
+		{name: "the backslash twin", req: adoReq(http.MethodPost, `/acme/_apis/wit\.. \hooks/subscriptions`, `{}`), wantErr: true},
+		{name: "a trailing dot on a denied area", req: adoReq(http.MethodPost, "/acme/_apis/hooks./subscriptions", `{}`), wantErr: true},
+		{name: "a trailing dot on the token area", req: adoReq(http.MethodGet, "/acme/_apis/tokens./pats", ""), wantErr: true},
+		{name: "three dots", req: adoReq(http.MethodGet, "/acme/proj/.../evil/_apis/projects", ""), wantErr: true},
+		{name: "a trailing space on the organisation", req: adoReq(http.MethodGet, "/acme%20/_apis/projects", ""), wantErr: true},
+		{
+			name:    "a $batch operation walking out through a trailing space",
+			req:     adoReq(http.MethodPost, "/acme/_apis/wit/$batch", `[{"uri":"/_apis/wit/..%20/hooks/subscriptions"}]`),
+			wantErr: true,
+		},
+		// Internal spaces and dots are ordinary name content.
+		{name: "a project name with an internal space", req: adoReq(http.MethodGet, "/acme/My%20Project/_apis/git/repositories", ""), want: CapRead},
+		{
+			name: "a package file with internal dots",
+			req: func() Request {
+				r := adoReq(http.MethodGet, "/acme/_apis/packaging/feeds/f1/npm/p/-/p-1.0.0.tgz", "")
+				r.Host = "pkgs.dev.azure.com"
+				return r
+			}(),
+			want: CapRead,
+		},
 	})
 }

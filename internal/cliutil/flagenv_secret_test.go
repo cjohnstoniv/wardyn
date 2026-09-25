@@ -9,14 +9,14 @@ import (
 	"testing"
 )
 
-// TestFlagEnv_SecretNeverPrintedInUsage is the regression. FlagEnv seeded
-// the flag's DEFAULT from the env var, flag.String captures that as
-// Flag.DefValue, and PrintDefaults renders a non-empty string default as
-// `(default "…")` — printed for -help AND for EVERY parse error, since
-// flag.CommandLine is ExitOnError. One typo'd flag in a compose command, a
-// systemd unit or a Helm args list therefore wrote WARDYN_ADMIN_TOKEN,
-// WARDYN_AGE_KEY (the secret store's master identity),
-// WARDYN_OIDC_CLIENT_SECRET or WARDYN_GROUNDTRUTH_TOKEN verbatim to stderr.
+// TestFlagEnv_SecretNeverPrintedInUsage: if FlagEnv seeded the flag's default
+// from the env var, flag.String would capture that as Flag.DefValue, and
+// PrintDefaults renders a non-empty string default as `(default "…")` —
+// printed for -help and for every parse error, since flag.CommandLine is
+// ExitOnError. One typo'd flag in a compose command, a systemd unit or a Helm
+// args list would then write WARDYN_ADMIN_TOKEN, WARDYN_AGE_KEY (the secret
+// store's master identity), WARDYN_OIDC_CLIENT_SECRET or
+// WARDYN_GROUNDTRUTH_TOKEN verbatim to stderr.
 func TestFlagEnv_SecretNeverPrintedInUsage(t *testing.T) {
 	const secret = "AGE-SECRET-KEY-1QQQQNOTREALBUTSTILLSECRET"
 	out := resetFlags(t)

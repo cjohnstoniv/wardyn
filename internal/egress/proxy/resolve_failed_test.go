@@ -3,19 +3,20 @@
 
 package proxy
 
-// a name the proxy could not RESOLVE is not a private-address block.
+// A name the proxy could not resolve is not a private-address block.
 //
-// evaluate() used to throw egressTarget's error away and stamp every
-// post-resolution denial "builtin:private-ip", so a resolver outage, an
-// NXDOMAIN and a zero-answer lookup all arrived in the decision stream as the
-// SSRF guard — with literalIPDenialDetail's "declare it under internal_hosts"
-// advice attached. That advice cannot fix a DNS fault, and it points an
-// operator at loosening an SSRF control in response to one.
+// evaluate() keeps egressTarget's error: stamping every post-resolution
+// denial "builtin:private-ip" would make a resolver outage, an NXDOMAIN and a
+// zero-answer lookup all arrive in the decision stream as the SSRF guard —
+// with literalIPDenialDetail's "declare it under internal_hosts" advice
+// attached. That advice cannot fix a DNS fault, and it points an operator at
+// loosening an SSRF control in response to one.
 //
-// These pins hold both halves: the three resolver outcomes audit as themselves
-// (still DENIED — fail closed is unchanged, only the attribution moved), and a
-// host that really does resolve into private space still audits
-// builtin:private-ip with the site-config advice that actually fixes it.
+// These pins hold both halves: the three resolver outcomes audit as
+// themselves (still denied — fail closed either way, only the attribution
+// differs), and a host that really does resolve into private space still
+// audits builtin:private-ip with the site-config advice that actually fixes
+// it.
 
 import (
 	"errors"
@@ -100,7 +101,7 @@ func TestResolveFailure_AuditedAsResolveFailed_NotPrivateIP(t *testing.T) {
 	})
 }
 
-// TestResolvedPrivateAddress_StillAuditedAsPrivateIP is the regression the
+// TestResolvedPrivateAddress_StillAuditedAsPrivateIP is the case the
 // split must not cause: a name that DOES resolve, into private space, is still
 // the address-range guard — same rule_source, same site-config advice.
 func TestResolvedPrivateAddress_StillAuditedAsPrivateIP(t *testing.T) {

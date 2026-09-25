@@ -154,7 +154,7 @@ func TestRevokeSessions_AdminRevokesAll(t *testing.T) {
 
 func TestRevokeSessions_MemberForbidden(t *testing.T) {
 	srv, fake := sessionsTestServer(t)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", member, `{"sub":"alice@corp.example"}`)
 	if w.Code != http.StatusForbidden {
@@ -237,18 +237,18 @@ func TestRevokeSessions_AuditEmitted(t *testing.T) {
 	}
 }
 
-// ─── the SEC-over-SUPER direction (Requirement 3) ────────────────────────────
+// the SEC-over-SUPER direction (Requirement 3)
 
 // TestSecurityAdminRevokesSuperAdmin pins the answer to "may a security_admin
 // revoke a SUPER admin's sessions and tokens". YES — deliberately, and this
 // test is what makes that a decision rather than an accident.
 //
-// It was previously unpinned in BOTH directions: TestSecurityAdminRouteTier
-// (authz_test.go) probes this route with bodyFor("POST") == "{}", which 400s in
-// handleRevokeSessions' default arm before any target is named, so it proves
-// only that the router gate admits a security_admin. Every test in this file
-// used an ADMIN caller. Nothing anywhere named a super admin as the TARGET, so
-// adding a target-role guard would have reddened nothing.
+// TestSecurityAdminRouteTier (authz_test.go) probes this route with
+// bodyFor("POST") == "{}", which 400s in handleRevokeSessions' default arm
+// before any target is named, so it proves only that the router gate admits a
+// security_admin, and the other tests in this file use an admin caller. This
+// one names a super admin as the target, so adding a target-role guard reds
+// here.
 //
 // The reasoning is on handleRevokeSessions; the short form is that revocation
 // only ever SUBTRACTS reach, incident response is this tier's job, and it is
@@ -326,7 +326,7 @@ func TestSecurityAdminRevokesSuperAdmin(t *testing.T) {
 	// so this test cannot be read as "the route is simply open".
 	t.Run("a member is still refused", func(t *testing.T) {
 		srv, fake, _ := sessionsTestServerWithTokens(t, nil)
-		member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+		member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 		if w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", member, `{"sub":"`+superSub+`"}`); w.Code != http.StatusForbidden {
 			t.Errorf("member: status = %d, want 403", w.Code)
 		}
@@ -336,22 +336,21 @@ func TestSecurityAdminRevokesSuperAdmin(t *testing.T) {
 	})
 }
 
-// ─── an email names the same human as their sub ───────────────────────
+// an email names the same human as their sub
 
 // TestRevokeSessions_EmailFormRevokesTheSameHuman: "revoke a human now" is the
-// time-critical half of incident response, and it used to be keyed on the OIDC
-// sub ALONE while both the CLI flag help and OPERATIONS.md advertised
-// "sub/email". On any IdP where the two differ — Entra, whose sub is an opaque
-// per-app identifier, the shape the SSO work targets — naming the email stamped
-// a cutoff that matched nobody and swept no tokens, and the responder's only
-// feedback was 204 plus an append-only outcome=success row.
+// time-critical half of incident response, and both the CLI flag help and
+// OPERATIONS.md advertise "sub/email". On any IdP where the two differ — Entra,
+// whose sub is an opaque per-app identifier, the shape the SSO work targets —
+// keying on the OIDC sub alone would stamp a cutoff for the email that matches
+// nobody and sweeps no tokens, and the responder's only feedback would be 204
+// plus an append-only outcome=success row.
 //
 // Both halves of one revoke have to agree about who was named, so both are
 // asserted here: the cutoff key AND the token sweep.
 //
 // Counterfactual: drop the email fallback in revokeAPITokensFor and the token
-// assertion fails while the cutoff one still passes — which is exactly how this
-// shipped half-working.
+// assertion fails while the cutoff one still passes — a half-working revoke.
 func TestRevokeSessions_EmailFormRevokesTheSameHuman(t *testing.T) {
 	const (
 		aliceSub   = "sub-alice-opaque-entra-identifier"

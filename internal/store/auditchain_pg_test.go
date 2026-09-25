@@ -23,8 +23,8 @@ import (
 // appendChained inserts one audit event through the real path and returns it
 // with the hashes Postgres computed. Data deliberately carries out-of-order
 // keys: jsonb re-sorts them on the way in, so hashing the caller's bytes
-// instead of the stored jsonb would make every row fail verification — this is
-// the regression that catches it.
+// instead of the stored jsonb would make every row fail verification, and this
+// catches it.
 func appendChained(t *testing.T, pool *pgxpool.Pool, actor string) types.AuditEvent {
 	t.Helper()
 	ev := types.AuditEvent{
@@ -163,9 +163,9 @@ func TestPG_AuditChain_DetectsTamperedMiddleRow(t *testing.T) {
 		if _, err := pool.Exec(ctx,
 			`ALTER TABLE audit_events DISABLE TRIGGER audit_events_no_update`); err != nil {
 			// The last self-skip in this package the skip floor cannot see:
-			// this test's name does not match /^TestPG_ProbeF11_/, so a lane
-			// that CAN own the table and silently stopped tampering would still
-			// report `ok`. Routed through the same derived discipline.
+			// this test never calls testfloor.Mark, so a lane that CAN own the
+			// table and silently stopped tampering would still report `ok`.
+			// Routed through the same derived discipline.
 			storeSkipOrFatal(t, pool, "cannot disable the append-only trigger as this role (%v); "+
 				"the tamper case needs table ownership", err)
 		}

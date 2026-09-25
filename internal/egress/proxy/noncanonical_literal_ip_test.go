@@ -47,14 +47,14 @@ func upstreamAllowAllProxy(t *testing.T) *Proxy {
 // `is` column carries the pairing so the claim cannot drift). net.ParseIP is
 // also nil for a ZONE-SUFFIXED IPv6 literal (fe80::1%eth0, and the RFC 6874
 // authority spelling fe80::1%25eth0) that netip.ParseAddr parses and net.Dial
-// dials. Every one of those spellings used to walk past step 0 as an ordinary
-// "hostname" and be handed to the operator's proxy verbatim.
+// dials. Every one of those spellings must be denied at step 0, not walk past
+// it as an ordinary "hostname" and be handed to the operator's proxy verbatim.
 func TestNonCanonicalLiteralIPIsDeniedLikeItsCanonicalSpelling(t *testing.T) {
 	p := upstreamAllowAllProxy(t)
 
-	// is = the address the spelling actually names to the thing that dials, so
-	// a wrong pairing (the "0251.0376.0.1 is 127.0.0.1" the docs used to claim)
-	// fails here rather than living on in a comment.
+	// is = the address the spelling actually names to the thing that dials, so a
+	// wrong pairing (such as "0251.0376.0.1 is 127.0.0.1") fails here rather
+	// than living on in a comment.
 	blocked := []struct{ host, is, why string }{
 		{"127.1", "127.0.0.1", "dotted-double loopback"},
 		{"127.0.1", "127.0.0.1", "dotted-triple loopback"},
@@ -65,8 +65,8 @@ func TestNonCanonicalLiteralIPIsDeniedLikeItsCanonicalSpelling(t *testing.T) {
 		{"2852039166", "169.254.169.254", "bare 32-bit cloud metadata"},
 		{"0xa000001", "10.0.0.1", "hexadecimal RFC1918"},
 		{"167772161", "10.0.0.1", "bare 32-bit RFC1918"},
-		// The second axis: net.ParseIP is nil for a zoned IPv6 literal, so the
-		// zone id alone used to decide allow-vs-deny for the SAME address.
+		// Second axis: net.ParseIP is nil for a zoned IPv6 literal, so the zone
+		// id alone must not decide allow-vs-deny for the same address.
 		{"fe80::1%eth0", "fe80::1", "zone-suffixed IPv6 link-local"},
 		{"fe80::1%25eth0", "fe80::1", "percent-encoded zone (RFC 6874 authority form)"},
 		{"ff02::1%eth0", "ff02::1", "zone-suffixed IPv6 multicast"},
