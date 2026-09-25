@@ -191,7 +191,7 @@ export interface AgentRun {
   lost_at?: string;
   lost_reason?: "ended" | "reboot" | "outage";
   // When the re-clamp of a tightened profile last moved this run's end
-  // (migration 0087, #573): the run page's "Your admin shortened the limit"
+  // (migration 0085, #573): the run page's "Your admin shortened the limit"
   // banner. Cleared when a person moves the end again.
   end_tightened_at?: string;
   // internal/types/types.go's AgentRun.ModelProviderID (migration 0076, #527) —
