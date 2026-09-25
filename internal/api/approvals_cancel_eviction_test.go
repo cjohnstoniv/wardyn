@@ -142,7 +142,7 @@ func (a evictionApprovals) List(ctx context.Context, state types.ApprovalState) 
 	return a.st.ListApprovals(ctx, state)
 }
 
-func (a evictionApprovals) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
+func (a evictionApprovals) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	return approval.CancelForRun(ctx, a.st, runID, reason)
 }
 
@@ -198,11 +198,12 @@ func TestEvictedSandbox_CancelsAHeldCredentialReauthAndShutsTheInternalDoor(t *t
 	}}
 
 	// The held sign-in request: raised while the run was RUNNING, still PENDING
-	// when the node evicted the pod.
+	// when the node evicted the pod. The scope is the AWS raise's own shape
+	// (holdOrRefuseCredentialReauth), which is what the metric counts (#151).
 	apID := uuid.New()
 	if _, err := approvals.Request(context.Background(), types.ApprovalRequest{
 		ID: apID, RunID: runID, Kind: types.ApprovalCredentialReauth,
-		RequestedScope: json.RawMessage(`{"provider":"aws_sso","owner":"alice@example.com"}`),
+		RequestedScope: json.RawMessage(`{"mechanism":"bedrock_sso","credential_source":"per_user","owner":"alice@example.com"}`),
 		RequestedAt:    time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("seed the held re-auth request: %v", err)

@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -1959,10 +1960,10 @@ func (a *authzApprovals) List(_ context.Context, state types.ApprovalState) ([]t
 	return out, nil
 }
 
-func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (int, error) {
+func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	n := 0
+	byKind := map[string]int{}
 	for id, ap := range a.byID {
 		if ap.RunID != runID || ap.State != types.ApprovalPending {
 			continue
@@ -1970,9 +1971,9 @@ func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason
 		ap.State = types.ApprovalCancelled
 		ap.DecidedBy, ap.Reason = "system", reason
 		a.byID[id] = ap
-		n++
+		byKind[approval.TallyKey(ap)]++
 	}
-	return n, nil
+	return byKind, nil
 }
 
 func (a *authzApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string) error {

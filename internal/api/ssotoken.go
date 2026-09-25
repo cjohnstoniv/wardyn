@@ -7,8 +7,12 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -290,6 +294,63 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		s.resolvePendingReauth(r.Context(), scope, claims.Sub, live)
 	}
 	w.WriteHeader(http.StatusNoContent)
+	s.killSignInRunAfterCapture(r.Context(), claims.RunID, scope.owner)
+}
+
+// signInCaptureKillGrace is how long a sign-in sandbox outlives its stored
+// capture: long enough for the helper to receive its 204 and print the DONE
+// line the console corroborates (signin-pane.sh) before the sandbox goes.
+const signInCaptureKillGrace = 30 * time.Second
+
+// killSignInRunAfterCapture is #151's server belt: a sign-in run whose capture
+// was just STORED ends on the server, so a closed console tab (or a pane mount
+// that never kills) no longer leaves the sandbox running to its idle cap. Only
+// the success path reaches it — every refusal and a failed store return first.
+//
+// The whole wait is tracked by goBackground and selects on the grace and
+// BaseCtx (cancelled on shutdown before WaitBackground), so an orderly stop
+// neither waits out the grace nor adds to a WaitGroup already being waited
+// on. A shutdown inside the grace skips the kill; the run's idle cap and
+// ReconcileOnBoot still end it. The run is re-read after the grace: the
+// console's own killRun or the banner door may have ended it already, and a
+// terminal run is left alone (a re-kill would re-run the teardown and write a
+// second run.kill row). A lost CAS is not an error. Detached and panic-safe,
+// the same idiom as supersedeOneLoginRun.
+func (s *Server) killSignInRunAfterCapture(ctx context.Context, runID uuid.UUID, owner string) {
+	detached := context.WithoutCancel(ctx)
+	grace := s.signInCaptureKillGrace
+	s.goBackground(func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.ErrorContext(detached, "wardynd: post-capture sign-in kill panicked",
+					slog.String("run_id", runID.String()), slog.Any("panic", rec))
+			}
+		}()
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-s.cfg.BaseCtx.Done():
+			return
+		}
+		readCtx, cancel := context.WithTimeout(detached, killCascadeTimeout)
+		run, err := s.cfg.Store.GetRun(readCtx, runID)
+		cancel()
+		if err != nil {
+			slog.WarnContext(detached, "wardynd: could not read a captured sign-in run to end it",
+				slog.String("run_id", runID.String()), slog.Any("error", err))
+			return
+		}
+		if isTerminalRunState(run.State) {
+			return
+		}
+		_, killData, kerr := s.killRunCascade(detached, run, types.ActorSystem, "wardynd",
+			map[string]any{"reason": signInCapturedReason, "captured_for": owner})
+		if kerr != nil || len(killData) > 0 {
+			slog.WarnContext(detached, "wardynd: captured sign-in sandbox was not fully torn down",
+				slog.String("run_id", runID.String()), slog.Any("error", kerr), slog.Any("errors", killData))
+		}
+	})
 }
 
 // bindSSOBlob binds WHAT is uploaded to what the operator asked for, and is the
