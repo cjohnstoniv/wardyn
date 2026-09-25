@@ -530,7 +530,7 @@ func parseBootFlags() *bootFlags {
 		migrateSecrets: flag.Bool("migrate-secrets", false, "MAINTENANCE MODE, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit. Idempotent and resumable. See docs/OPERATIONS.md"),
 		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
 		reconcile:      flag.Bool("reconcile", false, "MAINTENANCE MODE: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit (non-zero on any). Deletes nothing"),
-		rewrap:         flag.Bool("rewrap", false, "MAINTENANCE MODE: rewrap every stored secret's data key onto the key a write uses today — the local key of its purpose (after an upgrade, or after setting WARDYN_PLATFORM_KEY_FILE), or the key service WARDYN_KEK selects at its latest version, or back to the local key — in ONE transaction, then exit. The sealed values are never decrypted. See docs/OPERATIONS.md"),
+		rewrap:         flag.Bool("rewrap", false, "MAINTENANCE MODE: rewrap every stored secret's data key onto the key a write uses today (its purpose's local key, or the WARDYN_KEK=transit key at its latest version) in ONE transaction, then exit. Values are never decrypted. See docs/OPERATIONS.md"),
 		vault:          registerVaultFlags(),
 		azure:          registerAzureFlags(),
 
