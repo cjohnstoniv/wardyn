@@ -148,7 +148,7 @@ func TestProviderBedrockDispatch(t *testing.T) {
 			t.Errorf("the operator's ~/.claude mount survived: %+v", policy.WorkspaceMounts)
 		}
 		reasons := strings.Join(auditReasons(t, h.srv, "run.injection.dropped"), ",")
-		for _, r := range []string{"provider_key_not_dispatch_authored", "not_the_chosen_provider"} {
+		for _, r := range []string{"model_credential_not_provider_authored"} {
 			if !strings.Contains(reasons, r) {
 				t.Errorf("dropped reasons %q lack %s", reasons, r)
 			}
@@ -214,11 +214,11 @@ func TestProviderBedrockDispatch(t *testing.T) {
 		{"bearer: the owner has no key, though the operator does", brBearerProvider(),
 			func(_ *subStore, sec *memSecrets, p types.ModelProvider) {
 				_ = sec.For(subOwner).Delete(context.Background(), providerSecretName(p.UID, providerKeyPart))
-			}, fmt.Sprintf(mpRunRefusal, "bedrock-key", mpBRNoKey, mpRunRemedySignIn)},
+			}, fmt.Sprintf(mpRunRefusal, "bedrock-key", mpRunNoKey, mpRunRemedySignIn)},
 		{"bearer: the owner's key is blank", brBearerProvider(),
 			func(_ *subStore, sec *memSecrets, p types.ModelProvider) {
 				_ = sec.For(subOwner).Put(context.Background(), providerSecretName(p.UID, providerKeyPart), []byte("  "))
-			}, fmt.Sprintf(mpRunRefusal, "bedrock-key", mpBRNoKey, mpRunRemedySignIn)},
+			}, fmt.Sprintf(mpRunRefusal, "bedrock-key", mpRunNoKey, mpRunRemedySignIn)},
 		{"sso: the owner is not signed in, though the operator is", brSSOProvider(),
 			func(_ *subStore, sec *memSecrets, p types.ModelProvider) {
 				_ = sec.For(subOwner).Delete(context.Background(), providerSecretName(p.UID, providerSSOPart))
@@ -457,7 +457,7 @@ func TestProviderBedrockCreate(t *testing.T) {
 		wantBody string
 	}{
 		{"bearer, no key of their own", brBearerProvider(), false, http.StatusUnprocessableEntity,
-			fmt.Sprintf(mpRunRefusal, "bedrock-key", mpBRNoKey, mpRunRemedySignIn)},
+			fmt.Sprintf(mpRunRefusal, "bedrock-key", mpRunNoKey, mpRunRemedySignIn)},
 		{"sso, not signed in", brSSOProvider(), false, http.StatusUnprocessableEntity,
 			fmt.Sprintf(mpRunRefusal, "bedrock-prod", mpBRNotSignedIn, mpRunRemedySignIn)},
 		{"bearer, their own key", brBearerProvider(), true, http.StatusCreated, ""},

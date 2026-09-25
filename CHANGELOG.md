@@ -422,6 +422,35 @@ and does not yet follow semantic versioning (interfaces are not stable).
   pin is not exempt. A run launched on a workspace by id (`workspace_id`, the CLI's `--workspace`)
   chooses like any other.
 
+- **Key and endpoint providers dispatch from the run owner's own credential (#528).** A run that
+  chose an Anthropic key, OpenAI key or custom endpoint provider launches: dispatch re-reads the
+  provider and authors one grant, the owner's own `wardyn-provider-<uid>-key` on the provider's
+  host (the vendor's, or its route-through or endpoint address, exactly allowlisted), and hands the
+  sidecar that run's own upstream (`BaseURL`+`Path` for the harness's dialect) instead of the boot
+  gateways. The injection sink resolves the key only from a grant recording the run's own subject,
+  and only from that namespace. Create, Review and dispatch refuse, naming the provider, when the
+  caller's own key or token is not stored, and dispatch also when the provider is gone, off or no
+  longer serves the agent. A dispatch that cannot read the site config refuses every model run, as
+  create does, whether or not it chose a provider: it cannot tell whether a block governs the run,
+  and the legacy lanes serve the operator's credentials. Once a provider block is set, a model run
+  never reaches the legacy lanes: no AI integration folds (`integration_id` is refused), no
+  declared-mechanism check, no managed or host-mounted subscription, and every other model
+  credential in its policy is dropped and audited; a run no provider serves launches with no model
+  credential and says so. Record sessions choose a provider the same way.
+
+- **Model-provider refusals and audit rows name the provider and its kind (#532).** The create and
+  Review 422 for a model-provider refusal (`enforceRunModelProvider`) now carries `provider` and
+  `kind` in the wire body whenever it names a provider, so the console can open that provider's own
+  door instead of guessing from the roster. Only a credential refusal (your own key or token is not
+  stored) also carries `reason: "model_credential"`, the class the console answers with a sign-in
+  and a relaunch; a provider that is turned off or not available to the agent carries none. The
+  `run.create` failure row dispatch writes for a model-provider refusal gains the same `kind`, the
+  legacy `mechanism` field written as that kind, and on a credential refusal the same `reason`, so
+  the console's audit reader grades that ending as a credential one (it reads `mechanism` only on
+  such a row, until MP-24 moves it off that key). When
+  the site config itself cannot be read, the create door's bare 500 (`get site config`) becomes
+  dispatch's 503 and sentence, so both doors now refuse the same way.
+
 - **A run on a Claude subscription model provider uses its owner's own sign-in (#529).** A run
   that chose an `anthropic_subscription` provider is dispatched on that provider alone: the run
   owner's own Claude sign-in (`wardyn-provider-<uid>-oauth`, read strictly from their own
@@ -436,7 +465,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The injection sink re-reads the provider by UID on every resolve and serves only the run token's
   own subject, the provider's own host, and a run still on that provider. A stored, inline or
   recorded grant naming a sign-in sentinel is dropped at dispatch (`run.injection.dropped`, reason
-  `provider_signin_not_dispatch_authored`), and Record Mode leaves one out of a profile. Nobody can
+  `model_credential_not_provider_authored`), and Record Mode leaves one out of a profile. Nobody can
   sign in to a provider yet (#533), so until then such runs are refused at create.
 - **A run on a Bedrock model provider uses its owner's own AWS credential (#530).** A run that
   chose a `bedrock_sso` or `bedrock_bearer` provider reaches Bedrock with the region, model and
@@ -445,7 +474,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   strictly from their own namespace. The kind names the one lane: the operator's bearer, captured
   session, host `~/.aws` mount and static SigV4 keys never credential it, and every other model
   injection the run carries (the legacy sentinels, anything bound for `api.anthropic.com`) is
-  dropped (`run.injection.dropped`, reason `not_the_chosen_provider`). An AWS sign-in must match
+  dropped (`run.injection.dropped`, reason `model_credential_not_provider_authored`). An AWS sign-in must match
   the provider's access portal and, when set, its pinned account and role. Create, Review and
   dispatch refuse, naming the provider, a run whose owner has not added their key or is not signed
   in to AWS for it. The injection sinks re-read the provider on every resolve and serve only the
@@ -635,6 +664,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **The injection sink trusts the model provider record, never the grant (#531).** Each resolve of
+  a person's provider key re-reads the run's provider by UID and injects only while it is still
+  that run's choice, on, serving the agent, with the same host, header and format the grant
+  carries; the key is read from the namespace the grant snapshots. A resolved key now expires
+  after 15 minutes, so the proxy re-checks about every 10 minutes while the run makes model calls
+  (each re-check re-mints the grant: one `credential.mint` and one `secret.read` audit row), and a
+  provider removed, turned off or re-pointed mid-run fails closed within that window rather than
+  keep its startup copy. Once a provider block is set, or when it cannot be read, the two legacy
+  shared subscription sentinels are refused before the operator's token is touched; the boot
+  gateway (`WARDYN_ANTHROPIC_BASE_URL`) no longer widens where a subscription token may go under a
+  block.
 - **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
   that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
   sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the

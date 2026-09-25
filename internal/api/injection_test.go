@@ -567,11 +567,13 @@ func (p liveOAuthProvider) Peek() (subscription.Token, error) {
 }
 
 // sentinelHarness wires a harness whose sentinel resolve WOULD succeed: posture
-// ok, both providers live, a mask registry to observe. Only the injection rule
-// differs per case.
+// ok, both providers live, no provider block, a mask registry to observe. Only
+// the injection rule differs per case.
 func sentinelHarness(t *testing.T, tok liveOAuthProvider) *harness {
 	t.Helper()
 	h, _ := newSecretsHarness(t)
+	h.srv.cfg.Store = &bearerGuardStore{}
+	h.srv.router = h.srv.routes()
 	h.srv.cfg.SubscriptionPostureOK = true
 	h.srv.cfg.SubscriptionPostureReason = ""
 	h.srv.cfg.SubscriptionToken = tok

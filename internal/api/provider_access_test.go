@@ -172,9 +172,9 @@ func TestProviderAccess_BedrockSSO(t *testing.T) {
 	if got.State != modelAccessExpiredSignin || got.Deadline != "" || got.Action != providerAccessPortalAction {
 		t.Fatalf("session from another access portal: got %+v, want expired_signin, no deadline, action %q", got, providerAccessPortalAction)
 	}
-	_, refusal, err := h.srv.providerBedrockRefusal(context.Background(), moved, "claude-code", paOwner, false)
-	if err != nil || !strings.Contains(refusal, mpBRPortal) {
-		t.Fatalf("dispatch on the same credential: refusal=%q err=%v, want the access-portal refusal", refusal, err)
+	_, d, err := h.srv.providerBedrockRefusal(context.Background(), moved, "claude-code", paOwner, false)
+	if err != nil || !strings.Contains(d.msg, mpBRPortal) || !d.credential {
+		t.Fatalf("dispatch on the same credential: refusal=%+v err=%v, want the access-portal refusal, a credential one", d, err)
 	}
 	// Case and a trailing slash are the same portal, as dispatch reads it.
 	b.SSOStartURL = "HTTPS://acme.awsapps.com/start/"

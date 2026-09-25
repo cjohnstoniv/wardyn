@@ -4,10 +4,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
@@ -121,6 +123,13 @@ func providerRunFixture(t *testing.T, site types.SiteConfig, cs *capStore, ws *t
 func TestRunModelProviderDoors(t *testing.T) {
 	enforced := map[string]bool{capModelProvider: true}
 	twoKeys := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), keyProvider("corp", "claude-code"))}
+	// corp as a kind whose dispatch arm has not landed (MP-9's).
+	bearerCorp := keyProvider("corp", "claude-code")
+	bearerCorp.Kind = types.ModelProviderBedrockBearer
+	keyAndBearer := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), bearerCorp)}
+	withIntegration := twoKeys
+	withIntegration.Integrations = []types.Integration{{ID: "corp-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
+		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "corp-anthropic-key"}}}}
 	pinned := &types.Workspace{
 		ID: uuid.New(), Name: "hello", Status: types.WorkspaceScanned,
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: govWorkspaceRepo}},
@@ -137,15 +146,19 @@ func TestRunModelProviderDoors(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name     string
-		site     types.SiteConfig
-		cs       *capStore
-		ws       *types.Workspace
-		operator bool
-		body     string
-		want     int
-		wantBody string
-		denied   bool // an authz.denied capability_model_provider row
+		name         string
+		site         types.SiteConfig
+		cs           *capStore
+		ws           *types.Workspace
+		operator     bool
+		body         string
+		want         int
+		wantBody     string
+		adminToken   bool   // the caller is the admin bearer token, not a session
+		denied       bool   // an authz.denied capability_model_provider row
+		wantProvider string // #532: the 422's provider and kind; "" when the refusal names no provider
+		wantKind     types.ModelProviderKind
+		credential   bool // #532: reason model_credential — only a refusal the caller's own stored credential repairs
 	}{
 		{name: "a requested provider the member is not granted", site: twoKeys, cs: &capStore{enf: enforced},
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
@@ -160,11 +173,26 @@ func TestRunModelProviderDoors(t *testing.T) {
 			body: byID(pinned, ""), want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
 		{name: "workspace_id: two candidates and no choice", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
 			body: byID(plain, ""), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
-		{name: "workspace_id: a chosen provider whose kind has no dispatch arm yet", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
-			body: byID(plain, `,"model_provider":"corp"`), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp")},
-		{name: "a chosen provider whose kind has no dispatch arm yet", site: twoKeys, cs: &capStore{}, operator: true,
+		{name: "workspace_id: a chosen provider whose kind has no dispatch arm yet", site: keyAndBearer, ws: plain, cs: &capStore{}, operator: true,
+			body: byID(plain, `,"model_provider":"corp"`), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp"),
+			wantProvider: "corp", wantKind: types.ModelProviderBedrockBearer},
+		{name: "a chosen provider whose kind has no dispatch arm yet", site: keyAndBearer, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
-			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp")},
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp"),
+			wantProvider: "corp", wantKind: types.ModelProviderBedrockBearer},
+		{name: "a chosen key provider the caller has not added their own key for", site: twoKeys, cs: &capStore{}, operator: true,
+			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunNoKey, mpRunRemedySignIn),
+			wantProvider: "corp", wantKind: types.ModelProviderAnthropicAPIKey, credential: true},
+		// No credential the admin token could store serves the run, so no
+		// sign-in door either: the sentence names the provider, no reason.
+		{name: "the admin token, which holds no credential of its own", site: twoKeys, cs: &capStore{}, adminToken: true,
+			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
+			want: http.StatusUnprocessableEntity, wantBody: mpcNoPerson,
+			wantProvider: "corp", wantKind: types.ModelProviderAnthropicAPIKey},
+		{name: "integration_id under a provider block", site: withIntegration, cs: &capStore{}, operator: true,
+			body: `{"agent":"claude-code","task":"t","integration_id":"corp-anthropic","model_provider":"corp"}`,
+			want: http.StatusUnprocessableEntity, wantBody: mpRunNoIntegration},
 		{name: "a disabled default with one other candidate", cs: &capStore{}, operator: true,
 			site: types.SiteConfig{
 				ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), func() types.ModelProvider {
@@ -175,7 +203,8 @@ func TestRunModelProviderDoors(t *testing.T) {
 				AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", DefaultProvider: "corp"}),
 			},
 			body: `{"agent":"claude-code","task":"t"}`,
-			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateOff, mpRunRemedy)},
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateOff, mpRunRemedy),
+			wantProvider: "corp", wantKind: types.ModelProviderAnthropicAPIKey},
 		{name: "two candidates and no choice", site: twoKeys, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t"}`,
 			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
@@ -197,12 +226,31 @@ func TestRunModelProviderDoors(t *testing.T) {
 				if tc.operator {
 					session = admitAdminSession(t)
 				}
-				w := doSSO(t, srv, http.MethodPost, path, session, tc.body)
+				var w *httptest.ResponseRecorder
+				if tc.adminToken {
+					w = do(t, srv, http.MethodPost, path, adminToken, tc.body)
+				} else {
+					w = doSSO(t, srv, http.MethodPost, path, session, tc.body)
+				}
 				codes[i] = w.Code
 				var body errorBody
 				_ = json.Unmarshal(w.Body.Bytes(), &body)
 				if w.Code != tc.want || body.Error != tc.wantBody {
 					t.Errorf("%s = %d %s\nwant %d carrying %q", path, w.Code, w.Body.String(), tc.want, tc.wantBody)
+				}
+				// #532: every 422 refusing a NAMED provider carries `provider`
+				// and `kind`; `reason` rides only on a credential refusal, since
+				// the console answers it with a sign-in and a relaunch. Absent
+				// on the 403s (denyMemberField), the field-validation 4xxs
+				// (mpRunNoIntegration/mpRunNoBlock/mpRunNoModel/mpRunBadID) and
+				// the no-provider-named refusals (mpRunChoose).
+				wantReason := ""
+				if tc.credential {
+					wantReason = llmRefusalAuditReason
+				}
+				if body.Reason != wantReason || body.Provider != tc.wantProvider || body.Kind != string(tc.wantKind) {
+					t.Errorf("%s: reason/provider/kind = %q/%q/%q, want %q/%q/%q",
+						path, body.Reason, body.Provider, body.Kind, wantReason, tc.wantProvider, tc.wantKind)
 				}
 				if got := slices.Contains(auditReasons(t, srv, "authz.denied"), "capability_model_provider"); got != tc.denied {
 					t.Errorf("%s: authz.denied capability_model_provider written = %v, want %v", path, got, tc.denied)
@@ -222,27 +270,66 @@ func TestRunModelProviderDoors(t *testing.T) {
 			t.Errorf("create = %d, want 201: %s", w.Code, w.Body.String())
 		}
 	})
+
+	// A transient store failure is no door (multi-provider §5.8): the 503
+	// names the provider in its sentence and carries no provider or kind.
+	t.Run("a credential that cannot be read refuses with the sentence alone", func(t *testing.T) {
+		for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+			srv := providerRunFixture(t, twoKeys, &capStore{}, nil)
+			srv.cfg.Secrets = wedgedSecrets{err: errors.New("age: no identity matched")}
+			w := doSSO(t, srv, http.MethodPost, path, admitAdminSession(t), `{"agent":"claude-code","task":"t","model_provider":"corp"}`)
+			var body errorBody
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			if w.Code != http.StatusServiceUnavailable || body != (errorBody{Error: fmt.Sprintf(mpRunCredUnreadable, "corp")}) {
+				t.Errorf("%s = %d %s\nwant 503 carrying only %q", path, w.Code, w.Body.String(), fmt.Sprintf(mpRunCredUnreadable, "corp"))
+			}
+		}
+	})
+
+	// Both doors call enforceRunModelProvider (runs.go, preflight.go), and a
+	// site config every earlier create step also reads cannot fail for this
+	// read alone, so the door is driven directly.
+	t.Run("an unreadable provider block refuses as dispatch does, with no driver text", func(t *testing.T) {
+		srv := providerRunFixture(t, twoKeys, &capStore{}, nil)
+		srv.cfg.Store = siteErrStore{srv.cfg.Store.(*integStore)}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+		if _, ok := srv.enforceRunModelProvider(w, r, createRunRequest{Agent: "claude-code", Task: "t"}, nil); ok {
+			t.Fatal("an unreadable provider block admitted the run")
+		}
+		var body errorBody
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != http.StatusServiceUnavailable || body != (errorBody{Error: mpRunUnreadable}) {
+			t.Errorf("= %d %s\nwant 503 carrying only %q", w.Code, w.Body.String(), mpRunUnreadable)
+		}
+	})
 }
 
-// TestRunModelProviderPersistsOnTheRow is #527: once a provider's kind has a
-// dispatch arm (MP-7/8/9 — simulated here since none has landed yet, exactly
-// the way each of THOSE PRs will exercise this same plumbing), the run's
-// chosen provider freezes onto AgentRun.ModelProviderID (the id alone) and
-// onto the run.create audit event's model_provider snapshot ({id, kind} —
-// the kind is NOT on the row; see the field's doc on types.AgentRun).
+// siteErrStore is an integStore whose site config cannot be read.
+type siteErrStore struct{ *integStore }
+
+func (siteErrStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, errors.New("pq: connection refused")
+}
+
+// TestRunModelProviderPersistsOnTheRow is #527: the run's chosen provider
+// freezes onto AgentRun.ModelProviderID (the id alone) and onto the
+// run.create audit event's model_provider snapshot ({id, kind} — the kind is
+// NOT on the row; see the field's doc on types.AgentRun).
 func TestRunModelProviderPersistsOnTheRow(t *testing.T) {
 	// The single candidate: no AgentProviders row at all, so the legacy
 	// declared-mechanism gate (enforceCreateLLMMechanism, unrelated to #527)
 	// sees no row for this agent and stays out of the way — exactly what
 	// TestChooseModelProvider's "the single candidate" case exercises.
 	provider := keyProvider("corp", "claude-code")
+	provider.UID = "uid-corp"
 	site := types.SiteConfig{ModelProviders: providerBlock(provider)}
 	srv := providerRunFixture(t, site, &capStore{}, nil)
-
-	// providerKindDispatched lacks the key kinds until MP-7 lands them; a real PR
-	// flips this bit permanently, a test flips it for the span of one call.
-	providerKindDispatched[provider.Kind] = true
-	defer delete(providerKindDispatched, provider.Kind)
+	// The caller's own key, which the liveness check at create requires.
+	if err := srv.cfg.Secrets.For("sub-admit-admin").Put(context.Background(),
+		providerSecretName(provider.UID, providerKeyPart), []byte("sk-ant-admin-own-key")); err != nil {
+		t.Fatal(err)
+	}
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", admitAdminSession(t), `{"agent":"claude-code","task":"t"}`)
 	if w.Code != http.StatusCreated {

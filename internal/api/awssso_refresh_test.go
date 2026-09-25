@@ -665,7 +665,7 @@ func TestAWSSSORefresh_AdvisoryNeverRedeems(t *testing.T) {
 	})
 
 	llm := s.resolveRunLLMAccess(context.Background(), createRunRequest{Agent: "claude-code"},
-		types.RunPolicySpec{}, nil, nil, "")
+		types.RunPolicySpec{}, nil, nil, "", runProviderChoice{})
 	if llm == nil || !llm.Provisioned {
 		t.Fatalf("resolveRunLLMAccess = %+v; want a provisioned Bedrock verdict for an expired-but-renewable session", llm)
 	}

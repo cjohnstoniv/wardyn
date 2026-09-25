@@ -364,6 +364,12 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnprocessableEntity, strings.TrimPrefix(lerr.Error(), errAgentNotEnabled.Error()+": "))
 			return
 		}
+		// The model-provider choice: the create door's 422 and sentence, without
+		// its provider/kind/reason fields yet (#797).
+		if errors.Is(lerr, errModelProviderRefused) {
+			writeError(w, http.StatusUnprocessableEntity, strings.TrimPrefix(lerr.Error(), errModelProviderRefused.Error()+": "))
+			return
+		}
 		// Provider admission, the roster refusal's sibling and mapped the
 		// same way: the status and the sentence are the ones every other admission
 		// door answers, so "this repository is not on an enabled provider" costs
