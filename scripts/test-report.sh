@@ -36,6 +36,89 @@ go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "
   > "$OUT/test-output.json"
 GO_EXIT=$?
 
+# ── name the failure ─────────────────────────────────────────────────────────
+# G11: a red `build`/`test-pg` job used to say only `make: *** [Makefile:195:
+# test-report] Error 1` — the failing test names and any compiler output were
+# visible only in the uploaded JSON artifact (gh run download -n
+# go-test-reports). Surface both directly in the job log on a red run, plus
+# any package that failed with no failing test to name (a -timeout panic, a
+# panic in init, os.Exit or a failure in TestMain): its package name and the
+# panic, or else its last few output lines.
+if [ "$GO_EXIT" -ne 0 ] && [ -s "$OUT/test-output.json" ] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$OUT/test-output.json" >&2 <<'PYEOF'
+import json
+import sys
+from collections import deque
+
+fails = set()
+build_output = {}  # ImportPath -> [Output, ...], buffered until we see build-fail
+build_fails = {}   # ImportPath -> [Output, ...]
+pkg_fails = set()  # Package: failed with no Test and not a build failure
+tail = {}          # Package -> its last few output lines
+panics = {}        # Package -> its first `panic:` line and the lines after it
+panic_test = {}    # Package -> the test that panic was attributed to, if any
+
+
+def emit(out):
+    sys.stdout.write(">>     " + out if out.endswith("\n") else ">>     " + out + "\n")
+
+with open(sys.argv[1]) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue  # a non-JSON line (e.g. `go test` itself failed to start)
+        action = ev.get("Action")
+        if action == "build-output":
+            build_output.setdefault(ev.get("ImportPath", ""), []).append(ev.get("Output", ""))
+        elif action == "build-fail":
+            ip = ev.get("ImportPath", "")
+            build_fails[ip] = build_output.get(ip, [])
+        elif action == "output" and ev.get("Package"):
+            pkg, out = ev["Package"], ev.get("Output", "")
+            tail.setdefault(pkg, deque(maxlen=8)).append(out)
+            # A -timeout panic is attributed to the running test but emits no
+            # fail event for it, and its last lines are goroutine frames: the
+            # `panic:` line and the ones after it are what name the cause.
+            if pkg not in panics and out.startswith("panic: "):
+                panics[pkg] = [out]
+                panic_test[pkg] = ev.get("Test", "")
+            elif pkg in panics and len(panics[pkg]) < 8:
+                panics[pkg].append(out)
+        elif action == "fail" and ev.get("Test"):
+            fails.add((ev.get("Package", ""), ev["Test"]))
+        elif action == "fail" and not ev.get("FailedBuild"):
+            pkg_fails.add(ev.get("Package", ""))
+
+if fails:
+    print(">> failing tests:")
+    for pkg, test in sorted(fails):
+        print(f">>   {pkg} {test}")
+
+if build_fails:
+    print(">> failed to build:")
+    for ip, lines in sorted(build_fails.items()):
+        print(f">>   {ip}")
+        for out in lines:
+            emit(out)
+
+named_fail_pkgs = {pkg for pkg, _ in fails}
+# An ordinary panic in a test fails that test, already named above; a -timeout
+# panic fails no test, so it still needs its package listed here.
+orphan_panics = {p for p in panics if (p, panic_test[p]) not in fails}
+unnamed = sorted(p for p in pkg_fails if p in orphan_panics or p not in named_fail_pkgs)
+if unnamed:
+    print(">> failed outside any named test:")
+    for pkg in unnamed:
+        print(f">>   {pkg}")
+        for out in panics.get(pkg) or tail.get(pkg, []):
+            emit(out)
+PYEOF
+fi
+
 # Coverage artifacts (best-effort; cover.out may be absent if build failed).
 if [ -s "$OUT/cover.out" ]; then
   go tool cover -func="$OUT/cover.out" > "$OUT/coverage-func.txt" 2>/dev/null

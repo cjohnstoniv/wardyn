@@ -82,9 +82,12 @@ BASE="http://127.0.0.1:8080"
 # cluster is actually up. A cluster that was asked for but is not there is
 # the SAME "nothing to prove against" case as the guard above, so it gets the
 # same treatment: an out-loud skip (exit 0), never a silent one and never a
-# red that looks like a real defect.
+# red that looks like a real defect. The message carries a greppable marker
+# ("SKIPPED no-install") so any future nightly wiring can assert on it the
+# same way nightly.yml's kind-sso-walk step does, rather than reading exit 0
+# as a pass.
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment wardyn >/dev/null 2>&1 || {
-  echo "run-e2e-ssh-k8s: no wardyn install in context ${CONTEXT}, namespace ${NAMESPACE} — run 'make kind-quickstart' first (this script never creates a cluster) -- skipping." >&2
+  echo "run-e2e-ssh-k8s: SKIPPED no-install — no wardyn install in context ${CONTEXT}, namespace ${NAMESPACE} — run 'make kind-quickstart' first (this script never creates a cluster)." >&2
   exit 0
 }
 
