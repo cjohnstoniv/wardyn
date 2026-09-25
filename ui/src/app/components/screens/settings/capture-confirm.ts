@@ -125,7 +125,7 @@ export function serverConfirmsCapture(
 // a model provider's door (#544). Its capture lands under the provider's own
 // name, which /setup/status's harness rows never carry, so no source_run_id
 // can prove THIS run. The proof is the audit row the upload writes for this
-// run after its store write (`audited`, harness.credential.captured) — a row
+// run after its store write (`audited`, harness.credential.capture) — a row
 // the sandbox cannot write — and the provider's own row must agree the
 // credential is there. Strict by construction: no presence-only fallback.
 export function serverConfirmsProviderCapture(status: SetupStatus, modelProvider: string, audited: boolean): boolean {

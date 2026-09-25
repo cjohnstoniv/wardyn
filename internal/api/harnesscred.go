@@ -581,7 +581,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 		"sso_role_name":  t.pin.RoleName,
 	}
 	t.stampProvider(stamp)
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.started",
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.start",
 		runID.String(), "success", mustJSON(stamp)))
 
 	image := agentImage(hl.agent, s.cfg.AgentImages)

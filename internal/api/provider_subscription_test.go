@@ -160,7 +160,7 @@ func TestProviderSubscriptionDispatch(t *testing.T) {
 			env["ANTHROPIC_MODEL"] != "claude-opus-4-1" || env["ANTHROPIC_API_KEY"] != "" {
 			t.Errorf("sandbox env = %v", env)
 		}
-		if !strings.Contains(strings.Join(auditReasons(t, h.srv, "run.injection.dropped"), ","), "model_credential_not_provider_authored") {
+		if !strings.Contains(strings.Join(auditReasons(t, h.srv, "run.injection.drop"), ","), "model_credential_not_provider_authored") {
 			t.Error("the unauthored sign-in injection was not dropped with an audit row")
 		}
 	})

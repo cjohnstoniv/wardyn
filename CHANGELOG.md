@@ -52,7 +52,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   of L0 or L1 got Claude Code's managed settings, whose `allowManagedPermissionRulesOnly` stops a
   repository or user `permissions.allow` rule from running a tool before `wardyn-toolgate` is asked.
   Every claude-code hold run now gets that managed file (the L1 document), including a run at L2,
-  at L3, or with no level. Its `run.agent_policy` audit row carries `"tool_approvals": "hold"`, and
+  at L3, or with no level. Its `run.agent_policy.write` audit row carries `"tool_approvals": "hold"`, and
   on a runner that cannot deliver the file the create response says so, as it does for a gated run.
 
 - **Take-over could land the taker read-only.** The server already promotes the taker's own
@@ -62,7 +62,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   promoted the caller in place, and a console tab whose socket is still open skips the reconnect on
   that answer (#507).
 - A run refused at dispatch for an Amazon Bedrock model-credential mismatch (`autonomy_grade_drift`)
-  or by the declared-mechanism gate no longer audits a `run.llm.bedrock` "success" row for a
+  or by the declared-mechanism gate no longer audits a `run.bedrock.configure` "success" row for a
   credential it was never handed — that row is now recorded only once those gates have let the run
   through. A roster read that fails at create/Review now refuses the run (500) instead of silently
   admitting it ungraded, which used to surface later at dispatch with a misleading "the
@@ -468,7 +468,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   session carries that type beside the tier. Among the types a person matches, the highest
   priority wins and Standard user never wins against a custom type. Two custom types at the same
   top priority refuse the sign-in (`user_type_ambiguous`), and so does a type that doesn't exist
-  (`user_type_unknown`, also warned at boot); both are `auth.failed` rows from
+  (`user_type_unknown`, also warned at boot); both are `auth.fail` rows from
   `wardyn/oidcCallback`. An `admin` sign-in, the operator allowlist included, is never refused
   over a type: it lands on Standard user with a warning. `POST /access/mappings` takes `user_type` on a user row and refuses a
   type that doesn't exist; `GET /access` names each row's type and lists the types; the People
@@ -656,7 +656,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   SSO; dispatch also refuses a provider since deleted, turned off, or no longer serving the agent.
   The injection sink re-reads the provider by UID on every resolve and serves only the run token's
   own subject, the provider's own host, and a run still on that provider. A stored, inline or
-  recorded grant naming a sign-in sentinel is dropped at dispatch (`run.injection.dropped`, reason
+  recorded grant naming a sign-in sentinel is dropped at dispatch (`run.injection.drop`, reason
   `model_credential_not_provider_authored`), and Record Mode leaves one out of a profile. Nobody can
   sign in to a provider yet (#533), so until then such runs are refused at create.
 - **A run on a Bedrock model provider uses its owner's own AWS credential (#530).** A run that
@@ -666,7 +666,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   strictly from their own namespace. The kind names the one lane: the operator's bearer, captured
   session, host `~/.aws` mount and static SigV4 keys never credential it, and every other model
   injection the run carries (the legacy sentinels, anything bound for `api.anthropic.com`) is
-  dropped (`run.injection.dropped`, reason `model_credential_not_provider_authored`). An AWS sign-in must match
+  dropped (`run.injection.drop`, reason `model_credential_not_provider_authored`). An AWS sign-in must match
   the provider's access portal and, when set, its pinned account and role. Create, Review and
   dispatch refuse, naming the provider, a run whose owner has not added their key or is not signed
   in to AWS for it. The injection sinks re-read the provider on every resolve and serve only the
@@ -712,8 +712,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   caller must be granted the provider and an agent it serves; the admin token under SSO cannot sign
   in. A run whose provider AWS session lapses mid-run is now held for its owner to sign in again,
   as roster runs are: the hold's `requested_scope` names the provider (`provider`, `provider_uid`),
-  and only its owner's sign-in for that provider answers it. `harness.login.started`,
-  `harness.credential.captured` and `credential.reauth.*` gain `model_provider`.
+  and only its owner's sign-in for that provider answers it. `harness.login.start`,
+  `harness.credential.capture` and `credential.reauth.*` gain `model_provider`.
 - **Every model-provider kind dispatches through one gate and one lane (#551).** The key and
   endpoint kinds (#528, #532) and the subscription and Bedrock kinds (#529, #530) were built on
   two lines and are now one path. A provider block that is set, or cannot be read, governs every
@@ -722,7 +722,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   lanes. Every door — create, Review, a record session and dispatch — checks the run owner's own
   credential by the provider's kind, and dispatch drops every other model credential — including
   one on another harness's vendor host, such as an OpenAI key on a claude-code run — before the
-  kind's arm authors its own (`run.injection.dropped`, reason
+  kind's arm authors its own (`run.injection.drop`, reason
   `model_credential_not_provider_authored`, which on a provider run now also carries `provider`;
   it replaces `not_the_chosen_provider`, `provider_signin_not_dispatch_authored` and
   `provider_key_not_dispatch_authored`). Subscription and Bedrock refusals now follow #532: the
@@ -1765,7 +1765,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   store seam only — no routes, CLI or forwarder yet. A row at or before the device's recorded cursor is
   skipped as a re-send only when it carries the hash of the row the organisation holds at that seq
   (looked up through migration `0078_audit_events_device_origin_idx`), so a laptop table reset that
-  restarts its seq (`TRUNCATE … RESTART IDENTITY`, a restore) is a recorded `device.audit.chain_reset`
+  restarts its seq (`TRUNCATE … RESTART IDENTITY`, a restore) is a recorded `device.chain.reset`
   with every new row ingested, never rows dropped as duplicates; a re-chained rewrite of a held row is
   refused 422. Upgrading: migration 0078 builds its index inside the migration transaction, so audit
   writes pause while it scans `audit_events` (seconds per million rows); raise `WARDYN_MIGRATE_TIMEOUT`
@@ -2169,7 +2169,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **codex-cli has no agent-side autonomy layer.** Managed settings are generated only for the one
   agent that reads a managed-settings file; a codex-cli run under any resolved level gets no file and
   runs on its CLI-flag levers alone — the honest signal is the launch warning on the 201 and the line
-  the image's launcher prints, not a `run.agent_policy` row.
+  the image's launcher prints, not a `run.agent_policy.write` row.
 - **`L2`'s seeded auto tools do not yet mean unattended tool use.** At `L2` the rubric permits
   `seed_auto_tools` (*"Let it use tools before I attach"*), but such a run boots
   `claude --dangerously-skip-permissions`, which still parks on Claude Code's own Bypass Permissions

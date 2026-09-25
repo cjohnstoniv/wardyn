@@ -2805,7 +2805,7 @@ which drops repository and user rules and hooks alike. wardynd delivers it to
 every hold run, whatever autonomy level the run resolved to, including a run no
 rubric bound (`internal/agentpolicy`, the L1 document). The one gap left is a
 runner that does not deliver managed files: the run still launches under the flag
-alone, and its `run.agent_policy` audit row records `delivered: false` with the
+alone, and its `run.agent_policy.write` audit row records `delivered: false` with the
 reason. Both shipped runners (Docker, Kubernetes) deliver it; a krun sandbox
 receives it but the row records it as unverified. The flag is on the hold lane only: the autonomous lane already runs
 every tool (`--dangerously-skip-permissions`), and the interactive lanes have no

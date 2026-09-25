@@ -302,7 +302,7 @@ func (s *Server) authorOAuthSentinelGrant(ctx context.Context, run types.AgentRu
 	if g.provider != "" {
 		data["provider"] = g.provider
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.subscription_inject",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.subscription.inject",
 		run.ID.String(), "success", mustJSON(data)))
 	return injections, true
 }
