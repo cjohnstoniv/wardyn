@@ -42,6 +42,7 @@ import { runs as runsApi } from "../../lib/api/runs";
 import { approvals as approvalsApi } from "../../lib/api/approvals";
 import {
   audit as auditApi,
+  canonicalAuditAction,
   createRequestFromAudit,
   egressFromAudit,
   exitCodeFromAudit,
@@ -177,7 +178,9 @@ export function RunDetailScreen() {
         // and internal/api/approvals.go:56-61.
         approvalsApi.listApprovals("", id),
         auditApi.listAudit(id),
-        auditApi.listAudit(id, { actionPrefix: "session.recording" }), // both action names, one request
+        // "session.recording" names the ACTION FAMILY, prefixing both the old
+        // and new action names — not itself a legacy action name (Conductor ruling, #1062).
+        auditApi.listAudit(id, { actionPrefix: "session.recording" }),
       ])
         .then(([r, g, runApprovals, a, recA]) => {
           if (r.status === "rejected") {
@@ -661,18 +664,14 @@ function Cockpit({
   return <RunCanvas ctx={ctx} />;
 }
 
-// Every human attach session is recorded and masked, but under a COMPOSITE cast
-// key the console never asked for — so it is write-only without an index.
-// There is no list-casts endpoint (and no Store.List to add one on): the
-// index is an action_prefix="session.recording"-FILTERED audit fetch — not
-// the general trail, whose own 1000-row cap a chatty run can blow through —
-// where the event's TARGET is that very key. RECORDING_ACTIONS is an EXACT
-// set, not the fetch's own prefix: session.recording is the never-rewritten
-// pre-0.8 name for session.recording.write (AUDIT-ACTIONS.md).
-const RECORDING_ACTIONS = new Set(["session.recording.write", "session.recording"]);
+// Every human attach session is recorded under a COMPOSITE cast key the
+// console never asked for; the index is the action_prefix="session.recording"
+// fetch above (not the capped general trail), keyed on the event's TARGET.
+// The filter is an EXACT match on the CANONICAL name (canonicalAuditAction),
+// not the prefix — a plain startsWith would also admit session.recording.other.
 function attachSessions(audit: AuditEvent[]): AuditEvent[] {
   const seen = new Set<string>(); // dedup, belt-and-braces
-  return audit.filter((e) => RECORDING_ACTIONS.has(e.action) && e.outcome === "success" && e.target && !seen.has(e.id) && seen.add(e.id));
+  return audit.filter((e) => canonicalAuditAction(e.action) === "session.recording.write" && e.outcome === "success" && e.target && !seen.has(e.id) && seen.add(e.id));
 }
 
 // Approvals tab (this run's approvals)

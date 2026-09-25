@@ -49,6 +49,9 @@ const auditMocks = vi.hoisted(() => ({
 vi.mock("../../lib/api/audit", async (importOriginal) => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
+  // attachSessions (run-detail.tsx) canonicalizes before comparing — the
+  // C-02 old/new-name pins below need the REAL mapping, not a stub.
+  canonicalAuditAction: (await importOriginal<typeof import("../../lib/api/audit")>()).canonicalAuditAction,
   // F6-F2: the REAL derivation, not a stub — every other test here leaves
   // listAuditMock at its default `[]`, which the real function already reads
   // as "no exit code" (identical to the old stub); only F6-F2's own test
@@ -388,6 +391,38 @@ describe("RunDetailScreen — the recording picker indexes both the pre- and pos
       sessionOptionLabel(oldSession as AuditEvent),
       sessionOptionLabel(newSession as AuditEvent),
     ]);
+  });
+
+  // Pins the EXACT-set filter (attachSessions, run-detail.tsx): a sibling
+  // action that merely STARTS WITH the family prefix must not index, even
+  // though the action_prefix="session.recording" fetch itself returns it.
+  // Mixed with a real session (not sent alone) — the picker only renders at
+  // all once at least one session indexes (run-detail.tsx's `sessions.length
+  // > 0` guard), so an empty-result case would prove nothing about the filter.
+  it("an unrelated sibling action (session.recording.other) does not index", async () => {
+    const other = {
+      id: "e-other", time: aheadByHours(-2), actor_type: "human", actor: "carol",
+      action: "session.recording.other", target: "run-1~session-other", outcome: "success",
+    };
+    listAuditMock.mockResolvedValue([other, newSession]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    expect(await screen.findByText(/bob/)).toBeInTheDocument();
+    expect(screen.queryByText(/carol/)).not.toBeInTheDocument();
+  });
+
+  // Pins the dedup (attachSessions' `seen` set): the same event id returned
+  // twice (e.g. by two overlapping fetches) must still index once.
+  it("dedups: the same event id returned twice shows once", async () => {
+    listAuditMock.mockResolvedValue([newSession, newSession]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    const options = await screen.findAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual(["Agent session", sessionOptionLabel(newSession as AuditEvent)]);
   });
 });
 

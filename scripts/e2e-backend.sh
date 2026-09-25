@@ -284,71 +284,6 @@ cmd_seed() {
   # localStorage seam three specs used to fake per-browser; the install-side
   # mark is the honest version of the same statement.
   api POST /api/v1/setup/onboarding-complete '' >/dev/null 2>&1 || true
-  # C-02 (#1062): a STANDALONE run (own api call, own task text — excluded BY
-  # NAME from the positional row_number()->state CTE below, so it can never
-  # renumber or restate any of the 9 fixtures the agents/titles loop creates,
-  # regardless of creation order) whose recording history spans a pre-0.8
-  # session.recording row AND a post-0.8 session.recording.write row, plus one
-  # pre-0.8 egress.pending row (egress.hold's old name — docs/AUDIT-ACTIONS.md's
-  # "Renamed in 0.8"), all buried behind >1000 unrelated audit rows on the SAME
-  # run.
-  #
-  # Every audit query orders by `seq` (audit_events' insertion-order PRIMARY
-  # KEY), NEVER by the `time` column (internal/store/pagination.go,
-  # auditfilter.go) — so `time` only ever decides CLIENT-side sort (the Egress
-  # widget's own most-recent-8 slice, run-detail.tsx), never which rows a
-  # server-side LIMIT keeps. Two separate `seq` facts this fixture has to
-  # satisfy, in order:
-  #
-  # 1. Global admin Audit screen (no run_id => `ORDER BY seq DESC LIMIT`,
-  #    newest-INSERTED-first): audit.spec.ts and governance.spec.ts pin
-  #    specific ORIGINAL seed events ("Stored a secret" etc.) staying inside
-  #    that capped window. This block therefore runs FIRST, before the 9
-  #    fixtures / secret / workspace below — so its 1004 rows get the LOWEST
-  #    seq in the whole deployment, and everything seeded after keeps the
-  #    highest (newest) seq and stays on top of that feed, same as before this
-  #    fixture existed.
-  # 2. This run's OWN general (unscoped run_id) fetch (`ORDER BY seq ASC
-  #    LIMIT`, oldest-INSERTED-first — the same cap a per-run trail always
-  #    had): egress.pending is inserted BEFORE the 1001 filler rows, so it is
-  #    comfortably inside the run's own first-1000-by-seq and always survives;
-  #    the two recording rows are inserted LAST and fall outside that window —
-  #    which is fine, since attachSessions reads them off the SEPARATE
-  #    action_prefix=session.recording fetch, filtered before any LIMIT is
-  #    applied, so it never competes with the filler for cap room at all.
-  #
-  # `time` still matters for one thing: the Egress widget re-sorts whatever
-  # the (seq-capped) general fetch returns by `time` DESC and shows the top 8.
-  # egress.pending's `time` is plain now(); every filler row's `time` is
-  # backdated 60+ seconds below that, so egress.pending is unambiguously the
-  # most recent EGRESS-type row among the ~998 that make the cap, regardless
-  # of how long the multi-row filler INSERT itself takes to run.
-  api POST /api/v1/runs '{"agent":"claude-code","repo":"acme/widgets","title":"","task":"e2e fixture recording-history"}' >/dev/null
-  psql_e2e >/dev/null 2>&1 <<'SQL' || true
-WITH r AS (SELECT id FROM agent_runs WHERE task = 'e2e fixture recording-history')
-INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now(), r.id, 'system', 'proxy',
-       'egress.pending', 'held.example.com:443', 'success', '{"domain":"held.example.com"}'::jsonb
-FROM r;
-
-WITH r AS (SELECT id FROM agent_runs WHERE task = 'e2e fixture recording-history')
-INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now() - (n + 60 || ' seconds')::interval, r.id, 'agent', 'agent',
-       'egress.allow', 'filler.example.com:443', 'success', '{}'::jsonb
-FROM r, generate_series(1, 1001) AS n;
-
-WITH r AS (SELECT id FROM agent_runs WHERE task = 'e2e fixture recording-history')
-INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now() - interval '30 seconds', r.id, 'human', 'alice',
-       'session.recording', r.id::text || '~e2e-session-old', 'success', '{}'::jsonb
-FROM r;
-
-WITH r AS (SELECT id FROM agent_runs WHERE task = 'e2e fixture recording-history')
-INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now(), r.id, 'human', 'bob',
-       'session.recording.write', r.id::text || '~e2e-session-new', 'success', '{}'::jsonb
-FROM r;
-SQL
   # A handful of runs (the none runner leaves them PENDING; we re-state below).
   # review C-02: index 4 (rn=5, fixed to COMPLETED below) is claude-code, not
   # codex-cli — codex-cli disables the "hold" tool-approvals option in the
@@ -379,14 +314,9 @@ SQL
     api POST /api/v1/runs "{\"agent\":\"${agents[$i]}\",\"repo\":\"acme/widgets\",\"title\":\"${titles[$i]}\",\"task\":\"e2e fixture ${i}\"${extra}}" >/dev/null
   done
   # Diversify states deterministically by created order so specs can target them.
-  # C-02's "recording-history" fixture is excluded BY NAME, not by relying on
-  # creation order — it is seeded first (see above) precisely so its 1000+
-  # audit rows get the lowest seq in the deployment, which would otherwise
-  # also make it row_number()=1 here and shift every fixture below by one.
   psql_e2e >/dev/null <<'SQL' || true
 WITH ordered AS (
-  SELECT id, row_number() OVER (ORDER BY created_at) AS rn
-  FROM agent_runs WHERE task <> 'e2e fixture recording-history'
+  SELECT id, row_number() OVER (ORDER BY created_at) AS rn FROM agent_runs
 )
 UPDATE agent_runs a SET state = v.state
 FROM ordered o
