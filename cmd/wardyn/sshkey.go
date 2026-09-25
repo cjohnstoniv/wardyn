@@ -119,7 +119,7 @@ func runSSHKeyEnsure(cmd *cobra.Command, c *sdk.Client, path, name string, asJSO
 
 	res := sshKeyEnsureResult{Path: path, PublicKey: line, Fingerprint: fp, Generated: generated, Registered: registered}
 	if asJSON {
-		return emitJSON(res)
+		return emitJSON(cmd.OutOrStdout(), res)
 	}
 	out := cmd.OutOrStdout()
 	switch {
@@ -151,9 +151,9 @@ func sshKeyListCmd(client clientFn) *cobra.Command {
 				if keys == nil {
 					keys = []sdk.SSHPublicKey{}
 				}
-				return emitJSON(keys)
+				return emitJSON(cmd.OutOrStdout(), keys)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "FINGERPRINT\tNAME\tROLE\tCREATED")
 			for _, k := range keys {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", k.Fingerprint, k.Name, k.Role, k.CreatedAt.Format("2006-01-02"))

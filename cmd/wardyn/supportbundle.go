@@ -98,7 +98,7 @@ func supportBundleCmd(client clientFn) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&outPath, "out", "", "output tar.gz path (default wardyn-support-bundle-<timestamp>.tar.gz)")
+	cmd.Flags().StringVarP(&outPath, "output", "o", "", "output tar.gz path (default wardyn-support-bundle-<timestamp>.tar.gz)")
 	cmd.Flags().StringVar(&composeFile, "compose-file", "deploy/compose/docker-compose.yaml",
 		"compose file to include, redacted (skipped with a note if not found and `docker compose config` also fails)")
 	cmd.Flags().IntVar(&auditLimit, "audit-limit", 200,

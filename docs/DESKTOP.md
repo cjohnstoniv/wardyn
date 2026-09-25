@@ -550,7 +550,7 @@ the file:
 ```sh
 # MDM-scheduled, e.g. daily. The admin token is MDM-held; the developer never
 # reads it, and on m′ they could not use it anyway.
-wardyn support-bundle --out "/var/log/wardyn/support-$(date +%F).tar.gz"
+wardyn support-bundle --output "/var/log/wardyn/support-$(date +%F).tar.gz"
 ```
 
 **Leaked sandboxes.** A run row that is terminal but still carries a sandbox ref

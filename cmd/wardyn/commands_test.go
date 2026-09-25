@@ -137,8 +137,61 @@ func execCmdStdin(t *testing.T, in string, args ...string) error {
 }
 
 // --------------------------------------------------------------------------
-// run command
+// #200: one CLI output contract
 // --------------------------------------------------------------------------
+
+// TestCLIOutput_WritesThroughCommandWriter pins #200: emitJSON and newTab
+// write through the writer their caller passes them (cmd.OutOrStdout()),
+// never straight to the process's own os.Stdout. That is what lets a caller
+// capture a *cobra.Command's output by setting its writer — as every other
+// test in this file does — instead of redirecting the real file descriptor.
+// The real os.Stdout is redirected here as the independent check: if either
+// helper ever regresses back to a bare os.Stdout write, this test catches the
+// leak even though the assertion above would also pass by accident.
+func TestCLIOutput_WritesThroughCommandWriter(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		body any
+	}{
+		{"json (emitJSON)", []string{"policy", "list", "--json"}, []types.RunPolicy{{ID: uuid.New(), Name: "p"}}},
+		{"table (newTab)", []string{"policy", "list"}, []types.RunPolicy{{ID: uuid.New(), Name: "p"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newCmdServer(t, http.StatusOK, tc.body)
+
+			origStdout := os.Stdout
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatalf("pipe: %v", err)
+			}
+			os.Stdout = w
+			leakCh := make(chan []byte, 1)
+			go func() { b, _ := io.ReadAll(r); leakCh <- b }()
+
+			out := &strings.Builder{}
+			root := rootCmd()
+			root.SetArgs(append(append([]string{}, tc.args...), "--url", srv.URL, "--token", "tok"))
+			root.SetOut(out)
+			root.SetErr(&strings.Builder{})
+			execErr := root.Execute()
+
+			_ = w.Close()
+			os.Stdout = origStdout
+			leaked := <-leakCh
+
+			if execErr != nil {
+				t.Fatalf("%s: %v", tc.name, execErr)
+			}
+			if out.Len() == 0 {
+				t.Fatalf("%s: cmd.OutOrStdout() (cobra's SetOut sink) got nothing", tc.name)
+			}
+			if len(leaked) != 0 {
+				t.Errorf("%s: output leaked to the real os.Stdout instead of cmd.OutOrStdout(): %q", tc.name, leaked)
+			}
+		})
+	}
+}
 
 func TestRunCmd_BuildsCreateRequest(t *testing.T) {
 	srv := newCmdServer(t, http.StatusCreated, types.AgentRun{
@@ -244,14 +297,16 @@ func TestRunCmd_DryRunPrintsSetupItemLabel(t *testing.T) {
 		},
 	})
 
-	out := captureStdout(t, func() {
-		if err := execCmd(t, "run", "--url", srv.URL, "--token", "tok",
-			"--agent", "claude-code", "--dry-run"); err != nil {
-			t.Fatalf("run --dry-run returned error: %v", err)
-		}
-	})
-	if !strings.Contains(out, "Workspace secret: GITHUB_TOKEN") {
-		t.Errorf("printPreflight output missing setup item label, got:\n%s", out)
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"run", "--url", srv.URL, "--token", "tok", "--agent", "claude-code", "--dry-run"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("run --dry-run returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "Workspace secret: GITHUB_TOKEN") {
+		t.Errorf("printPreflight output missing setup item label, got:\n%s", out.String())
 	}
 }
 
@@ -579,6 +634,28 @@ func TestRunFailureReason(t *testing.T) {
 	}
 }
 
+// TestRunGetCmd_FailedShowsFailureReason pins #200: `run get` on a FAILED run
+// prints its failure reason on the default (non-JSON) surface, through
+// cmd.OutOrStdout() — not just at exit code time, and not only through --wait.
+func TestRunGetCmd_FailedShowsFailureReason(t *testing.T) {
+	runID := uuid.New()
+	srv := waitServer(t, runID, []types.RunState{types.RunFailed}, []types.AuditEvent{
+		{Action: "run.dispatch", Outcome: "failure", Data: json.RawMessage(`{"error":"pull ghcr.io/x/agent-oracle:latest: not found"}`)},
+	})
+
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"run", "get", runID.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("run get returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "failed:") {
+		t.Errorf("run get output missing the \"failed:\" pin, got:\n%s", out.String())
+	}
+}
+
 func TestRunCmd_WaitFailedNoAuditFallsBackTo1(t *testing.T) {
 	setWaitPollInterval(t, time.Millisecond)
 	runID := uuid.New()
@@ -757,11 +834,15 @@ func TestApprovalsListCmd_PrintsHostAndHoldHint(t *testing.T) {
 		State: types.ApprovalPending, RequestedAt: time.Now(),
 		RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`),
 	}})
-	got := captureStdout(t, func() {
-		if err := execCmd(t, "approvals", "list", "--url", srv.URL, "--token", "tok"); err != nil {
-			t.Fatalf("approvals list returned error: %v", err)
-		}
-	})
+	gotBuf := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"approvals", "list", "--url", srv.URL, "--token", "tok"})
+	root.SetOut(gotBuf)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("approvals list returned error: %v", err)
+	}
+	got := gotBuf.String()
 	if !strings.Contains(got, "pkg.example.com") {
 		t.Errorf("output = %q, want it to contain the requested host", got)
 	}
@@ -1717,25 +1798,6 @@ func TestRecordSaveCmd_RequiresName(t *testing.T) {
 	}
 }
 
-// captureStdout runs fn with os.Stdout redirected and returns what it printed.
-// The table writers target os.Stdout directly (newTab), not cobra's out sink,
-// so the cobra SetOut in execCmd cannot see them.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	orig := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stdout = w
-	done := make(chan string, 1)
-	go func() { b, _ := io.ReadAll(r); done <- string(b) }()
-	fn()
-	_ = w.Close()
-	os.Stdout = orig
-	return <-done
-}
-
 // An ACTIONABLE id must print in full. `run kill` / `approve` / `deny` / `--policy`
 // all parse a full UUID and reject a truncated one ("invalid UUID length: 8"), so
 // truncating the ID column here would break the obvious list → copy → act flow.
@@ -1764,13 +1826,15 @@ func TestListCmds_PrintFullActionableIDs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := newCmdServer(t, http.StatusOK, tc.body)
-			var execErr error
-			out := captureStdout(t, func() {
-				execErr = execCmd(t, append(tc.args, "--url", srv.URL, "--token", "tok")...)
-			})
-			if execErr != nil {
-				t.Fatalf("%s: %v", tc.name, execErr)
+			outBuf := &strings.Builder{}
+			root := rootCmd()
+			root.SetArgs(append(tc.args, "--url", srv.URL, "--token", "tok"))
+			root.SetOut(outBuf)
+			root.SetErr(&strings.Builder{})
+			if err := root.Execute(); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
 			}
+			out := outBuf.String()
 			if !strings.Contains(out, tc.want.String()) {
 				t.Errorf("%s must print the FULL actionable id %s (a truncated id is rejected by the action subcommands); got:\n%s",
 					tc.name, tc.want, out)
@@ -1810,6 +1874,48 @@ func TestWorkspaceCreateCmd(t *testing.T) {
 	}
 	if body["name"] != "/home/you/svc" {
 		t.Errorf("name = %v, want it defaulted to --source", body["name"])
+	}
+}
+
+// TestWorkspaceGetCmd_JSONDefaultsFalse pins #200's clean break: `workspace
+// get` used to default --json to true (the CLI's one command that disagreed
+// with the other 23), which this command now matches — plain --json=false
+// output unless the flag is passed.
+func TestWorkspaceGetCmd_JSONDefaultsFalse(t *testing.T) {
+	id := uuid.New()
+	srv := newCmdServer(t, http.StatusOK, types.Workspace{
+		ID: id, Kind: types.WorkspaceKindLocalDir, Source: "/home/you/svc", Status: types.WorkspaceScanned,
+	})
+
+	out := &strings.Builder{}
+	root := rootCmd()
+	root.SetArgs([]string{"workspace", "get", id.String(), "--url", srv.URL, "--token", "tok"})
+	root.SetOut(out)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("workspace get returned error: %v", err)
+	}
+	if strings.HasPrefix(strings.TrimSpace(out.String()), "{") {
+		t.Errorf("workspace get with no --json printed JSON, want the one-line composition table: %q", out.String())
+	}
+	if !strings.Contains(out.String(), id.String()) {
+		t.Errorf("workspace get table output missing id: %q", out.String())
+	}
+
+	jsonOut := &strings.Builder{}
+	root = rootCmd()
+	root.SetArgs([]string{"workspace", "get", id.String(), "--json", "--url", srv.URL, "--token", "tok"})
+	root.SetOut(jsonOut)
+	root.SetErr(&strings.Builder{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("workspace get --json returned error: %v", err)
+	}
+	var ws types.Workspace
+	if err := json.Unmarshal([]byte(jsonOut.String()), &ws); err != nil {
+		t.Fatalf("workspace get --json output not valid JSON: %v (%q)", err, jsonOut.String())
+	}
+	if ws.ID != id {
+		t.Errorf("workspace get --json id = %s, want %s", ws.ID, id)
 	}
 }
 
