@@ -265,6 +265,19 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("takeover: code = %d, body = %s", w.Code, w.Body.String())
 		}
+		// The UI's doTakeover (attach-terminal.tsx) branches on this field: it
+		// must NOT evict-then-reconnect its own socket when the server already
+		// promoted it in place, or it closes the very socket just promoted and
+		// hands the writer slot to the next queued observer by FIFO (#507).
+		var takeoverBody struct {
+			Promoted bool `json:"promoted"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &takeoverBody); err != nil {
+			t.Fatalf("decode takeover body %q: %v", w.Body.String(), err)
+		}
+		if !takeoverBody.Promoted {
+			t.Fatalf("takeover body promoted = %v, want true (the taker had a queued observer socket)", takeoverBody.Promoted)
+		}
 
 		m := readNextAttachMode(t, c2)
 		if m.ReadOnly || m.Holder == nil || m.Holder.Principal != holderOwner {

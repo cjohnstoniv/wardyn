@@ -510,10 +510,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           if (cb) cb(outDecoder.decode(bytes, { stream: true }));
           return;
         }
-        // TEXT frame = control JSON. Today the server sends exactly one, the
-        // attach-mode frame, immediately on open (attach_holder.go). Anything
-        // else — a keepalive, a frame from a newer daemon — is ignored exactly
-        // as it was before this branch existed.
+        // TEXT frame = control JSON: the attach-mode frame, sent on open
+        // (attach_holder.go) and again mid-stream, read_only:false, when the
+        // server promotes this socket in place. Anything else — a keepalive, a
+        // frame from a newer daemon — is ignored, as before this branch existed.
         if (typeof ev.data !== "string") return;
         try {
           const msg = JSON.parse(ev.data) as AttachModeMsg;
@@ -609,13 +609,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       };
     };
 
-    // Take-over evicts, it does not promote (handleAttachTakeover). After the
-    // POST returns 200 the old holder's socket is closed, but ours is still the
-    // read-only one the server admitted — the server has no mid-stream "you may
-    // now type" message, and inventing one on both ends buys nothing over the
-    // reconnect this component already does. So: drop our socket and
-    // attach again; the fresh attach registers as holder. Between the eviction
-    // and that attach the holder endpoint honestly reports held:false.
+    // Unless our own open socket was just promoted in place (doTakeover skips
+    // this then), a take-over freed the slot rather than promoting us into it
+    // (handleAttachTakeover). After the POST returns 200 the old holder's
+    // socket is closed, but ours is still the read-only one the server
+    // admitted (or we had none) — so: drop our socket and attach again; the
+    // fresh attach registers as holder. Between the eviction and that attach
+    // the holder endpoint honestly reports held:false.
     reclaimRef.current = () => {
       if (disposed) return;
       const cur = wsRef.current;
@@ -758,12 +758,14 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const doTakeover = React.useCallback(async () => {
     setConfirmTakeover(false);
     setTakeoverErr("");
+    let promoted = false;
     try {
-      await runs.takeoverAttach(runId);
+      ({ promoted } = await runs.takeoverAttach(runId));
     } catch (e) {
       // A 409 means the server says NOBODY holds it — the holder left while we
-      // sat here as an observer, and nothing told us: the attach-mode frame is
-      // sent once, at connect. Without this branch the panel was a dead end,
+      // sat here as an observer, and nothing told us: past connect, an
+      // attach-mode frame (read_only:false) comes only with a promotion, and
+      // ours did not happen. Without this branch the panel was a dead end,
       // because the whole page's hero is a terminal permanently convinced it is
       // read-only, and the only way out was a full reload. There IS nothing to
       // take over, so reclaiming is the correct response to that answer, not an
@@ -778,6 +780,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       return;
     }
     setTakenOverBy(null);
+    // promoted: this principal's FIRST observer socket was flipped to writer IN
+    // PLACE, its notice on the way (see lastReadOnly above); reconnecting would
+    // close it and hand the slot to the oldest bystander, landing the taker
+    // read-only (#507). That socket may be another tab's, so only a still-open
+    // one can be ours — a displaced or exhausted panel has none, and reclaims.
+    if (promoted && wsRef.current?.readyState === WebSocket.OPEN) return;
     setMode(null);
     reclaimRef.current(); // evict-then-reconnect; see reclaimRef's assignment
   }, [runId]);

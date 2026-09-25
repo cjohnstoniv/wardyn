@@ -75,9 +75,26 @@ export async function stubAttachTicket(target: Page | BrowserContext, runId: str
   );
 }
 
-/** POST /api/v1/runs/{id}/attach/takeover — the server's own 200. */
-export async function stubTakeover(target: Page | BrowserContext, runId: string): Promise<void> {
-  await target.route(`**/api/v1/runs/${runId}/attach/takeover`, (route) => route.fulfill({ json: {} }));
+/** POST /api/v1/runs/{id}/attach/takeover — the server's own 200. Defaults to
+ *  `{}` (no `promoted` field, so `doTakeover` reads it as falsy and takes its
+ *  evict-then-reconnect path) — the shape every existing caller relies on.
+ *  Pass `promoted: true` for the in-place-promotion path (#507): the response
+ *  then matches the server's real shape,
+ *  `{taken_over, previous_holder, previous_source, promoted}`. */
+export async function stubTakeover(
+  target: Page | BrowserContext,
+  runId: string,
+  opts?: { promoted?: boolean; previousHolder?: string; previousSource?: string },
+): Promise<void> {
+  const body = opts?.promoted
+    ? {
+        taken_over: true,
+        previous_holder: opts.previousHolder ?? "bob@e2e.example",
+        previous_source: opts.previousSource ?? "web",
+        promoted: true,
+      }
+    : {};
+  await target.route(`**/api/v1/runs/${runId}/attach/takeover`, (route) => route.fulfill({ json: body }));
 }
 
 // The attach-mode control frame the daemon sends as a TEXT frame on every

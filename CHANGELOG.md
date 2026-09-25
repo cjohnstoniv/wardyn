@@ -49,6 +49,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   at L3, or with no level. Its `run.agent_policy` audit row carries `"tool_approvals": "hold"`, and
   on a runner that cannot deliver the file the create response says so, as it does for a gated run.
 
+- **Take-over could land the taker read-only.** The server already promotes the taker's own
+  queued observer socket to writer in place, but the console's take-over button unconditionally
+  reconnected afterward — closing that just-promoted socket and handing the writer slot to
+  whichever bystander was next in the FIFO queue. `POST /attach/takeover` now reports whether it
+  promoted the caller in place, and a console tab whose socket is still open skips the reconnect on
+  that answer (#507).
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
