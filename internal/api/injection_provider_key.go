@@ -6,6 +6,7 @@ package api
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -23,7 +24,20 @@ const (
 	providerKeyAbsent = "your own key or token for this run's model provider is not stored — add it again from Getting " +
 		"started in the console; no other person's credential stands in for it"
 	providerKeyUnreadable = "Wardyn couldn't read your model provider credential just now"
+	providerKeyChanged    = "this run's model provider was removed, turned off, re-pointed or changed after the run " +
+		"started, so its key is no longer injected"
+	providerKeyRecordUnreadable = "Wardyn couldn't read this run's model provider just now, so its key is not injected"
 )
+
+// providerKeyRecheck is how long a resolved provider key is good for. The
+// proxy re-resolves 5 minutes before expiry (injectRefreshMargin), so a key is
+// re-checked against the provider record about every 10 minutes while the run
+// makes model calls; each re-check is one credential.mint and one secret.read
+// audit row. A provider removed, turned off or re-pointed mid-run therefore
+// fails closed within that window rather than keep its startup copy, and the
+// sidecar's exact-host allowlist, fixed at dispatch, already refuses a new
+// address in the meantime.
+const providerKeyRecheck = 15 * time.Minute
 
 // resolveProviderKeyInjection is the wardyn-provider-<uid>-key arm of
 // handleInternalInjection: a person's own key or token for a key or endpoint
@@ -33,7 +47,12 @@ const (
 // the grant's snapshot must name the key it carries and the run's OWN subject
 // — the run token, not the grant, is authority for who that is — and the key
 // is read from that namespace strictly (ownSecret), never through the
-// operator fallback the generic arm below takes. Every miss fails closed.
+// operator fallback the generic arm below takes.
+//
+// It trusts the provider record, never the grant, for where the key goes: the
+// provider is re-read by UID on every resolve and must still be the run's
+// choice, on, serving its agent; the host, header and format it derives must
+// equal the grant's. Every miss fails closed.
 func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Request,
 	claims *identity.Claims, minted broker.Minted, grantID uuid.UUID,
 ) bool {
@@ -57,14 +76,31 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 	if rec.OwnerSubject == "" || rec.OwnerSubject != claims.Sub {
 		return fail(http.StatusForbidden, "owner_mismatch", providerKeyNotOwn)
 	}
-	secret, found, err := s.ownSecret(rctx, claims.Sub, name)
+	run, err := s.cfg.Store.GetRun(ctx, claims.RunID)
+	if err != nil {
+		return fail(http.StatusServiceUnavailable, "run_unreadable", providerKeyRecordUnreadable)
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return fail(http.StatusServiceUnavailable, "providers_unreadable", providerKeyRecordUnreadable)
+	}
+	p, found := modelProviderByID(sc.ModelProviders, run.ModelProviderID)
+	if !found || p.UID != rec.ProviderUID || p.Disabled || !providerKindDispatched[p.Kind] {
+		return fail(http.StatusForbidden, "provider_changed", providerKeyChanged)
+	}
+	lane, ok := providerKeyLaneFor(p, run.Agent)
+	if !ok || !hostEqual(minted.Injection.Host, lane.host) ||
+		minted.Injection.Header != lane.header || minted.Injection.Format != lane.format {
+		return fail(http.StatusForbidden, "provider_changed", providerKeyChanged)
+	}
+	secret, found, err := s.ownSecret(rctx, rec.OwnerSubject, name)
 	switch {
 	case err != nil:
 		return fail(http.StatusServiceUnavailable, "store_unreadable", providerKeyUnreadable)
 	case !found || len(secret) == 0:
 		return fail(http.StatusFailedDependency, "own_key_absent", providerKeyAbsent)
 	}
-	formatted := formatInjectionValue(minted.Injection.Format, secret)
+	formatted := formatInjectionValue(lane.format, secret)
 	if s.cfg.MaskRegistry != nil {
 		s.cfg.MaskRegistry.Add(claims.RunID, secret)
 		if formatted != string(secret) {
@@ -74,10 +110,11 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", name, "success", mustJSON(withStoreRow(map[string]any{
 			"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI,
-			"owner": claims.Sub, "provider_uid": rec.ProviderUID,
+			"owner": rec.OwnerSubject, "provider": p.ID, "provider_uid": rec.ProviderUID,
 		}, row))))
 	writeJSON(w, http.StatusOK, injectionResponse{
-		Host: minted.Injection.Host, Header: minted.Injection.Header, Value: formatted, JTI: minted.JTI,
+		Host: lane.host, Header: lane.header, Value: formatted, JTI: minted.JTI,
+		ExpiresAt: time.Now().Add(providerKeyRecheck).UnixMilli(),
 	})
 	return true
 }

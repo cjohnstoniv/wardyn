@@ -571,6 +571,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **The injection sink trusts the model provider record, never the grant (#531).** Each resolve of
+  a person's provider key re-reads the run's provider by UID and injects only while it is still
+  that run's choice, on, serving the agent, with the same host, header and format the grant
+  carries; the key is read from the namespace the grant snapshots. A resolved key now expires
+  after 15 minutes, so the proxy re-checks about every 10 minutes while the run makes model calls
+  (each re-check re-mints the grant: one `credential.mint` and one `secret.read` audit row), and a
+  provider removed, turned off or re-pointed mid-run fails closed within that window rather than
+  keep its startup copy. Once a provider block is set, or when it cannot be read, the two legacy
+  shared subscription sentinels are refused before the operator's token is touched; the boot
+  gateway (`WARDYN_ANTHROPIC_BASE_URL`) no longer widens where a subscription token may go under a
+  block.
 - **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
   that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
   sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the
