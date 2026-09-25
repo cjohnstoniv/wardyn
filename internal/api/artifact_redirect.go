@@ -53,28 +53,16 @@ func redirectPublicHosts(r types.EgressRedirect) []string {
 
 // redirectEndpointPort reads the port a redirect endpoint (a full URL or a bare
 // "host[:port][/path]", per validSiteURLOrHost) SPELLS, off the same authority
-// hostrules.HostOf reads its host from — so the two parsers cannot disagree
-// about the one string. HostOf ends the authority at IndexAny("/:"); this ends
-// it at IndexAny("/?#"), which is the same boundary for everything before the
-// port, and then takes the port from the first ':' exactly where HostOf stops.
-// Cutting only at '/' (as this did) handed strconv "8443?repo=npm" for a To of
-// scheme://host:port?query and silently fell back to 443.
-//
-// Three outcomes, kept distinct because the callers need different ones:
+// hostrules.HostOf reads its host from, so the two parsers cannot disagree; the
+// authority ends at IndexAny("/?#") so a query never reaches strconv.
 //
 //	(p, true, true)   a port is spelled and is a decimal 1-65535
 //	(0, false, true)  no port is spelled — the caller applies its scheme default
-//	(0, true, false)  a port IS spelled and is not usable (":0", ":99999", ":-1",
-//	                  a query glued to the authority). validateSiteConfig REFUSES
-//	                  this at PUT rather than letting a downstream parser coerce
-//	                  it to a port the operator never configured.
+//	(0, true, false)  spelled but unusable: validateSiteConfig REFUSES it at PUT, never coerced
 //
-// Taking the port from the FIRST ':' is HostOf's own boundary, so a bracketed
-// IPv6 authority ("[fd00::1]:8443") reads as spelled-but-unusable here. That is
-// inert today and deliberately left so: validSiteURLOrHost already refuses
-// every IPv6 spelling of a redirect endpoint (HostOf cuts at IndexAny("/:")
-// too), so nothing reachable regresses — but a future IPv6 story must teach
-// BOTH parsers at once rather than inherit this answer.
+// The FIRST ':' reads a bracketed IPv6 authority as unusable: inert, since
+// validSiteURLOrHost refuses IPv6 redirect endpoints, but a future IPv6 story
+// must teach BOTH parsers at once.
 func redirectEndpointPort(rawURL string) (port int, spelled, ok bool) {
 	s := strings.TrimSpace(rawURL)
 	if i := strings.Index(s, "://"); i >= 0 {
@@ -96,25 +84,16 @@ func redirectEndpointPort(rawURL string) (port int, spelled, ok bool) {
 
 // redirectPort is the port a redirect's To endpoint NAMES: the one it spells,
 // else the default of the SCHEME it spells — 80 for an explicit "http://",
-// 443 otherwise (a bare host and an "https://" URL are both dialed as a
-// CONNECT tunnel the proxy TLS-terminates, see mitm.go). Scheme-blindness here
-// is what made the redirect probe dial a plain-http mirror's 443 and report a
-// working mirror as blocked, and what put a host:443 entry in mitmHosts for a
-// mirror that serves cleartext on 80.
-//
-// planArtifactRedirect needs the port beside the host so mitmHosts can carry
-// "host:port" and the proxy's TLS termination dials the mirror's REAL port
-// instead of always assuming 443; an http:// To is reached through
-// handlePlain, never a CONNECT, so the 80 default narrows that MITM-eligibility
-// entry to a port no CONNECT arrives on rather than widening anything.
-//
-// A port that is spelled but unusable cannot reach here from a stored config —
-// validateSiteConfig refuses it at PUT — so the scheme default also covers a
-// row written before that gate existed, fail-safe and unchanged from before.
-//
-// Also used for the Bedrock data-plane authority — WARDYN_BEDROCK_BASE_URL,
-// runs_bedrock.go — so the two MITM-authoring lanes derive their port by the
-// SAME rule rather than each keeping a copy.
+// 443 otherwise (a bare host and an "https://" URL are both dialed as a CONNECT
+// tunnel the proxy TLS-terminates). Being scheme-blind would probe a plain-http
+// mirror's 443 and report it blocked. planArtifactRedirect puts "host:port" in
+// mitmHosts so TLS termination dials the mirror's REAL port; an http:// To goes
+// through the proxy's handlePlain, never a CONNECT, so its 80 default narrows
+// that MITM entry to a port no CONNECT arrives on rather than widening anything.
+// A spelled-but-unusable port is refused at PUT (validateSiteConfig), so the
+// scheme default also covers an older row, fail-safe. The Bedrock data-plane
+// authority (WARDYN_BEDROCK_BASE_URL) uses this too, so both MITM-authoring
+// lanes derive their port by the SAME rule.
 func redirectPort(rawURL string) int {
 	if p, spelled, ok := redirectEndpointPort(rawURL); ok && spelled {
 		return p
@@ -214,27 +193,17 @@ func artifactBaseURLs(sc types.SiteConfig) map[string]string {
 }
 
 // planArtifactRedirect builds the dispatch-time egress-redirect plan for a run
-// from the operator-wide site-config. It:
-//   - emits each Ecosystem-tier redirect's per-tool config (URL-only) as a
-//     base64 env payload agent-run materializes under $HOME, plus go's
-//     GOPROXY/GOSUMDB (network-only rows contribute no file — see
-//     types.SiteConfig.EgressRedirects);
-//   - for EVERY redirect's To host WITH a token secret THAT EXISTS (both
-//     tiers), authors a stored-secret api_key grant + injection rule so the
-//     token injects proxy-side, and marks the host for TLS-MITM (the injector
-//     cannot rewrite an opaque CONNECT).
+// from the operator-wide site-config: each Ecosystem-tier redirect's per-tool
+// config (URL-only) as a base64 env payload agent-run materializes under $HOME,
+// and, for each To host whose token secret EXISTS, a stored-secret api_key grant
+// + injection rule with the host marked for TLS-MITM (the injector cannot
+// rewrite an opaque CONNECT). A redirect with no token, a dangling token ref or
+// a failed grant create (audited) degrades to redirect-only, never failing the
+// run: anonymous-read corp mirrors work without a token.
 //
-// A redirect with no token (or a token whose secret is absent) still redirects
-// the URL/host — anonymous-read corp destinations work without a token, and a
-// dangling token ref degrades to redirect-only rather than failing the run
-// (non-blocking posture). Grant creation touches the store; a create failure is
-// audited and that one redirect is skipped, never aborting the run.
-//
-// preDomains is the run's PRE-substitution egress allowlist. A token injection +
-// TLS-MITM is authored for a redirect ONLY when the run actually reaches one of
-// the public hosts it fronts (artifactRedirectApplies) — the SAME
-// scope substituteArtifactEgress uses for the To-host add — so an unrelated sealed
-// run never has the operator's registry token injected onto a host it never named.
+// preDomains is the run's PRE-substitution allowlist: injection + TLS-MITM only
+// when the run reaches a public host the redirect fronts (artifactRedirectApplies,
+// as substituteArtifactEgress), so no run gets the token on a host it never named.
 func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, sc types.SiteConfig, preDomains []string) artifactRedirectPlan {
 	var plan artifactRedirectPlan
 	if len(sc.EgressRedirects) == 0 {
@@ -282,26 +251,15 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		if host == "" || seenHost[host] {
 			continue
 		}
-		// Veto: refuse a redirect whose To is the configured internal model
-		// gateway OR a public model-provider host — buildInjector's byHost map
-		// is last-write-wins, so a colliding row would swap an artifact token
-		// onto model traffic (or, for the public-host half, land the token on
-		// a live subscription/managed request that never expected one).
-		//
-		// isModelProviderRejectHost (llmcred.go), NOT isModelProviderHost: this
-		// is a REJECT test, and the Bedrock lane's bedrock-runtime.<region> /
-		// bedrock.<region> pair — plus a WARDYN_BEDROCK_BASE_URL endpoint —
-		// carries proxy-side bearer injection exactly as the anthropic/openai
-		// lanes do (resolveBedrockAuth's preferred bearer mode, runs_bedrock.go),
-		// so a redirect To one of them is the SAME last-write-wins collision.
-		//
-		// A ZERO types.Workspace is passed deliberately. This plan is composed
-		// before dispatch resolves the run's LLM transport (the resolveLLMTransport
-		// block below this call in runs_dispatch.go), and a run can reference
-		// several onboarded workspaces (run.WorkspaceIDs), so there is no single
-		// workspace to consult here — only the daemon-wide BedrockRegion pair is
-		// decidable at this point. bedrockLaneHosts' per-workspace half is
-		// therefore not exercised at this site.
+		// Veto a To that is the configured model gateway or a public model-provider
+		// host: proxy.buildInjector's byHost map is last-write-wins, so a colliding
+		// row would swap an artifact token onto model traffic. isModelProviderRejectHost,
+		// NOT isModelProviderHost: the Bedrock hosts (and WARDYN_BEDROCK_BASE_URL)
+		// carry proxy-side bearer injection too (resolveBedrockAuth), so they are the
+		// SAME collision. A ZERO types.Workspace is deliberate: this plan is composed
+		// before resolveLLMTransport, and a run can reference several workspaces
+		// (run.WorkspaceIDs), so only the daemon-wide BedrockRegion pair is decidable
+		// here; bedrockLaneHosts' per-workspace half is not exercised at this site.
 		if s.isModelProviderRejectHost(ctx, types.Workspace{}, host) {
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.artifact.redirect",
 				run.ID.String(), "warn", mustJSON(map[string]any{
@@ -326,20 +284,15 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		}
 		seenHost[host] = true
 		grantID := uuid.New()
-		// require_tls: the redirect's OWN transport intent, declared here because
-		// this producer is the one place that knows it. A redirect the
-		// operator spelled `https://` is TLS by construction — the proxy
-		// TLS-terminates it and injects on the decrypted leg — so a cleartext
-		// request to the mirror is the SANDBOX choosing the transport, and the
-		// corp token must be refused (403, policy:require-tls) rather than
-		// silently withheld. It is also what keeps this from widening the
-		// cleartext door it walks through: the allowlist entry this redirect
-		// authors is port-qualified, and AuthoredPortFor reads a port-qualified
-		// entry as declared transport intent.
-		//
-		// An explicit `http://` To is the operator asking for cleartext, so it
-		// does NOT set the flag: there the mirror genuinely is a plaintext
-		// connector and injectableTransport's port-80 arm is the right answer.
+		// require_tls: the redirect's OWN transport intent, declared by the one
+		// producer that knows it. An `https://` To is TLS by construction (the proxy
+		// injects on the decrypted leg), so a cleartext request to the mirror is the
+		// SANDBOX choosing the transport and the corp token must be refused (403,
+		// policy:require-tls), not silently withheld. It also keeps this from
+		// widening the cleartext door: the port-qualified allowlist entry this
+		// authors reads as declared intent (proxy's AuthoredPortFor). An explicit
+		// `http://` To is the operator asking for cleartext, so it does NOT set the
+		// flag; there proxy.injectableTransport's port-80 arm is the right answer.
 		scope, _ := json.Marshal(map[string]any{
 			"host":        host,
 			"header":      tok.header,
@@ -386,22 +339,13 @@ type redirectToken struct{ secretName, header, format string }
 // injection scope needs, from whichever of the two sources the row names.
 // A non-empty `why` means no token — the caller applies the redirect WITHOUT
 // injection and audits that reason.
+//   - TokenSecretRef: a bare secret presented as "Authorization: Bearer <secret>",
+//     byte-for-byte unchanged for every existing row.
+//   - TokenIntegrationRef: the INTEGRATION owns the credential, so its Header and
+//     Format come with the secret name (e.g. "X-JFrog-Art-Api" or a bare token).
 //
-// The two sources differ in more than where the secret name comes from:
-//
-//   - TokenSecretRef (the original): a bare secret, presented as
-//     "Authorization: Bearer <secret>" because that is the only shape this path
-//     ever supported. Unchanged, byte-for-byte, for every existing row.
-//   - TokenIntegrationRef (the seam): the INTEGRATION owns the system and its
-//     credential, so its own Header and Format come along with the secret name.
-//     That is the actual gain — a feed authenticating with "X-JFrog-Art-Api" or
-//     a bare token finally works, where the hardcoded Bearer above would have
-//     sent a header the server rejects.
-//
-// Every failure degrades to redirect-only rather than failing the run, matching
-// the dangling-secret posture this path already had: an unconfigured or
-// disabled integration, one that delivers no header credential, or a secret
-// that is not in the store.
+// Every failure (unconfigured or disabled integration, no header credential, a
+// missing secret) degrades to redirect-only rather than failing the run.
 func (s *Server) resolveRedirectToken(ctx context.Context, r types.EgressRedirect, present map[string]bool) (redirectToken, string) {
 	if r.TokenIntegrationRef != "" {
 		integ, found := s.resolveIntegrationRef(ctx, "", r.TokenIntegrationRef)

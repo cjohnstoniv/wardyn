@@ -45,26 +45,13 @@ type AuditSpool struct {
 	// quarantined counts lines moved aside because the store rejected them
 	// spoolPoisonAttempts times running (see Drain). Surfaced on /metrics: the
 	// spool draining back to 0 must not be the same signal as the spool being
-	// COMPLETE, and after a quarantine those two differ.
-	//
-	// Seeded from the sidecar at NewAuditSpool, because the condition it reports
-	// is persistent on disk while a process-local counter is not. Any restart
-	// after a quarantine returned it to 0 while the sidecar still held the
-	// missing events, and /metrics then showed a completely healthy audit
-	// surface over a trail that is permanently incomplete.
-	//
-	// As durable as the directory, and no more: durability across "a deploy, a
-	// crash loop, a pod reschedule" holds only on a substrate that gives the
-	// spool directory durable storage:
-	// compose's `audit` named volume, or a chart install with
-	// persistence.enabled=true. On the chart's DEFAULT (persistence.enabled
-	// false) WARDYN_AUDIT_SPOOL is /tmp/audit-spool.jsonl and /tmp is an
-	// emptyDir, so a rolling deploy or a reschedule discards the sidecar with
-	// the pod: the counter reads 0 again and the permanently-refused events it
-	// accounts for are gone with it. A process restart in place still keeps
-	// both, on every substrate. ephemeralSpoolDir names the case that does not,
-	// and NewAuditSpool WARNs about it at boot rather than leaving the operator
-	// to discover the difference from a counter that silently reset.
+	// COMPLETE, and after a quarantine those two differ. Seeded from the sidecar
+	// at NewAuditSpool so a restart cannot show a healthy surface over a trail
+	// that is permanently incomplete. As durable as the directory, and no more:
+	// on the chart's DEFAULT (persistence.enabled=false, /tmp an emptyDir) a
+	// redeploy or reschedule discards the sidecar and the counter reads 0 again;
+	// compose's `audit` volume or persistence.enabled=true keep it. NewAuditSpool
+	// WARNs at boot when ephemeralSpoolDir names that case.
 	quarantined atomic.Int64
 	// lines is the number of un-replayed events in the spool: the
 	// wardyn_audit_spool_lines gauge. An atomic maintained by Append and Drain
@@ -140,24 +127,14 @@ func NewAuditSpool(path string) (*AuditSpool, error) {
 		return nil, err
 	}
 	a := &AuditSpool{f: f, path: path}
-	// Both counters describe state that is ON DISK and outlives this process, so
-	// both are read back from it rather than started at zero. For the backlog
-	// that is merely correct; for the quarantine it is the whole point - without
-	// reading it back, a restart would clear the only scrape-surface signal that
-	// the queryable trail is permanently incomplete, while the sidecar holding
-	// the missing events sat untouched beside the spool.
-	// The cursor is on-disk state too, for the same reason the two counters
-	// above are: it describes the file, not this process. Drain retires work by
-	// advancing `consumed` and only REWRITES the file when the reclaim pays for
-	// itself (at least half), so between compactions the cursor is the only
-	// record of what has already reached the store. A restart that started it at
-	// zero re-replayed every line back to the last compaction — measured: one
-	// pass of 100 out of 400 spooled events, then a restart, replayed all 400,
-	// i.e. 100 duplicate audit_events rows, and the compaction rule bounds that
-	// at ~50% of the spool, so a 64k backlog can produce ~32k duplicates on one
-	// restart. The file's own doc claimed the bound was "a crash between
-	// rec.Record succeeding and the on-disk trim", i.e. the in-flight batch;
-	// this makes that sentence true.
+	// The cursor and both counters describe state ON DISK that outlives this
+	// process, so they are read back rather than started at zero. For the
+	// quarantine that keeps the only scrape signal of a permanently incomplete
+	// trail. Drain only REWRITES the file when the reclaim is at least half, so
+	// between compactions the cursor is the only record of what reached the
+	// store; starting it at zero would replay up to ~50% of the spool as
+	// duplicate audit_events rows. With it, the duplicate bound is the in-flight
+	// batch (a crash between rec.Record succeeding and the on-disk trim).
 	a.consumed = seedSpoolCursor(a.consumedPath(), path, spoolFileSize(path))
 	a.lines.Store(countSpoolLinesFrom(path, a.consumed))
 	a.quarantined.Store(countSpoolLines(a.quarantinePath()))
@@ -176,20 +153,12 @@ func NewAuditSpool(path string) (*AuditSpool, error) {
 }
 
 // ephemeralSpoolDir reports whether path's directory is one this project KNOWS
-// is discarded with the container, and names it.
-//
-// A path test, deliberately, and its limits are the reason it is one. The case
-// that matters is the Helm chart's own default — persistence.enabled=false
-// points WARDYN_AUDIT_SPOOL at /tmp/audit-spool.jsonl and mounts /tmp as an
-// emptyDir — and an emptyDir is NOT a distinguishable filesystem: it is the
-// node's disk, so statfs sees ext4/overlayfs and reports nothing unusual. There
-// is no syscall that answers "will this survive a pod reschedule". What there IS
-// is a convention every substrate this ships on honours: /tmp is scratch.
-//
-// It therefore UNDER-reports rather than over-reports: an operator who points
-// the spool at some other ephemeral mount gets no warning, and that is the safe
-// direction for a heuristic — a false alarm on a durable path would teach
-// operators to ignore the line.
+// is discarded with the container, and names it. A path test, deliberately: the
+// chart default mounts /tmp as an emptyDir, which statfs cannot tell from the
+// node's disk, and no syscall answers "will this survive a reschedule" — but
+// every substrate this ships on treats /tmp as scratch. It UNDER-reports (another
+// ephemeral mount gets no warning), the safe direction for a heuristic: a false
+// alarm on a durable path would teach operators to ignore the line.
 func ephemeralSpoolDir(path string) (string, bool) {
 	dir := filepath.Clean(filepath.Dir(path))
 	if dir == os.TempDir() || dir == "/tmp" || strings.HasPrefix(dir, "/tmp/") {
@@ -259,22 +228,15 @@ func (a *AuditSpool) endsUnterminated() bool {
 }
 
 // auditWriteTimedOut reports whether a store rejection was a WAIT the DATABASE
-// aborted rather than a judgement about the event.
-//
-// SQLSTATE, not a message match and not a driver type: the codes are the
-// database's own closed vocabulary, stable across driver versions, and
-// documented for exactly this purpose.
+// aborted rather than a judgement about the event. SQLSTATE, not a message or
+// driver type: the codes are the database's own stable, closed vocabulary.
 //   - 55P03 lock_not_available — the audit-chain advisory lock was held past
-//     `SET LOCAL lock_timeout` (internal/db's AuditChainLockTimeoutSQL). The
-//     transaction never got to evaluate this event.
-//   - 57014 query_canceled — statement_timeout, or an administrator cancelling
-//     the backend. Same argument: aborted, not refused.
+//     `SET LOCAL lock_timeout` (db.AuditChainLockTimeoutSQL); the event was
+//     never evaluated.
+//   - 57014 query_canceled — statement_timeout or an admin cancel: aborted.
 //
-// Read through the `SQLState() string` method rather than *pgconn.PgError so
-// this package keeps its layering — internal/api talks to store.Store and has
-// never imported the driver — and so a wrapped or re-typed error from a future
-// store implementation still classifies, as long as it carries the code.
-// errors.As walks the %w chain the store builds around the driver error.
+// Read via a `SQLState() string` method, not *pgconn.PgError, so internal/api
+// never imports the driver and any store's wrapped error classifies (errors.As).
 func auditWriteTimedOut(err error) bool {
 	var coded interface{ SQLState() string }
 	if !errors.As(err, &coded) {
@@ -292,65 +254,18 @@ const (
 	sqlStateQueryCanceled    = "57014"
 )
 
-// Drain replays up to batch spooled events into rec (the DURABLE store recorder)
-// and removes exactly those it confirmed, leaving the rest for the next call. It
-// returns the number of events replayed. On a replay error it stops and keeps
-// every not-yet-confirmed line on disk (including the one that failed), so a
-// still-down store just leaves the spool untouched to retry later.
-//
-// EXCEPT for a line the store will never accept. Stopping at the first error is
-// right for an outage and wrong for a rejection that cannot resolve — a CHECK
-// violation, a payload a column type refuses, a hand-edited line, an event shape
-// from another binary version. That line sat at the head of the file and every
-// event behind it was replayed never, while the only symptom was a
-// wardyn_audit_spool_lines gauge that stopped falling; docs/OPERATIONS.md
-// meanwhile promises the trail "becomes complete again automatically". After
-// spoolPoisonAttempts consecutive rejections of the SAME line, Drain therefore
-// moves it to the quarantine sidecar (fsynced there before it leaves the spool)
-// and carries on with the lines behind it, returning errSpoolLineQuarantined so
-// the move is never silent.
-//
-// Known limit: two or more ADJACENT unacceptable lines still wedge, because the
-// second rejection in a pass is read as "the store is down" — which is the right
-// reading for every other cause of two rejections in a row, and the price of
-// never quarantining during an outage. A run like that is what "an event shape
-// from another binary version" produces, so it is not hypothetical. It is not
-// silent: the suspect is logged by event id every tick (above), which reads
-// differently from StartDrain's store-still-failing line, and the spool gauge
-// stays flat. The manual remedy is in docs/OPERATIONS.md.
-//
-// rec MUST be a raw durable recorder (e.g. store.Recorder) — NOT the spooling
-// chain: Drain holds the spool lock across the whole operation, so a recorder that
-// re-entered Append on failure would deadlock. Holding the lock also makes it safe
-// against concurrent Append (a failed write during a drain blocks briefly instead
-// of racing the truncate); the bounded batch keeps that hold short.
-//
-// at-least-once, and it stays that way. A crash between rec.Record succeeding
-// and the cursor's fsync can re-replay that batch on the next Drain.
-//
-// The bound is the in-flight batch, and it is a bound the code holds rather
-// than a sentence about one. Keeping the cursor only in memory, with the
-// file rewritten at most every other pass (see the compaction rule below),
-// would let a restart replay everything back to the LAST COMPACTION — up to half the
-// spool, measured at 100 duplicates from a 400-event backlog after one 100-event
-// pass. It is fsynced beside the spool at every advance (saveSpoolCursor)
-// and seeded at open (seedSpoolCursor), so the window really is one batch.
-// `ON CONFLICT (id) DO NOTHING` does NOT fix that: audit_events has no unique
-// constraint on `id` (the PK is the surrogate `seq`), so Postgres rejects that
-// clause at PLAN time with 42P10 — it would break every audit insert, not just
-// the replayed ones. Retrofitting the index is also not a boot-time migration:
-// pre-existing duplicate ids would fail it inside applyMigration's transaction
-// and abort startup, CREATE UNIQUE INDEX CONCURRENTLY cannot run in that
-// transaction (25001), and de-duplicating first is blocked by the append-only
-// DELETE trigger (P0001) — i.e. it would require disabling the very guarantee
-// db.AuditDDLProtected exists to verify.
-//
-// The duplicate is also the benign direction: `seq` still identifies the row
-// uniquely, a replayed event is byte-identical and self-identifying by its
-// repeated `id`, and an append-only log that records an event twice is a far
-// smaller integrity problem than one that drops it. If exactly-once is ever
-// wanted, the non-destructive path is an operator-run, out-of-band
-// CREATE UNIQUE INDEX CONCURRENTLY after a duplicate check, behind a flag.
+// Drain replays up to batch spooled events into rec (the DURABLE store recorder), removes exactly
+// those it confirmed and returns the count. On a replay error it stops and keeps every unconfirmed
+// line, so a down store leaves the spool to retry. A line rejected spoolPoisonAttempts times running
+// moves to the quarantine sidecar (fsynced there first) and Drain returns errSpoolLineQuarantined, so
+// the move is never silent. Known limit: two ADJACENT unacceptable lines still wedge (the second reads
+// as an outage, the price of never quarantining during one); the suspect is logged by event id every
+// tick, and docs/OPERATIONS.md has the remedy. rec MUST NOT be the spooling chain: Drain holds the
+// spool lock throughout (safe against concurrent Append), so re-entering Append would deadlock.
+// At-least-once, bounded by the in-flight batch (saveSpoolCursor fsyncs at every advance). Not
+// `ON CONFLICT (id)`: audit_events has no unique id (42P10), and a unique index cannot be a boot
+// migration without disabling what db.AuditDDLProtected verifies. A duplicate is the benign direction;
+// exactly-once would be an operator-run CREATE UNIQUE INDEX CONCURRENTLY behind a flag.
 func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -419,18 +334,10 @@ func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (
 			replayErr = err
 			// A timeout is NOT a rejection: the store never answered, so this
 			// line has proved nothing about itself and must not earn a strike
-			// toward quarantine.
-			//
-			// Two kinds of timeout, and only one of them was checked. A
-			// CLIENT-side deadline shows up on passCtx. A DATABASE-side abort
-			// does not: the audit-chain insert runs under `SET LOCAL
-			// lock_timeout` (db.AuditChainLockTimeoutSQL), so a contended chain
-			// lock comes back as an ordinary statement error with
-			// passCtx.Err() == nil and earned a strike. Three contended ticks on
-			// the same head line and the first line to land behind it proved
-			// "the store is up", moving a replayable event — a credential.mint,
-			// say — into <spool>.quarantine, after which the spool gauge reads 0
-			// (fully recovered) over a permanently incomplete trail. Per
+			// toward quarantine. A CLIENT-side deadline shows on passCtx; a
+			// DATABASE-side abort (the chain insert's `SET LOCAL lock_timeout`,
+			// db.AuditChainLockTimeoutSQL) is an ordinary statement error with
+			// passCtx.Err() == nil, so auditWriteTimedOut checks it too. Per
 			// docs/OPERATIONS.md an outage, chain-lock contention included, must
 			// quarantine nothing.
 			if passCtx.Err() != nil || auditWriteTimedOut(err) {
@@ -608,21 +515,13 @@ func (a *AuditSpool) reclaimAll(size int64) error {
 
 // compact rewrites the spool as head (the kept lines of the processed window)
 // followed by the raw bytes from tailStart to size, dropping the consumed
-// prefix. Atomic via rename.
-//
-// The new fd is opened on the temp file before the rename and swapped in after
-// it, so there is no window in which a.f points at an inode the rename has
-// already unlinked. Reopening the path AFTER the rename would leave one: a
-// failure there (fd exhaustion, most likely under exactly the load that
-// produced the backlog) would leave a.f still on the unlinked inode, and
-// every later Append would then write and fsync into a file with no
-// directory entry and return nil — so spoolingRecorder would log nothing,
-// Lines() would read the new file and report 0, and the runbook's "the gauge
-// is back to 0" would mean the events were gone: the "never silently lost"
-// invariant this whole file exists to hold, inverted into silent loss behind
-// a healthy-looking gauge. Opening first removes the failure mode instead of
-// handling it: nothing between the rename and the swap can fail. O_RDWR, not
-// O_WRONLY, so endsUnterminated's ReadAt probe keeps working on the new fd.
+// prefix. Atomic via rename. The new fd is opened on the temp file BEFORE the
+// rename and swapped in after it, so nothing between rename and swap can fail:
+// a reopen after the rename could fail (fd exhaustion under backlog load) and
+// leave a.f on the unlinked inode, where every later Append would write into a
+// file with no directory entry and return nil — silent loss behind a gauge
+// reading 0, the inverse of this file's "never silently lost" invariant.
+// O_RDWR, not O_WRONLY, so endsUnterminated's ReadAt probe works on the new fd.
 //
 // Caller must hold a.mu.
 func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
@@ -656,20 +555,13 @@ func (a *AuditSpool) compact(head [][]byte, tailStart, size int64) error {
 		tf.Close()
 		return err
 	}
-	// The cursor is retired before the rename, not after it. The window between
-	// them is a real crash window, and what it would leave behind is the OLD
-	// offset standing over the NEW, compacted file — which is SMALLER, so an
-	// offset that was in range for the file it was measured against is very
-	// often in range for the replacement too. A size bound cannot see it;
-	// seedSpoolCursor's fingerprint now can, but the
-	// ordering removes the window rather than relying on the check that catches
-	// it. Zero over the OLD file is safe in the only direction that matters: it
-	// replays lines that already landed (at-least-once, the residual this
-	// accepts), where a stale offset over the new file SKIPS lines that did not.
-	//
-	// a.consumed is NOT moved here: this rename can still fail, and a compaction
-	// that failed must leave the in-memory cursor describing the file that is
-	// still on disk.
+	// The cursor is retired BEFORE the rename: a crash between them would
+	// otherwise leave the OLD offset over the NEW, smaller file, where it often
+	// still fits. seedSpoolCursor's fingerprint would catch that, but the
+	// ordering removes the window. Zero over the OLD file only replays lines that
+	// already landed (at-least-once); a stale offset over the new file SKIPS
+	// lines that did not. a.consumed is NOT moved here: the rename can still
+	// fail, and the in-memory cursor must describe the file still on disk.
 	a.writeSpoolCursor(0)
 	if err := os.Rename(tmp, a.path); err != nil {
 		tf.Close()
@@ -700,16 +592,13 @@ func (a *AuditSpool) strikeLine(line []byte) int {
 
 // quarantineLine appends line verbatim to the sidecar quarantine file and
 // fsyncs it BEFORE Drain consumes it from the spool, so the event exists in two
-// places at once rather than in none at any instant. Verbatim, because the file
-// is then a valid JSONL spool an operator can move back onto the spool path once
-// the cause is fixed; the reason lives in the log line and the /metrics counter,
-// not smuggled into the payload.
-//
+// places at once rather than in none at any instant. Verbatim, so the file is a
+// valid JSONL spool an operator can move back once the cause is fixed; the
+// reason lives in the log line and the /metrics counter, not the payload.
 // Deliberately NOT recorded as an audit event through rec: the store just
-// refused a write from this very spool, and an integrity report written into the
-// log it is about — through the path that is failing — is the worst of both. The
-// operator-facing signals are the WARN below, wardyn_audit_spool_quarantined_total,
-// and the file itself.
+// refused a write from this spool, and a report written through the failing path
+// into the log it is about is the worst of both. The signals are the log line
+// below, wardyn_audit_spool_quarantined_total, and the file itself.
 //
 // Caller must hold a.mu (Drain does).
 func (a *AuditSpool) quarantineLine(ctx context.Context, line []byte, ev types.AuditEvent, cause error) error {
@@ -761,25 +650,13 @@ func (a *AuditSpool) Quarantined() int64 {
 // the queryable trail is complete again. Served as the wardyn_audit_spool_lines
 // gauge on /metrics: a spool that never returns to 0 is a drain that is not
 // working, which nothing else on the scrape surface shows. A nil spool (spooling
-// disabled) reports 0, and so does an unreadable file — this is an observability
-// gauge, not a correctness path.
+// disabled) reports 0 — an observability gauge, not a correctness path.
 //
-// Takes no lock, on purpose, and this is the reason the count is an atomic
-// rather than a re-read of the file. Drain holds a.mu across every rec.Record,
-// bounded only by spoolDrainDeadline, and a blocked store is exactly when this
-// gauge is worth reading: an external session that inserted into audit_events
-// and left its transaction open holds the chain lock, so the pass runs the full
-// 15 seconds. A Lines() that waited on that mutex blocked the whole /metrics
-// handler with it - past Prometheus' 10s default scrape_timeout, so the scrape
-// was cancelled and the ENTIRE response was lost, wardyn_store_up and the run
-// counters included, once per tick for as long as the outage lasted. The two
-// gauges docs/OPERATIONS.md names for telling a dead store from an idle cluster
-// disappeared during precisely the event they exist to report.
-//
-// Reading an atomic instead makes the scrape O(1) and structurally free of the
-// drain: no shared memory beyond the counter is touched, so there is nothing to
-// race on. The count can be momentarily stale against the file (an Append that
-// has fsynced but not yet incremented), which is what a gauge is for.
+// Takes no lock, on purpose (hence the atomic): Drain holds a.mu across every
+// rec.Record for up to spoolDrainDeadline, and a blocked store is exactly when
+// this gauge matters. Waiting on the mutex would push /metrics past Prometheus'
+// 10s default scrape_timeout and lose the ENTIRE scrape, wardyn_store_up
+// included, during the very outage it reports. Briefly lagging the file is fine.
 func (a *AuditSpool) Lines() int {
 	if a == nil {
 		return 0
@@ -803,21 +680,13 @@ func (a *AuditSpool) TornDrops() int64 {
 
 // drainUntilIdle replays until the spool is empty, a pass makes no progress, or
 // a replay error defers the rest to the next tick. Returns how many events
-// landed. Extracted so StartDrain and its tests drive the SAME loop: the bug
-// below was invisible partly because the tests drove a hand-written copy of it.
+// landed. Shared by StartDrain and its tests so both drive the SAME loop.
 //
-// The termination test asks the backlog, not the batch. `n < batch` is
-// insufficient once a pass reads a bounded WINDOW rather than the whole
-// file: replaying fewer than a full batch no longer means there is nothing
-// left to replay, since a short pass far more often means the WINDOW ended.
-// A test on batch size alone would stop the tick early and leave the rest of
-// a large backlog for the next one — draining a window per interval instead
-// of continuously, safe but slow: recovery would crawl on exactly the
-// backlogs the paging exists to make fast.
-//
-// The no-progress guard is what makes this loop safe to run to exhaustion: a
-// pass that cannot consume anything ends the tick rather than spinning inside
-// it.
+// It terminates on the backlog, not `n < batch`: a pass reads a bounded WINDOW,
+// so a short pass usually means the window ended, and stopping there would
+// drain one window per interval — recovery crawling on exactly the backlogs
+// paging exists to make fast. The no-progress guard makes running to
+// exhaustion safe: a pass that consumes nothing ends the tick, never spins.
 func (a *AuditSpool) drainUntilIdle(ctx context.Context, rec audit.Recorder, batch int) (int, error) {
 	total := 0
 	for {
