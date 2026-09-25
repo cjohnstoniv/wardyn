@@ -16,9 +16,10 @@ export const CONSOLE_VIEW = {
   TITLE_ADMIN: "Wardyn admin",
   TITLE_USER: "Wardyn",
   // Packet M-B (QM-7, modes-b.html): a link straight to the same object in
-  // User view — the admin's own rows (M-7, not built here), the Record
-  // dependency line (M-6, §4.6) and #543's failure block or reauth card on the
-  // admin's own run (whose door is User view only) all reuse this one string.
+  // User view — the admin's own rows (M-7, now built — see live-approvals.tsx
+  // and console-view.tsx), the Record dependency line (M-6, §4.6) and #543's
+  // failure block or reauth card on the admin's own run (whose door is User
+  // view only) all reuse this one string.
   OPEN_IN_USER: "Open in user view",
 } as const;
 

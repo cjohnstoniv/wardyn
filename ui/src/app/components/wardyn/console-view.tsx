@@ -116,8 +116,9 @@ export function viewHome(view: ConsoleView): string {
 // unannounced view switch (ViewGate's TWIN rule sends the plain /runs/:id
 // path to the User view for a "url"-access install, and refuses it for an
 // admin-only token — see viewVerdict). OpenInUserView is the one deliberate
-// exception: it always targets the User-view path, since crossing views is
-// its whole job.
+// exception, since crossing views is its whole job: with a `runId` it targets
+// that run in the User view; without one (since c52adb584) it targets this
+// page's own User-view twin instead.
 export function runPath(view: ConsoleView, id: string): string {
   return view === "admin" ? `/admin/runs/${encodeURIComponent(id)}` : `/runs/${encodeURIComponent(id)}`;
 }
