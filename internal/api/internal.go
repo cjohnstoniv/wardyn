@@ -122,11 +122,11 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// host itself — never an ApprovalID (decisionLog never sets one for this
 	// source, on either lane), so the host is the only signal the ingest has to
 	// tell the two apart. wardyn_credential_reauth_total's HELP promises the
-	// AWS SSO re-auth population alone (#971), so an Azure DevOps host is
+	// AWS SSO re-auth population alone (#971), so an Azure DevOps Entra host is
 	// excluded here the same way its `requested`/`resolved` raises never call
 	// this recorder at all.
 	if dl.Decision == egress.Deny && dl.RuleSource == ruleSourceCredentialReauthTimeout &&
-		adoEgressDomains(dl.Request.Host) == nil {
+		!isADOEntraHost(dl.Request.Host) {
 		s.metrics.credentialReauthRecorded(credentialReauthOutcomeTimeout)
 	}
 
@@ -138,6 +138,18 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusAccepted, nil)
+}
+
+// isADOEntraHost reports whether host is one adoEntraHosts (any org) can
+// return: dev.azure.com, a service subdomain of it (vssps./vsrm./feeds./
+// pkgs./almsearch..., adoEntraServices), or any *.visualstudio.com. Not
+// adoEgressDomains, which answers a narrower question (the two-host egress
+// bundle to open for a git_pat/ssh_key grant) and misses the *.dev.azure.com
+// service subdomains the Entra lane's own credential hold also gates and
+// times out on.
+func isADOEntraHost(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	return h == "dev.azure.com" || strings.HasSuffix(h, ".dev.azure.com") || strings.HasSuffix(h, ".visualstudio.com")
 }
 
 // maxAuditFindings bounds how many per-finding records one llm.scan.* audit

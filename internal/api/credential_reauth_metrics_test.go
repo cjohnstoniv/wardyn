@@ -153,7 +153,7 @@ func TestCredentialReauthMetrics_TimeoutCountsOnlyTheAWSLane(t *testing.T) {
 		}
 	}
 
-	for _, host := range []string{"dev.azure.com", "myorg.visualstudio.com"} {
+	for _, host := range adoEntraHosts("myorg") {
 		before := reauthCount(t, srv, "timeout")
 		post(host)
 		if after := reauthCount(t, srv, "timeout"); after != before {
