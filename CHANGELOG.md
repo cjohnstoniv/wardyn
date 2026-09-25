@@ -528,7 +528,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   model run, whatever its provider's kind: a run no provider serves gets no model credential,
   where a build carrying only the subscription and Bedrock kinds fell through to the operator's
   lanes. Every door — create, Review, a record session and dispatch — checks the run owner's own
-  credential by the provider's kind, and dispatch drops every other model credential before the
+  credential by the provider's kind, and dispatch drops every other model credential — including
+  one on another harness's vendor host, such as an OpenAI key on a claude-code run — before the
   kind's arm authors its own (`run.injection.dropped`, reason
   `model_credential_not_provider_authored`, which on a provider run now also carries `provider`;
   it replaces `not_the_chosen_provider`, `provider_signin_not_dispatch_authored` and
