@@ -89,6 +89,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   answers 503 `roster_unreadable`, and `/me/scm-access` answers 500. Setup status and preflight
   leave the Azure DevOps fact out rather than guess. Both sign-in doors (the console login and the
   dedicated sign-in) now store the same scopes: those granted within the row's ceiling.
+- **A failed credential grant no longer shows database text to the run's owner (#445).** When a
+  dispatch could not record the Azure DevOps, AWS SSO, subscription or Bedrock bearer credential
+  grant, the run's failure hint (and the Azure DevOps refusal's audit detail) carried the store's
+  own error, database host and SQLSTATE included. The hint is now a fixed sentence and the real
+  error goes to the daemon log; the same holds for a lost agent exec-id write, a failed per-run CA
+  and a record session that could not launch (its card and its run's hint). The driver-text guard
+  now also watches `failAndRevoke` and `refuseADOEntraDispatch`.
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.

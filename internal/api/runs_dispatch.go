@@ -786,7 +786,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 			// above uses, so a FAILED run never leaves a live agent behind.
 			s.stopSandboxOrAudit(ctx, run.ID, ref, "run.exec")
 			s.failAndRevoke(ctx, run.ID, types.RunRunning,
-				"the agent started but its exec id could not be persisted, so the run could not be tracked: "+xerr.Error())
+				"the agent started but its exec id could not be persisted, so the run could not be tracked")
 			return
 		}
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.exec",
