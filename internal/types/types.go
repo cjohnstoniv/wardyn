@@ -301,12 +301,12 @@ type AgentRun struct {
 	// memory, files and proxy; a person typing, an exec, the request it waits
 	// on closing, or POST /runs/{id}/resume thaws it. A paused run is not
 	// contained: kill still is. Nil / "" is a run that is not paused.
-	// Migration 0087.
+	// Migration 0085.
 	PausedAt     *time.Time  `json:"paused_at,omitempty"`
 	PausedReason PauseReason `json:"paused_reason,omitempty"`
 	// ActiveAt is the presence clock: the last input a person typed into the
 	// run, the agent's last egress decision, or the last bytes the proxy moved
-	// for it. Keepalives never move it. Nil (a run from before migration 0087,
+	// for it. Keepalives never move it. Nil (a run from before migration 0085,
 	// or one nothing has happened in yet) reads as CreatedAt.
 	ActiveAt *time.Time `json:"active_at,omitempty"`
 	// ModelProviderID freezes the id of the model provider chooseModelProvider

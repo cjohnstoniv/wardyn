@@ -1061,7 +1061,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   admin), and the last open request being decided, cancelled or expired. The run page's files and
   resources reads answer 409 on a paused run rather than wake it. The run carries `paused_at`,
   `paused_reason` (`waiting` or `idle`) and `active_at` on the wire. Audited as `run.pause` and
-  `run.resume`. A paused run is not contained: kill still is. Migration `0087_agent_runs_pause` adds
+  `run.resume`. A paused run is not contained: kill still is. Migration `0085_agent_runs_pause` adds
   the three columns.
 - **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
   agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
