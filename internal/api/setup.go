@@ -558,7 +558,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
 	// conditional check gates on its own applicability).
 	oidcConfigured := s.cfg.OIDC != nil
-	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured), oidcConfigured && s.cfg.OIDC.HasOperatorEmails()); ok {
+	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured), oidcConfigured && s.cfg.OIDC.HasOperatorEmails(), s.oidcDefaultRoleIsAdmin(oidcConfigured)); ok {
 		checks = append(checks, chk)
 	}
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
@@ -680,6 +680,15 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 	}
 	rows, err := s.cfg.Store.ListRoleMappings(ctx)
 	return err == nil && len(rows) > 0
+}
+
+// oidcDefaultRoleIsAdmin reports whether WARDYN_OIDC_DEFAULT_ROLE resolves to
+// admin — ssoRBACCheck's defaultRoleAdmin input (#491). Split out of
+// handleSetupStatus (which is otherwise inline) to keep it under the gocyclo
+// gate; s.cfg.OIDC already carries the boot-validated DefaultRole, so no new
+// Config field is needed.
+func (s *Server) oidcDefaultRoleIsAdmin(oidcConfigured bool) bool {
+	return oidcConfigured && s.cfg.OIDC.DefaultRole() == oidc.RoleAdmin
 }
 
 // redactSetupStatusForMember drops the operator/admin-facing DIAGNOSTIC detail

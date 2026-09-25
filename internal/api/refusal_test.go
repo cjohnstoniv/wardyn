@@ -133,6 +133,7 @@ var roleComparisons = map[string]int{
 	"access.go":            2,
 	"attach.go":            1,
 	"http.go":              3, // isOperator and isSecurityOperator themselves
+	"setup.go":             1, // #491: ssoRBACCheck's defaultRoleAdmin input — a deployment CONFIG posture (WARDYN_OIDC_DEFAULT_ROLE), not the caller's own stamped role
 	"sshgateway.go":        1,
 	"uigateway.go":         1,
 	"uigateway_session.go": 1,

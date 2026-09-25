@@ -26,22 +26,33 @@ func TestSsoRBACCheck(t *testing.T) {
 		roleMapConfigured bool
 		consoleRows       bool
 		adminList         bool
+		defaultRoleAdmin  bool
 		wantOK            bool
 		wantStatus        string
+		wantCause         string
 	}{
-		{"OIDC off: absent regardless of role map", false, true, false, false, false, ""},
-		{"OIDC off, everything unset: still absent", false, false, false, false, false, ""},
+		{"OIDC off: absent regardless of role map", false, true, false, false, false, false, "", ""},
+		{"OIDC off, everything unset: still absent", false, false, false, false, false, false, "", ""},
 		// Q457-5: the warn fires ONLY when neither a role map nor an admin list
 		// is set — the one state in which everyone who signs in is an admin.
-		{"none: no role map, no admin list: warn", true, false, false, false, true, "warn"},
-		{"admin list only: ok", true, false, false, true, true, "ok"},
-		{"role map only (chart): ok", true, true, false, false, true, "ok"},
-		{"role map only (People-step rows): ok", true, false, true, false, true, "ok"},
-		{"both role map and admin list: ok", true, true, true, true, true, "ok"},
+		{"none: no role map, no admin list: warn", true, false, false, false, false, true, "warn", ""},
+		{"admin list only: ok", true, false, false, true, false, true, "ok", ""},
+		{"role map only (chart): ok", true, true, false, false, false, true, "ok", ""},
+		{"role map only (People-step rows): ok", true, false, true, false, false, true, "ok", ""},
+		{"both role map and admin list: ok", true, true, true, true, false, true, "ok", ""},
+		// #491/Q491-1: a role map is set, but the default role is admin — an
+		// unmatched sign-in is still an admin, so the row must not read ok.
+		{"role map (chart) + default role admin: warn, default_role cause", true, true, false, false, true, true, "warn", "default_role"},
+		{"role map (People-step) + default role admin: warn, default_role cause", true, false, true, false, true, true, "warn", "default_role"},
+		{"admin list + default role admin: warn, default_role cause", true, false, false, true, true, true, "warn", "default_role"},
+		// Q491-1: the combination case (neither role map nor admin list, AND
+		// default role admin) reads as #484's ORIGINAL case, not the new one —
+		// the packet shows one banner, not two competing ones.
+		{"none set + default role admin: #484's own warn, no cause", true, false, false, false, true, true, "warn", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			chk, ok := ssoRBACCheck(tc.oidcConfigured, tc.roleMapConfigured, tc.consoleRows, tc.adminList)
+			chk, ok := ssoRBACCheck(tc.oidcConfigured, tc.roleMapConfigured, tc.consoleRows, tc.adminList, tc.defaultRoleAdmin)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}
@@ -54,8 +65,20 @@ func TestSsoRBACCheck(t *testing.T) {
 			if chk.Status != tc.wantStatus {
 				t.Errorf("Status = %q, want %q", chk.Status, tc.wantStatus)
 			}
+			if chk.Cause != tc.wantCause {
+				t.Errorf("Cause = %q, want %q", chk.Cause, tc.wantCause)
+			}
 			// The frozen strings (docs/design/admin-access-canon.md), byte for byte.
-			if tc.wantStatus == "warn" {
+			switch {
+			case tc.wantStatus == "warn" && tc.wantCause == "default_role":
+				if chk.Detail != "A role map is set, but the default role is admin, so a sign-in the map doesn't match is still an admin." ||
+					chk.Fix != "Set WARDYN_OIDC_DEFAULT_ROLE to user or a user type (chart: env.WARDYN_OIDC_DEFAULT_ROLE), so a sign-in the role map doesn't match becomes a user, not an admin." {
+					t.Errorf("warn_default_role strings drifted from the canon: %+v", chk)
+				}
+				if !chk.Blocking {
+					t.Error("warn must stay Blocking")
+				}
+			case tc.wantStatus == "warn":
 				if chk.Detail != "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin." ||
 					chk.Fix != "Map people to admin or user on the People step, so only the people you name can change this deployment." {
 					t.Errorf("warn strings drifted from the canon: %+v", chk)
@@ -63,7 +86,7 @@ func TestSsoRBACCheck(t *testing.T) {
 				if !chk.Blocking {
 					t.Error("warn must stay Blocking")
 				}
-			} else if chk.Detail != "People are mapped to admin or user, so a person's role comes from their sign-in." || chk.Blocking {
+			case chk.Detail != "People are mapped to admin or user, so a person's role comes from their sign-in." || chk.Blocking:
 				t.Errorf("ok row drifted from the canon or blocks: %+v", chk)
 			}
 		})
@@ -846,17 +869,24 @@ func TestSetupCheckBlocking(t *testing.T) {
 		t.Fatal("confinementFloorCheck absent, want a floor-mismatch row")
 	}
 
-	if chk, ok := ssoRBACCheck(true, false, false, false); ok {
+	if chk, ok := ssoRBACCheck(true, false, false, false, false); ok {
 		assertSetupCheckBlocking(t, chk)
 	} else {
 		t.Fatal("ssoRBACCheck absent")
 	}
-	if chk, ok := ssoRBACCheck(true, true, false, false); ok {
+	if chk, ok := ssoRBACCheck(true, true, false, false, false); ok {
 		assertSetupCheckBlocking(t, chk)
 	} else {
 		t.Fatal("ssoRBACCheck absent")
 	}
-	if chk, ok := ssoRBACCheck(true, false, false, true); ok {
+	if chk, ok := ssoRBACCheck(true, false, false, true, false); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("ssoRBACCheck absent")
+	}
+	// #491: the default-role-admin warn arm blocks too (Q457-6's canon treats
+	// Blocking as this row's own concern, not the banner's).
+	if chk, ok := ssoRBACCheck(true, true, false, false, true); ok {
 		assertSetupCheckBlocking(t, chk)
 	} else {
 		t.Fatal("ssoRBACCheck absent")
