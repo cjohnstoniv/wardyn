@@ -25,10 +25,11 @@ func siteConfigStatusChecks(checks []SetupCheck, sc types.SiteConfig, present ma
 
 // signInHelpHTTPCheck warns about a sign-in help link stored as http:// before
 // the https-only rule (#489). The write refuses a new one; this is how an
-// admin learns about the one already there. Frozen strings:
-// docs/design/admin-access-canon.md.
+// admin learns about the one already there. Only a link /healthz actually
+// publishes (signInHelpPublic's check) is warned about: one it drops sends
+// nobody anywhere. Frozen strings: docs/design/admin-access-canon.md.
 func signInHelpHTTPCheck(sc types.SiteConfig) (SetupCheck, bool) {
-	if !signInHelpIsHTTP(sc.SignInHelpURL) {
+	if !signInHelpIsHTTP(sc.SignInHelpURL) || validateSignInHelp("", sc.SignInHelpURL) != nil {
 		return SetupCheck{}, false
 	}
 	return SetupCheck{

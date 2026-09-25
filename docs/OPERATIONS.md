@@ -2172,6 +2172,10 @@ query string is fine — and always reads "Request access". A link saved as
 `http://` before 0.8 keeps working and is published unchanged, but the setup
 checklist warns about it (row `sign_in_help_url`) until you change it; a save
 that sends it back unchanged is accepted, and a new `http://` link is refused.
+That includes an MDM or CLI baseline (`wardyn site-config apply`) whose `http://`
+link differs from the stored one: the whole re-apply is refused with a 400 on
+every boot (`wardyn-desktop.sh` logs "site-config apply failed") until the
+baseline file names an `https://` link.
 Every write records both values in the clear on `site_config.write`. A write outside those bounds is refused with a 400 naming the
 field, and a stored value that no longer passes is dropped from `/healthz`
 rather than published. Like the provider blocks, a body that does not name a

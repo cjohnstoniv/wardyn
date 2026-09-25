@@ -30,6 +30,10 @@ func TestSetupCheck_SignInHelpHTTP(t *testing.T) {
 		{"https link", "https://it.corp.example/request", false},
 		{"http link", "http://helpdesk.corp.example/", true},
 		{"upper-case HTTP scheme", "HTTP://helpdesk.corp.example/", true},
+		// /healthz already drops these (signInHelpPublic), so nobody is sent to
+		// them and there is nothing to warn about.
+		{"unpublished http link: dotless host", "http://intranet/request", false},
+		{"unpublished http link: userinfo", "http://user:pass@helpdesk.corp.example/", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, ok := statusCheck(types.SiteConfig{SignInHelpURL: tc.link}, "sign_in_help_url")
