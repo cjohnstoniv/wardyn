@@ -75,7 +75,7 @@ func (s *Server) handleSetupOnboardingComplete(w http.ResponseWriter, r *http.Re
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"setup.onboarding.completed", "site_config", "success", mustJSON(map[string]any{
+		"setup.onboarding.complete", "site_config", "success", mustJSON(map[string]any{
 			"completed_at": now,
 		})))
 	writeJSON(w, http.StatusOK, map[string]any{"onboarding_complete": true})

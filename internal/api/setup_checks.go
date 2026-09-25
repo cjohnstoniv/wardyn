@@ -56,6 +56,12 @@ type SetupCheck struct {
 	Detail   string `json:"detail,omitempty"`
 	Fix      string `json:"fix,omitempty"`
 	Blocking bool   `json:"blocking,omitempty"`
+	// Cause narrows a row that can warn for more than one reason, the same
+	// shape as SCMAccess.cause on the wire (ui/src/app/lib/types/setup.ts) — a
+	// machine key, never prose, so a console reader can pick per-cause copy
+	// without string-matching Detail. Only sso_rbac sets it today ("default_role",
+	// #491): #484's original no-role-map-and-no-admin-list warn leaves it empty.
+	Cause string `json:"cause,omitempty"`
 }
 
 // runnerCheck grades the sandbox runner: no runner (or no live class) is the one
@@ -717,66 +723,6 @@ func (s *Server) firstBrokeredRepoFromRuns(ctx context.Context) string {
 		}
 	}
 	return ""
-}
-
-// ssoRBACCheck warns when OIDC is configured and NOTHING splits admins from
-// members: no role mapping — neither the chart's WARDYN_OIDC_ROLE_MAP nor a
-// console-managed row (migration 0051, the People step) — and no admin list
-// (the operator allowlist, WARDYN_OIDC_OPERATOR_EMAILS). Only then does every
-// signed-in human derive role "admin" (internal/auth/oidc's deriveRole,
-// upgrade-safe default; accessRolePosture's `before` reads the same arm) —
-// fine for a single-operator deployment, but it silently grants admin to
-// everyone the moment a second human signs in. An admin list alone is ok
-// (Q457-5): an unmatched person then derives user.
-// consoleRows is whether the store currently holds at least one People-step
-// row (the same nil-Store guard setup.go's own read of it applies —
-// unreadable/absent reads as false, the conservative direction: it surfaces
-// the warning rather than hiding it). Only surfaced when OIDC is configured
-// (mirrors bedrockProviderCheck's own "worth showing at all" gate).
-//
-// Wording per docs/design/admin-access-canon.md (frozen; the console's
-// everyone-is-an-admin banner carries the same warn sentence).
-func ssoRBACCheck(oidcConfigured, roleMapConfigured, consoleRows, adminList bool) (SetupCheck, bool) {
-	if !oidcConfigured {
-		return SetupCheck{}, false
-	}
-	if roleMapConfigured || consoleRows || adminList {
-		return SetupCheck{
-			ID: "sso_rbac", Label: "Who is an admin", Status: "ok",
-			Detail: "People are mapped to admin or user, so a person's role comes from their sign-in.",
-		}, true
-	}
-	return SetupCheck{
-		ID: "sso_rbac", Label: "Who is an admin", Status: "warn",
-		Detail:   "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin.",
-		Fix:      "Map people to admin or user on the People step, so only the people you name can change this deployment.",
-		Blocking: true,
-	}, true
-}
-
-// tlsCookiePostureCheck warns when the OIDC redirect URL is https — evidence
-// that TLS terminates somewhere in front of this deployment — but wardynd
-// still computed secureCookies=false (validateConfig, cmd/wardynd/main.go: the
-// exact condition this inverts is tlsEnabled||WARDYN_TLS_TERMINATED), so the
-// session cookie is issued without the Secure attribute: the classic
-// behind-an-ingress misconfiguration where WARDYN_TLS_TERMINATED was never
-// set. Only surfaced when OIDC is configured AND the redirect URL is https —
-// there is nothing to warn about otherwise.
-func tlsCookiePostureCheck(oidcConfigured bool, redirectURL string, secureCookies bool) (SetupCheck, bool) {
-	if !oidcConfigured || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(redirectURL)), "https://") {
-		return SetupCheck{}, false
-	}
-	if secureCookies {
-		return SetupCheck{
-			ID: "tls_cookie_posture", Label: "TLS/cookie posture", Status: "ok",
-			Detail: "The OIDC redirect URL is https and wardynd knows the connection is TLS-protected; session cookies are marked Secure.",
-		}, true
-	}
-	return SetupCheck{
-		ID: "tls_cookie_posture", Label: "TLS/cookie posture", Status: "warn",
-		Detail: "The OIDC redirect URL is https but WARDYN_TLS_TERMINATED is not set, so wardynd still thinks it is serving plain HTTP: the session cookie is issued WITHOUT the Secure attribute.",
-		Fix:    "Set WARDYN_TLS_TERMINATED=true (helm: env.WARDYN_TLS_TERMINATED) when TLS terminates at an upstream reverse proxy/ingress.",
-	}, true
 }
 
 // scmProviderCheck grades the SCM credential posture against the safest-path

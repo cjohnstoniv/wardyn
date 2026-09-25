@@ -123,7 +123,7 @@ func TestIntegrationFold_GrantedFoldsHostsAndOneGrantPerHost(t *testing.T) {
 			t.Errorf("grant scope host = %q, not one of the integration's hosts", sc["host"])
 		}
 	}
-	if len(events) != 1 || events[0].action != "run.workspace.requirement.integration" {
+	if len(events) != 1 || events[0].action != "run.requirement.inject" {
 		t.Fatalf("events = %+v, want one integration audit entry", events)
 	}
 	if events[0].target != "corp-artifactory" {

@@ -323,7 +323,7 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string
 // other row is tallied under its kind as-is: egress_domain, credential, a hook
 // tool_call as `tool_call`, and a credential_reauth of no shape below as
 // `credential_reauth`. Documented on docs/AUDIT-ACTIONS.md's
-// approval.cancelled row.
+// approval.cancel row.
 const (
 	// TallyToolCallADO is an Azure DevOps capability escalation.
 	TallyToolCallADO = "tool_call:azure_devops"
@@ -431,13 +431,13 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 			RunID:     &runID,
 			ActorType: types.ActorSystem,
 			Actor:     "wardyn/approval-cancel",
-			Action:    "approval.cancelled",
+			Action:    "approval.cancel",
 			Target:    runID.String(),
 			Outcome:   outcome,
 			Data:      json.RawMessage(auditData),
 		}
 		// Log-loud instead of swallowing, same rule as the expiry sweep: a dropped
-		// approval.cancelled row would leave the queue's emptying unexplained.
+		// approval.cancel row would leave the queue's emptying unexplained.
 		if rerr := st.Record(ctx, ev); rerr != nil {
 			audit.LogWriteFailure(ctx, ev, rerr)
 		}

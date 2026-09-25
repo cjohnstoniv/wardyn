@@ -184,6 +184,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 	caps := runner.Capabilities{
 		Driver:   o.Name(),
 		Resolved: map[types.ConfinementClass]string{},
+		Freeze:   map[types.ConfinementClass]bool{},
 	}
 	drives := len(o.substrates) > 0
 	managed := len(o.substrates) > 0
@@ -199,6 +200,11 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 			if !seen[c] {
 				seen[c] = true
 				classes = append(classes, c)
+				// Freeze is decided by the substrate substrateFor ROUTES the
+				// class to (the first to list it), so a later substrate's
+				// claim can never vouch for runs it will not receive. An
+				// absent entry reads false.
+				caps.Freeze[c] = cs.Freeze[c]
 			}
 		}
 		for k, v := range cs.Resolved {
@@ -404,6 +410,106 @@ func (o *Orchestrator) EndSandbox(ctx context.Context, ref string) error {
 		return runner.ErrEndUnsupported
 	}
 	return ender.EndSandbox(ctx, ref)
+}
+
+// StopProxy forwards a lost run's proxy removal to ref's substrate when it can
+// keep the rest of the sandbox. The route is kept, as for EndSandbox.
+func (o *Orchestrator) StopProxy(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	stopper, ok := s.(runner.ProxyStopper)
+	if !ok {
+		return runner.ErrEndUnsupported
+	}
+	return stopper.StopProxy(ctx, ref)
+}
+
+// ProxyConfig forwards a proxy config read-back to ref's substrate when it can
+// replace a proxy in place (runner.ProxyReviver).
+func (o *Orchestrator) ProxyConfig(ctx context.Context, ref string) ([]byte, error) {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	rv, ok := s.(runner.ProxyReviver)
+	if !ok {
+		return nil, runner.ErrReviveUnsupported
+	}
+	return rv.ProxyConfig(ctx, ref)
+}
+
+// ReplaceProxy forwards a proxy replacement to ref's substrate; see
+// ProxyConfig. The route is kept: the agent is the same sandbox.
+func (o *Orchestrator) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	rv, ok := s.(runner.ProxyReviver)
+	if !ok {
+		return runner.ErrReviveUnsupported
+	}
+	return rv.ReplaceProxy(ctx, ref, cfgJSON)
+}
+
+// EnsureProxyImage ensures every substrate's proxy sidecar image ahead of a
+// revive claim (runner.ProxyReviver), not just the one ref's own substrate:
+// this runs BEFORE the claim identifies which run it is for, and pulling an
+// already-present image is a cheap local check (F2). There is exactly one
+// revivable substrate today; this loops in case a future one joins it.
+func (o *Orchestrator) EnsureProxyImage(ctx context.Context) error {
+	for _, s := range o.substrates {
+		if rv, ok := s.(runner.ProxyReviver); ok {
+			if err := rv.EnsureProxyImage(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// StartSandbox forwards a kept agent's restart to ref's substrate when it can
+// start one again (runner.SandboxStarter). The route is kept.
+func (o *Orchestrator) StartSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	st, ok := s.(runner.SandboxStarter)
+	if !ok {
+		return runner.ErrReviveUnsupported
+	}
+	return st.StartSandbox(ctx, ref)
+}
+
+// FreezeSandbox forwards a pause to ref's substrate when it implements
+// runner.Freezer (Docker/runc today). The route is kept: the sandbox still
+// exists, paused, and Thaw/Stop/Kill must still find its substrate.
+func (o *Orchestrator) FreezeSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	f, ok := s.(runner.Freezer)
+	if !ok {
+		return runner.ErrFreezeUnsupported
+	}
+	return f.FreezeSandbox(ctx, ref)
+}
+
+// ThawSandbox forwards a resume to ref's substrate; see FreezeSandbox.
+func (o *Orchestrator) ThawSandbox(ctx context.Context, ref string) error {
+	s, err := o.subForRef(ctx, ref)
+	if err != nil {
+		return err
+	}
+	f, ok := s.(runner.Freezer)
+	if !ok {
+		return runner.ErrFreezeUnsupported
+	}
+	return f.ThawSandbox(ctx, ref)
 }
 
 func (o *Orchestrator) KillSandbox(ctx context.Context, ref string) error {

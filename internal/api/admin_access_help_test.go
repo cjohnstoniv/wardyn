@@ -48,10 +48,49 @@ func TestSetupStatus_SSORBACAdminListIsOK(t *testing.T) {
 	}
 }
 
+// TestSetupStatus_SSORBACDefaultRoleAdmin drives the real /setup/status
+// wiring for #491: a role map is set (Config.OIDCRoleMapConfigured), but
+// WARDYN_OIDC_DEFAULT_ROLE=admin still warns, with Cause "default_role" — the
+// gap that used to read "ok" because a role map being set was all the old
+// check looked for.
+func TestSetupStatus_SSORBACDefaultRoleAdmin(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		defaultRole string
+		want        string
+		wantCause   string
+	}{
+		{"role map set, default role admin: warn, default_role cause", "admin", "warn", "default_role"},
+		{"role map set, default role user: ok", "user", "ok", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			srv := New(Config{
+				AdminToken:            adminToken,
+				OIDC:                  newAccessAuth(t, map[string]string{"engineering": "user"}, tc.defaultRole, nil, nil),
+				OIDCRoleMapConfigured: true,
+			})
+			code, st := decodeSetup(t, srv, adminToken)
+			if code != http.StatusOK {
+				t.Fatalf("GET /setup/status = %d", code)
+			}
+			for _, c := range st.Checks {
+				if c.ID == "sso_rbac" {
+					if c.Status != tc.want || c.Cause != tc.wantCause {
+						t.Errorf("sso_rbac = status %q cause %q, want %q/%q (%+v)", c.Status, c.Cause, tc.want, tc.wantCause, c)
+					}
+					return
+				}
+			}
+			t.Fatal("sso_rbac row absent with OIDC configured")
+		})
+	}
+}
+
 // A member never reads the warn row: the redaction drops every check,
 // whatever it says — unchanged by #484.
 func TestRedactSetupStatusForMember_DropsSSORBACWarn(t *testing.T) {
-	warn, _ := ssoRBACCheck(true, false, false, false)
+	warn, _ := ssoRBACCheck(true, false, false, false, false)
 	got := redactSetupStatusForUser(SetupStatus{Checks: []SetupCheck{warn}}, false, false)
 	if len(got.Checks) != 0 || !got.ChecksRedacted {
 		t.Errorf("member checks = %+v (redacted=%v), want none", got.Checks, got.ChecksRedacted)

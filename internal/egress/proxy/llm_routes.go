@@ -286,9 +286,9 @@ const (
 
 // scanSummaryFrom builds a CONTENT-FREE decision summary from a scan result.
 // overrideAction (e.g. "block") wins; otherwise the action is derived from the
-// result (error > skip-with-findings > skipped > alert) — a scan that hit
+// result (error > skip-with-findings > skip > alert) — a scan that hit
 // findings_capped, scan_budget, or attachment_decode_error but still produced
-// findings alerts (B2/B4 below), not "skipped". It never copies raw matched
+// findings alerts (B2/B4 below), not "skip". It never copies raw matched
 // bytes.
 func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine, overrideAction string, channel contentscan.Channel) *egress.ScanSummary {
 	s := &egress.ScanSummary{
@@ -327,7 +327,7 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 	case overrideAction != "":
 		s.Action = overrideAction
 	case serr != nil || (res.Skipped && res.SkipReason == "parse_error"):
-		s.Action = "error"
+		s.Action = "fail"
 	case (res.Skipped || res.FindingsCapped) && len(res.Findings) > 0 &&
 		(res.FindingsCapped || res.SkipReason == "findings_capped" ||
 			res.SkipReason == "scan_budget" || res.SkipReason == "attachment_decode_error"):
@@ -336,19 +336,19 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 		// findings BEFORE `res.Skipped` and resolves to "alert" whenever a real
 		// secret is found alongside a budget/decode limit — resolving
 		// `res.Skipped` first would flip the decision's Action from "alert" to
-		// "skipped" exactly when a real secret was also found
+		// "skip" exactly when a real secret was also found
 		// (egress.ScanSummary.Action is the literal audit-action suffix,
-		// docs/AUDIT-ACTIONS.md:71: llm.scan.alert vs llm.scan.skipped — a SIEM
+		// docs/AUDIT-ACTIONS.md:71: llm.scan.alert vs llm.scan.skip — a SIEM
 		// rule keyed on llm.scan.alert would lose the detected secret). A skipped
 		// scan that still carries findings is the loudest scan there is: it
 		// still alerts; the truncation/decode-limit rides on
 		// Skipped/SkipReason, not on Action. span_oversize is deliberately
-		// excluded: it already read "skipped" with findings on base, so
+		// excluded: it already read "skip" with findings on base, so
 		// including it would be a behaviour change outside this lane's
 		// findings.
 		s.Action = "alert"
 	case res.Skipped:
-		s.Action = "skipped"
+		s.Action = "skip"
 	default:
 		s.Action = "alert"
 	}
@@ -385,7 +385,7 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 			writeScanBlocked(w, 0, nil, "uninspected_channel")
 			return nil, nil, noRelease, true
 		}
-		return r.Body, p.skipSummary("skipped", "uninspected_channel", channel), noRelease, false
+		return r.Body, p.skipSummary("skip", "uninspected_channel", channel), noRelease, false
 	default: // scanNone: not prompt-bearing — stream through, stay quiet
 		return r.Body, nil, noRelease, false
 	}
@@ -496,7 +496,7 @@ func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel
 			return nil, nil, noRelease, true
 		}
 		return io.MultiReader(bytes.NewReader(buffered), r.Body),
-			p.skipSummary("skipped", "body_oversize", channel), release, false
+			p.skipSummary("skip", "body_oversize", channel), release, false
 	}
 	res, _, serr := p.scanner.ScanRequest(channel, buffered)
 	if p.scanner.ShouldBlock(res) {
@@ -566,7 +566,7 @@ func (p *Proxy) emitLLMDecision(r *http.Request, host string, port int, decision
 	p.sink.emit(log)
 }
 
-// emitLLMBlindOnce emits a single llm.scan.blind signal per LLM host: an
+// emitLLMBlindOnce emits a single llm.scan.bypass signal per LLM host: an
 // inspection-enabled run reached host over an opaque CONNECT tunnel that cannot
 // be inspected (no TLS-MITM yet). The CONNECT itself is allowed separately; this
 // is purely the honest coverage signal so audit never implies inspection that
@@ -595,7 +595,7 @@ func (p *Proxy) emitLLMBlindOnce(host string) {
 	// one stream internal/api/healthz.go delegates coverage reporting to. So
 	// account for it where the sink ALREADY accounts for decision records it
 	// could not deliver: decisionSink.dropped feeds the periodic synthetic
-	// `egress.decisions.dropped:<n>` summary (reportDropped/droppedSummaryLog)
+	// `egress:dropped-decisions-<n>` summary (reportDropped/droppedSummaryLog)
 	// and close()'s "closed with N dropped records". A blind row we refuse to
 	// emit IS an unrecorded decision, so it belongs on that counter — one
 	// mechanism, no second counter, no new audit string — plus an operator-side
@@ -603,7 +603,7 @@ func (p *Proxy) emitLLMBlindOnce(host string) {
 	if len(p.blindHosts) >= maxBlindHosts {
 		p.blindMu.Unlock()
 		p.sink.dropped.Add(1)
-		slog.Warn("llm.scan.blind coverage suppressed: per-run blind-host cap reached",
+		slog.Warn("llm.scan.bypass coverage suppressed: per-run blind-host cap reached",
 			"host", h, "cap", maxBlindHosts, "rule_source", ruleSourceLLMBlind)
 		return
 	}
@@ -624,7 +624,7 @@ func (p *Proxy) emitLLMBlindOnce(host string) {
 			Scanned:  false,
 			Coverage: coverageOpaque,
 			Mode:     string(p.scanner.Mode()),
-			Action:   "blind",
+			Action:   "bypass",
 		},
 	})
 }

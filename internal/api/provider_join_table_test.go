@@ -295,7 +295,7 @@ func assertJoinStripped(t *testing.T, h *harness, plan dispatchLLMPlan, legacy [
 	}
 	dropped := map[string]int{}
 	for _, ev := range h.audit.snapshot() {
-		if ev.Action == "run.injection.dropped" {
+		if ev.Action == "run.injection.drop" {
 			var d struct{ Reason string }
 			_ = json.Unmarshal(ev.Data, &d)
 			dropped[ev.Target+"/"+d.Reason]++

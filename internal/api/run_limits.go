@@ -74,13 +74,20 @@ func (s *Server) captureRunLimits(run *types.AgentRun, ceiling governanceCeiling
 // deployment's approval expiry, whose sweep binds every request anyway. 0 means
 // no bound is known here (no profile wait and no deployment expiry).
 func runWaitSec(l types.RunLimits, deployment time.Duration) int {
-	ceiling := int(deployment / time.Second)
-	if l.MaxWaitSec > 0 && (ceiling <= 0 || l.MaxWaitSec < ceiling) {
-		ceiling = l.MaxWaitSec
-	}
+	ceiling := waitCeilingSec(l, deployment)
 	wait := cmp.Or(l.DefaultWaitSec, ceiling)
 	if ceiling > 0 {
 		wait = min(wait, ceiling)
 	}
 	return wait
+}
+
+// waitCeilingSec is the longest wait a run may have: the tighter of the
+// profile's max and the deployment's approval expiry, or 0 when neither is set.
+func waitCeilingSec(l types.RunLimits, deployment time.Duration) int {
+	ceiling := int(deployment / time.Second)
+	if l.MaxWaitSec > 0 && (ceiling <= 0 || l.MaxWaitSec < ceiling) {
+		ceiling = l.MaxWaitSec
+	}
+	return ceiling
 }
