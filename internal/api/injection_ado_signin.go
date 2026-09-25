@@ -164,7 +164,7 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 	}
 	if created.ID == raisedID {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
-			"credential.reauth.requested", created.ID.String(), "success",
+			"credential.reauth.request", created.ID.String(), "success",
 			mustJSON(map[string]any{
 				"approval_id": created.ID, "owner": sn.OwnerSubject, "provider": adoApprovalLane,
 				"reason": string(class), "detail": adoSignInRaisedNote,

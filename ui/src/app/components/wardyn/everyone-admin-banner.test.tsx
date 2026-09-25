@@ -19,6 +19,14 @@ function status(checks: SetupCheck[]): SetupStatus {
 }
 const WARN: SetupCheck = { id: "sso_rbac", label: "Who is an admin", status: "warn", blocking: true };
 const OK: SetupCheck = { id: "sso_rbac", label: "Who is an admin", status: "ok" };
+// #491 — a role map is set, but WARDYN_OIDC_DEFAULT_ROLE=admin.
+const WARN_DEFAULT_ROLE: SetupCheck = {
+  id: "sso_rbac",
+  label: "Who is an admin",
+  status: "warn",
+  blocking: true,
+  cause: "default_role",
+};
 
 function Where() {
   const loc = useLocation();
@@ -62,6 +70,23 @@ describe("EveryoneAdminBanner (#484)", () => {
   it("hidden once a role map or admin list is set (the row reads ok)", () => {
     renderBanner(status([OK]));
     expect(screen.queryByText(ADMIN_ACCESS_BANNER.TITLE)).not.toBeInTheDocument();
+  });
+
+  // #491/Q491-1 — same title and CTA, BODY_DEFAULT_ROLE in place of BODY.
+  it("shows BODY_DEFAULT_ROLE, not BODY, when the row's cause is default_role", async () => {
+    renderBanner(status([WARN_DEFAULT_ROLE]));
+    expect(screen.getByText(ADMIN_ACCESS_BANNER.TITLE)).toBeInTheDocument();
+    expect(screen.getByText(ADMIN_ACCESS_BANNER.BODY_DEFAULT_ROLE)).toBeInTheDocument();
+    expect(screen.queryByText(ADMIN_ACCESS_BANNER.BODY)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: ADMIN_ACCESS_BANNER.ACTION }));
+    expect(screen.getByTestId("where")).toHaveTextContent("/admin/setup?step=people");
+  });
+
+  // Canon pin (docs/design/admin-access-canon.md) — byte for byte.
+  it("BODY_DEFAULT_ROLE matches the frozen canon string", () => {
+    expect(ADMIN_ACCESS_BANNER.BODY_DEFAULT_ROLE).toBe(
+      "The default role is admin, so anyone your identity provider lets in whom the role map doesn't match can still change policies, read and write secrets, decide approvals, and open a shell in any running sandbox.",
+    );
   });
 
   it("hidden with no status yet, and for a member's redacted checks", () => {

@@ -697,7 +697,7 @@ still names the unmapped-drop count for an operator reading a broken
 correlation. The series are omitted entirely when no sensor has ever beaten.
 
 Two counters cover the authentication lane, where a failure otherwise leaves no
-trace at all. `wardyn_auth_failed_suppressed_total` counts `auth.failed` audit
+trace at all. `wardyn_auth_failed_suppressed_total` counts `auth.fail` audit
 rows the rate limiter dropped — the trail is capped at roughly one row per
 second, so past a small burst it stops describing the volume it is bounding and
 **a credential-stuffing run reads quieter than a handful of typos**. Alert on
@@ -705,7 +705,7 @@ this series, not on the audit row count: flat rows with this climbing is the
 attack. Both the public lane and the INTERNAL lane (the sandbox's run token and
 the host sensor's token) feed that one limiter and that one counter, so a
 process inside a sandbox brute-forcing run tokens is visible on this series
-without being able to flood the append-only log; the `auth.failed` row's actor
+without being able to flood the append-only log; the `auth.fail` row's actor
 (`wardyn/adminAuth` vs `wardyn/internalAuth` / `wardyn/internalAuthGroundtruth`
 / `wardyn/internalApproval`) is what tells the two incidents apart. `wardyn_auth_store_errors_total` counts requests an authentication lane
 could not decide because its store read failed and answered `500` — a state with
@@ -884,6 +884,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
 | `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
 | `POST /admin/sandboxes/sweep` — force-reaping sandboxes across every workspace, not just the caller's own | ⛔ admin only |
+| `GET /admin/runs/proxy-window` and `POST /admin/runs/restart` — listing the runs whose proxy was started by a release older than wardynd N−1, and giving named runs a new proxy on the current release under each OWNER's current profile denies ("Restart with current limits"). Proxy-only: a run lost to a reboot is reported, never started; its owner revives it. Not the security tier: a restart replaces proxies on runs the caller does not own. The runs are restarted one at a time, each audited as `run.revive`, so when a response is cut off part-way those rows say which were | ⛔ admin only |
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
@@ -952,7 +953,7 @@ admits an SSH clone of ANY org on that host, with the deployment's
 `ssh-key-<host>` secret. That is a documented ceiling of 0.7.2, not an
 oversight, and it is never silent: the `/admin/providers` screen says it under the
 row's lanes, and run create puts it on the 201 as a warning (with a
-`run.provider.ssh_host_level` audit row) whenever a path-scoped row admits an
+`run.provider.admit` audit row) whenever a path-scoped row admits an
 SSH repository. **The remedy is the row's own `lanes` list** — drop `ssh` from a
 path-scoped row and its addresses bind again, over the one transport that
 carries a path. Dot-segment and percent-encoded paths do NOT reach this
@@ -1113,7 +1114,7 @@ migration `0050`)** are the second and third owned nouns after runs.
   refresh token the provider refuses for good (`invalid_grant`) is deleted at
   that renewal, and a stored AWS sign-in is deleted by a daily sweep once it can
   no longer be used or renewed (its row's `expires_at`); both audit
-  `credential.expired_deleted`. The person is then shown as not connected and
+  `credential.expired.delete`. The person is then shown as not connected and
   signs in again. A Conditional Access refusal does not delete anything — the
   sign-in still works once the person is present.
 - **Cross-user admin access is queryable.** An admin acting on a member-owned
@@ -1270,7 +1271,7 @@ role at all — local-mode callers are *always* admins
 (`Server.requireOperator`'s own doc says so), so the unclamped branch above is the
 default there. An `inline_policy` the developer submits is bounded by nothing
 `WARDYN_DEFAULT_POLICY` sets, and setting one is one ordinary API call. What still
-holds: the unclamped spec lands on the audit feed as `policy.inline` before
+holds: the unclamped spec lands on the audit feed as `policy.inline.apply` before
 `run.create` ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)), egress still has no route off
 the sandbox except `wardyn-proxy`, and the session is still recorded. A governance
 control, not a containment boundary against the operator holding the laptop. Full
@@ -1743,7 +1744,7 @@ untouched no matter what a member holds.
 | `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam). Only the choice: the selected row is still bounded by the member's ceiling, and a run that names no policy is not gated. Checked before the row is read, so an ungranted id is refused whether or not it exists |
 
 `*` as a value matches everything of that kind, spelled the same way for all
-eight. `egress_host` values are matched by `entryCoversAny`
+ten. `egress_host` values are matched by `entryCoversAny`
 (`internal/api/artifact_redirect.go`) — the *same* matcher that decides whether
 one allowlist entry covers a host, deliberately not a second one, because two
 host matchers that disagree is how a deny gets bypassed by a port suffix. Every
@@ -1993,7 +1994,7 @@ available to nobody. `egress_host` and `secret` values can't be restricted
 (`400`). The value is the rest of the path, so an image ref's slashes need no
 escaping.
 
-Writes are audited as `capability.grant.created` / `.updated` / `.deleted`,
+Writes are audited as `capability.grant.create` / `.updated` / `.deleted`,
 `capability.enforcement.write` and `capability.availability.write`. Enforcement lives in its own table rather than in
 SiteConfig because `PUT /site-config` is a full replace: a stale client
 round-tripping an older document could otherwise silently disable an authorization
@@ -2276,14 +2277,26 @@ credential lives.
 
 ### When everyone is an admin, and what a refused person is told
 
-**The everyone-is-an-admin warning.** With SSO configured, a person nobody has
-mapped derives `admin` only when there is **neither** a role map (the chart's
-`WARDYN_OIDC_ROLE_MAP` or a People-step row) **nor** an admin list (the operator
-allowlist, `WARDYN_OIDC_OPERATOR_EMAILS`). That one state — and only that one —
-grades the setup checklist's "Who is an admin" row `warn`, holds the console in
-the People step, and shows every admin a banner above every page until a mapping
-or an admin list exists. An admin list alone is enough: an unmatched person then
-derives `member`. Members see neither.
+**The everyone-is-an-admin warning.** With SSO configured, the setup checklist's
+"Who is an admin" row grades `warn` — holding the console in the People step and
+showing every admin a banner above every page — on either of two conditions
+(#491):
+
+- **No role map and no admin list.** A person nobody has mapped derives `admin`
+  when there is **neither** a role map (the chart's `WARDYN_OIDC_ROLE_MAP` or a
+  People-step row) **nor** an admin list (the operator allowlist,
+  `WARDYN_OIDC_OPERATOR_EMAILS`). An admin list alone is enough to clear this:
+  an unmatched person then derives `member`.
+- **A role map IS set (chart or People step), but `WARDYN_OIDC_DEFAULT_ROLE=admin`.**
+  Every sign-in the map doesn't match still falls through to `admin` — before
+  #491 this read `ok`, since a role map being set was all the check looked for.
+  Fix by setting `WARDYN_OIDC_DEFAULT_ROLE` to `user` or a user type instead.
+  An admin list alone does not trip this: with no role map, a sign-in the
+  (empty) map doesn't match derives `member` regardless of the default role.
+
+A deployment that hits BOTH conditions (no role map, no admin list, AND
+`WARDYN_OIDC_DEFAULT_ROLE=admin`) reads the first condition's own sentence —
+one banner, not two competing ones. Members see neither.
 
 **Request-access help (`sign_in_help_text`, `sign_in_help_url`).** Two optional
 SiteConfig fields, edited on the People step ("When someone can't sign in") or
@@ -2452,7 +2465,7 @@ screen, and **Admin view** is the way back; there is no band, because the User
 view is a normal state. Other tabs follow the session into the same view. Every
 audit row the session writes still names **your
 own sub** — this is not impersonation, and there is no way to become anybody
-else. The transition itself is audited as `auth.user_view` (`auth.member_mode`
+else. The transition itself is audited as `auth.user_view.set` (`auth.member_mode`
 dual-emitted alongside it through 0.8.x, [Renamed in 0.8](#renamed-in-08))
 (`enabled`, `real_role`, and `no_credential` on the preview below), and each `403` an **admin-tier gate** raises while the
 mode is on carries `user_view: true` on its `authz.denied` row — the two
@@ -2497,7 +2510,7 @@ a member who has not signed in meets, and `POST /setup/harness-login` answers
 `409` — *"Exit the user view to sign in to AWS — the capture would land on your
 own identity."* Nothing is deleted: your session sits untouched in the store
 and comes back the moment you exit. The transition is audited as
-`auth.user_view` (`auth.member_mode` dual-emitted alongside it through 0.8.x)
+`auth.user_view.set` (`auth.member_mode` dual-emitted alongside it through 0.8.x)
 with `no_credential: true` beside `enabled` and `real_role`.
 
 Inside the preview, **signing in is refused** — `POST /setup/harness-login`
@@ -3853,10 +3866,10 @@ The pin is enforced at four doors, and each one fails CLOSED:
   ACCOUNT) and prints `wardyn: aws sso credential rejected: …` on the login
   terminal rather than uploading. It never falls back to the first account.
 - **Capture** — the upload is bound to the pin AS IT READ AT LAUNCH (stamped on
-  the run's own `harness.login.started` row, never re-read from the live roster,
+  the run's own `harness.login.start` row, never re-read from the live roster,
   so a roster edit mid-sign-in cannot re-point a capture in flight). A blob that
   disagrees — or, on an UNPINNED launch, that names an account the configured
-  model does not live in — is refused with 400 and a `harness.credential.refused` audit row carrying a
+  model does not live in — is refused with 400 and a `harness.credential.refuse` audit row carrying a
   `reason` from a fixed vocabulary ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
   Refused, never rewritten: the stored blob is baked verbatim into every later
   run's `~/.aws/config`, so rewriting it would record a session nobody saw and
@@ -3951,9 +3964,9 @@ person, never this mechanism, and it signs in and reads its own model access
 exactly like any other principal.
 
 **Blast radius.** A compromised sandbox reaches THAT person's SSO session and
-the role credentials it mints, not the organisation's. The `harness.credential.captured`
+the role credentials it mints, not the organisation's. The `harness.credential.capture`
 and `harness.credential.refresh` audit rows carry `owner` and `credential_source`,
-so "whose credential" is answerable from the trail, and `harness.credential.refused`
+so "whose credential" is answerable from the trail, and `harness.credential.refuse`
 says which captures were turned away and why.
 
 **Revoking a session — what 0.7.2 actually gives you.** Disconnect
@@ -4003,7 +4016,7 @@ Consequences worth knowing:
   losing CAS race is abandoned after three tries), so a concurrency-limited member can rarely still
   meet the cap.
 - **A closed sandbox's upload is refused.** A killed sign-in run's credential upload is refused with
-  `harness.credential.refused` / `reason = run_killed`, even inside the five-minute grace a terminal
+  `harness.credential.refuse` / `reason = run_killed`, even inside the five-minute grace a terminal
   run otherwise has for its own tail uploads. Credential revocation alone is best-effort; this is the
   belt.
 - **The old sandbox's teardown is detached from the launch request.** The state change is still
@@ -4026,7 +4039,7 @@ Consequences worth knowing:
   Closing the last case needs a per-person lock around the write. **Still open at 0.8.**
 - **A sandbox superseded mid-upload almost never wins.** The upload door
   re-reads the run's state immediately before it stores, so a capture that was uploading when the
-  person's next sign-in replaced its sandbox is ordinarily refused (`harness.credential.refused` /
+  person's next sign-in replaced its sandbox is ordinarily refused (`harness.credential.refuse` /
   `reason = run_killed`) instead of overwriting the newer session. The re-read is the last statement
   before the write, not a lock: a supersede landing between those two statements still loses to the
   old capture, and the next sign-in replaces it. Whoever is watching the old
@@ -4388,10 +4401,10 @@ again.
   and to the run's own owner or an admin. A caller who does not own the run gets the same
   `404 approval not found` every other kind gives them, byte for byte, so the refusal cannot be
   used to ask whether a UUID is somebody else's sign-in request.
-- The audit trail carries `credential.reauth.requested` at the raise — with `owner`,
+- The audit trail carries `credential.reauth.request` at the raise — with `owner`,
   `credential_source` and a `reason` from a closed set (`spent` the refresh token is gone at AWS,
   `unavailable` renewal failed transiently with nothing left to serve, `not_found` there is no stored
-  session for that namespace) — and `credential.reauth.resolved` when a sign-in answers it, naming
+  session for that namespace) — and `credential.reauth.resolve` when a sign-in answers it, naming
   `resolved_by` and the `capture_run_id` it landed from.
 - `/metrics` carries `wardyn_credential_reauth_total{outcome=requested|resolved|expired|cancelled|timeout}`
   and `wardyn_credential_reauth_wait_seconds` (sum/count — the average time a request stayed open).
@@ -4399,7 +4412,7 @@ again.
   that answered it, `expired` where the 24 h sweeper ages a row out, `cancelled` where a terminal run
   cancels one, `timeout` where the daemon ingests the sidecar's `credential:reauth-timeout` decision.
   That decision row is written for a spent BUDGET and nothing else: a hold ended by a proxy
-  shutdown, by a killed run (which leaves its own `approval.cancelled` row) or by a request
+  shutdown, by a killed run (which leaves its own `approval.cancel` row) or by a request
   answered with anything but an approval refuses the sandbox with the same modelled 401 but is
   neither counted nor logged as a timeout, so `timeout` always means "the owner had the whole
   window".
@@ -4610,7 +4623,7 @@ footing as the GitHub ref-ruleset check ([TRY-IT.md](TRY-IT.md)): the check is
 real. Each launches a throwaway, one-shot confined sandbox, makes an actual
 outbound request through it — the same path a real run's egress takes — and tears
 it down. Both are **admin-only** (a member 403s) and **audited**
-(`site_config.test_proxy` / `site_config.test_redirect`); the audit row carries
+(`site_config.proxy.test` / `site_config.redirect.test`); the audit row carries
 the host(s) probed and the outcome, never the proxy URL, which may legitimately
 carry a credential.
 
@@ -4754,7 +4767,7 @@ minimal-reach posture, so:
   the daemon process and are never written to Postgres, never to the audit log.
   Individual searches are deliberately **not** audited — one row per keystroke
   would make the append-only log a record of every name an admin ever typed.
-  Connector **failures** are audited (`directory.search_failed`), with the
+  Connector **failures** are audited (`directory.search.fail`), with the
   provider, the failing operation and the upstream status — never the query.
 - **Retracting it is one variable.** Unset `WARDYN_DIRECTORY_PROVIDER` and
   restart: the connector is gone, the endpoint answers `503
@@ -5588,7 +5601,7 @@ names forever; only what the server emits GOING FORWARD changed.
 |---|---|---|
 | The toggle ("view as member"/the user view) | `POST /me/member-mode {"enabled":bool}` | `POST /me/view {"view":"user"\|"admin","user_type":"…"}` |
 | `/me` fields | `member_mode`, `member_mode_no_credential`, `member_preview_available` | `user_view`, `user_view_no_credential`, `user_preview_available` |
-| Audit action | `auth.member_mode` | `auth.user_view` — **dual-emitted** alongside `auth.member_mode` (identical `Data`) for one minor (0.8.x, OD-18), so a dashboard or SIEM rule still filtering on the old name keeps seeing rows; the compat row is removed in 0.9 |
+| Audit action | `auth.member_mode` | `auth.user_view.set` — **dual-emitted** alongside `auth.member_mode` (identical `Data`) for one minor (0.8.x, OD-18), so a dashboard or SIEM rule still filtering on the old name keeps seeing rows; the compat row is removed in 0.9 |
 | `authz.denied` datum | `member_mode: true` | `user_view: true` — a clean rename, not dual-emitted (it lives inside `authz.denied`'s own row, which is not itself renamed) |
 | `authz.denied` reason | `byoi_member` | `byoi_user` |
 | Go: `runner` package | `MemberMountPolicy`, `SandboxSpec.MemberMountRoots`, `ParseMemberMountPolicy`, `ValidateMemberMount`, `ValidateMemberMountSource`, `deniedMemberSegment`, `memberCeilingRoots`, `validateMemberSource` | `UserMountPolicy`, `SandboxSpec.UserMountRoots`, `ParseUserMountPolicy`, `ValidateUserMount`, `ValidateUserMountSource`, `deniedUserSegment`, `userCeilingRoots`, `validateUserSource` |
@@ -5821,7 +5834,7 @@ re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
 (`0062` widens `approvals.state` with `CANCELLED`, `0064` widens
 `approvals.kind` with `credential_reauth`), `0063` adds the
 `agent_runs.status_detail` column, `0065` adds `agent_runs.autonomy_level`, `0072` adds the
-run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `governance_profile_id`) and `0073` the
+run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `governance_profile_id`), `0073` the
 lease columns (`lost_at`, `lost_reason`, `ending_soon_for`, `ending_soon_sec`) — and `0056`, `0057` and `0058` are three successive
 `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
@@ -5840,7 +5853,8 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 0.8's user types add three more: `0079` re-adds the subject-type CHECKs on
 `capability_grants` (`0042`'s table), `governance_assignments` (`0052`'s) and
 `user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
-`api_tokens.user_type` with its CHECK.
+`api_tokens.user_type` with its CHECK. The long-holds runs add two more on `agent_runs`:
+`0083` adds `token_renewed_at` and `0084` adds `proxy_release`.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does

@@ -25,7 +25,7 @@ func TestDecisionConstants(t *testing.T) {
 	}{
 		{"allow", Allow, "allow"},
 		{"deny", Deny, "deny"},
-		{"pending", Pending, "pending"},
+		{"pending", Pending, "hold"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

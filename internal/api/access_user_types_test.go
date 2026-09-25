@@ -321,7 +321,7 @@ func (meTypeStore) GetUserType(_ context.Context, id string) (types.UserType, er
 	return types.UserType{}, store.ErrNotFound
 }
 
-// TestAuditSignInDenied: the two user-type refusals are auth.failed rows from
+// TestAuditSignInDenied: the two user-type refusals are auth.fail rows from
 // the callback's own boundary; any other reason writes nothing.
 func TestAuditSignInDenied(t *testing.T) {
 	h := newHarness(t)
@@ -331,7 +331,7 @@ func TestAuditSignInDenied(t *testing.T) {
 	}
 	var got []string
 	for _, ev := range h.audit.snapshot() {
-		if ev.Action != "auth.failed" {
+		if ev.Action != "auth.fail" {
 			continue
 		}
 		if ev.Actor != oidcCallbackActor {
@@ -344,7 +344,7 @@ func TestAuditSignInDenied(t *testing.T) {
 		got = append(got, data.Reason)
 	}
 	if !slices.Equal(got, []string{authFailedUserTypeAmbiguous, authFailedUserTypeUnknown}) {
-		t.Errorf("auth.failed reasons = %v, want the two user-type refusals only", got)
+		t.Errorf("auth.fail reasons = %v, want the two user-type refusals only", got)
 	}
 	if authFailedUserTypeAmbiguous != oidc.DenialUserTypeAmbiguous || authFailedUserTypeUnknown != oidc.DenialUserTypeUnknown {
 		t.Error("the audit reasons drifted from the sign-in denial codes")

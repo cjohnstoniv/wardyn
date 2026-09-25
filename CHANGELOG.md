@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
+  map being set was previously enough to hide the "Who is an admin" setup row and the shell
+  banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
+  fell through to admin, unwarned. `ssoRBACCheck` now warns on that condition too (whether or not
+  a role map is set), with its own setup-row detail/fix and banner sentence; a deployment with
+  neither a role map nor an admin list still reads #484's original warning, one banner, not two.
 - **`wardynd -rotate-age-key` now stamps `updated_at` on every row it re-encrypts (#717).**
   A rotation is a write, and least-retention sweeps read `updated_at` to decide what is
   stale; the Postgres secret store's whole-table rewrap (shared by `-rotate-age-key` and
@@ -46,7 +52,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   of L0 or L1 got Claude Code's managed settings, whose `allowManagedPermissionRulesOnly` stops a
   repository or user `permissions.allow` rule from running a tool before `wardyn-toolgate` is asked.
   Every claude-code hold run now gets that managed file (the L1 document), including a run at L2,
-  at L3, or with no level. Its `run.agent_policy` audit row carries `"tool_approvals": "hold"`, and
+  at L3, or with no level. Its `run.agent_policy.write` audit row carries `"tool_approvals": "hold"`, and
   on a runner that cannot deliver the file the create response says so, as it does for a gated run.
 
 - **Take-over could land the taker read-only.** The server already promotes the taker's own
@@ -56,7 +62,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   promoted the caller in place, and a console tab whose socket is still open skips the reconnect on
   that answer (#507).
 - A run refused at dispatch for an Amazon Bedrock model-credential mismatch (`autonomy_grade_drift`)
-  or by the declared-mechanism gate no longer audits a `run.llm.bedrock` "success" row for a
+  or by the declared-mechanism gate no longer audits a `run.bedrock.configure` "success" row for a
   credential it was never handed — that row is now recorded only once those gates have let the run
   through. A roster read that fails at create/Review now refuses the run (500) instead of silently
   admitting it ungraded, which used to surface later at dispatch with a misleading "the
@@ -87,6 +93,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `CreateUserType` now refuses (`409`) an id any of those three tables still names, so the id stays
   dead until an operator clears the orphan rows themselves, rather than quietly inheriting whatever
   a later type of the same id is given to (#610).
+- **Reviving a run, and moving its end later, now re-check its owner's authority instead of keeping
+  the run alive on what it was granted at launch.** A revive (the run's page or an admin's "Restart
+  with current limits") and a later end or No end are refused, naming the capability, when the owner
+  no longer holds the run's agent, one of its workspaces or the git provider of one of its repos;
+  an extension is also refused when the governance profile the run was created under is gone. A
+  revive is also refused when the model credential its proxy would inject has been erased or its
+  integration disabled, and the revived proxy takes the upstream proxy, trusted CA and model
+  gateways from the current configuration rather than its old rendered copy. When anyone but the
+  owner asks, the owner is known by sub alone: any deny row covering the value refuses, and only
+  `all` rows or allow rows for the owner's sub count, not the owner's admin role. So under an
+  enforced kind, an admin-owned run can be revived, restarted or extended only by its owner, or
+  with an allow row for the owner's sub. Each refusal is audited `denied` with the owner as
+  `subject` (#679).
+- **The idle reaper is now hold-aware: it no longer stops a run out from under an open
+  push/egress/ADO/credential/tool-call request that is still within its wait.** The idle-stop
+  CAS (`UpdateRunStateIfIdle`) now also checks for a PENDING approval whose own
+  `min(requested_at + wait, ends_at)` has not yet passed, and refuses the transition while one
+  is open — closing the same race window the existing touched-after-snapshot guard closes, since
+  a request can be raised between the reaper's scan and the stop. A re-auth hold's own timeout
+  decision (`credential:reauth-timeout`) no longer resets the run's idle clock, since it is the
+  proxy reporting that nobody answered, not real agent activity (#570).
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
@@ -382,7 +409,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `POST /me/view {"view":"user"|"admin","user_type":"…"}` (a clean break — `POST /me/member-mode`'s
   `{"enabled":bool}` shape is not aliased); `/me` reports `user_view`, `user_view_no_credential`
   and `user_preview_available` in place of `member_mode`, `member_mode_no_credential` and
-  `member_preview_available`. The audit action is `auth.user_view` (dual-emitted alongside
+  `member_preview_available`. The audit action is `auth.user_view.set` (dual-emitted alongside
   `auth.member_mode` for one minor for SIEM stability, removed in 0.9); the `authz.denied`
   marker is `user_view`; the BYOI refusal reason is `byoi_user`. `runner.MemberMountPolicy` is
   `UserMountPolicy` and 29 more `*Member*` server functions (`denyMember*`, `filterMemberGrants`,
@@ -395,6 +422,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `view` value refuses `400` with `The "view" field must be "user" or "admin".` The SSH-key door
   no longer refuses inside the view — a key registered there is stored capped instead (migration
   0070), re-stamped to the caller's real role at their next sign-in.
+- **Audit action names follow one grammar (#205).** Every action in `docs/AUDIT-ACTIONS.md` is now
+  `<noun>[.<sub>].<verb>`: two or three segments, ending in a verb from the closed list in that
+  page's new "Grammar" section. `TestAuditActionsDoc_Grammar` holds every action row, and every
+  suffix a wildcard family row names, to it. 61 names changed: 21 past-tense ones
+  (`capability.grant.created` → `capability.grant.create`), 37 that ended in a noun, an adjective or
+  a compound segment (`run.policy.effective` → `run.policy.resolve`, `ssh.auth` →
+  `ssh.authenticate`), and the three four-segment `run.workspace.requirement.*` names. The five
+  per-lane egress-union actions became one `run.egress.add` carrying `kind`; `run.ssh.drop`,
+  `run.git_pat.drop`, `run.provider.admit` and `workspace.provider.admit` carry `reason`.
+  `authz.denied` is the one listed exception. See "Upgrading" below. The page also gains a
+  Consumers column naming what inside Wardyn reads each action back. The
+  `egress.decisions.dropped:<n>` `rule_source` value is now `egress:dropped-decisions-<n>`, and the
+  same test now checks every `rule_source` row is `family:kebab`. Every `secret.read`
+  refusal reason is snake_case, like the rest of its reasons. The `wardyn_egress_denies_total`
+  metric's `HELP` text no longer promises a `reason` label the series does not carry — the series
+  itself is unchanged, still one unlabeled counter.
 - **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
   `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
   `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →
@@ -425,7 +468,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   session carries that type beside the tier. Among the types a person matches, the highest
   priority wins and Standard user never wins against a custom type. Two custom types at the same
   top priority refuse the sign-in (`user_type_ambiguous`), and so does a type that doesn't exist
-  (`user_type_unknown`, also warned at boot); both are `auth.failed` rows from
+  (`user_type_unknown`, also warned at boot); both are `auth.fail` rows from
   `wardyn/oidcCallback`. An `admin` sign-in, the operator allowlist included, is never refused
   over a type: it lands on Standard user with a warning. `POST /access/mappings` takes `user_type` on a user row and refuses a
   type that doesn't exist; `GET /access` names each row's type and lists the types; the People
@@ -613,7 +656,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   SSO; dispatch also refuses a provider since deleted, turned off, or no longer serving the agent.
   The injection sink re-reads the provider by UID on every resolve and serves only the run token's
   own subject, the provider's own host, and a run still on that provider. A stored, inline or
-  recorded grant naming a sign-in sentinel is dropped at dispatch (`run.injection.dropped`, reason
+  recorded grant naming a sign-in sentinel is dropped at dispatch (`run.injection.drop`, reason
   `model_credential_not_provider_authored`), and Record Mode leaves one out of a profile. Nobody can
   sign in to a provider yet (#533), so until then such runs are refused at create.
 - **A run on a Bedrock model provider uses its owner's own AWS credential (#530).** A run that
@@ -623,7 +666,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   strictly from their own namespace. The kind names the one lane: the operator's bearer, captured
   session, host `~/.aws` mount and static SigV4 keys never credential it, and every other model
   injection the run carries (the legacy sentinels, anything bound for `api.anthropic.com`) is
-  dropped (`run.injection.dropped`, reason `model_credential_not_provider_authored`). An AWS sign-in must match
+  dropped (`run.injection.drop`, reason `model_credential_not_provider_authored`). An AWS sign-in must match
   the provider's access portal and, when set, its pinned account and role. Create, Review and
   dispatch refuse, naming the provider, a run whose owner has not added their key or is not signed
   in to AWS for it. The injection sinks re-read the provider on every resolve and serve only the
@@ -669,8 +712,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   caller must be granted the provider and an agent it serves; the admin token under SSO cannot sign
   in. A run whose provider AWS session lapses mid-run is now held for its owner to sign in again,
   as roster runs are: the hold's `requested_scope` names the provider (`provider`, `provider_uid`),
-  and only its owner's sign-in for that provider answers it. `harness.login.started`,
-  `harness.credential.captured` and `credential.reauth.*` gain `model_provider`.
+  and only its owner's sign-in for that provider answers it. `harness.login.start`,
+  `harness.credential.capture` and `credential.reauth.*` gain `model_provider`.
 - **Every model-provider kind dispatches through one gate and one lane (#551).** The key and
   endpoint kinds (#528, #532) and the subscription and Bedrock kinds (#529, #530) were built on
   two lines and are now one path. A provider block that is set, or cannot be read, governs every
@@ -679,7 +722,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   lanes. Every door — create, Review, a record session and dispatch — checks the run owner's own
   credential by the provider's kind, and dispatch drops every other model credential — including
   one on another harness's vendor host, such as an OpenAI key on a claude-code run — before the
-  kind's arm authors its own (`run.injection.dropped`, reason
+  kind's arm authors its own (`run.injection.drop`, reason
   `model_credential_not_provider_authored`, which on a provider run now also carries `provider`;
   it replaces `not_the_chosen_provider`, `provider_signin_not_dispatch_authored` and
   `provider_key_not_dispatch_authored`). Subscription and Bedrock refusals now follow #532: the
@@ -861,7 +904,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   deleted, the next request is refused `403` `user_view_type_deleted` (a launch `409` `admin_view`)
   rather than answered as the admin, and the view turns off; `GET /me` answers the real tier with
   `user_view_dropped`. A run records the type it was launched as (`agent_runs.user_type`, and
-  `user_type` / `user_view` on `run.create`); the switch is audited as `auth.user_view`.
+  `user_type` / `user_view` on `run.create`); the switch is audited as `auth.user_view.set`.
 - **SSH keys and API tokens can be turned off per person, group or user type (#614).** A new
   capability kind `feature` (values `ssh_key` and `api_token`, or `*`) is checked at `POST
   /me/ssh-keys` and `POST /me/tokens`. It narrows: until an admin enforces it on the Permissions
@@ -944,7 +987,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `expires_at` = min(requested_at + the run's wait, the run's end), and the approval sweep expires a
   request at that time as well as at the deployment cutoff. Migration
   `0072_agent_runs_run_limits` adds the four `agent_runs` columns; zero limits keep today's
-  behaviour. Nothing yet lets a user change the end or the wait (#569).
+  behaviour.
 - **A run stops at its end and is kept (#568).** When a run's `ends_at` passes, it is stopped and
   kept: its pending approvals are cancelled (`run_ended`), its broker credentials revoked, its agent
   container stopped but not removed, and its proxy sidecar removed, so it has no network. It stays
@@ -957,6 +1000,78 @@ and does not yet follow semantic versioning (interfaces are not stable).
   10 minutes before the end; `run.ended` and `run.ended.expired` record the end and the grace running
   out. Migration `0073_agent_runs_lease` adds `lost_at`, `lost_reason`, `ending_soon_for` and
   `ending_soon_sec`.
+- **A person changes their run's end and wait (#569).** `PATCH /api/v1/runs/{id}` takes
+  `ends_at` (a time, or `null` for No end) and `wait_budget_sec`, for the run's owner or a super
+  admin. Extending the end within the run's captured max (measured from now) is always allowed;
+  shortening it, setting No end (where `allow_no_end`) and changing the wait need the run's captured
+  `user_changes_limits` and otherwise answer 403. An over-ask is capped at the limit and the response
+  names it (`capped`, `latest_end`, `max_wait_sec`). A security admin is bounded like anyone and
+  reaches only their own runs; a super admin is bounded by the deployment alone. A finished or ended
+  run answers 409. Audited as `run.end.set` and `run.wait_budget.set`, refusals as `denied`.
+- **Runner Freeze/Thaw: the agent container can be paused and resumed in place (#571).**
+  `runner.Freezer` is an optional `Runner` capability (`FreezeSandbox`/`ThawSandbox`), implemented
+  today by the Docker driver as `ContainerPause`/`ContainerUnpause` on the agent only — the proxy
+  sidecar is never paused, so it keeps renewing its token and answering egress decisions while the
+  agent is frozen. Both are idempotent on a missing or already-in-that-state sandbox.
+  `runner.Capabilities.Freeze` (and its substrate-level counterpart, `substrate.ClassSupport.Freeze`)
+  reports support PER CONFINEMENT CLASS, keyed on the runtime the class actually runs on: only a
+  class on `runc` (the one runtime this is verified against) is `true`; a daemon whose default
+  runtime is not `runc`, an operator pin away from it, and `runsc`/Kata-backed classes report
+  `false` until that pause path is verified. Kubernetes does not implement `Freezer`; a router in
+  front of one answers `ErrFreezeUnsupported`. No wiring yet decides when to pause a run — that is
+  #572.
+- **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
+  agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
+  suspend) is no longer failed and deleted: it is kept, `RUNNING` with `lost_reason: "reboot"`, its
+  agent stopped, its proxy stopped, its pending approvals cancelled (`run_lost`) and its broker
+  credentials revoked. A run whose token has not been renewed for over an hour and five minutes (the
+  control plane was down past the proxy's renew window, after which the proxy gives up renewing but
+  used to keep forwarding allowlisted egress on a dead identity, unaudited) is now found at boot and
+  on every sweep: an interactive one is kept with `lost_reason: "outage"`, its proxy stopped so it
+  has no egress while its agent keeps running; a headless one is failed and torn down. A lost run is
+  kept until its end plus `WARDYN_ENDED_RUN_GRACE` (`run.lost.expired`), or until it is killed when
+  it has no end; an outage run's agent is stopped once its end passes. Anything that cannot be kept
+  fails closed and is torn down (an outage run as `FAILED`): a headless run, one past its end and
+  grace, a substrate that cannot keep a sandbox (Kubernetes), or a proxy that cannot be stopped. Every renew now stamps
+  the run and hands out its token only once the stamp lands; a kept (ended or lost) run's renew
+  answers 403. Audited as `run.lost`. Migration `0083_agent_runs_token_renewed` adds
+  `token_renewed_at`, starting every existing run with a fresh stamp so none is read as lapsed at
+  upgrade.
+- **A run lost to a control-plane outage can be revived, and an admin can restart standing runs
+  with current limits (#575).** `POST /api/v1/runs/{id}/revive` (the run's owner, or a super
+  admin) gives a run lost to an `outage`, whose agent is still running, a new proxy sidecar: the
+  old one's own config is read back from the stopped container, a fresh run token is minted for
+  the owner, and the owner's CURRENT governance profile (the one captured at create) is
+  re-asserted over the frozen policy — its denies are added and every injection or brokered PAT
+  host they deny is dropped. It is never the caller's ceiling, so an admin's click cannot strip a
+  member's limits, and the policy is never re-resolved. The new proxy takes the old one's address
+  on the run's network and the current proxy image; the per-run MITM CA carries over and is copied
+  nowhere else. A revive is refused, with nothing changed, when the captured profile no longer
+  exists, when the profile now denies a host the run's git broker needs (the agent's grant id
+  cannot be withdrawn from a running sandbox), for a run lost to a `reboot` or `ended`, or past
+  its end. A proxy that cannot be replaced leaves the run lost (`outage`) again with no proxy,
+  except that a live run whose old proxy was never touched (its image cannot be pulled, say) keeps it.
+  Audited as `run.revive` with the actor and the owner as `subject`. Admins get the same path in
+  bulk: `POST /api/v1/admin/runs/restart` ("Restart with current limits") and
+  `GET /api/v1/admin/runs/proxy-window`, which lists the live runs whose proxy was started by a
+  release older than wardynd N−1 (or by one it cannot place). A lost run's proxy is now stopped
+  and kept rather than removed, since its env is where the config a revive reads back rests;
+  teardown removes it with the rest of the sandbox. A new contract test pins the internal API the
+  previous minor's proxy calls. Kubernetes cannot revive (the agent pins the proxy pod's IP).
+  Migration `0084_agent_runs_proxy_release` adds `proxy_release`.
+- **A run lost to a reboot can be revived, and Claude Code continues its conversation (#576).**
+  `POST /api/v1/runs/{id}/revive` now also takes a run lost to a `reboot` (Docker): it gets the
+  same new proxy (a fresh run token, the owner's current profile denies), and only then is its
+  kept agent container started again (`docker start`), so the agent's first request goes through
+  the rewritten config. Docker refuses to start the agent unless its new proxy is running. An
+  agent that cannot be started leaves the run lost (`reboot`) again with its agent and proxy
+  stopped; audited as `run.revive` `from: reboot` with `agent_started`. The admin bulk restart
+  stays proxy-only and reports a rebooted run instead of starting it. Image side, a container
+  that has booted before takes `agent-run --revive`: the same prep over the kept files, and the
+  run's seed is never started again. Claude Code continues its last conversation
+  (`claude --continue`) when the run landed the human in the agent; codex-cli starts a fresh
+  session on the first attach; the aws-sso image re-runs its sign-in after this boot's prep.
+  Images built before this change re-seed a revived run. Running programs are not restored.
 - **The Console view switch, and per-view chrome (#634).** Beside the wordmark, an admin with both
   views gets an **Admin view** | **User view** switch. On SSO it asks the unsaved-changes guard
   first, flips the session's existing clamp (`POST /me/member-mode`), tells the other tabs, and
@@ -1035,7 +1150,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   with a credential left behind, and it cannot touch the operator's own credentials. Audited
   `credential.erase`. A captured AWS or Azure DevOps sign-in whose refresh token the provider
   refuses for good (`invalid_grant`) is deleted at once, and a stored AWS sign-in is deleted by a
-  daily sweep once its expiry passes; both are audited `credential.expired_deleted`. A person
+  daily sweep once its expiry passes; both are audited `credential.expired.delete`. A person
   whose sign-in was deleted this way is shown as not connected and signs in again.
 - **An admin can no longer set a secret in someone else's namespace (#590).** `PUT
   /api/v1/secrets/{name}?owner=` is refused with `403` for everyone, audited `secret.write`
@@ -1154,7 +1269,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `user`,
   and it never gains the admin override: the sign-in re-stamp leaves its role alone, a CHECK
   refuses a capped row that reads `admin`, and the SSH gateway refuses the override for it
-  (`ssh.auth` reason "capped key (registered in the user view): no admin override"). It still
+  (`ssh.authenticate` reason "capped key (registered in the user view): no admin override"). It still
   reaches its owner's own runs. `ssh_key.add` carries `capped: true` for such a key. Keys
   registered outside the user view behave exactly as before, and `POST /me/tokens` still refuses
   in the mode. See `docs/SSH.md#bounds`.
@@ -1220,7 +1335,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   service-account token (Kubernetes auth) or a token file, never a token in an environment
   variable; it refuses `http://` to a non-loopback Vault and uses a TLS config of its own. A
   sealed, throttled or unreachable Vault is transient (the credential sink answers 503, distinct
-  from a missing credential's 424, and audits `secret.read` with `reason` `store-unavailable`); a
+  from a missing credential's 424, and audits `secret.read` with `reason` `store_unavailable`); a
   401/403 is definitive, and re-authenticates at most once every 30 s. On a transient failure the
   proxy keeps injecting its last value for a bounded grace (#589, above). A KV v2 mount
   that does not exist fails boot, and a write or delete Vault answers 404 fails rather than reading
@@ -1269,7 +1384,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   settings are not loaded; managed settings still are. This is an interim fix. The agent can still
   write its own user-level `~/.claude/settings.json`; THREAT-MODEL.md §5 states that residual, and
   #333's managed settings close it.
-- **An unauthenticated caller that rotated its source address wrote one `auth.failed` audit row per
+- **An unauthenticated caller that rotated its source address wrote one `auth.failed` (now `auth.fail`) audit row per
   refused request.** The 0.7.2 coalescer keyed a streak on the peer IP, so every change of address
   closed the streak and opened a new one: a bad-token drip from ten addresses, one a second, recorded
   120 rows in two minutes, as many as the rate limiter allows (#347). A streak is now keyed on the
@@ -1385,7 +1500,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `per_user`), and the injection sink resolves `bedrock-api-key` from exactly that record and
   refuses a grant that carries none — it no longer goes through the owner-then-operator fallback
   read, which could hand a run a different key from the one dispatch chose. Any other injection
-  naming the key is dropped at dispatch and audited as `run.injection.dropped`. For the same
+  naming the key is dropped at dispatch and audited as `run.injection.drop`. For the same
   reason a member's inline grant naming `bedrock-api-key` is dropped, and an `env_secret` or an
   `llm_inspection.workspace_secret_names` entry naming it is never resolved (the latter is also
   refused at write): the bearer is proxy-injected only. `runs_bedrock.go` was split by seam first — the probe
@@ -1569,8 +1684,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and a purge on the laptop is accepted and audited as a chain reset. A device has at most one push
   in flight (a concurrent one is 429), every accepted row's claim re-checks from the stored row, and
   a value Postgres cannot store is a 400 the forwarder stops on rather than a 500 it retries.
-  Failure rows are coalesced like `auth.failed`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
-  (failures) and `device.audit.chain_reset`.
+  Failure rows are coalesced like `auth.fail`'s and bounded per device. New audit actions: `device.enrolment_token.create`, `device.enrol`, `device.revoke`, `device.audit.ingest`
+  (failures) and `device.chain.reset`.
 
 - **`wardyn drive` reads and replaces admin-registered drives from the CLI.** `wardyn drive get`
   prints every drive and allocation as JSON; `wardyn drive apply <file>` (or stdin, `-`) upserts what
@@ -1665,7 +1780,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   store seam only — no routes, CLI or forwarder yet. A row at or before the device's recorded cursor is
   skipped as a re-send only when it carries the hash of the row the organisation holds at that seq
   (looked up through migration `0078_audit_events_device_origin_idx`), so a laptop table reset that
-  restarts its seq (`TRUNCATE … RESTART IDENTITY`, a restore) is a recorded `device.audit.chain_reset`
+  restarts its seq (`TRUNCATE … RESTART IDENTITY`, a restore) is a recorded `device.chain.reset`
   with every new row ingested, never rows dropped as duplicates; a re-chained rewrite of a held row is
   refused 422. Upgrading: migration 0078 builds its index inside the migration transaction, so audit
   writes pause while it scans `audit_events` (seconds per million rows); raise `WARDYN_MIGRATE_TIMEOUT`
@@ -1689,7 +1804,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   checks must be re-run on every version bump. The level rides the sandbox as
   `WARDYN_AUTONOMY_LEVEL`, and the document is delivered root-owned at
   `/etc/claude-code/managed-settings.json` through the runner's managed-files contract. A new
-  `run.agent_policy` audit row records which document was generated for which run and whether it was
+  `run.agent_policy.write` audit row records which document was generated for which run and whether it was
   `delivered`, written once the agent's container exists. On Docker, such a run fails with the
   driver's reason as its hint when the image runs as root or leaves `/etc` writable, since either
   would let the agent replace the file. A run whose runner's capabilities cannot be read fails rather
@@ -2034,13 +2149,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A runner without managed-file delivery runs a gated claude-code run without its managed
   settings.** When the runner does not advertise `Capabilities.ManagedFiles`, an `L0`–`L2`
   claude-code run is not refused: it launches under its CLI-flag levers alone, gets no file, and its
-  `run.agent_policy` row records `delivered:false` with the reason, and the create response carries a
+  `run.agent_policy.write` row records `delivered:false` with the reason, and the create response carries a
   warning saying so. Handing that runner the file anyway would place a ceiling the agent could
   rewrite.
 - **On the exec-less krun runtime, a run's managed settings are placed but not vouched for.** libkrun
   runs the guest as root and does not apply the image's `USER`, while the file's immutability depends
   on the agent not being root, and this is not yet verified on a krun host. By ruling, such a run
-  still gets the file, but its `run.agent_policy` row records `delivered:false` with the reason
+  still gets the file, but its `run.agent_policy.write` row records `delivered:false` with the reason
   "unverified on this runtime: libkrun may run the guest as root", and the create response carries the
   same warning as any undelivered run.
 - **An AWS SSO account/role pin does not invalidate a capture already in flight.** A roster edit
@@ -2069,7 +2184,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **codex-cli has no agent-side autonomy layer.** Managed settings are generated only for the one
   agent that reads a managed-settings file; a codex-cli run under any resolved level gets no file and
   runs on its CLI-flag levers alone — the honest signal is the launch warning on the 201 and the line
-  the image's launcher prints, not a `run.agent_policy` row.
+  the image's launcher prints, not a `run.agent_policy.write` row.
 - **`L2`'s seeded auto tools do not yet mean unattended tool use.** At `L2` the rubric permits
   `seed_auto_tools` (*"Let it use tools before I attach"*), but such a run boots
   `claude --dangerously-skip-permissions`, which still parks on Claude Code's own Bypass Permissions
@@ -2092,6 +2207,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   JSON must pass `--json`.
 - **`wardyn support-bundle --out` is gone; use `--output` or `-o` (#200).** There is no alias — a
   script or cron job passing `--out` now fails at the flag parser instead of silently continuing.
+- **61 audit action names changed (#205), clean break, no alias period.** Wardyn has no users yet
+  (owner ruling, #205/#203/#206), so a consumer keyed on an old name — a SIEM rule, a saved filter,
+  a dashboard query — starts missing rows the moment this ships; there is no dual-emission window to
+  catch it during. Rows written before the upgrade keep the name they were written with, so a query
+  that spans the upgrade has to name both. The full old → new table is `docs/AUDIT-ACTIONS.md`'s
+  "Renamed in 0.8" appendix (e.g. `auth.failed` → `auth.fail`, `egress.pending` → `egress.hold`,
+  `kernel.sensor.heartbeat` → `kernel.sensor.ping`, `run.workspace.egress` → `run.egress.add` with
+  `kind: workspace`). `authz.denied` is unchanged. The egress proxy's wire values moved with the
+  names (a held decision is sent as `hold`, a failed or opaque LLM scan as `fail` or `bypass`), so
+  run the proxy image from the same release as `wardynd`. The `egress.decisions.dropped:<n>`
+  `rule_source` value is now `egress:dropped-decisions-<n>`, and `secret.read`'s refusal reasons are
+  snake_case (`host-not-organisation` → `host_not_organisation`, `sso-host-not-portal` →
+  `sso_host_not_portal`, and six more the appendix lists); a consumer matching an old spelling needs
+  the same update.
 
 ## [0.7.12] — 2026-09-23
 

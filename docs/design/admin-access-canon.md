@@ -15,6 +15,7 @@ strings; this table is where a reviewer checks them. It supersedes the `sso_rbac
 | Q457-8 | The text limit is **1,000 characters**. This is an owner change from the mock's 280. Counted as characters, not bytes. |
 | #489 (2026-09-25) | The sign-in help link is **https:// only**. A new http:// link is refused at save with the scheme error. A link already stored as http:// surfaces as a setup warning. |
 | #584 (2026-09-25) | The SSH keys screen shows a chip on a capped key (one added in the user view). |
+| Q491-1 | Warn whenever the default role is admin, whether or not a role map is set — not only when neither a role map nor an admin list is set (#484's original condition). Same banner and setup row; the copy shown depends on which condition tripped it. |
 
 ## Frozen strings
 
@@ -27,6 +28,9 @@ strings; this table is where a reviewer checks them. It supersedes the `sso_rbac
 | `ADMIN_ACCESS_BANNER.TITLE` | Everyone who signs in is an admin | shell banner (`access-posture-copy.ts`) |
 | `ADMIN_ACCESS_BANNER.BODY` | Nobody is mapped to a role and no admin list is set, so every person your identity provider lets in can change policies, read and write secrets, decide approvals, and open a shell in any running sandbox. | shell banner |
 | `ADMIN_ACCESS_BANNER.ACTION` | Set who is an admin | shell banner CTA → `/admin/setup?step=people` |
+| `ADMIN_ACCESS_BANNER.BODY_DEFAULT_ROLE` | The default role is admin, so anyone your identity provider lets in whom the role map doesn't match can still change policies, read and write secrets, decide approvals, and open a shell in any running sandbox. | shell banner, shown in place of `.BODY` when the cause is `WARDYN_OIDC_DEFAULT_ROLE=admin` rather than "no mapping at all" (#491) |
+| `sso_rbac.warn_default_role` | A role map is set, but the default role is admin, so a sign-in the map doesn't match is still an admin. | `/setup/status` row `detail`, warn, same substitution as the banner body (#491) |
+| `sso_rbac.fix_default_role` | Set WARDYN_OIDC_DEFAULT_ROLE to user or a user type (chart: env.WARDYN_OIDC_DEFAULT_ROLE), so a sign-in the role map doesn't match becomes a user, not an admin. | `/setup/status` row `fix`, warn (#491) |
 | `SIGNIN_HELP.TITLE` | When someone can't sign in | People-step card (`access-posture-copy.ts`) |
 | `SIGNIN_HELP.LEAD` | Wardyn says what happened. You say what to do about it. | People-step card |
 | `SIGNIN_HELP.TEXT_LABEL` | What to tell them | card, text field |
