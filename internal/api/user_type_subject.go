@@ -49,6 +49,8 @@ type callerSubjects struct {
 // that names a type refuses rather than resolving without it — dropping the
 // type would silently lift a type-tier deny and hand the person the `all`
 // tier's answer instead of their type's.
+//
+//lint:ignore ST1005 the text is the sentence the refused person reads, as errGroupsSnapshotStale's is
 var errUserTypeUnknown = errors.New(userTypeUnknownMsg)
 
 const userTypeUnknownMsg = "Your user type no longer exists, so Wardyn can't tell what you may use. " +
