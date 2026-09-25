@@ -196,6 +196,33 @@ export interface UserDrivePreview {
 export const isManagedBackend = (b: DriveBackend): boolean =>
   b === "docker_volume" || b === "k8s_pvc";
 
+// DriveObjectNamedByWardyn, inverted for the UI: whether Wardyn MINTS this
+// backend's storage object name. host_path is the only backend on the other
+// side — its object is `<host_root>/<home>`, a directory the share owner
+// already made and named.
+const objectNamedByWardyn = (b: DriveBackend): boolean => b !== "host_path";
+
+// homeTemplateDisabled mirrors ManagedBackendRejectsTemplate /
+// ShareBackendRejectsTemplate (internal/types/user_drive.go) as ONE predicate,
+// so the editor's home-template picker cannot drift from what the server
+// actually refuses (#808). THE AXIS IS WHO NAMES THE OBJECT, not the
+// managed/share split isManagedBackend answers:
+//   - docker_volume / k8s_pvc (managed, Wardyn-named): only `hash` — the home
+//     segment is concatenated into the name `docker volume ls`/`kubectl get
+//     pvc` print without an inspect or describe.
+//   - k8s_pvc_static (a SHARE by Kind(), but STILL Wardyn-named — an admin
+//     provisions the claim, Wardyn only Gets it, but still names it): `hash`
+//     and `sub` are both fine (`hash` is the server's default and recommended
+//     template here), only `email_local` is refused — it would fold two
+//     principals' claims onto one pre-created volume.
+//   - host_path (a share NOT named by Wardyn): `sub` and `email_local`, never
+//     `hash` — a derived id would name a directory nobody made.
+export function homeTemplateDisabled(b: DriveBackend, t: HomeTemplate): boolean {
+  if (!objectNamedByWardyn(b)) return t === "hash";
+  if (isManagedBackend(b)) return t !== "hash";
+  return t === "email_local";
+}
+
 // types.EnforcementFor — what binds this backend's bytes. Also derived in Go
 // and absent from the list wire type (the preview and /me carry the resolved
 // value; a table row does not). An unknown backend reads as `none`: claiming

@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-// ─── maskProxyURL ────────────────────────────────────────────────────────────
+// maskProxyURL
 
 func TestMaskProxyURL(t *testing.T) {
 	cases := []struct {
@@ -56,7 +56,7 @@ func TestMaskProxyURL(t *testing.T) {
 }
 
 // An unparseable proxy value that still contains credentials must be redacted
-// entirely, never echoed raw (regression guard for the credential-leak fix).
+// entirely, never echoed raw.
 func TestMaskProxyURL_UnparseableRedacts(t *testing.T) {
 	in := "http://user:s3cr3t@%zzproxy.corp:8080" // %zz is an invalid escape → url.Parse errors
 	masked, hasCred := maskProxyURL(in)
@@ -71,7 +71,7 @@ func TestMaskProxyURL_UnparseableRedacts(t *testing.T) {
 	}
 }
 
-// ─── env vars ────────────────────────────────────────────────────────────────
+// env vars
 
 func TestDetectEnvProxyCandidates_LowercasePreferredAndMismatch(t *testing.T) {
 	clearProxyEnv(t)
@@ -189,7 +189,7 @@ func clearProxyEnv(t *testing.T) {
 	}
 }
 
-// ─── shell profiles ──────────────────────────────────────────────────────────
+// shell profiles
 
 func TestDetectShellProxyCandidates_TempProfileAndCredentialMasking(t *testing.T) {
 	home := t.TempDir()
@@ -245,7 +245,7 @@ func TestDetectShellProxyCandidates_MissingFilesTolerated(t *testing.T) {
 	}
 }
 
-// ─── git config ──────────────────────────────────────────────────────────────
+// git config
 
 func TestDetectGitProxyConfig_FakeExec(t *testing.T) {
 	orig := execCommandOutput
@@ -285,7 +285,7 @@ func TestDetectGitProxyConfig_NeitherSet(t *testing.T) {
 	}
 }
 
-// ─── tool configs ────────────────────────────────────────────────────────────
+// tool configs
 
 func TestDetectToolConfigs_TempHome(t *testing.T) {
 	home := t.TempDir()
@@ -354,7 +354,7 @@ func mustWrite(t *testing.T, path, content string) {
 	}
 }
 
-// ─── OS-level parsing (pure — no real exec, safe on any box) ────────────────
+// OS-level parsing (pure — no real exec, safe on any box)
 
 func TestSplitWindowsProxyServer(t *testing.T) {
 	cases := []struct {
@@ -456,7 +456,7 @@ func TestParseScutilProxyOutput(t *testing.T) {
 	}
 }
 
-// ─── OS-level: Windows via WSL (fake exec) ──────────────────────────────────
+// OS-level: Windows via WSL (fake exec)
 
 // TestDetectWindowsProxyViaWSL_RegistryHit exercises the primary probe: a
 // successful powershell.exe call reporting an enabled proxy must produce
@@ -539,7 +539,7 @@ func TestDetectWindowsProxyViaWSL_BothUnavailable(t *testing.T) {
 	}
 }
 
-// ─── OS-level: macOS (fake exec) ─────────────────────────────────────────────
+// OS-level: macOS (fake exec)
 
 // TestDetectMacOSProxy_FakeExec exercises the scutil dispatch+parse wiring
 // end to end via the execCommandOutput seam (mirroring
@@ -579,7 +579,7 @@ func TestDetectMacOSProxy_Unavailable(t *testing.T) {
 	}
 }
 
-// ─── precedence merge ────────────────────────────────────────────────────────
+// precedence merge
 
 func TestWinningSetting_PrecedenceEnvBeatsShellBeatsOS(t *testing.T) {
 	candidates := []proxyCandidate{
@@ -604,7 +604,7 @@ func TestWinningSetting_PrecedenceEnvBeatsShellBeatsOS(t *testing.T) {
 	}
 }
 
-// ─── top-level smoke test ────────────────────────────────────────────────────
+// top-level smoke test
 
 // TestDetectHostProxy_NeverPanicsOrErrors is a smoke test: DetectHostProxy
 // must return successfully on any box, including one where powershell.exe,

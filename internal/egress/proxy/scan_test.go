@@ -27,7 +27,7 @@ const scanTestSecret = "sk-ant-test-DEADBEEF-0123456789" // >= secretmask.MinLen
 func TestLLMInspectionConfigRoundTrip(t *testing.T) {
 	cfg := Config{
 		RunID:           uuid.New(),
-		ControlPlaneURL: "http://wardynd:8080",
+		ControlPlaneURL: "http://127.0.0.1:8080",
 		RunToken:        "tok",
 		Policy: types.RunPolicySpec{
 			AllowedDomains: []string{anthropicHost},

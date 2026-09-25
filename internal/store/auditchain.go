@@ -159,7 +159,7 @@ func (w *auditChainWalk) fail(seq int64, reason string) {
 
 // VerifyAuditChain walks the audit_events hash chain oldest-first, re-hashing
 // every row with migration 0047's audit_row_hash — the SAME function the insert
-// trigger used to write it, so there is no second implementation to drift out
+// trigger uses to write it, so there is no second implementation to drift out
 // of agreement with the first.
 //
 // The sweep is paged, which is a correctness property before it is a cost

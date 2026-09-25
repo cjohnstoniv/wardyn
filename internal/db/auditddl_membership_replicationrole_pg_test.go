@@ -3,18 +3,16 @@
 
 package db
 
-// PIN for the reopened finding that AuditDDLProtected's FOURTH leg — the
-// session_replication_role one — was the only leg that did not follow role
-// membership, so the exact shape the first three legs were rewritten to catch
-// walked past it.
+// Pin for AuditDDLProtected's fourth leg — the session_replication_role one —
+// following role membership the way the first three legs do.
 //
-// The shape: GRANT SET ON PARAMETER session_replication_role TO admin;
-// GRANT admin TO app, with app NOINHERIT. has_parameter_privilege(app, …) is
-// then FALSE — app holds no such grant of its own and inherits nothing — so the
-// pre-fix leg reported the deployment PROTECTED. app can nonetheless run
-// SET ROLE admin; SET session_replication_role = 'replica'; RESET ROLE and, back
-// as ITSELF, append rows past all three simply-enabled audit triggers.
-//
+// The shape: GRANT SET ON PARAMETER session_replication_role TO admin; GRANT
+// admin TO app, with app NOINHERIT. has_parameter_privilege(app, …) is then
+// FALSE — app holds no such grant of its own and inherits nothing — so a leg
+// that asked only that would report the deployment PROTECTED. app can
+// nonetheless run SET ROLE admin; SET session_replication_role = 'replica';
+// RESET ROLE and, back as itself, append rows past all three simply-enabled
+// audit triggers.
 // This test executes that bypass rather than arguing it (the INSERT comes back
 // with row_hash NULL, proving the chain trigger did not fire) and then asserts
 // the verdict. Everything runs inside a transaction that is ROLLED BACK, so the
@@ -99,9 +97,10 @@ func TestPG_AuditDDLProtectedFollowsMembershipToTheReplicationRoleGrant(t *testi
 	}
 	t.Cleanup(appPool.Close)
 
-	// PRECONDITION, and it is the whole finding: none of the first three legs
-	// fire, AND the pre-fix fourth leg's own question answers false — so a
-	// verdict of PROTECTED here is exactly what the pre-fix code returned.
+	// Precondition, and it is the whole point: none of the first three legs
+	// fire, and a fourth leg that asks has_parameter_privilege alone answers
+	// false — so a verdict of PROTECTED here is exactly what that leg would
+	// return.
 	var superLeg, ownerLeg, triggerLeg, ownGrant, memberOfAdm bool
 	if err := appPool.QueryRow(ctx, `
 		SELECT bool_or(EXISTS (SELECT 1 FROM pg_roles s WHERE s.rolsuper AND pg_has_role(current_user, s.oid, 'MEMBER'))),

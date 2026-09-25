@@ -63,7 +63,7 @@ type Policy struct {
 	// the operator named exactly, mapped to the set of ports they qualified it
 	// with. It answers the HOST question AllowedExactHost asks (credential
 	// injection) and nothing else — evalHost never consults it, so a port-qualified
-	// entry still grants egress on that port only (F106).
+	// entry still grants egress on that port only.
 	//
 	// It keeps the PORTS rather than stripping them because the allow side and the
 	// deny side must stay symmetric: CompilePolicy routes a port-qualified deny to
@@ -487,8 +487,8 @@ func (p *Policy) AllowsLiteralIP(host string, port int) bool {
 // allowlist entry covering host:port — "vendor.example:8443", or the wildcard
 // form "*.example.com:8443".
 //
-// It is the closest thing the compiled policy has to declared TRANSPORT INTENT
-// (F110): a BARE entry matches any port, so it says nothing about which port
+// It is the closest thing the compiled policy has to declared TRANSPORT INTENT:
+// a BARE entry matches any port, so it says nothing about which port
 // the operator meant; a port-qualified one is the operator naming the port in
 // writing. Credential injection over CLEARTEXT reads it that way — see
 // Proxy.injectableTransport, which asks this only AFTER its unconditional
@@ -696,8 +696,8 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 // X-Wardyn-Host already carries that.
 //
 // It exists so a resolver outage is never labelled builtin:private-ip with
-// literalIPDenialDetail's "declare it under internal_hosts" advice attached
-// (F055): that advice cannot fix a resolver outage, and it points at loosening
+// literalIPDenialDetail's "declare it under internal_hosts" advice attached.
+// That advice cannot fix a resolver outage, and it points at loosening
 // an SSRF control for a fault that is neither.
 const resolveFailedDetail = "this host did not resolve (DNS failure, no such name, or no address records), so no address " +
 	"could be vetted; this is a name-resolution fault, not the private-address guard — check the sandbox's resolver, " +

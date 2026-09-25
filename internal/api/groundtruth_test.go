@@ -148,8 +148,8 @@ func (r *failingRecorder) Record(_ context.Context, ev types.AuditEvent) error {
 	return r.err
 }
 
-// TestGroundtruthPartialBatchDoesNotCommitGoodEventsOnBadOne is the RED-FIRST
-// regression for the partial-commit finding: a batch whose FIRST event is valid
+// TestGroundtruthPartialBatchDoesNotCommitGoodEventsOnBadOne: a batch whose
+// first event is valid
 // (kernel.*, NULL run_id) but whose SECOND event is invalid (non-kernel action)
 // must NOT silently commit the good event while returning a 400 — that loses
 // events and miscounts. The whole batch is validated before anything commits, so
@@ -181,8 +181,8 @@ func TestGroundtruthPartialBatchDoesNotCommitGoodEventsOnBadOne(t *testing.T) {
 	}
 }
 
-// TestGroundtruthAuditWriteFailureIsNon2xx is the RED-FIRST regression for the
-// swallowed-write finding: when the audit Record fails (durability failure on
+// TestGroundtruthAuditWriteFailureIsNon2xx: when the audit Record fails
+// (durability failure on
 // the tamper-proof stream), the endpoint must propagate a non-2xx so the sender
 // retries (fail-closed durability) rather than reporting the events accepted.
 func TestGroundtruthAuditWriteFailureIsNon2xx(t *testing.T) {
@@ -200,8 +200,8 @@ func TestGroundtruthAuditWriteFailureIsNon2xx(t *testing.T) {
 	}
 }
 
-// TestGroundtruthClampsSuppliedFutureTime is the regression for the trusted-Time
-// finding: a compromised/skewed sensor posting a heartbeat with Time far in the
+// TestGroundtruthClampsSuppliedFutureTime: a compromised/skewed sensor posting a
+// heartbeat with Time far in the
 // FUTURE must not have that Time trusted. /healthz computes ebpf_groundtruth
 // health as Now().Sub(latest heartbeat Time) <= TTL, so a future Time makes the
 // diff negative and pins "healthy" forever even after the sensor dies. The server
@@ -275,6 +275,12 @@ func (s stubHeartbeatStore) LatestAuditEventByAction(context.Context, string) (t
 	return s.ev, nil
 }
 
+// GetSiteConfig answers /healthz's other read (the sign-in help pair) with
+// nothing configured.
+func (stubHeartbeatStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 // healthzEbpf GETs /healthz and returns its ebpf_groundtruth object.
 func healthzEbpf(t *testing.T, h *harness) map[string]any {
 	t.Helper()
@@ -293,8 +299,8 @@ func healthzEbpf(t *testing.T, h *harness) map[string]any {
 	return gt
 }
 
-// TestHealthzEbpfIdleWhenNoEventsObserved is the red-first regression for
-// a FRESH heartbeat proves the sidecar process is alive and reaching the control
+// TestHealthzEbpfIdleWhenNoEventsObserved: a fresh heartbeat proves the sidecar
+// process is alive and reaching the control
 // plane, but if it has mapped zero kernel events (Tetragon dead / wrong export
 // path / no TracingPolicy) the stream is BLIND. /healthz must report "idle", not
 // "healthy" — "heartbeat arriving" is not "kernel ground truth arriving".
@@ -313,12 +319,12 @@ func TestHealthzEbpfIdleWhenNoEventsObserved(t *testing.T) {
 	}
 }
 
-// TestHealthzEbpfIdleNamesBrokenCorrelation is the E2 visibility regression: a
-// sensor that saw kernel events but could bind NONE of them to a run (the 0.6
-// frozen-counter defect) reported the SAME idle/observed_total:0 as a sensor
-// seeing nothing at all — one is a quiet host, the other is a broken pipeline
-// no amount of waiting fixes. The gated-drop count must reach /healthz and the
-// reason must say which of the two failures this is.
+// TestHealthzEbpfIdleNamesBrokenCorrelation: a sensor that saw kernel events
+// but could bind none of them to a run (a frozen correlator counter) must not
+// report the same idle/observed_total:0 as a sensor seeing nothing at all —
+// one is a quiet host, the other is a broken pipeline no amount of waiting
+// fixes. The gated-drop count must reach /healthz and the reason must say
+// which of the two failures this is.
 func TestHealthzEbpfIdleNamesBrokenCorrelation(t *testing.T) {
 	h := newHarness(t)
 	hb := groundtruth.HeartbeatEventWithDropped(0, 0, 4812, nil) // saw 4,812, correlated none
@@ -356,15 +362,14 @@ func TestHealthzEbpfHealthyWhenEventsObserved(t *testing.T) {
 	}
 }
 
-// TestHealthzEbpfPartialWhenOneKindNeverArrives is W20-W20-groundtruth-
-// mapper-4: a sensor that has mapped real events (observed_total>0) but only
-// EVER for one kind (a mis-scoped TracingPolicy that never fires for
-// network.connect, say) used to read "healthy" identically to one seeing
-// every required kind — the aggregate alone cannot tell them apart. With the
-// per-kind breakdown published, this must report "partial" and name the
-// missing kind, not the "healthy" overclaim. kernel.file.write is NOT in the
-// required set (bug-audit-1: it fires only on a narrow credential-path
-// write, so its absence is not a coverage gap — see
+// TestHealthzEbpfPartialWhenOneKindNeverArrives: a sensor that has mapped
+// real events (observed_total>0) but only ever for one kind (a mis-scoped
+// TracingPolicy that never fires for network.connect, say) must not read
+// "healthy" like one seeing every required kind — the aggregate alone cannot
+// tell them apart. With the per-kind breakdown published, this must report
+// "partial" and name the missing kind. kernel.file.write is not in the
+// required set (it fires only on a narrow credential-path write, so its
+// absence is not a coverage gap — see
 // TestHealthzEbpfHealthyWithoutFileWrite) and so is never named here.
 func TestHealthzEbpfPartialWhenOneKindNeverArrives(t *testing.T) {
 	h := newHarness(t)
@@ -403,13 +408,12 @@ func TestHealthzEbpfHealthyWhenAllKindsArrive(t *testing.T) {
 	}
 }
 
-// TestHealthzEbpfHealthyWithoutFileWrite is the bug-audit-1 regression: the
-// P1 fix for W20-W20-groundtruth-mapper-4 (commit b7ad12fd) required ALL
-// THREE kernel event kinds — including kernel.file.write — before reporting
-// "healthy". But sensitive.go's own allowlist filter means file.write fires
-// only on a write to a narrow credential-shaped path (~/.ssh, ~/.aws, ...),
-// which most captures never touch, making "healthy" chronically unreachable
-// and stamping a spurious "partial coverage" caveat on nearly every capture.
+// TestHealthzEbpfHealthyWithoutFileWrite: requiring all three kernel event
+// kinds — including kernel.file.write — before reporting "healthy" is wrong,
+// because sensitive.go's own allowlist filter means file.write fires only on
+// a write to a narrow credential-shaped path (~/.ssh, ~/.aws, ...), which
+// most captures never touch; "healthy" would be chronically unreachable and
+// nearly every capture would carry a spurious "partial coverage" caveat.
 // exec+connect (both near-universal) having arrived must report healthy on
 // their own, with zero file.write observed.
 func TestHealthzEbpfHealthyWithoutFileWrite(t *testing.T) {
@@ -431,7 +435,7 @@ func TestHealthzEbpfHealthyWithoutFileWrite(t *testing.T) {
 	}
 }
 
-// TestEbpfGroundtruthCaveat_OneLinePerState is W20-W20-groundtruth-mapper-4's
+// TestEbpfGroundtruthCaveat_OneLinePerState is
 // other half: before this, the per-kind coverage state ebpfGroundtruthStatus
 // computes existed ONLY on the admin-only /healthz endpoint — nowhere a
 // Record Mode capture or a synthesized profile (the surfaces an operator
@@ -517,8 +521,8 @@ func (notFoundStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) 
 	return types.AgentRun{}, store.ErrNotFound
 }
 
-// TestGroundtruthUnknownRunIDDowngradesNotRejectsBatch is the RED-FIRST
-// regression for a batch with ONE event whose run_id is
+// TestGroundtruthUnknownRunIDDowngradesNotRejectsBatch: a batch with
+// one event whose run_id is
 // present-but-unknown (e.g. an orphaned container after a DB reset/re-point)
 // must NOT 400 the whole batch — the sensor treats a 4xx as a non-retryable
 // whole-batch drop, so every co-batched event would be permanently lost. The

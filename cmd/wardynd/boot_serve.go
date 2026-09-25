@@ -203,8 +203,10 @@ func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPos
 // error, then drains: graceful HTTP shutdown first, audit sinks last (after the
 // server has stopped accepting requests, so no further audit events are
 // produced). Every exit path must Close the sinks, or the final batch is
-// abandoned. Extracted verbatim from run(); fan may be nil.
-func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout) error {
+// abandoned. Extracted verbatim from run(); fan may be nil. The proxy-facing
+// TLS listener (hop, internal_tls.go) shares this lifecycle: its serve error
+// ends the daemon like the console's, and it drains in the same Shutdown pass.
+func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, hop *hopTLS) error {
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
 		Handler:           srv.Handler(),
@@ -217,7 +219,8 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		MaxHeaderBytes: 1 << 20,
 	}
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	internalSrv := startInternalListener(hop, f, srv.Handler(), errCh)
 	go func() {
 		switch {
 		case posture.tlsEnabled:
@@ -272,6 +275,9 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
 	defer shutCancel()
+	if internalSrv != nil {
+		_ = internalSrv.Shutdown(shutCtx)
+	}
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}

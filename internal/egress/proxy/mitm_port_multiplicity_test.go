@@ -23,14 +23,14 @@ import (
 // one wins and the other port silently falls through as an opaque tunnel, never
 // TLS-terminated and never offered the operator's token.
 //
-// It is LATENT because the only producer, planArtifactRedirect, dedupes by BARE
+// It is latent because the only producer, planArtifactRedirect, dedupes by bare
 // host (its seenHost map), so a second entry for one host cannot be authored
 // today. Re-keying the four maps on "host:port" is deferred until a second
 // producer exists.
 //
-// SCOPE OF THIS TEST, stated so the deferral does not rest on more than it
+// Scope of this test, stated so the deferral does not rest on more than it
 // proves: it builds its own Proxy from a literal MITMHosts slice, so it turns red
-// when the RE-KEYING lands — not when a second producer appears. The
+// when the re-keying lands — not when a second producer appears. The
 // producer-side half of the deferral is pinned where the producer lives:
 // TestDispatch_RedirectMITMHostsCarryNoDuplicateBareHost (internal/api).
 func TestMITMHostsKeepOnlyTheLastPortPerHost(t *testing.T) {

@@ -56,12 +56,12 @@ func kvExecSession(stdout string) *runner.ExecSession {
 
 // A run with no sandbox is a 409, and writes NO audit row.
 //
-// It used to hand an empty ref straight to ExecStream, which errored into the
-// failure branch: a 500 plus a run.resources failure row EVERY 4 SECONDS per
-// open tab, for a PENDING/STARTING run that simply is not up yet — against a
-// handler whose own comment says failures are "the rare, interesting case".
-// It also disagreed with the Files widget beside it in the same rail, which
-// returns a crisp 409 for the identical fact.
+// Handing an empty ref to ExecStream would error into the failure branch: a
+// 500 plus a run.resources failure row every 4 seconds per open tab, for a
+// PENDING/STARTING run that simply is not up yet — against a handler whose
+// own comment says failures are "the rare, interesting case". It would also
+// disagree with the Files widget beside it in the same rail, which returns a
+// crisp 409 for the identical fact.
 func TestRunResources_NoSandboxIs409AndNeverAudits(t *testing.T) {
 	called := false
 	srv, ast, h := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
@@ -243,13 +243,13 @@ func TestRunResources_ForeignRun404(t *testing.T) {
 	})
 	id := seedResourcesRun(ast, "owner-sub")
 
-	mallory := ssoSession(t, "mallory-sub", "mallory@corp.example", oidc.RoleMember)
+	mallory := ssoSession(t, "mallory-sub", "mallory@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", mallory, "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("non-owning member: code = %d, want 404; body=%s", w.Code, w.Body.String())
 	}
 
-	owner := ssoSession(t, "owner-sub", "owner@corp.example", oidc.RoleMember)
+	owner := ssoSession(t, "owner-sub", "owner@corp.example", oidc.RoleUser)
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", owner, ""); w.Code != http.StatusOK {
 		t.Fatalf("owning member: code = %d, want 200 (contrast case — the run itself is reachable); body=%s", w.Code, w.Body.String())
 	}
