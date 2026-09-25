@@ -861,15 +861,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   list can't be removed until Everyone is chosen. The control is shown to security admins and super
   admins only. Not yet wired: the stored policy, model provider, integration and base image editors
   (#923); the person-facing side (#922).
-- **"Available to" on base images: a new Images tab on Workspace providers (#923).** One row per
-  image in the `GET /base-images` catalog, each with its control, whose first choice reads "Admins
-  only" (an image nobody is listed for is launched only by admins). Add image takes one reference and
-  asks who gets it on the form: it creates the catalog row, then writes the list, then turns "Only
-  these" on; a list the server refuses leaves the dialog open on the saved image with the server's
-  sentence. The control now follows the approved mock: a radio choice, chips that name a user type
-  (a group is marked "(group)"), and a refused add shown under the adder instead of a toast. The stored
-  policy and model provider editors wait on those kinds becoming restrictable (#818, #537);
-  integrations get no editor of their own.
+- **"Available to" on stored policies, model providers and base images (#923).** A policy's detail
+  sheet and the model provider editor carry the control, each with its own "Only these" line and note.
+  Base images get a new Images tab on Workspace providers: one row per image in the
+  `GET /base-images` catalog, whose first choice reads "Admins only" (an image nobody is listed for is
+  launched only by admins). New policy, a new model provider and Add image ask who gets it on the
+  form: Save creates the resource, then writes the list, then turns "Only these" on; a list the server
+  refuses leaves the editor open on the saved resource with the server's sentence. The control now
+  follows the approved mock: a radio choice, chips that name a user type (a group is marked
+  "(group)"), and a refused add shown under the adder instead of a toast. Integrations get no editor
+  of their own: their lists live on the model provider and git provider rows.
 - **The user view looks through a chosen user type (#615).** `POST /me/view` with
   `{"view": "user", "user_type": "<id>"}` puts an admin in the user view as that type: its grants,
   governance profile, drives and run limits bind exactly as for a person of that type, and the tier

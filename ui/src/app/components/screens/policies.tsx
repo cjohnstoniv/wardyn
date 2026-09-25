@@ -63,6 +63,13 @@ import { PageHeader } from "../wardyn/page-header";
 import { CC_META } from "../wardyn/cc-meta";
 import { OPERATOR_ONLY_REASON, POLICY_UI_APPS, RESIDUAL_PREFIX } from "../wardyn/copy";
 import { useOperator } from "../wardyn/operator-context";
+import {
+  AvailabilityControl,
+  AvailabilityDraft,
+  writeAvailability,
+  type AvailabilityDraftValue,
+} from "../wardyn/availability-control";
+import { AVAILABILITY } from "../../lib/availability-copy";
 import { DeleteConfirmDialog } from "../wardyn/delete-confirm-dialog";
 
 // The starter spec that prefills the "create" editor IS the panel's Minimal
@@ -404,6 +411,15 @@ function PolicyDetail({
               }
             />
 
+            {/* #923: after the facts, before the raw JSON. Drawn for a security
+                admin or a super admin only; anyone else gets the sheet without it. */}
+            <AvailabilityControl
+              kind="policy"
+              value={policy.id}
+              onlyHint={AVAILABILITY.POLICY_ONLY_HINT}
+              note={AVAILABILITY.POLICY_NOTE}
+            />
+
             {/* Raw JSON stays one click away (C7), never the primary content. */}
             <details className="group rounded-lg border border-border">
               <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
@@ -459,11 +475,21 @@ function PolicyEditor({
   // F5-F9: what the editor opened WITH — the dirty check below compares
   // against this, not against empty/starter values.
   const initial = React.useRef({ name: "", specText: "" });
+  // A new policy asks who gets it (#923 decision 4). Create writes the policy,
+  // then the list, then Only these; a refused list write keeps the editor open
+  // on the saved policy, which stays available to everyone meanwhile.
+  const [audience, setAudience] = React.useState<AvailabilityDraftValue>({ restricted: false, audiences: [] });
+  const [partial, setPartial] = React.useState<{ policy: RunPolicy; message: string } | null>(null);
+  const editing = partial?.policy ?? (editor?.mode === "edit" ? editor.policy : undefined);
+  // Once the create landed, closing must re-read even without another save.
+  const close = partial ? onSaved : onClose;
 
   React.useEffect(() => {
     if (!editor) return;
     setError(null);
     setSaving(false);
+    setPartial(null);
+    setAudience({ restricted: false, audiences: [] });
     const seedName = editor.mode === "edit" && editor.policy ? editor.policy.name : "";
     const seedSpec = JSON.stringify(
       editor.mode === "edit" && editor.policy ? editor.policy.spec : STARTER_SPEC,
@@ -492,10 +518,18 @@ function PolicyEditor({
     }
     setSaving(true);
     try {
-      if (editor?.mode === "edit" && editor.policy) {
-        await api.updatePolicy(editor.policy.id, name.trim(), spec);
+      if (editing) {
+        await api.updatePolicy(editing.id, name.trim(), spec);
       } else {
-        await api.createPolicy(name.trim(), spec);
+        const created = await api.createPolicy(name.trim(), spec);
+        try {
+          await writeAvailability("policy", created.id, audience);
+        } catch (e) {
+          initial.current = { name, specText };
+          setPartial({ policy: created, message: getErrorMessage(e) });
+          setSaving(false);
+          return;
+        }
       }
       onSaved();
     } catch (e) {
@@ -505,10 +539,10 @@ function PolicyEditor({
     }
   };
 
-  const isEdit = editor?.mode === "edit";
+  const isEdit = !!editing;
 
   return (
-    <Dialog open={!!editor} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={!!editor} onOpenChange={(o) => !o && close()}>
       {/* F3-F8: the primitive (ui/dialog.tsx) now carries the max-height/
           overflow/scroll-thin floor itself — this local patch, narrower than
           the primitive's (85vh vs 100dvh-2rem), is deleted. */}
@@ -532,6 +566,13 @@ function PolicyEditor({
         </DialogHeader>
 
         <div className="space-y-4 py-1">
+          {partial && (
+            <div role="alert" className="flex flex-col gap-1 rounded-lg bg-danger-subtle p-3 text-body text-danger">
+              <b className="font-semibold">{AVAILABILITY.CREATE_PARTIAL_TITLE}</b>
+              <span>{partial.message}</span>
+              <span>{AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
+            </div>
+          )}
           {/* ui-secretsPolicies-3: required Name/Spec, marked via the shared
               Field's asterisk convention (same as secrets.tsx's AddSecretDialog)
               instead of a bare Label + Input with no requirement signal. */}
@@ -545,6 +586,28 @@ function PolicyEditor({
             />
           </Field>
           <PolicyPanel instance="policies" value={specText} onChange={setSpecText} />
+          {/* The creation form asks; an existing policy's list lives on its
+              sheet, except right after a refused list write. */}
+          {(!editing || partial) && (
+            <div className="border-t border-border pt-4">
+              {partial ? (
+                <AvailabilityControl
+                  kind="policy"
+                  value={partial.policy.id}
+                  onlyHint={AVAILABILITY.POLICY_ONLY_HINT}
+                  note={AVAILABILITY.POLICY_NOTE}
+                />
+              ) : (
+                <AvailabilityDraft
+                  draft={audience}
+                  onChange={setAudience}
+                  disabled={saving}
+                  onlyHint={AVAILABILITY.POLICY_ONLY_HINT}
+                  note={AVAILABILITY.POLICY_NOTE}
+                />
+              )}
+            </div>
+          )}
           {/* ui-secretsPolicies-2: role="alert" (an implicit aria-live region)
               plus wiring into the Save button's aria-describedby below — a
               rejected save previously only ever showed visually. */}
@@ -565,7 +628,7 @@ function PolicyEditor({
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={close}>
             Cancel
           </Button>
           <Button

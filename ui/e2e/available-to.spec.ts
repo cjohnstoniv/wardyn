@@ -3,13 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// #923 — "Available to" on a base image, against the real backend: the Images
-// tab on Workspace providers, an image's control starting at Admins only, Add
-// image asking who gets it, and a list the server refuses after the image
-// saved. Each write is read back from the wire, not only from the screen.
-import { test, expect, ADMIN_TOKEN, gotoConsole, navToRoute } from "./fixtures";
+// #923 — "Available to" against the real backend: on a base image (the Images
+// tab, Admins only, Add image asking, a list refused after the image saved),
+// on a stored policy (its sheet, New policy asking, and a person outside the
+// list refused), and on a model provider (the editor asking). Each write is
+// read back from the wire, not only from the screen.
+import { createHash, randomBytes } from "node:crypto";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, navToRoute, sql } from "./fixtures";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY, IMAGES } from "../src/app/lib/availability-copy";
+import { MODEL_PROVIDERS, PROVIDER_EDITOR } from "../src/app/lib/model-providers-copy";
 import type { Page } from "@playwright/test";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -122,5 +125,135 @@ test.describe("Available to — base images (#923)", () => {
     expect(view.allowed_by).toEqual([]);
     const catalog = await (await page.request.get("/api/v1/base-images", { headers: auth })).json();
     expect(catalog.base_images.map((b: { image: string }) => b.image)).toContain(PARTIAL);
+  });
+});
+
+// A genuine user-tier caller. The harness's admin bearer is exempt from every
+// capability, so a person outside a list is seeded the way the server's own
+// mint stores one: an api_tokens row keyed by the token's sha256, with the
+// role and user type the request then carries (apitokens.go, apiTokenAuth).
+function seedUserToken(userType: string): { Authorization: string } {
+  const raw = `wdn_${randomBytes(32).toString("hex")}`;
+  const hash = createHash("sha256").update(raw).digest("hex");
+  const who = `${userType}-${hash.slice(0, 8)}@e2e.test`;
+  sql(
+    `INSERT INTO api_tokens (id, principal, email, role, user_type, groups, groups_truncated, name, token_sha256, created_at)
+     VALUES (gen_random_uuid(), '${who}', '${who}', 'user', '${userType}', '[]'::jsonb, false, 'e2e', '${hash}', now())`,
+  );
+  return { Authorization: `Bearer ${raw}` };
+}
+
+const POLICY_NAME = "Read-only research";
+const POLICY_SPEC = JSON.stringify({
+  allowed_domains: ["api.anthropic.com"],
+  first_use_approval: "deny_with_review",
+  min_confinement_class: "CC2",
+  eligible_grants: [],
+});
+
+test.describe("Available to — a stored policy (#923)", () => {
+  test.describe.configure({ mode: "serial" });
+  let policyId = "";
+
+  test("New policy asks who gets it: Only these with a user type lands restricted and listed", async ({ page }) => {
+    // A second user type, so the built-in "standard" is the one left out.
+    const made = await page.request.post("/api/v1/user-types", {
+      headers: auth,
+      data: { id: "portfolio-manager", name: "Portfolio manager" },
+    });
+    expect(made.status(), await made.text()).toBe(201);
+
+    await gotoConsole(page, "admin");
+    await navTo(page, "Policies");
+    await page.getByRole("button", { name: "New policy" }).first().click();
+    const dialog = page.getByRole("dialog").filter({ hasText: "New policy" });
+    await expect(dialog.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    await expect(dialog.getByText(AVAILABILITY.POLICY_NOTE)).toBeVisible();
+    await dialog.getByLabel("Name").fill(POLICY_NAME);
+    await dialog.getByLabel("Spec (JSON)").fill(POLICY_SPEC);
+    await dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("portfolio-manager");
+    await dialog.getByRole("button", { name: AVAILABILITY.ADD_CTA, exact: true }).click();
+    await expect(dialog.getByText("Portfolio manager")).toBeVisible();
+    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    await dialog.getByRole("button", { name: "Create policy" }).click();
+    await expect(dialog).toHaveCount(0);
+
+    const list = await (await page.request.get("/api/v1/policies", { headers: auth })).json();
+    const rows = (Array.isArray(list) ? list : list.policies ?? list.items) as { id: string; name: string }[];
+    policyId = rows.find((p) => p.name === POLICY_NAME)!.id;
+    const view = await (
+      await page.request.get(`/api/v1/permissions/availability/policy/${policyId}`, { headers: auth })
+    ).json();
+    expect(view.restricted).toBe(true);
+    expect(view.allowed_by).toEqual([
+      expect.objectContaining({ subject_type: "user_type", subject: "portfolio-manager", capability: "policy", value: policyId }),
+    ]);
+  });
+
+  test("the policy's sheet shows its Available to: Only these, the type listed and locked, the policy's lines", async ({
+    page,
+  }) => {
+    await gotoConsole(page, "admin");
+    await navTo(page, "Policies");
+    await page.getByText(POLICY_NAME, { exact: true }).click();
+    const sheet = page.getByRole("dialog").filter({ hasText: "View raw JSON" });
+    await expect(sheet.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
+    await expect(sheet.getByTestId("availability-only")).toHaveText(AVAILABILITY.POLICY_ONLY_HINT);
+    await expect(sheet.getByRole("button", { name: AVAILABILITY.REMOVE_ARIA("Portfolio manager") })).toBeDisabled();
+    await expect(sheet.getByText(AVAILABILITY.LAST_AUDIENCE_LOCKED)).toBeVisible();
+    await expect(sheet.getByText(AVAILABILITY.POLICY_NOTE)).toBeVisible();
+  });
+
+  test("a person outside the list can't pick it; a person on the list can", async ({ page }) => {
+    const outsider = seedUserToken("standard");
+    const insider = seedUserToken("portfolio-manager");
+    const run = (headers: { Authorization: string }) =>
+      page.request.post("/api/v1/runs", {
+        headers,
+        data: { agent: "claude-code", repo: "acme/widgets", task: "e2e available-to policy", policy_id: policyId },
+      });
+
+    const refused = await run(outsider);
+    const body = await refused.text();
+    expect(refused.status(), body).toBe(403);
+    expect(JSON.parse(body).error).toBe(
+      `Stored policy ${policyId} isn't available to you. Ask your admin, or launch without policy_id.`,
+    );
+    // The listed type is not refused on the policy (whatever else its launch meets).
+    expect(await (await run(insider)).text()).not.toContain("isn't available to you");
+  });
+});
+
+test.describe("Available to — a model provider (#923)", () => {
+  test("a new provider asks who gets it, and an existing one carries the live control", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/admin/settings");
+    await page.getByRole("button", { name: MODEL_PROVIDERS.ADD_CTA }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_api_key }).click();
+    await expect(dialog.getByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    await expect(dialog.getByTestId("availability-only")).toHaveText(AVAILABILITY.MODEL_PROVIDER_ONLY_HINT);
+    await dialog.getByLabel(PROVIDER_EDITOR.NAME).fill("Bloomberg gateway");
+    await dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("standard");
+    await dialog.getByRole("button", { name: AVAILABILITY.ADD_CTA, exact: true }).click();
+    await expect(dialog.getByText("Standard user")).toBeVisible();
+    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    await dialog.getByRole("button", { name: PROVIDER_EDITOR.SAVE, exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+
+    const view = await (
+      await page.request.get("/api/v1/permissions/availability/model_provider/bloomberg-gateway", { headers: auth })
+    ).json();
+    expect(view.restricted).toBe(true);
+    expect(view.allowed_by).toEqual([
+      expect.objectContaining({ subject_type: "user_type", subject: "standard", capability: "model_provider" }),
+    ]);
+
+    // Reopened, the saved provider shows what the server holds.
+    await page.getByRole("button", { name: /^Bloomberg gateway/ }).click();
+    const edit = page.getByRole("dialog");
+    await expect(edit.getByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
+    await expect(edit.getByRole("button", { name: AVAILABILITY.REMOVE_ARIA("Standard user") })).toBeDisabled();
+    await expect(edit.getByText(AVAILABILITY.MODEL_PROVIDER_NOTE)).toBeVisible();
   });
 });
