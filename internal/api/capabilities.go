@@ -104,7 +104,8 @@ const (
 	// capFeature NARROWS: it bounds whether a person may MINT a personal
 	// credential at all. Two values, a closed set (featureValues), plus `*`:
 	// featureSSHKey gates POST /me/ssh-keys and featureAPIToken gates POST
-	// /me/tokens, one check at each mint door beside member mode's 409.
+	// /me/tokens, one check at each mint door (the token door also keeps
+	// member mode's 409; the SSH door stores a capped key instead, #564).
 	//
 	// Narrowing, on capAgent's rule: every signed-in person could already add a
 	// key and mint a token, so the unenforced default stays ALLOWED and an
