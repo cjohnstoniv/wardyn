@@ -844,22 +844,9 @@ type Server struct {
 	// dirLimiter rate-bounds GET /access/directory/search PER PRINCIPAL — it is
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
-	dirLimiter principalLimiter
-	// enrolLimiter bounds the ONE anonymous device route, POST
-	// /devices/enrol, per TCP peer (devices_auth.go's peerKey), with per-entry
-	// eviction so the map cannot grow without bound. Configured in New.
-	enrolLimiter principalLimiter
-	// The device routes' failure-row bounds (device_audit_bounds.go):
-	// enrolFailures is the anonymous route's one stream, ingestFailures one
-	// stream per device, ingestFailureLimiter that stream's per-device bucket.
-	enrolFailures        failureStreams
-	ingestFailures       failureStreams
-	ingestFailureLimiter principalLimiter
-	// ingestInFlight holds the id of every device with a push in progress —
-	// handleDeviceAuditIngest's one-push-per-device cap. Process-local like
-	// the limiters above; an entry lives only as long as its request.
-	ingestInFlight sync.Map
-	runLeaseState  // the run lease sweep's process state (run_lease_server.go)
+	dirLimiter       principalLimiter
+	deviceRouteState // the device routes' process state (server_devices.go)
+	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
@@ -925,8 +912,10 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
-		ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
+		deviceRouteState: deviceRouteState{
+			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
+			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
+		},
 	}
 	s.router = s.routes()
 	// drain the durable audit-fallback spool back into the store once it
