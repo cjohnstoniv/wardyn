@@ -293,8 +293,8 @@ func TestModelProvidersNilBlockIsToday(t *testing.T) {
 	}
 	want := []string{
 		"agent_providers", "egress_redirects", "egress_redirects_count", "git_providers", "internal_hosts",
-		"internal_hosts_count", "scm_hosts_count", "storage_configured", "upstream_proxy_configured",
-		"upstream_proxy_secret_ref", "upstream_proxy_url",
+		"internal_hosts_count", "scm_hosts_count", "sign_in_help_text", "sign_in_help_url", "storage_configured",
+		"upstream_proxy_configured", "upstream_proxy_secret_ref", "upstream_proxy_url",
 	}
 	if got := slices.Sorted(maps.Keys(siteConfigWriteDatum(t, audit))); !slices.Equal(got, want) {
 		t.Errorf("site_config.write keys = %v, want exactly today's %v", got, want)

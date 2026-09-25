@@ -210,14 +210,16 @@ export interface ResourceLimits {
 
 // Content rules for a run's brokered git pushes (mirrors types.PushRulesSpec)
 // — the counterpart to git_push_any_branch's WHERE: this says WHAT a push may
-// touch. Phase one only: deny_paths and max_inspect_pack_mib are STORED and
-// VALIDATED, never matched — no matcher runs yet (that lands with the pack
-// inspector, a later change). Omitted/undefined on RunPolicySpec means no
-// content rules at all, identical to every policy authored before this field
-// existed.
+// touch. deny_paths refuse a push; require_review_paths hold it for an admin's
+// push_content decision for up to hold_seconds (0/absent = 120, max 600), and
+// an unattended run refuses instead. Omitted/undefined on RunPolicySpec means
+// no content rules at all, identical to every policy authored before this
+// field existed.
 export interface PushRulesSpec {
   deny_paths?: string[];
   max_inspect_pack_mib?: number;
+  require_review_paths?: string[];
+  hold_seconds?: number;
 }
 
 export interface RunPolicySpec {

@@ -25,13 +25,12 @@ var citationRoots = []string{"cmd", "internal", "pkg"}
 // would mean re-resolving every one on every run, and a citation that resolves
 // to the WRONG code still passes such a check.
 //
-// Every instance this guard was written for had already rotted. The 2026-07-17
-// god-function decomposition (6e789f5) moved the run-create path out of
-// internal/api/runs.go into runs_create.go; six comments in
-// internal/api/compose_setup.go went on citing line numbers in files that had
-// since shrunk below them, so each one sent the reader to unrelated code. A
-// symbol name survives that refactor; a line number never does. Cite the symbol
-// (and the file, if it is not obvious) instead.
+// A line citation rots on the first refactor that moves or shrinks the cited
+// file: moving the run-create path out of internal/api/runs.go into
+// runs_create.go, for instance, leaves every comment citing a runs.go line
+// number pointing at unrelated code. A symbol name survives that refactor; a
+// line number never does. Cite the symbol (and the file, if it is not obvious)
+// instead.
 var lineCitation = regexp.MustCompile(`[a-zA-Z0-9_]+\.go:[0-9]+`)
 
 // TestCommentsCiteSymbolsNotLineNumbers fails on any Go comment under

@@ -27,7 +27,7 @@ func previewEphemeralDiskMiB(t *testing.T, requested int, site types.SiteConfig,
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
 
-	role := oidc.RoleMember
+	role := oidc.RoleUser
 	if operator {
 		role = oidc.RoleAdmin
 	}

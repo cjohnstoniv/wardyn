@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -92,12 +93,13 @@ func (s *Server) credentialPerson(subject string) bool {
 // providerCredentialRefusal is the liveness check both doors make for a key or
 // endpoint provider: "" when owner's OWN key or token for p is stored, else the
 // sentence refusing the run. Read strictly (ownSecret): the operator's row
-// never stands in for a person's.
+// never stands in for a person's. The read only grades the key, so it is
+// recorded as a status read.
 func (s *Server) providerCredentialRefusal(ctx context.Context, owner string, p types.ModelProvider) (string, error) {
 	if !s.credentialPerson(owner) {
 		return mpcNoPerson, nil
 	}
-	_, found, err := s.ownSecret(ctx, owner, providerSecretName(p.UID, providerKeyPart))
+	_, found, err := s.ownSecret(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), owner, providerSecretName(p.UID, providerKeyPart))
 	if err != nil || found {
 		return "", err
 	}

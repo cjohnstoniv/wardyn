@@ -203,8 +203,10 @@ func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPos
 // error, then drains: graceful HTTP shutdown first, audit sinks last (after the
 // server has stopped accepting requests, so no further audit events are
 // produced). Every exit path must Close the sinks, or the final batch is
-// abandoned. Extracted verbatim from run(); fan may be nil.
-func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout) error {
+// abandoned. Extracted verbatim from run(); fan may be nil. The proxy-facing
+// TLS listener (hop, internal_tls.go) shares this lifecycle: its serve error
+// ends the daemon like the console's, and it drains in the same Shutdown pass.
+func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout, hop *hopTLS) error {
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
 		Handler:           srv.Handler(),
@@ -217,7 +219,8 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		MaxHeaderBytes: 1 << 20,
 	}
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
+	internalSrv := startInternalListener(hop, f, srv.Handler(), errCh)
 	go func() {
 		switch {
 		case posture.tlsEnabled:
@@ -272,9 +275,24 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutCancel()
+	if internalSrv != nil {
+		_ = internalSrv.Shutdown(shutCtx)
+	}
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
+
+	// httpSrv.Shutdown only waits for in-flight HANDLERS to return — it knows
+	// nothing about work a handler deliberately detached from itself (a sign-in
+	// launch's dispatch, a superseded sandbox's teardown: internal/api's
+	// goBackground/WaitBackground). Without this, a SIGTERM landing between a
+	// supersede's KILLED claim and its teardown would answer the sign-in POST
+	// (already done) but drop the run.kill row and both revocations on the
+	// floor — a run left KILLED with its sandbox still up and its credentials
+	// still live. WaitBackground carries its own bound (killCascadeTimeout plus
+	// a margin) and logs if it hits it, so this cannot turn an orderly stop
+	// into a hang.
+	srv.WaitBackground()
 
 	// BETWEEN the two, deliberately: the server has stopped accepting requests
 	// (so no new auth.failed can open a streak) and the sinks are still open (so

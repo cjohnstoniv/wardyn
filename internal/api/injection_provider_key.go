@@ -11,6 +11,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -41,9 +42,10 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 		return false
 	}
 	ctx := r.Context()
+	rctx, row := secretstore.SiteAudited(ctx)
 	fail := func(status int, reason, body string) bool {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", name, "failure", mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
+			"secret.read", name, "failure", mustJSON(withStoreRow(map[string]any{"reason": reason, "grant_id": grantID}, row))))
 		writeError(w, status, body)
 		return true
 	}
@@ -55,7 +57,7 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 	if rec.OwnerSubject == "" || rec.OwnerSubject != claims.Sub {
 		return fail(http.StatusForbidden, "owner_mismatch", providerKeyNotOwn)
 	}
-	secret, found, err := s.ownSecret(ctx, claims.Sub, name)
+	secret, found, err := s.ownSecret(rctx, claims.Sub, name)
 	switch {
 	case err != nil:
 		return fail(http.StatusServiceUnavailable, "store_unreadable", providerKeyUnreadable)
@@ -70,10 +72,10 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"secret.read", name, "success", mustJSON(map[string]any{
+		"secret.read", name, "success", mustJSON(withStoreRow(map[string]any{
 			"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI,
 			"owner": claims.Sub, "provider_uid": rec.ProviderUID,
-		})))
+		}, row))))
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: minted.Injection.Header, Value: formatted, JTI: minted.JTI,
 	})

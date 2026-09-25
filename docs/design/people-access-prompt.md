@@ -266,14 +266,14 @@ Phase-rail badge (`steps.ts`, unchanged, not part of `PEOPLE_STEP`): `"Multi-use
 | Key | String |
 |---|---|
 | `TABLE_TITLE` | Role mappings |
-| `TABLE_LEAD` | A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or member. |
+| `TABLE_LEAD` | A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or user. |
 | `EFFECT_NOTE` | Takes effect at next sign-in. A person already signed in keeps the role they were given until then. |
 | `COL_VALUE` | Value |
 | `COL_ROLE` | Role |
 | `COL_SOURCE` | Source |
 | `COL_ADDED` | Added |
 | `ROLE_ADMIN` | Admin |
-| `ROLE_MEMBER` | Member |
+| `ROLE_USER` | User |
 | `SOURCE_CHART` | From your chart |
 | `SOURCE_CONSOLE` | Console |
 | `CHART_HINT` | Edit in your chart values. |
@@ -303,17 +303,17 @@ Phase-rail badge (`steps.ts`, unchanged, not part of `PEOPLE_STEP`): `"Multi-use
 | `OPERATOR_EMAILS_EMPTY` | None set. |
 | `IDP_NOTE` | Creating people and groups, and assigning Entra App Roles, happens in your identity provider — mapping a role here only tells Wardyn what to do with a value your IdP already sends. "Assignment required" on the app registration is Entra's gate, not this one's. |
 
-Value shown for `DEFAULT_ROLE_LABEL` when set: `ROLE_ADMIN` or `ROLE_MEMBER`, reused as-is (no
+Value shown for `DEFAULT_ROLE_LABEL` when set: `ROLE_ADMIN` or `ROLE_USER`, reused as-is (no
 separate string) — see Q2 (§9) on the display treatment.
 
 **Casing rule:** `{role}`/`{defaultRole}` interpolations inside a sentence (§7.3, §7.5, §7.7)
-are lowercase — `admin`/`security admin`/`member` — the way prose names a role mid-sentence.
-`ROLE_ADMIN` / `ROLE_MEMBER` above, and `ROLE_SECURITY_ADMIN` (frozen in `governance-prompt.md`
-§7.9, shipped in this module beside them), are the chip/label forms only (`Admin` / `Member` /
+are lowercase — `admin`/`security admin`/`user` — the way prose names a role mid-sentence.
+`ROLE_ADMIN` / `ROLE_USER` above, and `ROLE_SECURITY_ADMIN` (frozen in `governance-prompt.md`
+§7.9, shipped in this module beside them), are the chip/label forms only (`Admin` / `User` /
 `Security admin`, title case) and are never interpolated into a sentence **as-is**: a sentence
 takes the LOWERCASE of the chip, which for the third tier is `security admin` — so a
 `security_admin` preview verdict reads "Would sign in as security admin — matched by
-{matched}.", never "member". One derivation owns that lowering (`roleLabelInSentence`,
+{matched}.", never "user". One derivation owns that lowering (`roleLabelInSentence`,
 `ui/src/app/components/screens/setup/access-panel.tsx`, derived from the `roleLabel` chip form
 beside it), so a fourth tier is one case there and no new rule here; an unrecognized claim value
 renders ITSELF rather than a role it is not.
@@ -457,6 +457,10 @@ env var(s) demoted to a parenthetical for the operator who actually has to act o
 signed-in human should never be told to go set an env var themselves.
 
 ### 7.8 `sso_rbac` setup-check (`internal/api/setup_checks.go`'s `ssoRBACCheck`) — reworded
+
+> Superseded by #484: the row's label and all three strings now come from
+> [admin-access-canon.md](admin-access-canon.md), and it warns only when neither a role map nor an
+> admin list is set.
 
 | State | Field | Today | Reworded |
 |---|---|---|---|
