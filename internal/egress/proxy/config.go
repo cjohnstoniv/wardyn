@@ -201,6 +201,18 @@ func LoadConfig(path string) (*Config, error) {
 	return LoadConfigBytes(b)
 }
 
+// configWire is the exact JSON shape LoadConfigBytes decodes: Config plus the
+// legacy ado_grants list an older control plane writes in place of ado_grant
+// (read here and nowhere else). Named — rather than the equivalent anonymous
+// struct inline in LoadConfigBytes — so config_keys_test.go's configKeyPaths
+// can walk this same type: the golden key set it pins is the sidecar's
+// STRICT-decode key set (DisallowUnknownFields refuses anything outside it),
+// and that set includes ado_grants, not just Config's own fields.
+type configWire struct {
+	Config
+	LegacyADOGrants []ADOGrantConfig `json:"ado_grants"`
+}
+
 // LoadConfigBytes parses and validates a Config from raw JSON. Used by the
 // sidecar's env-var config path (WARDYN_PROXY_CONFIG_JSON), which is how the
 // docker driver delivers the run's policy without managing host files.
@@ -222,12 +234,7 @@ func LoadConfig(path string) (*Config, error) {
 // handshake anywhere. A key this binary cannot honour must fail the sidecar's
 // startup loudly instead of being dropped on the floor.
 func LoadConfigBytes(b []byte) (*Config, error) {
-	// LegacyADOGrants is the ado_grants list an older control plane writes in
-	// place of ado_grant. It is read here and nowhere else.
-	var raw struct {
-		Config
-		LegacyADOGrants []ADOGrantConfig `json:"ado_grants"`
-	}
+	var raw configWire
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&raw); err != nil {
