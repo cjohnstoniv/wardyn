@@ -301,17 +301,21 @@ export function MemberGettingStarted() {
   // (setup/steps.ts's PHASES, before M-6), gated by the same precondition
   // that used to drop an unmet one from that walk (walkableDemos — needsModel
   // without a connected model, needsSecret without that secret stored).
-  // KNOWN GAPS, all in #850. internal/api/setup.go's redactSetupStatusForMember
-  // zeroes secrets.present and providers for a caller the server answers as a
-  // user, so a needsSecret demo (five of the eight "secrets" ones) is never
-  // offered to an SSO user, and neither is a needsModel one unless the model
-  // access is a managed subscription or Bedrock. And a demo run by a user goes
-  // through the user ceiling (boundMemberSpec), which changes several demos'
-  // policies (D5); none is watch-only yet. A single-operator install (D1) is
-  // unaffected by all three.
+  // Owner ruling 2026-09-25: a demo the caller's own governance ceiling would
+  // narrow (ceilingNarrows) is dropped from this list too, so it never
+  // renders here — it is not offered watch-only (#850's own mock round
+  // decides that, separately). KNOWN GAPS, all in #850.
+  // internal/api/setup.go's redactSetupStatusForMember zeroes secrets.present
+  // and providers for a caller the server answers as a user, so a
+  // needsSecret demo (five of the eight "secrets" ones) is never offered to
+  // an SSO user, and neither is a needsModel one unless the model access is a
+  // managed subscription or Bedrock. A single-operator install (D1) is
+  // unaffected by all of this — ceilingApplies is false, and its status is
+  // never redacted.
   const walkable = new Set(walkableDemos(status).map((d) => d.id));
-  const egressDemos = DEMOS.filter((d) => d.section === "egress" && walkable.has(d.id));
-  const secretsDemos = DEMOS.filter((d) => d.section === "secrets" && walkable.has(d.id));
+  const visible = (d: Demo) => walkable.has(d.id) && !(ceilingApplies && ceilingNarrows(d));
+  const egressDemos = DEMOS.filter((d) => d.section === "egress" && visible(d));
+  const secretsDemos = DEMOS.filter((d) => d.section === "secrets" && visible(d));
   // /demos and a shared link both redirect into a `?step=<id>` deep link
   // (App.tsx) — honor it here the same way the funnel used to: open that one
   // demo's row, silently ignoring an id this page doesn't offer (unmet
@@ -648,7 +652,6 @@ export function MemberGettingStarted() {
                 barrierReady={!!strongest}
                 githubAppReady={status ? !!status.secrets.github_app : true}
                 defaultOpen={d.id === deepLinkedDemoId}
-                ceilingWatchOnly={ceilingApplies && ceilingNarrows(d)}
               />
             ))}
           </div>
@@ -665,7 +668,6 @@ export function MemberGettingStarted() {
                 barrierReady={!!strongest}
                 githubAppReady={status ? !!status.secrets.github_app : true}
                 defaultOpen={d.id === deepLinkedDemoId}
-                ceilingWatchOnly={ceilingApplies && ceilingNarrows(d)}
               />
             ))}
           </div>
@@ -712,13 +714,11 @@ function DemoRow({
   barrierReady,
   githubAppReady,
   defaultOpen = false,
-  ceilingWatchOnly = false,
 }: {
   demo: Demo;
   barrierReady: boolean;
   githubAppReady: boolean;
   defaultOpen?: boolean;
-  ceilingWatchOnly?: boolean;
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
   // A ?step=<id> deep link opens a row below the page's three setup cards —
@@ -754,7 +754,6 @@ function DemoRow({
               barrierReady={barrierReady}
               githubAppReady={githubAppReady}
               onDemoLaunched={() => {}}
-              ceilingWatchOnly={ceilingWatchOnly}
             />
           </React.Suspense>
         </div>

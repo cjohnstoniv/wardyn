@@ -212,18 +212,22 @@ export function walkableDemos(status: SetupStatus | null): Demo[] {
   return DEMOS.filter((d) => demoMet(d, llmReady, present));
 }
 
-// M-6 (D5, admin-member-modes-design.md §4.8/§6 — "each such demo either
-// becomes watch-only or is fixed in M-6"): whether a member's own ceiling
-// (internal/api's narrowMemberInlinePolicy/filterMemberGrants, invoked via
-// boundMemberSpec at run-create) would rewrite THIS demo's policy, changing
-// what it actually shows. Read directly off the demo's own policy shape —
-// the same three things the ceiling narrows — rather than a hand-maintained
-// id list that could drift from demo-catalog.ts: `allow_all_egress` is
-// dropped, `wait_for_review` is raised to `deny_with_review`, and an
-// api_key/git_pat/ssh_key/cloud_sts/github_token eligible_grants entry is
-// either dropped or (github_token) forced to require approval. #850 has the
-// full per-demo accounting, read against the shipped default policy.
-const CEILING_GRANT_KINDS = new Set(["api_key", "git_pat", "ssh_key", "cloud_sts", "github_token"]);
+// M-6 (D5, admin-member-modes-design.md §4.8/§6): whether a member's own
+// ceiling (internal/api's narrowMemberInlinePolicy/filterMemberGrants,
+// invoked via boundMemberSpec at run-create) would rewrite THIS demo's
+// policy in a way that changes what it actually demonstrates — never merely
+// requires an extra click. Per the owner's 2026-09-25 ruling, a demo this
+// narrows is HIDDEN from the user's Getting Started (setup/steps.ts callers),
+// not offered watch-only. Read directly off the demo's own policy shape —
+// the same things the ceiling narrows — rather than a hand-maintained id
+// list that could drift from demo-catalog.ts: `allow_all_egress` is dropped,
+// `wait_for_review` is raised to `deny_with_review`, and an
+// api_key/git_pat/ssh_key/cloud_sts eligible_grants entry is dropped.
+// github_token is NOT in this set (#850): that grant survives the ceiling
+// with approval forced on, so the demo still runs — it is not narrowed in
+// the sense this function cares about. #850 has the full per-demo
+// accounting, read against the shipped default policy.
+const CEILING_GRANT_KINDS = new Set(["api_key", "git_pat", "ssh_key", "cloud_sts"]);
 export function ceilingNarrows(d: Demo): boolean {
   if (d.policy.allow_all_egress) return true;
   if (d.policy.first_use_approval === "wait_for_review") return true;

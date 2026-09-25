@@ -399,11 +399,14 @@ test.describe("security admin at /setup (mocked /me role)", () => {
     await expect(page.getByText("Pick your barrier")).toHaveCount(0);
   });
 
-  // W6-3. The account menu's Demos entry deep-links to /setup?step=sealed-box,
-  // and the test above is the proof that this tier lands on the member Getting
-  // Started — which ignores ?step entirely. Offering it here is the same dead
-  // invitation the member's own menu already drops.
-  test("the account menu has no Demos entry either — the deep link lands on a page that ignores ?step", async ({ page }) => {
+  // W6-3. The account menu's Demos entry used to deep-link to
+  // /setup?step=sealed-box, and the test above is the proof that this tier
+  // lands on the member Getting Started, which DOES honor ?step=<id> — it
+  // pre-opens the matching row, for a demo it actually offers (see
+  // member-getting-started.test.tsx's own ?step= cases). The entry stays
+  // gone regardless: a menu item pointing at a page this tier already lands
+  // on by default would be a dead invitation either way.
+  test("the account menu has no Demos entry either", async ({ page }) => {
     await gotoConsole(page);
     await page.locator("header").getByRole("button").last().click();
     const menu = page.getByRole("menu");

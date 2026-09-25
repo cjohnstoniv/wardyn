@@ -49,7 +49,6 @@ export default function DemoDetail({
   githubAppReady = true,
   onJump,
   onDemoLaunched,
-  ceilingWatchOnly = false,
 }: {
   demo: Demo;
   barrierReady: boolean;
@@ -62,11 +61,6 @@ export default function DemoDetail({
    *  instead of a control that would go nowhere. */
   onJump?: (id: SetupStepId) => void;
   onDemoLaunched: (demoId: string) => void;
-  /** M-6 (D5): true when THIS demo's policy would be rewritten by the
-   *  caller's own governance ceiling (steps.ts's ceilingNarrows) — everything
-   *  above still teaches the lane, but "Try it" is replaced by a note instead
-   *  of a Start that would run a policy other than the one shown. */
-  ceilingWatchOnly?: boolean;
 }) {
   const { runs, starting, start, end, createErrors } = useDemoRuns(onDemoLaunched);
   // Local open-state only — ProfileReview needs nothing but a runId.
@@ -161,37 +155,24 @@ export default function DemoDetail({
           policy, the terminal, and the audit/approvals together — everything
           relevant in one shot. The manual "set up yourself" steps are the
           supplementary alternative, so they move to the bottom.
-          M-6 (D5): ceilingWatchOnly skips DemoRunControls entirely rather
-          than disabling it — a launched run would go through the CALLER's
-          own ceiling and run a narrowed policy, not the one shown above, so
-          offering Start here would demo a policy this run could never
-          actually have. */}
+          M-6 (D5), owner ruling 2026-09-25: a demo whose policy the caller's
+          own ceiling would narrow is never offered here at all — the caller
+          (setup/steps.ts's ceilingNarrows) filters it out of the list before
+          a row for it ever renders, so this control always matches the
+          policy shown above. */}
       <Section title="Try it">
-        {ceilingWatchOnly ? (
-          <div
-            className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning"
-            data-testid="demo-ceiling-watch-only"
-          >
-            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-            <p>
-              Your admin's ceiling would narrow this policy before a run of yours could use it, so
-              the policy above is what this teaches, not what you'd get. Watch-only for now.
-            </p>
-          </div>
-        ) : (
-          <DemoRunControls
-            demo={demo}
-            run={runs[demo.id]}
-            starting={starting === demo.id}
-            barrierReady={barrierReady}
-            githubAppReady={githubAppReady}
-            createError={createErrors[demo.id]}
-            loading={false}
-            onStart={() => start(demo)}
-            onEnd={(runId) => end(demo, runId)}
-            onTurnIntoPolicy={setProfileRunId}
-          />
-        )}
+        <DemoRunControls
+          demo={demo}
+          run={runs[demo.id]}
+          starting={starting === demo.id}
+          barrierReady={barrierReady}
+          githubAppReady={githubAppReady}
+          createError={createErrors[demo.id]}
+          loading={false}
+          onStart={() => start(demo)}
+          onEnd={(runId) => end(demo, runId)}
+          onTurnIntoPolicy={setProfileRunId}
+        />
       </Section>
 
       <Section title="Set up a sandbox like this yourself">

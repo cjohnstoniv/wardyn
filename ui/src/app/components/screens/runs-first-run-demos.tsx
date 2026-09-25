@@ -32,10 +32,12 @@ export default function FirstRunDemoGrid({
   llmReady: boolean;
   secretNames: string[];
 }) {
-  // D5: outside D1 "Run it" lands in the User view, where a demo the caller's
-  // ceiling rewrites is watch-only (member-getting-started.tsx), so its card
-  // says so instead of promising a Start the destination doesn't offer.
+  // D5, owner ruling 2026-09-25: outside D1 "Run it" lands in the User view,
+  // where a demo the caller's ceiling narrows is hidden entirely
+  // (member-getting-started.tsx's own filter) — so this grid drops the same
+  // cards rather than link to a card that wouldn't be there.
   const ceilingApplies = useViewAccess() !== "url";
+  const demos = DEMOS.filter((demo) => !(ceilingApplies && ceilingNarrows(demo)));
   return (
     <div className="w-full max-w-[900px] space-y-4">
       <div className="space-y-1 text-center">
@@ -45,7 +47,7 @@ export default function FirstRunDemoGrid({
         <p className="text-sm text-muted-foreground">{FIRST_RUN_DEMOS_SUBTITLE}</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {DEMOS.map((demo) => {
+        {demos.map((demo) => {
           // The flagship agent demo needs a connected model — the same gate
           // the funnel's own walk applies (steps.ts's stepOrder drops the
           // step until llmReady), so this card can never link to a step that
@@ -88,9 +90,7 @@ export default function FirstRunDemoGrid({
                 // primary action on the page ("New run" above). Per-card: the
                 // funnel step for THIS demo, not a catalog page to hunt in.
                 <Button variant="outline" size="sm" className="self-start" asChild>
-                  <Link to={`/setup?step=${demo.id}`}>
-                    {ceilingApplies && ceilingNarrows(demo) ? "See it" : "Run it"}
-                  </Link>
+                  <Link to={`/setup?step=${demo.id}`}>Run it</Link>
                 </Button>
               )}
             </div>
