@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { aheadByHours } from "../../lib/test-clock";
 
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
@@ -207,5 +208,41 @@ describe("SSHKeysScreen — admin-override badge", () => {
     expect(screen.getAllByText("Admin override")).toHaveLength(1);
     // …on the admin key's row, not the member key's.
     expect(badge.closest("tr")).toHaveTextContent("workstation");
+  });
+});
+
+// #584: a key added in the user view is capped at member rights for good
+// (docs/SSH.md §Bounds). The chip reads the API's `capped`, not `role`.
+// Frozen strings: docs/design/admin-access-canon.md.
+describe("SSHKeysScreen — capped-key chip", () => {
+  it("marks only the capped key, with the owner-approved tooltip", async () => {
+    listKeysMock.mockResolvedValue([
+      {
+        fingerprint: "SHA256:aaa",
+        principal: "alice@example.com",
+        name: "laptop",
+        public_key: "",
+        role: "user",
+        capped: true,
+        created_at: aheadByHours(-48),
+      },
+      {
+        fingerprint: "SHA256:bbb",
+        principal: "alice@example.com",
+        name: "workstation",
+        public_key: "",
+        role: "user",
+        capped: false,
+        created_at: aheadByHours(-24),
+      },
+    ]);
+    renderScreen();
+    const chip = await screen.findByText("Member access");
+    expect(screen.getAllByText("Member access")).toHaveLength(1);
+    expect(chip.closest("tr")).toHaveTextContent("laptop");
+    expect(chip.closest("[title]")).toHaveAttribute(
+      "title",
+      "Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH.",
+    );
   });
 });

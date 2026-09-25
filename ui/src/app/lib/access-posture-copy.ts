@@ -37,7 +37,7 @@ export const SIGNIN_HELP = {
   COUNTER: (n: number) => `${n} / 1000`,
   URL_LABEL: "Link",
   URL_PLACEHOLDER: "https://",
-  URL_HINT: 'Optional. Must start with http:// or https://. It shows as "Request access" — the address itself is public.',
+  URL_HINT: 'Optional. Must start with https://. It shows as "Request access" — the address itself is public.',
   EMPTY_NOTE: "Nothing set. People see Wardyn's own sentence and are told to ask their Wardyn admin.",
   PREVIEW_HEADING: "What a signed-out person sees",
   APPLIES_NOTE:

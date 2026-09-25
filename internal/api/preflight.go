@@ -225,9 +225,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Which secrets actually exist (names only) — the SAME map compose builds.
-	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
-
 	// Fold the run's model-access binding AND each referenced workspace's
 	// requirements contract into the spec BEFORE computing the enforced confinement
 	// class and grading — the SAME order launch now uses (SPINE-2/SPINE-6), so a
@@ -256,6 +253,9 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	for _, ws := range wsRefs {
 		unionAllowedDomains(&spec, workspaceCloneEgress(ws))
 	}
+	// Which secrets actually exist (names only) — the SAME map compose builds,
+	// read where launch reads it (TestPreflightMirrorsLaunchGates pins the order).
+	presentSecrets := s.presentSecretNamesFor(ctx, s.secretOwnerFromRequest(r))
 	_, _, bedrockRef := s.foldRunIntegration(ctx, s.secretOwnerFromRequest(r), &spec, req, wsRefs)
 	_ = s.applyWorkspaceRequirementsFor(ctx, presentSecrets, &spec, req.Agent, wsRefs, resolveWorkspaceSelections(req))
 

@@ -125,6 +125,14 @@ export function SshKeysPane({ heading = "h1" }: { heading?: "h1" | "h3" } = {}) 
                           Admin override
                         </Chip>
                       )}
+                      {/* #584: added in the user view, so capped at member
+                          rights for good (docs/SSH.md §Bounds). Frozen strings:
+                          docs/design/admin-access-canon.md. */}
+                      {k.capped && (
+                        <Chip title="Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH.">
+                          Member access
+                        </Chip>
+                      )}
                     </span>
                   </TableCell>
                   <TableCell>

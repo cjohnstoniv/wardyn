@@ -80,7 +80,10 @@ func TestValidateSignInHelp(t *testing.T) {
 		{"line separator (U+2028): refused", "a\u2028b", "", errSignInHelpTextControl},
 		{"paragraph separator (U+2029): refused", "a\u2029b", "", errSignInHelpTextControl},
 		{"https url: ok", "", "https://it.corp.example/request?app=wardyn", nil},
-		{"http url: ok", "", "http://helpdesk.corp.example/", nil},
+		// The shape check alone: /healthz keeps publishing a link stored before
+		// #489. The PUT refuses a NEW http:// link (signInHelpURLHTTPS,
+		// TestHandlePutSiteConfig_SignInHelpRefusals).
+		{"http url: shape ok", "", "http://helpdesk.corp.example/", nil},
 		// The defect #489's review found: an ordinary helpdesk query string.
 		{"& in the query: ok", "", "https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc", nil},
 		{"upper-case scheme and host, port, fragment: ok", "", "HTTPS://IT.Corp.Example:8443/a?b=c&d=e#f", nil},
@@ -121,7 +124,10 @@ func TestHandlePutSiteConfig_SignInHelpRefusals(t *testing.T) {
 		{"line break", `{"sign_in_help_text":"one\ntwo"}`,
 			"sign_in_help_text: contains a line break, control character or invisible formatting character — it renders as one plain paragraph on the sign-in page"},
 		{"bad scheme", `{"sign_in_help_url":"javascript:alert(1)"}`,
-			"sign_in_help_url: must be an http:// or https:// address — it is shown to people who have not signed in"},
+			"sign_in_help_url: must be an https:// address — it is shown to people who have not signed in"},
+		// #489: https only. A new http:// link is refused with the same sentence.
+		{"http link", `{"sign_in_help_url":"http://helpdesk.corp.example/"}`,
+			"sign_in_help_url: must be an https:// address — it is shown to people who have not signed in"},
 		{"malformed", `{"sign_in_help_url":"https://user@it.corp.example/"}`,
 			"sign_in_help_url: must be a plain web address with a real host name — no spaces, sign-in details or hidden characters — it is shown to people who have not signed in"},
 	} {
@@ -160,6 +166,30 @@ func TestHandlePutSiteConfig_SignInHelpCarryForward(t *testing.T) {
 	}
 	if fake.putSeen.SignInHelpText != "" || fake.putSeen.SignInHelpURL != "" {
 		t.Errorf("naming the pair as empty did not clear it: %+v", fake.putSeen)
+	}
+}
+
+// #489: a link stored as http:// before the rule is not a reason to refuse a
+// save that echoes it back unchanged (a console save of the whole document, an
+// MDM re-apply); setup warns about it instead. Changing it to another http://
+// address is refused.
+func TestHandlePutSiteConfig_SignInHelpStoredHTTPEcho(t *testing.T) {
+	stored := types.SiteConfig{SignInHelpURL: "http://helpdesk.corp.example/"}
+
+	fake := &fakeSiteConfigStore{cfg: stored}
+	srv, _ := newSiteConfigHarness(t, fake)
+	if w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"sign_in_help_url":"http://helpdesk.corp.example/"}`); w.Code != http.StatusOK {
+		t.Fatalf("echoing the stored link = %d %s, want 200", w.Code, w.Body.String())
+	}
+
+	fake = &fakeSiteConfigStore{cfg: stored}
+	srv, _ = newSiteConfigHarness(t, fake)
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"sign_in_help_url":"http://other.corp.example/"}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), errSignInHelpURLScheme.Error()) {
+		t.Errorf("a different http:// link = %d %s, want 400 carrying the scheme error", w.Code, w.Body.String())
+	}
+	if fake.putSeen != nil {
+		t.Error("a refused write reached the store")
 	}
 }
 
@@ -214,6 +244,10 @@ func TestHealthz_SignInHelp(t *testing.T) {
 		{"invalid stored text dropped, url kept",
 			types.SiteConfig{SignInHelpText: "line\nbreak", SignInHelpURL: "https://it.corp.example/"},
 			nil, "https://it.corp.example/"},
+		// Stored before #489's https-only rule: still published, and setup warns.
+		{"stored http url still published",
+			types.SiteConfig{SignInHelpURL: "http://helpdesk.corp.example/"},
+			nil, "http://helpdesk.corp.example/"},
 		{"invalid stored url dropped, text kept",
 			types.SiteConfig{SignInHelpText: "Ask IT.", SignInHelpURL: "javascript:alert(1)"},
 			"Ask IT.", nil},
