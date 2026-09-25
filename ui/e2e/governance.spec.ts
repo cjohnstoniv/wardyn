@@ -882,7 +882,7 @@ test.describe("governance — the run limits round-trip through the editor (RL-1
     const unitPicker = (label: string) =>
       page.getByRole("combobox", { name: RL.UNIT_PICKER_LABEL(label), exact: true });
 
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
     await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
     const editor = page.getByTestId("governance-profile-editor");
