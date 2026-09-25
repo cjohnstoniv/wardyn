@@ -244,7 +244,7 @@ export function RunFailureBlock({
           {/* The page's one primary action, so the one `default` Button on this
               surface (CONSOLE-RULES §6) — the sentence above it is the server's
               and names no control. */}
-          <Button size="sm" aria-label={MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA} onClick={(e) => door.openDoor(e.currentTarget)}>
+          <Button size="sm" aria-label={MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA} onClick={(e) => door.openDoor({ returnTo: e.currentTarget })}>
             {AGENTS.SIGN_IN_AWS}
           </Button>
           <span className="text-xs leading-relaxed text-muted-foreground">{MODEL_ACCESS_RUN_DOOR.NOTE}</span>

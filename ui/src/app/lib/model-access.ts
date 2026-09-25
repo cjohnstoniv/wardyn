@@ -25,7 +25,7 @@
 // workspace-providers-copy re-exports them for its existing callers. The one
 // copy decision this feature needs of that table — `expiring`'s action line,
 // re-composed on the reader's clock — lives THERE, beside its template.
-import type { SetupHarnessTool, SetupStatus } from "./types";
+import type { SetupHarnessTool, SetupModelProvider, SetupStatus } from "./types";
 
 // U-10: the per_user "something actionable to do" states — the member's own
 // sign-in. Defined once so the Agents tab (admin), member Getting Started
@@ -150,4 +150,96 @@ export function modelAccessDoor(
       (h) => h.id === MODEL_ACCESS_AGENT && h.enabled !== false && h.mechanism === "bedrock_sso",
     ),
   };
+}
+
+/** One provider the strip speaks for (design §5.5, packet MP-D). */
+export interface ProviderAttention {
+  provider: SetupModelProvider;
+  /** provider_access's state: not_configured, expired_signin or expiring. */
+  state: string;
+  deadline: string;
+  /** The agents whose default it is, among those the person may run — the
+   *  "{Claude Code} runs use …" of B1, B4 and B5. */
+  defaultFor: string[];
+}
+
+/**
+ * providerAttention is what needs the person, per provider (§5.5): (i) the
+ * default provider of an agent they may run, when their credential for it is
+ * not connected; and (ii) any provider where they HOLD a credential that is
+ * expiring or no longer works. A provider they never used, that is no default,
+ * never raises the strip. Empty with no provider block — the legacy strip
+ * (modelAccessDoor) speaks there.
+ *
+ * A Claude subscription's `expiring` (the 11-month aging heuristic) is left to
+ * Getting started's row: packet D draws no strip state for it.
+ */
+export function providerAttention(status: SetupStatus | null | undefined): ProviderAttention[] {
+  const out: ProviderAttention[] = [];
+  for (const p of status?.model_providers ?? []) {
+    const access = status?.provider_access?.find((a) => a.provider === p.id);
+    if (p.disabled || !access) continue;
+    const defaultFor = (p.default_for ?? []).filter((h) => p.harnesses.includes(h));
+    const held = p.kind === "bedrock_sso" && (access.state === "expiring" || access.state === "expired_signin");
+    const missing = defaultFor.length > 0 && MODEL_ACCESS_ACTIONABLE.has(access.state) && !(p.kind === "anthropic_subscription" && access.state === "expiring");
+    if (held || missing) out.push({ provider: p, state: access.state, deadline: access.deadline ?? "", defaultFor });
+  }
+  return out;
+}
+
+// THE DOOR'S KEY (#544, design §5.9): which door an entrance opens. An entrance
+// that knows its provider names it; one that predates providers names today's
+// login lane, and resolveDoor keys that to a provider where the install has
+// them.
+export type DoorRequest = { provider: string } | { login: "aws" | "anthropic" };
+
+// What the one mount renders. `legacy` is today's door (POST
+// /setup/harness-login): the only door on an install with no model providers,
+// and in the Admin view. `signin` and `key` are the provider doors, User view
+// only (packet E: "mounted in the Member view only") — a person's credential
+// for a provider is theirs as a person, added from the User view, which is
+// also where the server's refusal of the legacy door sends an admin.
+export type DoorTarget =
+  | { kind: "legacy"; login: "aws" | "anthropic" }
+  | { kind: "signin"; login: "aws" | "anthropic"; provider: SetupModelProvider }
+  | { kind: "key"; provider: SetupModelProvider; token: boolean; stored: boolean };
+
+const SIGN_IN_KINDS: Record<string, "aws" | "anthropic"> = {
+  bedrock_sso: "aws",
+  anthropic_subscription: "anthropic",
+};
+
+function providerDoor(status: SetupStatus, p: SetupModelProvider): DoorTarget {
+  const login = SIGN_IN_KINDS[p.kind];
+  if (login) return { kind: "signin", login, provider: p };
+  // Every other kind is a typed key or token (the server's providerTypedKinds);
+  // custom_endpoint says "token", the rest "key" — gradeProviderKey's own rule.
+  const state = status.provider_access?.find((a) => a.provider === p.id)?.state;
+  return { kind: "key", provider: p, token: p.kind === "custom_endpoint", stored: state === "live" };
+}
+
+/**
+ * resolveDoor keys one entrance's request to the door it opens, or null when
+ * there is none for it (a provider this person cannot see, or any provider
+ * door in the Admin view).
+ *
+ * A `login` request on an install with providers opens the provider door of
+ * that sign-in kind — the claude-code default when it is one, else the first —
+ * because it is the only door the server answers there (POST
+ * /setup/harness-login refuses while a provider block exists). With no provider
+ * of that kind it stays today's door, whose refusal the pane shows verbatim.
+ */
+export function resolveDoor(
+  status: SetupStatus | null | undefined,
+  request: DoorRequest,
+  view: "admin" | "user",
+): DoorTarget | null {
+  const providers = (view === "user" && status?.model_providers) || [];
+  if ("provider" in request) {
+    const p = providers.find((v) => v.id === request.provider);
+    return p && status ? providerDoor(status, p) : null;
+  }
+  const ofKind = providers.filter((p) => SIGN_IN_KINDS[p.kind] === request.login);
+  const p = ofKind.find((v) => v.default_for?.includes(MODEL_ACCESS_AGENT)) ?? ofKind[0];
+  return p && status ? providerDoor(status, p) : { kind: "legacy", login: request.login };
 }

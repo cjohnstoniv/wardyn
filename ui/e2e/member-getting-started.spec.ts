@@ -165,7 +165,8 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect(cardButton).toBeVisible();
     // Both still SAY the frozen visible text.
     await expect(cardButton).toHaveText(AGENTS.SIGN_IN_AWS);
-    // …and opening the pane takes the card's duplicate off the page.
+    // …and opening the one door (a modal, #544) takes the card's duplicate
+    // out of reach.
     await page
       .getByRole("button", { name: MEMBER_GETTING_STARTED.SIGN_IN_AWS_ARIA_SUMMARY, exact: true })
       .click();

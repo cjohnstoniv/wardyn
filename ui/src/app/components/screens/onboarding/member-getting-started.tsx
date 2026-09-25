@@ -42,7 +42,7 @@ import {
   MODEL_ACCESS_CHIP_LABEL,
   modelAccessActionLine,
 } from "../../../lib/workspace-providers-copy";
-import { HarnessLoginPane } from "../settings/harness-login-pane";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
@@ -96,9 +96,11 @@ function modelAccessChip(
 export function MemberGettingStarted() {
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [retryTick, setRetryTick] = React.useState(0);
-  // The member's own AWS sign-in pane (C4.3) — opens IN PLACE under the card,
-  // per the mock; HarnessLoginPane is reused unchanged.
-  const [awsLoginOpen, setAwsLoginOpen] = React.useState(false);
+  // The member's own AWS sign-in (C4.3) opens the shell's one door (#544 —
+  // this page mounted its own pane before). This page keeps its own status
+  // read, so a completed sign-in re-reads it.
+  const door = useModelAccessDoor();
+  const openAwsDoor = () => door.openDoor({ for: { login: "aws" }, onSignedIn: () => setRetryTick((n) => n + 1) });
 
   React.useEffect(() => {
     let active = true;
@@ -397,24 +399,7 @@ export function MemberGettingStarted() {
                   either nothing to do, or nothing this member can do about it. */}
               {!ownKeyCounts &&
                 status?.model_access &&
-                MODEL_ACCESS_ACTIONABLE.has(status.model_access.state) &&
-                (awsLoginOpen ? (
-                  <div className="mt-3 max-w-md">
-                    <HarnessLoginPane
-                      provider="aws"
-                      /* This CTA renders for the per_user states only, so the
-                         org's access portal is the admin's stored one and the
-                         server uses it regardless of what is typed — the member
-                         is told, not asked. */
-                      startURLManaged
-                      onDone={() => {
-                        setAwsLoginOpen(false);
-                        setRetryTick((n) => n + 1);
-                      }}
-                      onCancel={() => setAwsLoginOpen(false)}
-                    />
-                  </div>
-                ) : (
+                MODEL_ACCESS_ACTIONABLE.has(status.model_access.state) && (
                   // outline: this card is informational (file header) and
                   // never enters the page's one-teal-at-a-time computation.
                   //
@@ -430,11 +415,11 @@ export function MemberGettingStarted() {
                     variant="outline"
                     className="mt-3"
                     aria-label={T.SIGN_IN_AWS_ARIA_SUMMARY}
-                    onClick={() => setAwsLoginOpen(true)}
+                    onClick={openAwsDoor}
                   >
                     {AGENTS.SIGN_IN_AWS}
                   </Button>
-                ))}
+                )}
               {/* #386: `not_configured`'s cause line + CONNECT_ADO — the fallback
                   states only (§2.2/§7.5); `live` (every source) and
                   `shared_expired` render neither line nor button here, the
@@ -522,11 +507,10 @@ export function MemberGettingStarted() {
           mine={mine}
           harnesses={status?.harnesses}
           modelAccess={status?.model_access}
-          onSignInAws={() => setAwsLoginOpen(true)}
-          /* U-13: the pane opens in the card ABOVE this one and moves no focus,
-             so while it is open the card's own button is a no-op that reads as
-             a second, live way in. */
-          signInOpen={awsLoginOpen}
+          onSignInAws={openAwsDoor}
+          /* U-13: while the door is open the card's own button is a second,
+             live-looking way into the same one door. */
+          signInOpen={door.open}
           known={!unreachable}
           variant={variantFor("model-key")}
           onChanged={loadSecrets}

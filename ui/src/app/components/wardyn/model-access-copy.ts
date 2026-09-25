@@ -57,6 +57,12 @@ export const MODEL_ACCESS_BANNER = {
   // CONSOLE-RULES §9's transient case: the strip vanishes on the next status
   // read, and a surface that disappears is not a confirmation.
   SIGNED_IN_TOAST: "Signed in to AWS — your runs can use your session now",
+  // Canon (packet E, Q151-2) — the provider sign-in doors' one line about the
+  // sandbox the person watches start.
+  DIALOG_CLEANUP_NOTE: "This sign-in runs in its own sandbox. It is stopped as soon as your sign-in is stored.",
+  // B9 (packet MP-D): beside the server's sentence for a refusal that landed
+  // after the person left New Run.
+  REFUSAL_DISMISS: "Dismiss",
   // The per-viewer, per-session set-aside. Offered ONLY where the viewer cannot
   // act (W0-mock ruling 3): the first-run state, and a dead SHARED credential
   // for a non-operator. A lapse of something the person already had is never

@@ -6,10 +6,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus, AgentRun, SetupHarnessTool } from "../../../lib/types";
 import { makeRun } from "../../../../test/factories";
-import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
+import { WithDoor } from "../../../../test/door-harness";
+import { MODEL_PROVIDERS, baseMe, baseMeDrive, baseStatus, providerStatus } from "../../../lib/test-fixtures";
+
+// A provider door's pane starts its sign-in at once; held pending here, so the
+// case below ends at the door it opened.
+const startSignInMock = vi.fn();
+vi.mock("../../../lib/api/model-provider-signin", () => ({
+  modelProviderSignIn: {
+    startSignIn: (id: string) => {
+      startSignInMock(id);
+      return new Promise(() => {});
+    },
+    captureSignIn: vi.fn(),
+  },
+}));
 
 const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({
@@ -117,9 +130,11 @@ const sharedBedrockHarness: SetupHarnessTool[] = [
 // The page reads its drive off the shell's ONE GET /me (operator-context's
 // MeIdentity.userDrive), not a fetch of its own — so a case states its /me body
 // here, exactly as app-shell hands it down.
-function renderPage(me: Me = baseMe()) {
+// `shell` is the shell's own /setup/status read, behind the one door the
+// page's sign-in buttons open (#544) — the page itself reads its own.
+function renderPage(me: Me = baseMe(), shell: SetupStatus | null = null) {
   return render(
-    <MemoryRouter>
+    <WithDoor status={shell} path="/setup" operator={false}>
       <OperatorProvider
         operator={false}
         securityOperator={false}
@@ -128,7 +143,7 @@ function renderPage(me: Me = baseMe()) {
       >
         <MemberGettingStarted />
       </OperatorProvider>
-    </MemoryRouter>,
+    </WithDoor>,
   );
 }
 
@@ -464,29 +479,49 @@ describe("MemberGettingStarted", () => {
 
     // Appendix A finding 2 — a per_user row's not_configured state is
     // actionable on BOTH the chip row (unchanged) and the card (new): TWO
-    // "Sign in to AWS" buttons, one pane, either one opens it (both call the
-    // same setAwsLoginOpen(true)).
-    it("clicking Sign in to AWS opens HarnessLoginPane in place", async () => {
+    // "Sign in to AWS" buttons, one door, either one opens it (#544: the
+    // shell's door, no longer a pane this page mounts).
+    it("clicking Sign in to AWS opens the one door", async () => {
       const user = userEvent.setup();
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
-      renderPage();
+      const s = status({ model_access: { state: "not_configured" }, harnesses: perUserHarness });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
       const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       await user.click(buttons[0]);
-      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+      expect(await screen.findByRole("dialog", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+      expect(await screen.findByTestId("harness-login-pane")).toBeInTheDocument();
+    });
+
+    // #544: on an install with model providers the same button opens the
+    // door of the provider it is for — the claude-code default AWS provider —
+    // never /setup/harness-login, which the server refuses there.
+    it("with providers, it opens that provider's AWS door", async () => {
+      const user = userEvent.setup();
+      const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"] }], {
+        model_access: { state: "not_configured" },
+        harnesses: perUserHarness,
+      });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
+      await user.click((await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME }))[0]);
+      const dialog = await screen.findByRole("dialog", { name: AGENTS.SIGN_IN_AWS });
+      expect(dialog).toHaveTextContent("For Bedrock (prod)");
+      await waitFor(() => expect(startSignInMock).toHaveBeenCalledWith("bedrock-prod"));
     });
 
     // FIX PASS 1 (REVIEW-1.md H1) — the SAME scenario, but through the
     // CARD's own button (buttons[1]) instead of the chip row's: both must
-    // reach the identical single pane mount.
+    // reach the identical single door.
     it("...and so does the CARD's own Sign in to AWS button", async () => {
       const user = userEvent.setup();
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
-      renderPage();
+      const s = status({ model_access: { state: "not_configured" }, harnesses: perUserHarness });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
       const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       await user.click(buttons[1]);
-      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+      expect(await screen.findByTestId("harness-login-pane")).toBeInTheDocument();
     });
 
     // The pane's start-URL field would otherwise be EMPTY, leaving every
@@ -496,12 +531,13 @@ describe("MemberGettingStarted", () => {
     // none; the note is the fact.
     it("...and that pane asks for no access portal — the admin's is the one used", async () => {
       const user = userEvent.setup();
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
-      renderPage();
+      const s = status({ model_access: { state: "not_configured" }, harnesses: perUserHarness });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
       const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       await user.click(buttons[0]);
-      expect(screen.getByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
+      expect(await screen.findByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
       expect(document.getElementById("harness-login-start-url")).toBeNull();
       // The pane is at its consent gate, ready to launch — not stuck waiting on
       // a field it no longer shows.
@@ -563,15 +599,16 @@ describe("MemberGettingStarted", () => {
     // would leave this exact fixture showing MODEL_ACCESS_OWN_CHIP ("Your
     // key", success) with the chip row AND the card's own Sign-in button
     // dead: H1's probe catches PROBE pane present after click = false.
-    it("hasOwn:true + per_user + not_configured: still Not signed in, checklist NOT done, reveal absent, own chip absent, card's own button mounts the pane", async () => {
+    it("hasOwn:true + per_user + not_configured: still Not signed in, checklist NOT done, reveal absent, own chip absent, card's own button opens the door", async () => {
       const user = userEvent.setup();
       // FIX PASS 1 (M1) — same observable-of-modelKeyDone technique as the
       // test above: a workspace present makes model-key the page's sole
       // `default`-variant section IFF modelKeyDone is actually false.
       listWorkspacesMock.mockResolvedValue([{ id: "w1" }]);
       listSecretsMineMock.mockResolvedValue({ names: ["anthropic-api-key"], mine: ["anthropic-api-key"] });
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
-      renderPage();
+      const s = status({ model_access: { state: "not_configured" }, harnesses: perUserHarness });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
       expect(await screen.findByText(YMK.NOT_SIGNED_IN_CHIP)).toBeInTheDocument();
       const modelKeySection = screen.getByRole("heading", { name: "Your model key" }).closest("section")!;
       expect(within(modelKeySection).queryByText("Done")).not.toBeInTheDocument();
@@ -591,7 +628,7 @@ describe("MemberGettingStarted", () => {
       await waitFor(() => expect(defaultButtons().length).toBe(1));
       expect(defaultButtons()[0].textContent).toContain(AGENTS.SIGN_IN_AWS);
       await user.click(buttons[1]);
-      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+      expect(await screen.findByTestId("harness-login-pane")).toBeInTheDocument();
     });
 
     // Negative control for the reveal-hidden assertion above: a shared/api-key
@@ -723,15 +760,13 @@ describe("MemberGettingStarted", () => {
 
     // U-13 (a11y, W6 blind lens) — without distinct names, the page's two
     // sign-in buttons would carry the IDENTICAL accessible name "Sign in to
-    // AWS" (plus a plain-text action line saying the same words), and the
-    // card's one opens a pane mounted in the card ABOVE it, moving no focus
-    // and staying enabled as a no-op once it is open.
-    it("U-13: the two Sign in to AWS buttons have distinct accessible names, and the card's hides while the pane is open", async () => {
+    // AWS" (plus a plain-text action line saying the same words). Both open
+    // the one door, a modal, so while it is open neither is a second way in.
+    it("U-13: the two Sign in to AWS buttons have distinct accessible names, and neither is reachable while the door is open", async () => {
       const user = userEvent.setup();
-      getSetupStatusMock.mockResolvedValue(
-        status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }),
-      );
-      renderPage();
+      const s = status({ model_access: { state: "not_configured" }, harnesses: perUserHarness });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
       const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
@@ -742,7 +777,7 @@ describe("MemberGettingStarted", () => {
       // section, so the visible console is byte-identical.
       for (const b of buttons) expect(b).toHaveTextContent(AGENTS.SIGN_IN_AWS);
       await user.click(buttons[0]);
-      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+      expect(await screen.findByTestId("harness-login-pane")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
     });
 
