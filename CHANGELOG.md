@@ -856,6 +856,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   repository name on a self-hosted host is refused with a 400 that names the site configuration,
   not the address's shape. Review's preflight now reads the secret list where launch does, and
   `TestPreflightMirrorsLaunchGates` pins the gate order, not only the set (#515).
+- **The `local` key refuses to start under `GODEBUG=fips140=only` (#682).** That mode forbids
+  X25519, and age drops the error, so every `WARDYN_AGE_KEY` got the same empty public recipient
+  and every local key the same `kek_id`. wardynd now refuses to start with an age key (set or
+  ephemeral) in that mode and names store mode (`WARDYN_SECRET_STORE=vaultkv`), which needs no age
+  key. New tests prove, in a child process under `fips140=only`, that the envelope round trip works
+  and that a store-mode boot mints and re-reads every boot key without X25519. `make helm-lint` now
+  checks that store mode with `secretFiles.enabled` renders no secret as an env value or
+  `secretKeyRef`.
 - **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
   that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
   sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the

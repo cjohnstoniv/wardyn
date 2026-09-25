@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"filippo.io/age"
+
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/secretstoretest"
 )
 
 // The golden vectors were computed OUTSIDE Go (Python `cryptography`: HKDF
@@ -264,5 +266,27 @@ func TestSeal_NeverRepeatsANonce(t *testing.T) {
 			t.Fatalf("nonce %x repeated after %d seals", ct[:nonceSize], i)
 		}
 		seen[n] = true
+	}
+}
+
+// TestNewLocal_RefusesUnderFIPSOnly: GODEBUG=fips140=only forbids X25519, and
+// age swallows that error, leaving every identity with the same empty
+// recipient. NewLocal must refuse rather than give every age key one kek_id.
+func TestNewLocal_RefusesUnderFIPSOnly(t *testing.T) {
+	if !secretstoretest.UnderFIPSOnly(t) {
+		return
+	}
+	for range 2 {
+		id, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		l, err := NewLocal(id)
+		if err == nil {
+			t.Fatalf("NewLocal derived %s under fips140=only", l.ID())
+		}
+		if !strings.Contains(err.Error(), "WARDYN_SECRET_STORE=vaultkv") {
+			t.Fatalf("the refusal does not name the FIPS-only way out: %v", err)
+		}
 	}
 }

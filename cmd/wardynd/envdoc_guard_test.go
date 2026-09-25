@@ -29,13 +29,13 @@ var envDocAllow = map[string]bool{
 	"WARDYN_TEST_BOOL": true, "WARDYN_TEST_DUR": true, "WARDYN_TEST_STR": true,
 	"WARDYN_TEST_PG": true, "WARDYN_TEST_DOCKER": true, "WARDYN_TEST_CACHE_REPO": true,
 	"WARDYN_TEST_VAULT": true, "WARDYN_TEST_VAULT_TOKEN_FILE": true, "WARDYN_TEST_VAULT_K8S_JWT_FILE": true,
-	"WARDYN_TEST_AZURE_KV":  true,
-	"WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
+	"WARDYN_TEST_AZURE_KV":   true,
+	"WARDYN_TEST_FIPS_CHILD": true, "WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
 	"WARDYN_ENVBUILD_TEST_INT": true, "WARDYN_FAKE_MARKER": true, "WARDYN_NEGCTL": true,
 	// internal/testfloor.Marker: the skip-floor probe sentinel scripts/test-report.sh
 	// greps from `go test -json` log output — never read via os.Getenv, so it is
 	// scaffolding, not operator configuration.
-	"WARDYN_FLOOR_PROBE": true,
+	"WARDYN_FLOOR_PROBE":  true,
 	"WARDYN_E2E_BASE_URL": true, "WARDYN_E2E_CLAUDE_CREDS": true,
 	"WARDYN_E2E_REAL_MODEL": true, "WARDYN_E2E_TASKS_DIR": true,
 	"WARDYN_E2E_WORK_ROOT": true, "WARDYN_E2E_EXPECT_INJECT": true,
