@@ -17,628 +17,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   chip. Reached from Getting Started, which keeps only that summary chip and a link. This is
   additive: an install with no per-provider model records (#551) at all is unaffected, and keeps
   "Your model key" on Getting Started as its own credential door until #548 converts it.
-
-### Changed
-
-- **`GET /setup/status`'s `model_providers` no longer omits itself when a provider block exists but
-  grants the caller nothing (#541 fix review).** It now reads `[]` for that shape and `null` (or is
-  absent, from an older daemon) only when there is no provider block at all — the two are different
-  facts, and collapsing them into the same missing key made a real "not connected to anything" grant
-  indistinguishable from an admin who has not started setting providers up.
-
-### Fixed
-
-- **Review states where a chosen model provider's credential lives (#983).** A run that chose a
-  model provider got no `model_credential` from `POST /runs/preflight`, so the New Run rail said
-  "Resolved at launch." even after Preflight, and the CC3 confinement advisory never fired for an
-  AWS sign-in provider. The chosen provider's kind now sets the facts at both doors: mechanism
-  (the kind), `per_user`, and `sandbox` for `bedrock_sso` or `proxy` for every other kind. A
-  `bedrock_sso` provider run below CC3 now carries the advisory warning and the `run.create` row's
-  `credential_confinement: below_floor`, as the legacy AWS SSO lane already did.
-- **`wardyn_credential_reauth_total` counted Azure DevOps sign-in/consent requests too (#971).**
-  The metric's HELP promises the AWS SSO re-auth population alone, but its `requested`,
-  `resolved`, `expired` and `timeout` outcomes all folded in the per-person Azure DevOps lane's
-  own credential_reauth rows. Each is now scoped to the AWS SSO lane, the same split `cancelled`
-  already used (#968).
-- **Getting Started's model-access chip read "Not set up by your admin" for every legacy install
-  (#541 fix review).** #541's new per-provider connections chip graded only `model_providers`/
-  `provider_access`, which are empty for any install predating provider records — every shared or
-  per_user-roster install still on main, since the admin funnel writes no provider block until
-  #548 lands. `legacySummary` (`lib/model-connections.ts`) restores the old per-principal
-  `model_access`/`llm_ready` reading as Getting Started's own fallback whenever there is no
-  provider block, and the per_user lede is back for a per_user roster row; a real provider block
-  shows Your model connections' own lede. The expiring row's own line
-  (`Your account`'s connections list) now reads a clock time, matching packet MP-D's own drawn
-  text, instead of a relative offset.
-- **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
-  map being set was previously enough to hide the "Who is an admin" setup row and the shell
-  banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
-  fell through to admin, unwarned. `ssoRBACCheck` now warns on that condition too (whether or not
-  a role map is set), with its own setup-row detail/fix and banner sentence; a deployment with
-  neither a role map nor an admin list still reads #484's original warning, one banner, not two.
-- **`wardynd -rotate-age-key` now stamps `updated_at` on every row it re-encrypts (#717).**
-  A rotation is a write, and least-retention sweeps read `updated_at` to decide what is
-  stale; the Postgres secret store's whole-table rewrap (shared by `-rotate-age-key` and
-  `-rewrap`) previously moved `wrapped_dek`/`kek_id` without touching the column, so a
-  rotated-but-otherwise-untouched secret could still be swept as stale.
-- **Task runs start on a proxy one version behind (#676, #889).** Dispatch set the sidecar's
-  `unattended` key on every non-interactive run, and a v0.7.12 proxy refuses a key it does not
-  know, so every task run failed at sidecar start on an operator who pinned that image. The key
-  changes only what happens to a push matching `require_review_paths`, so dispatch now sets it
-  only when the policy has review paths.
-- **A tool call held for a human was denied at once instead of waiting (#711).** The control plane
-  answers a raised approval with the created row, which carries both its `id` and
-  `"state":"PENDING"`; `wardyn-toolgate` read any `state` as a `tool_rules` decision and denied
-  the call as an unrecognised state. It now polls whenever an `id` is present and reads a state
-  with no `id` as the run's own `tool_rules` answer (anything but `APPROVED` still denies).
-- **`scripts/up.sh` no longer just warns when the Claude sign-in image fails to build (#802).**
-  `agent-claude-code` is the checked prerequisite for Claude subscriptions (`claude_signin_image`
-  on `/setup/status`, and adding a subscription is refused without it, #524); a failed build now
-  stops `up.sh` with the rebuild command instead of leaving a silent warning behind. The stack
-  stays up and other agent images stay warn-only. Setting `WARDYN_UP_SKIP_RUN_IMAGES=1` now says
-  explicitly that adding a Claude subscription is refused and claude-code runs fail until the
-  sign-in image is built.
-- **An Azure DevOps capability escalation kept reading "sandbox held" after its own card said the
-  opposite.** The proxy releases that specific hold after 4 minutes (the same window the capability
-  card's own countdown already used); the Runs board and run cockpit read it as held for as long as
-  the row stayed pending, so the board chip, the cockpit header and the strip icon disagreed with
-  the card sitting right beside them. Both now read one shared window (#725).
-- **A Codex (or any non-Claude-Code) launch refused for its own model-credential reason could open
-  "Sign in to AWS"** on a deployment that also has a working Bedrock SSO Claude Code row — a
-  sign-in that repairs nothing for the agent that was actually refused. The door now opens only
-  for a refused Claude Code launch (#725).
-- **A `tool_approvals=hold` run no autonomy rubric bound could still have its approval gate
-  bypassed by the agent's own user-level settings (#358).** Only runs with a rubric-resolved level
-  of L0 or L1 got Claude Code's managed settings, whose `allowManagedPermissionRulesOnly` stops a
-  repository or user `permissions.allow` rule from running a tool before `wardyn-toolgate` is asked.
-  Every claude-code hold run now gets that managed file (the L1 document), including a run at L2,
-  at L3, or with no level. Its `run.agent_policy.write` audit row carries `"tool_approvals": "hold"`, and
-  on a runner that cannot deliver the file the create response says so, as it does for a gated run.
-
-- **Take-over could land the taker read-only.** The server already promotes the taker's own
-  queued observer socket to writer in place, but the console's take-over button unconditionally
-  reconnected afterward — closing that just-promoted socket and handing the writer slot to
-  whichever bystander was next in the FIFO queue. `POST /attach/takeover` now reports whether it
-  promoted the caller in place, and a console tab whose socket is still open skips the reconnect on
-  that answer (#507).
-- A run refused at dispatch for an Amazon Bedrock model-credential mismatch (`autonomy_grade_drift`)
-  or by the declared-mechanism gate no longer audits a `run.bedrock.configure` "success" row for a
-  credential it was never handed — that row is now recorded only once those gates have let the run
-  through. A roster read that fails at create/Review now refuses the run (500) instead of silently
-  admitting it ungraded, which used to surface later at dispatch with a misleading "the
-  configuration changed between then and now" detail (#518).
-- **Console fixes from the early 0.8 review (#510).** The cockpit terminal's reconnecting hint
-  claimed keystrokes typed during a reconnect were held; there is no input buffer, so they are
-  silently dropped — the hint now says so, and the disconnected message interpolates the live
-  reconnect budget instead of a hardcoded "4". `usePoll`'s coalesced refocus follow-up could still
-  fire after the hook had unmounted, running the caller's fetch chain (and every `setState` inside
-  it) against a dead screen; the cleanup now marks the hook disposed and the follow-up checks it.
-  Every Getting Started episode card issued its own `/healthz` fetch for the demo-video mirror
-  address — 24 requests on one mount — for a value that is the same for the whole page load; it is
-  now read once in the shell and handed down through context. The network-confinement banner's
-  action sent a member to `/setup?step=environment`, a page a member cannot reach; the action is
-  now operator-only, and the strip stays informational for a member. The autonomy wire types
-  (`AutonomyRubric`/`AutonomyPosture`/`AutonomyResolution`) now have a Go↔TS parity test. Two
-  copy nits: the Environment step's "stronger tiers" note and the Recordings screen's loaded-count
-  notes now pluralise correctly for exactly one item. An e2e fixture re-typed the admin-token
-  localStorage key by hand; it now imports it from `fixtures.ts`. One known gap stays: while the
-  setup status is still loading, or after a failed read, the Getting Started episode catalog still
-  groups under the "Your deployment — single-user" heading (the readiness chips above it already
-  say "Checking…"). It corrects itself once the status resolves — after a failed read, on the
-  next five-minute status poll.
-- **A deleted user type's orphaned subject row could silently rebind to a same-id type created
-  later.** `userTypeSubjectExists`' existence check races a concurrent `DeleteUserType`: a
-  capability grant, governance assignment or drive grant can finish writing just after the type it
-  names was deleted (migration `0079` carries no FK, by design), leaving a row nothing owns.
-  `CreateUserType` now refuses (`409`) an id any of those three tables still names, so the id stays
-  dead until an operator clears the orphan rows themselves, rather than quietly inheriting whatever
-  a later type of the same id is given to (#610).
-- **Reviving a run, and moving its end later, now re-check its owner's authority instead of keeping
-  the run alive on what it was granted at launch.** A revive (the run's page or an admin's "Restart
-  with current limits") and a later end or No end are refused, naming the capability, when the owner
-  no longer holds the run's agent, one of its workspaces or the git provider of one of its repos;
-  an extension is also refused when the governance profile the run was created under is gone. A
-  revive is also refused when the model credential its proxy would inject has been erased or its
-  integration disabled, and the revived proxy takes the upstream proxy, trusted CA and model
-  gateways from the current configuration rather than its old rendered copy. When anyone but the
-  owner asks, the owner is known by sub and by the user type stamped on the run: any deny row
-  covering the value refuses, and only `all` rows or allow rows for the owner's sub or stamped type
-  count, not the owner's admin role. A stamp naming a type deleted since refuses; a run with no
-  stamp counts no type rows (#1019). So under an enforced kind, an admin-owned run can be revived,
-  restarted or extended only by its owner, or with an allow row for the owner's sub or type. Each
-  refusal is audited `denied` with the owner as `subject` (#679).
-- **The idle reaper is now hold-aware: it no longer stops a run out from under an open
-  push/egress/ADO/credential/tool-call request that is still within its wait.** The idle-stop
-  CAS (`UpdateRunStateIfIdle`) now also checks for a PENDING approval whose own
-  `min(requested_at + wait, ends_at)` has not yet passed, and refuses the transition while one
-  is open — closing the same race window the existing touched-after-snapshot guard closes, since
-  a request can be raised between the reaper's scan and the stop. A re-auth hold's own timeout
-  decision (`credential:reauth-timeout`) no longer resets the run's idle clock, since it is the
-  proxy reporting that nobody answered, not real agent activity (#570).
-- **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
-  captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
-  in-sandbox helper still gets its answer and prints its done line), including when the console
-  tab was closed; the `run.kill` row carries `reason: sign_in_captured`. The `approval.cancelled`
-  row now carries `by_kind`, which tells a hook tool call from an Azure DevOps escalation and an
-  AWS re-auth from an Azure DevOps sign-in or consent request. The cancelled credential re-auth
-  metric counts only AWS re-auth rows the cancel actually moved, not one a person decided at the
-  same moment.
-- **The Getting Started funnel paints from the setup status the console already holds (#806).**
-  A gated install redirected into `/setup` used to show "Checking Wardyn's setup…" with no step
-  rail until the funnel's own second `/setup/status` read answered. The funnel now starts from the
-  status that sent it there and refreshes behind it, so a slow second read no longer hides the rail.
-  `runs.spec.ts`'s search tests retry the fill itself, since a reload of the board can detach the
-  input a fill lands on.
-- **`wardyn-toolgate` closes its own approval on giving up, instead of leaving it `PENDING`
-  for the sweeper (#811).** The gate's own `-deadline` and the server's periodic approval
-  sweep shared the same ceiling, but the sweep only catches a stale `PENDING` row on its
-  next tick — up to `approval-expiry-interval` (10m default) after the gate already
-  returned deny for it. In that window an operator could still approve a call the agent had
-  already abandoned. The gate now tells the control plane (`POST
-  /wardyn/v1/approvals/{id}/expire`) the moment it gives up, moving the row straight to
-  `EXPIRED`; an approval that beats that call is honoured rather than denied. Only a
-  `tool_call` row the sandbox itself raised can be withdrawn this way — an Azure DevOps
-  escalation stays the operator's — and the audit row names the run's agent.
-- **Signing in no longer opens a blank tab (#628).** Starting the AWS or Claude sign-in used to open
-  an about:blank tab straight away, and on a first launch the person sat on it while the sign-in
-  image downloaded. The dialog now stays put and shows three steps: starting the sign-in sandbox,
-  downloading the sign-in image ("Can take a few minutes the first time." — no runner reports pull
-  progress, so there is no percentage; the step lights while the runner reports `Pulling`, which only
-  the Docker runner does — on Kubernetes the kubelet reports `ContainerCreating` through a pull, so the
-  first step stays lit), and waiting for the provider. Once the provider's page is
-  ready, an "Open AWS sign-in" (or "Open Claude sign-in") button opens it, with the device code
-  beside it and a copy-link fallback; the tab still has its `opener` severed. A failed image pull
-  shows the server's own reason and a Retry that starts a fresh sandbox. The Azure DevOps
-  popup-blocked fallback now reads "Your browser blocked the connect popup." with an "Open Azure
-  DevOps sign-in" button.
-- **`wardynd:latest` is published only from a commit CI passed on.** `publish-image.yml` ran on
-  every push to `main` in parallel with CI, so a red commit still became `:latest` — the tag
-  desktop installs pull. It now runs after CI completes and publishes only when every CI push run
-  on the commit, on that branch, succeeded (`scripts/ci-green-for-sha.sh`), so a release branch
-  still running on the same commit does not hold `main` back; a manual dispatch on a red commit
-  skips. `:latest` now lags `main` by one CI run (#664).
-- **Approval scope caret: choosing "Until…" no longer drops keyboard focus to the page body** —
-  the popover swapped its content on Enter without moving focus anywhere; it now lands on the
-  sub-view's "← Back" control (#481).
-- The `harness_login_not_per_user` refusal (a member's `POST /setup/harness-login` when the agent's
-  model credential is not per person) has written `authz.denied` rows since 0.7.2 under a reason the
-  documented closed enum did not list. It is now in `docs/OPERATIONS.md` and `docs/AUDIT-ACTIONS.md`,
-  and the enum is checked from the registry instead of a source scanner that missed it (#736).
-- **GPL offer and image-doc follow-ups from the UI-image publishing PR (#357).** The
-  0.6.6–0.7.7 note in `deploy/images/third-party-gpl-historical.md` sat under a heading
-  whose opening sentence said conveyance had ceased, while the tags it covers are still
-  pullable; it now has its own heading stating the offer stands while they remain
-  pullable. The Makefile's image targets now stamp the build commit on every local image
-  (`org.opencontainers.image.revision`, suffixed `-dirty` when tracked files differed), and
-  `scripts/gpl-source-offer.sh` names that commit in a pre-publication (bootstrap) section,
-  read from the image's SBOM, instead of whatever HEAD was when the script ran. It refuses
-  an image built from a dirty tree or carrying no build commit. `scripts/check-image-pins.sh`
-  now fails if the hand-listed websockify entry in `gpl-source-offer.sh`'s `MANUAL_ENTRIES`
-  drifts from `deploy/images/novnc/Dockerfile`'s `WEBSOCKIFY_VERSION` pin or download URL.
-  `docs/CI.md` now says seven images (a release now publishes
-  `agent-vscode` and `agent-novnc` too).
-- **The drive editor's home-template rule for `k8s_pvc_static` now matches the server (#808).**
-  The picker treated `k8s_pvc_static` as a plain share: it disabled `hash`, the server's default
-  and recommended template for a static PVC, and offered `email_local`, the one template the
-  server always refuses on this backend. `k8s_pvc_static` is a third case — an admin
-  pre-provisions the claim, but Wardyn still names it — so the editor now enables `hash` and `sub`
-  there and disables only `email_local`, mirroring `ManagedBackendRejectsTemplate` /
-  `ShareBackendRejectsTemplate` (`internal/types/user_drive.go`) through one shared predicate.
-- **`make lint` replayed golangci-lint findings from a deleted sibling worktree (#480).** The
-  linter's cache was shared machine-wide, keyed by absolute path, so a stale entry for a worktree
-  that no longer exists could fail a lint run that never touched that file. `make lint` now points
-  `GOLANGCI_LINT_CACHE` at a `.golangci-cache/` directory inside the current worktree (gitignored),
-  so one worktree's cache can never leak into another's.
-- **A credential mint's SIEM record no longer depends on the client staying connected.** The
-  broker fanned the committed `credential.mint` event to the file, webhook and syslog sinks on the
-  request context, and the syslog sink skips an event whose context is already done — so a git
-  helper that hung up after its mint committed could leave a live credential with no SIEM record.
-  The fan-out now detaches from request cancellation; tests pin one SIEM event per winning mint,
-  none for a concurrent loser or a refused mint, and no token bytes in the event (#716).
-- **A secret-store or site-config outage no longer tells a person to reconnect Azure DevOps
-  (#447).** When the per-user Azure DevOps sign-in state could not be read, launching a run used to
-  refuse with "you are not connected to Azure DevOps", and `GET /me/scm-access` answered 200 with
-  a `not_configured` row or an empty array. Every launch door (run create, Build, Scan, record) now
-  answers 503 `roster_unreadable`, and `/me/scm-access` answers 500. Setup status and preflight
-  leave the Azure DevOps fact out rather than guess. Both sign-in doors (the console login and the
-  dedicated sign-in) now store the same scopes: those granted within the row's ceiling.
-- **A failed credential grant no longer shows database text to the run's owner (#445).** When a
-  dispatch could not record the Azure DevOps, AWS SSO, subscription or Bedrock bearer credential
-  grant, the run's failure hint (and the Azure DevOps refusal's audit detail) carried the store's
-  own error, database host and SQLSTATE included. The hint is now a fixed sentence and the real
-  error goes to the daemon log; the same holds for a lost agent exec-id write, a failed per-run CA
-  and a record session that could not launch (its card and its run's hint). The driver-text guard
-  now also watches `failAndRevoke` and `refuseADOEntraDispatch`.
-- **The per-person Azure DevOps injection lane's refusals now carry a machine `reason` on the
-  wire, not just the audit row** — the proxy sidecar (and now the Go SDK, via the new
-  `client.APIError.Reason` field) can branch on why a resolve, capability ask or sign-in hold
-  was refused instead of string-matching the human sentence. The three refusals in the lane that
-  bypassed its own audited refusal path (a capability, consent or sign-in hold that could not even
-  raise its approval request) now leave the same `secret.read` failure row every sibling refusal
-  does (#204).
-- **The AWS SSO and Bedrock bearer credential-injection lanes carry the same machine `reason` on
-  the wire the Azure DevOps lane's refusals do** — both lanes already computed a reason for the
-  audit row; the resolve refusal, and the AWS SSO re-auth hold's terminal/exhausted/raise-failed
-  refusals, now send it in the body too. The reason vocabulary is now one closed set
-  (`internal/api/reasons.go`) shared across all three lanes, so the same reason means the same
-  thing regardless of which lane sent it (#656, continuing #204's sweep). The AWS SSO host-pin
-  refusal's reason, written to the audit row as `sso-host-not-portal` until now, is spelled
-  `sso_host_not_portal` on the audit row and the wire alike, matching the rest of the set.
-- **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
-  configuration carried a list of grants keyed by host, and every organisation shares
-  `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
-  The key is now `ado_grant` (one grant). The older `ado_grants` list still loads when it holds
-  one entry; a list with more than one, or one set beside `ado_grant`, fails the sidecar's
-  startup (#452). The other direction is a clean break: a control plane at this version refuses
-  to configure a v0.7.12 proxy for Azure DevOps runs (the grant config is now `ado_grant`), so
-  upgrade the proxy image with the control plane.
-- **The ephemeral-age-key boot refusal names the rows no key can recover (#755).** With
-  `WARDYN_AGE_KEY` unset over age-sealed rows, wardynd told the operator to set the key the rows
-  were written with — but rows written under an earlier ephemeral key have no such key. The
-  refusal now says those rows are unrecoverable and gives the statement that deletes them. The
-  console's "Secret store durability" row now says what is stored under the ephemeral key is lost
-  at the next restart and that the next boot refuses to start, and the Helm values comment for
-  `secrets.ageKeyFromSecret` says no key set afterwards recovers the rows.
-- **Live kind SSO walk: two timing flakes (#804).** Case L in `sso-member-recovery.spec.ts` read
-  the run's audit trail exactly once for `run.exec:success`, which under load could still be racing
-  the dispatch it was asserting on; it now polls the trail (bounded by the same `SANDBOX_UP` ceiling
-  dispatch itself races against) instead of reading it once. Separately, `scripts/kind-sso-walk.sh`
-  now calls `run-ui-e2e.sh` once per spec file instead of once for all three — Playwright clears
-  `ui/test-results` at the start of every `playwright test` process, so a failing spec's own
-  screenshots and traces were being wiped by the very next spec before the walk ever got to look —
-  and copies a failed spec's `ui/test-results` into the walk's evidence directory immediately after
-  that spec runs, before anything downstream can destroy them.
-- **Settings no longer says "Stored as \<name\>" beside a secret that isn't stored (#355).** Every
-  credential lane (Anthropic/OpenAI API keys, Bedrock bearer key, git PAT, SSH key — all built on
-  the shared `SecretLane`) showed that caption next to an empty, unsaved Save button, reading as
-  "already saved" when nothing was. It now shows only once the lane actually reads as stored; the
-  unsaved form carries no name.
-- **The Corporate-network setup step no longer reverts a save made elsewhere (#492).** Its
-  `PUT /site-config` (Host proxy / Egress redirection) sent no `If-Match`, so a save here could
-  silently spread a stale GET over `scm_hosts`, `egress_redirects`, or the People step's own
-  sign-in-help fields if they'd changed in another tab since this step last loaded. It now sends
-  the last GET's ETag, same as the sign-in-help card, and a stale write is refused (412) rather
-  than accepted: the step reloads the current document (and a fresh ETag) and tells the operator
-  their change wasn't saved, without touching what they were still typing (a redirect being
-  added or edited stays in its form until a save lands).
-- **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
-  enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
-  complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
-  provider-policy doors (`PUT /workspace-providers` and `PUT /site-config`) now answer 400 naming
-  the two rows; disable one of them to save. A disabled second row is still accepted.
-- **The m' desktop envelope had no pointer to the org control plane and a stale OIDC claim (#105).**
-  `deploy/desktop/wardyn.env.m-prime.example` now carries a commented block naming
-  `WARDYN_ORG_URL` and pointing `WARDYN_ORG_ENROLMENT_TOKEN` at
-  `secret.env` (`scripts/test-desktop-profile.sh` now asserts both names are present and stay
-  commented), and neither it nor `deploy/desktop/wardyn.env.example`'s SSO variant still claims
-  there is "no public-client / PKCE-only path" — `oidc.New` makes the client secret optional.
-  `ci.yml`'s `desktop-envelope` job gained a step that boots the real daemon image with an org URL
-  set and member mode unset and asserts the boot refusal fires. One paragraph in
-  `deploy/helm/wardyn/README.md` (plus a `values.yaml` comment) now says managed laptops enrol
-  through the console Ingress at `POST /api/v1/devices/enrol`.
-- **A governance profile narrower than the deployment default on `push_rules` silently dropped
-  its members' content-inspection rules.** Resolving a profile's effective ceiling now warns when
-  the deployment default carries `push_rules` and the profile's own ceiling does not — mirroring
-  the resolve-time grant-drop warning — so the drop shows up in the run-create and preflight
-  `warnings[]` instead of vanishing at the assignment boundary (#272).
-- **A governance-ceiling or drive-resolve 500 logged no method, path or trace id.** Three sites
-  (`writeCeilingError`, `writeCeilingErrorPrefixed`, `writeDriveError`) logged their underlying
-  store error through a bare `context.Background()`, so the operator line an on-call reads for one
-  of these 500s carried no request context. All three now route through `writeServerError`, which
-  logs the method and path. The admin-facing "sign in [again] under Settings → Model provider"
-  remedy is now one format string instead of two near-duplicate constants. The three sites answering 403 rather than 404 for
-  "run not found" (the sandbox-side, run-token-authenticated doors) are now commented with why: the
-  caller's own presented token names the missing run, so a lookup miss is that token's authority
-  gone, not a path a member could probe (#189).
-- `push_rules.deny_paths` entries with leading or trailing whitespace, or that are not valid
-  UTF-8, are now refused at write time (`400`) instead of stored as a deny rule that matches
-  almost nothing. The git broker reads them the same way, so a policy that bypassed write-time
-  validation with one has every push refused rather than the entry ignored (#271).
-- A push of a few hundred commits from a merge-heavy history is no longer refused as
-  uninspectable while far below every size limit. Push content rules charged each merge again for
-  every directory the other side had changed, so such a push crossed the inspector's tree-entry
-  ceiling at about 570 commits. Each comparison is now charged once, and the ceiling is justified
-  against measured real history (#254). An honest push that still crosses one of
-  `internal/gitpack`'s own ceilings (object count, inflated bytes, tree entries, changed paths) now
-  refuses with `413`/`brokered:git:push-too-large` instead of `415`/`brokered:git:push-uninspectable`,
-  since it names the same fix as an oversized push: fewer commits at a time.
-- **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
-  that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
-  explaining there is no per-person connection to show. The capability card's consent door now
-  reads "Connect Azure DevOps" (matching its destination) and lands on the Settings card's own
-  anchor, which takes focus on arrival; a decide's `busy` state now tracks which button was
-  pressed, so Approve and Deny no longer spin together on a single click (#458).
-- **Sign-in first contact: honest loading state, no jargon (#457).** Before the console has ever
-  heard back from `/healthz`, the sign-in screen used to guess — rendering a token field and a
-  disabled "Sign in with SSO" stub that might be wrong for a moment. It now shows only "Checking
-  sign-in options…" (adding "Still checking — Wardyn hasn't answered yet." after three unanswered
-  reads) until a real answer names which doors exist. The disabled SSO stub and its
-  `WARDYN_OIDC_*` title are gone entirely — the button renders only when SSO is actually
-  configured. Every refusal sentence (`NO_ROLE`, `CLAIMS_OVERAGE`, `EMAIL_VERIFIED_ABSENT`,
-  `EMAIL_DOMAIN`, `ROLE_CHECK_UNAVAILABLE`, `OIDC_CONFIG`, `AUTH_FAILED`, and the shared
-  `ErrorState` default) dropped every env var name and "operator" in favor of "your Wardyn
-  admin" — a reader here, sometimes not even signed in, cannot reach a chart value. The
-  SSO-role-source caveat ("comes from your SSO role assignment") is removed entirely, with its
-  tests. Frozen strings: docs/design/signin-first-contact-canon.md.
-- The cockpit terminal's way out is now Ctrl+Shift+Backspace, which works on every keyboard
-  layout. On DE/FR/ES layouts the old chord needed AltGr to reach `]`, so it never fired there and
-  keyboard users had no way out of the terminal without a pointer (#133).
-- A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
-  so a write still finishing from the failed attempt can never interleave with the resend (#368).
-- Azure DevOps projects and repositories whose names carry spaces or other permitted characters
-  (`Payments Platform`, `Card Auth (v2).Service`) now import, launch, clone, fetch and push:
-  every door stores one spelling of the address, and approvals name the repository the same
-  way on the REST and git paths. When two repositories in one run would clone into the same
-  directory, the run's response now says which one was not cloned (#485).
-- The `gates (gitleaks)` CI check was not hermetic: with `fetch-depth: 0` fetching every remote
-  branch, gitleaks' default scan range (`--all`) meant an accepted finding on someone else's open
-  branch could red every other PR's gate too. `make gitleaks` now scans only the commit under
-  test's own history (`--log-opts="HEAD --full-history --diff-filter=tuxdb"`, gitleaks' own
-  defaults minus `--all`). The fixture false positives that used to need a fresh
-  `.gitleaksignore` fingerprint on every touching commit (`pat_broker_mask_test.go`'s minted PAT,
-  the secret-store's AAD label constant, the install test's stub age key and admin token, the
-  runbook's quoted age recipient and `secrets.allowEphemeralAgeKey` flag) are now a path/regex
-  allowlist in `.gitleaks.toml` instead, which matches regardless of commit, and a repo guard
-  refuses a `.gitleaksignore` path that keeps churning fingerprints (#665).
-- **The Runs board declared a still-live `tool_call`/`credential_reauth` hold dead after a
-  60-minute client-side ceiling, while `wardyn-toolgate` keeps the agent parked on it for up to
-  `WARDYN_APPROVAL_EXPIRY_AFTER` (24h default).** An operator back from lunch saw the group chip
-  say "1 was held", the card swap Review for Open, and the cockpit drop "sandbox held" — for a run
-  whose agent was still frozen waiting for exactly that decision (#509). A PENDING row is now live
-  until the server's own state says otherwise; a hold the server has expired or cancelled simply
-  stops showing as held.
-- The New Run rail's launch and preflight failures are now `role="alert"` regions, announced to a
-  screen reader on arrival (a repeated, identical failure re-announces too), and disabled controls
-  that used to explain themselves only through a `title` tooltip — the record pane's operator-only
-  Approve buttons and the Recordings search field and empty state — now state the reason in visible
-  text a keyboard or touch user can actually read (#459).
-- **`wardynd`'s shutdown now waits for a run launch already under way (#749).** `POST /api/v1/runs`
-  answers 201 and then builds the image and dispatches the run in a detached goroutine. That
-  goroutine was not tracked, so a SIGTERM during `CreateSandbox` stopped the daemon partway through
-  dispatch, and the run stayed `STARTING` until the boot reconcile found it. The launch is now
-  tracked like the sign-in launch, and shutdown waits for it within the same bound.
-- **With an Anthropic gateway configured, a subscription credential is mounted only when the run
-  can reach the gateway.** A `*.anthropic.com` or `api.anthropic.com` allowlist entry used to
-  pass the check, mounting the resident credential into a run whose one model dial (to the
-  gateway) the proxy then refused. The gateway's reachability is now judged the way the proxy
-  judges the CONNECT: its host, a covering `*.` wildcard, a port qualifier, and `denied_domains`
-  all count (#508).
-- **`wardyn drive get` prints every allocation, or nothing.** It used to print the first page of
-  allocations only, so `drive get > drives.json` followed by `drive apply` restored a partial
-  set. It now reads every page, and refuses to print when the pages do not add up to the
-  server's `grant_total` (#508).
-- **`push_rules.deny_paths` on a `git_pat` forge other than github.com is now graded.** There the
-  broker cannot show that a push left a path unchanged, so an entry reaching any path the
-  repository already holds refuses every push. The run's risk grade now says so, and
-  POLICIES.md says to deny only paths the repository does not hold yet on such a forge (#508).
-- **The git broker's own reads of api.github.com on a push's behalf are in the run's decision
-  stream** as one `brokered:git:forge-read` row per push that read the forge (#508).
-- **Docs: an `emptyDir` cache volume is writable by the agent without `FSGroup`** (the kubelet
-  creates it `0777`); the Helm README, OPERATIONS.md and the k8s runner no longer claim a
-  root-owned mount the agent cannot write (#508).
-
-### Changed
-
-- **The boot conversion of pre-envelope secrets records `purpose` `boot`, not `migrate` (#717).**
-  Each row the first boot converts to envelope v1 still writes one `secret.read`, naming the row
-  and never its value; its `purpose` is now `boot`, so `migrate` is left to
-  `wardynd -migrate-secrets`, whose rows carry `actor` `wardyn/migrate-secrets`. There is no
-  separate conversion action. A consumer that counted conversion reads under `migrate` should
-  count `purpose=boot` rows with no `ref` instead. OPERATIONS.md's ephemeral-key section now shows
-  the boot refusal a second boot hits today and carries the statement it names for deleting the
-  rows no key can open.
-- **`wardynd -h` reads like a product, and the hybrid-boot org control-plane check now runs before
-  migration (#197).** Every flag's usage string was rewritten to say what it does, its default and
-  its unit, with internal ids and version history dropped; no flag was added, removed or renamed.
-  `validateHybridPosture` (`WARDYN_ORG_URL`/`WARDYN_ORG_ENROLMENT_TOKEN`) is flag-only and now
-  validates beside `validateConfig`, before `connectAndMigrate`, instead of after secrets, identity,
-  the broker and the runner are already up; `validateMemberModePosture` stays at its later point
-  since it needs local mode's resolved state and whether OIDC actually came up.
-- **The PR template now asks for a CHANGELOG entry explicitly.** A new checklist line —
-  "CHANGELOG entry or `no user-visible change` stated" — sits beside the existing docs-landing
-  and frozen-section lines, so a PR that adds neither has to say so instead of leaving the box
-  ambiguous (#730).
-- **Stopped runs no longer wait out the full kill timeout (#468).** The sandbox's idle main
-  process ended in `exec sleep infinity`; as PID 1, `sleep` ignores SIGTERM, so every stop
-  (k8s and docker, task mode and interactive `agent-run --idle`) sat out the whole grace period
-  before the runtime force-killed it. It now traps TERM/INT and exits immediately.
-- **API tokens carry a user type (#611).** Migration `0082_api_tokens_user_type` adds
-  `api_tokens.user_type`: a new token is stamped with its session's user type (every existing
-  token becomes Standard user), the holder's next sign-in re-stamps it beside the role and
-  groups, and every request the token authenticates carries it — `/me` now reports `user_type`
-  through a token too, and `token.create` audit rows name it. A People-page edit that changes the
-  type a value derives revokes every live token still carrying the old type that names the value,
-  or whose group snapshot can't say whether it does, and counts them in `tokens_revoked`; the
-  holder mints a new one after signing in. On the first type assignment to a value that derived
-  Standard user before, that is every token minted before 0.7 whose holder hasn't signed in since
-  and every truncated-snapshot token, whoever holds it. A type change made in the chart reaches a token only at
-  its holder's next sign-in (threat model #38). `DELETE /user-types/{id}` is refused (`409`) while
-  a live token carries the type, and the database now refuses a token with an empty `user_type`.
-- **Server rename sweep: "view as member" is the user view (#617).** The route is
-  `POST /me/view {"view":"user"|"admin","user_type":"…"}` (a clean break — `POST /me/member-mode`'s
-  `{"enabled":bool}` shape is not aliased); `/me` reports `user_view`, `user_view_no_credential`
-  and `user_preview_available` in place of `member_mode`, `member_mode_no_credential` and
-  `member_preview_available`. The audit action is `auth.user_view.set` (dual-emitted alongside
-  `auth.member_mode` for one minor for SIEM stability, removed in 0.9); the `authz.denied`
-  marker is `user_view`; the BYOI refusal reason is `byoi_user`. `runner.MemberMountPolicy` is
-  `UserMountPolicy` and 29 more `*Member*` server functions (`denyMember*`, `filterMemberGrants`,
-  …) are renamed to their `*User*` counterparts (`SetMemberMode`/`handleSetMemberMode` were
-  already renamed to `SetUserView`/`handleSetUserView` by #835's type-selecting `/me/view` route,
-  which this sweep folds into rather than duplicating). See docs/OPERATIONS.md's "Renamed in 0.8"
-  appendix for the full old-name/new-name table. Refusal sentences now say "the user view": the
-  no-SSO `400` ("The user view needs a signed-in SSO human…"), the API-token mint `409` ("Exit
-  the user view to mint a token."), and "Exit the user view to sign in to AWS…"; an unrecognised
-  `view` value refuses `400` with `The "view" field must be "user" or "admin".` The SSH-key door
-  no longer refuses inside the view — a key registered there is stored capped instead (migration
-  0070), re-stamped to the caller's real role at their next sign-in.
-- **Audit action names follow one grammar (#205).** Every action in `docs/AUDIT-ACTIONS.md` is now
-  `<noun>[.<sub>].<verb>`: two or three segments, ending in a verb from the closed list in that
-  page's new "Grammar" section. `TestAuditActionsDoc_Grammar` holds every action row, and every
-  suffix a wildcard family row names, to it. 61 names changed: 21 past-tense ones
-  (`capability.grant.created` → `capability.grant.create`), 37 that ended in a noun, an adjective or
-  a compound segment (`run.policy.effective` → `run.policy.resolve`, `ssh.auth` →
-  `ssh.authenticate`), and the three four-segment `run.workspace.requirement.*` names. The five
-  per-lane egress-union actions became one `run.egress.add` carrying `kind`; `run.ssh.drop`,
-  `run.git_pat.drop`, `run.provider.admit` and `workspace.provider.admit` carry `reason`.
-  `authz.denied` is the one listed exception. See "Upgrading" below. The page also gains a
-  Consumers column naming what inside Wardyn reads each action back. The
-  `egress.decisions.dropped:<n>` `rule_source` value is now `egress:dropped-decisions-<n>`, and the
-  same test now checks every `rule_source` row is `family:kebab`. Every `secret.read`
-  refusal reason is snake_case, like the rest of its reasons. The `wardyn_egress_denies_total`
-  metric's `HELP` text no longer promises a `reason` label the series does not carry — the series
-  itself is unchanged, still one unlabeled counter.
-- **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
-  `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
-  `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →
-  `WARDYN_USER_WRITABLE_ROOTS`; `WARDYN_MEMBER_WRITABLE_DENY` → `WARDYN_USER_WRITABLE_DENY`;
-  `WARDYN_ALLOW_MEMBER_ENV_SECRET` → `WARDYN_ALLOW_USER_ENV_SECRET`. Every deprecated name still
-  works and WARNs once at boot (`cliutil.EnvAlias`, `cmd/wardynd/boot_flags.go`'s
-  `resolveDeprecatedEnvAliases`) through 0.8.x; removed in 0.9 (user-types-design.md rev 4 §4's D5
-  ruling). When both spellings are set to different values the new one wins and boot WARNs naming
-  the ignored one. Compose forwards both spellings with EMPTY defaults, so an envelope still setting
-  `WARDYN_MEMBER_MODE=true` boots in member mode (`make compose-config` renders that envelope).
-  Helm's sso-only conflict guard refuses either name (`make helm-lint` checks both), the compose
-  env-forwarding block and `deploy/desktop/wardyn.env.m-prime.example` are updated to match, and
-  docs/ENV.md's six rows name their deprecated alias; docs/DESKTOP.md and docs/OPERATIONS.md use the
-  new names.
-- **Test names say what they test, and the skip floor covers every Go suite (#208).** 111 Go
-  tests and 227 vitest/Playwright titles that carried an internal work-item id (`TestF075_…`,
-  `TestPG_ProbeF11_…`, `TestB4F2_…`, `"F3-F11: …"`, `"… (X2-F13)"`) now describe the behaviour
-  under test; the id moved into a `// ticket: …` comment in the test body, still searchable.
-  `TestADOEntraStorePG_*` is now `TestPG_ADOEntraStore_*`, so `-run 'TestPG_'` selects it, and
-  `internal/adoscope/review2_test.go` is folded into `evasion_test.go` / `classify_test.go`.
-  `scripts/test-report.sh`'s skip floor, which fails a suite that silently skips its falsifiable
-  probes, now keys on a `testfloor.Mark(t, "<suite>")` call in the test body instead of a
-  name regex, so a rename can no longer empty it. It reads the expected probes from the source,
-  so a probe that skips or returns before its Mark line turns the report red rather than dropping
-  out. The floor, which covered the pg and unit suites, now covers docker and k8s as well.
-- **Sign-in derives a user type (#609).** A `WARDYN_OIDC_ROLE_MAP` value, a People row or
-  `WARDYN_OIDC_DEFAULT_ROLE` may now name a user type id (`pm-group=portfolio-manager`); the
-  session carries that type beside the tier. Among the types a person matches, the highest
-  priority wins and Standard user never wins against a custom type. Two custom types at the same
-  top priority refuse the sign-in (`user_type_ambiguous`), and so does a type that doesn't exist
-  (`user_type_unknown`, also warned at boot); both are `auth.fail` rows from
-  `wardyn/oidcCallback`. An `admin` sign-in, the operator allowlist included, is never refused
-  over a type: it lands on Standard user with a warning. `POST /access/mappings` takes `user_type` on a user row and refuses a
-  type that doesn't exist; `GET /access` names each row's type and lists the types; the People
-  preview names the type, a tie and a missing type; `/me` reports `user_type: {id, name}`.
-- **`make lint` now runs the console's ESLint, so it needs node and pnpm (#193).**
-  `ui/eslint.config.js` turns on `react-hooks/rules-of-hooks`, `react-hooks/exhaustive-deps` and
-  type-aware `@typescript-eslint/no-floating-promises`, and fails on a disable comment for a rule it
-  does not enable; every remaining `eslint-disable` carries its reason on the same line. CI's
-  `build` job now sets up pnpm and node for it.
-- **The non-admin tier is renamed `member` → `user` (#608).** `/me.role`, a role-map value and
-  `WARDYN_OIDC_DEFAULT_ROLE` now read `admin`, `security_admin` or `user`, and the console's
-  People step offers "User". Migration `0074_user_tier_rename` rewrites every stored `member`:
-  People-page rows become `user` on the built-in `standard` type (a new `role_mappings.user_type`
-  column, which a type cannot be deleted out from under), and the role snapshots on API tokens,
-  SSH keys and attach tickets become `user`; the `role_mappings` and `api_tokens` CHECKs refuse
-  `member` from then on. The session cookie's codec moves to version 2 and carries the person's
-  user type (`standard` for everyone until sign-in derives one), so **everyone signs in once more
-  after the upgrade**; API tokens keep working. A chart that still says `=member` in
-  `WARDYN_OIDC_ROLE_MAP`, or `WARDYN_OIDC_DEFAULT_ROLE=member`, still boots and signs those
-  people in as `user` (Standard user), with one boot warning per entry; that alias is removed in
-  0.9. `POST /access/mappings` accepts `user` only.
-- **CI does less per pull request (#932).** The three Go tag-set suites and lint run as parallel
-  `go (…)` legs, and the required `build` check unions their coverage profiles (`make cover-union`).
-  A docs-only or ui-only pull request skips the conformance, Postgres, envbuild and Helm work, and
-  a docs-only one skips `ui-e2e` too. A docs-only change still runs the Go packages whose guard
-  tests read the docs, with plain `go test` (no race detector, no coverage union).
-  Required checks still report success when their steps are skipped. Three image builds reuse
-  main's Docker layer cache (docs/CI.md, "Incremental CI").
-- **Docs caught up with `POST /runs` answering before dispatch completes (#121, #118).** `POST /runs`
-  answers when the run row exists; every refusal is still synchronous with no run created; a
-  dispatch failure ends FAILED with a failure hint; a restart mid-dispatch is reaped after the
-  undispatched grace period with the reconciler's reason; and 0.7 CLI, SDK and curl callers need no
-  change — status code, body and `--wait` are unmoved, `state` reads PENDING, and `image` is absent
-  on the create reply.
-- **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
-  is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
-  set; an admin list alone reads ok. While it warns, every admin also sees a banner above every
-  page, with a link to the People step. Members see neither.
-- **One capability-grant resolver (#735): no decision change; an enforcement-read failure no longer fails a value the grant rows already settled.** `capBatch` now answers every
-  capability question: `capAllowed`, `capGranted`, `capSeamAllowed` and `capScan` are one-value doors
-  onto one seven-step rule order, direction comes from a `capKinds` table, and one resolution shares one
-  snapshot through a context memo. A build with no store now refuses a widening kind at every door.
-- **Every authorization refusal goes through one emitter and one registry (#736).** `internal/authz` holds the
-  closed `authz.denied` reason set, each reason's effect and status, and the serializable `Decision`
-  (schema `authz/v1`); every door refuses through one `refuse`, and a guard test fails on an
-  `authz.denied` row or a registered reason written by hand. Sentences and statuses are unchanged. Audit rows change additively:
-  the `member_mode` marker now also rides `groups_snapshot_stale` rows, and every row a request
-  produced carries `method`. A refusal naming an unregistered reason answers `500` instead of the door's
-  `403`. The reason codes are frozen as an append-only contract at the 0.8.0 tag.
-- **Console path re-point: the pre-split routes are deleted (#633).** `/policies`, `/governance`,
-  `/permissions`, `/audit`, `/recordings`, `/drives`, `/providers`, `/settings` and
-  `/integrations(/:id)` are gone, clean break, no alias — each lives only at its `/admin/*` twin
-  now (`/ssh-keys` stays until M-5, and `/demos` until M-6). Every in-app link, the sidebar's
-  Policies/Governance/Permissions/Audit/Recordings entries, the account-menu and sidebar Settings
-  links (which now land on `/admin/settings` for an admin tier and `/account` for a user), the
-  first-run model-provider "Connect →" doors (`/admin/settings`), the "New policy", "Drives",
-  "Providers", "open full Audit" and "Recordings library" links, and the Azure DevOps connection
-  anchor (`/account#azure-devops`) are re-pointed to match. "New policy", "open full Audit" and
-  "Recordings library" now render only for the tier whose Admin view screen they open, so a user
-  never gets a link to a page that refuses them. The operator docs' console-screen citations are
-  re-pointed too. A stale bookmark or link falls through to the console's ordinary catch-all.
-- **A held tool call now waits the operator's real approval ceiling (RL-1, #566).**
-  `wardyn-toolgate`'s `-deadline` and Claude Code's `MCP_TOOL_TIMEOUT` were hardcoded, so
-  raising `WARDYN_APPROVAL_EXPIRY_AFTER` on the daemon did not change how long a parked tool
-  call waited. Dispatch now mirrors that ceiling onto a hold-mode run's sandbox env;
-  `wardyn-toolgate` defaults its deadline to it, and `agent-run` sets `MCP_TOOL_TIMEOUT` to the
-  ceiling plus 15 minutes whenever that exceeds Claude Code's own ~27.8h default, so the gate's
-  deny, not a Claude Code timeout, ends a call held to the ceiling. Above a ~596h ceiling that
-  export would exceed Claude Code's own ~24.85 day clamp on the value (2^31-1 ms); past that
-  point `agent-run` caps `MCP_TOOL_TIMEOUT` at the clamp and passes `wardyn-toolgate` a
-  `-deadline` 15 minutes under it, so the gate's deny still wins the race no matter how high the
-  ceiling is raised. `wardyn-toolgate` also polls once more after its deadline, catching a
-  decision that landed while its last poll interval slept past it.
-- The Azure DevOps per-user setup guide moved from `docs/adoption/azure-devops-entra.md` (a
-  point-in-time field report location) to `docs/AZURE-DEVOPS.md`, indexed in `docs/README.md`
-  alongside a new `docs/LIVE-TESTS.md` row, and gained a request-flow sequence diagram (#465).
-- **`make ci` no longer runs the Go tree six times (#467).** The three `test-report` suites
-  (tagless, `-tags docker`, `-tags k8s`) now run under `-race -covermode=atomic`, so coverage and
-  race detection ride in one pass per tag set instead of two — `test-race` is kept as a local alias
-  for `cover-check`, and `build-docker`/`build-k8s` are dropped from `ci:` since `cover-check`'s
-  suites already compile and test those tag sets. `run-e2e-subscription.sh`'s teardown now kills the
-  process bound to its own port instead of `pkill -f 'bin/wardynd'`, which used to kill every
-  wardynd on the host including a developer's own daemon on another port. `test-race-pg` is now in
-  `.PHONY`. Five scripts (`e2e-backend.sh`, `run-ui-e2e.sh`, `screenshots.sh`, `run-e2e-byoi.sh`,
-  `stage-agent-binary.sh`) drop a locally re-declared `log()`/`die()` that only differed from
-  `scripts/lib/common.sh`'s default by a tag or matched it exactly; the new `WARDYN_LOG_TAG` env var
-  lets a caller set the prefix without re-declaring the function. (The kind SSO walk rename to
-  `walk` and the `test/e2e/live` → `test/e2e/tasks` orchestrator rename from the same issue are
-  deferred — see the PR description.)
-- **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
-  `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
-  `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
-  `killTeardownTail` (`KillSandbox`, both credential revocations, and the `run.kill` audit row).
-  `supersedeOneLoginRun` claims the transition synchronously, so its three-attempt CAS re-read loop
-  is unchanged and the superseded run reads `KILLED` before the launch POST answers, then hands the
-  teardown to a goroutine detached with `context.WithoutCancel`. `killRunCascade` itself still runs
-  claim then tail back to back under one shared `killCascadeTimeout` deadline, so `handleKillRun`'s
-  own synchronous cascade keeps the exact 30s budget it always had. The detached teardown (and the
-  sign-in launch's own detached dispatch) is now tracked by a new `Server.goBackground`/
-  `WaitBackground`: `wardynd`'s shutdown waits for it, bounded, after `http.Server.Shutdown` — before
-  this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
-  revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
-  already detached from itself.
-- **The Helm chart and the compose stack give `wardynd` 70 seconds to stop (#554).** An orderly
-  stop drains HTTP for up to 15s (waiting for background work even if that drain times out), waits
-  up to 35s for detached work (a run launch, a superseded sign-in's teardown), then flushes the
-  audit sinks — up to another 15s, the webhook sink's own delivery timeout. The Kubernetes default
-  grace of 30s and `docker stop`'s 10s could SIGKILL a teardown partway through, leaving a run
-  `KILLED` with its sandbox up and no `run.kill` row. The chart sets
-  `terminationGracePeriodSeconds: 70` (a new value), and the `wardynd` compose service sets
-  `stop_grace_period: 70s`. A unit test fails if either falls below the daemon's own shutdown
-  budget.
-- **Two UI e2e runs on one host no longer collide (#210, in part).** Left unset,
-  `scripts/run-ui-e2e.sh` now picks free ports for its backend instead of `:8088`/`:8089`, and
-  names its database `wardyn_e2e_<pid>`, which it drops on exit. `scripts/run-e2e-subscription.sh`
-  stops only the `wardynd` holding its own port, where it used to kill every `wardynd` on the
-  host. `make lint` gains `scripts/check-fixture-dates.sh`, which fails a test file that gains a
-  literal date.
-
-### Added
-
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.
@@ -1191,425 +569,6 @@ and does not yet follow semantic versioning (interfaces are not stable).
   tarball, so no package-manager scan ever saw it). The first real publish
   happens at the next tagged release — this lands the pipeline, not a pushed
   image.
-
-### Security
-
-- **`env_secret` and `llm_inspection` can no longer read a model-provider credential (#1035).**
-  Both resolve an authored secret name through the run owner's namespace, falling back to the
-  operator's, and only the `-oauth` and `-sso` provider names were reserved, so an `env_secret`
-  grant naming `wardyn-provider-<uid>-key` put a model key, the operator's included, into the
-  sandbox env. Every `wardyn-provider-*` name, whatever its suffix, is now refused by the policy
-  validators (stored policies, and inline policy at launch and in Review) and skipped, with an
-  audit event, at dispatch.
-- **"Available to" now also hides the resource from people it leaves out, and blocks storing a key for it (#612, #923).**
-  `GET /policies` leaves out a stored policy the caller isn't listed for. It filters before the
-  page window, so neither the page nor `X-Wardyn-Truncated` counts a hidden policy, and a
-  failed permission read hides every policy. Admins and security admins still see every policy,
-  since they write the lists. `/setup/status` leaves out a model provider the caller isn't listed
-  for, in `model_providers` and in the `provider_access` rows. `PUT
-  /model-providers/{id}/credential` refuses such a caller with an audited 403
-  (`capability_model_provider`) and stores nothing, the same check the launch door makes, so a
-  security admin who isn't listed is refused too. Deleting a key stays open to everyone.
-- **An image reference with a backslash, or an empty, `.` or `..` path segment, is refused (#612, #923).**
-  No registry names an image that way, and an image reference is also a value the Images tab
-  builds a control from, so a workspace's `base_image.image` could plant `../policy/<uuid>`
-  there. `POST /workspaces`, `PUT /workspaces/{id}`, `POST /base-images`, and image grants and
-  availability writes now answer 400. The availability route decodes its value first, so
-  `%2e%2e` is refused as `..` and an encoded reference is stored as the reference it spells.
-- **A person's credentials can be erased in one step, and dead sign-ins are deleted (#590).**
-  `DELETE /api/v1/people/{principal}/credentials` (admin or `security_admin`) deletes every
-  credential that person has stored — keys, tokens and captured sign-ins — and answers with the
-  count; in store mode each value is removed from Vault or Key Vault before its row, and the
-  answer says how long Key Vault keeps a soft-deleted value recoverable. It never reports success
-  with a credential left behind, and it cannot touch the operator's own credentials. Audited
-  `credential.erase`. A captured AWS or Azure DevOps sign-in whose refresh token the provider
-  refuses for good (`invalid_grant`) is deleted at once, and a stored AWS sign-in is deleted by a
-  daily sweep once its expiry passes; both are audited `credential.expired.delete`. A person
-  whose sign-in was deleted this way is shown as not connected and signs in again.
-- **An admin can no longer set a secret in someone else's namespace (#590).** `PUT
-  /api/v1/secrets/{name}?owner=` is refused with `403` for everyone, audited `secret.write`
-  `denied`: a credential is set only by the person it belongs to. `DELETE` and the name list keep
-  `?owner=`, so an admin can still remove a person's credentials. Pre-provisioning a member's key
-  before they sign in is no longer possible; they set it themselves.
-- **Credentials in memory: re-read, ridden out, let go (#589).** A stored key (an API key, the
-  Bedrock bearer key, the managed Claude token) used to be read once and injected for the run's
-  whole life, so removing it, or revoking Wardyn's access to it at the store, changed nothing for
-  a run already using it. The injection sink now gives it a ten-minute expiry and the proxy
-  re-reads it five minutes before that; an approval-gated grant, whose mint is single-use, is
-  still read once. A failed read is split two ways at every sink arm: the store (or the
-  database) not answering is a 503 ("Wardyn couldn't reach the service that holds this run's
-  credential…"), and the proxy keeps injecting the last value it had for up to 15 minutes past
-  its expiry, asking again every 30 s; any other failure is definitive (424 on the stored-key
-  paths, the Bedrock bearer arm included, which used to read an unreadable key as absent; 403 on
-  the captured AWS SSO and Azure DevOps arms, the latter as the new class `store_refused`), and the proxy
-  drops the value at once. The managed Claude token is cached for 60 s instead of read on every
-  resolve, and a capture or disconnect empties the cache. Process-wide mask copies of a
-  person's tokens (AWS SSO, Azure DevOps, the managed Claude token) are kept per credential:
-  a refresh or a disconnect retires the old values, which stay masked for an hour and are then
-  dropped instead of living for the daemon's life; an AWS SSO or Azure DevOps access token nothing
-  replaces is dropped an hour after its own expiry (#151). wardynd and wardyn-proxy set `RLIMIT_CORE` to
-  0 and mark themselves non-dumpable at start, so a crash writes no core file and another
-  process of the same user cannot read their memory or environment.
-- **Security-API follow-ups (#724).** The sign-in help link is `https://` only: a new `http://`
-  link is refused at save, and one already stored surfaces as the setup warning
-  `sign_in_help_url` (#489). A second enabled Azure DevOps (Entra) row stored before the write
-  refused it is the setup warning `ado_entra_rows` (#603). The SSH keys screen marks a key added in
-  the user view with a "Member access" chip (#584). With the site config unreadable, an escaped
-  repository name on a self-hosted host is refused with a 400 that names the site configuration,
-  not the address's shape. Review's preflight now reads the secret list where launch does, and
-  `TestPreflightMirrorsLaunchGates` pins the gate order, not only the set (#515).
-- **The `local` key refuses to start under `GODEBUG=fips140=only` (#682).** That mode forbids
-  X25519, and age drops the error, so every `WARDYN_AGE_KEY` got the same empty public recipient
-  and every local key the same `kek_id`. wardynd now refuses to start with an age key (set or
-  ephemeral) in that mode and names store mode (`WARDYN_SECRET_STORE=vaultkv`), which needs no age
-  key. New tests prove, in a child process under `fips140=only`, that the envelope round trip works
-  and that a store-mode boot mints and re-reads every boot key without X25519. `make helm-lint` now
-  checks that store mode with `secretFiles.enabled` renders no secret as an env value or
-  `secretKeyRef`.
-- **The injection sink trusts the model provider record, never the grant (#531).** Each resolve of
-  a person's provider key re-reads the run's provider by UID and injects only while it is still
-  that run's choice, on, serving the agent, with the same host, header and format the grant
-  carries; the key is read from the namespace the grant snapshots. A resolved key now expires
-  after 15 minutes, so the proxy re-checks about every 10 minutes while the run makes model calls
-  (each re-check re-mints the grant: one `credential.mint` and one `secret.read` audit row), and a
-  provider removed, turned off or re-pointed mid-run fails closed within that window rather than
-  keep its startup copy. Once a provider block is set, or when it cannot be read, the two legacy
-  shared subscription sentinels are refused before the operator's token is touched; the boot
-  gateway (`WARDYN_ANTHROPIC_BASE_URL`) no longer widens where a subscription token may go under a
-  block.
-- **An older wardynd now refuses a database a newer one migrated (#675).** Boot used to skip the
-  migrations it knew and never look at the ones it did not, so `helm rollback` or a pinned older
-  image booted over a schema whose one-way conversions it could not read. Boot now stops before
-  writing anything, naming the newest `schema_migrations` file this binary does not ship; restore
-  the pre-upgrade dump. `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` is the break-glass. Saving the site
-  config or a governance profile also keeps top-level keys this binary does not know, so a key a
-  newer wardynd wrote — a governance limit, where absent means no limit — is no longer dropped.
-- **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
-  that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
-  sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the
-  concurrent burst that lock exists to serialize. The one arm that still proceeds, a database pool
-  too small to spare a connection for the hold (`pool_max_conns=2`), now writes an
-  `auth.signin_unserialized` audit row; a refused capture is `harness.credential.refused` with
-  reason `signin_busy`. The sandbox-facing AWS sign-in request route's 503 no longer appends the
-  approval store's error text to its body. A failed read of a persisted AWS SSO spent-token mark
-  is no longer cached as "not spent" for the rest of the process's life. The Azure DevOps
-  `scm.ado.signin.captured` `store_error` row no longer carries the raw store error (dropped
-  `error` field; the cause is in the daemon log).
-- **Store mode files the internal CA with Wardyn's other boot keys (#689).** `wardyn-internal-ca`
-  (the CA every run's proxy pins for the control-plane hop) was filed as an operator credential:
-  under Vault's `operator/` path and Key Vault's `-operator-` names instead of `platform/` and
-  `-platform-`, where a policy or role restricting Wardyn's own keys would not cover it. It now sits
-  with the signing, session, UI-session and SSH host keys, and the list of platform keys is checked
-  against the keys wardynd actually mints at boot, so a new one cannot be left out again.
-- **The lists a person picks from now hold only what they may use (#737).** The harnesses and
-  integrations in `GET /setup/status`, `GET /integrations`, and the Azure DevOps rows in
-  `GET /me/scm-access` and `/setup/status`'s `scm_access` are filtered by the same capability rules
-  the launch doors refuse with (`agent`, `integration`, `workspace_provider`). A refused row is
-  dropped whole and reads exactly as one the deployment does not have; if the grant tables cannot
-  be read, those lists come back empty rather than unfiltered. Admins still see every row.
-  `GET /me/capabilities` gains `kinds_version`, which goes up whenever the set of capability kinds
-  changes.
-- **Wardyn's own keys can be kept apart from people's credentials (#646).** In local mode each
-  stored row's data key is now wrapped under a key for its purpose — `local/platform:` for the
-  signing, session, UI-session and SSH host keys, `local/cred:` for everything else — and the new
-  optional `WARDYN_PLATFORM_KEY_FILE` names a second age key that alone protects the first kind.
-  With it set, a leak of `WARDYN_AGE_KEY` forges no run identity, console session or SSH host
-  key: a boot key wrapped under anything the age key derives is refused and boot stops. The new
-  `wardynd -rewrap` maintenance mode moves rows onto their purpose's key (rows written before
-  this change, and the boot keys once the file is set), data keys only, in one transaction, and
-  writes a `secret.rewrap` audit row; boot refuses by name until it has run. `-rotate-age-key`
-  leaves the boot keys under the platform key alone. Without the file, `/setup/status` shows the
-  amber `platform_shared` row. In Vault store mode, the new `WARDYN_VAULT_ROLE_PLATFORM`
-  (chart `secretStore.vault.rolePlatform`) logs wardynd in as a second role that alone reaches
-  `<prefix>/platform/`, so the credentials token reaches no platform key; OPERATIONS.md
-  recommends it. THREAT-MODEL residual #49 states what stays shared. Rows written by this
-  version name keys an earlier 0.8 build does not know, and it refuses them by name.
-- **Vault Transit as the key that wraps stored credentials (#586).** With `WARDYN_KEK=transit`
-  and `WARDYN_VAULT_TRANSIT_KEY`, each credential sealed in Postgres has its data key wrapped by
-  your Vault's (or OpenBao's) Transit key instead of a key derived from `WARDYN_AGE_KEY`, over the
-  same Vault client, auth and TLS as store mode; the key never leaves Vault and every unwrap is in
-  its audit log. Each wrap is bound to its row with `associated_data`, and wardynd refuses to boot
-  on a key that does not enforce it (proved live on Vault 1.20 and OpenBao 2.6) or that it cannot
-  reach. Reads follow each row's `kek_id`, so an install moves while it serves: `wardynd -rewrap`
-  (the one command that moves data keys, #646) now also moves every row onto the Transit key at
-  its latest version, and back to the local key, client-side (never Transit's server-side
-  `rewrap`), in one transaction; its `secret.rewrap` row names the key service, and it says when
-  `min_decryption_version` can retire the old versions. Once no row is under the age key, it can be
-  unset; the boot keys are wrapped by Transit too. `-rotate-age-key` now leaves Transit rows alone. The chart gains `kek.provider` and
-  `kek.transit.*`, compose `docker-compose.transit.yaml`, and `/setup/status` a `kek_service` row,
-  plus an amber `kek_local` row on a multi-user install still on the local key.
-- **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
-  view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
-  The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `user`,
-  and it never gains the admin override: the sign-in re-stamp leaves its role alone, a CHECK
-  refuses a capped row that reads `admin`, and the SSH gateway refuses the override for it
-  (`ssh.authenticate` reason "capped key (registered in the user view): no admin override"). It still
-  reaches its owner's own runs. `ssh_key.add` carries `capped: true` for such a key. Keys
-  registered outside the user view behave exactly as before, and `POST /me/tokens` still refuses
-  in the mode. See `docs/SSH.md#bounds`.
-- **Store mode in Azure Key Vault (#645).** `WARDYN_SECRET_STORE=azurekv` writes every stored
-  credential to the organisation's Key Vault as a secret and keeps only a pointer row, like
-  `vaultkv`; no Azure SDK is involved. wardynd authenticates with AKS workload identity (a
-  projected token exchanged for an Entra token, re-read at every exchange) or a VM's managed
-  identity, never a client secret, and refuses to start without a token. A secret's name is
-  derived from a hash of its row's owner and name, one name per credential; a read refuses a row
-  that points to any other name or vault, then a value whose tags name another row. A replace is a
-  new version and disables the versions listed before it (Key Vault cannot delete old versions), so
-  two writes landing together never disable each other's, and store-mode writes to one credential
-  wait for each other across replicas; once the vault holds `WARDYN_AZURE_KV_MAX_VERSIONS` (100)
-  versions of a name, the next write starts a fresh name and deletes the old one.
-  A removal soft-deletes the secret and then purges it when the vault allows; when purge
-  protection or the role withholds it, the removal still succeeds and `secret.delete` records
-  `purged: false` and the vault's `recoverable_days`. A name still held by a deleted secret is
-  purged and reused, or skipped for a new one; Wardyn never recovers a deleted secret. `-reconcile`
-  lists values left soft-deleted, and `-migrate-secrets -to=local` counts them (`soft_deleted`). A
-  429, a 5xx or any token endpoint failure (a refusal included, since Entra answers
-  `invalid_client` for a projected token caught mid-refresh) is transient; a 401 fetches a new
-  token at most every 30 s; a 403, a disabled or missing secret, or a binding mismatch is
-  definitive. A store-mode write, lock wait included, is bounded at six times
-  `WARDYN_SECRET_STORE_TIMEOUT`. A list's `nextLink`
-  is followed only on the same vault, so the bearer token never leaves it. The chart's
-  `secretStore.azure.*` values label the pod and annotate the service account for workload
-  identity; `-migrate-secrets -to=azurekv|local` and `-reconcile` work as for Vault. In the shared
-  store seam, a Put that fails to write its row no longer deletes the value the row already
-  points to, and is audited (`secret.write` failure, reason `row`), for Wardyn's own writes (a
-  captured or refreshed sign-in, a pasted harness credential) as for the API's. Tested against a fake Key
-  Vault; not yet run against a live one.
-- **Every read of a stored secret is now audited, once (#647).** Before, only the injection
-  sinks recorded `secret.read`; boot-key reads, the GitHub App and git PAT/SSH key reads at mint,
-  resident secrets placed at dispatch, and every status check that decrypts a captured sign-in or
-  the managed subscription token left no row. wardynd now wraps its secret store in one decorator that
-  records a `secret.read` for each read, carrying why it happened (`purpose`: `boot`,
-  `broker-mint`, `dispatch`, `managed-token`, `migrate`, `sso-refresh`, `ado-refresh`, `status`),
-  whose namespace it was made for, the store, and the row it opened (`ref`, `row_owner`). The
-  injection sinks keep their own row, with its grant and jti, and now name the stored row too; the
-  decorator stays silent for those reads, so no read is counted twice. A read that finds nothing
-  records nothing, and a refused row is a `failure` without the store's error text. The first
-  0.8 boot records one `migrate` read per legacy row it converts. A read in store mode names the
-  store (`vaultkv` or `azurekv`). A guard type-checks every read site, the boot conversion's and
-  `wardynd -migrate-secrets`' bulk reads included, and fails the build on one that says neither
-  why it reads nor that it records the read itself, following the context the read actually
-  receives; it also fails on a new path to a stored value inside the store that it does not check; a read that still reaches the store
-  with no purpose is refused and recorded as an `unmarked` failure. The row's owner, the read's own
-  owner, and ref are all cut to 512 bytes and stripped of control characters before they are
-  recorded, since a database writer controls them. Deployments that poll setup status often will
-  see more `secret.read` rows: each status check that decrypts a captured sign-in is now one.
-- **Store mode: credentials can live in your organisation's Vault, and Wardyn holds no key
-  (#644).** `WARDYN_SECRET_STORE=vaultkv` writes every stored credential to a Vault KV v2 engine
-  (OpenBao is a supported endpoint) and keeps only a pointer row in Postgres (`enc_version` 2, no
-  ciphertext); Wardyn does no at-rest cryptography for it, and once every row is in Vault,
-  `WARDYN_AGE_KEY` is unset. Wardyn's own boot keys live there too, under `platform/`. A read
-  derives the Vault path from the row's owner and name and refuses a row that points anywhere
-  else, then refuses a value whose `custom_metadata` (owner, name, kind, format) names another
-  row, so a pointer moved by a database writer reads nothing. A row whose value is gone, or whose
-  data at Vault is not in Wardyn's format, is a refusal, never "not found" or an empty value, so a
-  lost boot key, or one whose data was replaced with another shape, fails boot instead of being
-  minted over; a Put never writes over a path bound to another row. Put writes Vault before the
-  row and Delete removes every version from Vault before the row. wardynd authenticates with a projected
-  service-account token (Kubernetes auth) or a token file, never a token in an environment
-  variable; it refuses `http://` to a non-loopback Vault and uses a TLS config of its own. A
-  sealed, throttled or unreachable Vault is transient (the credential sink answers 503, distinct
-  from a missing credential's 424, and audits `secret.read` with `reason` `store_unavailable`); a
-  401/403 is definitive, and re-authenticates at most once every 30 s. On a transient failure the
-  proxy keeps injecting its last value for a bounded grace (#589, above). A KV v2 mount
-  that does not exist fails boot, and a write or delete Vault answers 404 fails rather than reading
-  as done. The documented Vault policy grants `read` on `<mount>/config`, no `delete` on `data/`,
-  and no `destroy/` or `undelete/`. `wardynd -migrate-secrets
-  -to=vaultkv|local` moves rows online in either direction (`secret.migrate`), and
-  `wardynd -reconcile` reports pointers without values and values without pointers. The chart's
-  `secretStore.vault.*` values, a compose token-file overlay, a setup row naming the store, and
-  docs/OPERATIONS.md "Store mode: credentials in Vault" go with it. Tested against a fake Vault
-  and live against Vault OSS 2.1.1 and OpenBao 2.6.2, including Kubernetes auth on kind.
-- **A row an enrolled laptop forwarded could read as the organisation's own.** A federated audit row
-  kept the device's claimed `actor`, so a `wdd_` device credential could append
-  `human` / `<an org admin>` / `governance.profile.update` rows that nothing but an unread
-  `data.device_origin` told apart (#506). The stored actor is now `device:<id>/<claimed actor>` (the
-  claim stays in `data.device_origin.actor`, and the device's hash still re-checks from the stored
-  row), every audit read and the NDJSON export carry a top-level `device_id` on forwarded rows, and
-  `GET /audit` and `/audit/export` take `?origin=device|organisation`.
-- **An enrolment token can be cancelled before it is redeemed (#506).** `GET
-  /admin/devices/enrolment-tokens` lists the tokens still redeemable (never the token or its hash)
-  and `DELETE /admin/devices/enrolment-tokens/{id}` revokes one, audited as
-  `device.enrolment_token.revoke` — admin or `security_admin`, and on the CLI as `wardyn device
-  enrol-token-list` / `enrol-token-revoke <id>`. A leaked token no longer stays redeemable for its
-  full 72 hours.
-
-- **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
-  near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
-  object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
-  256 MiB cap (#250). The object ceiling is now 200,000, far above a real push, so that pack is
-  refused as uninspectable; objects are allocated at their exact size, and a blob's content is
-  released once the pack is parsed. A max-legal pack of that shape now keeps 22 MiB. Inspections
-  already ran one at a time behind the proxy's inspection slot; a test now pins it.
-- **The autonomy rubric graded a run's Amazon Bedrock model credential as no secret at all (#504).**
-  The secrets axis read only the grants a request carried, and the Bedrock credential (a captured
-  AWS SSO session, a bearer key, SigV4 keys) is handed to the run at dispatch, so such a run graded
-  `secrets=none` on Review and at launch and was capped by the wrong rubric row. It now grades
-  `powerful`, the value the rubric already gives an `api_key` to a host outside the coding-agent
-  baseline, whether the credential is proxy-injected or resident. Both doors grade from the one
-  model-credential resolution, which now runs before the autonomy gate. The grade is frozen for
-  dispatch: a run graded without a Bedrock credential that would be handed one at dispatch fails
-  with `autonomy_grade_drift` instead of launching.
-- **A repository's own `.claude/settings.json` could approve tool calls on a `tool_approvals=hold`
-  run before Wardyn's approval gate was asked.** Claude Code resolves `permissions.allow` rules
-  before it consults `--permission-prompt-tool`, so a matching rule in the workspace (which the
-  agent can also write) ran the tool and `wardyn-toolgate` never saw it (#358). The hold lane in
-  the claude-code image's `agent-run` now passes `--setting-sources user`, so project and local
-  settings are not loaded; managed settings still are. This is an interim fix. The agent can still
-  write its own user-level `~/.claude/settings.json`; THREAT-MODEL.md §5 states that residual, and
-  #333's managed settings close it.
-- **An unauthenticated caller that rotated its source address wrote one `auth.failed` (now `auth.fail`) audit row per
-  refused request.** The 0.7.2 coalescer keyed a streak on the peer IP, so every change of address
-  closed the streak and opened a new one: a bad-token drip from ten addresses, one a second, recorded
-  120 rows in two minutes, as many as the rate limiter allows (#347). A streak is now keyed on the
-  refusing boundary, `reason` and path. The summary row keeps the opening peer as `SourceIP` and adds
-  `peers`, the number of distinct peer IPs it folded (stops counting at 100), `peer_ips`, those
-  addresses (capped at 100), and `peers_truncated`. The rate limiter
-  is unchanged.
-- **A handler that builds a 5xx body's `(status, message)` pair and hands it to a helper could still
-  forward driver/substrate error text into it, past the guard added for #173.** The guard only read
-  direct `writeError` call sites, so a helper's own call site — where the message had already
-  collapsed into one opaque string argument — reported clean. Seven sites did this: `refuseCapture`'s
-  four callers in `ssotoken.go` (the AWS SSO capture path — the door the sandbox itself talks to),
-  `driveBindFailureHere`'s runner-capabilities-unavailable arm (`user_drives_run.go`), and `uiFail`'s
-  two callers in `uigateway.go`, which forwarded `sshExecStreamErrorMessage`'s own raw-error fallback.
-  All seven now log the error and send a fixed sentence; their `reason` codes are unchanged, since the
-  SDK reads them as a wire contract. The guard (`TestNoDriverTextInServerErrorBody`) now follows one
-  hop into a known forwarder (`refuseCapture`, `uiFail`, and the `*driveBindFailure` composite-literal
-  shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
-  `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
-  handler written in this indirect style no longer passes CI clean.
-- **A run that will hold a person's Azure DevOps Entra bearer no longer grades its secrets
-  `none` (#503, closing #474).** The autonomy rubric graded a run from its eligible grants
-  alone, but dispatch authors the per-person Azure DevOps grant later, for `dev.azure.com`.
-  So a run that would hold that bearer graded `secrets=none` at create, on Review and at
-  launch, and could land above its profile's secrets cap. The rubric now
-  resolves the Azure DevOps lane at create, the same way dispatch does, and grades the
-  credential with it. The `bound_by` sentence names the credential when it is why the secrets
-  axis graded `powerful`. Dispatch then authors from that frozen resolution and refuses a lane
-  the grade did not include: an admin who edits the provider row during a long image build
-  can no longer hand a run graded `none` an Azure DevOps credential.
-
-### Fixed
-
-- **Four console DTOs closed against their Go wire types.** `AgentRun` was missing `agent_exec_id`,
-  `auto_stop_after_sec` and `source_id`; `AuditEvent` was missing `prev_hash` and `row_hash` — the two
-  fields the audit screen's own integrity story rests on. `ui_apps` — sent only by `GET /runs/{id}` —
-  moved off the shared `AgentRun` onto a new `RunDetail` type, so a list consumer (the board, the
-  table) is no longer typed for a field it never receives. `runs.wire.fields.test.ts`'s parity pattern
-  now also covers `AuditEvent`, closing the gap the hand-maintained TypeScript mirror had opened
-  against the Go structs it mirrors.
-- **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
-  status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
-  while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
-- **Fourteen recovered nil-pointer panics in `internal/api`'s test suite were reported as passing
-  tests.** #323 fixed ten on the `/metrics` scrape path; the rest were the same class elsewhere — a
-  test double embeds `store.Store` as a nil interface to satisfy the wide type, a request reaches a
-  method the double never implemented, and chi's `Recoverer` turns the dereference into an
-  unremarkable 500 every assertion still matched. `rbacStore`, `tokenMemStore`, `pingStore`,
-  `apiTokenErrStore`, `driveStore`, `wsReadStore` and `recordTierStore` now answer `Ping`,
-  `LatestAuditEventByAction`, `GetSiteConfig`, `PutSiteConfig` and `ListRuns` where a request
-  legitimately reaches them instead of leaving them on the nil embed; `noGovernanceStore` — already
-  the shared "empty deployment" answer several of them embed — gained the store reads several
-  request paths (a scrape, a capability check) make regardless of what the test means to exercise.
-  The five `handleCreateRun` panics were a deliberate no-Store harness design ("a request accepted
-  past validation panics inside `CreateRun`, which chi turns into the 500 that proves it got there")
-  that the same class caught: `createRunUnconfiguredStore` now answers that same "accepted past
-  validation" 500 from a real `CreateRun` error instead of a crash, and the two tests that read that
-  sentinel now assert the 500 directly rather than only its side effects. The durable half needs no
-  production code: chi's `Recoverer` already calls `GetLogEntry(r).Panic(rvr, stack)` when the
-  request carries one instead of just printing the stack, a seam nothing outside `_test.go` uses, so
-  a new `panicFails` test helper attaches a catcher via `middleware.WithLogEntry` and fails the test
-  if `Panic` ran. Every `srv.Handler().ServeHTTP` and `httptest.NewServer(srv.Handler())` call site in
-  the package — about 55 of them — now wraps its handler with it, so no test path in the package can
-  read a recovered panic back as a passing test (#338). The one site whose panic IS the fixture
-  (#323's `/metrics` scrape) inverts the check with `panicIsTheFixture` rather than dropping it, so
-  it fails if nothing panics.
-- **An HTTP/2 answer to the egress proxy's HTTP/1.1 request is now recorded as
-  `builtin:upstream-protocol-mismatch` with a plain cause, and answered with a 400 so SDKs stop
-  retrying, instead of a `builtin:dial-failed` that was retried until the SDK gave up (#359).**
-- **One TLS config was shared between the sidecar's control-plane client and the proxy's forward
-  transport, and enabling HTTP/2 edited it in place (#360).** The control-plane client keeps
-  net/http's HTTP/2 support, and turning that on prepends `h2` to the transport's own
-  `TLSClientConfig.NextProtos`. Sharing the pointer meant the forward transport then OFFERED HTTP/2
-  to every TLS peer while being unable to speak it, so a peer that chose `h2` answered with frames
-  the HTTP/1.1 reader could not parse — the failure reported in #359. It only happened where
-  `trusted_ca_pem` is set, which is every estate with a corporate CA. The control-plane client now
-  takes its own copy, and a test pins that the shared config is still untouched after a
-  control-plane round trip.
-- **The MITM and plain egress lanes now work against a TLS peer that speaks HTTP/2, negotiated or
-  not (#360).** A peer that picks `h2` over ALPN gets HTTP/2. A peer that speaks HTTP/2 without
-  negotiating it is recognised from its first frame (a SETTINGS frame read right after the TLS
-  handshake, or net/http's parse error when it only answers a request), remembered for the rest of
-  the run, and the request is resent over HTTP/2 when its body can be replayed; later requests to
-  that host go straight to HTTP/2. This also catches the two shapes the #359 error-text check missed:
-  a SETTINGS payload with a space byte before any newline, and SETTINGS that arrive before the
-  request goes out. A peer caught before the request was written is resent even when its body is a
-  one-shot stream, since nothing had read it. A request that cannot be resent, or whose HTTP/2
-  resend also fails, still gets #359's `builtin:upstream-protocol-mismatch` row and 400, with the
-  cause naming both attempts. The brokered git and PAT lanes take the same path, so a forge that
-  speaks HTTP/2 is served over HTTP/2 instead of refused.
-
-### Changed
-
-- **The egress proxy now offers HTTP/2 to TLS peers, deliberately.** Its forward transport offers
-  `h2,http/1.1` over ALPN and speaks HTTP/2 when a peer chooses it; the control-plane transport
-  stays HTTP/1.1. The first connection to a host whose handshake negotiates no ALPN protocol waits
-  up to 250 ms for an unprompted HTTP/2 SETTINGS frame; what that connection learns is remembered
-  for the run, so no later connection to the same host waits again.
-- **A member may store their own Bedrock bearer key.** `PUT`/`DELETE /secrets/bedrock-api-key`
-  is no longer refused to a non-operator: the BEARER is a static `Authorization` header the proxy
-  injects per run, so under a `per_user` agent row a member's own key is a credential their runs
-  really authenticate with. The three AWS SigV4 names — `aws-access-key-id`,
-  `aws-secret-access-key` and `aws-session-token` — are **unchanged** and still `403` for every
-  non-operator, because SigV4 is always signed out of the operator namespace; so are the reserved
-  platform and sentinel names. `credential_source: per_user` is now accepted for a
-  `bedrock_bearer` agent row beside `bedrock_sso`, and under it there is **no cross-source
-  fallback in either direction**: the resolve reads the caller's own namespace and never the
-  operator's, and an empty or whitespace-only value reads as no credential rather than as a
-  configured one that fails upstream. The row's mechanism decides the lane, so a member holding
-  both their own AWS SSO session and their own bearer is resolved — and reported by setup — on the
-  one the row names. Under `shared` a member's own key is never read: dispatch records on the
-  grant it authors whose key it read (the operator's under `shared`, the run owner's under
-  `per_user`), and the injection sink resolves `bedrock-api-key` from exactly that record and
-  refuses a grant that carries none — it no longer goes through the owner-then-operator fallback
-  read, which could hand a run a different key from the one dispatch chose. Any other injection
-  naming the key is dropped at dispatch and audited as `run.injection.drop`. For the same
-  reason a member's inline grant naming `bedrock-api-key` is dropped, and an `env_secret` or an
-  `llm_inspection.workspace_secret_names` entry naming it is never resolved (the latter is also
-  refused at write): the bearer is proxy-injected only. `runs_bedrock.go` was split by seam first — the probe
-  and reporting half now lives in `runs_bedrock_probe.go` — because it had reached the
-  1000-line file-size gate.
-
-- **Drive grants and preview now admit `security_admin`, not just super-admin.** `POST
-  /drives/grants`, `DELETE /drives/grants/{id}`, and `POST /drives/preview` moved off the
-  super-admin-only tier onto `securityOps` (admin or `security_admin`): none of the three names a
-  host path, and a security admin already reaches drives through the `DenyUserDrive` door on a
-  governance profile. The four routes that DO name a host path or cluster storage class — creating,
-  listing, updating, and removing the drive itself — stay super-admin only (#168).
-
-- **Review groups checks by whether they block, not by grade.** A blocking warn (the SSO
-  role-mapping gap, a runner failure, a confinement floor the runner can't meet) now sits under
-  "Blocking"; a non-blocking fail or warn sits under "Worth a look" instead of borrowing a heading
-  that promised it was fatal. Grade still shows on the row's own chip — partitioning on `blocking`
-  first just stops the heading from answering the wrong question.
-
-- **Setup counts only the steps that block a run, and recommends what the host actually has.**
-  The Getting-started counter read "Step 1 of 17" with ten of those steps optional demos; it now
-  reads "Step 1 of 4" (Environment, People, Network, Review), with the honest count of what
-  follows named underneath. Three categories, not two: Secrets, Workspace providers and
-  Workspaces are real configuration that blocks nothing, kept apart in the rail and on Review
-  from the ten demos that change nothing — collapsing them into one list is what put Secrets
-  behind a "Start the demo" button. `recommendedTier` now reads only what the host reports
-  installed (`runner.confinement_classes`), never inferring from the operating system or from
-  hardware compatibility — a host reporting nothing gets no Recommended chip and a line saying
-  so, and a note names what's stronger when the recommendation isn't the strongest class that
-  exists. The `Recommended` chip is `tone="neutral"`, not the teal `"primary"` CONSOLE-RULES
-  already flagged as a violation, and its row is fixed-height so the barrier matrix can't shift
-  when the chip appears.
-
-### Added
-
 - **A user drive readable by root but not by the agent user is refused, not launched.** The daemon's
   own `os.Stat` in `internal/api/user_drives_run.go` ran as root, so a share only the daemon (not the
   sandboxed uid 1000) could read passed create, preflight and `/me` and only failed once the run was
@@ -1982,8 +941,787 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `AutonomyPosture` is new too (`lib/api/governance.ts`), there being no prior console consumer of
   either.
 
+### Changed
+
+- **`GET /setup/status`'s `model_providers` no longer omits itself when a provider block exists but
+  grants the caller nothing (#541 fix review).** It now reads `[]` for that shape and `null` (or is
+  absent, from an older daemon) only when there is no provider block at all — the two are different
+  facts, and collapsing them into the same missing key made a real "not connected to anything" grant
+  indistinguishable from an admin who has not started setting providers up.
+- **The boot conversion of pre-envelope secrets records `purpose` `boot`, not `migrate` (#717).**
+  Each row the first boot converts to envelope v1 still writes one `secret.read`, naming the row
+  and never its value; its `purpose` is now `boot`, so `migrate` is left to
+  `wardynd -migrate-secrets`, whose rows carry `actor` `wardyn/migrate-secrets`. There is no
+  separate conversion action. A consumer that counted conversion reads under `migrate` should
+  count `purpose=boot` rows with no `ref` instead. OPERATIONS.md's ephemeral-key section now shows
+  the boot refusal a second boot hits today and carries the statement it names for deleting the
+  rows no key can open.
+- **`wardynd -h` reads like a product, and the hybrid-boot org control-plane check now runs before
+  migration (#197).** Every flag's usage string was rewritten to say what it does, its default and
+  its unit, with internal ids and version history dropped; no flag was added, removed or renamed.
+  `validateHybridPosture` (`WARDYN_ORG_URL`/`WARDYN_ORG_ENROLMENT_TOKEN`) is flag-only and now
+  validates beside `validateConfig`, before `connectAndMigrate`, instead of after secrets, identity,
+  the broker and the runner are already up; `validateMemberModePosture` stays at its later point
+  since it needs local mode's resolved state and whether OIDC actually came up.
+- **The PR template now asks for a CHANGELOG entry explicitly.** A new checklist line —
+  "CHANGELOG entry or `no user-visible change` stated" — sits beside the existing docs-landing
+  and frozen-section lines, so a PR that adds neither has to say so instead of leaving the box
+  ambiguous (#730).
+- **Stopped runs no longer wait out the full kill timeout (#468).** The sandbox's idle main
+  process ended in `exec sleep infinity`; as PID 1, `sleep` ignores SIGTERM, so every stop
+  (k8s and docker, task mode and interactive `agent-run --idle`) sat out the whole grace period
+  before the runtime force-killed it. It now traps TERM/INT and exits immediately.
+- **API tokens carry a user type (#611).** Migration `0082_api_tokens_user_type` adds
+  `api_tokens.user_type`: a new token is stamped with its session's user type (every existing
+  token becomes Standard user), the holder's next sign-in re-stamps it beside the role and
+  groups, and every request the token authenticates carries it — `/me` now reports `user_type`
+  through a token too, and `token.create` audit rows name it. A People-page edit that changes the
+  type a value derives revokes every live token still carrying the old type that names the value,
+  or whose group snapshot can't say whether it does, and counts them in `tokens_revoked`; the
+  holder mints a new one after signing in. On the first type assignment to a value that derived
+  Standard user before, that is every token minted before 0.7 whose holder hasn't signed in since
+  and every truncated-snapshot token, whoever holds it. A type change made in the chart reaches a token only at
+  its holder's next sign-in (threat model #38). `DELETE /user-types/{id}` is refused (`409`) while
+  a live token carries the type, and the database now refuses a token with an empty `user_type`.
+- **Server rename sweep: "view as member" is the user view (#617).** The route is
+  `POST /me/view {"view":"user"|"admin","user_type":"…"}` (a clean break — `POST /me/member-mode`'s
+  `{"enabled":bool}` shape is not aliased); `/me` reports `user_view`, `user_view_no_credential`
+  and `user_preview_available` in place of `member_mode`, `member_mode_no_credential` and
+  `member_preview_available`. The audit action is `auth.user_view.set` (dual-emitted alongside
+  `auth.member_mode` for one minor for SIEM stability, removed in 0.9); the `authz.denied`
+  marker is `user_view`; the BYOI refusal reason is `byoi_user`. `runner.MemberMountPolicy` is
+  `UserMountPolicy` and 29 more `*Member*` server functions (`denyMember*`, `filterMemberGrants`,
+  …) are renamed to their `*User*` counterparts (`SetMemberMode`/`handleSetMemberMode` were
+  already renamed to `SetUserView`/`handleSetUserView` by #835's type-selecting `/me/view` route,
+  which this sweep folds into rather than duplicating). See docs/OPERATIONS.md's "Renamed in 0.8"
+  appendix for the full old-name/new-name table. Refusal sentences now say "the user view": the
+  no-SSO `400` ("The user view needs a signed-in SSO human…"), the API-token mint `409` ("Exit
+  the user view to mint a token."), and "Exit the user view to sign in to AWS…"; an unrecognised
+  `view` value refuses `400` with `The "view" field must be "user" or "admin".` The SSH-key door
+  no longer refuses inside the view — a key registered there is stored capped instead (migration
+  0070), re-stamped to the caller's real role at their next sign-in.
+- **Audit action names follow one grammar (#205).** Every action in `docs/AUDIT-ACTIONS.md` is now
+  `<noun>[.<sub>].<verb>`: two or three segments, ending in a verb from the closed list in that
+  page's new "Grammar" section. `TestAuditActionsDoc_Grammar` holds every action row, and every
+  suffix a wildcard family row names, to it. 61 names changed: 21 past-tense ones
+  (`capability.grant.created` → `capability.grant.create`), 37 that ended in a noun, an adjective or
+  a compound segment (`run.policy.effective` → `run.policy.resolve`, `ssh.auth` →
+  `ssh.authenticate`), and the three four-segment `run.workspace.requirement.*` names. The five
+  per-lane egress-union actions became one `run.egress.add` carrying `kind`; `run.ssh.drop`,
+  `run.git_pat.drop`, `run.provider.admit` and `workspace.provider.admit` carry `reason`.
+  `authz.denied` is the one listed exception. See "Upgrading" below. The page also gains a
+  Consumers column naming what inside Wardyn reads each action back. The
+  `egress.decisions.dropped:<n>` `rule_source` value is now `egress:dropped-decisions-<n>`, and the
+  same test now checks every `rule_source` row is `family:kebab`. Every `secret.read`
+  refusal reason is snake_case, like the rest of its reasons. The `wardyn_egress_denies_total`
+  metric's `HELP` text no longer promises a `reason` label the series does not carry — the series
+  itself is unchanged, still one unlabeled counter.
+- **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
+  `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
+  `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →
+  `WARDYN_USER_WRITABLE_ROOTS`; `WARDYN_MEMBER_WRITABLE_DENY` → `WARDYN_USER_WRITABLE_DENY`;
+  `WARDYN_ALLOW_MEMBER_ENV_SECRET` → `WARDYN_ALLOW_USER_ENV_SECRET`. Every deprecated name still
+  works and WARNs once at boot (`cliutil.EnvAlias`, `cmd/wardynd/boot_flags.go`'s
+  `resolveDeprecatedEnvAliases`) through 0.8.x; removed in 0.9 (user-types-design.md rev 4 §4's D5
+  ruling). When both spellings are set to different values the new one wins and boot WARNs naming
+  the ignored one. Compose forwards both spellings with EMPTY defaults, so an envelope still setting
+  `WARDYN_MEMBER_MODE=true` boots in member mode (`make compose-config` renders that envelope).
+  Helm's sso-only conflict guard refuses either name (`make helm-lint` checks both), the compose
+  env-forwarding block and `deploy/desktop/wardyn.env.m-prime.example` are updated to match, and
+  docs/ENV.md's six rows name their deprecated alias; docs/DESKTOP.md and docs/OPERATIONS.md use the
+  new names.
+- **Test names say what they test, and the skip floor covers every Go suite (#208).** 111 Go
+  tests and 227 vitest/Playwright titles that carried an internal work-item id (`TestF075_…`,
+  `TestPG_ProbeF11_…`, `TestB4F2_…`, `"F3-F11: …"`, `"… (X2-F13)"`) now describe the behaviour
+  under test; the id moved into a `// ticket: …` comment in the test body, still searchable.
+  `TestADOEntraStorePG_*` is now `TestPG_ADOEntraStore_*`, so `-run 'TestPG_'` selects it, and
+  `internal/adoscope/review2_test.go` is folded into `evasion_test.go` / `classify_test.go`.
+  `scripts/test-report.sh`'s skip floor, which fails a suite that silently skips its falsifiable
+  probes, now keys on a `testfloor.Mark(t, "<suite>")` call in the test body instead of a
+  name regex, so a rename can no longer empty it. It reads the expected probes from the source,
+  so a probe that skips or returns before its Mark line turns the report red rather than dropping
+  out. The floor, which covered the pg and unit suites, now covers docker and k8s as well.
+- **Sign-in derives a user type (#609).** A `WARDYN_OIDC_ROLE_MAP` value, a People row or
+  `WARDYN_OIDC_DEFAULT_ROLE` may now name a user type id (`pm-group=portfolio-manager`); the
+  session carries that type beside the tier. Among the types a person matches, the highest
+  priority wins and Standard user never wins against a custom type. Two custom types at the same
+  top priority refuse the sign-in (`user_type_ambiguous`), and so does a type that doesn't exist
+  (`user_type_unknown`, also warned at boot); both are `auth.fail` rows from
+  `wardyn/oidcCallback`. An `admin` sign-in, the operator allowlist included, is never refused
+  over a type: it lands on Standard user with a warning. `POST /access/mappings` takes `user_type` on a user row and refuses a
+  type that doesn't exist; `GET /access` names each row's type and lists the types; the People
+  preview names the type, a tie and a missing type; `/me` reports `user_type: {id, name}`.
+- **`make lint` now runs the console's ESLint, so it needs node and pnpm (#193).**
+  `ui/eslint.config.js` turns on `react-hooks/rules-of-hooks`, `react-hooks/exhaustive-deps` and
+  type-aware `@typescript-eslint/no-floating-promises`, and fails on a disable comment for a rule it
+  does not enable; every remaining `eslint-disable` carries its reason on the same line. CI's
+  `build` job now sets up pnpm and node for it.
+- **The non-admin tier is renamed `member` → `user` (#608).** `/me.role`, a role-map value and
+  `WARDYN_OIDC_DEFAULT_ROLE` now read `admin`, `security_admin` or `user`, and the console's
+  People step offers "User". Migration `0074_user_tier_rename` rewrites every stored `member`:
+  People-page rows become `user` on the built-in `standard` type (a new `role_mappings.user_type`
+  column, which a type cannot be deleted out from under), and the role snapshots on API tokens,
+  SSH keys and attach tickets become `user`; the `role_mappings` and `api_tokens` CHECKs refuse
+  `member` from then on. The session cookie's codec moves to version 2 and carries the person's
+  user type (`standard` for everyone until sign-in derives one), so **everyone signs in once more
+  after the upgrade**; API tokens keep working. A chart that still says `=member` in
+  `WARDYN_OIDC_ROLE_MAP`, or `WARDYN_OIDC_DEFAULT_ROLE=member`, still boots and signs those
+  people in as `user` (Standard user), with one boot warning per entry; that alias is removed in
+  0.9. `POST /access/mappings` accepts `user` only.
+- **CI does less per pull request (#932).** The three Go tag-set suites and lint run as parallel
+  `go (…)` legs, and the required `build` check unions their coverage profiles (`make cover-union`).
+  A docs-only or ui-only pull request skips the conformance, Postgres, envbuild and Helm work, and
+  a docs-only one skips `ui-e2e` too. A docs-only change still runs the Go packages whose guard
+  tests read the docs, with plain `go test` (no race detector, no coverage union).
+  Required checks still report success when their steps are skipped. Three image builds reuse
+  main's Docker layer cache (docs/CI.md, "Incremental CI").
+- **Docs caught up with `POST /runs` answering before dispatch completes (#121, #118).** `POST /runs`
+  answers when the run row exists; every refusal is still synchronous with no run created; a
+  dispatch failure ends FAILED with a failure hint; a restart mid-dispatch is reaped after the
+  undispatched grace period with the reconciler's reason; and 0.7 CLI, SDK and curl callers need no
+  change — status code, body and `--wait` are unmoved, `state` reads PENDING, and `image` is absent
+  on the create reply.
+- **The everyone-is-an-admin warning fires only when it is true (#484).** The setup row, now "Who
+  is an admin", warns only when neither a role map nor an admin list (the operator allowlist) is
+  set; an admin list alone reads ok. While it warns, every admin also sees a banner above every
+  page, with a link to the People step. Members see neither.
+- **One capability-grant resolver (#735): no decision change; an enforcement-read failure no longer fails a value the grant rows already settled.** `capBatch` now answers every
+  capability question: `capAllowed`, `capGranted`, `capSeamAllowed` and `capScan` are one-value doors
+  onto one seven-step rule order, direction comes from a `capKinds` table, and one resolution shares one
+  snapshot through a context memo. A build with no store now refuses a widening kind at every door.
+- **Every authorization refusal goes through one emitter and one registry (#736).** `internal/authz` holds the
+  closed `authz.denied` reason set, each reason's effect and status, and the serializable `Decision`
+  (schema `authz/v1`); every door refuses through one `refuse`, and a guard test fails on an
+  `authz.denied` row or a registered reason written by hand. Sentences and statuses are unchanged. Audit rows change additively:
+  the `member_mode` marker now also rides `groups_snapshot_stale` rows, and every row a request
+  produced carries `method`. A refusal naming an unregistered reason answers `500` instead of the door's
+  `403`. The reason codes are frozen as an append-only contract at the 0.8.0 tag.
+- **Console path re-point: the pre-split routes are deleted (#633).** `/policies`, `/governance`,
+  `/permissions`, `/audit`, `/recordings`, `/drives`, `/providers`, `/settings` and
+  `/integrations(/:id)` are gone, clean break, no alias — each lives only at its `/admin/*` twin
+  now (`/ssh-keys` stays until M-5, and `/demos` until M-6). Every in-app link, the sidebar's
+  Policies/Governance/Permissions/Audit/Recordings entries, the account-menu and sidebar Settings
+  links (which now land on `/admin/settings` for an admin tier and `/account` for a user), the
+  first-run model-provider "Connect →" doors (`/admin/settings`), the "New policy", "Drives",
+  "Providers", "open full Audit" and "Recordings library" links, and the Azure DevOps connection
+  anchor (`/account#azure-devops`) are re-pointed to match. "New policy", "open full Audit" and
+  "Recordings library" now render only for the tier whose Admin view screen they open, so a user
+  never gets a link to a page that refuses them. The operator docs' console-screen citations are
+  re-pointed too. A stale bookmark or link falls through to the console's ordinary catch-all.
+- **A held tool call now waits the operator's real approval ceiling (RL-1, #566).**
+  `wardyn-toolgate`'s `-deadline` and Claude Code's `MCP_TOOL_TIMEOUT` were hardcoded, so
+  raising `WARDYN_APPROVAL_EXPIRY_AFTER` on the daemon did not change how long a parked tool
+  call waited. Dispatch now mirrors that ceiling onto a hold-mode run's sandbox env;
+  `wardyn-toolgate` defaults its deadline to it, and `agent-run` sets `MCP_TOOL_TIMEOUT` to the
+  ceiling plus 15 minutes whenever that exceeds Claude Code's own ~27.8h default, so the gate's
+  deny, not a Claude Code timeout, ends a call held to the ceiling. Above a ~596h ceiling that
+  export would exceed Claude Code's own ~24.85 day clamp on the value (2^31-1 ms); past that
+  point `agent-run` caps `MCP_TOOL_TIMEOUT` at the clamp and passes `wardyn-toolgate` a
+  `-deadline` 15 minutes under it, so the gate's deny still wins the race no matter how high the
+  ceiling is raised. `wardyn-toolgate` also polls once more after its deadline, catching a
+  decision that landed while its last poll interval slept past it.
+- The Azure DevOps per-user setup guide moved from `docs/adoption/azure-devops-entra.md` (a
+  point-in-time field report location) to `docs/AZURE-DEVOPS.md`, indexed in `docs/README.md`
+  alongside a new `docs/LIVE-TESTS.md` row, and gained a request-flow sequence diagram (#465).
+- **`make ci` no longer runs the Go tree six times (#467).** The three `test-report` suites
+  (tagless, `-tags docker`, `-tags k8s`) now run under `-race -covermode=atomic`, so coverage and
+  race detection ride in one pass per tag set instead of two — `test-race` is kept as a local alias
+  for `cover-check`, and `build-docker`/`build-k8s` are dropped from `ci:` since `cover-check`'s
+  suites already compile and test those tag sets. `run-e2e-subscription.sh`'s teardown now kills the
+  process bound to its own port instead of `pkill -f 'bin/wardynd'`, which used to kill every
+  wardynd on the host including a developer's own daemon on another port. `test-race-pg` is now in
+  `.PHONY`. Five scripts (`e2e-backend.sh`, `run-ui-e2e.sh`, `screenshots.sh`, `run-e2e-byoi.sh`,
+  `stage-agent-binary.sh`) drop a locally re-declared `log()`/`die()` that only differed from
+  `scripts/lib/common.sh`'s default by a tag or matched it exactly; the new `WARDYN_LOG_TAG` env var
+  lets a caller set the prefix without re-declaring the function. (The kind SSO walk rename to
+  `walk` and the `test/e2e/live` → `test/e2e/tasks` orchestrator rename from the same issue are
+  deferred — see the PR description.)
+- **A sign-in that supersedes an older sandbox now answers before that sandbox is torn down (#122).**
+  `killRunCascade` splits into `claimKillTransition` (the KILLED compare-and-swap plus
+  `cancelRunApprovals` — the half that frees the run's `max_concurrent_runs` slot) and
+  `killTeardownTail` (`KillSandbox`, both credential revocations, and the `run.kill` audit row).
+  `supersedeOneLoginRun` claims the transition synchronously, so its three-attempt CAS re-read loop
+  is unchanged and the superseded run reads `KILLED` before the launch POST answers, then hands the
+  teardown to a goroutine detached with `context.WithoutCancel`. `killRunCascade` itself still runs
+  claim then tail back to back under one shared `killCascadeTimeout` deadline, so `handleKillRun`'s
+  own synchronous cascade keeps the exact 30s budget it always had. The detached teardown (and the
+  sign-in launch's own detached dispatch) is now tracked by a new `Server.goBackground`/
+  `WaitBackground`: `wardynd`'s shutdown waits for it, bounded, after `http.Server.Shutdown` — before
+  this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
+  revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
+  already detached from itself.
+- **The Helm chart and the compose stack give `wardynd` 70 seconds to stop (#554).** An orderly
+  stop drains HTTP for up to 15s (waiting for background work even if that drain times out), waits
+  up to 35s for detached work (a run launch, a superseded sign-in's teardown), then flushes the
+  audit sinks — up to another 15s, the webhook sink's own delivery timeout. The Kubernetes default
+  grace of 30s and `docker stop`'s 10s could SIGKILL a teardown partway through, leaving a run
+  `KILLED` with its sandbox up and no `run.kill` row. The chart sets
+  `terminationGracePeriodSeconds: 70` (a new value), and the `wardynd` compose service sets
+  `stop_grace_period: 70s`. A unit test fails if either falls below the daemon's own shutdown
+  budget.
+- **Two UI e2e runs on one host no longer collide (#210, in part).** Left unset,
+  `scripts/run-ui-e2e.sh` now picks free ports for its backend instead of `:8088`/`:8089`, and
+  names its database `wardyn_e2e_<pid>`, which it drops on exit. `scripts/run-e2e-subscription.sh`
+  stops only the `wardynd` holding its own port, where it used to kill every `wardynd` on the
+  host. `make lint` gains `scripts/check-fixture-dates.sh`, which fails a test file that gains a
+  literal date.
+- **The egress proxy now offers HTTP/2 to TLS peers, deliberately.** Its forward transport offers
+  `h2,http/1.1` over ALPN and speaks HTTP/2 when a peer chooses it; the control-plane transport
+  stays HTTP/1.1. The first connection to a host whose handshake negotiates no ALPN protocol waits
+  up to 250 ms for an unprompted HTTP/2 SETTINGS frame; what that connection learns is remembered
+  for the run, so no later connection to the same host waits again.
+- **A member may store their own Bedrock bearer key.** `PUT`/`DELETE /secrets/bedrock-api-key`
+  is no longer refused to a non-operator: the BEARER is a static `Authorization` header the proxy
+  injects per run, so under a `per_user` agent row a member's own key is a credential their runs
+  really authenticate with. The three AWS SigV4 names — `aws-access-key-id`,
+  `aws-secret-access-key` and `aws-session-token` — are **unchanged** and still `403` for every
+  non-operator, because SigV4 is always signed out of the operator namespace; so are the reserved
+  platform and sentinel names. `credential_source: per_user` is now accepted for a
+  `bedrock_bearer` agent row beside `bedrock_sso`, and under it there is **no cross-source
+  fallback in either direction**: the resolve reads the caller's own namespace and never the
+  operator's, and an empty or whitespace-only value reads as no credential rather than as a
+  configured one that fails upstream. The row's mechanism decides the lane, so a member holding
+  both their own AWS SSO session and their own bearer is resolved — and reported by setup — on the
+  one the row names. Under `shared` a member's own key is never read: dispatch records on the
+  grant it authors whose key it read (the operator's under `shared`, the run owner's under
+  `per_user`), and the injection sink resolves `bedrock-api-key` from exactly that record and
+  refuses a grant that carries none — it no longer goes through the owner-then-operator fallback
+  read, which could hand a run a different key from the one dispatch chose. Any other injection
+  naming the key is dropped at dispatch and audited as `run.injection.drop`. For the same
+  reason a member's inline grant naming `bedrock-api-key` is dropped, and an `env_secret` or an
+  `llm_inspection.workspace_secret_names` entry naming it is never resolved (the latter is also
+  refused at write): the bearer is proxy-injected only. `runs_bedrock.go` was split by seam first — the probe
+  and reporting half now lives in `runs_bedrock_probe.go` — because it had reached the
+  1000-line file-size gate.
+
+- **Drive grants and preview now admit `security_admin`, not just super-admin.** `POST
+  /drives/grants`, `DELETE /drives/grants/{id}`, and `POST /drives/preview` moved off the
+  super-admin-only tier onto `securityOps` (admin or `security_admin`): none of the three names a
+  host path, and a security admin already reaches drives through the `DenyUserDrive` door on a
+  governance profile. The four routes that DO name a host path or cluster storage class — creating,
+  listing, updating, and removing the drive itself — stay super-admin only (#168).
+
+- **Review groups checks by whether they block, not by grade.** A blocking warn (the SSO
+  role-mapping gap, a runner failure, a confinement floor the runner can't meet) now sits under
+  "Blocking"; a non-blocking fail or warn sits under "Worth a look" instead of borrowing a heading
+  that promised it was fatal. Grade still shows on the row's own chip — partitioning on `blocking`
+  first just stops the heading from answering the wrong question.
+
+- **Setup counts only the steps that block a run, and recommends what the host actually has.**
+  The Getting-started counter read "Step 1 of 17" with ten of those steps optional demos; it now
+  reads "Step 1 of 4" (Environment, People, Network, Review), with the honest count of what
+  follows named underneath. Three categories, not two: Secrets, Workspace providers and
+  Workspaces are real configuration that blocks nothing, kept apart in the rail and on Review
+  from the ten demos that change nothing — collapsing them into one list is what put Secrets
+  behind a "Start the demo" button. `recommendedTier` now reads only what the host reports
+  installed (`runner.confinement_classes`), never inferring from the operating system or from
+  hardware compatibility — a host reporting nothing gets no Recommended chip and a line saying
+  so, and a note names what's stronger when the recommendation isn't the strongest class that
+  exists. The `Recommended` chip is `tone="neutral"`, not the teal `"primary"` CONSOLE-RULES
+  already flagged as a violation, and its row is fixed-height so the barrier matrix can't shift
+  when the chip appears.
+- **`vscode/` and `novnc/` now default `FROM wardyn/agent-base:local`, not `wardyn/agent-claude-code:local`.**
+  Both Dockerfiles take a `BASE_IMAGE` build arg (`deploy/images/{vscode,novnc}/Dockerfile`); their
+  launchers only exec `code-server`/the X stack and never call a coding-agent CLI, so the vendor base
+  was never actually needed. `deploy/images/vscode/Dockerfile` also drops the
+  `LicenseRef-Anthropic-Terms` OCI licence label it no longer carries. `agent-image-vscode` and
+  `agent-image-novnc` now depend on a new `agent-image-base` target instead of `agent-images-core`, so
+  neither build touches the vendor CLI image at all. **Upgrading:** a developer checkout that wants
+  `claude` available in the vscode terminal restores the vendor base explicitly — build it first with
+  `make agent-images-core`, then `make agent-image-vscode BASE_IMAGE=wardyn/agent-claude-code:local`
+  (same knob for `agent-image-novnc`).
+
+- **The sign-in screen stops advertising the demo admin token.** The admin-token field's
+  placeholder no longer carries `demo-admin-token`, and its hint no longer names
+  `WARDYN_ADMIN_TOKEN` or the compose demo token — it says what belongs in the field and where the
+  person saw it. The unreachable-daemon refusal now names Wardyn and names the `wardynd` daemon to
+  check, instead of a bare "Could not reach the control plane." with no next step. The email-domain
+  refusal no longer tells a locked-out, unauthenticated reader to go set `WARDYN_OIDC_EMAIL_DOMAINS`
+  themselves — it points them at their Wardyn admin instead. `sign-in.tsx` (Closes #212).
+
+- **The Recordings screen pages instead of stopping at 1,000.** It fetched the whole run list in one
+  shot (capped at `LIST_LIMIT`), so an install past 1,000 runs silently lost every recording beyond
+  that window, with only a passive "truncated" note and nothing to press. `listRuns()` now takes an
+  optional `limit`/`offset` and, when both are given, returns `{ runs, truncated }` off the server's
+  own `?limit=&offset=` paging and its `X-Wardyn-Truncated` header — every other caller is unchanged.
+  The screen fetches 100 runs at a time; a "Load 100 more" text link (matching the Runs board's own
+  "Load N more") appears while more is known to exist, and a failed page keeps what already loaded
+  with a Retry that resumes from the same offset. No total is ever shown — the server doesn't send
+  one.
+
+- **CLI help and an operator-facing log line no longer print internal campaign IDs.**
+  `wardyn policy default --help`, `wardyn-tetragon-ingest --help`, and the mint-refusal WARN log in
+  `internal/api/internal.go` cited review-package coordinates (`W14-S1-6`, `W24-S1-1`, `F098`) that
+  resolve to nothing outside this repository. Each now says the thing the coordinate stood for
+  instead.
+- **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
+  `(image string, failed bool)` instead of writing the 201 itself on a BYOI/devcontainer build
+  failure, so it can be called from a background worker. `internal/api/runs.go`'s
+  `handleCreateRun` answers the 201 (refreshed FAILED run + warnings) one frame up.
+- **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site
+  citations and `docs/design/CONSOLE-RULES.md`'s 51 component citations moved from `path/file.go:NNN`
+  to `path/file.go#Symbol` (`#Type.Method` for a method, `#heading-slug` into another document,
+  `#--token` or `#.selector` for CSS). The guards resolve them with `go/parser` (and a source glob on
+  the console side) and fail unless the action appears **inside the cited symbol's own body**, so a
+  citation that drifts onto the wrong function still reds — but an insertion ANYWHERE above a cited
+  line no longer does. Contributors: inserting a line in a heavily-cited file is no longer a
+  required-check failure, and the re-point-at-rebase step for those two documents is retired. The
+  tree-wide ban on `file.go:NNN` (`TestCommentsCiteSymbolsNotLineNumbers`) now covers both documents
+  too.
+- **Two clean breaks, no alias window (owner ruling 2026-09-22): `workspace get --json` now
+  defaults to `false`, and `support-bundle`'s output flag is spelled `--output`/`-o` (#200).**
+  `workspace get` was the CLI's only command defaulting `--json` to `true` — every other command
+  defaults it `false`. `support-bundle --out` was the CLI's only flag spelled `--out` instead of
+  `--output`/`-o` (`run recording`'s download flag already used that spelling). Both now match the
+  rest of the CLI. Neither old spelling is accepted.
+
 ### Fixed
 
+- **Review states where a chosen model provider's credential lives (#983).** A run that chose a
+  model provider got no `model_credential` from `POST /runs/preflight`, so the New Run rail said
+  "Resolved at launch." even after Preflight, and the CC3 confinement advisory never fired for an
+  AWS sign-in provider. The chosen provider's kind now sets the facts at both doors: mechanism
+  (the kind), `per_user`, and `sandbox` for `bedrock_sso` or `proxy` for every other kind. A
+  `bedrock_sso` provider run below CC3 now carries the advisory warning and the `run.create` row's
+  `credential_confinement: below_floor`, as the legacy AWS SSO lane already did.
+- **`wardyn_credential_reauth_total` counted Azure DevOps sign-in/consent requests too (#971).**
+  The metric's HELP promises the AWS SSO re-auth population alone, but its `requested`,
+  `resolved`, `expired` and `timeout` outcomes all folded in the per-person Azure DevOps lane's
+  own credential_reauth rows. Each is now scoped to the AWS SSO lane, the same split `cancelled`
+  already used (#968).
+- **Getting Started's model-access chip read "Not set up by your admin" for every legacy install
+  (#541 fix review).** #541's new per-provider connections chip graded only `model_providers`/
+  `provider_access`, which are empty for any install predating provider records — every shared or
+  per_user-roster install still on main, since the admin funnel writes no provider block until
+  #548 lands. `legacySummary` (`lib/model-connections.ts`) restores the old per-principal
+  `model_access`/`llm_ready` reading as Getting Started's own fallback whenever there is no
+  provider block, and the per_user lede is back for a per_user roster row; a real provider block
+  shows Your model connections' own lede. The expiring row's own line
+  (`Your account`'s connections list) now reads a clock time, matching packet MP-D's own drawn
+  text, instead of a relative offset.
+- **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
+  map being set was previously enough to hide the "Who is an admin" setup row and the shell
+  banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
+  fell through to admin, unwarned. `ssoRBACCheck` now warns on that condition too (whether or not
+  a role map is set), with its own setup-row detail/fix and banner sentence; a deployment with
+  neither a role map nor an admin list still reads #484's original warning, one banner, not two.
+- **`wardynd -rotate-age-key` now stamps `updated_at` on every row it re-encrypts (#717).**
+  A rotation is a write, and least-retention sweeps read `updated_at` to decide what is
+  stale; the Postgres secret store's whole-table rewrap (shared by `-rotate-age-key` and
+  `-rewrap`) previously moved `wrapped_dek`/`kek_id` without touching the column, so a
+  rotated-but-otherwise-untouched secret could still be swept as stale.
+- **Task runs start on a proxy one version behind (#676, #889).** Dispatch set the sidecar's
+  `unattended` key on every non-interactive run, and a v0.7.12 proxy refuses a key it does not
+  know, so every task run failed at sidecar start on an operator who pinned that image. The key
+  changes only what happens to a push matching `require_review_paths`, so dispatch now sets it
+  only when the policy has review paths.
+- **A tool call held for a human was denied at once instead of waiting (#711).** The control plane
+  answers a raised approval with the created row, which carries both its `id` and
+  `"state":"PENDING"`; `wardyn-toolgate` read any `state` as a `tool_rules` decision and denied
+  the call as an unrecognised state. It now polls whenever an `id` is present and reads a state
+  with no `id` as the run's own `tool_rules` answer (anything but `APPROVED` still denies).
+- **`scripts/up.sh` no longer just warns when the Claude sign-in image fails to build (#802).**
+  `agent-claude-code` is the checked prerequisite for Claude subscriptions (`claude_signin_image`
+  on `/setup/status`, and adding a subscription is refused without it, #524); a failed build now
+  stops `up.sh` with the rebuild command instead of leaving a silent warning behind. The stack
+  stays up and other agent images stay warn-only. Setting `WARDYN_UP_SKIP_RUN_IMAGES=1` now says
+  explicitly that adding a Claude subscription is refused and claude-code runs fail until the
+  sign-in image is built.
+- **An Azure DevOps capability escalation kept reading "sandbox held" after its own card said the
+  opposite.** The proxy releases that specific hold after 4 minutes (the same window the capability
+  card's own countdown already used); the Runs board and run cockpit read it as held for as long as
+  the row stayed pending, so the board chip, the cockpit header and the strip icon disagreed with
+  the card sitting right beside them. Both now read one shared window (#725).
+- **A Codex (or any non-Claude-Code) launch refused for its own model-credential reason could open
+  "Sign in to AWS"** on a deployment that also has a working Bedrock SSO Claude Code row — a
+  sign-in that repairs nothing for the agent that was actually refused. The door now opens only
+  for a refused Claude Code launch (#725).
+- **A `tool_approvals=hold` run no autonomy rubric bound could still have its approval gate
+  bypassed by the agent's own user-level settings (#358).** Only runs with a rubric-resolved level
+  of L0 or L1 got Claude Code's managed settings, whose `allowManagedPermissionRulesOnly` stops a
+  repository or user `permissions.allow` rule from running a tool before `wardyn-toolgate` is asked.
+  Every claude-code hold run now gets that managed file (the L1 document), including a run at L2,
+  at L3, or with no level. Its `run.agent_policy.write` audit row carries `"tool_approvals": "hold"`, and
+  on a runner that cannot deliver the file the create response says so, as it does for a gated run.
+
+- **Take-over could land the taker read-only.** The server already promotes the taker's own
+  queued observer socket to writer in place, but the console's take-over button unconditionally
+  reconnected afterward — closing that just-promoted socket and handing the writer slot to
+  whichever bystander was next in the FIFO queue. `POST /attach/takeover` now reports whether it
+  promoted the caller in place, and a console tab whose socket is still open skips the reconnect on
+  that answer (#507).
+- A run refused at dispatch for an Amazon Bedrock model-credential mismatch (`autonomy_grade_drift`)
+  or by the declared-mechanism gate no longer audits a `run.bedrock.configure` "success" row for a
+  credential it was never handed — that row is now recorded only once those gates have let the run
+  through. A roster read that fails at create/Review now refuses the run (500) instead of silently
+  admitting it ungraded, which used to surface later at dispatch with a misleading "the
+  configuration changed between then and now" detail (#518).
+- **Console fixes from the early 0.8 review (#510).** The cockpit terminal's reconnecting hint
+  claimed keystrokes typed during a reconnect were held; there is no input buffer, so they are
+  silently dropped — the hint now says so, and the disconnected message interpolates the live
+  reconnect budget instead of a hardcoded "4". `usePoll`'s coalesced refocus follow-up could still
+  fire after the hook had unmounted, running the caller's fetch chain (and every `setState` inside
+  it) against a dead screen; the cleanup now marks the hook disposed and the follow-up checks it.
+  Every Getting Started episode card issued its own `/healthz` fetch for the demo-video mirror
+  address — 24 requests on one mount — for a value that is the same for the whole page load; it is
+  now read once in the shell and handed down through context. The network-confinement banner's
+  action sent a member to `/setup?step=environment`, a page a member cannot reach; the action is
+  now operator-only, and the strip stays informational for a member. The autonomy wire types
+  (`AutonomyRubric`/`AutonomyPosture`/`AutonomyResolution`) now have a Go↔TS parity test. Two
+  copy nits: the Environment step's "stronger tiers" note and the Recordings screen's loaded-count
+  notes now pluralise correctly for exactly one item. An e2e fixture re-typed the admin-token
+  localStorage key by hand; it now imports it from `fixtures.ts`. One known gap stays: while the
+  setup status is still loading, or after a failed read, the Getting Started episode catalog still
+  groups under the "Your deployment — single-user" heading (the readiness chips above it already
+  say "Checking…"). It corrects itself once the status resolves — after a failed read, on the
+  next five-minute status poll.
+- **A deleted user type's orphaned subject row could silently rebind to a same-id type created
+  later.** `userTypeSubjectExists`' existence check races a concurrent `DeleteUserType`: a
+  capability grant, governance assignment or drive grant can finish writing just after the type it
+  names was deleted (migration `0079` carries no FK, by design), leaving a row nothing owns.
+  `CreateUserType` now refuses (`409`) an id any of those three tables still names, so the id stays
+  dead until an operator clears the orphan rows themselves, rather than quietly inheriting whatever
+  a later type of the same id is given to (#610).
+- **Reviving a run, and moving its end later, now re-check its owner's authority instead of keeping
+  the run alive on what it was granted at launch.** A revive (the run's page or an admin's "Restart
+  with current limits") and a later end or No end are refused, naming the capability, when the owner
+  no longer holds the run's agent, one of its workspaces or the git provider of one of its repos;
+  an extension is also refused when the governance profile the run was created under is gone. A
+  revive is also refused when the model credential its proxy would inject has been erased or its
+  integration disabled, and the revived proxy takes the upstream proxy, trusted CA and model
+  gateways from the current configuration rather than its old rendered copy. When anyone but the
+  owner asks, the owner is known by sub and by the user type stamped on the run: any deny row
+  covering the value refuses, and only `all` rows or allow rows for the owner's sub or stamped type
+  count, not the owner's admin role. A stamp naming a type deleted since refuses; a run with no
+  stamp counts no type rows (#1019). So under an enforced kind, an admin-owned run can be revived,
+  restarted or extended only by its owner, or with an allow row for the owner's sub or type. Each
+  refusal is audited `denied` with the owner as `subject` (#679).
+- **The idle reaper is now hold-aware: it no longer stops a run out from under an open
+  push/egress/ADO/credential/tool-call request that is still within its wait.** The idle-stop
+  CAS (`UpdateRunStateIfIdle`) now also checks for a PENDING approval whose own
+  `min(requested_at + wait, ends_at)` has not yet passed, and refuses the transition while one
+  is open — closing the same race window the existing touched-after-snapshot guard closes, since
+  a request can be raised between the reaper's scan and the stop. A re-auth hold's own timeout
+  decision (`credential:reauth-timeout`) no longer resets the run's idle clock, since it is the
+  proxy reporting that nobody answered, not real agent activity (#570).
+- **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
+  captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
+  in-sandbox helper still gets its answer and prints its done line), including when the console
+  tab was closed; the `run.kill` row carries `reason: sign_in_captured`. The `approval.cancelled`
+  row now carries `by_kind`, which tells a hook tool call from an Azure DevOps escalation and an
+  AWS re-auth from an Azure DevOps sign-in or consent request. The cancelled credential re-auth
+  metric counts only AWS re-auth rows the cancel actually moved, not one a person decided at the
+  same moment.
+- **The Getting Started funnel paints from the setup status the console already holds (#806).**
+  A gated install redirected into `/setup` used to show "Checking Wardyn's setup…" with no step
+  rail until the funnel's own second `/setup/status` read answered. The funnel now starts from the
+  status that sent it there and refreshes behind it, so a slow second read no longer hides the rail.
+  `runs.spec.ts`'s search tests retry the fill itself, since a reload of the board can detach the
+  input a fill lands on.
+- **`wardyn-toolgate` closes its own approval on giving up, instead of leaving it `PENDING`
+  for the sweeper (#811).** The gate's own `-deadline` and the server's periodic approval
+  sweep shared the same ceiling, but the sweep only catches a stale `PENDING` row on its
+  next tick — up to `approval-expiry-interval` (10m default) after the gate already
+  returned deny for it. In that window an operator could still approve a call the agent had
+  already abandoned. The gate now tells the control plane (`POST
+  /wardyn/v1/approvals/{id}/expire`) the moment it gives up, moving the row straight to
+  `EXPIRED`; an approval that beats that call is honoured rather than denied. Only a
+  `tool_call` row the sandbox itself raised can be withdrawn this way — an Azure DevOps
+  escalation stays the operator's — and the audit row names the run's agent.
+- **Signing in no longer opens a blank tab (#628).** Starting the AWS or Claude sign-in used to open
+  an about:blank tab straight away, and on a first launch the person sat on it while the sign-in
+  image downloaded. The dialog now stays put and shows three steps: starting the sign-in sandbox,
+  downloading the sign-in image ("Can take a few minutes the first time." — no runner reports pull
+  progress, so there is no percentage; the step lights while the runner reports `Pulling`, which only
+  the Docker runner does — on Kubernetes the kubelet reports `ContainerCreating` through a pull, so the
+  first step stays lit), and waiting for the provider. Once the provider's page is
+  ready, an "Open AWS sign-in" (or "Open Claude sign-in") button opens it, with the device code
+  beside it and a copy-link fallback; the tab still has its `opener` severed. A failed image pull
+  shows the server's own reason and a Retry that starts a fresh sandbox. The Azure DevOps
+  popup-blocked fallback now reads "Your browser blocked the connect popup." with an "Open Azure
+  DevOps sign-in" button.
+- **`wardynd:latest` is published only from a commit CI passed on.** `publish-image.yml` ran on
+  every push to `main` in parallel with CI, so a red commit still became `:latest` — the tag
+  desktop installs pull. It now runs after CI completes and publishes only when every CI push run
+  on the commit, on that branch, succeeded (`scripts/ci-green-for-sha.sh`), so a release branch
+  still running on the same commit does not hold `main` back; a manual dispatch on a red commit
+  skips. `:latest` now lags `main` by one CI run (#664).
+- **Approval scope caret: choosing "Until…" no longer drops keyboard focus to the page body** —
+  the popover swapped its content on Enter without moving focus anywhere; it now lands on the
+  sub-view's "← Back" control (#481).
+- The `harness_login_not_per_user` refusal (a member's `POST /setup/harness-login` when the agent's
+  model credential is not per person) has written `authz.denied` rows since 0.7.2 under a reason the
+  documented closed enum did not list. It is now in `docs/OPERATIONS.md` and `docs/AUDIT-ACTIONS.md`,
+  and the enum is checked from the registry instead of a source scanner that missed it (#736).
+- **GPL offer and image-doc follow-ups from the UI-image publishing PR (#357).** The
+  0.6.6–0.7.7 note in `deploy/images/third-party-gpl-historical.md` sat under a heading
+  whose opening sentence said conveyance had ceased, while the tags it covers are still
+  pullable; it now has its own heading stating the offer stands while they remain
+  pullable. The Makefile's image targets now stamp the build commit on every local image
+  (`org.opencontainers.image.revision`, suffixed `-dirty` when tracked files differed), and
+  `scripts/gpl-source-offer.sh` names that commit in a pre-publication (bootstrap) section,
+  read from the image's SBOM, instead of whatever HEAD was when the script ran. It refuses
+  an image built from a dirty tree or carrying no build commit. `scripts/check-image-pins.sh`
+  now fails if the hand-listed websockify entry in `gpl-source-offer.sh`'s `MANUAL_ENTRIES`
+  drifts from `deploy/images/novnc/Dockerfile`'s `WEBSOCKIFY_VERSION` pin or download URL.
+  `docs/CI.md` now says seven images (a release now publishes
+  `agent-vscode` and `agent-novnc` too).
+- **The drive editor's home-template rule for `k8s_pvc_static` now matches the server (#808).**
+  The picker treated `k8s_pvc_static` as a plain share: it disabled `hash`, the server's default
+  and recommended template for a static PVC, and offered `email_local`, the one template the
+  server always refuses on this backend. `k8s_pvc_static` is a third case — an admin
+  pre-provisions the claim, but Wardyn still names it — so the editor now enables `hash` and `sub`
+  there and disables only `email_local`, mirroring `ManagedBackendRejectsTemplate` /
+  `ShareBackendRejectsTemplate` (`internal/types/user_drive.go`) through one shared predicate.
+- **`make lint` replayed golangci-lint findings from a deleted sibling worktree (#480).** The
+  linter's cache was shared machine-wide, keyed by absolute path, so a stale entry for a worktree
+  that no longer exists could fail a lint run that never touched that file. `make lint` now points
+  `GOLANGCI_LINT_CACHE` at a `.golangci-cache/` directory inside the current worktree (gitignored),
+  so one worktree's cache can never leak into another's.
+- **A credential mint's SIEM record no longer depends on the client staying connected.** The
+  broker fanned the committed `credential.mint` event to the file, webhook and syslog sinks on the
+  request context, and the syslog sink skips an event whose context is already done — so a git
+  helper that hung up after its mint committed could leave a live credential with no SIEM record.
+  The fan-out now detaches from request cancellation; tests pin one SIEM event per winning mint,
+  none for a concurrent loser or a refused mint, and no token bytes in the event (#716).
+- **A secret-store or site-config outage no longer tells a person to reconnect Azure DevOps
+  (#447).** When the per-user Azure DevOps sign-in state could not be read, launching a run used to
+  refuse with "you are not connected to Azure DevOps", and `GET /me/scm-access` answered 200 with
+  a `not_configured` row or an empty array. Every launch door (run create, Build, Scan, record) now
+  answers 503 `roster_unreadable`, and `/me/scm-access` answers 500. Setup status and preflight
+  leave the Azure DevOps fact out rather than guess. Both sign-in doors (the console login and the
+  dedicated sign-in) now store the same scopes: those granted within the row's ceiling.
+- **A failed credential grant no longer shows database text to the run's owner (#445).** When a
+  dispatch could not record the Azure DevOps, AWS SSO, subscription or Bedrock bearer credential
+  grant, the run's failure hint (and the Azure DevOps refusal's audit detail) carried the store's
+  own error, database host and SQLSTATE included. The hint is now a fixed sentence and the real
+  error goes to the daemon log; the same holds for a lost agent exec-id write, a failed per-run CA
+  and a record session that could not launch (its card and its run's hint). The driver-text guard
+  now also watches `failAndRevoke` and `refuseADOEntraDispatch`.
+- **The per-person Azure DevOps injection lane's refusals now carry a machine `reason` on the
+  wire, not just the audit row** — the proxy sidecar (and now the Go SDK, via the new
+  `client.APIError.Reason` field) can branch on why a resolve, capability ask or sign-in hold
+  was refused instead of string-matching the human sentence. The three refusals in the lane that
+  bypassed its own audited refusal path (a capability, consent or sign-in hold that could not even
+  raise its approval request) now leave the same `secret.read` failure row every sibling refusal
+  does (#204).
+- **The AWS SSO and Bedrock bearer credential-injection lanes carry the same machine `reason` on
+  the wire the Azure DevOps lane's refusals do** — both lanes already computed a reason for the
+  audit row; the resolve refusal, and the AWS SSO re-auth hold's terminal/exhausted/raise-failed
+  refusals, now send it in the body too. The reason vocabulary is now one closed set
+  (`internal/api/reasons.go`) shared across all three lanes, so the same reason means the same
+  thing regardless of which lane sent it (#656, continuing #204's sweep). The AWS SSO host-pin
+  refusal's reason, written to the audit row as `sso-host-not-portal` until now, is spelled
+  `sso_host_not_portal` on the audit row and the wire alike, matching the rest of the set.
+- **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
+  configuration carried a list of grants keyed by host, and every organisation shares
+  `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
+  The key is now `ado_grant` (one grant). The older `ado_grants` list still loads when it holds
+  one entry; a list with more than one, or one set beside `ado_grant`, fails the sidecar's
+  startup (#452). The other direction is a clean break: a control plane at this version refuses
+  to configure a v0.7.12 proxy for Azure DevOps runs (the grant config is now `ado_grant`), so
+  upgrade the proxy image with the control plane.
+- **The ephemeral-age-key boot refusal names the rows no key can recover (#755).** With
+  `WARDYN_AGE_KEY` unset over age-sealed rows, wardynd told the operator to set the key the rows
+  were written with — but rows written under an earlier ephemeral key have no such key. The
+  refusal now says those rows are unrecoverable and gives the statement that deletes them. The
+  console's "Secret store durability" row now says what is stored under the ephemeral key is lost
+  at the next restart and that the next boot refuses to start, and the Helm values comment for
+  `secrets.ageKeyFromSecret` says no key set afterwards recovers the rows.
+- **Live kind SSO walk: two timing flakes (#804).** Case L in `sso-member-recovery.spec.ts` read
+  the run's audit trail exactly once for `run.exec:success`, which under load could still be racing
+  the dispatch it was asserting on; it now polls the trail (bounded by the same `SANDBOX_UP` ceiling
+  dispatch itself races against) instead of reading it once. Separately, `scripts/kind-sso-walk.sh`
+  now calls `run-ui-e2e.sh` once per spec file instead of once for all three — Playwright clears
+  `ui/test-results` at the start of every `playwright test` process, so a failing spec's own
+  screenshots and traces were being wiped by the very next spec before the walk ever got to look —
+  and copies a failed spec's `ui/test-results` into the walk's evidence directory immediately after
+  that spec runs, before anything downstream can destroy them.
+- **Settings no longer says "Stored as \<name\>" beside a secret that isn't stored (#355).** Every
+  credential lane (Anthropic/OpenAI API keys, Bedrock bearer key, git PAT, SSH key — all built on
+  the shared `SecretLane`) showed that caption next to an empty, unsaved Save button, reading as
+  "already saved" when nothing was. It now shows only once the lane actually reads as stored; the
+  unsaved form carries no name.
+- **The Corporate-network setup step no longer reverts a save made elsewhere (#492).** Its
+  `PUT /site-config` (Host proxy / Egress redirection) sent no `If-Match`, so a save here could
+  silently spread a stale GET over `scm_hosts`, `egress_redirects`, or the People step's own
+  sign-in-help fields if they'd changed in another tab since this step last loaded. It now sends
+  the last GET's ETag, same as the sign-in-help card, and a stale write is refused (412) rather
+  than accepted: the step reloads the current document (and a fresh ETag) and tells the operator
+  their change wasn't saved, without touching what they were still typing (a redirect being
+  added or edited stays in its form until a save lands).
+- **A second per-user Azure DevOps row is refused when it is written (#446).** Only the first
+  enabled row on the `entra` lane is ever offered a sign-in, so a second one used to save without
+  complaint and then fail every run on it with a misleading `scope_changed` refusal. Both
+  provider-policy doors (`PUT /workspace-providers` and `PUT /site-config`) now answer 400 naming
+  the two rows; disable one of them to save. A disabled second row is still accepted.
+- **The m' desktop envelope had no pointer to the org control plane and a stale OIDC claim (#105).**
+  `deploy/desktop/wardyn.env.m-prime.example` now carries a commented block naming
+  `WARDYN_ORG_URL` and pointing `WARDYN_ORG_ENROLMENT_TOKEN` at
+  `secret.env` (`scripts/test-desktop-profile.sh` now asserts both names are present and stay
+  commented), and neither it nor `deploy/desktop/wardyn.env.example`'s SSO variant still claims
+  there is "no public-client / PKCE-only path" — `oidc.New` makes the client secret optional.
+  `ci.yml`'s `desktop-envelope` job gained a step that boots the real daemon image with an org URL
+  set and member mode unset and asserts the boot refusal fires. One paragraph in
+  `deploy/helm/wardyn/README.md` (plus a `values.yaml` comment) now says managed laptops enrol
+  through the console Ingress at `POST /api/v1/devices/enrol`.
+- **A governance profile narrower than the deployment default on `push_rules` silently dropped
+  its members' content-inspection rules.** Resolving a profile's effective ceiling now warns when
+  the deployment default carries `push_rules` and the profile's own ceiling does not — mirroring
+  the resolve-time grant-drop warning — so the drop shows up in the run-create and preflight
+  `warnings[]` instead of vanishing at the assignment boundary (#272).
+- **A governance-ceiling or drive-resolve 500 logged no method, path or trace id.** Three sites
+  (`writeCeilingError`, `writeCeilingErrorPrefixed`, `writeDriveError`) logged their underlying
+  store error through a bare `context.Background()`, so the operator line an on-call reads for one
+  of these 500s carried no request context. All three now route through `writeServerError`, which
+  logs the method and path. The admin-facing "sign in [again] under Settings → Model provider"
+  remedy is now one format string instead of two near-duplicate constants. The three sites answering 403 rather than 404 for
+  "run not found" (the sandbox-side, run-token-authenticated doors) are now commented with why: the
+  caller's own presented token names the missing run, so a lookup miss is that token's authority
+  gone, not a path a member could probe (#189).
+- `push_rules.deny_paths` entries with leading or trailing whitespace, or that are not valid
+  UTF-8, are now refused at write time (`400`) instead of stored as a deny rule that matches
+  almost nothing. The git broker reads them the same way, so a policy that bypassed write-time
+  validation with one has every push refused rather than the entry ignored (#271).
+- A push of a few hundred commits from a merge-heavy history is no longer refused as
+  uninspectable while far below every size limit. Push content rules charged each merge again for
+  every directory the other side had changed, so such a push crossed the inspector's tree-entry
+  ceiling at about 570 commits. Each comparison is now charged once, and the ceiling is justified
+  against measured real history (#254). An honest push that still crosses one of
+  `internal/gitpack`'s own ceilings (object count, inflated bytes, tree entries, changed paths) now
+  refuses with `413`/`brokered:git:push-too-large` instead of `415`/`brokered:git:push-uninspectable`,
+  since it names the same fix as an oversized push: fewer commits at a time.
+- **The Settings Azure DevOps card was empty for an admin-token or local-mode caller** — Go grades
+  that sign-in `not_applicable`, a state the card never had a branch for. It now renders one line
+  explaining there is no per-person connection to show. The capability card's consent door now
+  reads "Connect Azure DevOps" (matching its destination) and lands on the Settings card's own
+  anchor, which takes focus on arrival; a decide's `busy` state now tracks which button was
+  pressed, so Approve and Deny no longer spin together on a single click (#458).
+- **Sign-in first contact: honest loading state, no jargon (#457).** Before the console has ever
+  heard back from `/healthz`, the sign-in screen used to guess — rendering a token field and a
+  disabled "Sign in with SSO" stub that might be wrong for a moment. It now shows only "Checking
+  sign-in options…" (adding "Still checking — Wardyn hasn't answered yet." after three unanswered
+  reads) until a real answer names which doors exist. The disabled SSO stub and its
+  `WARDYN_OIDC_*` title are gone entirely — the button renders only when SSO is actually
+  configured. Every refusal sentence (`NO_ROLE`, `CLAIMS_OVERAGE`, `EMAIL_VERIFIED_ABSENT`,
+  `EMAIL_DOMAIN`, `ROLE_CHECK_UNAVAILABLE`, `OIDC_CONFIG`, `AUTH_FAILED`, and the shared
+  `ErrorState` default) dropped every env var name and "operator" in favor of "your Wardyn
+  admin" — a reader here, sometimes not even signed in, cannot reach a chart value. The
+  SSO-role-source caveat ("comes from your SSO role assignment") is removed entirely, with its
+  tests. Frozen strings: docs/design/signin-first-contact-canon.md.
+- The cockpit terminal's way out is now Ctrl+Shift+Backspace, which works on every keyboard
+  layout. On DE/FR/ES layouts the old chord needed AltGr to reach `]`, so it never fired there and
+  keyboard users had no way out of the terminal without a pointer (#133).
+- A request the egress proxy resends over HTTP/2 is rebuilt from its own source when it has one,
+  so a write still finishing from the failed attempt can never interleave with the resend (#368).
+- Azure DevOps projects and repositories whose names carry spaces or other permitted characters
+  (`Payments Platform`, `Card Auth (v2).Service`) now import, launch, clone, fetch and push:
+  every door stores one spelling of the address, and approvals name the repository the same
+  way on the REST and git paths. When two repositories in one run would clone into the same
+  directory, the run's response now says which one was not cloned (#485).
+- The `gates (gitleaks)` CI check was not hermetic: with `fetch-depth: 0` fetching every remote
+  branch, gitleaks' default scan range (`--all`) meant an accepted finding on someone else's open
+  branch could red every other PR's gate too. `make gitleaks` now scans only the commit under
+  test's own history (`--log-opts="HEAD --full-history --diff-filter=tuxdb"`, gitleaks' own
+  defaults minus `--all`). The fixture false positives that used to need a fresh
+  `.gitleaksignore` fingerprint on every touching commit (`pat_broker_mask_test.go`'s minted PAT,
+  the secret-store's AAD label constant, the install test's stub age key and admin token, the
+  runbook's quoted age recipient and `secrets.allowEphemeralAgeKey` flag) are now a path/regex
+  allowlist in `.gitleaks.toml` instead, which matches regardless of commit, and a repo guard
+  refuses a `.gitleaksignore` path that keeps churning fingerprints (#665).
+- **The Runs board declared a still-live `tool_call`/`credential_reauth` hold dead after a
+  60-minute client-side ceiling, while `wardyn-toolgate` keeps the agent parked on it for up to
+  `WARDYN_APPROVAL_EXPIRY_AFTER` (24h default).** An operator back from lunch saw the group chip
+  say "1 was held", the card swap Review for Open, and the cockpit drop "sandbox held" — for a run
+  whose agent was still frozen waiting for exactly that decision (#509). A PENDING row is now live
+  until the server's own state says otherwise; a hold the server has expired or cancelled simply
+  stops showing as held.
+- The New Run rail's launch and preflight failures are now `role="alert"` regions, announced to a
+  screen reader on arrival (a repeated, identical failure re-announces too), and disabled controls
+  that used to explain themselves only through a `title` tooltip — the record pane's operator-only
+  Approve buttons and the Recordings search field and empty state — now state the reason in visible
+  text a keyboard or touch user can actually read (#459).
+- **`wardynd`'s shutdown now waits for a run launch already under way (#749).** `POST /api/v1/runs`
+  answers 201 and then builds the image and dispatches the run in a detached goroutine. That
+  goroutine was not tracked, so a SIGTERM during `CreateSandbox` stopped the daemon partway through
+  dispatch, and the run stayed `STARTING` until the boot reconcile found it. The launch is now
+  tracked like the sign-in launch, and shutdown waits for it within the same bound.
+- **With an Anthropic gateway configured, a subscription credential is mounted only when the run
+  can reach the gateway.** A `*.anthropic.com` or `api.anthropic.com` allowlist entry used to
+  pass the check, mounting the resident credential into a run whose one model dial (to the
+  gateway) the proxy then refused. The gateway's reachability is now judged the way the proxy
+  judges the CONNECT: its host, a covering `*.` wildcard, a port qualifier, and `denied_domains`
+  all count (#508).
+- **`wardyn drive get` prints every allocation, or nothing.** It used to print the first page of
+  allocations only, so `drive get > drives.json` followed by `drive apply` restored a partial
+  set. It now reads every page, and refuses to print when the pages do not add up to the
+  server's `grant_total` (#508).
+- **`push_rules.deny_paths` on a `git_pat` forge other than github.com is now graded.** There the
+  broker cannot show that a push left a path unchanged, so an entry reaching any path the
+  repository already holds refuses every push. The run's risk grade now says so, and
+  POLICIES.md says to deny only paths the repository does not hold yet on such a forge (#508).
+- **The git broker's own reads of api.github.com on a push's behalf are in the run's decision
+  stream** as one `brokered:git:forge-read` row per push that read the forge (#508).
+- **Docs: an `emptyDir` cache volume is writable by the agent without `FSGroup`** (the kubelet
+  creates it `0777`); the Helm README, OPERATIONS.md and the k8s runner no longer claim a
+  root-owned mount the agent cannot write (#508).
+- **Four console DTOs closed against their Go wire types.** `AgentRun` was missing `agent_exec_id`,
+  `auto_stop_after_sec` and `source_id`; `AuditEvent` was missing `prev_hash` and `row_hash` — the two
+  fields the audit screen's own integrity story rests on. `ui_apps` — sent only by `GET /runs/{id}` —
+  moved off the shared `AgentRun` onto a new `RunDetail` type, so a list consumer (the board, the
+  table) is no longer typed for a field it never receives. `runs.wire.fields.test.ts`'s parity pattern
+  now also covers `AuditEvent`, closing the gap the hand-maintained TypeScript mirror had opened
+  against the Go structs it mirrors.
+- **A lapsed session on the Runs landing screen no longer raises an unhandled rejection.** The setup-
+  status loader had no `.catch`, and the underlying fetch rethrows on a 401 — so a session expiring
+  while a person sat on Runs raised a floating unhandled promise rejection at exactly that moment.
+- **Fourteen recovered nil-pointer panics in `internal/api`'s test suite were reported as passing
+  tests.** #323 fixed ten on the `/metrics` scrape path; the rest were the same class elsewhere — a
+  test double embeds `store.Store` as a nil interface to satisfy the wide type, a request reaches a
+  method the double never implemented, and chi's `Recoverer` turns the dereference into an
+  unremarkable 500 every assertion still matched. `rbacStore`, `tokenMemStore`, `pingStore`,
+  `apiTokenErrStore`, `driveStore`, `wsReadStore` and `recordTierStore` now answer `Ping`,
+  `LatestAuditEventByAction`, `GetSiteConfig`, `PutSiteConfig` and `ListRuns` where a request
+  legitimately reaches them instead of leaving them on the nil embed; `noGovernanceStore` — already
+  the shared "empty deployment" answer several of them embed — gained the store reads several
+  request paths (a scrape, a capability check) make regardless of what the test means to exercise.
+  The five `handleCreateRun` panics were a deliberate no-Store harness design ("a request accepted
+  past validation panics inside `CreateRun`, which chi turns into the 500 that proves it got there")
+  that the same class caught: `createRunUnconfiguredStore` now answers that same "accepted past
+  validation" 500 from a real `CreateRun` error instead of a crash, and the two tests that read that
+  sentinel now assert the 500 directly rather than only its side effects. The durable half needs no
+  production code: chi's `Recoverer` already calls `GetLogEntry(r).Panic(rvr, stack)` when the
+  request carries one instead of just printing the stack, a seam nothing outside `_test.go` uses, so
+  a new `panicFails` test helper attaches a catcher via `middleware.WithLogEntry` and fails the test
+  if `Panic` ran. Every `srv.Handler().ServeHTTP` and `httptest.NewServer(srv.Handler())` call site in
+  the package — about 55 of them — now wraps its handler with it, so no test path in the package can
+  read a recovered panic back as a passing test (#338). The one site whose panic IS the fixture
+  (#323's `/metrics` scrape) inverts the check with `panicIsTheFixture` rather than dropping it, so
+  it fails if nothing panics.
+- **An HTTP/2 answer to the egress proxy's HTTP/1.1 request is now recorded as
+  `builtin:upstream-protocol-mismatch` with a plain cause, and answered with a 400 so SDKs stop
+  retrying, instead of a `builtin:dial-failed` that was retried until the SDK gave up (#359).**
+- **One TLS config was shared between the sidecar's control-plane client and the proxy's forward
+  transport, and enabling HTTP/2 edited it in place (#360).** The control-plane client keeps
+  net/http's HTTP/2 support, and turning that on prepends `h2` to the transport's own
+  `TLSClientConfig.NextProtos`. Sharing the pointer meant the forward transport then OFFERED HTTP/2
+  to every TLS peer while being unable to speak it, so a peer that chose `h2` answered with frames
+  the HTTP/1.1 reader could not parse — the failure reported in #359. It only happened where
+  `trusted_ca_pem` is set, which is every estate with a corporate CA. The control-plane client now
+  takes its own copy, and a test pins that the shared config is still untouched after a
+  control-plane round trip.
+- **The MITM and plain egress lanes now work against a TLS peer that speaks HTTP/2, negotiated or
+  not (#360).** A peer that picks `h2` over ALPN gets HTTP/2. A peer that speaks HTTP/2 without
+  negotiating it is recognised from its first frame (a SETTINGS frame read right after the TLS
+  handshake, or net/http's parse error when it only answers a request), remembered for the rest of
+  the run, and the request is resent over HTTP/2 when its body can be replayed; later requests to
+  that host go straight to HTTP/2. This also catches the two shapes the #359 error-text check missed:
+  a SETTINGS payload with a space byte before any newline, and SETTINGS that arrive before the
+  request goes out. A peer caught before the request was written is resent even when its body is a
+  one-shot stream, since nothing had read it. A request that cannot be resent, or whose HTTP/2
+  resend also fails, still gets #359's `builtin:upstream-protocol-mismatch` row and 400, with the
+  cause naming both attempts. The brokered git and PAT lanes take the same path, so a forge that
+  speaks HTTP/2 is served over HTTP/2 instead of refused.
 - **On Kubernetes, a run's Go and npm caches now count against `disk_mib`.** A third `emptyDir`
   (`wardyn-cache` at `/home/agent/.cache`) joins the existing `/tmp` and workdir scratch volumes
   (`ephemeralScratchVolumes`), and dispatch's toolchain env now points `GOTMPDIR`, `GOMODCACHE` and
@@ -2145,65 +1883,303 @@ and does not yet follow semantic versioning (interfaces are not stable).
   permits (2, or 4 with the ground-truth rotator) simply goes unserialized, as it was before, rather
   than queueing sign-ins behind a connection it cannot spare.
 
-### Changed
-
-- **`vscode/` and `novnc/` now default `FROM wardyn/agent-base:local`, not `wardyn/agent-claude-code:local`.**
-  Both Dockerfiles take a `BASE_IMAGE` build arg (`deploy/images/{vscode,novnc}/Dockerfile`); their
-  launchers only exec `code-server`/the X stack and never call a coding-agent CLI, so the vendor base
-  was never actually needed. `deploy/images/vscode/Dockerfile` also drops the
-  `LicenseRef-Anthropic-Terms` OCI licence label it no longer carries. `agent-image-vscode` and
-  `agent-image-novnc` now depend on a new `agent-image-base` target instead of `agent-images-core`, so
-  neither build touches the vendor CLI image at all. **Upgrading:** a developer checkout that wants
-  `claude` available in the vscode terminal restores the vendor base explicitly — build it first with
-  `make agent-images-core`, then `make agent-image-vscode BASE_IMAGE=wardyn/agent-claude-code:local`
-  (same knob for `agent-image-novnc`).
-
-- **The sign-in screen stops advertising the demo admin token.** The admin-token field's
-  placeholder no longer carries `demo-admin-token`, and its hint no longer names
-  `WARDYN_ADMIN_TOKEN` or the compose demo token — it says what belongs in the field and where the
-  person saw it. The unreachable-daemon refusal now names Wardyn and names the `wardynd` daemon to
-  check, instead of a bare "Could not reach the control plane." with no next step. The email-domain
-  refusal no longer tells a locked-out, unauthenticated reader to go set `WARDYN_OIDC_EMAIL_DOMAINS`
-  themselves — it points them at their Wardyn admin instead. `sign-in.tsx` (Closes #212).
-
-- **The Recordings screen pages instead of stopping at 1,000.** It fetched the whole run list in one
-  shot (capped at `LIST_LIMIT`), so an install past 1,000 runs silently lost every recording beyond
-  that window, with only a passive "truncated" note and nothing to press. `listRuns()` now takes an
-  optional `limit`/`offset` and, when both are given, returns `{ runs, truncated }` off the server's
-  own `?limit=&offset=` paging and its `X-Wardyn-Truncated` header — every other caller is unchanged.
-  The screen fetches 100 runs at a time; a "Load 100 more" text link (matching the Runs board's own
-  "Load N more") appears while more is known to exist, and a failed page keeps what already loaded
-  with a Retry that resumes from the same offset. No total is ever shown — the server doesn't send
-  one.
-
-- **CLI help and an operator-facing log line no longer print internal campaign IDs.**
-  `wardyn policy default --help`, `wardyn-tetragon-ingest --help`, and the mint-refusal WARN log in
-  `internal/api/internal.go` cited review-package coordinates (`W14-S1-6`, `W24-S1-1`, `F098`) that
-  resolve to nothing outside this repository. Each now says the thing the coordinate stood for
-  instead.
-- **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
-  `(image string, failed bool)` instead of writing the 201 itself on a BYOI/devcontainer build
-  failure, so it can be called from a background worker. `internal/api/runs.go`'s
-  `handleCreateRun` answers the 201 (refreshed FAILED run + warnings) one frame up.
-- **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site
-  citations and `docs/design/CONSOLE-RULES.md`'s 51 component citations moved from `path/file.go:NNN`
-  to `path/file.go#Symbol` (`#Type.Method` for a method, `#heading-slug` into another document,
-  `#--token` or `#.selector` for CSS). The guards resolve them with `go/parser` (and a source glob on
-  the console side) and fail unless the action appears **inside the cited symbol's own body**, so a
-  citation that drifts onto the wrong function still reds — but an insertion ANYWHERE above a cited
-  line no longer does. Contributors: inserting a line in a heavily-cited file is no longer a
-  required-check failure, and the re-point-at-rebase step for those two documents is retired. The
-  tree-wide ban on `file.go:NNN` (`TestCommentsCiteSymbolsNotLineNumbers`) now covers both documents
-  too.
-- **Two clean breaks, no alias window (owner ruling 2026-09-22): `workspace get --json` now
-  defaults to `false`, and `support-bundle`'s output flag is spelled `--output`/`-o` (#200).**
-  `workspace get` was the CLI's only command defaulting `--json` to `true` — every other command
-  defaults it `false`. `support-bundle --out` was the CLI's only flag spelled `--out` instead of
-  `--output`/`-o` (`run recording`'s download flag already used that spelling). Both now match the
-  rest of the CLI. Neither old spelling is accepted.
-
 ### Security
 
+- **`env_secret` and `llm_inspection` can no longer read a model-provider credential (#1035).**
+  Both resolve an authored secret name through the run owner's namespace, falling back to the
+  operator's, and only the `-oauth` and `-sso` provider names were reserved, so an `env_secret`
+  grant naming `wardyn-provider-<uid>-key` put a model key, the operator's included, into the
+  sandbox env. Every `wardyn-provider-*` name, whatever its suffix, is now refused by the policy
+  validators (stored policies, and inline policy at launch and in Review) and skipped, with an
+  audit event, at dispatch.
+- **"Available to" now also hides the resource from people it leaves out, and blocks storing a key for it (#612, #923).**
+  `GET /policies` leaves out a stored policy the caller isn't listed for. It filters before the
+  page window, so neither the page nor `X-Wardyn-Truncated` counts a hidden policy, and a
+  failed permission read hides every policy. Admins and security admins still see every policy,
+  since they write the lists. `/setup/status` leaves out a model provider the caller isn't listed
+  for, in `model_providers` and in the `provider_access` rows. `PUT
+  /model-providers/{id}/credential` refuses such a caller with an audited 403
+  (`capability_model_provider`) and stores nothing, the same check the launch door makes, so a
+  security admin who isn't listed is refused too. Deleting a key stays open to everyone.
+- **An image reference with a backslash, or an empty, `.` or `..` path segment, is refused (#612, #923).**
+  No registry names an image that way, and an image reference is also a value the Images tab
+  builds a control from, so a workspace's `base_image.image` could plant `../policy/<uuid>`
+  there. `POST /workspaces`, `PUT /workspaces/{id}`, `POST /base-images`, and image grants and
+  availability writes now answer 400. The availability route decodes its value first, so
+  `%2e%2e` is refused as `..` and an encoded reference is stored as the reference it spells.
+- **A person's credentials can be erased in one step, and dead sign-ins are deleted (#590).**
+  `DELETE /api/v1/people/{principal}/credentials` (admin or `security_admin`) deletes every
+  credential that person has stored — keys, tokens and captured sign-ins — and answers with the
+  count; in store mode each value is removed from Vault or Key Vault before its row, and the
+  answer says how long Key Vault keeps a soft-deleted value recoverable. It never reports success
+  with a credential left behind, and it cannot touch the operator's own credentials. Audited
+  `credential.erase`. A captured AWS or Azure DevOps sign-in whose refresh token the provider
+  refuses for good (`invalid_grant`) is deleted at once, and a stored AWS sign-in is deleted by a
+  daily sweep once its expiry passes; both are audited `credential.expired.delete`. A person
+  whose sign-in was deleted this way is shown as not connected and signs in again.
+- **An admin can no longer set a secret in someone else's namespace (#590).** `PUT
+  /api/v1/secrets/{name}?owner=` is refused with `403` for everyone, audited `secret.write`
+  `denied`: a credential is set only by the person it belongs to. `DELETE` and the name list keep
+  `?owner=`, so an admin can still remove a person's credentials. Pre-provisioning a member's key
+  before they sign in is no longer possible; they set it themselves.
+- **Credentials in memory: re-read, ridden out, let go (#589).** A stored key (an API key, the
+  Bedrock bearer key, the managed Claude token) used to be read once and injected for the run's
+  whole life, so removing it, or revoking Wardyn's access to it at the store, changed nothing for
+  a run already using it. The injection sink now gives it a ten-minute expiry and the proxy
+  re-reads it five minutes before that; an approval-gated grant, whose mint is single-use, is
+  still read once. A failed read is split two ways at every sink arm: the store (or the
+  database) not answering is a 503 ("Wardyn couldn't reach the service that holds this run's
+  credential…"), and the proxy keeps injecting the last value it had for up to 15 minutes past
+  its expiry, asking again every 30 s; any other failure is definitive (424 on the stored-key
+  paths, the Bedrock bearer arm included, which used to read an unreadable key as absent; 403 on
+  the captured AWS SSO and Azure DevOps arms, the latter as the new class `store_refused`), and the proxy
+  drops the value at once. The managed Claude token is cached for 60 s instead of read on every
+  resolve, and a capture or disconnect empties the cache. Process-wide mask copies of a
+  person's tokens (AWS SSO, Azure DevOps, the managed Claude token) are kept per credential:
+  a refresh or a disconnect retires the old values, which stay masked for an hour and are then
+  dropped instead of living for the daemon's life; an AWS SSO or Azure DevOps access token nothing
+  replaces is dropped an hour after its own expiry (#151). wardynd and wardyn-proxy set `RLIMIT_CORE` to
+  0 and mark themselves non-dumpable at start, so a crash writes no core file and another
+  process of the same user cannot read their memory or environment.
+- **Security-API follow-ups (#724).** The sign-in help link is `https://` only: a new `http://`
+  link is refused at save, and one already stored surfaces as the setup warning
+  `sign_in_help_url` (#489). A second enabled Azure DevOps (Entra) row stored before the write
+  refused it is the setup warning `ado_entra_rows` (#603). The SSH keys screen marks a key added in
+  the user view with a "Member access" chip (#584). With the site config unreadable, an escaped
+  repository name on a self-hosted host is refused with a 400 that names the site configuration,
+  not the address's shape. Review's preflight now reads the secret list where launch does, and
+  `TestPreflightMirrorsLaunchGates` pins the gate order, not only the set (#515).
+- **The `local` key refuses to start under `GODEBUG=fips140=only` (#682).** That mode forbids
+  X25519, and age drops the error, so every `WARDYN_AGE_KEY` got the same empty public recipient
+  and every local key the same `kek_id`. wardynd now refuses to start with an age key (set or
+  ephemeral) in that mode and names store mode (`WARDYN_SECRET_STORE=vaultkv`), which needs no age
+  key. New tests prove, in a child process under `fips140=only`, that the envelope round trip works
+  and that a store-mode boot mints and re-reads every boot key without X25519. `make helm-lint` now
+  checks that store mode with `secretFiles.enabled` renders no secret as an env value or
+  `secretKeyRef`.
+- **The injection sink trusts the model provider record, never the grant (#531).** Each resolve of
+  a person's provider key re-reads the run's provider by UID and injects only while it is still
+  that run's choice, on, serving the agent, with the same host, header and format the grant
+  carries; the key is read from the namespace the grant snapshots. A resolved key now expires
+  after 15 minutes, so the proxy re-checks about every 10 minutes while the run makes model calls
+  (each re-check re-mints the grant: one `credential.mint` and one `secret.read` audit row), and a
+  provider removed, turned off or re-pointed mid-run fails closed within that window rather than
+  keep its startup copy. Once a provider block is set, or when it cannot be read, the two legacy
+  shared subscription sentinels are refused before the operator's token is touched; the boot
+  gateway (`WARDYN_ANTHROPIC_BASE_URL`) no longer widens where a subscription token may go under a
+  block.
+- **An older wardynd now refuses a database a newer one migrated (#675).** Boot used to skip the
+  migrations it knew and never look at the ones it did not, so `helm rollback` or a pinned older
+  image booted over a schema whose one-way conversions it could not read. Boot now stops before
+  writing anything, naming the newest `schema_migrations` file this binary does not ship; restore
+  the pre-upgrade dump. `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` is the break-glass. Saving the site
+  config or a governance profile also keeps top-level keys this binary does not know, so a key a
+  newer wardynd wrote — a governance limit, where absent means no limit — is no longer dropped.
+- **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
+  that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
+  sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the
+  concurrent burst that lock exists to serialize. The one arm that still proceeds, a database pool
+  too small to spare a connection for the hold (`pool_max_conns=2`), now writes an
+  `auth.signin_unserialized` audit row; a refused capture is `harness.credential.refused` with
+  reason `signin_busy`. The sandbox-facing AWS sign-in request route's 503 no longer appends the
+  approval store's error text to its body. A failed read of a persisted AWS SSO spent-token mark
+  is no longer cached as "not spent" for the rest of the process's life. The Azure DevOps
+  `scm.ado.signin.captured` `store_error` row no longer carries the raw store error (dropped
+  `error` field; the cause is in the daemon log).
+- **Store mode files the internal CA with Wardyn's other boot keys (#689).** `wardyn-internal-ca`
+  (the CA every run's proxy pins for the control-plane hop) was filed as an operator credential:
+  under Vault's `operator/` path and Key Vault's `-operator-` names instead of `platform/` and
+  `-platform-`, where a policy or role restricting Wardyn's own keys would not cover it. It now sits
+  with the signing, session, UI-session and SSH host keys, and the list of platform keys is checked
+  against the keys wardynd actually mints at boot, so a new one cannot be left out again.
+- **The lists a person picks from now hold only what they may use (#737).** The harnesses and
+  integrations in `GET /setup/status`, `GET /integrations`, and the Azure DevOps rows in
+  `GET /me/scm-access` and `/setup/status`'s `scm_access` are filtered by the same capability rules
+  the launch doors refuse with (`agent`, `integration`, `workspace_provider`). A refused row is
+  dropped whole and reads exactly as one the deployment does not have; if the grant tables cannot
+  be read, those lists come back empty rather than unfiltered. Admins still see every row.
+  `GET /me/capabilities` gains `kinds_version`, which goes up whenever the set of capability kinds
+  changes.
+- **Wardyn's own keys can be kept apart from people's credentials (#646).** In local mode each
+  stored row's data key is now wrapped under a key for its purpose — `local/platform:` for the
+  signing, session, UI-session and SSH host keys, `local/cred:` for everything else — and the new
+  optional `WARDYN_PLATFORM_KEY_FILE` names a second age key that alone protects the first kind.
+  With it set, a leak of `WARDYN_AGE_KEY` forges no run identity, console session or SSH host
+  key: a boot key wrapped under anything the age key derives is refused and boot stops. The new
+  `wardynd -rewrap` maintenance mode moves rows onto their purpose's key (rows written before
+  this change, and the boot keys once the file is set), data keys only, in one transaction, and
+  writes a `secret.rewrap` audit row; boot refuses by name until it has run. `-rotate-age-key`
+  leaves the boot keys under the platform key alone. Without the file, `/setup/status` shows the
+  amber `platform_shared` row. In Vault store mode, the new `WARDYN_VAULT_ROLE_PLATFORM`
+  (chart `secretStore.vault.rolePlatform`) logs wardynd in as a second role that alone reaches
+  `<prefix>/platform/`, so the credentials token reaches no platform key; OPERATIONS.md
+  recommends it. THREAT-MODEL residual #49 states what stays shared. Rows written by this
+  version name keys an earlier 0.8 build does not know, and it refuses them by name.
+- **Vault Transit as the key that wraps stored credentials (#586).** With `WARDYN_KEK=transit`
+  and `WARDYN_VAULT_TRANSIT_KEY`, each credential sealed in Postgres has its data key wrapped by
+  your Vault's (or OpenBao's) Transit key instead of a key derived from `WARDYN_AGE_KEY`, over the
+  same Vault client, auth and TLS as store mode; the key never leaves Vault and every unwrap is in
+  its audit log. Each wrap is bound to its row with `associated_data`, and wardynd refuses to boot
+  on a key that does not enforce it (proved live on Vault 1.20 and OpenBao 2.6) or that it cannot
+  reach. Reads follow each row's `kek_id`, so an install moves while it serves: `wardynd -rewrap`
+  (the one command that moves data keys, #646) now also moves every row onto the Transit key at
+  its latest version, and back to the local key, client-side (never Transit's server-side
+  `rewrap`), in one transaction; its `secret.rewrap` row names the key service, and it says when
+  `min_decryption_version` can retire the old versions. Once no row is under the age key, it can be
+  unset; the boot keys are wrapped by Transit too. `-rotate-age-key` now leaves Transit rows alone. The chart gains `kek.provider` and
+  `kek.transit.*`, compose `docker-compose.transit.yaml`, and `/setup/status` a `kek_service` row,
+  plus an amber `kek_local` row on a multi-user install still on the local key.
+- **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
+  view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
+  The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `user`,
+  and it never gains the admin override: the sign-in re-stamp leaves its role alone, a CHECK
+  refuses a capped row that reads `admin`, and the SSH gateway refuses the override for it
+  (`ssh.authenticate` reason "capped key (registered in the user view): no admin override"). It still
+  reaches its owner's own runs. `ssh_key.add` carries `capped: true` for such a key. Keys
+  registered outside the user view behave exactly as before, and `POST /me/tokens` still refuses
+  in the mode. See `docs/SSH.md#bounds`.
+- **Store mode in Azure Key Vault (#645).** `WARDYN_SECRET_STORE=azurekv` writes every stored
+  credential to the organisation's Key Vault as a secret and keeps only a pointer row, like
+  `vaultkv`; no Azure SDK is involved. wardynd authenticates with AKS workload identity (a
+  projected token exchanged for an Entra token, re-read at every exchange) or a VM's managed
+  identity, never a client secret, and refuses to start without a token. A secret's name is
+  derived from a hash of its row's owner and name, one name per credential; a read refuses a row
+  that points to any other name or vault, then a value whose tags name another row. A replace is a
+  new version and disables the versions listed before it (Key Vault cannot delete old versions), so
+  two writes landing together never disable each other's, and store-mode writes to one credential
+  wait for each other across replicas; once the vault holds `WARDYN_AZURE_KV_MAX_VERSIONS` (100)
+  versions of a name, the next write starts a fresh name and deletes the old one.
+  A removal soft-deletes the secret and then purges it when the vault allows; when purge
+  protection or the role withholds it, the removal still succeeds and `secret.delete` records
+  `purged: false` and the vault's `recoverable_days`. A name still held by a deleted secret is
+  purged and reused, or skipped for a new one; Wardyn never recovers a deleted secret. `-reconcile`
+  lists values left soft-deleted, and `-migrate-secrets -to=local` counts them (`soft_deleted`). A
+  429, a 5xx or any token endpoint failure (a refusal included, since Entra answers
+  `invalid_client` for a projected token caught mid-refresh) is transient; a 401 fetches a new
+  token at most every 30 s; a 403, a disabled or missing secret, or a binding mismatch is
+  definitive. A store-mode write, lock wait included, is bounded at six times
+  `WARDYN_SECRET_STORE_TIMEOUT`. A list's `nextLink`
+  is followed only on the same vault, so the bearer token never leaves it. The chart's
+  `secretStore.azure.*` values label the pod and annotate the service account for workload
+  identity; `-migrate-secrets -to=azurekv|local` and `-reconcile` work as for Vault. In the shared
+  store seam, a Put that fails to write its row no longer deletes the value the row already
+  points to, and is audited (`secret.write` failure, reason `row`), for Wardyn's own writes (a
+  captured or refreshed sign-in, a pasted harness credential) as for the API's. Tested against a fake Key
+  Vault; not yet run against a live one.
+- **Every read of a stored secret is now audited, once (#647).** Before, only the injection
+  sinks recorded `secret.read`; boot-key reads, the GitHub App and git PAT/SSH key reads at mint,
+  resident secrets placed at dispatch, and every status check that decrypts a captured sign-in or
+  the managed subscription token left no row. wardynd now wraps its secret store in one decorator that
+  records a `secret.read` for each read, carrying why it happened (`purpose`: `boot`,
+  `broker-mint`, `dispatch`, `managed-token`, `migrate`, `sso-refresh`, `ado-refresh`, `status`),
+  whose namespace it was made for, the store, and the row it opened (`ref`, `row_owner`). The
+  injection sinks keep their own row, with its grant and jti, and now name the stored row too; the
+  decorator stays silent for those reads, so no read is counted twice. A read that finds nothing
+  records nothing, and a refused row is a `failure` without the store's error text. The first
+  0.8 boot records one `migrate` read per legacy row it converts. A read in store mode names the
+  store (`vaultkv` or `azurekv`). A guard type-checks every read site, the boot conversion's and
+  `wardynd -migrate-secrets`' bulk reads included, and fails the build on one that says neither
+  why it reads nor that it records the read itself, following the context the read actually
+  receives; it also fails on a new path to a stored value inside the store that it does not check; a read that still reaches the store
+  with no purpose is refused and recorded as an `unmarked` failure. The row's owner, the read's own
+  owner, and ref are all cut to 512 bytes and stripped of control characters before they are
+  recorded, since a database writer controls them. Deployments that poll setup status often will
+  see more `secret.read` rows: each status check that decrypts a captured sign-in is now one.
+- **Store mode: credentials can live in your organisation's Vault, and Wardyn holds no key
+  (#644).** `WARDYN_SECRET_STORE=vaultkv` writes every stored credential to a Vault KV v2 engine
+  (OpenBao is a supported endpoint) and keeps only a pointer row in Postgres (`enc_version` 2, no
+  ciphertext); Wardyn does no at-rest cryptography for it, and once every row is in Vault,
+  `WARDYN_AGE_KEY` is unset. Wardyn's own boot keys live there too, under `platform/`. A read
+  derives the Vault path from the row's owner and name and refuses a row that points anywhere
+  else, then refuses a value whose `custom_metadata` (owner, name, kind, format) names another
+  row, so a pointer moved by a database writer reads nothing. A row whose value is gone, or whose
+  data at Vault is not in Wardyn's format, is a refusal, never "not found" or an empty value, so a
+  lost boot key, or one whose data was replaced with another shape, fails boot instead of being
+  minted over; a Put never writes over a path bound to another row. Put writes Vault before the
+  row and Delete removes every version from Vault before the row. wardynd authenticates with a projected
+  service-account token (Kubernetes auth) or a token file, never a token in an environment
+  variable; it refuses `http://` to a non-loopback Vault and uses a TLS config of its own. A
+  sealed, throttled or unreachable Vault is transient (the credential sink answers 503, distinct
+  from a missing credential's 424, and audits `secret.read` with `reason` `store_unavailable`); a
+  401/403 is definitive, and re-authenticates at most once every 30 s. On a transient failure the
+  proxy keeps injecting its last value for a bounded grace (#589, above). A KV v2 mount
+  that does not exist fails boot, and a write or delete Vault answers 404 fails rather than reading
+  as done. The documented Vault policy grants `read` on `<mount>/config`, no `delete` on `data/`,
+  and no `destroy/` or `undelete/`. `wardynd -migrate-secrets
+  -to=vaultkv|local` moves rows online in either direction (`secret.migrate`), and
+  `wardynd -reconcile` reports pointers without values and values without pointers. The chart's
+  `secretStore.vault.*` values, a compose token-file overlay, a setup row naming the store, and
+  docs/OPERATIONS.md "Store mode: credentials in Vault" go with it. Tested against a fake Vault
+  and live against Vault OSS 2.1.1 and OpenBao 2.6.2, including Kubernetes auth on kind.
+- **A row an enrolled laptop forwarded could read as the organisation's own.** A federated audit row
+  kept the device's claimed `actor`, so a `wdd_` device credential could append
+  `human` / `<an org admin>` / `governance.profile.update` rows that nothing but an unread
+  `data.device_origin` told apart (#506). The stored actor is now `device:<id>/<claimed actor>` (the
+  claim stays in `data.device_origin.actor`, and the device's hash still re-checks from the stored
+  row), every audit read and the NDJSON export carry a top-level `device_id` on forwarded rows, and
+  `GET /audit` and `/audit/export` take `?origin=device|organisation`.
+- **An enrolment token can be cancelled before it is redeemed (#506).** `GET
+  /admin/devices/enrolment-tokens` lists the tokens still redeemable (never the token or its hash)
+  and `DELETE /admin/devices/enrolment-tokens/{id}` revokes one, audited as
+  `device.enrolment_token.revoke` — admin or `security_admin`, and on the CLI as `wardyn device
+  enrol-token-list` / `enrol-token-revoke <id>`. A leaked token no longer stays redeemable for its
+  full 72 hours.
+
+- **One push-rules inspection could hold 656 MiB from a legal 16.8 MB push.** A pack of 1,048,576
+  near-empty blobs sat inside every `internal/gitpack` ceiling, and its per-object bookkeeping (each
+  object kept a 512-byte read buffer) grew the egress proxy's heap by 656 MiB against the sidecar's
+  256 MiB cap (#250). The object ceiling is now 200,000, far above a real push, so that pack is
+  refused as uninspectable; objects are allocated at their exact size, and a blob's content is
+  released once the pack is parsed. A max-legal pack of that shape now keeps 22 MiB. Inspections
+  already ran one at a time behind the proxy's inspection slot; a test now pins it.
+- **The autonomy rubric graded a run's Amazon Bedrock model credential as no secret at all (#504).**
+  The secrets axis read only the grants a request carried, and the Bedrock credential (a captured
+  AWS SSO session, a bearer key, SigV4 keys) is handed to the run at dispatch, so such a run graded
+  `secrets=none` on Review and at launch and was capped by the wrong rubric row. It now grades
+  `powerful`, the value the rubric already gives an `api_key` to a host outside the coding-agent
+  baseline, whether the credential is proxy-injected or resident. Both doors grade from the one
+  model-credential resolution, which now runs before the autonomy gate. The grade is frozen for
+  dispatch: a run graded without a Bedrock credential that would be handed one at dispatch fails
+  with `autonomy_grade_drift` instead of launching.
+- **A repository's own `.claude/settings.json` could approve tool calls on a `tool_approvals=hold`
+  run before Wardyn's approval gate was asked.** Claude Code resolves `permissions.allow` rules
+  before it consults `--permission-prompt-tool`, so a matching rule in the workspace (which the
+  agent can also write) ran the tool and `wardyn-toolgate` never saw it (#358). The hold lane in
+  the claude-code image's `agent-run` now passes `--setting-sources user`, so project and local
+  settings are not loaded; managed settings still are. This is an interim fix. The agent can still
+  write its own user-level `~/.claude/settings.json`; THREAT-MODEL.md §5 states that residual, and
+  #333's managed settings close it.
+- **An unauthenticated caller that rotated its source address wrote one `auth.failed` (now `auth.fail`) audit row per
+  refused request.** The 0.7.2 coalescer keyed a streak on the peer IP, so every change of address
+  closed the streak and opened a new one: a bad-token drip from ten addresses, one a second, recorded
+  120 rows in two minutes, as many as the rate limiter allows (#347). A streak is now keyed on the
+  refusing boundary, `reason` and path. The summary row keeps the opening peer as `SourceIP` and adds
+  `peers`, the number of distinct peer IPs it folded (stops counting at 100), `peer_ips`, those
+  addresses (capped at 100), and `peers_truncated`. The rate limiter
+  is unchanged.
+- **A handler that builds a 5xx body's `(status, message)` pair and hands it to a helper could still
+  forward driver/substrate error text into it, past the guard added for #173.** The guard only read
+  direct `writeError` call sites, so a helper's own call site — where the message had already
+  collapsed into one opaque string argument — reported clean. Seven sites did this: `refuseCapture`'s
+  four callers in `ssotoken.go` (the AWS SSO capture path — the door the sandbox itself talks to),
+  `driveBindFailureHere`'s runner-capabilities-unavailable arm (`user_drives_run.go`), and `uiFail`'s
+  two callers in `uigateway.go`, which forwarded `sshExecStreamErrorMessage`'s own raw-error fallback.
+  All seven now log the error and send a fixed sentence; their `reason` codes are unchanged, since the
+  SDK reads them as a wire contract. The guard (`TestNoDriverTextInServerErrorBody`) now follows one
+  hop into a known forwarder (`refuseCapture`, `uiFail`, and the `*driveBindFailure` composite-literal
+  shape `driveBindFailureHere`/`driveShareBindFailure` build) and treats a call to
+  `sshExecStreamErrorMessage` as carrying error text the same as an inline `err.Error()`, so the next
+  handler written in this indirect style no longer passes CI clean.
+- **A run that will hold a person's Azure DevOps Entra bearer no longer grades its secrets
+  `none` (#503, closing #474).** The autonomy rubric graded a run from its eligible grants
+  alone, but dispatch authors the per-person Azure DevOps grant later, for `dev.azure.com`.
+  So a run that would hold that bearer graded `secrets=none` at create, on Review and at
+  launch, and could land above its profile's secrets cap. The rubric now
+  resolves the Azure DevOps lane at create, the same way dispatch does, and grades the
+  credential with it. The `bound_by` sentence names the credential when it is why the secrets
+  axis graded `powerful`. Dispatch then authors from that frozen resolution and refuses a lane
+  the grade did not include: an admin who edits the provider row during a long image build
+  can no longer hand a run graded `none` an Azure DevOps credential.
 - **`limits.deny_task_mode_exec` also refuses an interactive run's shell startup command.** A
   member under that profile could send the exec command as an interactive run's task with
   `interactive_start` unset or `shell`; the image runs it as `bash -lc` at sandbox boot, before
