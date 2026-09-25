@@ -287,6 +287,22 @@ func (p *Provider) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 	return nil
 }
 
+// RevokeJTI revokes a single token by its own jti, without revoking the
+// whole run (O2, least-privilege credentials): a revive uses this to retire
+// a run's OLD token the moment a fresh one is minted, distinct from RevokeRun
+// (the run-wide kill-switch cascade). Not part of identity.Provider — callers
+// reach it through their own narrow capability interface (internal/api's
+// jtiRevoker), the way every other optional capability in this tree is
+// reached, rather than widening the Provider contract for one caller.
+func (p *Provider) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error {
+	if err := p.revocations.RevokeJTI(ctx, jti, runID); err != nil {
+		p.audit(ctx, runID, p.spiffeIDString(runID), "identity.revoke_jti", jti, "failure")
+		return fmt.Errorf("embedded identity: revoke jti for run %s: %w", runID, err)
+	}
+	p.audit(ctx, runID, p.spiffeIDString(runID), "identity.revoke_jti", jti, "success")
+	return nil
+}
+
 func (p *Provider) spiffeIDForRun(runID uuid.UUID) (spiffeid.ID, error) {
 	id, err := spiffeid.FromSegments(p.trustDomain, "agent-run", runID.String())
 	if err != nil {

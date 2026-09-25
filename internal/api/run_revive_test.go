@@ -443,3 +443,38 @@ func TestAdminProxyWindow(t *testing.T) {
 		t.Errorf("proxy-window after a revive: %s; want nothing outside the window", w.Body.String())
 	}
 }
+
+// TestReviveRun_RevokesTheRetiringToken is O2 (least-privilege credentials,
+// owner law 2026-09-24): a revive mints a fresh run token, and the OLD one's
+// own jti must stop verifying at once rather than waiting out its TTL — a
+// live retiring token must not go on answering /internal/* calls once a
+// fresh one exists.
+func TestReviveRun_RevokesTheRetiringToken(t *testing.T) {
+	f := newReviveFixture(t)
+	ctx := context.Background()
+	old, err := f.srv.cfg.Identity.MintRunIdentity(ctx, f.run.ID, f.run.CreatedBy, f.run.CreatedBy, internalAudience)
+	if err != nil {
+		t.Fatalf("mint the retiring token: %v", err)
+	}
+	// Splice the real, live old token into the run's rendered (stopped) proxy
+	// config, as ProxyConfig would read one back for a genuine revive.
+	cfg, err := proxy.LoadConfigBytes(f.rr.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RunToken = old.Token
+	if f.rr.cfg, err = json.Marshal(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
+	}
+	if _, verr := f.srv.cfg.Identity.Verify(ctx, old.Token, internalAudience); verr == nil {
+		t.Error("the retiring token still verifies after the revive; want it revoked")
+	}
+	newCfg := f.newConfig(t)
+	if _, verr := f.srv.cfg.Identity.Verify(ctx, newCfg.RunToken, internalAudience); verr != nil {
+		t.Errorf("the fresh token does not verify: %v", verr)
+	}
+}

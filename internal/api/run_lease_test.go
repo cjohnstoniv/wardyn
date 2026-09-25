@@ -165,6 +165,19 @@ func (c *countingIdentity) RevokeRun(ctx context.Context, runID uuid.UUID) error
 	return c.Provider.RevokeRun(ctx, runID)
 }
 
+// RevokeJTI forwards to the wrapped provider (O2): countingIdentity embeds
+// identity.Provider, whose four-method interface does not carry RevokeJTI, so
+// without this passthrough a revive under this fixture would silently skip
+// revoking the retiring token — the jtiRevoker assertion in run_revive.go
+// would just fail closed-but-quiet, not error.
+func (c *countingIdentity) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error {
+	jr, ok := c.Provider.(jtiRevoker)
+	if !ok {
+		return nil
+	}
+	return jr.RevokeJTI(ctx, jti, runID)
+}
+
 func (c *countingIdentity) count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

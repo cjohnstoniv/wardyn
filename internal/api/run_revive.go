@@ -60,6 +60,17 @@ import (
 // reviveBulkMax bounds one admin restart request.
 const reviveBulkMax = 100
 
+// jtiRevoker is an OPTIONAL identity.Provider capability: revoke a single
+// token by its own jti, without revoking the whole run (O2, least-privilege
+// credentials, owner law 2026-09-24). A revive mints a fresh run token; this
+// is how it retires the OLD one on the spot rather than leaving it to lapse
+// on its own TTL. The embedded provider's RevocationStore already carries
+// RevokeJTI (cmd/wardynd/adapters.go); this is the narrow seam that reaches
+// it without widening identity.Provider for every implementation.
+type jtiRevoker interface {
+	RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error
+}
+
 // reviveError is a revive refusal: status is the HTTP answer, and lost says
 // the proxy is gone and the run was put back to lost (outage).
 type reviveError struct {
@@ -165,6 +176,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveOwnerRecheck(ctx, run, cfg, actorType, actor); rerr != nil {
 		return reviveResult{}, rerr
 	}
+	retiring := cfg.RunToken
 	id, err := s.cfg.Identity.MintRunIdentity(ctx, run.ID, runIdentitySubject(ctx, run.CreatedBy), run.CreatedBy, internalAudience)
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "mint run identity: "+err.Error())
@@ -174,6 +186,8 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if err != nil {
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "encode proxy config: "+err.Error())
 	}
+
+	s.revokeRetiringToken(ctx, retiring, run.ID)
 
 	// F2 (Fable review): a slow first pull of the proxy image belongs BEFORE
 	// the claim below, never after — the claim is what makes a watcher sweep
@@ -298,6 +312,28 @@ func (s *Server) reviveNeedsAgentStart(ctx context.Context, run types.AgentRun) 
 	}
 	st, err := s.cfg.Runner.Status(ctx, run.SandboxRef)
 	return err == nil && st.State != types.RunRunning
+}
+
+// revokeRetiringToken retires the OLD run token's own jti once a fresh one is
+// minted (O2, least-privilege credentials, owner law 2026-09-24): a live old
+// token must not go on answering /internal/* calls until its TTL lapses on
+// its own. Best-effort and silent on a miss: an already-expired retiring
+// token fails Verify on expiry before revocation is even reached, so there is
+// nothing to revoke, and a provider without single-jti revocation is not held
+// back.
+func (s *Server) revokeRetiringToken(ctx context.Context, retiring string, runID uuid.UUID) {
+	claims, verr := s.cfg.Identity.Verify(ctx, retiring, internalAudience)
+	if verr != nil {
+		return
+	}
+	jr, ok := s.cfg.Identity.(jtiRevoker)
+	if !ok {
+		return
+	}
+	if err := jr.RevokeJTI(ctx, claims.JTI, runID); err != nil {
+		slog.WarnContext(ctx, "wardynd: revoking a revived run's retiring token failed",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
 }
 
 func reviveFrom(run types.AgentRun) string {
