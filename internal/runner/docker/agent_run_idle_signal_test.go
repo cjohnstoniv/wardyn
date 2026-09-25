@@ -29,9 +29,10 @@ import (
 // shell fires the same whether that shell is a literal PID 1 or merely a
 // process GROUP leader — so this runs each REAL script as its own process
 // group leader (the idiom TestAgentIdleScript_ExitsOnSIGTERM already uses) and
-// signals the whole group (the loop backgrounds a child `sleep`; signalling
-// only the leader would miss it), pinning the exit codes 143/130 the same way
-// TestAgentIdleScript_ExitsOnSIGTERM pins the sh script.
+// signals only the leader — matching how docker stop and the kubelet deliver
+// a stop signal, which target PID 1 only, never the whole process group —
+// pinning the exit codes 143/130 the same way TestAgentIdleScript_ExitsOnSIGTERM
+// pins the sh script.
 func TestAgentRunIdle_ExitsOnSignal(t *testing.T) {
 	images := []struct {
 		name  string
@@ -67,7 +68,8 @@ func TestAgentRunIdle_ExitsOnSignal(t *testing.T) {
 // group leader, waits for it to reach the hold-open point (prepDone written —
 // same signal ccRunIdle/runIdle/cxRunIdle wait for, via `timeout`, in the
 // sibling boot-ordering tests) and then for the idle loop's `sleep` child,
-// sends sig to the WHOLE GROUP, and returns the exit code.
+// sends sig to the LEADER ONLY (matching docker stop / the kubelet), and
+// returns the exit code.
 func runIdleAndSignal(t *testing.T, script string, env []string, prepDone string, sig syscall.Signal) int {
 	t.Helper()
 	cmd := exec.Command("bash", script, "--idle")
@@ -117,8 +119,10 @@ func runIdleAndSignal(t *testing.T, script string, env []string, prepDone string
 		return hasSleepChild(cmd.Process.Pid)
 	})
 
-	if err := syscall.Kill(-cmd.Process.Pid, sig); err != nil {
-		t.Fatalf("signal the process group: %v", err)
+	// Leader only, matching docker stop / the kubelet, which signal PID 1
+	// and never the whole process group.
+	if err := syscall.Kill(cmd.Process.Pid, sig); err != nil {
+		t.Fatalf("signal the process leader: %v", err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
