@@ -1,0 +1,17 @@
+-- Persist each run's EFFECTIVE idle auto-stop cap on the run row.
+--
+-- The idle reaper (cmd/wardynd/adapters.go ListRunningWithPolicy) read
+-- auto_stop_after_sec by LEFT JOINing run_policies on agent_runs.policy_id and
+-- COALESCE-ing a missing join to 0 (= never auto-stop). But a run launched with
+-- an INLINE policy, the configured default, or one of the internal lanes
+-- (scan / verify / record / harness-login) has NO stored policy_id — so the join
+-- was always NULL and every such run was silently EXEMPT from idle reaping. An
+-- interactive box therefore never auto-stopped: its sandbox + minted credentials
+-- lived until manual kill.
+--
+-- Capture the resolved cap on the run at creation time (written from the
+-- effective RunPolicySpec at every CreateRun site) so the reaper reads it from
+-- the run row directly, independent of whether a stored policy is attached — and
+-- frozen at launch so a later policy edit can't retroactively change a live run's
+-- cap. DEFAULT 0 preserves the old "no cap" behaviour for any pre-existing row.
+ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS auto_stop_after_sec INTEGER NOT NULL DEFAULT 0;
