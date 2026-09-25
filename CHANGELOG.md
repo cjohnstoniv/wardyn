@@ -438,6 +438,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   credential in its policy is dropped and audited; a run no provider serves launches with no model
   credential and says so. Record sessions choose a provider the same way.
 
+- **Model-provider refusals and audit rows name the provider and its kind (#532).** The create and
+  Review 422 for a model-provider refusal (`enforceRunModelProvider`) now carries `provider` and
+  `kind` in the wire body whenever it names a provider, so the console can open that provider's own
+  door instead of guessing from the roster. Only a credential refusal (your own key or token is not
+  stored) also carries `reason: "model_credential"`, the class the console answers with a sign-in
+  and a relaunch; a provider that is turned off, not available to the agent or of a kind with no
+  dispatch arm yet carries none. The `run.create` failure row dispatch writes for a model-provider
+  refusal gains the same `kind`, the legacy `mechanism` field written as that kind, and on a
+  credential refusal the same `reason`, so the console's audit reader grades that ending as a
+  credential one (it reads `mechanism` only on such a row, until MP-24 moves it off that key). When
+  the site config itself cannot be read, the create door's bare 500 (`get site config`) becomes
+  dispatch's 503 and sentence, so both doors now refuse the same way.
+
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0076_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to
   at create time, so every `scanRun`-bound reader — `GetRun`, `ListRuns`, the run detail and list

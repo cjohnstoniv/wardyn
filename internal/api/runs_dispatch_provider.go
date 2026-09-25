@@ -110,6 +110,13 @@ func (s *Server) providerCredentialRefusal(ctx context.Context, owner string, p 
 	return fmt.Sprintf(mpRunRefusal, p.ID, state, mpRunConnectRemedy), nil
 }
 
+// providerCredentialMissing reports whether msg, a providerCredentialRefusal
+// answer, is one the person's own stored key or token repairs — the one
+// model-provider refusal that carries reason model_credential (#532) at both
+// doors. The admin token's (mpcNoPerson) is not: no credential it could store
+// would serve the run.
+func providerCredentialMissing(msg string) bool { return msg != "" && msg != mpcNoPerson }
+
 // providerGovernsDispatch reports whether this dispatch takes the provider path
 // rather than the legacy lane chain: the run chose a provider, or this is a
 // model run of an agent Wardyn credentials and the block is set — or could not
@@ -152,7 +159,7 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, po
 ) (llmTransport, []runner.InjectionGrant, providerDispatch, bool) {
 	llm := llmTransport{modelRun: true}
 	if !siteCfgOK {
-		s.refuseProviderDispatch(ctx, run, mpRunUnreadable)
+		s.refuseProviderDispatch(ctx, run, mpRunUnreadable, "", false)
 		return llm, injections, providerDispatch{}, false
 	}
 	// The host-mount subscription path: a policy blessed with the operator's
@@ -163,8 +170,10 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, po
 	var lane providerKeyLane
 	if run.ModelProviderID != "" {
 		var refusal string
-		if lane, refusal = s.providerLaneForRun(ctx, run, siteCfg); refusal != "" {
-			s.refuseProviderDispatch(ctx, run, refusal)
+		var kind types.ModelProviderKind
+		var credential bool
+		if lane, refusal, kind, credential = s.providerLaneForRun(ctx, run, siteCfg); refusal != "" {
+			s.refuseProviderDispatch(ctx, run, refusal, kind, credential)
 			return llm, injections, providerDispatch{}, false
 		}
 	}
@@ -189,35 +198,53 @@ func (s *Server) resolveProviderLane(ctx context.Context, run types.AgentRun, po
 // providerLaneForRun re-reads the provider the run chose at create and refuses,
 // naming it, if it is gone, off, no longer serves the agent, is of a kind this
 // arm does not dispatch, or its owner's credential is not stored (§2.4 step 5).
-func (s *Server) providerLaneForRun(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig) (providerKeyLane, string) {
+// kind is the provider's, for the refusal's run.create audit row (#532) — ""
+// when id names no real provider (mpRunStateMissing), the only case with none
+// to name; credential marks a refusal providerCredentialMissing classes.
+func (s *Server) providerLaneForRun(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig) (
+	lane providerKeyLane, refusal string, kind types.ModelProviderKind, credential bool,
+) {
 	id := run.ModelProviderID
 	p, found := modelProviderByID(siteCfg.ModelProviders, id)
 	switch {
 	case !found:
-		return providerKeyLane{}, providerRefusal(id, mpRunStateMissing).refusal
+		return providerKeyLane{}, providerRefusal(id, "", mpRunStateMissing).refusal, "", false
 	case p.Disabled:
-		return providerKeyLane{}, providerRefusal(id, mpRunStateOff).refusal
+		return providerKeyLane{}, providerRefusal(id, p.Kind, mpRunStateOff).refusal, p.Kind, false
 	case !providerKindDispatched[p.Kind]:
-		return providerKeyLane{}, fmt.Sprintf(mpRunNotYet, id)
+		return providerKeyLane{}, fmt.Sprintf(mpRunNotYet, id), p.Kind, false
 	}
 	lane, ok := providerKeyLaneFor(p, run.Agent)
 	if !ok {
-		return providerKeyLane{}, providerRefusal(id, fmt.Sprintf(mpRunStateNotServing, run.Agent)).refusal
+		return providerKeyLane{}, providerRefusal(id, p.Kind, fmt.Sprintf(mpRunStateNotServing, run.Agent)).refusal, p.Kind, false
 	}
 	lane.owner = runIdentitySubject(ctx, run.CreatedBy)
 	msg, err := s.providerCredentialRefusal(ctx, lane.owner, p)
 	if err != nil {
-		return providerKeyLane{}, fmt.Sprintf(mpRunCredUnreadable, id)
+		return providerKeyLane{}, fmt.Sprintf(mpRunCredUnreadable, id), p.Kind, false
 	}
-	return lane, msg
+	return lane, msg, p.Kind, providerCredentialMissing(msg)
 }
 
 // refuseProviderDispatch fails the run closed (CAS from STARTING, so a
-// concurrent kill's KILLED stands) before any credential is authored.
-func (s *Server) refuseProviderDispatch(ctx context.Context, run types.AgentRun, msg string) {
+// concurrent kill's KILLED stands) before any credential is authored. kind
+// (#532) is the refused provider's kind, "" when it is not known (an
+// unreadable block, or a provider id that does not exist) — recorded twice,
+// as `kind` and as the legacy `mechanism` field. credential adds `reason:
+// model_credential`, the class the console's audit reader (runEndingFromAudit)
+// grades a credential ending by; it reads `mechanism` only on such a row, until
+// MP-24 moves it off that key.
+func (s *Server) refuseProviderDispatch(ctx context.Context, run types.AgentRun, msg string, kind types.ModelProviderKind, credential bool) {
 	s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
+	data := map[string]any{"error": msg, "provider": run.ModelProviderID}
+	if kind != "" {
+		data["kind"], data["mechanism"] = kind, string(kind)
+	}
+	if credential {
+		data["reason"] = llmRefusalAuditReason
+	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-		run.ID.String(), "failure", mustJSON(map[string]any{"error": msg, "provider": run.ModelProviderID})))
+		run.ID.String(), "failure", mustJSON(data)))
 }
 
 // dropLegacyModelInjections removes, auditing each, every injection that would
@@ -305,12 +332,12 @@ func (s *Server) authorProviderKeyInjection(ctx context.Context, run types.Agent
 		ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 		Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: 3600},
 	}); err != nil {
-		s.refuseProviderDispatch(ctx, run, "could not author the model provider credential injection: "+err.Error())
+		s.refuseProviderDispatch(ctx, run, "could not author the model provider credential injection: "+err.Error(), lane.provider.Kind, false)
 		return runner.InjectionGrant{}, false
 	}
 	rule, err := injectionRuleFromScope(scope)
 	if err != nil {
-		s.refuseProviderDispatch(ctx, run, "could not compile the model provider credential injection: "+err.Error())
+		s.refuseProviderDispatch(ctx, run, "could not compile the model provider credential injection: "+err.Error(), lane.provider.Kind, false)
 		return runner.InjectionGrant{}, false
 	}
 	return runner.InjectionGrant{GrantID: grantID, Rule: rule}, true

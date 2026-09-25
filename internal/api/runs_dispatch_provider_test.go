@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -230,19 +231,33 @@ func TestProviderDispatch_RefusesNamingTheProvider(t *testing.T) {
 		siteOK   bool
 		ownerKey bool
 		want     string
+		// wantKind is #532's run.create failure datum — `kind` and the legacy
+		// `mechanism` twin — "" when the refused provider's kind is not known
+		// (deleted, or the block itself could not be read).
+		wantKind types.ModelProviderKind
+		// credential: the row carries reason model_credential, the class the
+		// console's audit reader grades a credential ending by.
+		credential bool
+		owner      string // the run's owner, mpOwner when ""
 	}{
-		{"deleted", "anthropic", types.SiteConfig{ModelProviders: providerBlock()}, true, true, providerRefusal("anthropic", mpRunStateMissing).refusal},
-		{"turned off", "anthropic", with(func(q *types.ModelProvider) { q.Disabled = true }), true, true, providerRefusal("anthropic", mpRunStateOff).refusal},
+		{"deleted", "anthropic", types.SiteConfig{ModelProviders: providerBlock()}, true, true, providerRefusal("anthropic", "", mpRunStateMissing).refusal, "", false, ""},
+		{"turned off", "anthropic", with(func(q *types.ModelProvider) { q.Disabled = true }), true, true,
+			providerRefusal("anthropic", types.ModelProviderAnthropicAPIKey, mpRunStateOff).refusal, types.ModelProviderAnthropicAPIKey, false, ""},
 		{"no longer serves the agent", "anthropic", with(func(q *types.ModelProvider) { q.Harnesses = nil }), true, true,
-			providerRefusal("anthropic", "it is not available to claude-code").refusal},
+			providerRefusal("anthropic", types.ModelProviderAnthropicAPIKey, "it is not available to claude-code").refusal, types.ModelProviderAnthropicAPIKey, false, ""},
 		{"re-kinded to one with no arm", "anthropic", with(func(q *types.ModelProvider) { q.Kind = types.ModelProviderBedrockBearer }), true, true,
-			"This run's model provider is anthropic, and provider dispatch for that kind is not yet available on this build — nothing was started."},
-		{"the block cannot be read", "anthropic", types.SiteConfig{}, false, true, mpRunUnreadable},
+			"This run's model provider is anthropic, and provider dispatch for that kind is not yet available on this build — nothing was started.",
+			types.ModelProviderBedrockBearer, false, ""},
+		{"the block cannot be read", "anthropic", types.SiteConfig{}, false, true, mpRunUnreadable, "", false, ""},
 		// Created under a block that serves no provider for claude-code: nothing
 		// on the row says so, and the legacy chain would serve the operator's key.
-		{"no provider chosen and the block cannot be read", "", types.SiteConfig{}, false, true, mpRunUnreadable},
+		{"no provider chosen and the block cannot be read", "", types.SiteConfig{}, false, true, mpRunUnreadable, "", false, ""},
 		{"the owner's own key is absent", "anthropic", with(func(*types.ModelProvider) {}), true, false,
-			"This run's model provider is anthropic, and " + mpRunNoKey + " — " + mpRunConnectRemedy + " Wardyn does not substitute a different model provider."},
+			"This run's model provider is anthropic, and " + mpRunNoKey + " — " + mpRunConnectRemedy + " Wardyn does not substitute a different model provider.",
+			types.ModelProviderAnthropicAPIKey, true, ""},
+		// No credential the admin token could store would serve the run.
+		{"the owner is the admin token", "anthropic", with(func(*types.ModelProvider) {}), true, false,
+			mpcNoPerson, types.ModelProviderAnthropicAPIKey, false, adminTokenPrincipal},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := providerRunFixture(t, tc.site, &capStore{}, nil)
@@ -254,7 +269,7 @@ func TestProviderDispatch_RefusesNamingTheProvider(t *testing.T) {
 				_ = sec.For(mpOwner).Put(context.Background(), providerSecretName("uid-a", providerKeyPart), []byte(mpOwnerKey))
 			}
 			ctx := context.Background()
-			run, err := srv.cfg.Store.CreateRun(ctx, types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: mpOwner,
+			run, err := srv.cfg.Store.CreateRun(ctx, types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: cmp.Or(tc.owner, mpOwner),
 				ModelProviderID: tc.provider, State: types.RunStarting})
 			if err != nil {
 				t.Fatal(err)
@@ -271,6 +286,32 @@ func TestProviderDispatch_RefusesNamingTheProvider(t *testing.T) {
 			}
 			if len(st.grants) != 0 || len(policy.AllowedDomains) != 0 {
 				t.Errorf("a refused run authored grants %v / egress %v", st.grants, policy.AllowedDomains)
+			}
+			// #532: the run.create failure row names the provider and its kind
+			// (and the kind's legacy `mechanism` twin, absent when it isn't
+			// known); a credential refusal also carries the reason.
+			var data struct {
+				Provider, Kind, Mechanism, Reason string
+			}
+			found := false
+			for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+				if ev.Action == "run.create" && ev.Outcome == "failure" {
+					found = true
+					if err := json.Unmarshal(ev.Data, &data); err != nil {
+						t.Fatalf("unmarshal run.create data: %v", err)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("no run.create failure row was written")
+			}
+			wantReason := ""
+			if tc.credential {
+				wantReason = llmRefusalAuditReason
+			}
+			if data.Provider != tc.provider || data.Kind != string(tc.wantKind) || data.Mechanism != string(tc.wantKind) || data.Reason != wantReason {
+				t.Errorf("run.create provider/kind/mechanism/reason = %q/%q/%q/%q, want %q/%q/%q/%q",
+					data.Provider, data.Kind, data.Mechanism, data.Reason, tc.provider, tc.wantKind, tc.wantKind, wantReason)
 			}
 		})
 	}
