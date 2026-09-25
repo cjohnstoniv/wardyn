@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`make release-check` now propagates a Postgres-suite failure (#1068).** The Postgres-gated
+  `if` chained `test-report-pg` and `test-race-pg` with plain `;` in one shell, so the `if`'s
+  exit status was whichever submake ran last — a `test-report-pg` failure was silently swallowed
+  whenever `test-race-pg` then passed, and release-check printed "release-check PASSED" anyway.
+  The two submakes now chain on `&&`, so a Postgres failure stops the run there and its status
+  survives.
 - **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
   map being set was previously enough to hide the "Who is an admin" setup row and the shell
   banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
