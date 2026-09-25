@@ -6,6 +6,7 @@ package federation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -19,14 +20,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// memStore is the local audit table and the org_federation row. markCalls
-// counts every MarkFederationRevoked attempt, so a test can prove a
-// non-revocation 401 never touches the durable mark.
+// memStore is the local audit table and the org_federation row. markFail
+// counts down: each call to MarkFederationRevoked while it is > 0 fails and
+// decrements it, so a test can make the durable write fail N times before it
+// lands. markCalls counts every attempt, failed or not.
 type memStore struct {
 	mu        sync.Mutex
 	rows      []types.FederatedAuditEvent
 	cursor    int64
 	revoked   bool
+	markFail  int
 	markCalls int
 }
 
@@ -40,6 +43,10 @@ func (m *memStore) MarkFederationRevoked(context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.markCalls++
+	if m.markFail > 0 {
+		m.markFail--
+		return errors.New("mark federation revoked: simulated failure")
+	}
 	m.revoked = true
 	return nil
 }
@@ -407,5 +414,41 @@ func TestForwarder_A401WithoutTheDeviceRealmIsNotARevocation(t *testing.T) {
 	}
 	if len(rec.events) != 0 {
 		t.Fatalf("a non-revocation 401 wrote local rows: %+v", rec.events)
+	}
+}
+
+// TestForwarder_RetriesAFailedRevocationMark: the first MarkFederationRevoked
+// fails. The in-process gate closes immediately regardless — no run starts on
+// the credential's word alone — and a later tick retries the durable write
+// until it lands.
+func TestForwarder_RetriesAFailedRevocationMark(t *testing.T) {
+	st, rec := &memStore{markFail: 1}, &memRecorder{}
+	st.add(2, true)
+	cred := Credential{DeviceID: uuid.New(), Token: "wdd_test"}
+	org := &orgStub{answer: func(w http.ResponseWriter) bool {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
+		w.WriteHeader(http.StatusUnauthorized)
+		return true
+	}}
+	f := NewForwarder(NewClient(org.serve(t, cred.DeviceID).URL), st, cred, rec)
+
+	if _, stop := f.step(context.Background()); stop {
+		t.Fatal("a pending durable mark must not stop the forwarder yet")
+	}
+	if !f.Status().Revoked {
+		t.Fatal("the in-process gate must close even while the mark is pending")
+	}
+	if st.markCalls != 1 {
+		t.Fatalf("markCalls = %d, want 1 after the failed attempt", st.markCalls)
+	}
+
+	if _, stop := f.step(context.Background()); !stop {
+		t.Fatal("the retried mark should land and stop the forwarder")
+	}
+	if !st.revoked {
+		t.Fatal("the mark never landed durably")
+	}
+	if st.markCalls != 2 {
+		t.Fatalf("markCalls = %d, want 2 after the retry", st.markCalls)
 	}
 }
