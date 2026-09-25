@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -224,6 +225,15 @@ func (f *Forwarder) refused(ctx context.Context, err error) (time.Duration, bool
 	case se.Revoked():
 		f.revoke(ctx, se)
 		return 0, true
+	case se.Code == http.StatusUnauthorized:
+		// A 401 without deviceAuth's own realm: something on the path answered,
+		// not the organisation. Halt like any definitive refusal, but say what
+		// actually happened rather than logging a bland "refused".
+		f.halted = true
+		slog.Error("federation: 401 from something that is not the organisation; forwarding is halted until wardynd restarts",
+			"device_id", f.cred.DeviceID, "acked_seq", f.Status().AckedSeq)
+		f.update(func(s *Status) { s.LastError = "401 from something that is not the organisation" })
+		return f.interval, false
 	case se.Code == 429 && se.RetryAfter > 0:
 		f.update(func(s *Status) { s.LastError = se.Error() })
 		return min(se.RetryAfter, maxBackoff), false

@@ -19,12 +19,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// memStore is the local audit table and the org_federation row.
+// memStore is the local audit table and the org_federation row. markCalls
+// counts every MarkFederationRevoked attempt, so a test can prove a
+// non-revocation 401 never touches the durable mark.
 type memStore struct {
-	mu      sync.Mutex
-	rows    []types.FederatedAuditEvent
-	cursor  int64
-	revoked bool
+	mu        sync.Mutex
+	rows      []types.FederatedAuditEvent
+	cursor    int64
+	revoked   bool
+	markCalls int
 }
 
 func (m *memStore) FederationRevoked(context.Context) (bool, error) {
@@ -36,6 +39,7 @@ func (m *memStore) FederationRevoked(context.Context) (bool, error) {
 func (m *memStore) MarkFederationRevoked(context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.markCalls++
 	m.revoked = true
 	return nil
 }
@@ -219,7 +223,13 @@ func TestForwarder_RevokedOn401And410(t *testing.T) {
 			st, rec := &memStore{}, &memRecorder{}
 			st.add(2, true)
 			cred := Credential{DeviceID: uuid.New(), Token: "wdd_test"}
-			org := &orgStub{answer: func(w http.ResponseWriter) bool { w.WriteHeader(code); return true }}
+			org := &orgStub{answer: func(w http.ResponseWriter) bool {
+				if code == http.StatusUnauthorized {
+					w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
+				}
+				w.WriteHeader(code)
+				return true
+			}}
 			f := NewForwarder(NewClient(org.serve(t, cred.DeviceID).URL), st, cred, rec)
 			if _, stop := f.step(context.Background()); !stop {
 				t.Fatal("a revocation must stop the forwarder")
@@ -312,7 +322,11 @@ func TestForwarder_RevocationSurvivesRestart(t *testing.T) {
 	st, rec := &memStore{}, &memRecorder{}
 	st.add(2, true)
 	cred := Credential{DeviceID: uuid.New(), Token: "wdd_test"}
-	org := &orgStub{answer: func(w http.ResponseWriter) bool { w.WriteHeader(http.StatusUnauthorized); return true }}
+	org := &orgStub{answer: func(w http.ResponseWriter) bool {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
+		w.WriteHeader(http.StatusUnauthorized)
+		return true
+	}}
 	srv := org.serve(t, cred.DeviceID)
 	f := NewForwarder(NewClient(srv.URL), st, cred, rec)
 	if _, stop := f.step(context.Background()); !stop || !f.Status().Revoked {
@@ -369,5 +383,29 @@ func TestForwarder_HeadBelowCursorResendsFromTheStart(t *testing.T) {
 	f.step(context.Background())
 	if len(org.pushes) != 1 || len(org.pushes[0]) != 10 || org.pushes[0][0].Seq != 1 || st.cursor != 10 {
 		t.Fatalf("pushes=%d cursor=%d status=%+v", len(org.pushes), st.cursor, f.Status())
+	}
+}
+
+// TestForwarder_A401WithoutTheDeviceRealmIsNotARevocation: a 401 lacking
+// deviceAuth's own WWW-Authenticate realm is not the organisation — something
+// else on the path answered instead. It must not read as a revocation: no
+// Revoked status, no durable mark attempt, no device.local.revoke row.
+func TestForwarder_A401WithoutTheDeviceRealmIsNotARevocation(t *testing.T) {
+	st, rec := &memStore{}, &memRecorder{}
+	st.add(2, true)
+	cred := Credential{DeviceID: uuid.New(), Token: "wdd_test"}
+	org := &orgStub{answer: func(w http.ResponseWriter) bool { w.WriteHeader(http.StatusUnauthorized); return true }}
+	f := NewForwarder(NewClient(org.serve(t, cred.DeviceID).URL), st, cred, rec)
+	if _, stop := f.step(context.Background()); stop {
+		t.Fatal("a bare 401 without the device realm must not stop the forwarder")
+	}
+	if s := f.Status(); s.Revoked {
+		t.Fatalf("status = %+v: a bare 401 must not read as revoked", s)
+	}
+	if st.markCalls != 0 {
+		t.Fatalf("MarkFederationRevoked called %d times for a non-revocation 401", st.markCalls)
+	}
+	if len(rec.events) != 0 {
+		t.Fatalf("a non-revocation 401 wrote local rows: %+v", rec.events)
 	}
 }
