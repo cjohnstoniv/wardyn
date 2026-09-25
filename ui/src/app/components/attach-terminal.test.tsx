@@ -747,7 +747,7 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
     expect(screen.getByText("run_1")).toBeInTheDocument();
     expect(screen.queryByText("[closed] run_1")).toBeNull();
     expect(screen.getByText(TERMINAL.CLOSED_TITLE)).toBeInTheDocument();
-    expect(screen.getByText(TERMINAL.CLOSED_BODY)).toBeInTheDocument();
+    expect(screen.getByText(TERMINAL.CLOSED_BODY(4))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: TERMINAL.RECONNECT })).toBeInTheDocument();
     // Never written into xterm's own buffer — the writeln mock proves it.
     expect(writeln).not.toHaveBeenCalledWith(expect.stringContaining("[connection closed after"));

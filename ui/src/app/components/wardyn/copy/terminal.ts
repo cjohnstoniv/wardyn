@@ -33,8 +33,13 @@ export const TERMINAL = {
   RECONNECT: "Reconnect",
   RECONNECTING_LINE: (attempt: number, maxAttempts: number) =>
     `Reconnecting — attempt ${attempt} of ${maxAttempts}.`,
-  RECONNECTING_HINT: "Keystrokes are held until the terminal is back.",
+  // #510-F2 — no input buffer exists (attach-terminal.tsx's send() drops
+  // anything typed while the socket isn't OPEN), so the hint must say that
+  // rather than promise a queue that was never built.
+  RECONNECTING_HINT: "Keystrokes typed now are not sent.",
   CLOSED_TITLE: "The terminal disconnected.",
-  CLOSED_BODY:
-    "Wardyn stopped retrying after 4 attempts. This ends the terminal session only — the run itself is unaffected. Reconnect to watch it again.",
+  // #510-F2 — interpolates the live reconnect budget instead of hardcoding
+  // it, so this stays true if MAX_RECONNECT_ATTEMPTS ever moves.
+  CLOSED_BODY: (maxAttempts: number) =>
+    `Wardyn stopped retrying after ${maxAttempts} attempts. This ends the terminal session only — the run itself is unaffected. Reconnect to watch it again.`,
 } as const;

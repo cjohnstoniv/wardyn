@@ -1,5 +1,7 @@
 # First contact — clickable prototype
 
+> **Superseded for sign-in copy** by [`signin-first-contact-canon.md`](../signin-first-contact-canon.md) (#457). The token hint proposed below ("Your install printed it when it finished.") is not true — the installer prints where to read the token, never the token. The live hint is the one that canon freezes.
+
 The first ten minutes a new admin spends in the Wardyn console: sign in, walk setup,
 hit the host that cannot confine anything, and find the way out of it.
 

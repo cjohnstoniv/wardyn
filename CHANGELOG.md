@@ -61,6 +61,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   through. A roster read that fails at create/Review now refuses the run (500) instead of silently
   admitting it ungraded, which used to surface later at dispatch with a misleading "the
   configuration changed between then and now" detail (#518).
+- **Console fixes from the early 0.8 review (#510).** The cockpit terminal's reconnecting hint
+  claimed keystrokes typed during a reconnect were held; there is no input buffer, so they are
+  silently dropped — the hint now says so, and the disconnected message interpolates the live
+  reconnect budget instead of a hardcoded "4". `usePoll`'s coalesced refocus follow-up could still
+  fire after the hook had unmounted, running the caller's fetch chain (and every `setState` inside
+  it) against a dead screen; the cleanup now marks the hook disposed and the follow-up checks it.
+  Every Getting Started episode card issued its own `/healthz` fetch for the demo-video mirror
+  address — 24 requests on one mount — for a value that is the same for the whole page load; it is
+  now read once in the shell and handed down through context. The network-confinement banner's
+  action sent a member to `/setup?step=environment`, a page a member cannot reach; the action is
+  now operator-only, and the strip stays informational for a member. The autonomy wire types
+  (`AutonomyRubric`/`AutonomyPosture`/`AutonomyResolution`) now have a Go↔TS parity test. Two
+  copy nits: the Environment step's "stronger tiers" note and the Recordings screen's loaded-count
+  notes now pluralise correctly for exactly one item. An e2e fixture re-typed the admin-token
+  localStorage key by hand; it now imports it from `fixtures.ts`. One known gap stays: while the
+  setup status is still loading, or after a failed read, the Getting Started episode catalog still
+  groups under the "Your deployment — single-user" heading (the readiness chips above it already
+  say "Checking…"). It corrects itself once the status resolves — after a failed read, on the
+  next five-minute status poll.
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console

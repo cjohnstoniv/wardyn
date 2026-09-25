@@ -19,10 +19,10 @@ import {
 } from "./confinement-posture-copy";
 import type { ConfinementPosture } from "./operator-context";
 
-function renderBanner(posture: ConfinementPosture, view: "admin" | "user" = "admin") {
+function renderBanner(posture: ConfinementPosture, view: "admin" | "user" = "admin", operator = true) {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator confinementPosture={posture}>
+      <OperatorProvider operator={operator} confinementPosture={posture}>
         <ConfinementPostureBanner view={view} />
       </OperatorProvider>
     </MemoryRouter>,
@@ -64,6 +64,18 @@ describe("ConfinementPostureBanner", () => {
     expect(screen.getByText(POSTURE_UNKNOWN_BANNER.TITLE)).toBeInTheDocument();
     expect(screen.getByText(POSTURE_UNKNOWN_BANNER.BODY)).toBeInTheDocument();
     expect(screen.getByText(POSTURE_UNKNOWN_BANNER.ACTION)).toBeInTheDocument();
+  });
+
+  // #510-F7 — the action button sends /setup?step=environment, which a member
+  // cannot reach (App.tsx's SetupRoute renders MemberGettingStarted for a
+  // non-operator and ignores `step`). The strip stays informational for a
+  // member: title and body still show, the action does not.
+  it("drops the action button for a non-operator, keeps the strip informational", () => {
+    renderBanner("unenforced", "admin", false);
+    expect(screen.getByText(POSTURE_UNENFORCED_BANNER.TITLE)).toBeInTheDocument();
+    expect(screen.getByText(POSTURE_UNENFORCED_BANNER.BODY)).toBeInTheDocument();
+    expect(screen.queryByText(POSTURE_UNENFORCED_BANNER.ACTION)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });
 
