@@ -135,21 +135,16 @@ func (s *Server) removeStaleImage(ctx context.Context, ref, next string) {
 
 // resolveWorkspaceImage returns the sandbox image for a run driven by its PRIMARY
 // onboarded workspace, or ok=false to fall through to the convention image.
-// Order (all fail-OPEN — any failure returns ok=false + convention image, never
-// blocks the run):
-//   - an explicit BaseImage CHOICE on the workspace ("registry"/"byo"/"custom") →
-//     use it (see below);
+// Order (all fail-OPEN: any failure returns ok=false, never blocks the run):
+//   - an explicit BaseImage CHOICE ("registry"/"byo"/"custom") → use it;
 //   - a REPO PRIMARY source (Sources[0]) whose profile HasDevcontainer → build
 //     the repo's own devcontainer;
 //   - a cached generated image still valid for the current profile hash → reuse;
-//   - else generate a devcontainer for the detected toolchain, build it, and cache
-//     image_ref + built_profile_hash on the workspace for reuse.
+//   - else generate a devcontainer for the detected toolchain, build and cache it.
 //
-// logSink, when non-nil, receives the build's output as it happens (the
-// wizard Build step's in-memory ring); every OTHER caller passes nil, which
-// falls back to the ImageBuilder's own default (wardynd's slog) unchanged.
-//
-// It audits its own build success/failure against runID.
+// logSink, when non-nil, receives the build's output live (the wizard Build
+// step); nil falls back to the ImageBuilder's own default. It audits its own
+// build success/failure against runID.
 func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, primary types.Workspace, logSink io.Writer) (string, bool) {
 	buildAudit := func(outcome string, extra map[string]any) {
 		extra["workspace_id"] = primary.ID.String()
@@ -227,19 +222,13 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 	// it, build from the repo — UNLESS the source is an SSH URL. The image
 	// builder (envbuilder) clones with no minted key / known_hosts / :443
 	// ProxyCommand — only the agent-run sandbox has that wiring — so an SSH
-	// devcontainer build would fail auth. Fall through to a generated toolchain
-	// image; agent-run still clones the repo itself using the run's ssh_key
-	// grant (the repo's own devcontainer is just not built in v1).
+	// devcontainer build would fail auth; fall through to a generated toolchain
+	// image, and agent-run still clones the repo with the run's ssh_key grant.
 	//
-	// This lane never bakes the standard agent-tool install: it builds the
-	// repo's own devcontainer file(s) verbatim rather than rewriting them to
-	// point at the generated Dockerfile gen.go's baseOrBuild would otherwise
-	// layer a RUN onto (see its package comment — the two mechanisms that
-	// WOULD add one without rewriting the operator's own devcontainer, a
-	// lifecycle hook and the vendor's own devcontainer feature, were both
-	// tried against a real build and rejected). claude-code is therefore
-	// silently absent from this image unless the operator's own devcontainer
-	// happens to install it — deliberate, not an oversight.
+	// This lane builds the repo's own devcontainer verbatim and never bakes the
+	// standard agent-tool install (gen.go's package comment says why the
+	// non-rewriting alternatives were rejected), so claude-code is absent from this
+	// image unless the operator's devcontainer installs it — deliberate.
 	if url := repoOwnDevcontainerURL(primary, p); url != "" {
 		repoSrc := primary.Sources[0]
 		// Cache per (repo URL, ref), the same fix as the byoi branch above:

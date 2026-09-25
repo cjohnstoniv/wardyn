@@ -85,7 +85,7 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 	h.srv.cfg.Runner = rn
 
 	path := "/api/v1/runs/" + run.ID.String()
-	session := ssoSession(t, owner, ownerEmail, oidc.RoleMember)
+	session := ssoSession(t, owner, ownerEmail, oidc.RoleUser)
 	revive := func(asOwner bool) int {
 		if asOwner {
 			return doSSO(t, h.srv, http.MethodPost, path+"/revive", session, "").Code

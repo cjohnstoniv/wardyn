@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_RunLimitsRoundTrip pins migration 0069's four run columns through
+// TestPG_RunLimitsRoundTrip pins migration 0072's four run columns through
 // CreateRun and GetRun: the lease end, the wait, the captured limits and the
 // profile id. A legacy-shaped run (none set) reads back as no end, wait 0, zero
 // limits and no profile.

@@ -253,8 +253,8 @@ const openHoldSQL = `EXISTS (
 
 // execRun is the one body the scoped single-column agent_runs writers below
 // share: Exec, wrap a driver error as "store: <verb>", and translate "no row
-// matched" into ErrNotFound. verb is exactly the error text each writer used to
-// spell for itself, so the wrapped message a caller matches on is unchanged.
+// matched" into ErrNotFound. verb is the error text a caller matches on, so
+// each writer passes its own.
 // UpdateRunStateIf/UpdateRunStateIfIdle deliberately do NOT route through here:
 // zero rows affected is a legitimate no-op for a guarded transition, not a
 // missing row.
@@ -271,7 +271,7 @@ func (s PG) execRun(ctx context.Context, verb, query string, args ...any) error 
 
 // SetSandboxRef records the runner reference (container ID / pod name). A
 // non-empty ref also records this release as the one that started the run's
-// proxy (proxy_release, migration 0072).
+// proxy (proxy_release, migration 0077).
 func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
 	return s.execRun(ctx, "set sandbox ref",
 		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now(),
@@ -862,6 +862,7 @@ func scanAuditEvent(row pgx.Row) (types.AuditEvent, error) {
 	if len(dataRaw) > 0 {
 		ev.Data = json.RawMessage(dataRaw)
 	}
+	ev.DeviceID = FederatedDeviceID(ev)
 	return ev, nil
 }
 

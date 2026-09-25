@@ -256,6 +256,13 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "run is not RUNNING; cannot open a UI app (state="+string(run.State)+")")
 		return
 	}
+	// A kept run is RUNNING with its agent stopped: nothing to open.
+	if runIsKept(run) {
+		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.auth", app, "denied",
+			map[string]any{"reason": "run has ended"})
+		writeError(w, http.StatusConflict, "run has ended; cannot open a UI app")
+		return
+	}
 
 	apps, err := s.effectiveUIApps(r.Context(), runID)
 	if err != nil {
@@ -581,6 +588,10 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
 		return nil, uiFail(ctx, http.StatusConflict, "run is not RUNNING; the UI app is gone (state="+string(run.State)+")")
+	}
+	// A kept run is RUNNING with its agent stopped: the UI app is gone.
+	if runIsKept(run) {
+		return nil, uiFail(ctx, http.StatusConflict, "run has ended; the UI app is gone")
 	}
 	// …and the human, re-asserted against that same freshly-loaded run and
 	// against the revoke cutoff. The cookie is a long-lived credential; this is

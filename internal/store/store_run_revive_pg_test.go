@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
-// TestPG_RunRevive pins migration 0072 through the revive surface: the sandbox
+// TestPG_RunRevive pins migration 0077 through the revive surface: the sandbox
 // ref records the release that started the proxy; a revive claims a run lost
 // to an outage (clearing the mark and stamping a fresh token so the lapsed
 // sweep leaves it alone), one lost to a reboot (refreshing its watcher lease,

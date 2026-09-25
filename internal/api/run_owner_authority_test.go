@@ -61,7 +61,7 @@ func (f *reviveFixture) reviveAs(t *testing.T, owner bool) (int, string) {
 		w := do(t, f.srv, http.MethodPost, path, adminToken, "")
 		return w.Code, w.Body.String()
 	}
-	w := doSSO(t, f.srv, http.MethodPost, path, ssoSession(t, f.run.CreatedBy, ownerEmail, oidc.RoleMember), "")
+	w := doSSO(t, f.srv, http.MethodPost, path, ssoSession(t, f.run.CreatedBy, ownerEmail, oidc.RoleUser), "")
 	return w.Code, w.Body.String()
 }
 
@@ -337,7 +337,7 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 }
 
 func ownerSessionAs(t *testing.T) *http.Cookie {
-	return ssoSession(t, endWaitOwner, ownerEmail, oidc.RoleMember)
+	return ssoSession(t, endWaitOwner, ownerEmail, oidc.RoleUser)
 }
 
 // TestRecheck_AnAdminOwnedRunIsHeldToItsOwnersSubRows pins the by-sub rule for

@@ -73,15 +73,24 @@ func classifyADOUpstream(resp *http.Response) adoUpstreamClass {
 
 // ruleSource is the class's decision-log rule source on the REST or git door.
 func (c adoUpstreamClass) ruleSource(git bool) string {
-	src := map[adoUpstreamClass][2]string{
-		adoUpstreamNotSignedIn: {ruleSourceADOUpstreamNotSignedIn, ruleSourceADOGitUpstreamNotSignedIn},
-		adoUpstreamRefused:     {ruleSourceADOUpstreamRefused, ruleSourceADOGitUpstreamRefused},
-		adoUpstreamNoAccess:    {ruleSourceADOUpstreamNoAccess, ruleSourceADOGitUpstreamNoAccess},
-	}[c]
-	if git {
-		return src[1]
+	switch c {
+	case adoUpstreamNotSignedIn:
+		if git {
+			return ruleSourceADOGitUpstreamNotSignedIn
+		}
+		return ruleSourceADOUpstreamNotSignedIn
+	case adoUpstreamRefused:
+		if git {
+			return ruleSourceADOGitUpstreamRefused
+		}
+		return ruleSourceADOUpstreamRefused
+	case adoUpstreamNoAccess:
+		if git {
+			return ruleSourceADOGitUpstreamNoAccess
+		}
+		return ruleSourceADOUpstreamNoAccess
 	}
-	return src[0]
+	return ""
 }
 
 // message is the run-facing sentence for the class. target is host plus the
@@ -143,6 +152,7 @@ func (p *Proxy) relayUpstream(w http.ResponseWriter, r *http.Request, host strin
 // refuseADOGitUpstream answers git, in git's own terms, when Azure DevOps
 // refused a brokered git request, and reports whether it did. A relayed 401
 // would make git prompt for a username; a relayed 203 page is not a git answer.
+// The port is 443 because the brokered git lane always dials :443.
 func (p *Proxy) refuseADOGitUpstream(w http.ResponseWriter, r *http.Request, host, rest string, push *adoGitPush, resp *http.Response) bool {
 	c := classifyADOUpstream(resp)
 	if c == adoUpstreamOK {

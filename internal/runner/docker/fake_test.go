@@ -58,6 +58,9 @@ type createdContainer struct {
 	connectedTo []string
 	state       *container.State
 	removed     bool
+	// forceRemoved records whether the removal asked for Force, which a
+	// container that may be running needs.
+	forceRemoved bool
 }
 
 // fakeDocker is an in-memory dockerAPI for unit tests. It is concurrency-safe
@@ -527,7 +530,7 @@ func (f *fakeDocker) ContainerUnpause(ctx context.Context, id string, _ client.C
 	return client.ContainerUnpauseResult{}, nil
 }
 
-func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, _ client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
+func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.containers[id]
@@ -535,6 +538,7 @@ func (f *fakeDocker) ContainerRemove(ctx context.Context, id string, _ client.Co
 		return client.ContainerRemoveResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
 	c.removed = true
+	c.forceRemoved = opts.Force
 	return client.ContainerRemoveResult{}, nil
 }
 

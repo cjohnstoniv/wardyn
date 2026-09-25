@@ -424,7 +424,7 @@ func (s *Server) handleAdminProxyWindow(w http.ResponseWriter, r *http.Request) 
 }
 
 // inProxyWindow: release is the current minor or the one before it. An
-// unparseable release ("" before migration 0072) is outside.
+// unparseable release ("" before migration 0077) is outside.
 func inProxyWindow(current, release string) bool {
 	cm, cn, ok := majorMinor(current)
 	rm, rn, rok := majorMinor(release)

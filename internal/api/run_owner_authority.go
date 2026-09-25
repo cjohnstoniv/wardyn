@@ -151,7 +151,7 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, kind, value string) 
 	if allow {
 		return true, nil
 	}
-	enforced, err := s.capEnforced(ctx, kind)
+	enforced, err := s.newCapBatch(ctx).enforced(ctx, kind)
 	if err != nil {
 		return false, err
 	}

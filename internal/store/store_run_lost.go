@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Lost runs (long-holds design rev 4, RL-9; migration 0071): the token stamp
+// Lost runs (long-holds design rev 4, RL-9; migration 0076): the token stamp
 // the renew door writes, the read the lapsed-token sweep makes, and the claim
 // that marks a run lost. Kept out of store.go for the same size reason as
 // store_run_lease.go.

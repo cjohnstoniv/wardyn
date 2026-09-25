@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_RunLost pins migration 0071 through the lost-run surface: a new row
+// TestPG_RunLost pins migration 0076 through the lost-run surface: a new row
 // starts with a fresh token stamp, the sweep lists only RUNNING, unkept runs
 // whose stamp is older than the token's life, a renew's stamp takes a run out
 // of that list and wins against a mark that raced it, and a kept run can be

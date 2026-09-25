@@ -85,6 +85,20 @@ source /usr/local/bin/agent-run-lib.sh
 # codex-cli's boot pane prints the same two, and one sentence with two copies is
 # drift with extra steps.
 
+# ── managed agent-side policy ────────────────────────────────────────────────
+# wardynd generates /etc/claude-code/managed-settings.json from the run's
+# RESOLVED autonomy level and delivers it root-owned, so it is a ceiling this
+# agent cannot rewrite.  Say which state the sandbox is in, once, on every
+# launch path: an ABSENT file is the ordinary case (an unrestricted level, or a
+# deployment that has authored no autonomy rubric), and "is this run under a
+# managed layer or under its launch flags alone" is the one thing a reader of
+# this log must never have to infer.  Nothing below branches on it.
+if [[ -r /etc/claude-code/managed-settings.json ]]; then
+    echo "agent-run: managed settings present at /etc/claude-code/managed-settings.json (autonomy level ${WARDYN_AUTONOMY_LEVEL:-none})" >&2
+else
+    echo "agent-run: no managed settings at /etc/claude-code/managed-settings.json (autonomy level ${WARDYN_AUTONOMY_LEVEL:-none}) — this run's tool posture comes from its launch flags alone" >&2
+fi
+
 # ── anthropic auth-mode detection ─────────────────────────────────────────────
 # Decide how claude should authenticate to the model backend and wire the env
 # accordingly.  Echoes the chosen mode on stdout (callers capture it); also a
@@ -741,6 +755,26 @@ echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
 #     live in the C0 spike, claude 2.1.234).
 #   CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0   a human decision can take hours; the
 #     stdio idle timer must not turn patience into a deny.
+#   MCP_TOOL_TIMEOUT   claude's own overall cap on one MCP tool call, default
+#     1e8 ms (~27.8h). wardyn-toolgate defaults its -deadline to
+#     WARDYN_APPROVAL_EXPIRY_AFTER (dispatch's mirror of the ceiling the
+#     approval-expiry sweeper expires the approval at), so claude's cap must
+#     sit PAST that ceiling, never on it: claude's timer starts before
+#     toolgate's (the create round-trip), toolgate can sleep one -poll past
+#     its deadline and then make a final poll (30s HTTP timeout), and the
+#     sweeper's EXPIRED lands up to one sweep interval (10m default) after the
+#     ceiling. So the cap is ceiling + 15m, exported only when that exceeds
+#     claude's own default — never lowered below it (RL-1). Unset or
+#     unparseable leaves claude's default alone. Claude Code (2.1.280, pinned
+#     live) also clamps whatever we export to 2147483647ms (2^31-1, ~24.85d):
+#     above a ~596h ceiling, ceiling+15m exceeds that clamp, claude silently
+#     lowers it, and toolgate's OWN -deadline (still the full, uncapped
+#     ceiling) then loses the race — claude times the call out days before
+#     toolgate gives up, so the agent sees a tool error instead of a clean
+#     deny and may retry, raising a duplicate approval. Past that point we cap
+#     MCP_TOOL_TIMEOUT at claude's clamp AND pass toolgate a -deadline 15m
+#     under it (via its --mcp-config args), so toolgate's deny keeps winning
+#     the race no matter how high the ceiling goes.
 #   --setting-sources user   load NO project or local settings (#358). Claude
 #     Code resolves permissions.allow rules BEFORE it consults the prompt tool,
 #     so a rule in the workspace's .claude/settings.json (a checkout the agent
@@ -753,9 +787,25 @@ echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
 #     the approver, behind Claude Code's own workspace-trust prompt).
 if [[ "${WARDYN_TOOL_APPROVALS:-}" == "hold" ]]; then
     mkdir -p "$HOME/.wardyn"  # only --idle creates it; this is the exec path
-    printf '{"mcpServers":{"gate":{"command":"wardyn-toolgate"}}}\n' > "$HOME/.wardyn/toolgate-mcp.json"
-    echo "agent-run: tool-approval hold — gated tool use parks on Wardyn approvals" >&2
     export CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0
+    ceiling_ms=$(go_duration_to_ms "${WARDYN_APPROVAL_EXPIRY_AFTER:-}")
+    # claude's own MCP-timeout clamp (2^31-1 ms, ~24.85d) — see the
+    # MCP_TOOL_TIMEOUT comment above.
+    mcp_timeout_clamp=2147483647
+    toolgate_args=""
+    if [[ -n "$ceiling_ms" ]] && (( ceiling_ms + 900000 > 100000000 )); then
+        mcp_timeout=$(( ceiling_ms + 900000 ))
+        if (( mcp_timeout > mcp_timeout_clamp )); then
+            mcp_timeout=$mcp_timeout_clamp
+            toolgate_deadline_ms=$(( mcp_timeout_clamp - 900000 ))
+            toolgate_args=", \"args\": [\"-deadline\", \"${toolgate_deadline_ms}ms\"]"
+            echo "agent-run: WARDYN_APPROVAL_EXPIRY_AFTER=${WARDYN_APPROVAL_EXPIRY_AFTER} exceeds claude's MCP-timeout clamp — capping MCP_TOOL_TIMEOUT=${mcp_timeout}ms and toolgate -deadline=${toolgate_deadline_ms}ms" >&2
+        fi
+        export MCP_TOOL_TIMEOUT=$mcp_timeout
+        echo "agent-run: MCP_TOOL_TIMEOUT=${MCP_TOOL_TIMEOUT}ms (WARDYN_APPROVAL_EXPIRY_AFTER=${WARDYN_APPROVAL_EXPIRY_AFTER} + 15m)" >&2
+    fi
+    printf '{"mcpServers":{"gate":{"command":"wardyn-toolgate"%s}}}\n' "$toolgate_args" > "$HOME/.wardyn/toolgate-mcp.json"
+    echo "agent-run: tool-approval hold — gated tool use parks on Wardyn approvals" >&2
     exec claude -p "$task" --output-format text \
         --permission-mode manual --setting-sources user \
         --mcp-config "$HOME/.wardyn/toolgate-mcp.json" --strict-mcp-config \

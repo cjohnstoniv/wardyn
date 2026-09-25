@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/test/entrafake"
 )
 
 // adoResolveFixture is a captured sign-in (against the entra fake) plus a run
@@ -83,11 +84,12 @@ func (rf *adoResolveFixture) failureReason(t *testing.T) map[string]any {
 	return d
 }
 
-// THE GRANTED SCOPE STRING REACHES THE AUDIT ROW, and the response carries the
+// The granted scope string reaches the audit row, and the response carries the
 // organisation and capabilities the proxy pins and gates on.
 func TestResolveADOInjection_LiveRecordsGrantedScope(t *testing.T) {
 	rf := newADOResolveFixture(t)
-	blob, _ := rf.stored(t, rf.subject)
+	var issued []string
+	rf.fake.OnIssue(func(tok entrafake.IssuedToken) { issued = tok.Scopes })
 	w := rf.resolve(t, rf.subject, "dev.azure.com")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d body %q", w.Code, w.Body.String())
@@ -106,9 +108,10 @@ func TestResolveADOInjection_LiveRecordsGrantedScope(t *testing.T) {
 	}
 	var d map[string]any
 	_ = json.Unmarshal(rows[0].Data, &d)
-	// The fake, like the real service, answers every consented scope; the
-	// audit must carry exactly that answer.
-	want := strings.Join(blob.Scopes, " ")
+	// The fake, like the real service, answers every consented scope (the
+	// OIDC ones too, which the stored capture does not keep); the audit must
+	// carry exactly that answer.
+	want := strings.Join(issued, " ")
 	if d["granted_scope"] != want {
 		t.Errorf("audit granted_scope = %v, want the authority's own granted string %q", d["granted_scope"], want)
 	}
@@ -125,6 +128,16 @@ func TestResolveADOInjection_RefusesOwnerMismatch(t *testing.T) {
 	}
 	if d := rf.failureReason(t); d["reason"] != "owner_not_caller" {
 		t.Errorf("reason = %v, want owner_not_caller", d["reason"])
+	}
+	// #204: the audited reason must also reach the wire body, not just the
+	// audit row — the proxy has no audit access and used to see only the
+	// human sentence.
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != "owner_not_caller" {
+		t.Errorf("wire reason = %q, want owner_not_caller", body.Reason)
 	}
 }
 
@@ -158,8 +171,13 @@ func TestResolveADOInjection_RefusesSnapshotDrift(t *testing.T) {
 func TestResolveADOInjection_PinsHostToOrganisation(t *testing.T) {
 	for _, host := range []string{"fabrikam.visualstudio.com", "evil.example"} {
 		rf := newADOResolveFixture(t)
-		if w := rf.resolve(t, rf.subject, host); w.Code != http.StatusForbidden {
+		w := rf.resolve(t, rf.subject, host)
+		if w.Code != http.StatusForbidden {
 			t.Errorf("host %q: status %d, want 403", host, w.Code)
+		}
+		var body errorBody
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Reason != "host_not_organisation" {
+			t.Errorf("host %q: wire reason = %q (%v), want host_not_organisation", host, body.Reason, err)
 		}
 	}
 }

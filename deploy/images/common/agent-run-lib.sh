@@ -867,3 +867,30 @@ selftest_report_repo_and_git() {
     fi
     return $rc
 }
+
+# go_duration_to_ms converts a Go time.Duration string (h/m/s/ms components,
+# e.g. "24h0m0s", "90m", "1h30m0s" — the shape WARDYN_APPROVAL_EXPIRY_AFTER
+# arrives in, dispatch's mirror of the SAME ceiling the approval-expiry
+# sweeper expires a PENDING approval at) to whole milliseconds on stdout.
+# Unparseable input prints nothing (empty stdout) rather than failing the
+# run — callers fall back to their own default; it always returns 0, so a
+# bare `x=$(go_duration_to_ms ...)` is safe under set -e. RL-1: this is how
+# agent-run sizes MCP_TOOL_TIMEOUT to the real ceiling.
+go_duration_to_ms() {
+    local d="$1" total=0 num unit chunk
+    [[ -n "$d" ]] || return 0
+    while [[ "$d" =~ ^([0-9]+(\.[0-9]+)?)(h|ms|m|s) ]]; do
+        num="${BASH_REMATCH[1]}"
+        unit="${BASH_REMATCH[3]}"
+        case "$unit" in
+            h) chunk=$(awk "BEGIN{printf \"%.0f\", $num*3600000}") ;;
+            m) chunk=$(awk "BEGIN{printf \"%.0f\", $num*60000}") ;;
+            s) chunk=$(awk "BEGIN{printf \"%.0f\", $num*1000}") ;;
+            ms) chunk=$(awk "BEGIN{printf \"%.0f\", $num}") ;;
+        esac
+        total=$((total + chunk))
+        d="${d#"${BASH_REMATCH[0]}"}"
+    done
+    [[ -z "$d" ]] || return 0  # trailing garbage: refuse to guess, print nothing
+    if (( total > 0 )); then echo "$total"; fi
+}
