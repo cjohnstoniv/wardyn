@@ -19,13 +19,19 @@ import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
 import { ModelProviderEditor } from "./model-provider-editor";
-import { EDITOR_KINDS } from "./model-provider-draft";
 
-// The GET snapshot is kept whole: the editor (#537) writes the whole document
-// back with its ETag.
+// The GET snapshot is kept whole: the editor (#537, #538) writes the whole
+// document back with its ETag.
 type Loaded = { list: Snapshot; providers: ModelProvider[]; connected: Record<string, number>; roster: AgentProvider[] };
 
-export function ModelProvidersList({ harnesses }: { harnesses?: SetupHarnessTool[] }) {
+export function ModelProvidersList({
+  harnesses,
+  subscriptionAvailable,
+}: {
+  harnesses?: SetupHarnessTool[];
+  // Threaded to the editor's kind step (E4, QB-5) — see its own prop doc.
+  subscriptionAvailable?: boolean;
+}) {
   const [data, setData] = React.useState<Loaded | "loading" | "error">("loading");
   // "Add model provider" opens the editor at its kind step; a row opens it on that provider.
   const [editing, setEditing] = React.useState<ModelProvider | "new" | null>(null);
@@ -85,6 +91,7 @@ export function ModelProvidersList({ harnesses }: { harnesses?: SetupHarnessTool
           defaultFor={
             editing === "new" ? [] : data.roster.filter((a) => a.default_provider === editing.id).map((a) => a.id)
           }
+          subscriptionAvailable={subscriptionAvailable}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
@@ -146,15 +153,10 @@ function Rows({
     );
     return (
       <li key={p.id} className="flex items-start justify-between gap-4 px-3 py-2.5" data-testid={`model-provider-${p.id}`}>
-        {/* Only the kinds the editor draws open it; Bedrock and Claude
-            subscription rows stay inert until #538 builds their editor. */}
-        {(EDITOR_KINDS as readonly string[]).includes(p.kind) ? (
-          <button type="button" className="min-w-0 text-left" onClick={() => onEdit(p)}>
-            {facts}
-          </button>
-        ) : (
-          <div className="min-w-0">{facts}</div>
-        )}
+        {/* #538: the editor now draws every kind, so every row opens it. */}
+        <button type="button" className="min-w-0 text-left" onClick={() => onEdit(p)}>
+          {facts}
+        </button>
         <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
           {chipDefaults.length > 0 && <Chip>{M.CHIP_DEFAULT_FOR(chipDefaults)}</Chip>}
           <Chip>{p.disabled ? M.CHIP_OFF : M.CONNECTED(connected[p.id] ?? 0)}</Chip>

@@ -258,8 +258,16 @@ export function SettingsScreen() {
             onRecheck={load}
           />
           {/* #536: the Admin view only. The card below stays until the old
-              model is retired (MP-15), since it still backs runs today. */}
-          {adminView && adminReads && <ModelProvidersList harnesses={status.harnesses} />}
+              model is retired (MP-15), since it still backs runs today.
+              #538: the Claude subscription kind is disabled on the editor's
+              kind step until the sign-in image resolves — undefined status
+              (an older daemon with no such check) reads as available. */}
+          {adminView && adminReads && (
+            <ModelProvidersList
+              harnesses={status.harnesses}
+              subscriptionAvailable={status.checks.find((c) => c.id === "claude_signin_image")?.status !== "warn"}
+            />
+          )}
           {/* #541 (§5.4, packet MP-D): every person's own model-provider
               credentials, User view only — an admin reaches it by switching
               to Member view. Renders nothing with no provider block. */}

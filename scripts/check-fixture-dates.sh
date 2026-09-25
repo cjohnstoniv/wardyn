@@ -56,7 +56,7 @@ literal_dates() {
 }
 
 declare -A ALLOWLIST=(
-  ["cmd/wardyn-aws-sso/main_test.go"]=6
+  ["cmd/wardyn-aws-sso/main_test.go"]=2
   ["cmd/wardyn/commands_test.go"]=6
   ["cmd/wardyn/policyio_test.go"]=2
   ["cmd/wardyn/siteconfig_test.go"]=4
@@ -67,7 +67,6 @@ declare -A ALLOWLIST=(
   ["internal/api/auth_failed_coalesce_test.go"]=1
   ["internal/api/devices_bounds_test.go"]=1
   ["internal/api/directory_search_test.go"]=1
-  ["internal/api/harnesscred_disconnect_scope_test.go"]=1
   ["internal/api/harnesscred_supersede_test.go"]=1
   ["internal/api/modelaccess_member_redaction_test.go"]=2
   ["internal/api/modelaccess_test.go"]=1
@@ -77,12 +76,6 @@ declare -A ALLOWLIST=(
   ["internal/api/setup_onboarding_test.go"]=8
   ["internal/api/setup_status_scope_failclosed_test.go"]=1
   ["internal/api/setup_test.go"]=2
-  ["internal/api/ssotoken_binding_test.go"]=6
-  ["internal/api/ssotoken_test.go"]=7
-  ["internal/broker/github_lazy_test.go"]=1
-  ["internal/broker/github_revoke_test.go"]=1
-  ["internal/broker/github_rotation_test.go"]=4
-  ["internal/broker/ruleset_test.go"]=2
   ["internal/db/appclock_test.go"]=3
   ["internal/egress/egress_test.go"]=1
   ["internal/egress/proxy/llm_unavailable_detail_test.go"]=3

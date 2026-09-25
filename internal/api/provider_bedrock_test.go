@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -527,6 +528,71 @@ func TestProviderBedrockCreate(t *testing.T) {
 					_ = json.Unmarshal(w.Body.Bytes(), &run)
 					if run.ModelProviderID != tc.p.ID {
 						t.Errorf("model_provider_id = %q, want %s", run.ModelProviderID, tc.p.ID)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestProviderBedrockSandboxSpecCarriesNoHostAWSCredential is T-13's sandbox
+// half: the SandboxSpec of a run on a Bedrock provider — its Mounts, Env and
+// SecretEnv, composed from the dispatch plan by the same buildRunMounts and
+// splitSecretEnv dispatchRun uses — carries no ~/.aws bind and no SigV4 key,
+// though brHarness seeds both on the legacy chain (the operator's host ~/.aws
+// dir and static access keys; a session token is added here). The SigV4 check
+// is on the operator's key material itself, under any variable name. Every
+// Bedrock arm: bearer, and SSO with the session proxy-injected and resident.
+func TestProviderBedrockSandboxSpecCarriesNoHostAWSCredential(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		p      types.ModelProvider
+		inject bool
+	}{
+		{"bedrock_bearer", brBearerProvider(), true},
+		{"bedrock_sso, session proxy-injected", brSSOProvider(), true},
+		{"bedrock_sso, session resident", brSSOProvider(), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, st, sec := brHarness(t, tc.p)
+			h.srv.cfg.AWSSSOProxyInject = tc.inject
+			sec.m[bedrockSessionTokenSecret] = []byte("operator-session-must-not-leak")
+			var policy types.RunPolicySpec
+			env := map[string]string{}
+			plan, ok := dispatchSub(h, st, &policy, env, nil)
+			if !ok {
+				t.Fatalf("dispatch refused: %q", st.failed)
+			}
+			spec := runner.SandboxSpec{
+				Mounts:    buildRunMounts(policy, plan.llm, userMountPosture{}),
+				SecretEnv: splitSecretEnv(env, plan.llm.secretEnvKeys),
+				Env:       env,
+			}
+			for _, m := range spec.Mounts {
+				if m.Source == h.srv.cfg.BedrockAWSConfigDir || strings.Contains(m.Target, ".aws") {
+					t.Errorf("mount %+v: a Bedrock provider run must not bind a host ~/.aws", m)
+				}
+			}
+			sigV4 := []string{bedrockAccessKeyIDSecret, bedrockSecretAccessKeySecret, bedrockSessionTokenSecret}
+			for half, m := range map[string]map[string]string{"Env": spec.Env, "SecretEnv": spec.SecretEnv} {
+				if v, ok := m["AWS_ACCESS_KEY_ID"]; ok {
+					t.Errorf("%s[AWS_ACCESS_KEY_ID] = %q: SigV4 must not reach a Bedrock provider run", half, v)
+				}
+				for k, v := range m {
+					// The SSO arms ship files as encodeArtifactConfig records
+					// ("<path>\t<base64>" per line); scan their decoded bytes too.
+					text := v
+					for _, line := range strings.Split(v, "\n") {
+						if f := strings.Split(line, "\t"); len(f) == 2 {
+							if raw, err := base64.StdEncoding.DecodeString(f[1]); err == nil {
+								text += "\n" + string(raw)
+							}
+						}
+					}
+					for _, name := range sigV4 {
+						if strings.Contains(text, string(sec.m[name])) {
+							t.Errorf("%s[%s] carries the operator's %s: SigV4 must not reach a Bedrock provider run", half, k, name)
+						}
 					}
 				}
 			}

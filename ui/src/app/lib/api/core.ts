@@ -107,12 +107,15 @@ export class HttpError extends Error {
    *  none. A launch refusal's door is keyed by THIS, never by what the screen
    *  has selected (#146's ruling, #543). */
   provider: string;
-  constructor(status: number, message: string, reason = "", org = "", provider = "") {
+  /** The refused provider's kind (#532, #535), "" when the body names none. */
+  kind: string;
+  constructor(status: number, message: string, reason = "", org = "", provider = "", kind = "") {
     super(message);
     this.status = status;
     this.reason = reason;
     this.org = org;
     this.provider = provider;
+    this.kind = kind;
     this.name = "HttpError";
   }
 }
@@ -259,8 +262,8 @@ export async function wfetch(
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason, org, provider } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason, org, provider);
+    const { message, reason, org, provider, kind } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org, provider, kind);
   }
   return (await res.json()) as T;
 }
@@ -287,18 +290,30 @@ function isRawBodyDisplayable(body: string): boolean {
   return body.length <= RAW_BODY_MAX_CHARS && !/^\s*</.test(body);
 }
 
-type ErrEnvelope = { message: string; reason: string; org: string; provider: string };
+type ErrEnvelope = { message: string; reason: string; org: string; provider: string; kind: string };
 
 export async function errEnvelope(res: Response): Promise<ErrEnvelope> {
-  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "" });
+  const bare = (message: string): ErrEnvelope => ({ message, reason: "", org: "", provider: "", kind: "" });
   const field = (v: unknown) => (typeof v === "string" ? v : "");
   try {
     const body = await res.text();
     if (!body) return bare(res.statusText);
     try {
-      const j = JSON.parse(body) as { error?: unknown; reason?: unknown; org?: unknown; provider?: unknown };
+      const j = JSON.parse(body) as {
+        error?: unknown;
+        reason?: unknown;
+        org?: unknown;
+        provider?: unknown;
+        kind?: unknown;
+      };
       if (typeof j.error === "string" && j.error) {
-        return { message: j.error, reason: field(j.reason), org: field(j.org), provider: field(j.provider) };
+        return {
+          message: j.error,
+          reason: field(j.reason),
+          org: field(j.org),
+          provider: field(j.provider),
+          kind: field(j.kind),
+        };
       }
     } catch {
       // not JSON — fall through to the raw-body guard below

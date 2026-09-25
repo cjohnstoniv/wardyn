@@ -420,7 +420,7 @@ reflected in these is a broken test, not a free edit:
 - `ui/src/app/components/screens/setup/step-bodies.tsx` (`WorkspacesStep`) and
   `screens/settings/settings-screen.tsx` — the two homes of the shared card.
 - `ui/src/app/components/screens/workspaces.tsx` — the header's `actions` slot.
-- `docs/OPERATIONS.md` known-gaps — quotes `HONESTY` verbatim; `docs/MEMBERS.md` "Your drive".
+- `docs/OPERATIONS.md` known-gaps — quotes `HONESTY` verbatim; `docs/USERS.md` "Your drive".
 
 Implementation is not done when it builds and unit tests pass: the UI e2e suite is daemon-only
 and is **not** part of `make ci` — run `scripts/run-ui-e2e.sh drives` before calling any of it
@@ -986,7 +986,7 @@ carries all three with the operator recipe.
 - **Run create + preflight** — the nine server strings (§7.7) beside the gates that raise them;
   `/me.user_drive.denied_by_profile` (Q6).
 - **Run rail** — `RAIL_*` (§7.8), with run-row persistence in 0.7.1.
-- **`docs/OPERATIONS.md` known gaps, `docs/MEMBERS.md` "Your drive"** — `HONESTY` verbatim; the
+- **`docs/OPERATIONS.md` known gaps, `docs/USERS.md` "Your drive"** — `HONESTY` verbatim; the
   member section says where it mounts, read-only default, yours alone, and that the size shown
   is an allocation.
 

@@ -24,10 +24,14 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // envelopeDB is a fresh, migrated database on the WARDYN_TEST_PG server,
@@ -71,8 +75,14 @@ func envelopeDB(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// seedV0Row writes a row exactly as a pre-envelope wardynd did.
+// seedV0Row writes an operator row exactly as a pre-envelope wardynd did.
 func seedV0Row(t *testing.T, pool *pgxpool.Pool, to *age.X25519Identity, name string, value []byte) {
+	t.Helper()
+	seedOwnedV0Row(t, pool, to, "", name, value)
+}
+
+// seedOwnedV0Row is seedV0Row for owner's namespace.
+func seedOwnedV0Row(t *testing.T, pool *pgxpool.Pool, to *age.X25519Identity, owner, name string, value []byte) {
 	t.Helper()
 	var buf bytes.Buffer
 	w, err := age.Encrypt(&buf, to.Recipient())
@@ -85,7 +95,7 @@ func seedV0Row(t *testing.T, pool *pgxpool.Pool, to *age.X25519Identity, name st
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(context.Background(), `INSERT INTO secrets (name, ciphertext) VALUES ($1, $2)`, name, buf.Bytes()); err != nil {
+	if _, err := pool.Exec(context.Background(), `INSERT INTO secrets (owned_by, name, ciphertext) VALUES ($1, $2, $3)`, owner, name, buf.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -127,24 +137,27 @@ func TestPG_BootConvertsV0BeforeBootKeysAreRead(t *testing.T) {
 	if !got.Equal(orig) {
 		t.Fatal("the boot read a different signing key; the v0 row was not converted before it")
 	}
-	// Both reads of the key are on the record, once each: the conversion's and
-	// the boot's, which names the envelope's key.
-	var purposes []string
-	for _, ev := range rec.got {
+	// Both reads of the key are on the record, once each and both purpose boot:
+	// the conversion's, of a v0 row that has no ref, then the boot's, which
+	// names the envelope's key.
+	if len(rec.got) != 2 {
+		t.Fatalf("recorded %d audit events, want the conversion's read and the boot's", len(rec.got))
+	}
+	for i, wantRef := range []string{"", "local/platform:"} {
+		ev := rec.got[i]
 		var d map[string]string
 		if ev.Action != "secret.read" || ev.Target != secretSigningKey || ev.Outcome != "success" || json.Unmarshal(ev.Data, &d) != nil {
 			t.Fatalf("unexpected audit event %+v", ev)
 		}
-		if d["purpose"] == "boot" && !strings.HasPrefix(d["ref"], "local/platform:") {
-			t.Errorf("boot read records ref %q, want the boot key's local platform kek_id", d["ref"])
+		if d["purpose"] != "boot" {
+			t.Errorf("read %d records purpose %q, want boot", i, d["purpose"])
+		}
+		if ref, ok := d["ref"]; wantRef == "" && ok || !strings.HasPrefix(ref, wantRef) {
+			t.Errorf("read %d records ref %q, want %q", i, ref, wantRef+"…")
 		}
 		if _, ok := d["row_owner"]; !ok {
-			t.Errorf("%s read records no row_owner: %v", d["purpose"], d)
+			t.Errorf("read %d records no row_owner: %v", i, d)
 		}
-		purposes = append(purposes, d["purpose"])
-	}
-	if strings.Join(purposes, ",") != "migrate,boot" {
-		t.Fatalf("recorded secret.read purposes %v, want [migrate boot]", purposes)
 	}
 	version, wrapped, ct := envelopeColumns(t, pool, secretSigningKey)
 	if version != 1 {
@@ -157,6 +170,113 @@ func TestPG_BootConvertsV0BeforeBootKeysAreRead(t *testing.T) {
 	v2, w2, ct2 := envelopeColumns(t, pool, secretSigningKey)
 	if v2 != 1 || !bytes.Equal(w2, wrapped) || !bytes.Equal(ct2, ct) {
 		t.Fatal("the second boot rewrote a converted row; conversion must be a no-op once done")
+	}
+}
+
+// secretAuditRows is every secret.* row in audit_events, oldest first.
+func secretAuditRows(t *testing.T, pool *pgxpool.Pool) []types.AuditEvent {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT actor_type, actor, action, target, outcome, data FROM audit_events WHERE action LIKE 'secret.%' ORDER BY time, id`)
+	if err != nil {
+		t.Fatalf("query secret.* audit rows: %v", err)
+	}
+	evs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (types.AuditEvent, error) {
+		var ev types.AuditEvent
+		err := r.Scan(&ev.ActorType, &ev.Actor, &ev.Action, &ev.Target, &ev.Outcome, &ev.Data)
+		return ev, err
+	})
+	if err != nil {
+		t.Fatalf("scan secret.* audit rows: %v", err)
+	}
+	return evs
+}
+
+// TestPG_BootConversionRecordsABootReadPerRow is the owner's ruling
+// (2026-09-25) on #717, through the real audit chain into audit_events: every
+// row the boot conversion opens writes one secret.read, purpose boot, naming
+// that row and never its value, and nothing else (no secret.convert). A second
+// boot converts nothing and writes nothing.
+func TestPG_BootConversionRecordsABootReadPerRow(t *testing.T) {
+	pool := envelopeDB(t)
+	ctx := t.Context()
+	id, _ := age.GenerateX25519Identity()
+	seeded := []struct{ owner, name, value string }{
+		{"", "anthropic-api-key", "sk-ant-not-a-real-key-111111111111"},
+		{"alice@corp.example", "github-pat", "ghp_not_a_real_token_1111111111"},
+		{"bob@corp.example", "github-pat", "ghp_not_a_real_token_2222222222"},
+	}
+	for _, r := range seeded {
+		seedOwnedV0Row(t, pool, id, r.owner, r.name, []byte(r.value))
+	}
+	rec, fan, _, _, err := buildAuditChain(ctx, "", "", "", pool, secretmask.NewRegistry())
+	if err != nil {
+		t.Fatalf("build the audit chain: %v", err)
+	}
+	if fan != nil {
+		t.Fatal("no sinks were configured, yet the audit chain has a fanout")
+	}
+
+	if _, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, rec); err != nil {
+		t.Fatalf("first boot: %v", err)
+	}
+	evs := secretAuditRows(t, pool)
+	if len(evs) != len(seeded) {
+		t.Fatalf("first boot wrote %d secret.* audit rows, want one secret.read per converted row (%d)", len(evs), len(seeded))
+	}
+	got := map[[2]string]bool{}
+	for _, ev := range evs {
+		var d map[string]string
+		if err := json.Unmarshal(ev.Data, &d); err != nil {
+			t.Fatalf("decode %s data %s: %v", ev.Action, ev.Data, err)
+		}
+		if ev.Action != "secret.read" || ev.ActorType != types.ActorSystem || ev.Actor != "wardynd" || ev.Outcome != "success" {
+			t.Errorf("conversion row = (%s, %s, %s, %s), want (secret.read, system, wardynd, success)", ev.Action, ev.ActorType, ev.Actor, ev.Outcome)
+		}
+		if d["purpose"] != string(secretstore.PurposeBoot) || d["store"] != "pg" || d["owner"] != d["row_owner"] {
+			t.Errorf("conversion row data = %v, want purpose boot, store pg, owner = row_owner", d)
+		}
+		if _, ok := d["ref"]; ok {
+			t.Errorf("conversion row records a ref %q; a v0 row has none", d["ref"])
+		}
+		got[[2]string{d["row_owner"], ev.Target}] = true
+		for _, r := range seeded {
+			if strings.Contains(string(ev.Data), r.value) || strings.Contains(ev.Target, r.value) {
+				t.Errorf("conversion row carries the value of %s/%s", r.owner, r.name)
+			}
+		}
+	}
+	for _, r := range seeded {
+		if !got[[2]string{r.owner, r.name}] {
+			t.Errorf("no conversion row names %s/%s", r.owner, r.name)
+		}
+	}
+
+	if _, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, rec); err != nil {
+		t.Fatalf("second boot: %v", err)
+	}
+	if n := len(secretAuditRows(t, pool)); n != len(seeded) {
+		t.Errorf("second boot left %d secret.* audit rows, want the first boot's %d: it converts nothing, so it reads nothing", n, len(seeded))
+	}
+	st, err := secretstorepg.New(pool, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range seeded {
+		if v, err := st.For(r.owner).Get(ctx, r.name); err != nil || string(v) != r.value {
+			t.Errorf("%s/%s after conversion = (%q, %v), want its value", r.owner, r.name, v, err)
+		}
+	}
+}
+
+// TestOperationsDoc_CarriesTheEphemeralKeyRecovery: the ephemeral-key boot
+// refusal hands the operator a statement to run, and OPERATIONS.md must carry
+// the same one, so the runbook and the refusal never disagree on what to delete.
+func TestOperationsDoc_CarriesTheEphemeralKeyRecovery(t *testing.T) {
+	// Quoted whole, as the runbook's psql -c argument: a bare substring match
+	// would pass a statement cut short to a prefix of the documented one.
+	if want := `-c "` + ephemeralKeyRecoverySQL + `"`; !strings.Contains(readDoc(t, "docs/OPERATIONS.md"), want) {
+		t.Errorf("docs/OPERATIONS.md does not carry the ephemeral-key recovery %s", want)
 	}
 }
 
