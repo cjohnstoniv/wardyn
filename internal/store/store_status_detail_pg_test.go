@@ -23,7 +23,7 @@ import (
 // measured from (TouchRun's doc comment states both). A status heartbeat firing
 // every time the kubelet changes its mind would silently extend both windows —
 // a diagnostic line quietly buying a run more life is exactly the coupling
-// TouchRun's own W6-S1 guard exists to prevent.
+// TouchRun's own terminal-run guard exists to prevent.
 func TestSetRunStatusDetail_RoundTripsAndDoesNotTouchUpdatedAt(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()

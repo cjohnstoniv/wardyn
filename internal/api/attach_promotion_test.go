@@ -246,7 +246,7 @@ func TestAttachPromotion_TakeoverPromotesOnlyTheTaker(t *testing.T) {
 		srv, _, fr, audit, run := holderTestServer(t)
 		ts := httptest.NewServer(panicFails(t, srv.Handler()))
 		defer ts.Close()
-		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 
 		// Somebody else is driving the run's owner's terminal...
 		c1 := dialAttach(t, ts, srv, run.ID, holderSecond, "")

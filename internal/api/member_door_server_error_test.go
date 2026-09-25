@@ -32,7 +32,7 @@ func (s createRunFailingStore) CreateRun(context.Context, types.AgentRun) (types
 	return types.AgentRun{}, s.err
 }
 
-// TestCreateRunServerErrorDoesNotLeakDriverText (W6-S2) pins the highest-traffic
+// TestCreateRunServerErrorDoesNotLeakDriverText pins the highest-traffic
 // member door against the leak class the release says it closed.
 //
 // `POST /api/v1/runs` is plain-tier — every member reaches it — and its insert

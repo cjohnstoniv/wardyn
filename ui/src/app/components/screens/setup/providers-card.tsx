@@ -117,7 +117,7 @@ export function ProvidersCard({
       <p className="mt-0.5 text-body leading-snug text-muted-foreground">{PROVIDERS.CARD_LEAD}</p>
       <button
         type="button"
-        onClick={() => navigate("/providers")}
+        onClick={() => navigate("/admin/providers")}
         className="mt-3 flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-left transition-colors hover:border-border-strong"
       >
         <span>

@@ -12,7 +12,7 @@
 // notification surface, so "not signed in", "lapsed" and "lapsing" reached a
 // person only if they happened to open Getting Started — or by a run failing.
 //
-// Structure mirrors member-mode-banner.tsx deliberately: one band inside the
+// Structure mirrors user-preview.tsx deliberately: one band inside the
 // shell's `role="status"` region, `z-50` so the cockpit's focus-mode overlay
 // (z-40) cannot paint over it,
 // an underlined text button rather than a teal one (CONSOLE-RULES §6 allows one
@@ -331,14 +331,14 @@ export function ModelAccessBanner() {
   // The same screen in either view (the Admin view's /admin/setup is /setup).
   const path = screenPath(pathname);
   const under = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
-  // Never on /setup — the page is the door. On /settings and /providers only
-  // for an operator: those pages already mount the same pane for the same
-  // states, and a second control named "Sign in to AWS" on one page is the U-13
+  // Never on /setup — the page is the door. On /settings, /providers and
+  // /account only for an operator: those pages already mount the same pane for
+  // the same states, and a second control named "Sign in to AWS" on one page is the U-13
   // defect member-getting-started.tsx already fixed once. For a member the
   // Settings card's AWS button is `disabled={!operator}` ("Requires the admin
   // role."), so hiding the strip there would strand exactly the person the
   // refusal sentence sends there.
-  const suppressed = under("/setup") || (operator && (under("/settings") || under("/providers")));
+  const suppressed = under("/setup") || (operator && (under("/settings") || under("/providers") || under("/account")));
   const show = door.needsAttention && !suppressed && !(copy.dismissible && dismissed);
 
   return (

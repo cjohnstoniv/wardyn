@@ -799,7 +799,8 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
 // as a US-only fallback, but must not fire when altKey is held — that is
 // AltGr typing a bracket, not the chord. The per-layout matrix lives in
 // attach-terminal-keys.test.ts; these tests pin the wiring into the widget.
-describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", () => {
+describe("AttachTerminal — the keyboard trap has an advertised exit", () => {
+  // ticket: F144
   beforeEach(() => {
     keyHandler = null;
     FakeWebSocket.instances = [];
@@ -870,7 +871,8 @@ describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", (
 // click on the container's padding, or the dead space below the last row,
 // lands nowhere — which reads as needing a very specific click location, or
 // a second click that happens to land on the screen.
-describe("AttachTerminal — D3 focus", () => {
+describe("AttachTerminal — focus", () => {
+  // ticket: D3
   beforeEach(() => {
     focusCalls.n = 0;
     stubTerminalEnv();

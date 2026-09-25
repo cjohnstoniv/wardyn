@@ -299,7 +299,7 @@ function RemoveSSHKeyDialog({
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
-              confirmRemove();
+              void confirmRemove();
             }}
             disabled={removing}
             className="bg-danger text-danger-foreground hover:bg-danger/90"

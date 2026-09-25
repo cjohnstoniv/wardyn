@@ -51,7 +51,7 @@ func TestPreflight_HappyPath(t *testing.T) {
 	}
 }
 
-// TestPreflight_ExecTaskModeSkipsLLMAccess is W16-S1-3: task_mode=exec runs a
+// TestPreflight_ExecTaskModeSkipsLLMAccess: task_mode=exec runs a
 // plain shell command, not a model, so a --dry-run preflight for one must not
 // preview a false "missing model access" blocker (no secret is seeded here —
 // if llm_access were computed the same way the happy-path test asserts
@@ -77,8 +77,8 @@ func TestPreflight_ExecTaskModeSkipsLLMAccess(t *testing.T) {
 // contract (its own doc comment): a MEMBER whose inline_policy is clamped or has
 // a grant dropped must see WHY on Review, since launch itself stays silent. The
 // dry run therefore surfaces the clamp-warning list in preflightResponse.Warnings
-// — a regression here (the k8s merge briefly discarded it) leaves a member
-// launching a silently-narrowed policy with no explanation. The exfil pairing
+// — dropping it would leave a member launching a silently-narrowed policy
+// with no explanation. The exfil pairing
 // (a real operator secret pinned to an allowlisted attacker host) is dropped by
 // filterMemberGrants for the member and kept for the admin, so warnings are
 // present for one and absent for the other.
@@ -95,7 +95,7 @@ func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
 
 	// Member: the exfil pairing is dropped, and Review is told about it.
 	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs/preflight",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("member preflight: code=%d, want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -156,7 +156,7 @@ func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 
 	// The other half of parity: a workspace launch WOULD accept must surface on
 	// the checklist — the seeded mount resolves back through referencedWorkspaces
-	// to a "workspace" setup row, exactly what the pre-fix code silently dropped.
+	// to a "workspace" setup row.
 	h.srv.cfg.Store = &workspaceStoreFake{
 		Store: h.srv.cfg.Store,
 		ws: types.Workspace{
@@ -180,16 +180,15 @@ func TestPreflight_WorkspaceIDSeeded(t *testing.T) {
 	}
 }
 
-// TestPreflight_AlreadyReflectsWorkspaceScannedEgress is W15-S1-3: launch-time
+// TestPreflight_AlreadyReflectsWorkspaceScannedEgress: launch-time
 // unionRunEgress (runs.go) widens the enforced spec's egress from a
-// referenced workspace's scanned-profile hosts, but preflight used to grade
-// and checklist the UN-widened spec — a NARROWER envelope than the run would
-// actually launch with. The "egress:workspace" informational row already
-// re-computes what launch would add (setupEgressWorkspaceItem), so once
-// preflight widens the spec FIRST (matching launch), that row must read
-// "no additional egress needed" — proving Review already shows the real,
-// post-launch envelope instead of being blind to a widening launch performs
-// silently after the fact.
+// referenced workspace's scanned-profile hosts, so preflight must widen the
+// spec first too, or it grades and checklists a narrower envelope than the
+// run launches with. The "egress:workspace" informational row re-computes
+// what launch would add (setupEgressWorkspaceItem), so with the spec already
+// widened that row must read "no additional egress needed" — proving Review
+// shows the real, post-launch envelope instead of being blind to a widening
+// launch performs silently after the fact.
 func TestPreflight_AlreadyReflectsWorkspaceScannedEgress(t *testing.T) {
 	h := newHarness(t)
 	wsID := uuid.New()
@@ -270,12 +269,11 @@ func (preflightIntegrationStore) ListWorkspaces(context.Context) ([]types.Worksp
 	return nil, nil
 }
 
-// TestPreflight_ModelAccessFromExplicitIntegrationID is the audit-row-55 test:
-// preflight must fold the WHOLE run-level integration precedence chain
-// (foldRunIntegration), not just the workspace tier. A run naming an explicit
-// integration_id and NO workspace at all must still see model access
-// satisfied on the checklist — proving the fold reaches tier 1, not only the
-// workspace-ref tier the pre-fix code was limited to.
+// TestPreflight_ModelAccessFromExplicitIntegrationID: preflight must fold the
+// whole run-level integration precedence chain (foldRunIntegration), not just
+// the workspace tier. A run naming an explicit integration_id and no workspace
+// at all must still see model access satisfied on the checklist — proving the
+// fold reaches tier 1, not only the workspace-ref tier.
 func TestPreflight_ModelAccessFromExplicitIntegrationID(t *testing.T) {
 	h := newHarness(t)
 	st := preflightIntegrationStore{cfg: types.SiteConfig{Integrations: []types.Integration{
@@ -341,7 +339,7 @@ func TestPreflight_UnknownSecret422Passthrough(t *testing.T) {
 	}
 }
 
-// TestPreflight_RiskAssessment_HighItem is the N1 regression test: preflight
+// TestPreflight_RiskAssessment_HighItem: preflight
 // must carry the SAME deterministic risk grade the AI Run Composer's Review
 // renders, so the manual wizard's Review can gate launch behind the identical
 // HIGH-only acknowledgment (compose-review.tsx's RiskPanel). allow_all_egress

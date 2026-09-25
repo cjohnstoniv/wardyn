@@ -194,7 +194,7 @@ func (p *Proxy) privateIPRefused(req egress.Request, kind blockKind) {
 // all. A private-IP target can never be approved into reachability: the
 // address guard is unconditional and the internal_hosts lift that would
 // change it is compiled into this sidecar at dispatch, so the question can
-// only ever be answered "yes" and then overruled. F032 moved the method check
+// only ever be answered "yes" and then overruled, so the method check moved
 // above the raise to stop exactly this wasted question.
 //
 // It stays BELOW policy:denied and policy:method: both name a more specific rule
