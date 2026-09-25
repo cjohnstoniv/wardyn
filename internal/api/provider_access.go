@@ -55,7 +55,10 @@ type SetupProviderAccess struct {
 // graded from it: each is derived from the one before, so bundling them keeps
 // the handler to one statement (its own funlen ratchet, setup.go's doc comment).
 func (s *Server) setupModelProviderState(ctx context.Context, sc types.SiteConfig, owner string) ([]SetupModelProvider, []SetupProviderAccess, []SetupCheck) {
-	mp := s.setupModelProviders(ctx, sc)
+	// Only the providers this caller may run on ("Available to", capModelProvider).
+	// Filtered here, at the carrier, not in setupModelProviders: the sign-in and
+	// credential doors read that too and answer an ungranted provider themselves.
+	mp := capVisible(ctx, s, capModelProvider, s.setupModelProviders(ctx, sc), func(p SetupModelProvider) string { return p.ID })
 	access := s.setupProviderAccess(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sc, mp, owner)
 	defaultFor := map[string][]string{}
 	for _, sp := range mp {
