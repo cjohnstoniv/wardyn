@@ -18,11 +18,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// oidcUserTypeCtxKey carries the user type id stamped on the verified OIDC
-// session (oidc.UserTypeFromContext), published by withHumanIdentity beside
-// the role so the auth middleware stays the single place that trusts the oidc
-// package. "" for a caller with no stamp: the admin token, local mode, and
-// (until tokens carry a type) an API token.
+// oidcUserTypeCtxKey carries the user type of the same verified human: the
+// session's stamp on the SSO branch, the token row's on the api-token branch
+// (#611), published by withHumanIdentity beside the role so the auth
+// middleware stays the single place that trusts the oidc package. Read it
+// here, never through oidc.UserTypeFromContext, which the token lane does not
+// publish. "" for a caller with no stamp: the admin token and local mode.
 type oidcUserTypeCtxKey struct{}
 
 func withOIDCUserType(ctx context.Context, userType string) context.Context {

@@ -105,21 +105,6 @@ func oidcRoleFromContext(ctx context.Context) string {
 	return r
 }
 
-// oidcUserTypeCtxKey carries the user type of the same verified human: the
-// session's stamp on the SSO branch, the token row's on the api-token branch.
-// Read it here, never through oidc.UserTypeFromContext, which the token lane
-// does not publish.
-type oidcUserTypeCtxKey struct{}
-
-func withOIDCUserType(ctx context.Context, userType string) context.Context {
-	return context.WithValue(ctx, oidcUserTypeCtxKey{}, userType)
-}
-
-func oidcUserTypeFromContext(ctx context.Context) string {
-	t, _ := ctx.Value(oidcUserTypeCtxKey{}).(string)
-	return t
-}
-
 // oidcGroupsCtxKey carries the login-time group snapshot of the same verified
 // OIDC session (oidc.Session.Groups), published by humanOrAdminAuth next to the
 // principal/email/role and for the same reason those keys exist: the auth
