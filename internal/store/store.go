@@ -108,6 +108,13 @@ func (s PG) Ping(ctx context.Context) error {
 
 // AgentRun
 
+// createRunSQL is CreateRun's statement: one placeholder per runInsertCols
+// column, in order (TestCreateRunBindsEveryInsertColumn).
+var createRunSQL = `
+		INSERT INTO agent_runs (` + runInsertCols + `)
+		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
+		RETURNING ` + runCols
+
 // CreateRun inserts a new run and returns the persisted row.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
 	// updated_at ON THE DATABASE'S CLOCK, like every other writer of the column
@@ -121,16 +128,11 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	if !r.UpdatedAt.IsZero() {
 		updatedAge = db.AppClockAgeMicros(r.UpdatedAt, s.now())
 	}
-	q := `
-		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
-		RETURNING ` + runCols
-
 	limitsJSON, err := json.Marshal(r.RunLimits)
 	if err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: marshal run limits: %w", err)
 	}
-	row := s.Pool.QueryRow(ctx, q,
+	row := s.Pool.QueryRow(ctx, createRunSQL,
 		r.ID, r.CreatedAt, updatedAge, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
