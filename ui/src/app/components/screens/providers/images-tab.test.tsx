@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const listMock = vi.fn();
 const addMock = vi.fn();
@@ -42,8 +43,8 @@ const entry = (id: string, name: string, image: string) => ({
   kind: "byo" as const,
   name,
   image,
-  created_at: "2026-09-01T00:00:00Z",
-  updated_at: "2026-09-01T00:00:00Z",
+  created_at: aheadByHours(-24),
+  updated_at: aheadByHours(-24),
 });
 const TOOLBOX = entry("b1", "dev-toolbox", "ghcr.io/acme/dev-toolbox:1.4");
 const ML = entry("b2", "python-ml", "ghcr.io/acme/python-ml:3.12");

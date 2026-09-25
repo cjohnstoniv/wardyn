@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
+import { aheadByHours } from "../../../lib/test-clock";
 import type { ModelProvidersList } from "../../../lib/api/model-providers";
 import { AVAILABILITY } from "../../../lib/availability-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR as E } from "../../../lib/model-providers-copy";
@@ -64,7 +65,7 @@ const grant = (subject: string) => ({
   capability: "model_provider",
   value: "corp-gateway",
   effect: "allow" as const,
-  created_at: "2026-09-01T00:00:00Z",
+  created_at: aheadByHours(-24),
 });
 
 function renderEditor(editing: ModelProvider | null, providers: ModelProvider[] = []) {

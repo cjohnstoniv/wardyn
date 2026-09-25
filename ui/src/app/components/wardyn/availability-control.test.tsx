@@ -13,6 +13,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { HttpError } from "../../lib/api/core";
+import { aheadByHours } from "../../lib/test-clock";
 
 const getAvailabilityMock = vi.fn();
 const putAvailabilityMock = vi.fn();
@@ -56,7 +57,7 @@ const grant = (id: string, subject_type: "user_type" | "group" | "user", subject
   capability: KIND,
   value: ID,
   effect: "allow" as const,
-  created_at: "2026-09-01T00:00:00Z",
+  created_at: aheadByHours(-24),
 });
 const DEV = grant("g1", "user_type", "developer");
 const PM = grant("g2", "user_type", "portfolio-manager");
