@@ -288,6 +288,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   validates beside `validateConfig`, before `connectAndMigrate`, instead of after secrets, identity,
   the broker and the runner are already up; `validateMemberModePosture` stays at its later point
   since it needs local mode's resolved state and whether OIDC actually came up.
+- **The PR template now asks for a CHANGELOG entry explicitly.** A new checklist line —
+  "CHANGELOG entry or `no user-visible change` stated" — sits beside the existing docs-landing
+  and frozen-section lines, so a PR that adds neither has to say so instead of leaving the box
+  ambiguous (#730).
 - **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
   `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
   `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →
