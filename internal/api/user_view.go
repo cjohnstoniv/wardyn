@@ -98,8 +98,13 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength != 0 && !decodeStrict(w, r, &req) {
 		return
 	}
-	on := req.View == "user"
-	if !on && req.View != "admin" {
+	var on bool
+	switch req.View {
+	case "", "admin":
+		on = false
+	case "user":
+		on = true
+	default:
 		writeError(w, http.StatusBadRequest, `The "view" field must be "user" or "admin".`)
 		return
 	}

@@ -95,6 +95,11 @@ export interface Me {
   // server refuses to grant the posture as well. Absent on a pre-0.8 daemon,
   // which reads the same as "do not offer it".
   user_preview_available?: boolean;
+  // The user type whose deletion turned this session's user view off, until
+  // the next switch (0.8, internal/api/me.go's meUserViewDropped) — the
+  // console says why it is back in the Admin view. null otherwise, including
+  // on a pre-0.8 daemon.
+  user_view_dropped?: { user_type: string; reason: "deleted" } | null;
   // WHY /me COULD NOT ANSWER for this caller's drive, or "" when it could.
   // Always present on a 0.7 daemon, so an absent key is an older server rather
   // than "nothing is wrong".
