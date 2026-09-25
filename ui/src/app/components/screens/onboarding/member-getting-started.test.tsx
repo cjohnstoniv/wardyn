@@ -423,6 +423,21 @@ describe("MemberGettingStarted", () => {
       expect(await screen.findByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeInTheDocument();
     });
 
+    // Fix review (MED, the empty-grant shape): `model_providers: []` is a REAL
+    // block that grants this caller nothing — connectionsSummary's own
+    // Not-set-up reading, NEVER legacySummary's, and no "Your model key" card
+    // (the legacy BYOK door only ever applies when there is no block at all).
+    // A per_user model_access live here proves the branch: legacySummary
+    // would read this Ready (see the test above), so a Not-set-up chip here
+    // is proof providerMode took the `[]` branch, not the null one.
+    it("model_providers: [] (a block granting nothing): Not set up, and no Your model key card", async () => {
+      const s = status({ model_access: { state: "live" }, model_providers: [], provider_access: [] });
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
+      expect(await screen.findByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Your model key" })).not.toBeInTheDocument();
+    });
+
     // Fix review on #541: with no model-providers block at all,
     // connectionsSummary's rows are always empty — legacySummary is the
     // fallback (lib/model-connections.ts), reading the SAME model_access the
@@ -457,8 +472,7 @@ describe("MemberGettingStarted", () => {
     });
 
     // Restored (fix review on #541): the "shared credentials … your runs
-    // inherit them" lede is false under a per_user roster row — SAME reason
-    // it's false under a real provider block.
+    // inherit them" lede is false under a per_user roster row.
     it("a per_user roster row shows the per_user lede, never the shared one", async () => {
       getSetupStatusMock.mockResolvedValue(
         status({ model_access: { state: "live" }, harnesses: perUserHarness }),
@@ -466,6 +480,7 @@ describe("MemberGettingStarted", () => {
       renderPage();
       expect(await screen.findByText(T.SETUP_SUMMARY_HELPER_PER_USER)).toBeInTheDocument();
       expect(screen.queryByText(T.SETUP_SUMMARY_HELPER)).not.toBeInTheDocument();
+      expect(screen.queryByText(CONNECTIONS.LEDE)).not.toBeInTheDocument();
     });
 
     it("a plain shared install (no per_user row, no providers) shows the shared lede", async () => {
@@ -474,13 +489,18 @@ describe("MemberGettingStarted", () => {
       await screen.findByText(CONNECTIONS.SUMMARY_READY);
       expect(screen.getByText(T.SETUP_SUMMARY_HELPER)).toBeInTheDocument();
       expect(screen.queryByText(T.SETUP_SUMMARY_HELPER_PER_USER)).not.toBeInTheDocument();
+      expect(screen.queryByText(CONNECTIONS.LEDE)).not.toBeInTheDocument();
     });
 
-    it("a real provider block shows the per_user lede too — every provider is per-person", async () => {
+    // Fix review (MED): providerMode gets its OWN canon lede
+    // (CONNECTIONS.LEDE, copy/door.ts) rather than reusing
+    // SETUP_SUMMARY_HELPER_PER_USER — no new string, the conductor's ruling.
+    it("a real provider block shows CONNECTIONS.LEDE, neither of the legacy ledes", async () => {
       const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "live" }]);
       getSetupStatusMock.mockResolvedValue(s);
       renderPage(baseMe(), s);
-      expect(await screen.findByText(T.SETUP_SUMMARY_HELPER_PER_USER)).toBeInTheDocument();
+      expect(await screen.findByText(CONNECTIONS.LEDE)).toBeInTheDocument();
+      expect(screen.queryByText(T.SETUP_SUMMARY_HELPER_PER_USER)).not.toBeInTheDocument();
       expect(screen.queryByText(T.SETUP_SUMMARY_HELPER)).not.toBeInTheDocument();
     });
   });

@@ -327,7 +327,11 @@ export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}
   const path = screenPath(pathname);
   const under = (prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
   const userView = viewOfPath(pathname) === "user";
-  const providerMode = !!status?.model_providers;
+  // #541 fix review: `model_providers` carries no `omitempty` any more, so an
+  // admin who set up providers but granted THIS caller none reads `[]` — a
+  // real block, still provider mode — never the same wire shape as no block
+  // at all (`null`/absent). `!= null` (not `!!`) is what tells the two apart.
+  const providerMode = status?.model_providers != null;
 
   const copy = modelAccessStripCopy(door, { operator }, door.claimed);
   // Never on /setup — the page is the door. On /settings, /providers and

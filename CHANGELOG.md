@@ -8,6 +8,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **Your account ▸ Your model connections (#541).** Every person — admins included, by switching to
+  Member view — now connects their own credential for each model provider their admin enabled for
+  them, one row per provider: an AWS or Claude sign-in, or an API key/token, each with its own
+  live/expiring/signed-out state and a "Ready" / "Needs you" / "Not set up by your admin" summary
+  chip. Reached from Getting Started, which keeps only that summary chip and a link. This is
+  additive: an install with no per-provider model records (#551) at all is unaffected, and keeps
+  "Your model key" on Getting Started as its own credential door until #548 converts it.
+
+### Changed
+
+- **`GET /setup/status`'s `model_providers` no longer omits itself when a provider block exists but
+  grants the caller nothing (#541 fix review).** It now reads `[]` for that shape and `null` (or is
+  absent, from an older daemon) only when there is no provider block at all — the two are different
+  facts, and collapsing them into the same missing key made a real "not connected to anything" grant
+  indistinguishable from an admin who has not started setting providers up.
+
 ### Fixed
 
 - **Getting Started's model-access chip read "Not set up by your admin" for every legacy install

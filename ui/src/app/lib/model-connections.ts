@@ -101,6 +101,12 @@ export function legacySummary(status: SetupStatus | null | undefined): Connectio
   if (state === "not_configured" || state === "expired_signin") {
     return { label: CONNECTIONS.SUMMARY_NEEDS_YOU, tone: "warning" };
   }
+  // Fix review (HIGH): shared_expired is a DEAD shared credential, not a
+  // config fact — llm_ready is computed at the deployment/config level
+  // (internal/api/setup.go), so it stays true for an install whose one
+  // shared credential has expired, and the llmReady fallback below would
+  // otherwise read that install as Ready.
+  if (state === "shared_expired") return { label: AGENTS.MODEL_ACCESS_SHARED_EXPIRED, tone: "warning" };
   if (status?.llm_ready === true) return { label: CONNECTIONS.SUMMARY_READY, tone: "success" };
   return { label: CONNECTIONS.SUMMARY_NOT_SET_UP, tone: "neutral" };
 }

@@ -78,7 +78,13 @@ export function ModelConnectionsCard({ status, onChanged }: { status: SetupStatu
   const rows = connectionRows(status);
   const rowCopies = rows.map((row) => ({ row, copy: connectionRowCopy(status, row) }));
   useClaimModelAccessDoor(rowCopies.some(({ copy }) => !!copy.button));
-  if (!status.model_providers) return null;
+  // #541 fix review: `model_providers == null` (not `!status.model_providers`
+  // — functionally the same here since an array is always truthy, but the
+  // explicit null check matches the SAME providerMode expression
+  // model-access-banner.tsx and member-getting-started.tsx use) — no block at
+  // all, distinct from a block granting this caller nothing (`[]`, which
+  // still renders the card's own "No providers" state below).
+  if (status.model_providers == null) return null;
   const summary = connectionsSummary(rows);
 
   return (

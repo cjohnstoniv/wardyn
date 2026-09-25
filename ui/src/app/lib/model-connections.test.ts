@@ -269,6 +269,18 @@ describe("legacySummary", () => {
     });
   });
 
+  // Fix review (HIGH): a dead SHARED credential is a credential-health fact,
+  // never a config one — llm_ready is computed at the deployment/config level
+  // (internal/api/setup.go) and stays true regardless, so the llmReady
+  // fallback below must never be reached for this state, or an install whose
+  // one shared credential expired would read Ready.
+  it("model_access shared_expired: the admin's-credential-expired chip, even with llm_ready true", () => {
+    expect(legacySummary(baseStatus({ model_access: { state: "shared_expired" }, llm_ready: true }))).toEqual({
+      label: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
+      tone: "warning",
+    });
+  });
+
   // The shared-credential install: no per-principal model_access state at
   // all, but the deployment-wide llm_ready fallback is true — the exact shape
   // "Your model key" used to read "Provided by your admin" from.

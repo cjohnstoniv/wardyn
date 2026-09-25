@@ -47,6 +47,7 @@ import {
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
 import { connectionRows, connectionsSummary, legacySummary } from "../../../lib/model-connections";
 import { MODEL_ACCESS_AGENT, isPerUserSsoRow } from "../../../lib/model-access";
+import { CONNECTIONS } from "../../wardyn/copy/door";
 import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
@@ -217,7 +218,17 @@ export function MemberGettingStarted() {
   // install (no provider block, since the admin funnel writes none until
   // #548 lands) keeps "Your model key" as the door it always had. Computed
   // before `actionable` and `connectionsChip` below since both branch on it.
-  const providerMode = !!status?.model_providers;
+  //
+  // `!= null` (not `!!`): the server sends model_providers with no
+  // `omitempty` now (#541 fix review), so a real block granting this caller
+  // nothing reads `[]` — still provider mode, just the "No providers" state
+  // — never the same wire shape as no block at all (`null`/absent).
+  const providerMode = status?.model_providers != null;
+  // legacyMode additionally requires `status` itself to have loaded: while it
+  // is null (the pre-fetch window), providerMode already reads false, and
+  // rendering "Your model key" then would flash it for every install,
+  // including a real-provider one, until the read resolves.
+  const legacyMode = !!status && !providerMode;
 
   // X3-F3: the summary chip and the pane must agree on WHICH key — the name
   // follows the org's agent roster, not a hardcoded provider. Unused (and the
@@ -248,7 +259,7 @@ export function MemberGettingStarted() {
   // rather than an in-page action) are informational and never win it.
   const actionable: { key: string; done: boolean }[] = [
     { key: "workspace", done: workspaceDone },
-    ...(providerMode ? [] : [{ key: "model-key", done: modelKeyDone }]),
+    ...(legacyMode ? [{ key: "model-key", done: modelKeyDone }] : []),
     { key: "first-run", done: firstRunDone },
     { key: "connect-tools", done: connectDone },
   ];
@@ -270,10 +281,10 @@ export function MemberGettingStarted() {
   // credential was the regression this fixes. null while `status` itself
   // hasn't loaded yet: no claim before there is an answer to make one from.
   const connectionsChip = status ? (providerMode ? connectionsSummary(connectionRows(status)) : legacySummary(status)) : null;
-  // The per_user roster row (the pre-provider per-person AWS-SSO lane) —
-  // SETUP_SUMMARY_HELPER's "shared credentials" claim is false under it, same
-  // as under any real provider block (every provider is per-person by
-  // design), so both pick the per_user lede instead.
+  // The per_user roster row (the pre-provider per-person AWS-SSO lane) — the
+  // ONLY legacy shape SETUP_SUMMARY_HELPER's "shared credentials" claim is
+  // false for; a real provider block gets its OWN canon lede (CONNECTIONS.LEDE,
+  // copy/door.ts) below rather than reusing this one; add no new string.
   const isPerUserModelAccess = !!status?.harnesses?.some((h) => h.id === MODEL_ACCESS_AGENT && isPerUserSsoRow(h));
 
   // #386: the Azure DevOps chip + its fallback connect control — the same
@@ -423,7 +434,11 @@ export function MemberGettingStarted() {
                 <p className="mt-2 text-sm text-warning">{ADO.ACCESS_SHARED_EXPIRED_ACTION}</p>
               )}
               <p className="mt-3 text-sm text-muted-foreground">
-                {isPerUserModelAccess || providerMode ? T.SETUP_SUMMARY_HELPER_PER_USER : T.SETUP_SUMMARY_HELPER}
+                {providerMode
+                  ? CONNECTIONS.LEDE
+                  : isPerUserModelAccess
+                    ? T.SETUP_SUMMARY_HELPER_PER_USER
+                    : T.SETUP_SUMMARY_HELPER}
               </p>
               {/* The chip names the profile; this says what having one means.
                   Both render only when there IS one. */}
@@ -478,8 +493,10 @@ export function MemberGettingStarted() {
         {/* Restored (fix review on #541): the legacy install's own door — a
             real provider block makes Your account's Your model connections
             the only one (MP-D's own drawing), so this never renders beside
-            it. */}
-        {!providerMode && (
+            it. `legacyMode` (not `!providerMode`) also waits for `status`
+            itself to load, so the card never flashes on before the read
+            resolves. */}
+        {legacyMode && (
           <YourModelKey
             llmReady={llmReady}
             mine={mine}
