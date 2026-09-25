@@ -2077,6 +2077,33 @@ and does not yet follow semantic versioning (interfaces are not stable).
   ticking that box in the console counts as consent to the CLI's prompt is still an open owner
   decision.
 
+### Fixed
+
+- **One CLI output contract (#200).** `emitJSON` and `newTab` wrote to `os.Stdout` directly, so a
+  caller that redirected a `*cobra.Command`'s own writer (as every test in the CLI's own suite did,
+  via a `captureStdout`-style os.Stdout pipe) never saw the `--json`/table output that writer was
+  supposed to carry. Both now take the writer their caller passes, and every command passes
+  `cmd.OutOrStdout()` — so output is captured wherever the caller redirected it, in tests and in a
+  script that captures a subprocess's stdout. `wardyn attach`/`wardyn ssh`'s raw terminal writes are
+  unaffected: those need the real file descriptor for interactive I/O, not a buffered writer.
+
+### Changed
+
+- **Two clean breaks, no alias window (owner ruling 2026-09-22): `workspace get --json` now
+  defaults to `false`, and `support-bundle`'s output flag is spelled `--output`/`-o` (#200).**
+  `workspace get` was the CLI's only command defaulting `--json` to `true` — every other command
+  defaults it `false`. `support-bundle --out` was the CLI's only flag spelled `--out` instead of
+  `--output`/`-o` (`run recording`'s download flag already used that spelling). Both now match the
+  rest of the CLI. Neither old spelling is accepted.
+
+### Upgrading
+
+- **`wardyn workspace get` no longer defaults to JSON (#200).** A script parsing its plain output
+  now gets `wardyn workspace get <id> --json` back only when `--json` is passed explicitly; add the
+  flag to any script that relied on the old default.
+- **`wardyn support-bundle --out` is gone; use `--output` or `-o` (#200).** There is no alias — a
+  script or cron job passing `--out` now fails at the flag parser instead of silently continuing.
+
 ## [0.7.12] — 2026-09-23
 
 ### Security

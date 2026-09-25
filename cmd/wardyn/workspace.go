@@ -183,7 +183,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if createJSON {
-				return emitJSON(ws)
+				return emitJSON(cmd.OutOrStdout(), ws)
 			}
 			fmt.Printf("created workspace %s (%q, %s, status %s)\n", ws.ID, ws.Name, workspaceComposition(ws), ws.Status)
 			return nil
@@ -212,9 +212,9 @@ func workspaceCmd(client clientFn) *cobra.Command {
 			}
 			warnListTruncated(cmd, truncated, "workspace", len(wss), listOffset)
 			if listJSON {
-				return emitJSON(wss)
+				return emitJSON(cmd.OutOrStdout(), wss)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tNAME\tCOMPOSITION\tSTATUS")
 			for _, ws := range wss {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", ws.ID, ws.Name, workspaceComposition(ws), ws.Status)
@@ -226,7 +226,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 	list.Flags().IntVar(&listLimit, "limit", 0, "max rows to return (0 = server default page)")
 	list.Flags().IntVar(&listOffset, "offset", 0, "skip this many rows (page forward past a truncated list)")
 
-	getJSON := true
+	getJSON := false
 	get := &cobra.Command{
 		Use:   "get <workspace-id>",
 		Short: "Show one workspace (full row, including its scan profile)",
@@ -241,15 +241,15 @@ func workspaceCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if getJSON {
-				return emitJSON(ws)
+				return emitJSON(cmd.OutOrStdout(), ws)
 			}
-			tw := newTab()
+			tw := newTab(cmd.OutOrStdout())
 			fmt.Fprintln(tw, "ID\tNAME\tCOMPOSITION\tSTATUS")
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", ws.ID, ws.Name, workspaceComposition(ws), ws.Status)
 			return tw.Flush()
 		},
 	}
-	get.Flags().BoolVar(&getJSON, "json", true, "emit raw JSON (--json=false for a one-line composition table)")
+	get.Flags().BoolVar(&getJSON, "json", false, "emit raw JSON (default: a one-line composition table)")
 
 	del := &cobra.Command{
 		Use:     "delete <workspace-id>",
@@ -284,7 +284,7 @@ func workspaceCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return emitJSON(raw)
+			return emitJSON(cmd.OutOrStdout(), raw)
 		},
 	}
 
