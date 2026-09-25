@@ -201,7 +201,7 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 		modelRun: true, provider: &c, bedrock: auth, bedrockReady: true,
 		injectBedrockBearer: auth.bearer, injectBedrockSSO: auth.ssoInject && auth.ssoProxyInject,
 	}
-	t.secretEnvKeys = s.applyBedrockTransport(ctx, run, auth, policy, sandboxEnv)
+	t.secretEnvKeys, t.bedrockAudit = s.applyBedrockTransport(run, auth, policy, sandboxEnv)
 	return t, true
 }
 

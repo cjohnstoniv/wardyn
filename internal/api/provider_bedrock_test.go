@@ -285,6 +285,43 @@ func brAuthored(t *testing.T, p types.ModelProvider) (*harness, *subStore, *memS
 	return h, st, sec
 }
 
+// #518 records run.llm.bedrock past dispatch's last gate, from the row
+// applyBedrockTransport computes; the provider arm has to hand its row over the
+// same way, and the row still names the provider the run chose (#530).
+func TestProviderBedrockDispatchAuditsItsTransport(t *testing.T) {
+	for _, tc := range []struct {
+		p    types.ModelProvider
+		mode string
+	}{{brBearerProvider(), "bearer"}, {brSSOProvider(), "sso-inject-proxy"}} {
+		t.Run(string(tc.p.Kind), func(t *testing.T) {
+			h, st, _ := brHarness(t, tc.p)
+			if _, ok := dispatchSub(h, st, &types.RunPolicySpec{}, map[string]string{}, nil); !ok {
+				t.Fatalf("dispatch refused: %q", st.failed)
+			}
+			var rows []map[string]any
+			for _, ev := range h.srv.cfg.Audit.(*recRecorder).snapshot() {
+				if ev.Action != "run.llm.bedrock" {
+					continue
+				}
+				var d map[string]any
+				if err := json.Unmarshal(ev.Data, &d); err != nil {
+					t.Fatal(err)
+				}
+				rows = append(rows, d)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("run.llm.bedrock rows = %d, want 1", len(rows))
+			}
+			d := rows[0]
+			if d["provider"] != tc.p.ID || d["region"] != "us-west-2" || d["model"] != brModel ||
+				d["endpoint"] != providerBedrockRuntimeHost(tc.p) || d["mode"] != tc.mode {
+				t.Errorf("run.llm.bedrock = %v, want provider %s, us-west-2, %s at %s, mode %s",
+					d, tc.p.ID, brModel, providerBedrockRuntimeHost(tc.p), tc.mode)
+			}
+		})
+	}
+}
+
 func noBRLeak(t *testing.T, body string) {
 	t.Helper()
 	for _, leak := range []string{brOwnerKey, brOperatorKey, brOtherKey, brOwnerToken, brOperatorTok} {
