@@ -795,14 +795,14 @@ jobs:
           out=$(timeout 120 docker compose --env-file /etc/wardyn/wardyn.env \
             -f deploy/desktop/docker-compose.yaml -p wardyn-desk-ci \
             run --rm -T --name wardyn-desk-ci-hybrid-refusal \
-            -e WARDYN_ORG_URL=https://org-controlplane.example.com -e WARDYN_MEMBER_MODE=false \
+            -e WARDYN_ORG_URL=https://org-controlplane.example.com -e WARDYN_USER_DESKTOP=false \
             wardynd 2>&1)
           code=$?
           set -e
           echo "${out}"
           [ "${code}" -ne 0 ] \
-            || { echo "::error::wardynd booted (exit 0) with WARDYN_ORG_URL set and WARDYN_MEMBER_MODE unset — validateHybridPosture's refusal did not fire"; exit 1; }
-          echo "${out}" | grep -qF 'WARDYN_ORG_URL is set but WARDYN_MEMBER_MODE is not' \
+            || { echo "::error::wardynd booted (exit 0) with WARDYN_ORG_URL set and WARDYN_USER_DESKTOP unset — validateHybridPosture's refusal did not fire"; exit 1; }
+          echo "${out}" | grep -qF 'WARDYN_ORG_URL is set but WARDYN_USER_DESKTOP is not' \
             || { echo "::error::wardynd exited ${code}, but not with the expected refusal (124 = still running after 120s, i.e. it booted): ${out}"; exit 1; }
           docker compose --env-file /etc/wardyn/wardyn.env \
             -f deploy/desktop/docker-compose.yaml -p wardyn-desk-ci down -v
