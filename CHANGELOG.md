@@ -269,6 +269,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`wardynd -h` reads like a product, and the hybrid-boot org control-plane check now runs before
+  migration (#197).** Every flag's usage string was rewritten to say what it does, its default and
+  its unit, with internal ids and version history dropped; no flag was added, removed or renamed.
+  `validateHybridPosture` (`WARDYN_ORG_URL`/`WARDYN_ORG_ENROLMENT_TOKEN`) is flag-only and now
+  validates beside `validateConfig`, before `connectAndMigrate`, instead of after secrets, identity,
+  the broker and the runner are already up; `validateMemberModePosture` stays at its later point
+  since it needs local mode's resolved state and whether OIDC actually came up.
 - **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
   `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
   `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →

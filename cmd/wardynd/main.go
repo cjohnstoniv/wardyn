@@ -118,7 +118,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, posture, *f.allowPlaintextListen); err != nil {
+	// The flag-only posture refusals (UI-sandbox gateway, HYBRID BOOT's org
+	// control plane — issue #100) validate here, beside validateConfig and
+	// before connectAndMigrate, rather than waiting for the daemon to stand up
+	// migration, secrets, identity, the broker and the runner first. See
+	// validateBootPosture's own doc comment (boot_posture.go) for why
+	// validateMemberModePosture is NOT in this list.
+	if err := validateBootPosture(f, posture); err != nil {
 		return err
 	}
 
@@ -356,16 +362,12 @@ func run() error {
 		return err
 	}
 
-	// MEMBER-MODE DESKTOP posture, then HYBRID BOOT's org control-plane posture
-	// (issue #100) right after it — folded into one call so run() gains no
-	// extra branch for the second, adjacent refusal (gocyclo); see each
-	// validator's own doc comment in boot_posture.go for what it enforces.
-	// Checked here (not in validateConfig) because both of member mode's
+	// MEMBER-MODE DESKTOP posture (validateHybridPosture already ran above,
+	// beside validateConfig). Checked here, not there, because both of its
 	// inputs only exist this far into boot: lm.enabled is the RESOLVED
 	// local-mode fact — local mode auto-enables, so the raw flag is not the
 	// answer — and feats.authn is the resolved "OIDC is configured" one.
-	if err := checkMemberAndHybridBootPosture(*f.memberMode, lm.enabled, feats.authn != nil,
-		*f.orgURL, *f.orgEnrolToken, *f.allowPlaintextListen); err != nil {
+	if err := validateMemberModePosture(*f.memberMode, lm.enabled, feats.authn != nil); err != nil {
 		return err
 	}
 
