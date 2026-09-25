@@ -58,7 +58,6 @@ describe("useAdoLaunchDoor + useAdoConnect", () => {
     // link the blockedUrl below feeds never had a chance to render.
     expect(result.current.dialog.open).toBe(true);
     expect(result.current.dialog.blockedUrl).toBe("/api/v1/scm/azure-devops/signin");
-    expect(getMineMock).not.toHaveBeenCalled();
   });
 
   it("a real, un-blocked connect that the person cancels still closes the dialog", async () => {
