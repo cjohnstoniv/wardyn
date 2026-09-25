@@ -81,11 +81,9 @@ func LegacyRoleMemberWarning(variable, entry string) string {
 // Roles is the closed set, in rank order, and it is the ONE place the set is
 // written down. ValidRole is implemented over it and the DDL parity guard
 // (internal/db's TestClosedEnumChecksMatchConstants, role_mappings.role) reads
-// it, so a fourth role cannot land on one side alone in EITHER direction. It
-// used to be typed out a third time in that guard, which left it blind in the
-// Go-widens-first direction — and that is the direction of the incident 0053
-// documents: ValidRole accepted security_admin while 0051's CHECK still refused
-// it, so POST /access/mappings passed validation and then 500'd at the database.
+// it, so a fourth role cannot land on one side alone in EITHER direction.
+// A duplicate copy could drift from this guard, silently admitting a role
+// the database still refuses.
 // The sibling user_drives enums already derive from types.DriveBackends and
 // friends for exactly this reason; this is the surface that did not.
 //
@@ -707,7 +705,7 @@ const maxSessionGroupsBytes = 2048
 // the snapshot partial, which is what "unanswerable" already means downstream.
 //
 // A value CanonicalGroupSubject refuses is the THIRD way, and it is the one
-// that used to be invisible: the drop happens before uniq is built, so the
+// invisible to the check below: the drop happens before uniq is built, so the
 // len(out) < len(uniq) reading below cannot see it and the snapshot reported
 // COMPLETE while a group the human really holds was missing. A directory that
 // names groups in a non-English locale ("Entwickler-Büro") hits this on an

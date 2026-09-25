@@ -749,7 +749,7 @@ func DriveObjectName(d UserDrive, home string) string {
 }
 
 // DriveObjectID is the drive's own id, dashless — the fixed-width fragment
-// DriveObjectSchemeID puts where DriveSlug used to go. 32 lowercase hex
+// DriveObjectSchemeID puts where DriveSlug would otherwise go. 32 lowercase hex
 // characters always: uuid.UUID.String() is fixed-format (8-4-4-4-12 hex,
 // lowercase), so stripping its four hyphens leaves a length and character
 // class that can never vary with what an admin typed into the drive's name or

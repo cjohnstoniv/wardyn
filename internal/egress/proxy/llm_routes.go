@@ -66,7 +66,7 @@ var maxLLMScanBody = 32 << 20 // 32 MiB
 // maxConcurrentScans bounds how many request bodies may be BUFFERED AND
 // EXTRACTED at once, process-wide (one proxy per sidecar process).
 //
-// It is a memory bound, not a throughput knob (F074). The buffer+extract path
+// It is a memory bound, not a throughput knob. The buffer+extract path
 // does not cost one body: contentscan's extractor re-materialises it several
 // times over (content array -> []json.RawMessage, each block -> a struct with
 // its own string, a generic body -> interface{} boxing), measured at ~5.3x live
@@ -92,7 +92,7 @@ var scanSlots = make(chan struct{}, maxConcurrentScans)
 // hold live at once, counted for as long as the buffer is REACHABLE — not just
 // while it is being scanned.
 //
-// Trust boundary (F074 fix-up): the scan slot above bounds the buffer+extract
+// Trust boundary: the scan slot above bounds the buffer+extract
 // WINDOW; it says nothing about the buffer's LIFETIME. scanBufferedBody hands
 // its caller a re-readable copy of the whole body and the caller then streams
 // it through RoundTrip, so the slot was already released while up to
@@ -143,8 +143,8 @@ func retainScanBuffer(ctx context.Context, n int) (func(), bool) {
 // With maxConcurrentScans at 1 and the slot held across io.ReadAll of a
 // SANDBOX-controlled body, a single slow-loris POST would otherwise park every
 // other inspected request of the run in the semaphore send forever, each
-// retaining a goroutine and a socket in a 256 MiB sidecar (the retention class
-// F079 names, reached through the inspection path and triggerable by the
+// retaining a goroutine and a socket in a 256 MiB sidecar (a retention class
+// reached through the inspection path and triggerable by the
 // untrusted sandbox).
 //
 // Expiring the wait fails CLOSED — Deny + 502, like the read-error arm beside
@@ -270,7 +270,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	// to report — a clean turn stays quiet).
 	bodyReader, scanSummary, releaseBody, blocked := p.inspectLLM(w, r, host, port, rest, channel)
 	// The buffered body stays charged to maxRetainedScanBytes until the upstream
-	// round trip has consumed it (F074).
+	// round trip has consumed it.
 	defer releaseBody()
 	if blocked {
 		return
@@ -283,7 +283,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 // llmRouteTarget resolves the brokered LLM route's dial target, choosing the
 // vet by what host IS rather than by which route asked.
 //
-// Trust boundary (F087 — read before widening): gatewayTarget/vetTrustedHost is
+// Trust boundary (read before widening): gatewayTarget/vetTrustedHost is
 // the RELAXED vet. It admits RFC1918/ULA/CGNAT by design, because an
 // operator-configured internal model gateway is expected to live there, and it
 // is safe ONLY because that host was typed into the control plane at boot.
@@ -327,7 +327,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	// Build the upstream target as a STRUCTURED url.URL, never by concatenating
 	// `rest` into a string that http.NewRequestWithContext then re-PARSES.
 	//
-	// Trust boundary (F035): `rest` is the PERCENT-DECODED path (r.URL.Path),
+	// Trust boundary: `rest` is the PERCENT-DECODED path (r.URL.Path),
 	// and it is the same value classifyLLM keys the inspection decision on. Fed
 	// back through a URL parser, a decoded "#" becomes a FRAGMENT and a decoded
 	// "?" becomes a QUERY, so `POST /wardyn/llm/anthropic/v1/messages%23z`
@@ -401,7 +401,7 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 		Channel:    string(channel),
 		Skipped:    res.Skipped,
 		SkipReason: res.SkipReason,
-		// The truncation, on the wire (F075): the flag survives an earlier skip
+		// The truncation, on the wire: the flag survives an earlier skip
 		// reason claiming SkipReason, and the counts let an auditor tell a
 		// capped scan from one that found exactly maxFindings.
 		FindingsCapped:  res.FindingsCapped || res.SkipReason == "findings_capped",
@@ -434,7 +434,7 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 	case (res.Skipped || res.FindingsCapped) && len(res.Findings) > 0 &&
 		(res.FindingsCapped || res.SkipReason == "findings_capped" ||
 			res.SkipReason == "scan_budget" || res.SkipReason == "attachment_decode_error"):
-		// B2/B4 (F075/F073/F056 fix-up): findings_capped, scan_budget, and
+		// findings_capped, scan_budget, and
 		// attachment_decode_error all set Result.Skipped, so this switch checks
 		// findings BEFORE `res.Skipped` and resolves to "alert" whenever a real
 		// secret is found alongside a budget/decode limit — resolving
@@ -497,7 +497,7 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 // bodyBearingMethod reports whether a method may carry a request body Wardyn
 // would want to inspect.
 //
-// Trust boundary (F088/F112): this is the ONE definition, shared by
+// Trust boundary: this is the ONE definition, shared by
 // hasScannableBody and by both LLM endpoint classifiers, so the two can never
 // disagree — a second definition (hasScannableBody accepting POST/PUT/PATCH
 // while a classifier opens with `if method != http.MethodPost { return
@@ -505,7 +505,7 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 // suffix: `PUT /v1/messages` with a secret in the body would reach the vendor
 // with the operator's brokered credential under mode=block, allowed, with
 // scanSummary=nil — audit-indistinguishable from a bodiless GET /v1/models.
-// Closing the suffix axis (F112's fail-closed default) while leaving the verb
+// Closing the suffix axis (the fail-closed default) while leaving the verb
 // axis open would just move the same bypass one keystroke sideways.
 func bodyBearingMethod(method string) bool {
 	switch method {
@@ -543,7 +543,7 @@ func (p *Proxy) inspectForwardBody(w http.ResponseWriter, r *http.Request, host 
 //
 // The returned release MUST be deferred by the caller: it is what gives the
 // buffer back to maxRetainedScanBytes, and the buffer stays charged until it
-// runs (F074 — the scan slot only ever bounded the extract window). It is
+// runs (the scan slot only ever bounded the extract window). It is
 // always non-nil and safe to call more than once.
 func (p *Proxy) scanBufferedBody(w http.ResponseWriter, r *http.Request, channel contentscan.Channel, readErrMsg string, emit func(egress.Decision, string, *egress.ScanSummary)) (io.Reader, *egress.ScanSummary, func(), bool) {
 	// Take a scan slot BEFORE buffering: the slot is what bounds live heap
@@ -678,10 +678,10 @@ func classifyLLM(channel contentscan.Channel, method, rest string) int {
 // count_tokens shares the Messages schema, so it is scanned with the same
 // extractor; every other body-bearing request carries content in a shape we
 // cannot parse yet, so it is marked uninspected rather than silently allowed —
-// see the default arm's F112/F088 note.
+// see the default arm's note above.
 func classifyAnthropicLLM(method, rest string) int {
 	// The quiet answer belongs to methods that carry NO body (GET/HEAD/DELETE/…),
-	// not to "anything that is not a POST" (F088/F112 — bodyBearingMethod is the
+	// not to "anything that is not a POST" (bodyBearingMethod is the
 	// one definition hasScannableBody uses too). The named arms below stay
 	// POST-only because POST is the only verb the vendor documents for them, so
 	// a PUT/PATCH to the same path is exactly an unrecognised body-bearing
@@ -696,7 +696,7 @@ func classifyAnthropicLLM(method, rest string) int {
 	case method == http.MethodPost && strings.HasSuffix(r, "/count_tokens"):
 		return scanMessages
 	default:
-		// Fail-closed default (F112): every OTHER POST on this route is
+		// Fail-closed default: every OTHER POST on this route is
 		// uninspected, not quiet — the enumerated arms above cannot be trusted to
 		// cover the vendor's whole content-upload surface, because the SANDBOX
 		// picks the whole suffix (handleLocalRoute dispatches on a bare prefix
@@ -711,7 +711,7 @@ func classifyAnthropicLLM(method, rest string) int {
 		// `files`). So the default is the honest answer — "prompt-bearing but no
 		// extractor yet" — and a new arm above is what earns silence.
 		//
-		// F088 second axis: the same is true of the VERB. `PUT /v1/messages` is
+		// The same is true of the VERB. `PUT /v1/messages` is
 		// not a documented Anthropic call, so it lands here rather than on the
 		// scanMessages arm — uninspected and refused under fail-closed blocking
 		// rather than silently forwarded.
@@ -725,7 +725,7 @@ func classifyAnthropicLLM(method, rest string) int {
 // honestly marked uninspected rather than silently allowed.
 func classifyOpenAILLM(method, rest string) int {
 	// Same two rules as classifyAnthropicLLM: only a bodiless method is quiet
-	// (F088/F112), and the named arm is POST-only so any other body-bearing verb
+	// and the named arm is POST-only so any other body-bearing verb
 	// on the same path is an unrecognised call, not a scanned one.
 	if !bodyBearingMethod(method) {
 		return scanNone
@@ -735,7 +735,7 @@ func classifyOpenAILLM(method, rest string) int {
 	case method == http.MethodPost && (r == "chat/completions" || strings.HasSuffix(r, "/chat/completions")):
 		return scanMessages
 	default:
-		// Fail-closed default (F112), same rule as classifyAnthropicLLM: an
+		// Fail-closed default, same rule as classifyAnthropicLLM: an
 		// enumerated allowlist of endpoints cannot be trusted to cover the
 		// vendor's whole content-upload surface. The vendor's own OpenAPI spec
 		// defines POST /v1/files and the multipart
@@ -743,7 +743,7 @@ func classifyOpenAILLM(method, rest string) int {
 		// beside /responses, /embeddings and /completions — an enumeration naming
 		// only the chat-adjacent endpoints would stream the rest through with the
 		// brokered credential and no scan block. An enumeration also has to carry
-		// each endpoint's BARE spelling (F088: with no gateway prefix configured,
+		// each endpoint's BARE spelling (with no gateway prefix configured,
 		// `rest` for POST /wardyn/llm/openai/responses is exactly "responses",
 		// which a suffix-only arm would miss) — a second way the same list could
 		// silently lose an endpoint. The default answers both.
@@ -902,7 +902,7 @@ func (p *Proxy) emitLLMBlindOnce(host string) {
 	// enumerate distinct (e.g. bedrock-runtime.*) hostnames to grow it without
 	// limit. Past the cap we stop tracking/emitting new blind signals.
 	//
-	// F066 — the cap SUPPRESSES the coverage signal; it does not make the tunnel
+	// The cap SUPPRESSES the coverage signal; it does not make the tunnel
 	// inspectable, and this function exists precisely so "audit never implies
 	// inspection that did not happen". Returning silently made the 65th
 	// uninspected model tunnel read exactly like no model tunnel at all, on the

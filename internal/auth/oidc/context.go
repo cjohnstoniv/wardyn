@@ -92,7 +92,7 @@ func UserTypeFromContext(ctx context.Context) string {
 }
 
 // ExpiryFromContext returns when the session Middleware verified will expire,
-// or the zero time when there is no SSO session. W31-S1-7: there is no
+// or the zero time when there is no SSO session. There is no
 // refresh — the session dies outright at this instant — so the console
 // surfaces it as an advance warning instead of a surprise 401 that wipes
 // mid-work state back to the sign-in gate.

@@ -177,7 +177,7 @@ type Proxy struct {
 	// for the same reason as localSubnets. All of them, not just the first: a
 	// wardynd behind more than one A record had only its first address
 	// excluded, while THREAT-MODEL.md states the exclusion covers "its resolved
-	// control-plane host" (F002).
+	// control-plane host".
 	controlPlaneIPs []net.IP
 	// exclusionUnknown is set when NewServer's startup capture of localSubnets
 	// or controlPlaneIPs FAILED. Both admin-authored exceptions to the private-
@@ -185,7 +185,7 @@ type Proxy struct {
 	// are clamped by onOwnSubnetOrControlPlane, so a silently empty clamp made
 	// those exceptions fire MORE widely, not less — the opposite of the
 	// fail-closed NewServer's comment claimed. With this set the clamp answers
-	// "yes" for every address, which refuses every lift/trust (F002).
+	// "yes" for every address, which refuses every lift/trust.
 	exclusionUnknown bool
 
 	// llmUpstreams is the OPERATOR-CONFIGURED internal-gateway table (vendor
@@ -510,7 +510,7 @@ func newProxy(opts Options) *Proxy {
 	// never re-resolved (same TOCTOU guard), and they NEVER chain through the
 	// upstream corp proxy — the run token stays off the corp-proxy wire.
 	//
-	// The Timeout is load-bearing (F070 sibling), not hygiene: every caller of
+	// The Timeout is load-bearing, not hygiene: every caller of
 	// forwardToControlPlane rides r.Context(), and the agent-facing listener sets
 	// ReadTimeout/WriteTimeout to 0 because streaming bodies and CONNECT tunnels
 	// need it (NewServer, server.go), so without it a control plane that accepts
@@ -631,7 +631,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// 2. Method restriction (CONNECT counts as method "CONNECT"), applied BEFORE
 	// the first-use approval flow below.
 	//
-	// F032: the method check runs BEFORE the first-use approval raise because it
+	// The method check runs BEFORE the first-use approval raise because it
 	// depends on nothing the approval produces, so refusing first is free. If it
 	// ran after the raise, a request whose method can NEVER pass —
 	// allowed_methods=["GET"] and the sandbox sends POST — would still POST an
@@ -815,7 +815,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// than the redirect actually authored. A non-matching port falls through to
 	// an ordinary opaque tunnel, still gated by the policy decision above — and
 	// the SAME clamp is inside mitmLLMHost below, so the fall-through cannot be
-	// re-admitted by the LLM branch for a host that is both (F009).
+	// re-admitted by the LLM branch for a host that is both.
 	if p.ca != nil && p.isCorpMITMHost(host) {
 		if p.mitmPortAllowed(host, port) {
 			if log != nil {
@@ -901,7 +901,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 // tunnel pipes bytes in both directions until EITHER side finishes, then closes
 // both connections — the standard CONNECT-proxy shape.
 //
-// F079 — why the first finisher closes and not both: waiting (wg.Wait()) for
+// Why the first finisher closes and not both: waiting (wg.Wait()) for
 // BOTH io.Copy calls before closing anything would let either direction pin
 // the tunnel forever. When the sandbox side goes away the client->upstream
 // copy returns and half-closes the upstream write side, but the

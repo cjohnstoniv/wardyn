@@ -207,13 +207,10 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 
 // ExpireStaleByKind is ExpireStale plus a per-KIND tally of what it moved.
 //
-// It exists because a metric that counts a state transition has to be
-// incremented WHERE THE STATE CHANGES: bumping the credential re-auth counter
-// at a later resolve that happens to meet a terminal row would count retries
-// rather than outcomes — with the measured ~30 s SDK cadence one aged-out
-// request would score dozens of "expired" — and would never fire at all for a
-// run whose sidecar had already given up. A separate function rather than a
-// changed signature: every existing caller asks the question it always asked.
+// The tally is incremented HERE, where the state actually changes, not at a
+// later resolve that happens to meet a terminal row — that would count
+// retries rather than outcomes. A separate function rather than a changed
+// signature: every existing caller asks the question it always asked.
 func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (int, map[types.ApprovalKind]int, error) {
 	now := time.Now().UTC()
 	cutoff := now.Add(-olderThan)
@@ -227,11 +224,10 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 	byKind := map[types.ApprovalKind]int{}
 	// Collected, not returned on the first failure: ListApprovals is ordered
 	// (ORDER BY requested_at DESC in the store) and the sweeper re-lists in the
-	// same order every tick, so returning on the first permanently failing
-	// PENDING row would abort the sweep at the same position every time —
-	// stranding every approval sorted after it, fleet-wide, with no expiry ever
-	// reaching them. The sweep instead expires what it can and reports every row
-	// it could not, the shape FSStore.Sweep already uses.
+	// same order every tick, so returning early would strand every approval
+	// sorted after the first failure, fleet-wide. The sweep instead expires
+	// what it can and reports every row it could not, the shape FSStore.Sweep
+	// already uses.
 	var failures []error
 	for _, ap := range pending {
 		runBound := ap.ExpiresAt != nil && !ap.ExpiresAt.After(now)
@@ -343,11 +339,9 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string
 // idempotent in the audit log as well as in the store.
 //
 // The row is emitted on the failure path too, carrying however many rows DID
-// move plus the error: returning the CAS failure before reaching the audit
-// block would leave a cancel that moved two approvals and then hit a store
-// error with two rows durably CANCELLED and nothing in the trail — exactly the
-// unexplained emptying of the operator's queue this row exists to explain, and
-// the reason ExpireStale records inside its own loop rather than after it.
+// move plus the error, so a partial cancel never leaves rows durably CANCELLED
+// with nothing in the trail — the same reason ExpireStale records inside its
+// own loop rather than after it.
 func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (int, error) {
 	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
 	if err != nil {

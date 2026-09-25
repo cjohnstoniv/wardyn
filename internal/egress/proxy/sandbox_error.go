@@ -20,7 +20,7 @@ import (
 //
 // Every sandbox-facing error in the package goes through Proxy.httpError, so
 // the two things that must be true of such a body — the process-global
-// credential mask, and the topology redaction F152 added — are decided here and
+// credential mask, and the topology redaction — are decided here and
 // nowhere else. Split out of proxy.go for the 1000-line file-size gate; the
 // seam is the trust boundary, not an arbitrary cut.
 
@@ -31,7 +31,7 @@ import (
 // injected credential, so error strings are masked here rather than at each site
 // — every sandbox-facing error goes through this helper, so no handler in the
 // package holds a raw err.Error().
-// F152 — the mask is not enough on its own: maskDecisionBytes only replaces
+// The mask is not enough on its own: maskDecisionBytes only replaces
 // values registered in procRegistry (i.e. CREDENTIALS), and a Go transport error
 // always embeds the ENDPOINT that failed. Three sandbox-reachable callers were
 // therefore handing the untrusted (possibly prompt-injected) process inside the
