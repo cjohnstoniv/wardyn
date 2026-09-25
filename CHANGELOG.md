@@ -2246,9 +2246,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "Renamed in 0.8" appendix (e.g. `auth.failed` → `auth.fail`, `egress.pending` → `egress.hold`,
   `kernel.sensor.heartbeat` → `kernel.sensor.ping`, `run.workspace.egress` → `run.egress.add` with
   `kind: workspace`). `authz.denied` is unchanged. The egress proxy's wire values moved with the
-  names (a held decision is sent as `hold`, a failed or opaque LLM scan as `fail` or `bypass`), so
-  run the proxy image from the same release as `wardynd`. The `egress.decisions.dropped:<n>`
-  `rule_source` value is now `egress:dropped-decisions-<n>`, and `secret.read`'s refusal reasons are
+  names (a held decision is sent as `hold`, a failed or opaque LLM scan as `fail` or `bypass`);
+  wardynd N accepts proxy N−1's spellings and records them under the N names. The
+  `egress.decisions.dropped:<n>` `rule_source` value is now `egress:dropped-decisions-<n>`, and
+  `secret.read`'s refusal reasons are
   snake_case (`host-not-organisation` → `host_not_organisation`, `sso-host-not-portal` →
   `sso_host_not_portal`, and six more the appendix lists); a consumer matching an old spelling needs
   the same update.
