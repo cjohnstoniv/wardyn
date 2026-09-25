@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -95,7 +96,7 @@ func TestProviderAccess_KeyKinds_OwnNamespaceOnly(t *testing.T) {
 // SetupHarness.Aging already uses) for a per-person Claude sign-in.
 func TestProviderAccess_AnthropicSubscription(t *testing.T) {
 	h, sec := newSecretsHarness(t)
-	now := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	h.srv.cfg.Now = func() time.Time { return now }
 	p := paKeyProvider("claude-sub", types.ModelProviderAnthropicSubscription)
 
@@ -250,6 +251,28 @@ func TestSetupProviderAccess_OneRowPerGrantedProvider(t *testing.T) {
 	}
 }
 
+// TestSetupProviderAccess_DisabledProviderSkipped: dispatch refuses a
+// disabled provider outright (mp.Disabled, provider_subscription.go/
+// provider_bedrock.go), so grading one would tell the caller connecting (or
+// reconnecting) a credential helps when it never does. A disabled provider
+// holding a live key must not grade "ok", and one with no key must not grade
+// a "connect it" warn — it gets no row at all.
+func TestSetupProviderAccess_DisabledProviderSkipped(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	p1 := paKeyProvider("gw", types.ModelProviderAnthropicAPIKey)
+	p2 := paKeyProvider("gw-off", types.ModelProviderAnthropicAPIKey)
+	sc := types.SiteConfig{ModelProviders: providerBlock(p1, p2)}
+	granted := []SetupModelProvider{{ID: p1.ID}, {ID: p2.ID, Disabled: true}}
+	// The disabled provider even holds a stored key, to prove Disabled alone
+	// suppresses the row rather than the credential being absent.
+	_ = sec.For(paOwner).Put(context.Background(), providerSecretName(p2.UID, providerKeyPart), []byte("a-real-key-value-0123456789"))
+
+	got := h.srv.setupProviderAccess(context.Background(), sc, granted, paOwner)
+	if len(got) != 1 || got[0].Provider != p1.ID {
+		t.Fatalf("got %+v, want exactly one row for gw (gw-off is disabled)", got)
+	}
+}
+
 // TestProviderAccessCheck_RowPerState is the checklist half of MP-12: each
 // provider_access state in the checklist's grammar, the row's fix being the
 // provider_access action verbatim so the two never disagree.
@@ -264,13 +287,41 @@ func TestProviderAccessCheck_RowPerState(t *testing.T) {
 		{modelAccessNotConfigured, providerAccessAddTokenAction, "warn", "You have not connected your token for this provider yet, so runs on it are refused until you do.", providerAccessAddTokenAction},
 		{modelAccessNotApplicable, "", "info", providerAccessMechanismDetail, bedrockMechanismFix},
 	} {
-		got := providerAccessCheck(p, SetupProviderAccess{Provider: p.ID, State: tc.state, Action: tc.action})
+		got := providerAccessCheck(p, SetupProviderAccess{Provider: p.ID, State: tc.state, Action: tc.action}, true)
 		want := SetupCheck{ID: "llm_provider:corp-gateway", Label: "LLM access: Corp gateway",
 			Status: tc.wantStatus, Detail: tc.wantDetail, Fix: tc.wantFix}
 		if got != want {
 			t.Errorf("%s:\n got  %+v\n want %+v", tc.state, got, want)
 		}
 		assertSetupCheckBlocking(t, got)
+	}
+}
+
+// TestProviderAccessCheck_NotDefaultNotConfiguredIsInfo: 5.4's "no alarm,
+// because it isn't the default" rule. A granted provider that is not any of
+// the caller's harness defaults grades not_configured as info, not warn — the
+// caller connected the provider they actually use, and nothing routes to this
+// one unless they choose it themselves. isDefault=true (or any OTHER state)
+// keeps the ordinary warn/ok grading unchanged.
+func TestProviderAccessCheck_NotDefaultNotConfiguredIsInfo(t *testing.T) {
+	p := types.ModelProvider{ID: "corp-gateway", Name: "Corp gateway", Kind: types.ModelProviderCustomEndpoint}
+	a := SetupProviderAccess{Provider: p.ID, State: modelAccessNotConfigured, Action: providerAccessAddTokenAction}
+
+	got := providerAccessCheck(p, a, false)
+	if got.Status != "info" {
+		t.Errorf("non-default, not configured: status = %q, want info", got.Status)
+	}
+	if got.Detail != fmt.Sprintf(providerAccessMissingDetail, "token") || got.Fix != providerAccessAddTokenAction {
+		t.Errorf("non-default, not configured keeps its own detail/fix: got %+v", got)
+	}
+	assertSetupCheckBlocking(t, got)
+
+	if got := providerAccessCheck(p, a, true); got.Status != "warn" {
+		t.Errorf("default, not configured: status = %q, want warn (unchanged)", got.Status)
+	}
+	live := SetupProviderAccess{Provider: p.ID, State: modelAccessLive}
+	if got := providerAccessCheck(p, live, false); got.Status != "ok" {
+		t.Errorf("non-default but live: status = %q, want ok (isDefault only touches not_configured)", got.Status)
 	}
 }
 
@@ -312,7 +363,7 @@ func TestSetupStatusProviderAccess(t *testing.T) {
 	sec := srv.cfg.Secrets.(*memSecrets)
 	status := func(t *testing.T, sub string) SetupStatus {
 		t.Helper()
-		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", ssoSession(t, sub, sub+"@corp.example", oidc.RoleMember), "")
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", ssoSession(t, sub, sub+"@corp.example", oidc.RoleUser), "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET /setup/status = %d; body=%s", w.Code, w.Body.String())
 		}

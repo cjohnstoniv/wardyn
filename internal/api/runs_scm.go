@@ -11,7 +11,9 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"unicode"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/gitremote"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -43,17 +45,10 @@ func gitEmailLocal(principal string) string {
 // and flows verbatim into an in-sandbox `git clone "$WARDYN_REPO_URL"`; the
 // agent-run scripts always double-quote it, but we still refuse control/space
 // bytes so a slug can never smuggle a newline, NUL, or argument break into the
-// sandbox env or the clone command. Fail closed: anything unexpected means the
-// repo env is simply not surfaced and the agent runs in an empty workspace.
-// stricter than the old hand-rolled scan — unicode.IsSpace also
-// rejects Unicode space separators (U+2000-200A, U+3000, ...) the old fixed
-// list let through; approved as a hardening, not a regression, for this
-// trust-boundary check.
-//
-// The RULE lives in internal/gitremote (FieldSafe) and this delegates to it, so
-// the door that AUTHORS a repo field and the scanner that DETECTS one cannot
-// answer differently about the same value — a scanner carrying its own
-// separate whitespace list would disagree the moment this rule changes.
+// sandbox env or the clone command (Unicode space separators included). Fail
+// closed: the repo env is not surfaced and the agent runs in an empty workspace.
+// The RULE lives in gitremote.FieldSafe so the door that AUTHORS a repo field and
+// the scanner that DETECTS one cannot answer differently about the same value.
 func repoFieldSafe(s string) bool {
 	return gitremote.FieldSafe(s)
 }
@@ -79,24 +74,26 @@ const repo400LocatorShape = "%s is not a repository address — a repository add
 	`no percent-escapes, no backslash, and no "", "." or ".." path segment`
 
 // repoLocatorPathSafe reports whether a repo locator's PATH is a plain
-// repository address. It is the CHOKEPOINT rule behind this blocker: git
-// squashes "." and ".." client-side and sends `%2F` raw, so
-// `https://github.com/acme/../evil/repo.git` is admitted by an
-// `https://github.com/acme` provider row's prefix match and then cloned — with
-// that row's org credential — as `evil/repo`. There is no spelling of the prefix
-// match that survives a path the server and the client read differently, so the
-// traversable SHAPES are refused instead, at parseCloneTarget (the one place
-// every admission door resolves a clone URL) and again at the write doors.
-//
-// Refused: any "%" (an address needs no escaping, and RawPath is exactly how
-// %2F sneaks a second segment past a decoded compare), any "\" (a segment
-// separator to some clients), and any empty, "." or ".." path segment.
-// A locator with no path at all is not this function's business — it is
-// unclonable for other reasons and nothing about it traverses.
-func repoLocatorPathSafe(raw string) bool {
+// repository address. git squashes "." and ".." client-side and sends `%2F` raw,
+// so `https://github.com/acme/../evil/repo.git` passes an `https://github.com/acme`
+// provider row's prefix match and is cloned, with that row's org credential, as
+// `evil/repo`. No prefix match survives a path server and client read differently,
+// so the traversable SHAPES are refused, at parseCloneTarget (where every
+// admission door resolves a clone URL) and at the write doors: any "%" (%2F
+// sneaks a segment past a decoded compare), any "\", any empty, "." or ".."
+// segment. The ONE "%" exception is an already-canonical Azure DevOps address
+// (canonicalRepoAddress): adoscope's name rule has refused every escape that
+// decodes to structure, so the decoded compare and the raw path cannot disagree
+// about where a segment ends. A locator with no path is not handled here.
+func repoLocatorPathSafe(raw string, adoServerHosts []string) bool {
 	s := strings.TrimSpace(raw)
-	if strings.ContainsAny(s, `%\`) {
+	if strings.Contains(s, `\`) {
 		return false
+	}
+	if strings.Contains(s, "%") {
+		if c, ok := adoscope.CanonicalRepoURL(s, adoServerHosts); !ok || c != s {
+			return false
+		}
 	}
 	path := s
 	if i := strings.Index(s, "://"); i >= 0 {
@@ -119,25 +116,73 @@ func repoLocatorPathSafe(raw string) bool {
 	return true
 }
 
+// canonicalRepoAddress is the ONE stored spelling of a repository address. An
+// Azure DevOps address has each path segment rewritten by adoscope's name rule
+// — so a project typed "Payments Platform", pasted "Payments%20Platform" or
+// escaped wholesale by a client library is one string — and anything else is
+// returned exactly as given. Every door that AUTHORS a repository address calls
+// this before it validates, so every gate, the run row and WARDYN_REPOS read
+// one spelling; a value it cannot canonicalise keeps its spelling and meets the
+// same refusals it always did.
+//
+// adoServerHosts are the Azure DevOps Server hosts this install's provider rows
+// name (adoServerHosts); the Azure DevOps service hosts need no listing.
+func canonicalRepoAddress(s string, adoServerHosts []string) string {
+	if c, ok := adoscope.CanonicalRepoURL(s, adoServerHosts); ok {
+		return c
+	}
+	return s
+}
+
+// canonicalizeRunRepos puts every repository address a create-run body names
+// into its stored spelling, before any gate reads one. Both run doors (launch
+// and preflight) call it straight after decoding.
+func canonicalizeRunRepos(req *createRunRequest, ado adoHostsLoader) {
+	values := []string{req.Repo, req.DevcontainerRepo}
+	if req.InlinePolicy != nil {
+		for _, wr := range req.InlinePolicy.WorkspaceRepos {
+			values = append(values, wr.Repo)
+		}
+	}
+	adoServerHosts := ado.forAddresses(values...)
+	req.Repo = canonicalRepoAddress(req.Repo, adoServerHosts)
+	req.DevcontainerRepo = canonicalRepoAddress(req.DevcontainerRepo, adoServerHosts)
+	if req.InlinePolicy != nil {
+		canonicalizeWorkspaceRepos(req.InlinePolicy.WorkspaceRepos, adoServerHosts)
+	}
+}
+
+// canonicalizeWorkspaceRepos is canonicalRepoAddress over a spec's
+// workspace_repos, in place.
+func canonicalizeWorkspaceRepos(repos []types.WorkspaceRepo, adoServerHosts []string) {
+	for i := range repos {
+		repos[i].Repo = canonicalRepoAddress(repos[i].Repo, adoServerHosts)
+	}
+}
+
+// repoDirName is the directory name for a clone whose address ends in leaf:
+// the leaf decoded by adoscope's name rule where it decodes (an Azure DevOps
+// repository is named "Card Auth (v2).Service", not its escapes), with each run
+// of whitespace made "-" so the name stays repoFieldSafe.
+func repoDirName(leaf string) string {
+	if name, err := adoscope.UnescapeName(leaf); err == nil {
+		leaf = name
+	}
+	return strings.Join(strings.FieldsFunc(leaf, unicode.IsSpace), "-")
+}
+
 // repoCloneURL derives a git clone URL from a (already sanitized) repo slug.
 //   - If the slug is already a URL (contains "://"), it is passed through as-is.
 //   - Otherwise, if it matches a bare <org>/<name> GitHub slug, an https GitHub
 //     clone URL is built.
-//   - Anything else yields "" (no clone URL; the slug is still surfaced as
-//     audit metadata and the agent runs in an empty workspace).
+//   - Anything else yields "" (no clone URL; the agent runs in an empty workspace).
 //
-// LIMITATION (v0.1): non-URL slugs are assumed to be GitHub. The brokered git
-// credential helper (wardyn-git-helper) and the demo egress allowlist are
-// GitHub-scoped, so cross-host cloning of a bare slug is out of scope for now;
-// pass a full https:// URL (and allowlist its host) to clone elsewhere.
-//
-// SSH: an ssh://[user@]host/… or scp-form user@host:path clone URL is accepted
-// ONLY when the host is a supported SSH-over-443 provider (sshOver443Endpoint:
-// GitHub / Azure DevOps). The URL passes through VERBATIM — the agent-run sandbox
-// (not this URL) supplies the minted key, known_hosts and the :443 ProxyCommand;
-// the run's ssh_key grant (maybeSSHKeyGrant) authorizes it. Any other transport
-// (file://, git's ext::/fd:: helpers, an unsupported SSH host, or an explicit
-// non-443 SSH port) fails closed.
+// LIMITATION: bare slugs are assumed GitHub (the git helper and demo allowlist
+// are GitHub-scoped); pass a full https:// URL and allowlist its host otherwise.
+// SSH (ssh:// or scp-form) is accepted ONLY for an sshOver443Endpoint host and
+// passes VERBATIM — the sandbox supplies key, known_hosts and the :443
+// ProxyCommand; maybeSSHKeyGrant authorizes it. Any other transport (file://,
+// ext::/fd::, other SSH hosts, a non-443 SSH port) fails closed.
 func repoCloneURL(slug string) string {
 	if strings.Contains(slug, "://") {
 		if strings.HasPrefix(slug, "https://") || strings.HasPrefix(slug, "http://") {
@@ -171,24 +216,19 @@ func repoCloneURL(slug string) string {
 
 // buildRepoRecords assembles the WARDYN_REPOS env value: newline-delimited,
 // tab-separated <url>\t<dest>\t<slug>\t<ref> records the agent-run entrypoint
-// iterates to clone each repo. Sources are the legacy single run.Repo (first,
-// keeping its default ~/work/<name> dest, no ref) plus each onboarded
-// WorkspaceRepo (already onboarding-gated). Every field is repoFieldSafe (no
-// whitespace/control chars) so the tab/newline framing cannot be smuggled
-// past; every dest is a validated allowed-prefix target, deduped so two repos
-// never target one directory. A slug with no derivable clone URL, an
-// unsafe/out-of-prefix dest, an unsafe ref, or a duplicate dest is skipped.
-// Ref is optional (branch/tag/sha, or "" for the remote's default branch) —
-// clone_one (agent-run-lib.sh) is the consumer that actually checks it out.
-// Returns "" when there is nothing to clone.
+// iterates to clone each repo: the legacy run.Repo first (default dest, no
+// ref), then each onboarded WorkspaceRepo. Every field is repoFieldSafe so the
+// tab/newline framing cannot be smuggled past; every dest is a validated
+// allowed-prefix target, deduped so two repos never share a directory. A slug
+// with no clone URL, a bad dest or ref, or a duplicate dest is skipped. Ref is
+// optional ("" = default branch); clone_one (agent-run-lib.sh) checks it out.
 //
-// The SECOND return is the sentences for the drops a caller must say out loud
-// — one per repo dropped for a target this function refuses. Run create appends
-// them to the 201's warnings[]; dispatch discards them (the run is already
-// created by then, and the slog.Warn at the skip is the record there).
+// The SECOND return is one sentence per repo dropped for a refused target or a
+// taken directory. Run create appends them to the 201's warnings[]; dispatch
+// discards them (the run already exists; the slog.Warn is the record there).
 func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, []string) {
 	const workRoot = "/home/agent/work"
-	seenDest := map[string]bool{}
+	seenDest := map[string]string{} // dest -> the slug that took it
 	var warnings []string
 	var b strings.Builder
 	add := func(slug, dest, ref string) {
@@ -206,29 +246,21 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 		}
 		// A FULL github URL — any spelling the control plane accepts: http://,
 		// trailing slash, .git suffix, :port, mixed case — collapses to the one
-		// shape agent-run's rewrite matches. It registers url.<broker>.insteadOf
-		// against "https://github.com/<org>/<repo>" and git prefix-matches the
-		// clone URL against it, so a trailing slash (which the shell's bare-slug
-		// regex rejects outright) or an http:// URL (which no https insteadOf
-		// prefix-matches) left the clone dialing github.com directly — a route a
-		// brokered run no longer has. A BARE slug is already this shape and is left
-		// untouched, casing included.
-		//
-		// Side effect, deliberate: the canonical key is lowercased, so a full URL's
-		// default dest follows — `https://github.com/octocat/Hello-World` clones to
-		// ~/work/hello-world, where HEAD gave ~/work/Hello-World. Accepted rather
-		// than derived-before-canonicalisation, because it is what makes the dest
-		// dedup below SEE that two spellings of one repo are one repo (HEAD cloned
-		// the bare slug and its trailing-slash URL into two directories, the second
-		// named ~/work/repo). A dest is a directory name; resolve_workdir finds the
-		// repo by scanning for .git, never by name.
+		// shape agent-run's url.<broker>.insteadOf rewrite prefix-matches
+		// ("https://github.com/<org>/<repo>"); any other spelling would dial
+		// github.com directly, a route a brokered run does not have. A BARE slug is
+		// already this shape and is left untouched, casing included.
+		// Deliberate side effect: the key is lowercased, so a full URL's default
+		// dest is lowercased too (~/work/hello-world). That is what lets the dest
+		// dedup below SEE two spellings of one repo as one; resolve_workdir finds
+		// the repo by scanning for .git, never by name.
 		if strings.Contains(slug, "://") {
 			if key := gitBrokerKeyFromSlug(slug); key != "" {
 				slug, url = key, "https://github.com/"+key+".git"
 			}
 		}
 		if dest == "" {
-			name := strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".git")
+			name := repoDirName(strings.TrimSuffix(url[strings.LastIndex(url, "/")+1:], ".git"))
 			if name == "" {
 				name = "repo"
 			}
@@ -254,19 +286,28 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 				slug, dest, terr))
 			return
 		}
-		if seenDest[dest] {
+		if first, taken := seenDest[dest]; taken {
 			// Loud, not silent — an unqualified caller (no explicit
 			// Target on either source, e.g. a raw API/CLI request that skips
 			// the wizard's own basename-collision disambiguation) can still
-			// reach here with two repos deriving the SAME default dest. A
-			// silently dropped clone is easy to miss until the agent goes
-			// looking for a repo that was never there; a warning at least
-			// makes it observable at run time.
+			// reach here with two repos deriving the SAME default dest, and
+			// two Azure DevOps names can derive one directory ("Card Auth" and
+			// "Card-Auth"). A silently dropped clone is easy to miss until the
+			// agent goes looking for a repo that was never there, so the 201
+			// says it as well as the log.
 			slog.Warn("wardynd: repo clone target collides with another repo in this run; dropping the later one",
 				slog.String("slug", slug), slog.String("dest", dest))
+			if first == slug {
+				// The same repository named twice — a workspace launch names its
+				// repo as the run's own repo too — is one clone, not a drop.
+				return
+			}
+			warnings = append(warnings, fmt.Sprintf(
+				"repository %s was NOT cloned: %s is already where %s is cloned — give one of them its own target and launch again",
+				slug, dest, first))
 			return
 		}
-		seenDest[dest] = true
+		seenDest[dest] = slug
 		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
@@ -287,22 +328,16 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) (string, [
 
 // injectionRuleFromScope decodes an api_key grant scope into its proxy-side
 // injection rule. Mirrors the broker's apiKeyScope shape (host, header,
-// format, secret_name, require_tls) with the same defaults.
+// format, secret_name, require_tls) with the same defaults. require_tls (absent
+// == false) is BOUND here: the rule rides runner.InjectionGrant into the proxy's
+// config (probeInjections, mintRecordAPIKeyInjections) for the plain lane.
 //
-// require_tls has no default to apply: absent == false == today's transport
-// rule. This decode is the one that BINDS it — the rule it returns rides
-// runner.InjectionGrant into the proxy's own config (probeInjections,
-// mintRecordAPIKeyInjections), which is where the plain lane reads it.
-//
-// Strict, and require_tls is why. A plain Unmarshal ignores a key it does not
-// know, so `{"requiretls":true}` or `{"require-tls":true}` decoded to false and
-// the operator's TLS-only declaration silently did not exist — a security
-// control failing OPEN on a typo, with the policy accepted and every gate green.
-// DisallowUnknownFields turns that into a refusal at the write boundary (422,
-// validateEligibleGrant) where the operator is looking at the text they just
-// wrote. Every scope Wardyn itself authors carries exactly these four keys
-// (llmcred.go, runs_create.go, integrations_run.go, artifact_redirect.go,
-// runs_dispatch_llm.go), so nothing shipped is newly refused.
+// Strict because of require_tls: a lenient Unmarshal would decode a typo like
+// `{"require-tls":true}` to false, a security control failing OPEN with every
+// gate green. DisallowUnknownFields makes it a 422 at the write boundary
+// (validateEligibleGrant). Every scope Wardyn authors (llmcred.go, runs_create.go,
+// integrations_run.go, artifact_redirect.go, runs_dispatch_llm.go) carries only
+// these keys, so nothing shipped is newly refused.
 func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error) {
 	var sc struct {
 		Host       string `json:"host"`

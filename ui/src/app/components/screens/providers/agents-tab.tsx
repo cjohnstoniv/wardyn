@@ -534,6 +534,7 @@ export function AgentsTab({
   operator,
   onRetryRoster,
   onStatusRefresh,
+  onDirtyChange,
 }: {
   /** The harness catalog off SetupStatus.harnesses. UNDEFINED is "unknown"
    *  (an older daemon omits the field, or the status read failed) — NEVER an
@@ -559,6 +560,12 @@ export function AgentsTab({
    *  edits), clears `savedElsewhere`, and a transient GET failure flips the
    *  whole screen to FETCH_FAILED right after a successful agent save. */
   onStatusRefresh: () => void;
+  /** #460 — this tab is its own resource with its own draft, so the parent
+   *  screen has no other way to know whether IT is dirty (for the PageHeader
+   *  chip and the Agents Segmented option). Fired whenever the dirty fact
+   *  changes, and once more with `false` on unmount (leaving the tab clears
+   *  it, same as the tab's own draft resets on remount). */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [draft, setDraft] = React.useState<AgentProviders | null>(null);
   // #217 — the snapshot `draft` started from, same role as providers-screen's
@@ -594,7 +601,16 @@ export function AgentsTab({
   const invalidAgentRow = agents.some(agentRowInvalid);
   // #217 — see providers-screen.tsx's own changedLines/useUnsavedGuard pair.
   const changedLines = React.useMemo(() => readableDiff(original, draft), [original, draft]);
-  useUnsavedGuard(changedLines.length > 0);
+  useUnsavedGuard("agents-tab", changedLines.length > 0, () => JSON.stringify(draft, null, 2));
+  // #460 — tells the parent screen this tab's own dirty fact (its PageHeader
+  // chip and Agents Segmented option); `false` on unmount, since leaving this
+  // tab drops the draft too (see AgentsTab's own file-header note).
+  const dirty = changedLines.length > 0;
+  React.useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => onDirtyChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onDirtyChange is a parent callback; `dirty` is the only real trigger
+  }, [dirty]);
   const roster = harnesses ?? [];
   const catalogIds = new Set(roster.map((h) => h.id));
   // Any row not in this build's catalog (a custom WARDYN_AGENT_IMAGES id) is
@@ -709,7 +725,7 @@ export function AgentsTab({
           above the rows rather than replacing them, so an edit typed
           moments before the 412 is still readable. #217: Copy my changes
           before Discard mine and reload — there is no "Save over theirs" arm. */}
-      {savedElsewhere && <SavedElsewhereBanner changedLines={changedLines} onDiscard={load} />}
+      {savedElsewhere && <SavedElsewhereBanner documentText={JSON.stringify(draft, null, 2)} onDiscard={load} />}
       {saveError && (
         <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
           <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE}</b>
@@ -741,7 +757,9 @@ export function AgentsTab({
           {/* #217 — beside the control, not only in a title tooltip. */}
           {!operator && <OperatorOnlyHint />}
           {operator && changedLines.length > 0 && (
-            <span className="mr-auto text-meta text-muted-foreground">{PROVIDERS_DRAFT.UNSAVED_MARKER}</span>
+            <span data-testid="unsaved-marker" className="mr-auto text-meta text-muted-foreground">
+              {PROVIDERS_DRAFT.UNSAVED_MARKER}
+            </span>
           )}
           <Button disabled={!operator || saving || invalidAgentRow} onClick={save}>
             {PROVIDERS.SAVE_CTA}

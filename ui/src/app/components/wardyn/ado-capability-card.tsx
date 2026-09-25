@@ -199,12 +199,33 @@ export function AdoCapabilityCard({
   // being visible there does NOT by itself prove ownership — those callers
   // keep the real loading/error/ownership gates.
   ownershipScopedList?: boolean;
-  busy: boolean;
+  // "approve" | "deny" while THAT decision is in flight, else null (#458):
+  // the old single boolean correctly disabled BOTH buttons but ALSO spun
+  // BOTH of them, so a reader couldn't tell which action their click had
+  // actually started. Both are still disabled whenever busy !== null; now
+  // only the pressed one shows the spinner.
+  busy: "approve" | "deny" | null;
   onApprove: (opts: [DecisionOptions]) => void;
   onDeny: (opts: [DecisionOptions]) => void;
 }) {
   const [scope, setScope] = React.useState<"once" | "run">("run");
   const [menuOpen, setMenuOpen] = React.useState(false);
+  // The hold window's own timer (#458): stillHeld(requested_at) was read only
+  // at render, so REQ_HELD survived past its own 4-minute window until some
+  // UNRELATED re-render happened to catch it up. `held` is seeded from the
+  // same check and then flipped false by a timer sized to the remaining
+  // window, so the card corrects itself with no other trigger needed.
+  const [held, setHeld] = React.useState(() => stillHeld(item.requested_at));
+  React.useEffect(() => {
+    if (isAdoConsentRequest(item)) return; // this card's own timer, not the consent card's
+    setHeld(stillHeld(item.requested_at));
+    const at = Date.parse(item.requested_at);
+    if (Number.isNaN(at)) return;
+    const msLeft = HOLD_WINDOW_MS - (Date.now() - at);
+    if (msLeft <= 0) return; // already past the window — no timer to set
+    const timer = setTimeout(() => setHeld(false), msLeft);
+    return () => clearTimeout(timer);
+  }, [item]);
 
   // The consent card FIRST, before any run-loading/error/ended gate below:
   // its decidability is "is the viewer the row's own owner" (a plain string
@@ -253,7 +274,6 @@ export function AdoCapabilityCard({
   const decidable = trusted || canDecideAdoCapability(securityOperator, isOwner);
   const where = scopeData.repo ? `${scopeData.org}/${scopeData.repo}` : scopeData.org;
   const source = ADO.REQ_SOURCE(relativeAbsolute(item.requested_at));
-  const held = stillHeld(item.requested_at);
 
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4" data-testid="ado-capability-card">
@@ -301,10 +321,10 @@ export function AdoCapabilityCard({
               size="sm"
               variant={destructive ? "outline" : "info"}
               className="rounded-r-none"
-              disabled={busy}
+              disabled={busy !== null}
               onClick={() => onApprove(adoDecisionArgs(scope))}
             >
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} Approve
+              {busy === "approve" ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} Approve
             </Button>
             <AdoScopeMenu scope={scope} thing={thing} onPick={(s) => setScope(s)} open={menuOpen} onOpenChange={setMenuOpen} />
             {/* The scope readout sits directly after Approve's own group,
@@ -317,10 +337,10 @@ export function AdoCapabilityCard({
               size="sm"
               variant={destructive ? "destructive" : "outline"}
               className="ml-1"
-              disabled={busy}
+              disabled={busy !== null}
               onClick={() => onDeny(adoDecisionArgs(scope))}
             >
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />} Deny
+              {busy === "deny" ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />} Deny
             </Button>
           </div>
           <p className="mt-2.5 text-meta text-muted-foreground">
@@ -333,7 +353,9 @@ export function AdoCapabilityCard({
         </div>
       ) : (
         <p className="mt-3 border-t border-border/60 pt-3 text-sm text-muted-foreground">
-          {ADO.REQ_NOT_YOURS_BODY(runOwner ?? "the run's owner")}
+          {/* `||`, not `??`: an empty owner names nobody exactly as much as a
+              missing one does — both get the fallback (#458). */}
+          {ADO.REQ_NOT_YOURS_BODY(runOwner || ADO.REQ_OWNER_FALLBACK)}
         </p>
       )}
     </div>
@@ -436,14 +458,16 @@ function AdoScopeMenu({
 // (or "you allowed it") the wire scope cannot back on every path — see its
 // own doc note in ado-entra-copy.ts.
 //
-// "Allow and continue" (REQ_CONSENT_CTA) links to /settings, not a route of
-// its own or a deep anchor into it: F9 (S10 round 3) points it at the same
-// Azure DevOps connection surface #415 built (screens/settings/ado-
-// connection.tsx's AdoConnectionCard, mounted unconditionally on the one
-// settings-screen.tsx page — no tabs, no query param), and #415's own
-// new-run-rail.tsx launch door already links there the identical way (a
-// bare `<Link to="/settings">`), so this reuses that precedent rather than
-// inventing a second convention for reaching the same card.
+// REQ_CONSENT_CTA links to /account#azure-devops, not a route of its own:
+// F9 (S10 round 3) pointed it at the same Azure DevOps connection surface
+// #415 built (screens/settings/ado-connection.tsx's AdoConnectionCard,
+// mounted unconditionally on the one settings-screen.tsx page — no tabs, no
+// query param). #458 added the `#azure-devops` anchor and matched the
+// label to that card's own CTA ("Connect Azure DevOps", CONNECT_ADO) — a
+// bare `<Link to="/settings">` landed at the top of a five-card page with
+// no way to find the one card this door is actually about, and the two CTAs
+// named the same act two different ways. M-1b: it's your own connection
+// (#386), so the anchor moved to /account when /settings was deleted.
 function AdoConsentCard({
   item,
   viewerPrincipal,
@@ -484,7 +508,7 @@ function AdoConsentCard({
       {isOwner && (
         <div className="mt-3">
           <Button asChild size="sm" variant="info">
-            <Link to="/settings">{copy.cta}</Link>
+            <Link to="/account#azure-devops">{copy.cta}</Link>
           </Button>
         </div>
       )}

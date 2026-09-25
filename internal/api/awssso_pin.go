@@ -127,6 +127,10 @@ const (
 	// door whose provider was removed, re-kinded or re-addressed while the
 	// login sandbox was open (storeProviderSignIn).
 	refuseReasonProviderChanged = "provider_changed"
+	// refuseReasonSignInBusy: the per-person sign-in lock could not be taken in
+	// time (lockLoginSupersede), so the capture was not serialized and is
+	// refused rather than stored.
+	refuseReasonSignInBusy = "signin_busy"
 )
 
 // DRAFT (M2 canon pending)

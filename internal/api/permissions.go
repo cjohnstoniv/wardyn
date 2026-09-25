@@ -437,6 +437,7 @@ type meCapabilitiesResponse struct {
 	Enforcement         map[string]bool         `json:"enforcement"`
 	SessionGroups       []string                `json:"session_groups"`
 	GroupsSnapshotStale bool                    `json:"groups_snapshot_stale"`
+	KindsVersion        int                     `json:"kinds_version"`
 }
 
 // handleMeCapabilities is the member-safe twin of GET /permissions: it sits on
@@ -469,5 +470,6 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 		Enforcement:         enf,
 		SessionGroups:       groups,
 		GroupsSnapshotStale: stale,
+		KindsVersion:        capKindsVersion,
 	})
 }

@@ -4,7 +4,7 @@ name: Release images
 # (keyless), plus a signed-release SBOM — on every vX.Y.Z tag push
 # (RELEASING.md's tagging convention). This is the "release" half of image
 # publishing; .github/workflows/publish-image.yml remains the CONTINUOUS half
-# (wardynd only, :latest + :sha-<commit> on every push to main) — the two no
+# (wardynd only, :latest + :sha-<commit> after CI passes on main) — the two no
 # longer overlap: publish-image.yml's own tags trigger was removed in the same
 # change that added this file (a v* push used to fire BOTH workflows, racing
 # to push the identical wardynd:X.Y.Z ref, one signed one not — see that
@@ -205,8 +205,8 @@ jobs:
       # binfmt_misc handlers so the agent images' target-arch RUN steps
       # (apt-get / npm / the AWS CLI installer) execute under emulation. The Go
       # compile stages do NOT use this — they cross-compile (see the header).
-      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
@@ -246,7 +246,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Build and push
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -380,8 +380,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # binfmt_misc handlers — see the `images` job's identical step for why.
-      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
@@ -420,7 +420,7 @@ jobs:
           fi
       - name: Build and push
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}

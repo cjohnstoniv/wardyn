@@ -10,6 +10,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -36,16 +37,32 @@ import (
 // the numbers are. Any stable value works.
 const LoginSupersedeLockClass int32 = 0x574C474E // ASCII "WLGN"
 
+// SecretRowLockClass is the classid of the TRANSACTION-scoped two-argument
+// lock secretstore/pg takes around a store-mode Put, keyed to one (owner,
+// name) row: one writer per row at a time across replicas, so two Puts never
+// interleave their store writes (design §2.3a). Taken with
+// pg_advisory_xact_lock inside the Put's own transaction, not through
+// AdvisoryLockKeyed: it is released by the commit that writes the row.
+const SecretRowLockClass int32 = 0x57534543 // ASCII "WSEC"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take a
 // keyed lock — the in-process slot, the pool connection and the lock itself —
-// before giving up and proceeding UNLOCKED. Every call site fails open, because
-// nobody may be refused a sign-in over a busy lock.
+// before giving up. A caller that runs out of it is REFUSED (retry), not let
+// through unlocked: a wait that expires is the concurrent burst the lock exists
+// to serialize (#505). Only ErrAdvisoryLockNoCapacity proceeds unlocked.
 //
 // 5s, the same value and the same reasoning as AuditChainLockTimeout: the
 // legitimate wait here is one other launch doing a handful of indexed
 // statements, so 5s absorbs a deep queue before it ever gives up on a lock it
 // would have got.
 var LoginSupersedeLockWait = 5 * time.Second
+
+// ErrAdvisoryLockNoCapacity is AdvisoryLockKeyed's one STRUCTURAL refusal: the
+// pool cannot spare advisoryLockFreeConnsNeeded connections, which on a pool at
+// the documented floor (2) is every call, not a burst. Its caller proceeds
+// unlocked and says so on the audit trail; every OTHER error is a wait or a
+// database fault, and its caller refuses.
+var ErrAdvisoryLockNoCapacity = errors.New("db: pool cannot spare a connection for an advisory lock")
 
 // advisoryLockAcquireWait bounds the POOL ACQUIRE specifically, and it is short
 // on purpose.
@@ -75,10 +92,10 @@ const advisoryLockAcquireWait = 250 * time.Millisecond
 // election holds another once acquired, and the lifecycle reaper borrows one
 // per tick. At pool_max_conns=2 on a serving daemon exactly one connection is
 // left — a hold would take it and the guarded work would then block on Acquire
-// with nothing to wait for. Below the threshold this reports an error instead,
-// the caller logs it and proceeds unlocked: a 2-connection deployment is left
-// exactly as unserialized as it was before this lock existed, rather than
-// wedged by it.
+// with nothing to wait for. Below the threshold this reports
+// ErrAdvisoryLockNoCapacity instead, and the caller audits it and proceeds
+// unlocked: a 2-connection deployment is left exactly as unserialized as it
+// was before this lock existed — on the record — rather than wedged by it.
 //
 // A snapshot, and racy by nature — another goroutine may take the connection a
 // microsecond later. That is acceptable only because of the two guards around
@@ -116,11 +133,11 @@ var advisoryLockGate = make(chan struct{}, 1)
 // — same acquire and release shape — for work that must be SERIALIZED rather
 // than skipped.
 //
-// Every error is a FAIL-OPEN signal, never something to hand back to a user: a
-// caller that gets one logs it and does its work unlocked. Three arms produce
-// one, and all three are bounded — the in-process slot (another hold did not
-// finish inside the budget), pool capacity (checked, then bounded at 250ms),
-// and the lock wait itself.
+// Every arm is bounded — the in-process slot (another hold did not finish
+// inside the budget), pool capacity (checked, then bounded at 250ms), and the
+// lock wait itself. ErrAdvisoryLockNoCapacity (the capacity check) is the one
+// error a caller may treat as "proceed unlocked"; every other one means the
+// work was not serialized and must not run.
 //
 // WHAT IT PINS, plainly: exactly one pool connection, for the duration of one
 // hold, and at most one per process at any moment (advisoryLockGate). None at
@@ -152,8 +169,8 @@ func AdvisoryLockKeyed(ctx context.Context, pool *pgxpool.Pool, class, obj int32
 
 	if st := pool.Stat(); st.MaxConns()-st.AcquiredConns() < advisoryLockFreeConnsNeeded {
 		ungate()
-		return nil, fmt.Errorf("db: pool cannot spare a connection for an advisory lock (max_conns %d, acquired %d, need %d free)",
-			st.MaxConns(), st.AcquiredConns(), advisoryLockFreeConnsNeeded)
+		return nil, fmt.Errorf("%w (max_conns %d, acquired %d, need %d free)",
+			ErrAdvisoryLockNoCapacity, st.MaxConns(), st.AcquiredConns(), advisoryLockFreeConnsNeeded)
 	}
 
 	// Bounded separately from the total budget — see advisoryLockAcquireWait.

@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── In-memory fake store ────────────────────────────────────────────────────
+// In-memory fake store
 
 type fakeStore struct {
 	mu      sync.Mutex
@@ -94,7 +96,7 @@ func (f *fakeStore) Record(_ context.Context, ev types.AuditEvent) error {
 	return nil
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// Helpers
 
 func newReq(runID uuid.UUID, kind types.ApprovalKind, scope json.RawMessage) types.ApprovalRequest {
 	return types.ApprovalRequest{
@@ -104,7 +106,7 @@ func newReq(runID uuid.UUID, kind types.ApprovalKind, scope json.RawMessage) typ
 	}
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// Tests
 
 func TestRequestApproval_Creates(t *testing.T) {
 	ctx := context.Background()
@@ -232,12 +234,10 @@ func TestDecide_AdminTokenRecordsAsSystem(t *testing.T) {
 	}
 }
 
-// TestDecide_AuditDataIncludesRequestedScopeHost is W20-hold-fsm-1's companion
-// fix: approval.Decide's audit event now surfaces the approval's own
-// requested_scope host at the top level (when it has one), so a SIEM consumer
-// can join "who decided this" straight to "which host" without parsing the
-// nested requested_scope JSON itself. Fails on base 6d76911, whose audit data
-// carries only approval_id/decision/reason.
+// TestDecide_AuditDataIncludesRequestedScopeHost: approval.Decide's audit
+// event surfaces the approval's own requested_scope host at the top level
+// (when it has one), so a SIEM consumer can join "who decided this" straight
+// to "which host" without parsing the nested requested_scope JSON itself.
 func TestDecide_AuditDataIncludesRequestedScopeHost(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}
@@ -385,7 +385,93 @@ func TestExpireStale_AlreadyDecidedRace(t *testing.T) {
 	}
 }
 
-// ─── CancelForRun (B4: a run's terminal transition ends its open questions) ──
+// ExpireOne (#811: the client that raised the row closes it itself)
+
+// TestExpireOne_MovesPendingToExpired is the happy path: a PENDING row is
+// EXPIRED immediately, with no age check (unlike ExpireStale), and the same
+// approval.expire audit action the periodic sweep emits, attributed to the
+// run's agent that withdrew it — nothing ties the call to a deadline, so it
+// must not read as a system event.
+func TestExpireOne_MovesPendingToExpired(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+
+	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash"}`)))
+	// Freshly raised — proves the transition is NOT age-gated the way
+	// ExpireStale's is.
+	if err := approval.ExpireOne(ctx, st, ap.ID, "spiffe://wardyn/run/x", "client_withdrawn"); err != nil {
+		t.Fatalf("expire one: %v", err)
+	}
+
+	got, err := st.GetApproval(ctx, ap.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.State != types.ApprovalExpired {
+		t.Errorf("want EXPIRED, got %s", got.State)
+	}
+	if got.DecidedBy != "system" {
+		t.Errorf("want decided_by=system, got %s", got.DecidedBy)
+	}
+
+	var expireEvents int
+	for _, ev := range st.audit {
+		if ev.Action == "approval.expire" {
+			expireEvents++
+			if ev.ActorType != types.ActorAgent || ev.Actor != "spiffe://wardyn/run/x" {
+				t.Errorf("want actor agent spiffe://wardyn/run/x, got %s %s", ev.ActorType, ev.Actor)
+			}
+			if !strings.Contains(string(ev.Data), `"reason":"client_withdrawn"`) {
+				t.Errorf("want reason client_withdrawn in data, got %s", ev.Data)
+			}
+		}
+	}
+	if expireEvents != 1 {
+		t.Errorf("expected 1 expire audit event, got %d", expireEvents)
+	}
+}
+
+// TestExpireOne_AlreadyDecidedIsSilent proves the idempotent race handling: a
+// row a human (or the periodic sweep) already decided must not error and must
+// not emit a second, contradicting audit row.
+func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+
+	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash"}`)))
+	if _, err := approval.Decide(ctx, st, ap.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice@example.com", Reason: "ok",
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	before := len(st.audit)
+
+	if err := approval.ExpireOne(ctx, st, ap.ID, "spiffe://wardyn/run/x", "client_withdrawn"); err != nil {
+		t.Fatalf("expire one on an already-decided row must be a silent no-op, got: %v", err)
+	}
+	got, _ := st.GetApproval(ctx, ap.ID)
+	if got.State != types.ApprovalApproved {
+		t.Errorf("an already-decided row must not be overwritten, got state %s", got.State)
+	}
+	if len(st.audit) != before {
+		t.Errorf("expected no new audit event for a no-op race, got %d new", len(st.audit)-before)
+	}
+}
+
+// CancelForRun (B4: a run's terminal transition ends its open questions)
+
+// cancelForRunTotal is CancelForRun summed across kinds, for the cases that
+// assert only how many rows moved.
+func cancelForRunTotal(ctx context.Context, st approval.Store, runID uuid.UUID, reason string) (int, error) {
+	byKind, err := approval.CancelForRun(ctx, st, runID, reason)
+	n := 0
+	for _, c := range byKind {
+		n += c
+	}
+	return n, err
+}
 
 // TestCancelForRun_MovesOnlyThisRunsPending is the whole contract in one drive:
 // only PENDING rows move, only this run's, they land on CANCELLED with
@@ -406,7 +492,7 @@ func TestCancelForRun_MovesOnlyThisRunsPending(t *testing.T) {
 		t.Fatalf("seed decide: %v", err)
 	}
 
-	n, err := approval.CancelForRun(ctx, st, killed, "run_killed")
+	n, err := cancelForRunTotal(ctx, st, killed, "run_killed")
 	if err != nil {
 		t.Fatalf("cancel for run: %v", err)
 	}
@@ -476,11 +562,11 @@ func TestCancelForRun_IdempotentAndSilentWithNothingPending(t *testing.T) {
 	runID := uuid.New()
 	_, _ = approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"a.example.com"}`)))
 
-	if n, err := approval.CancelForRun(ctx, st, runID, "run_killed"); err != nil || n != 1 {
+	if n, err := cancelForRunTotal(ctx, st, runID, "run_killed"); err != nil || n != 1 {
 		t.Fatalf("first cancel = (%d, %v), want (1, nil)", n, err)
 	}
 	before := len(st.audit)
-	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	n, err := cancelForRunTotal(ctx, st, runID, "run_killed")
 	if err != nil {
 		t.Fatalf("second cancel: %v", err)
 	}
@@ -507,7 +593,7 @@ func TestCancelForRun_PartialFailureStillRecordsWhatMoved(t *testing.T) {
 			json.RawMessage(`{"host":"h`+strconv.Itoa(i)+`.example.com"}`)))
 	}
 
-	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	n, err := cancelForRunTotal(ctx, st, runID, "run_killed")
 	if err == nil {
 		t.Fatal("a refused DecideApproval must be surfaced, not swallowed")
 	}
@@ -552,7 +638,7 @@ func TestCancelForRun_AFailureBeforeAnythingMovedRecordsNothing(t *testing.T) {
 	runID := uuid.New()
 	_, _ = approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"h.example.com"}`)))
 
-	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	n, err := cancelForRunTotal(ctx, st, runID, "run_killed")
 	if err == nil || n != 0 {
 		t.Fatalf("CancelForRun = (%d, %v), want (0, an error)", n, err)
 	}
@@ -599,13 +685,13 @@ func TestExpireStale_LeavesCancelledAlone(t *testing.T) {
 	}
 }
 
-// ─── Helper ──────────────────────────────────────────────────────────────────
+// Helper
 
 func isAlreadyDecided(err error) bool {
 	return err != nil && err == approval.ErrAlreadyDecided
 }
 
-// ─── the unique index's loser (patch-review batch E) ─────────────────────────
+// The unique index's loser
 
 // racyDupStore is the TOCTOU window itself, made deterministic.
 //
@@ -719,4 +805,159 @@ type alwaysDupStore struct{ *fakeStore }
 
 func (d alwaysDupStore) CreateApproval(context.Context, types.ApprovalRequest) (types.ApprovalRequest, error) {
 	return types.ApprovalRequest{}, types.ErrDuplicatePendingApproval
+}
+
+// TestDecide_AuditDataCarriesDecisionExpiresAt: a time-bounded ("until")
+// approval's expiry is part of its audit provenance — the approval.decide row
+// alone must say when the grant lapses. An unbounded decision carries no key.
+func TestDecide_AuditDataCarriesDecisionExpiresAt(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+	until := time.Now().Add(24 * time.Hour).Truncate(time.Second).In(time.FixedZone("x", 3600))
+
+	bounded, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"a.example.com"}`)))
+	if _, err := approval.Decide(ctx, st, bounded.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice", Scope: types.ScopeUntil, ExpiresAt: &until,
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	unbounded, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"b.example.com"}`)))
+	if _, err := approval.Decide(ctx, st, unbounded.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "alice", Scope: types.ScopeRun,
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if len(st.audit) != 2 {
+		t.Fatalf("audit rows = %d, want 2", len(st.audit))
+	}
+
+	var data map[string]any
+	if err := json.Unmarshal(st.audit[0].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	if got, want := data["decision_expires_at"], until.UTC().Format(time.RFC3339); got != want {
+		t.Errorf("decision_expires_at = %v, want %q (UTC)", got, want)
+	}
+	if got := data["decision_scope"]; got != string(types.ScopeUntil) {
+		t.Errorf("decision_scope = %v, want until", got)
+	}
+	data = nil
+	if err := json.Unmarshal(st.audit[1].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	if _, ok := data["decision_expires_at"]; ok {
+		t.Errorf("an unbounded decision carries decision_expires_at: %s", st.audit[1].Data)
+	}
+}
+
+// TestCancelForRun_AlreadyDecidedRaceIsNotAFailure: a human deciding a row
+// between CancelForRun's list and its CAS wins. The cascade skips that row and
+// carries on — it is neither an error nor counted as cancelled.
+func TestCancelForRun_AlreadyDecidedRaceIsNotAFailure(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{decideErrOn: 1, decideErr: approval.ErrAlreadyDecided}
+	runID := uuid.New()
+	for i := range 2 {
+		_, _ = approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain,
+			json.RawMessage(`{"host":"h`+strconv.Itoa(i)+`.example.com"}`)))
+	}
+
+	n, err := cancelForRunTotal(ctx, st, runID, "run_killed")
+	if err != nil {
+		t.Fatalf("CancelForRun = %v; a row a human already decided must be skipped, not fail the cascade", err)
+	}
+	if n != 1 {
+		t.Fatalf("cancelled = %d, want 1 (the raced row is the human's, not a cancellation)", n)
+	}
+	var evs []types.AuditEvent
+	for _, ev := range st.audit {
+		if ev.Action == "approval.cancelled" {
+			evs = append(evs, ev)
+		}
+	}
+	if len(evs) != 1 || evs[0].Outcome != "success" {
+		t.Fatalf("approval.cancelled rows = %+v, want one success row", evs)
+	}
+	var data struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(evs[0].Data, &data); err != nil || data.Count != 1 {
+		t.Errorf("audit count = %d (%v), want 1", data.Count, err)
+	}
+}
+
+// TestCancelForRun_CountsMovedRowsByKind (#151): the tally is what the CAS
+// actually moved, and the ONE summary row carries it beside the sum — split
+// where one kind carries two meanings (the owner's ruling on #151): a hook
+// tool_call apart from an Azure DevOps escalation (the tool_call row with a
+// grant_id), and an AWS SSO credential_reauth apart from an Azure DevOps
+// sign-in or consent request. The keys are the ones docs/AUDIT-ACTIONS.md
+// documents on the approval.cancelled row.
+func TestCancelForRun_CountsMovedRowsByKind(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID, grantID := uuid.New(), uuid.New()
+	adoEscalation := newReq(runID, types.ApprovalToolCall, json.RawMessage(
+		`{"lane":"azure_devops","grant_id":"`+grantID.String()+`","capability":"code_write","tool":"azure_devops","cmd":"x"}`))
+	adoEscalation.GrantID = &grantID
+	for _, r := range []types.ApprovalRequest{
+		newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"a.example.com"}`)),
+		newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"b.example.com"}`)),
+		newReq(runID, types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash","cmd":"ls"}`)),
+		adoEscalation,
+		newReq(runID, types.ApprovalCredentialReauth, json.RawMessage(
+			`{"mechanism":"bedrock_sso","credential_source":"per_user","owner":"alice"}`)),
+		newReq(runID, types.ApprovalCredentialReauth, json.RawMessage(
+			`{"lane":"azure_devops","mechanism":"entra_signin","reason":"signed_out","owner":"alice","provider_id":"p"}`)),
+		newReq(runID, types.ApprovalCredentialReauth, json.RawMessage(
+			`{"lane":"azure_devops","mechanism":"entra_consent","owner":"alice","provider_id":"p","scopes":["s"]}`)),
+	} {
+		if _, err := approval.RequestApproval(ctx, st, r); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	want := map[string]int{
+		"egress_domain":                          2,
+		"tool_call":                              1,
+		"tool_call:azure_devops":                 1,
+		"credential_reauth:aws_sso":              1,
+		"credential_reauth:azure_devops_signin":  1,
+		"credential_reauth:azure_devops_consent": 1,
+	}
+
+	byKind, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	if err != nil {
+		t.Fatalf("cancel for run: %v", err)
+	}
+	if len(byKind) != len(want) {
+		t.Errorf("tally = %v, want %v", byKind, want)
+	}
+	for k, n := range byKind {
+		if want[string(k)] != n {
+			t.Errorf("tally[%s] = %d, want %d (tally %v)", k, n, want[string(k)], byKind)
+		}
+	}
+	var evs []types.AuditEvent
+	for _, ev := range st.audit {
+		if ev.Action == "approval.cancelled" {
+			evs = append(evs, ev)
+		}
+	}
+	if len(evs) != 1 {
+		t.Fatalf("approval.cancelled rows = %d, want exactly 1", len(evs))
+	}
+	var data struct {
+		Count  int            `json:"count"`
+		ByKind map[string]int `json:"by_kind"`
+	}
+	if uerr := json.Unmarshal(evs[0].Data, &data); uerr != nil {
+		t.Fatalf("decode audit data: %v", uerr)
+	}
+	if data.Count != 7 {
+		t.Errorf("audit count = %d, want 7 (the sum)", data.Count)
+	}
+	if !maps.Equal(data.ByKind, want) {
+		t.Errorf("audit by_kind = %v, want %v", data.ByKind, want)
+	}
 }

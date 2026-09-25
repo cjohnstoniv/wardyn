@@ -16,12 +16,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// P1 W15-W15c-terminal-lifecycle-4: a terminal run's SandboxRef only survives
-// finalizeRunTail non-empty when its StopSandbox call FAILED — and
-// ReconcileOnBoot's `isTerminalRunState(run.State) { continue }` guard means
-// that run is never looked at again. The abandoned container (and its proxy
+// A terminal run's SandboxRef only survives finalizeRunTail non-empty when
+// its StopSandbox call failed — and ReconcileOnBoot's
+// `isTerminalRunState(run.State) { continue }` guard means the main loop
+// never looks at that run again. The abandoned container (and its proxy
 // sidecar, which resolved injected credential VALUES into memory at startup)
-// is audited once, at finalize time, and then permanent. These tests pin
+// would be audited once, at finalize time, and then be permanent. These
+// tests pin
 // reconcileOrphanedSandbox: ReconcileOnBoot must retry the teardown of every
 // terminal run that still carries a ref, clearing the ref on success.
 
@@ -90,10 +91,10 @@ func (r *orphanSweepRunner) stopCount(ref string) int {
 }
 
 // TestReconcileOnBoot_SweepsOrphanedTerminalSandbox is the counterfactual for
-// W15-W15c-terminal-lifecycle-4: on base 763beb5, ReconcileOnBoot's terminal
-// guard skips this run outright and StopSandbox is never called for it — the
-// container leaks forever. After the fix, the sweep tears it down and clears
-// the ref so the run drops out of future sweeps.
+// that guard: on its own, ReconcileOnBoot's terminal guard skips this run
+// outright and StopSandbox is never called for it — the container leaks
+// forever. The sweep tears it down and clears the ref so the run drops out of
+// future sweeps.
 func TestReconcileOnBoot_SweepsOrphanedTerminalSandbox(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
@@ -127,16 +128,14 @@ func TestReconcileOnBoot_SweepsOrphanedTerminalSandbox(t *testing.T) {
 	}
 }
 
-// TestReconcileOnBoot_OrphanSweepRetriesRevoke is the bug-lifecycle-1
-// regression: a terminal run's SandboxRef survives only when its ORIGINAL
-// finalizeRunTail teardown failed, but finalizeRunTail runs revokeRunCascade
-// BEFORE that teardown — so the run reaching this boot pass may carry an
-// un-revoked identity/broker credential independent of whether the retried
-// teardown itself succeeds. On base 17455349 the orphan sweep retries only
-// StopSandbox, never revokeRunCascade, so SweepTerminalSandboxes (the
-// written-but-never-wired retry surface) is the only place that credential
-// retry lives — and nothing calls it. The boot pass must re-run the revoke
-// cascade for every terminal run it walks.
+// TestReconcileOnBoot_OrphanSweepRetriesRevoke: a terminal run's SandboxRef
+// survives only when its original finalizeRunTail teardown failed, but
+// finalizeRunTail runs revokeRunCascade before that teardown — so the run
+// reaching this boot pass may carry an un-revoked identity/broker credential
+// independent of whether the retried teardown itself succeeds. An orphan
+// sweep that retried only StopSandbox would leave that credential
+// un-revoked. The boot pass must re-run the revoke cascade for every
+// terminal run it walks.
 func TestReconcileOnBoot_OrphanSweepRetriesRevoke(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()

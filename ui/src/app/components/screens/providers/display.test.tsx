@@ -5,7 +5,7 @@
 
 // baseURLError is the CLIENT MIRROR of the server's base-URL gate
 // (validateWorkspaceProviders + validateProviderHostForKind,
-// internal/api/workspace_providers.go:230-310). A mirror that admits what the
+// internal/api/workspace_providers_baseurl.go). A mirror that admits what the
 // server 400s is worse than no mirror: the admin types the URL their browser
 // gave them (`dev.azure.com/org/project` is exactly that), sees no hint, presses
 // Save and meets a refusal the field could have said first.
@@ -49,6 +49,19 @@ const PARITY: [url: string, kind: GitProviderKind, refused: boolean][] = [
   ["https://localhost/acme", "github", true],
   ["https://github.com/acme%2Fevil", "github", true],
   ["https://github.com/%60id%60", "github", true],
+  // An Azure DevOps row scoped to a project whose name has a space (#485):
+  // typed or escaped, it is the project's one canonical path. An escape hiding
+  // structure or decoding to a shell metacharacter is still refused, and a
+  // GitHub row takes no escape at all.
+  ["https://tfs.corp.example/Payments Platform", "azure_devops", false],
+  ["https://tfs.corp.example/Payments%20Platform", "azure_devops", false],
+  ["https://acme.visualstudio.com/Caf%C3%A9%20%C3%89quipe", "azure_devops", false],
+  ["https://tfs.corp.example/Payments%20Platform", "github", true],
+  ["https://tfs.corp.example/a%2Fb", "azure_devops", true],
+  ["https://tfs.corp.example/a%252Fb", "azure_devops", true],
+  ["https://tfs.corp.example/%60id%60", "azure_devops", true],
+  ["https://tfs.corp.example/R%26D", "azure_devops", true],
+  ["https://tfs.corp.example/p%20", "azure_devops", true],
   ["not a url", "github", true],
 ];
 

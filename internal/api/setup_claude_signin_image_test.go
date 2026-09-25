@@ -116,17 +116,22 @@ func TestClaudeSignInImageCheck(t *testing.T) {
 		}
 	})
 
-	for name, rnr := range map[string]runner.Runner{
-		"no ImageChecker":               &fakeRunner{},
-		"a presence check errors (k8s)": imageCheckErrRunner{&fakeRunner{}},
+	for name, tc := range map[string]struct {
+		rnr  runner.Runner
+		want string
+	}{
+		"no ImageChecker": {&fakeRunner{}, "cannot confirm"},
+		// The check itself failed (k8s, or an unreachable Docker daemon): the
+		// row names that failure, not a runner that can never check.
+		"a presence check errors": {imageCheckErrRunner{&fakeRunner{}}, "presence check could not answer: orchestrator:"},
 	} {
 		t.Run("pinned and "+name+" is info that says it is unverified", func(t *testing.T) {
-			chk := claudeSignInImageCheck(ctx, map[string]string{"claude-code": "wardyn/agent-claude-code:local"}, rnr)
+			chk := claudeSignInImageCheck(ctx, map[string]string{"claude-code": "wardyn/agent-claude-code:local"}, tc.rnr)
 			if chk.Status != "info" {
 				t.Fatalf("status = %q, want info", chk.Status)
 			}
-			if !strings.Contains(chk.Detail, "cannot confirm") {
-				t.Errorf("detail does not disclose the check is unverified: %q", chk.Detail)
+			if !strings.Contains(chk.Detail, tc.want) {
+				t.Errorf("detail = %q, want it to contain %q", chk.Detail, tc.want)
 			}
 		})
 	}
