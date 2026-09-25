@@ -400,7 +400,7 @@ consults the human's role live at connect time — SSH carries no session for
 the browser terminal's `requireOperator` gate, which reads the session's role
 fresh on every attach. What bounds the staleness now: **a demoted admin's
 already-registered key keeps its override only until whichever comes first —
-their own next login (re-stamping `role=member`), `role_checked_at` aging past
+their own next login (re-stamping `role=user`), `role_checked_at` aging past
 `WARDYN_SSH_ROLE_TTL` (the TTL bites even if they never log in again), or the
 key being deleted/re-registered.** An operator who wants the override gone
 immediately (rather than waiting out the TTL, or waiting for the demoted human
@@ -416,19 +416,19 @@ endpoint.
 **A key registered in the user view is capped, for good.** An admin whose
 console session is in the user view (member mode) can register a key; it is
 stored with `capped = true` (migration `0070_ssh_key_view_capped`) and role
-`member`. A capped key never gains the admin override: the sign-in re-stamp
+`user`. A capped key never gains the admin override: the sign-in re-stamp
 (`RefreshSSHKeyRoles`) refreshes its `role_checked_at` but leaves its role
-`member`, the database refuses a capped row that reads `admin`, and the gateway
+`user`, the database refuses a capped row that reads `admin`, and the gateway
 refuses the override for a capped key before it reads the role. The refusal is
 audited as `ssh.authenticate`, `outcome=failure`, reason "capped key (registered in the
 user view): no admin override". The key still reaches its owner's own runs. A
 break-glass key that reaches other people's runs is registered outside the
 user view. The `ssh_key.add` audit row marks a capped key with `capped: true`.
 
-**Upgrading from 0.5 (or from pre-`0046`): your existing key is a `member`
+**Upgrading from 0.5 (or from pre-`0046`): your existing key is a `user`
 key, and even an `admin`-stamped key loses the override until it is
 refreshed.** `role` is stamped at registration, and migration `0043`
-backfilled every pre-0.6 row as `member` — the fail-closed value, because
+backfilled every pre-0.6 row as `member` (`0074` renames it `user`) — the fail-closed value, because
 nothing in the schema knows what role a pre-0.6 registrant actually held, and
 guessing `admin` would hand every key already in the deployment a cross-user
 reach it was never granted. Migration `0046` adds a second fail-closed

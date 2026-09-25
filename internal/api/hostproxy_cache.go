@@ -12,42 +12,16 @@ import (
 )
 
 // Host-proxy sweep memo. setup.DetectHostProxy's OS tier shells out to the
-// platform's proxy configuration (registry/scutil/gsettings) and measured ~450ms
-// per call on a WSL host — 90%+ of handleSetupStatus's cost, on an endpoint the
-// console polls every 5s, so a single open Getting-started tab spent most of a
-// core on re-reading a host setting that changes about never.
-//
-// The sweep runs in the BACKGROUND and a caller never waits for it. The memo
-// alone was not enough: DetectHostProxy's WSL tier runs powershell.exe and then
-// netsh.exe, and probeTimeout bounds each CHILD but not the call — exec's
-// Output() waits for EOF on the stdout pipe, which a grandchild the kill did not
-// reach can hold open indefinitely (measured: 30s against a 3s context). So on a
-// host whose interop is wedged the FIRST caller after every daemon boot paid six
-// seconds at best and unboundedly at worst — and the console's first paint is
-// that caller.
-//
-// A readiness snapshot must never block on a subprocess, so a sweep that has not
-// answered yet reports what the memo holds and refreshes behind the request. The
-// three things that keeps honest:
-//
-//   - Seeded installs never see the window. A compose/`make setup` install —
-//     the corporate-network case this detection exists for — carries its answer
-//     in WARDYN_HOST_PROXY_B64, which DetectHostProxy decodes in-process with no
-//     exec at all, so cachedHostProxy resolves it SYNCHRONOUSLY on the first
-//     call rather than reporting an empty detection the operator would read as
-//     the confident "nothing is there" (hostProxyCheck's blind flag is false on
-//     a seeded install — the honesty rule at setup_checks.go's own doc comment).
-//   - A hanging sweep is bounded, logged and retried. hostProxySweepDeadline
-//     abandons it, releases the in-flight flag so the next poll tries again, and
-//     says so once in the journal — rather than leaving a permanently blind
-//     daemon reading as "none detected" forever with nothing to see.
-//   - Re-check forces a re-detect. GET /setup/status?recheck=1 (operator-only)
-//     drops the memo first, so the console's Re-check button is a real re-read of
-//     the host and not a refetch of the same 30s-old answer.
-//
-// Memoized here rather than on Server (the way githubRefRulesetCheck's cache is)
-// on purpose: the answer is a property of the HOST, not of any one Server, so
-// two Servers in one process would only duplicate the sweep. hostProxyDetect is
+// platform's proxy configuration and costs ~450ms on WSL, on an endpoint the
+// console polls every 5s. The sweep runs in the BACKGROUND and a caller never
+// waits: probeTimeout bounds each child but not the call (a grandchild can hold
+// the stdout pipe open indefinitely), and a readiness snapshot must never block
+// on a subprocess. What keeps that honest: a seeded install
+// (WARDYN_HOST_PROXY_B64, decoded in-process) resolves SYNCHRONOUSLY, so it never
+// reports a false "nothing is there"; hostProxySweepDeadline abandons, logs and
+// retries a hanging sweep; and GET /setup/status?recheck=1 forces a re-detect.
+// Memoized at package level, not on Server, on purpose: the answer is a property
+// of the HOST, so two Servers would only duplicate the sweep. hostProxyDetect is
 // the seam the memo tests swap.
 const hostProxyTTL = 30 * time.Second
 
@@ -228,16 +202,11 @@ func abandonHostProxySweep(seq uint64) bool {
 // param): force a re-detect (at most one per hostProxySweepDeadline),
 // start the sweep, and wait a BOUNDED moment for it so the answer this press
 // returns is the one it asked for. A press inside the bound starts
-// nothing, but still waits on the sweep already in flight — which is what the
-// operator is waiting for anyway.
+// nothing, but still waits on the sweep already in flight.
 //
-// It invalidates the memo's FRESHNESS without forgetting its answer, and that
-// is the difference between a re-check and a downgrade: a full forget would
-// answer the very press that asked with an empty detection, and the operator
-// would have to press again to see what they already had on screen. (The
-// aggregate bound REPLACED the old unbounded force, which yielded single-flight
-// outright so that N presses inside one deadline started N overlapping sweeps —
-// the wedged sweep that motivated it is still unstuck, once per deadline.)
+// It invalidates the memo's FRESHNESS without forgetting its answer: a full
+// forget would answer the very press that asked with an empty detection. The
+// per-deadline bound keeps N presses from starting N overlapping sweeps.
 func hostProxyRecheck() setup.HostProxyDetection {
 	hostProxyMu.Lock()
 	if hostProxyForcedAt.IsZero() || time.Since(hostProxyForcedAt) >= hostProxySweepDeadline {

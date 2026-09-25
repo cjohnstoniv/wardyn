@@ -20,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -851,8 +852,12 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	var getSecret func(context.Context, string) ([]byte, error)
 	if s.cfg.Secrets != nil {
 		// Operator namespace ONLY, matching resolveRunUpstreamProxy: the probe
-		// must resolve the same value real dispatch would.
-		getSecret = s.cfg.Secrets.For("").Get
+		// must resolve the same value real dispatch would. A status read: the
+		// probe grades the value, it does not use it.
+		sec := s.cfg.Secrets.For("")
+		getSecret = func(ctx context.Context, name string) ([]byte, error) {
+			return sec.Get(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), name)
+		}
 	}
 	resolvedUpstream, upstreamFailReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxyURL, siteCfg.UpstreamProxySecretRef, getSecret)
 	var upstream string

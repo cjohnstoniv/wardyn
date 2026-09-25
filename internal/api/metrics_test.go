@@ -124,7 +124,7 @@ func TestMetricsSinkDrops(t *testing.T) {
 	}
 }
 
-// ─── the auth lane's silent failures (group B) ───────────────────────────────
+// the auth lane's silent failures (group B)
 
 // TestAuthFailedSuppressionIsCounted is the whole point of the rate limiter
 // being safe to have. auditAuthFailed caps auth.fail audit rows at ~1/sec
@@ -249,15 +249,14 @@ func (scrapePanicStore) Ping(context.Context) error {
 	panic("store read from a scrape")
 }
 
-// TestMetricsScrapeIsAllOrNothing is #323's durable half, and it pins the
-// property that let a nil dereference on the scrape path live in this package
-// unnoticed: a panic PAST the counter block used to leave a committed 200 whose
-// body stopped mid-file, recovered into a 500 that could no longer be written.
-// `go test` exited 0, every existing /metrics assertion still matched (they read
-// series the truncated prefix still carried), and the only trace was a recovered
-// stack in `-v` output nobody reads.
+// TestMetricsScrapeIsAllOrNothing pins that a panic on the scrape path cannot
+// hide: a panic past the counter block must not leave a committed 200 whose body
+// stops mid-file, recovered into a 500 that can no longer be written. `go test`
+// would still exit 0, every other /metrics assertion would still match (they
+// read series the truncated prefix still carries), and the only trace would be a
+// recovered stack in `-v` output nobody reads.
 //
-// So the assertion is not "wardyn_store_up is present" — that was true of the
+// So the assertion is not "wardyn_store_up is present" — that holds for a
 // truncated body too. It is that a half-built exposition never reaches the wire
 // at all: an operator gets a failed scrape, which `up` shows, instead of a
 // healthy one that has quietly shed half its series.

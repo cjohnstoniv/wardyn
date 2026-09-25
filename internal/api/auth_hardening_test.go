@@ -13,14 +13,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── FIX #6: sign-out actually terminates the OIDC session ───────────────────────
+// FIX #6: sign-out actually terminates the OIDC session
 
-// TestLogoutRouteMountedClearsSession is the regression for FIX #6. The UI POSTs
-// /api/v1/auth/logout, but the OIDC logout used to be mounted ONLY as a root
-// GET /auth/logout, so the POST hit no route (404), the HttpOnly wardyn_session
-// cookie survived, and the next probe silently re-signed the operator in. The
-// POST must now be routed (not 404) when OIDC is configured, invoke the OIDC
-// LogoutHandler, and clear the session cookie.
+// TestLogoutRouteMountedClearsSession: the UI POSTs /api/v1/auth/logout, so with
+// OIDC configured that POST must be routed (not 404), invoke the OIDC
+// LogoutHandler, and clear the session cookie. A logout mounted only as a root
+// GET /auth/logout would leave the POST hitting no route, the HttpOnly
+// wardyn_session cookie surviving, and the next probe silently re-signing the
+// operator in.
 //
 // A zero-value *oidc.Authenticator is a valid test double here: its Middleware
 // finds no session cookie and falls through to the admin-token path, and its
@@ -65,9 +65,9 @@ func TestLogoutTokenModeNoOp(t *testing.T) {
 	}
 }
 
-// ─── FIX #8: local-mode Host allowlist (DNS-rebinding defense) ────────────────────
+// FIX #8: local-mode Host allowlist (DNS-rebinding defense)
 
-// TestLocalModeRejectsNonLoopbackHost is the regression for FIX #8. In local
+// TestLocalModeRejectsNonLoopbackHost pins the Host gate. In local
 // no-auth mode humanOrAdminAuth bypasses all auth, so a DNS-rebinding page
 // (Origin==Host==attacker.com rebound to 127.0.0.1) could drive the no-auth
 // surface with no credential. The bypass must reject any non-loopback Host with
@@ -108,7 +108,7 @@ func TestLocalModeRejectsNonLoopbackHost(t *testing.T) {
 	}
 }
 
-// TestLocalModeRejectsNonLoopbackRemoteAddr is the regression for N1. The Host
+// TestLocalModeRejectsNonLoopbackRemoteAddr pins the peer gate. The Host
 // header is forgeable by a direct socket client, so a LAN peer hitting a 0.0.0.0
 // bind with "Host: 127.0.0.1" would otherwise reach the auth-bypassed surface. The
 // bypass must ALSO require a loopback TCP peer (r.RemoteAddr) — which the server
@@ -147,7 +147,7 @@ func TestLocalModeRejectsNonLoopbackRemoteAddr(t *testing.T) {
 	}
 }
 
-// TestLocalTrustForwarderAllowsGatewayPeer is the regression for the compose fix:
+// TestLocalTrustForwarderAllowsGatewayPeer pins the compose topology:
 // with LocalTrustForwarder set (the compose topology — wardynd bound 0.0.0.0 behind
 // a loopback-only publish, so the peer is always the docker gateway), a non-loopback
 // peer must PASS the peer gate, while the Host gate still rejects DNS-rebinding.

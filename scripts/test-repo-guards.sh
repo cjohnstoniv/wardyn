@@ -248,7 +248,7 @@ fi
 #      EXISTING deployment whose .env does not set it (":-" substitutes for
 #      unset OR empty alike), silently moving deriveRole from its no-map arm
 #      to its map-present arm and denying logins arm 1 would have allowed —
-#      internal/auth/oidc's TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03
+#      internal/auth/oidc's TestDeriveRoleComposeDefaultDeniesUnlistedLogin
 #      proves the mechanism; this guard proves neither half of the R-03 fix
 #      regresses: the compose file stays a bare passthrough, and a fresh
 #      install still gets the pair (from .env.example, which env_set/
@@ -256,12 +256,12 @@ fi
 compose_role_map_line="$(grep -E '^\s*WARDYN_OIDC_ROLE_MAP:' deploy/compose/docker-compose.yaml || true)"
 case "$compose_role_map_line" in
     *'${WARDYN_OIDC_ROLE_MAP:-}'*) ok "docker-compose.yaml's WARDYN_OIDC_ROLE_MAP is a plain passthrough (no runtime default)" ;;
-    *) bad "docker-compose.yaml's WARDYN_OIDC_ROLE_MAP is not the bare passthrough \"\${WARDYN_OIDC_ROLE_MAP:-}\" any more (got: ${compose_role_map_line:-<no row found>}) — a non-empty \`:-\` default here silently denies logins on every upgraded deployment (R-03); see TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03" ;;
+    *) bad "docker-compose.yaml's WARDYN_OIDC_ROLE_MAP is not the bare passthrough \"\${WARDYN_OIDC_ROLE_MAP:-}\" any more (got: ${compose_role_map_line:-<no row found>}) — a non-empty \`:-\` default here silently denies logins on every upgraded deployment (R-03); see TestDeriveRoleComposeDefaultDeniesUnlistedLogin" ;;
 esac
-if grep -qE '^WARDYN_OIDC_ROLE_MAP=demo@wardyn\.local=admin,member@wardyn\.local=member\s*$' deploy/compose/.env.example; then
+if grep -qE '^WARDYN_OIDC_ROLE_MAP=demo@wardyn\.local=admin,member@wardyn\.local=user\s*$' deploy/compose/.env.example; then
     ok "deploy/compose/.env.example still seeds the demo/member role-map pair for a fresh .env"
 else
-    bad "deploy/compose/.env.example no longer carries an UNCOMMENTED WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=member row — a fresh compose stack would lose the second identity the member-mode rider added, and this is the ONLY safe place for it (R-03: a docker-compose.yaml runtime default would apply to upgrades too)"
+    bad "deploy/compose/.env.example no longer carries an UNCOMMENTED WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=user row — a fresh compose stack would lose the second identity the member-mode rider added, and this is the ONLY safe place for it (R-03: a docker-compose.yaml runtime default would apply to upgrades too)"
 fi
 
 # ── 9. .gitleaksignore fingerprint churn — a fixture whose flagged value

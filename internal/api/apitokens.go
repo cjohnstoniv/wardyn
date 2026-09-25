@@ -250,7 +250,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 			"an API token cannot create another API token — sign in to the console to mint one")
 		return
 	}
-	// Member mode refuses, it does not clamp. store.RefreshAPITokenRoles
+	// Member mode refuses, it does not clamp. store.RefreshAPITokenIdentity
 	// (fired by OnLogin) re-stamps EVERY token of a principal with their freshly
 	// derived role at the next sign-in, so a wdn_ token minted "as a member"
 	// would silently become an admin one — a credential outliving the mode that
@@ -305,11 +305,11 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// foreign-run reach and nothing else.
 	//
 	// Fallback for a caller with no OIDC role on ctx: unreachable here (the
-	// no-verified-human refusal above returned already), but RoleMember is the
+	// no-verified-human refusal above returned already), but RoleUser is the
 	// fail-closed value if that ever changes.
 	role := oidcRoleFromContext(ctx)
 	if role == "" {
-		role = oidc.RoleMember
+		role = oidc.RoleUser
 	}
 	// The group snapshot's completeness marker, stamped from the MINTING
 	// session's own bit (migration 0052's api_tokens.groups_truncated). The
@@ -422,7 +422,7 @@ func (s *Server) handleRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 // path for the stamp
 // ceiling migration 0045 documents — a demoted admin's outstanding tokens keep
 // the role they were minted under until their owner's next login re-stamps it
-// (store.RefreshAPITokenRoles, fired from the same OnLogin hook that has
+// (store.RefreshAPITokenIdentity, fired from the same OnLogin hook that has
 // refreshed SSH keys) or until they are revoked here. This route is
 // the path that takes effect IMMEDIATELY, and the only one that helps for an
 // owner who never signs in again — and for a token
@@ -558,7 +558,7 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // Why it revokes at all (owner adjudication). An api_token's role is
 // stamped at mint and read verbatim on every request until something re-stamps
 // it, and the only thing that does is the owner's own next login
-// (store.RefreshAPITokenRoles). So removing someone's admin through the People
+// (store.RefreshAPITokenIdentity). So removing someone's admin through the People
 // screen took effect on THEIR schedule — and never at all for someone who has
 // left, which is the case a demotion is most often about. "Removing admin
 // removes admin" is the contract; a bound that waits for the demoted human to
@@ -590,13 +590,13 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // Best effort by contract, like the counter: the mapping edit is already
 // durable when this runs, so a store failure is logged at WARN and reported as
 // zero — never turned into a 500 that would misdescribe what happened.
-func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, before, after []oidc.RoleMapping) int {
+func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, before, after []oidc.RoleMapping, userTypes []types.UserType) int {
 	ctx := r.Context()
 	if s.cfg.Store == nil || s.cfg.OIDC == nil || value == "" {
 		return 0
 	}
-	was, _ := s.cfg.OIDC.PreviewRoleAgainst(before, nil, []string{value}, "")
-	now, _ := s.cfg.OIDC.PreviewRoleAgainst(after, nil, []string{value}, "")
+	was := s.cfg.OIDC.PreviewRoleAgainst(before, userTypes, nil, []string{value}, "").Role
+	now := s.cfg.OIDC.PreviewRoleAgainst(after, userTypes, nil, []string{value}, "").Role
 	if !s.roleSnapshotDrops(was, now) {
 		return 0
 	}
@@ -612,12 +612,12 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 			continue
 		}
 		if apiTokenSnapshotAnswerable(t) {
-			wasT, _ := s.cfg.OIDC.PreviewRoleAgainst(before, nil, t.Groups, t.Email)
-			nowT, _ := s.cfg.OIDC.PreviewRoleAgainst(after, nil, t.Groups, t.Email)
+			wasT := s.cfg.OIDC.PreviewRoleAgainst(before, userTypes, nil, t.Groups, t.Email).Role
+			nowT := s.cfg.OIDC.PreviewRoleAgainst(after, userTypes, nil, t.Groups, t.Email).Role
 			if !s.roleSnapshotDrops(wasT, nowT) || !s.roleSnapshotDrops(t.Role, nowT) {
 				continue
 			}
-		} else if !s.roleSnapshotDrops(t.Role, oidc.RoleMember) {
+		} else if !s.roleSnapshotDrops(t.Role, oidc.RoleUser) {
 			continue
 		}
 		if !slices.Contains(principals, t.Principal) {

@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-DOCS=(README.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md)
+DOCS=(README.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md docs/AZURE-DEVOPS.md)
 RENDER_DIR=""
 [ "${1:-}" = "--render-png" ] && RENDER_DIR="${2:?--render-png needs a dir}"
 

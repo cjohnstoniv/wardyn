@@ -29,7 +29,7 @@ import (
 // expiry refusal for ONE token and a flat error for anything else — the two
 // shapes internal/api has to tell apart. The provider side (that a real expired
 // token verifies this way, and that no OTHER failure does) is pinned where it
-// lives, internal/identity/embedded's TestB5_ExpiredVerifyCarriesTheRunID.
+// lives, internal/identity/embedded's TestExpiredVerifyCarriesTheRunID.
 type expiredIdentity struct {
 	token string
 	runID uuid.UUID

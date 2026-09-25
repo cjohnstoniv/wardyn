@@ -182,7 +182,8 @@ describe("Focus mode — the edge dock", () => {
   // finishes), its rail button vanished but the panel kept the glass panel
   // open over a widget that can no longer place a tile (ConnectSSHCard
   // returns null).
-  it("F1-F6: clamps a stale dock selection once its widget stops being dockable", async () => {
+  it("clamps a stale dock selection once its widget stops being dockable", async () => {
+    // ticket: F1-F6
     const user = userEvent.setup();
     const running = { ...RUN, state: "RUNNING" } as WidgetContext["run"];
     const { rerender } = render(

@@ -331,7 +331,7 @@ func TestHarnessCredentialPaste_NilMaskRegistry(t *testing.T) {
 	}
 }
 
-// ── HTTP-router-level tests (through the real mux + humanOrAdminAuth) ─────────
+// HTTP-router-level tests (through the real mux + humanOrAdminAuth)
 
 // harnessCredSrv builds a Server with the harness login/credential routes MOUNTED
 // (they mount only when cfg.Secrets != nil) over the given secret store, reusing
@@ -801,7 +801,7 @@ func TestLaunchHarnessLoginRun_SeedsPinEnv(t *testing.T) {
 		SSOAccountID: "111111111111", SSORoleName: "BedrockRunner",
 	})
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
@@ -836,7 +836,7 @@ func TestLoginConfigEnv_NoPinNoEnv(t *testing.T) {
 		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
 	})
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}

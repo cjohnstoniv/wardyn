@@ -38,16 +38,12 @@ const leafCertTTL = 24 * time.Hour
 // leafRenewBefore is how long before NotAfter a CACHED leaf stops being reused
 // and is re-minted instead.
 //
-// A per-run proxy sidecar has no lifetime bound of its own — internal/lifecycle
-// skips the idle reaper entirely when the run's AutoStopAfterSec <= 0, which is
-// the default, and the per-run MITM CA is minted for a YEAR
-// (internal/api/mitmca.go) precisely because runs are expected to outlive a
-// day. leafCertTTL is only 24h: without this margin, a leaf picked up moments
-// before NotAfter would answer a new CONNECT to a MITM'd host with "200
-// Connection Established" and then fail the sandbox's TLS handshake with
-// "certificate has expired", silently and permanently. The margin keeps a leaf
-// from expiring mid-handshake on a conn that picked it up just before
-// NotAfter.
+// A per-run proxy sidecar has no lifetime bound of its own, and the per-run
+// MITM CA is minted for a YEAR (internal/api/mitmca.go) because runs are
+// expected to outlive a day — far longer than leafCertTTL's 24h. The margin
+// keeps a leaf picked up moments before NotAfter from answering a CONNECT and
+// then failing the sandbox's TLS handshake mid-flight, silently and
+// permanently.
 const leafRenewBefore = time.Hour
 
 // leafUsableAt reports whether a cached leaf is still safely reusable at now —
@@ -532,7 +528,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	var scanSummary *egress.ScanSummary
 	var blocked bool
 	// The inspected body stays charged to maxRetainedScanBytes until this
-	// request's own round trip has consumed it (F074).
+	// request's own round trip has consumed it.
 	releaseBody := func() {}
 	defer func() { releaseBody() }()
 	if channel == contentscan.ChannelGeneric && p.scanner != nil &&

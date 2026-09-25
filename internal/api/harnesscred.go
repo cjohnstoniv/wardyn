@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -377,18 +378,20 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 	if s.cfg.Secrets == nil {
 		return fmt.Errorf("no secret store configured")
 	}
-	st := s.cfg.Secrets
+	st, owner := s.cfg.Secrets, ""
 	if scope.perUser {
 		if !scope.namespaced() {
 			return fmt.Errorf("a per-user aws sso credential has no owner to store it under")
 		}
-		st = st.For(scope.owner)
+		st, owner = st.For(scope.owner), scope.owner
 	}
 	raw, err := json.Marshal(blob)
 	if err != nil {
 		return fmt.Errorf("marshal aws sso credential blob: %w", err)
 	}
-	return st.Put(ctx, harnessCredSecretName(awsSSOProvider), raw)
+	err = st.Put(ctx, harnessCredSecretName(awsSSOProvider), raw)
+	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, harnessCredSecretName(awsSSOProvider))
+	return err
 }
 
 // Login run launch
@@ -468,10 +471,14 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// supersede pass, the insert, and the SECOND pass after it are independent
 	// statements, and two launches interleaving through them leave two live
 	// sandboxes each holding a captured AWS SSO session. lockLoginSupersede
-	// carries the interleaving and why the lock fails open; released on every
-	// path, including the refusals and the error returns between here and the
-	// second pass.
-	releaseLoginLock := s.lockLoginSupersede(ctx, actor)
+	// carries the interleaving and why a lock that cannot be taken refuses
+	// (errSignInBusy) before anything is superseded or created; released on
+	// every path, including the refusals and the error returns between here and
+	// the second pass.
+	releaseLoginLock, lerr := s.lockLoginSupersede(ctx, actor, runID)
+	if lerr != nil {
+		return types.AgentRun{}, harnessLoginDispatch{}, lerr
+	}
 	defer releaseLoginLock()
 	// One live sign-in sandbox per person, and it happens HERE — before
 	// newStepRun, where the concurrency quota is counted — so a member capped at
@@ -735,8 +742,7 @@ func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, p
 		return row, scope, true
 	}
 	if !perUser {
-		return types.AgentProvider{}, awsSSOScope{}, !s.denyMemberField(w, r, "setup.harness_login",
-			"harness_login_not_per_user", harnessLoginNotPerUserRefusal)
+		return types.AgentProvider{}, awsSSOScope{}, !s.refuse(w, r, authz.Deny(authz.ReasonHarnessLoginNotPerUser, "setup.harness_login", harnessLoginNotPerUserRefusal))
 	}
 	if s.denyMemberCapability(w, r, capAgent, row.ID, "setup.harness_login",
 		fmt.Sprintf(harnessLoginAgentRefusal, row.ID)) {
@@ -784,6 +790,7 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	blob := managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC()}
 	raw, _ := json.Marshal(blob)
 	if err := s.cfg.Secrets.Put(r.Context(), hl.secretName, raw); err != nil { // operator-wide route (operatorOnly), not per-principal
+		s.auditRowNotWritten(r.Context(), err, actorTypeFromRequest(r), principalFromRequest(r), "", hl.secretName)
 		writeServerError(w, r, "store managed credential", err)
 		return
 	}
@@ -887,10 +894,10 @@ func NewManagedCredProvider(store secretstore.Store, provider string) subscripti
 	return &managedCredProvider{store: store, provider: provider}
 }
 
-func (p *managedCredProvider) read() (subscription.Token, error) {
+func (p *managedCredProvider) read(ctx context.Context) (subscription.Token, error) {
 	// p.store is the operator-wide managed credential (NewManagedCredProvider's
 	// caller passes the raw, unscoped store) — not per-principal.
-	raw, err := p.store.Get(context.Background(), harnessCredSecretName(p.provider))
+	raw, err := p.store.Get(ctx, harnessCredSecretName(p.provider))
 	if errors.Is(err, secretstore.ErrNotFound) {
 		return subscription.Token{}, fmt.Errorf("no managed %s credential connected", p.provider)
 	}
@@ -915,10 +922,12 @@ func (p *managedCredProvider) read() (subscription.Token, error) {
 
 // Current returns the managed token (no refresh — see type doc).
 func (p *managedCredProvider) Current(ctx context.Context) (subscription.Token, error) {
-	return p.read()
+	return p.read(secretstore.WithPurpose(ctx, secretstore.PurposeManagedToken))
 }
 
-// Peek is identical to Current here (no refresh side effect to avoid).
+// Peek is identical to Current here (no refresh side effect to avoid). Its
+// callers only ask whether a token is there (managedInjectReady), so its read
+// is recorded as a status read.
 func (p *managedCredProvider) Peek() (subscription.Token, error) {
-	return p.read()
+	return p.read(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus))
 }

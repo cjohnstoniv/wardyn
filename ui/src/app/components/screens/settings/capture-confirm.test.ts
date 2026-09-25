@@ -16,7 +16,8 @@ import {
   CAPTURE_POST_RUN_GRACE_MS,
   CAPTURE_WATCH_MAX_MS,
 } from "./capture-confirm";
-import type { AgentRun, SetupStatus } from "../../../lib/types";
+import type { SetupStatus } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 
 const getRunMock = vi.fn();
 vi.mock("../../../lib/api/runs", () => ({ runs: { getRun: (...a: unknown[]) => getRunMock(...a) } }));
@@ -97,7 +98,7 @@ describe("serverConfirmsCapture — strict (Codex #9)", () => {
 describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    getRunMock.mockReset().mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    getRunMock.mockReset().mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
     listAuditMock.mockReset().mockResolvedValue([]);
     getSetupStatusMock.mockReset().mockResolvedValue(status({}));
   });
@@ -153,7 +154,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   });
 
   it("expires CAPTURE_POST_RUN_GRACE_MS after the run goes terminal", async () => {
-    getRunMock.mockResolvedValue({ id: "run-123", state: "COMPLETED" } as AgentRun);
+    getRunMock.mockResolvedValue(makeRun({ id: "run-123", state: "COMPLETED" }));
     listAuditMock.mockResolvedValue([]); // never hinted
     getSetupStatusMock.mockResolvedValue(status({})); // never confirms
     const controller = new AbortController();
@@ -163,7 +164,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   });
 
   it("expires at the absolute CAPTURE_WATCH_MAX_MS even under continuous activity", async () => {
-    getRunMock.mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun); // never terminal
+    getRunMock.mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" })); // never terminal
     listAuditMock.mockResolvedValue([{ id: "a1" }]); // hinted every tick — busy, but never confirming
     getSetupStatusMock.mockResolvedValue(status({})); // never confirms
     const controller = new AbortController();
@@ -196,7 +197,7 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
   // and to `visibilitychange`; the run's own state transition needs no
   // separate wiring, since the loop already re-reads `getRun` every tick).
   it("a wake() tick ends the wait immediately, without advancing any timer", async () => {
-    getRunMock.mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    getRunMock.mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
     let auditCalls = 0;
     listAuditMock.mockImplementation(async () => {
       auditCalls += 1;

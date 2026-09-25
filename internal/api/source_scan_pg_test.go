@@ -128,10 +128,10 @@ func TestScanWorkspace_RepoPlusDir_ScansEverySource(t *testing.T) {
 }
 
 // The wizard's BUILD step endpoints: an explicit image pick boots verbatim
-// ONLY once an image builder is wired to wrap it (W7-S1-2 — this test's
-// harness has none), so it must answer the SAME honest "none" a
-// recommended/custom workspace gets, never the false "nothing_to_build ...
-// boots as-is" a builder-less host cannot actually deliver.
+// only once an image builder is wired to wrap it, and this test's harness
+// has none, so it must answer the same honest "none" a recommended/custom
+// workspace gets, never the false "nothing_to_build ... boots as-is" a
+// builder-less host cannot actually deliver.
 func TestWorkspaceBuild_ExplicitImageAndNoBuilder(t *testing.T) {
 	srv, _ := pgHarnessWithRunner(t, &fakeRunner{})
 

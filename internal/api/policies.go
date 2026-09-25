@@ -126,7 +126,7 @@ type defaultPolicyResponse struct {
 func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) {
 	ceiling, err := s.effectiveCeiling(r.Context())
 	if err != nil {
-		writeCeilingError(w, err)
+		writeCeilingError(w, r, err)
 		return
 	}
 	resp := defaultPolicyResponse{

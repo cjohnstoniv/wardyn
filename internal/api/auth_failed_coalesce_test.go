@@ -441,7 +441,7 @@ func TestAuthFailedCoalesce_ShutdownFlushesTheOpenStreak(t *testing.T) {
 	}
 }
 
-// ─── V1-r2-lensS: the summary row is rate-bound, and the key is the peer IP ───
+// V1-r2-lensS: the summary row is rate-bound, and the key is the peer IP
 
 // TestAuthFailedCoalesce_SummaryRowsPayTheRateLimiter is the HIGH of lens S round
 // 2, and it is the audit-flood vector the coalescer itself introduced: a streak

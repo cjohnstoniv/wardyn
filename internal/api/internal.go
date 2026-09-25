@@ -415,9 +415,10 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	switch body.Kind {
-	case types.ApprovalEgressDomain, types.ApprovalToolCall:
-		// Sidecars may only raise egress/tool approvals. credential approvals are
-		// created by the broker mint path, never by an untrusted sidecar.
+	case types.ApprovalEgressDomain, types.ApprovalToolCall, types.ApprovalPushContent:
+		// Sidecars may only raise egress/tool/held-push approvals. credential
+		// approvals are created by the broker mint path, never by an untrusted
+		// sidecar.
 	default:
 		// Recorded: this refusal is the forgery the case above exists to
 		// stop — a sidecar asking Wardyn to raise a `credential` approval. Same
@@ -441,6 +442,12 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		s.auditAuthFailedAs(r, internalApprovalActor, "reserved_scope_key")
 		writeError(w, http.StatusBadRequest, "requested_scope may not name a lane")
 		return
+	}
+	if body.Kind == types.ApprovalPushContent {
+		var ok bool
+		if body.RequestedScope, ok = s.admitPushContentRaise(w, r, claims, body.RequestedScope); !ok {
+			return
+		}
 	}
 
 	// Per-run cap, checked BEFORE the raise. Fail CLOSED on a count
@@ -521,6 +528,57 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 	// The same repair for an Azure DevOps consent or sign-in request: the
 	// person's new sign-in is the resolution (injection_ado_signin.go).
 	ap = s.reconcileADOReauthOnRead(r.Context(), ap)
+	writeJSON(w, http.StatusOK, ap)
+}
+
+// handleInternalExpireApproval lets wardyn-toolgate close its OWN tool_call
+// approval the moment it gives up waiting for one (its -deadline reached, or
+// its poll loop otherwise exhausted), instead of leaving the row PENDING for
+// the periodic sweep (approval-expiry-after/-interval) to catch up to — up to
+// one sweep interval later. In that window an operator could still approve a
+// call the gate has already answered deny for (#811).
+//
+// Scoped exactly like handleInternalGetApproval (own run only, 404 on any
+// mismatch so existence is never confirmed for another run's row) plus one
+// more restriction: only a tool_call approval the SANDBOX raised
+// (handleBrokerCreateApproval) may be expired here — a grant_id marks a row
+// the control plane raised (an Azure DevOps escalation, adoEscalationScope),
+// which is the operator's to decide, not the sandbox's to withdraw. The
+// transition itself is idempotent — an approval a human or the sweep already
+// decided is left untouched — and the answer is the row's FINAL state, so a
+// gate whose expire lost the race to an approval honours that approval.
+func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Request) {
+	claims, err := claimsFromContext(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "missing run claims")
+		return
+	}
+	id, ok := parseIDParam(w, r, "id", "approval")
+	if !ok {
+		return
+	}
+	ap, err := s.cfg.Approvals.Get(r.Context(), id)
+	if notFoundIf(w, err, "approval") {
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, "get approval", err)
+		return
+	}
+	if ap.RunID != claims.RunID || ap.Kind != types.ApprovalToolCall || ap.GrantID != nil {
+		// Do not confirm existence of another run's approval, or of an
+		// approval this route was never meant to touch.
+		writeError(w, http.StatusNotFound, "approval not found")
+		return
+	}
+	if err := s.cfg.Approvals.ExpireOne(r.Context(), id, claims.SPIFFEID, "client_withdrawn"); err != nil {
+		writeServerError(w, r, "expire approval", err)
+		return
+	}
+	if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
+		writeServerError(w, r, "get approval", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, ap)
 }
 
@@ -824,6 +882,9 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			// 403, not 404: same reason as refuseTerminalRun — the caller's own
+			// presented token names claims.RunID, so a missing run is that
+			// token's authority gone, not a path a member could probe.
 			s.auditRenewDenied(r, claims, "run_not_found")
 			writeError(w, http.StatusForbidden, "run not found")
 			return

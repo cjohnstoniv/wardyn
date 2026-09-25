@@ -50,7 +50,7 @@ func TestSSHKeys_UserViewAddIsCapped(t *testing.T) {
 		memberMode bool
 		wantRole   string
 	}{
-		{"user view: allowed and capped", true, oidc.RoleMember},
+		{"user view: allowed and capped", true, oidc.RoleUser},
 		{"admin view: uncapped admin key, as today", false, oidc.RoleAdmin},
 	}
 	for _, tc := range cases {

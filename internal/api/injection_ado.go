@@ -38,6 +38,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -138,12 +139,7 @@ func (s *Server) adoRequestScopes(ctx context.Context, cfg ADOEntraConfig, owner
 	if err != nil || !found {
 		return cfg.Scopes
 	}
-	var out []string
-	for _, sc := range cfg.Scopes {
-		if slices.Contains(blob.Scopes, sc) {
-			out = append(out, sc)
-		}
-	}
+	out := intersect(cfg.Scopes, blob.Scopes)
 	if len(out) == 0 {
 		return cfg.Scopes
 	}
@@ -172,7 +168,10 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	if minted.Injection == nil || minted.Injection.SecretName != types.ADOEntraAccessTokenSecret {
 		return false
 	}
-	ctx := r.Context()
+	// The stored sign-in is read here to redeem the access token this resolve
+	// injects; those reads are recorded as such, and the injection below as the
+	// sentinel's own secret.read.
+	ctx := secretstore.WithPurpose(r.Context(), secretstore.PurposeADORefresh)
 	fail := func(status int, reason, body string, extra map[string]any) bool {
 		data := map[string]any{"reason": reason, "grant_id": grantID}
 		for k, v := range extra {
@@ -180,7 +179,10 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		}
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", types.ADOEntraAccessTokenSecret, "failure", mustJSON(data)))
-		writeError(w, status, body)
+		// reason reaches the wire now (#204): the same machine class already
+		// recorded on the audit row, so the proxy can branch on it instead of
+		// string-matching the human sentence in body.
+		writeJSON(w, status, errorBody{Error: body, Reason: reason})
 		return true
 	}
 
@@ -248,7 +250,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	}
 	scopes := s.adoRequestScopes(ctx, cfg, snapshot.OwnerSubject)
 	access, err := s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, scopes, false)
-	if err == nil && capAsk.capability != "" && !adoScopesWithin(need, access.Scopes) {
+	if err == nil && capAsk.capability != "" && !subsetOf(need, access.Scopes) {
 		access, err = s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, scopes, true)
 	}
 	if err != nil {
@@ -300,9 +302,9 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		JTI:       minted.JTI,
 		ExpiresAt: access.ExpiresAt.UnixMilli(),
 		// Informational only: the proxy's gate pins the organisation from the
-		// dispatch-time ADOGrants in its own configuration, not from this.
+		// dispatch-time ADOGrant in its own configuration, not from this.
 		Organisation: snapshot.Organisation,
-		// Not the gate's input either (dispatch-time ADOGrants are); the hold
+		// Not the gate's input either (dispatch-time ADOGrant are); the hold
 		// reads it only to confirm a capability ask came back granted.
 		Capabilities: adoCapabilityStrings(responseCaps),
 	})
@@ -397,7 +399,7 @@ func (sn adoEntraScopeSnapshot) driftFrom(sc types.SiteConfig) string {
 		return "token_mode"
 	case !rowServesOrganisation(row, sn.Organisation):
 		return "organisation"
-	case !adoCapabilitiesWithin(sn.Capabilities, row.Entra.CapabilityCeiling):
+	case !subsetOf(sn.Capabilities, row.Entra.CapabilityCeiling):
 		return "capability_ceiling"
 	}
 	return ""

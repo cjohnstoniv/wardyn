@@ -478,7 +478,7 @@ test("V07 beat 5 — on the record", async () => {
   // The GLOBAL audit page, not the run's own Audit tab: the run tab prints
   // raw action strings, while /audit renders the event through its
   // ACTION_VERB map — and the verb row is the frame this beat is about.
-  await page.goto("/audit");
+  await page.goto("/admin/audit");
   await caption(page, "And the credential use is recorded.");
   await beat(page, PACE.read);
   await caption(page, "The secret value itself isn't.");

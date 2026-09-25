@@ -123,6 +123,10 @@ const (
 	// KILLED — by its own Cancel, or by the person's next sign-in superseding it
 	// (harnesscred_supersede.go). See ssoTokenRunKilledRefusal.
 	refuseReasonRunKilled = "run_killed"
+	// refuseReasonSignInBusy: the per-person sign-in lock could not be taken in
+	// time (lockLoginSupersede), so the capture was not serialized and is
+	// refused rather than stored.
+	refuseReasonSignInBusy = "signin_busy"
 )
 
 // DRAFT (M2 canon pending)

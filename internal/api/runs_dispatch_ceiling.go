@@ -84,6 +84,9 @@ type dispatchCeiling struct {
 	// the resolution has to travel, and a dispatchParams field that a lane can
 	// silently leave unset is the defect class this struct exists to close.
 	adoEntra adoEntraGrade
+	// bedrock is the same freeze for the Amazon Bedrock model credential
+	// (bedrockCredGrade, runs_autonomy_bedrock.go), on the same argument.
+	bedrock bedrockCredGrade
 }
 
 // ceilingForDispatch is the ONE translation from a resolved ceiling into the
@@ -104,14 +107,16 @@ type dispatchCeiling struct {
 // parameter and not a field for the same reason the ceiling itself is — a lane
 // that could leave it unset would be back to authoring a credential nobody
 // graded — and adoEntraUngraded() is the honest answer for the four lanes that
-// run no gate, not a way of skipping the question.
-func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade) dispatchCeiling {
+// run no gate, not a way of skipping the question. bedrock is the third, for
+// the Bedrock model credential, and bedrockCredUngraded() answers it for the
+// same lanes.
+func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockCredGrade) dispatchCeiling {
 	if c.Profile == nil {
-		return dispatchCeiling{resolved: true, adoEntra: ado}
+		return dispatchCeiling{resolved: true, adoEntra: ado, bedrock: bedrock}
 	}
 	return dispatchCeiling{
 		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
-		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB, adoEntra: ado,
+		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB, adoEntra: ado, bedrock: bedrock,
 	}
 }
 
@@ -335,7 +340,7 @@ func (s *Server) resolveDispatchCeiling(ctx context.Context) (dispatchCeiling, g
 	// adoEntraUngraded: every lane that resolves its own ceiling here — the scan,
 	// the probe and the harness login — runs no autonomy gate, so no rubric
 	// capped the run and there is no grade for dispatch to be held to.
-	return ceilingForDispatch(c, adoEntraUngraded()), c, nil
+	return ceilingForDispatch(c, adoEntraUngraded(), bedrockCredUngraded()), c, nil
 }
 
 // ceilingDenies reports whether the CEILING's deny list covers host — an exact

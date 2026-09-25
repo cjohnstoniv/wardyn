@@ -50,7 +50,9 @@ func (s *Server) routes() chi.Router {
 	// here: it is POST /api/v1/auth/logout below, inside humanOrAdminAuth.
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
-		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandler)
+		// A sign-in refused over its user type (ambiguous or unknown) is an
+		// auth.fail row; the oidc package stays audit-agnostic.
+		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.auditSignInDenied))
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -628,6 +630,9 @@ func (s *Server) routes() chi.Router {
 			r.Post("/internal/decisions", s.handlePostDecision)
 			r.Post("/internal/approvals", s.handleInternalRequestApproval)
 			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
+			// wardyn-toolgate's own give-up signal (#811): closes the row it
+			// raised instead of leaving it PENDING for the sweep.
+			r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 			r.Post("/internal/credentials/mint", s.handleInternalMint)
 
 			// Token renew: POST /api/v1/internal/token/renew

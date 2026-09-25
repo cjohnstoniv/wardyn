@@ -26,8 +26,8 @@ import (
 // RED on the base tree: the series reads 4 instead of 2.
 //
 // The audit half is asserted in the same test on purpose: scoping the COUNTER
-// must not have quietly stopped recording the egress.deny rows those decisions
-// still legitimately produce.
+// must not stop recording the egress.deny rows those decisions still
+// legitimately produce.
 func TestEgressDeniesTotalCountsPolicyDeniesOnly(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mintRunToken(t, uuid.New())

@@ -3,10 +3,10 @@
 
 package api
 
-// "View as a NEW member (not signed in)" (v0.7.5, field report finding 3) — the
-// server half. The 0.7.4 mode clamps the ROLE and leaves the admin's own
-// per-user AWS session in place, so an admin who has signed in cannot reach the
-// one state every new member on a per_user deployment is in. ONE guard at the
+// "View as a new member (not signed in)" — the server half. Clamping only the
+// role would leave the admin's own per-user AWS session in place, so an admin
+// who has signed in could not reach the one state every new member on a
+// per_user deployment is in. One guard at the
 // read chokepoint (readAWSSSOBlob, via previewHidesOwnCredential) is what moves
 // every downstream surface into that state, and each case below drives a REAL
 // route rather than the predicate, because the claim is about what the surfaces
@@ -49,7 +49,7 @@ func memberPreviewSession(t *testing.T, mm, noCredential bool) *http.Cookie {
 func memberPreviewSessionAs(t *testing.T, sub, role string, mm, noCredential bool) *http.Cookie {
 	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
-		V: oidc.SessionCodecVersion, Sub: sub, Email: memberPreviewAdminEmail, Role: role,
+		V: oidc.SessionCodecVersion, Sub: sub, Email: memberPreviewAdminEmail, Role: role, UserType: "standard",
 		MemberMode: mm, MemberModeNoCredential: noCredential,
 		Expiry: time.Now().UTC().Add(time.Hour),
 	})
@@ -264,7 +264,7 @@ func TestMemberPreview_SharedRosterDowngradesToThePlainMode(t *testing.T) {
 // docs/AUDIT-ACTIONS.md sentence false.
 func TestMemberPreview_RealMemberIsNeverGrantedThePosture(t *testing.T) {
 	srv, audit, _, _ := memberPreviewSrv(t)
-	member := memberPreviewSessionAs(t, "sub-real-member", oidc.RoleMember, false, false)
+	member := memberPreviewSessionAs(t, "sub-real-member", oidc.RoleUser, false, false)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true,"no_credential":true}`)
 	if w.Code != http.StatusOK {
@@ -288,7 +288,7 @@ func TestMemberPreview_RealMemberIsNeverGrantedThePosture(t *testing.T) {
 	if _, present := datum["no_credential"]; present {
 		t.Errorf("a real member's row carries no_credential: %v", datum)
 	}
-	if datum["real_role"] != oidc.RoleMember {
+	if datum["real_role"] != oidc.RoleUser {
 		t.Errorf("real_role = %v, want member", datum["real_role"])
 	}
 	// A member is never offered the control either.
@@ -440,11 +440,11 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 // is created inside the preview rather than refused, and the sandbox it
 // dispatches must carry no AWS SSO material.
 //
-// GREEN TODAY, deliberately, and it is a REGRESSION pin rather than a
-// reproduction: an exec run is not a model run, so no lane credentials it on
-// this tree either — there is no ungated run shape that resolves Bedrock today.
-// The value is the direction: if an exec lane ever starts resolving a model
-// credential, this case reds unless the preview moves with it. The first arm
+// Green by construction, and a pin on the direction rather than a reproduction:
+// an exec run is not a model run, so no lane credentials it — there is no
+// ungated run shape that resolves Bedrock. If an exec lane ever starts
+// resolving a model credential, this case reds unless the preview moves with
+// it. The first arm
 // below is what keeps it from being vacuous — the SAME fixture, on an ordinary
 // task run outside the preview, does put the admin's own session into a
 // sandbox, so "no AWS SSO material" is an observation and not an empty map.

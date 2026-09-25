@@ -70,13 +70,13 @@ type recordStore struct {
 	claimedRun    *uuid.UUID      // last ClaimWorkspaceActiveRun run id
 	clearedActive bool            // ClearWorkspaceActiveRun called
 	// heartbeat backs LatestAuditEventByAction — reconcileRecordRun's
-	// ebpfGroundtruthCaveat call (W20-W20-groundtruth-mapper-4) reads this to
+	// ebpfGroundtruthCaveat call reads this to
 	// stamp the sensor's coverage state onto the capture. nil (the default)
 	// means "no heartbeat ever" (ErrNotFound), same as a host with no sensor.
 	heartbeat *types.AuditEvent
 	// mergeErr, when set, is what MergeWorkspaceRequirements returns instead
-	// of applying `add` — the bug-record-1 regression seam (a store error on
-	// the widening AFTER the promotion marker CAS already committed).
+	// of applying `add` — the seam for a store error on the widening after
+	// the promotion marker CAS already committed.
 	mergeErr error
 }
 
@@ -272,7 +272,7 @@ func TestReconcileRecordRun_EmptyCaptureIsFailureNeverNoEgress(t *testing.T) {
 }
 
 // TestReconcileRecordRun_NeverStartedGetsDispatchHintNotNetworkingGuess is
-// W20-W20-capture-store-4: a record run whose SandboxRef is EMPTY never
+// A record run whose SandboxRef is empty never
 // reached CreateSandbox at all — it failed on the dispatch side (image build,
 // resource limits, a concurrent kill racing dispatch), never got a chance to
 // observe egress. Blaming the operator's proxy/WSL2 networking
@@ -464,7 +464,7 @@ func TestReconcileRecordRun_OpenEntryGetsNoCleanStamp(t *testing.T) {
 }
 
 // TestReconcileRecordRun_StampsEbpfGroundtruthCaveat is
-// W20-W20-groundtruth-mapper-4: before this, a capture's Caveats never said
+// Before this, a capture's Caveats never said
 // anything about the host eBPF sensor's own coverage — that state lived only
 // on the admin-only /healthz endpoint, nowhere an operator reviewing a
 // recording would see it. reconcileRecordRun must stamp the SAME state
@@ -616,15 +616,15 @@ func TestRecordWorkspace_Guards(t *testing.T) {
 	}
 }
 
-// TestRecordWorkspace_ClaimedButNotYetCreatedRunIsBusy is W20-W20-capture-
-// store-5: ClaimWorkspaceActiveRun CAS's ws.ActiveRunID onto the workspace
-// BEFORE Store.CreateRun persists the claiming run's own row (the clone-grant
-// FK needs the run row first). A second record request landing in that
-// window used to see GetRun(ActiveRunID) => ErrNotFound and read the old
-// `gerr == nil && !isTerminalRunState(...)` busy-check as "not busy" — an
-// indeterminate GetRun error must be treated as busy (only a CONFIRMED
-// terminal run may proceed), or the serial import-step gate is jumped into
-// two concurrent open-egress sandboxes.
+// TestRecordWorkspace_ClaimedButNotYetCreatedRunIsBusy:
+// ClaimWorkspaceActiveRun CAS's ws.ActiveRunID onto the workspace before
+// Store.CreateRun persists the claiming run's own row (the clone-grant FK
+// needs the run row first). A second record request landing in that window
+// sees GetRun(ActiveRunID) => ErrNotFound; that indeterminate GetRun error
+// must be treated as busy (only a confirmed terminal run may proceed), not
+// read as "not busy" by a `gerr == nil && !isTerminalRunState(...)` check, or
+// the serial import-step gate is jumped into two concurrent open-egress
+// sandboxes.
 func TestRecordWorkspace_ClaimedButNotYetCreatedRunIsBusy(t *testing.T) {
 	wsID, claimingRunID := uuid.New(), uuid.New()
 	ws := types.Workspace{
@@ -743,14 +743,13 @@ func TestPromoteRecordEgress_MergeRules(t *testing.T) {
 	}
 }
 
-// TestPromoteRecordEgress_MergeFailureDoesNotLeaveMarkerSet is the
-// bug-record-1 regression: on base 17455349, the EgressPromoted marker CAS
-// is written and committed BEFORE MergeWorkspaceRequirements — so a store
-// error from the merge (a concurrent-cap race, or any other failure) left
-// the record claiming a widening that never landed. The fix must return the
-// merge error to the caller (never a 200) AND leave the persisted marker at
-// its pre-click value, so a retry does not skip re-attempting the merge on
-// the mistaken belief it already happened.
+// TestPromoteRecordEgress_MergeFailureDoesNotLeaveMarkerSet: the
+// EgressPromoted marker CAS commits before MergeWorkspaceRequirements, so a
+// store error from the merge (a concurrent-cap race, or any other failure)
+// could leave the record claiming a widening that never landed. The handler
+// must return the merge error to the caller (never a 200) and leave the
+// persisted marker at its pre-click value, so a retry does not skip
+// re-attempting the merge on the mistaken belief it already happened.
 func TestPromoteRecordEgress_MergeFailureDoesNotLeaveMarkerSet(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	obs := recordmode.Observations{Domains: []recordmode.DomainObservation{
@@ -864,13 +863,13 @@ func TestPromoteRecordEgress_SkipsModelProviderAndBaselineHosts(t *testing.T) {
 	}
 }
 
-// TestPromoteRecordEgress_ZeroPromotedDoesNotSetEgressPromoted is W20-S1-1:
-// EgressPromoted used to be an unconditional `true` on every promote-egress
-// call, even one whose entire observed-allowed set is plumbing (never a
-// promotable candidate — see promotableHosts) or already covered, so
-// `promoted` stays empty. The card renders "Promoted" purely off this flag
-// (record-pane.tsx), so that used to claim success for a click that changed
-// nothing.
+// TestPromoteRecordEgress_ZeroPromotedDoesNotSetEgressPromoted:
+// EgressPromoted must not be an unconditional `true` on every
+// promote-egress call. A call whose entire observed-allowed set is plumbing
+// (never a promotable candidate — see promotableHosts) or already covered
+// leaves `promoted` empty, and the card renders "Promoted" purely off this
+// flag (record-pane.tsx), so it would claim success for a click that
+// changed nothing.
 func TestPromoteRecordEgress_ZeroPromotedDoesNotSetEgressPromoted(t *testing.T) {
 	runID, wsID := uuid.New(), uuid.New()
 	// Every observed+allowed host is either model-provider plumbing or

@@ -30,7 +30,7 @@ import (
 // is governance_nonescape_test.go's. What is here is everything decided about
 // the request SHAPE, which is the half no policy clamp can reach.
 
-// ─── fixtures ─────────────────────────────────────────────────────────────────
+// fixtures
 
 // holdProfile is an assigned profile whose tool_rules demand supervision, with
 // NO limits set — the limits and the derivation are independent mechanisms and a
@@ -71,7 +71,7 @@ func refusalBody(t *testing.T, w *httptest.ResponseRecorder) string {
 	return got.Error
 }
 
-// ─── the derivation ───────────────────────────────────────────────────────────
+// the derivation
 
 // TestEffectiveToolApprovals is the autonomy derivation and its three scopings.
 //
@@ -248,7 +248,7 @@ func TestGovernanceToolApprovalsOnCreate(t *testing.T) {
 	})
 }
 
-// ─── the limits ───────────────────────────────────────────────────────────────
+// the limits
 
 // TestGovernanceLimits covers the two GovernanceLimits booleans, and the
 // interactive one is why this test exists.
@@ -344,7 +344,7 @@ func TestGovernanceLimits(t *testing.T) {
 	})
 }
 
-// ─── G3: the seeded-image capImage bypass (PF-34) ─────────────────────────────
+// G3: the seeded-image capImage bypass (PF-34)
 
 // seedImageStore is govEscapeStore plus the one read the workspace_id door
 // needs: GetWorkspace.
@@ -415,8 +415,8 @@ func TestSeededImageCapabilityBypass(t *testing.T) {
 	}
 
 	t.Run("enforced + no grant: 403 byoi_member (the bug)", func(t *testing.T) {
-		// RED on today's tree: before the fix this is a 201 and the member is
-		// running an arbitrary image they hold no grant for.
+		// Without the gate this is a 201 and the member is running an
+		// arbitrary image they hold no grant for.
 		ws := baseImageWorkspace(memberSub, ref)
 		srv, _ := seedImageFixture(t, &capStore{enf: map[string]bool{capImage: true}}, ws)
 		w := launch(t, srv, ws)
@@ -468,7 +468,7 @@ func TestSeededImageCapabilityBypass(t *testing.T) {
 	})
 }
 
-// ─── the create path → dispatch hand-off ──────────────────────────────────────
+// the create path → dispatch hand-off
 
 // TestCreatePathWiresCeilingToDispatch is the create half of the dispatch-time
 // deny re-assertion, and it exists because NEITHER lane's own tests can see it:
@@ -531,7 +531,7 @@ func TestCreatePathWiresCeilingToDispatch(t *testing.T) {
 	})
 }
 
-// ─── the create-time workspace-egress warning ─────────────────────────────────
+// the create-time workspace-egress warning
 
 // TestCeilingDeniedWorkspaceEgressWarning: an operator APPROVED a host for a
 // workspace and the caller's profile DENIES it. Both decisions stand — the union
@@ -594,7 +594,7 @@ func TestCeilingDeniedWorkspaceEgressWarning(t *testing.T) {
 	}
 }
 
-// ─── G4: member-authored llm_cred at workspace create (PF-35) ─────────────────
+// G4: member-authored llm_cred at workspace create (PF-35)
 
 // TestMemberWorkspaceLLMCredRefused is G4 (PF-35). handleCreateWorkspace
 // assigned LLMCred with no gate at all, and the binding folds through
@@ -609,7 +609,7 @@ func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 	const body = `{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
-		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember), body)
+		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser), body)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("member create with llm_cred = %d, want 403: %s", w.Code, w.Body.String())
 	}
@@ -642,13 +642,13 @@ func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 	// A member creating a workspace WITHOUT the field is unaffected — the gate
 	// names one field, not the member.
 	w = doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
-		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember), `{"name":"plain"}`)
+		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser), `{"name":"plain"}`)
 	if w.Code != http.StatusCreated {
 		t.Errorf("member create without llm_cred = %d, want 201: %s", w.Code, w.Body.String())
 	}
 }
 
-// ─── §K: the two 0.7 capability kinds (PF-32, PF-33) ──────────────────────────
+// §K: the two 0.7 capability kinds (PF-32, PF-33)
 
 // govMemberSub is the member every §K test below launches as — the same
 // sub/group pair govSession stamps and capabilitySubjects resolves a `user`
@@ -732,7 +732,7 @@ func TestCapabilityAgentKind(t *testing.T) {
 	})
 }
 
-// ─── the integration kind, and the doctrine pin ───────────────────────────────
+// the integration kind, and the doctrine pin
 
 // integStore is govEscapeStore plus the one read the integration tiers need:
 // the site config that holds the deployment's integration rows.
@@ -904,7 +904,7 @@ func TestCapabilityIntegrationKind(t *testing.T) {
 	})
 }
 
-// ─── G5: the concurrent-run quota (PF-36) ─────────────────────────────────────
+// G5: the concurrent-run quota (PF-36)
 
 // quotaStore is govEscapeStore plus CountActiveRunsBy, counting the runs this
 // fixture ACTUALLY created rather than returning a canned number — so the cap is

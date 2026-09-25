@@ -236,6 +236,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
 		return
 	}
+	// A kept run is RUNNING with its agent stopped: nothing to attach to.
+	if runIsKept(run) {
+		writeError(w, http.StatusConflict, "run has ended; cannot attach")
+		return
+	}
 	if run.SandboxRef == "" {
 		writeError(w, http.StatusConflict, "run has no sandbox; cannot attach")
 		return

@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── CSRF: the same-origin guard on a COOKIE-authenticated mutating request ──
+// CSRF: the same-origin guard on a cookie-authenticated mutating request
 //
 // Two guards, one rule, pinned together. LocalMode has refused a cross-origin
 // mutating request since FIX #8's sibling (http.go's local arm) but nothing
@@ -176,7 +176,7 @@ func TestCSRFGuard(t *testing.T) {
 			wantOIDCRefused:  true,
 		},
 		{
-			// ACCEPTED BEHAVIOUR CHANGE (0.7.3), pinned so it is a decision and
+			// Accepted behaviour change (0.7.3), pinned so it is a decision and
 			// not a surprise: browsers treat localhost and 127.0.0.1 as two
 			// different SITES, so a page at http://localhost:<port> posting to
 			// http://127.0.0.1:<port> now carries Sec-Fetch-Site: cross-site
@@ -203,10 +203,11 @@ func TestCSRFGuard(t *testing.T) {
 			wantOIDCRefused:  true,
 		},
 		{
-			// RULE 3's OWN WORDS (S2-02): the CLI/API fallthrough is "no Origin
-			// AND no Sec-Fetch-Site". A browser that omits Origin on a same-site
+			// Rule 3's own words: the CLI/API fallthrough is "no Origin AND no
+			// Sec-Fetch-Site". A browser that omits Origin on a same-site
 			// top-level form POST — the sibling host on a shared parent domain,
-			// again — used to land in it, because only "cross-site" refused.
+			// again — must not land in it just because only "cross-site" is
+			// refused.
 			name:             "Sec-Fetch-Site: same-site with no Origin",
 			secFetchSite:     "same-site",
 			wantLocalRefused: true,
@@ -343,7 +344,7 @@ func TestCSRFGuard_BearerCallerIsNotRefused(t *testing.T) {
 	}
 }
 
-// TestCSRFGuard_EveryMutatingRouteIsFenced is the REGRESSION FENCE, and it
+// TestCSRFGuard_EveryMutatingRouteIsFenced is the route-wide fence, and it
 // hand-lists nothing. The table above drives one route (POST /auth/logout, the
 // most harmless mutation in the API); this walks authz_test.go's
 // chi.Walk-derived routeMatrix — the file's own doctrine, and the thing that

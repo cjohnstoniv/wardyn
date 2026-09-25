@@ -304,7 +304,7 @@ export function AuditScreen() {
     // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
     // events, so an event list structurally cannot show them — a dead sensor
     // reads exactly like a quiet one. health() never rejects.
-    healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
+    void healthApi.health().then((h) => setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined));
     return api.listAudit(runFilter || undefined).then(setEvents);
   }, [runFilter]);
 

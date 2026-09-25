@@ -231,12 +231,12 @@ func TestNewSessionRecorder_FlushesRetainedTail(t *testing.T) {
 	}
 }
 
-// TestNewSessionRecorder_ConcurrentWriteAndFinishRaceFree is the FIX #13 check
-// (run under `go test -race`): the recording tee (fed by the attach Read pump) is
-// written concurrently with a detach that flushes + reads + persists the same
-// buffer. Pre-fix, finish read bytes.Buffer.Bytes()/Len() (and the masker tail)
-// while the pump goroutine was still writing them — a data race the -race detector
-// flags. The single mutex in liveMaskWriter must serialise the two.
+// TestNewSessionRecorder_ConcurrentWriteAndFinishRaceFree (run under `go test
+// -race`): the recording tee (fed by the attach Read pump) is written concurrently
+// with a detach that flushes + reads + persists the same buffer. finish reads
+// bytes.Buffer.Bytes()/Len() (and the masker tail) while the pump goroutine may
+// still be writing them — a data race the -race detector flags unless the single
+// mutex in liveMaskWriter serialises the two.
 func TestNewSessionRecorder_ConcurrentWriteAndFinishRaceFree(t *testing.T) {
 	store, err := recording.NewFSStore(t.TempDir())
 	if err != nil {
@@ -252,7 +252,7 @@ func TestNewSessionRecorder_ConcurrentWriteAndFinishRaceFree(t *testing.T) {
 	tee, finish := srv.newSessionRecorder(types.AgentRun{ID: runID}, "race", runner.AttachOptions{Cols: 80, Rows: 24})
 
 	// Pump goroutine hammers the recording buffer, mirroring the attach Read pump
-	// that keeps writing until sess.Close (which, pre-fix, ran AFTER finish).
+	// that keeps writing until sess.Close.
 	started := make(chan struct{})
 	stop := make(chan struct{})
 	done := make(chan struct{})
@@ -421,12 +421,12 @@ func TestNewSessionRecorder_HarnessLoginRunIsNeverRecorded(t *testing.T) {
 }
 
 // TestNewSessionRecorder_OversizeCastTruncatedNotLost pins the bound on the
-// live-attach cast. It used to grow in the daemon's heap for the whole session
-// and then be REJECTED WHOLE by the store's own 64 MiB cap at close, so a long
-// interactive session's evidence was destroyed at exactly the moment it was
-// supposed to be persisted. Now the buffer stops at maxSessionCastBytes and what
-// was recorded up to that point is kept — still a well-formed asciicast (whole
-// event lines only), and flagged truncated in the audit trail.
+// live-attach cast. Unbounded, it would grow in the daemon's heap for the whole
+// session and then be rejected whole by the store's own 64 MiB cap at close,
+// destroying a long interactive session's evidence at exactly the moment it is
+// supposed to be persisted. The buffer stops at maxSessionCastBytes and what was
+// recorded up to that point is kept — still a well-formed asciicast (whole event
+// lines only), and flagged truncated in the audit trail.
 func TestNewSessionRecorder_OversizeCastTruncatedNotLost(t *testing.T) {
 	store, err := recording.NewFSStore(t.TempDir())
 	if err != nil {

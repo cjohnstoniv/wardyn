@@ -192,7 +192,7 @@ func TestAutonomySiteConfigIsReadOnceForGateAndUnion(t *testing.T) {
 // The gate grades the per-person Azure DevOps lane from the site config it read
 // at create; dispatch re-reads (siteConfigForDispatch) and authors the
 // credential from that SECOND read. So an admin who flips the provider row
-// between the two — `shared` to `per_user`, or adding the entra lane — used to
+// between the two — `shared` to `per_user`, or adding the entra lane — could
 // hand a run graded `secrets=none` the person's Entra bearer, on a rubric that
 // caps a powerful secret at a lower rung. The window is not a scheduling race:
 // it is the image resolve and the devcontainer/BYOI build inside
