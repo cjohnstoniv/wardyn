@@ -134,6 +134,11 @@ func TestReplaceProxy_NewProxyExitsAtConfigLoad(t *testing.T) {
 	}
 	old := f.containers[proxyContainerName(runID)]
 
+	// A fake-backed driver defaults proxySettle to 0; exercise the real
+	// settle window on the REPLACEMENT proxy's start below (set after the
+	// initial CreateSandbox above, so its own healthy-proxy start stays fast).
+	d.proxySettle = proxyStartSettle
+
 	// The replacement proxy reuses the OLD proxy's deterministic name, and
 	// ReplaceProxy inspects the OLD proxy once (for its labels) before
 	// removing it — that inspect must not consume the NEW container's

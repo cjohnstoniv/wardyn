@@ -196,6 +196,14 @@ type fakeDocker struct {
 	exitAfterInspects map[string]int
 	inspectCounts     map[string]int
 	logs              map[string][]byte
+
+	// startedAtOverride, keyed by container name, overrides ContainerStart's
+	// default (real, current-time) StartedAt for that container — used to
+	// simulate a daemon whose clock lags the host's (L1): a test sets an
+	// in-the-past value before Start to prove watchProxyExit measures its
+	// settle window from the watch's own start, never from a skewed
+	// StartedAt (driver_proxy_revive.go's proxySettleSince).
+	startedAtOverride map[string]time.Time
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -452,17 +460,16 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 		// this fast would leave ContainerWait to observe.
 		c.state = &container.State{Status: "exited", ExitCode: int(f.probeExitCode)}
 	} else {
-		// Backdated StartedAt: a REAL container's StartedAt is the instant
-		// ContainerStart returns, and watchProxyExit (driver_proxy_revive.go)
-		// requires Running to have HELD for proxyStartSettle before trusting
-		// it. Backdating here keeps every OTHER test's CreateSandbox fast. A
-		// container scripted via exitAfterInspects gets a FRESH StartedAt
-		// instead: it is modelling the real Running-then-dies race (F1), so
-		// its settle timer must actually run across the scripted Running
-		// observations rather than being satisfied by the first one.
-		startedAt := time.Now().Add(-time.Hour)
-		if _, scripted := f.exitAfterInspects[id]; scripted {
-			startedAt = time.Now()
+		// StartedAt defaults to real, current time — a Driver's proxySettle
+		// defaults to 0 for every fake-backed test driver (newWithClient),
+		// so the settle check is trivially satisfied regardless of this value
+		// UNLESS a test explicitly sets proxySettle back to a real duration,
+		// in which case the true current time is exactly what a real daemon
+		// would report. startedAtOverride lets a specific test (the L1 clock-
+		// skew regression) simulate a daemon whose clock lags the host's.
+		startedAt := time.Now()
+		if t, ok := f.startedAtOverride[id]; ok {
+			startedAt = t
 		}
 		c.state = &container.State{Status: "running", Running: true, StartedAt: startedAt.Format(time.RFC3339Nano)}
 	}
