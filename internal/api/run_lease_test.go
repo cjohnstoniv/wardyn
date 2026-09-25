@@ -44,8 +44,8 @@ func (s *leaseStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGr
 	return slices.Clone(s.caps), nil
 }
 
-func (s *leaseStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
-	return (&capStore{grants: s.caps}).ListCapabilityGrantsFor(ctx, users, groups)
+func (s *leaseStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
+	return (&capStore{grants: s.caps}).ListCapabilityGrantsFor(ctx, users, groups, userType)
 }
 
 func (s *leaseStore) ListGroupDenyGrants(ctx context.Context, kind string) ([]types.CapabilityGrant, error) {
