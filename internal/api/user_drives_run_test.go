@@ -668,7 +668,7 @@ func driveProbeShare(t *testing.T) (root string, st *driveStore, ctx context.Con
 		d.Writable = true
 	})
 	st = &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-	ctx = withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleMember), nil)
+	ctx = withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleUser), nil)
 	return root, st, ctx
 }
 
