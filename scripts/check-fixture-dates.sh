@@ -97,12 +97,16 @@ declare -A ALLOWLIST=(
   ["ui/e2e/recording.spec.ts"]=2
   ["ui/e2e/workspace-egress-tiers.spec.ts"]=3
   # #195-b: every ui/src file above this line was converted to test-clock-relative
-  # values (aheadByHours) or split into a dedicated scratch fixture, and dropped
-  # out of this allowlist entirely (0 literal dates left). These three keep a
-  # literal because it is genuinely display-only passthrough (never compared to
-  # the clock — see the "// passthrough, never compared to the clock" notes at
-  # each site): an older daemon's opaque `action` sentence rendered verbatim,
-  # with no `deadline` field for the client to parse or grade.
+  # values (aheadByHours) and dropped out of this allowlist entirely (0 literal
+  # dates left). These three keep a literal because it is genuinely
+  # display-only passthrough (never compared to the clock — see the
+  # "// passthrough, never compared to the clock" notes at each site): an
+  # older daemon's opaque `action` sentence rendered verbatim, with no
+  # `deadline` field for the client to parse or grade. model-access-banner.
+  # test.tsx's count of 2 also includes one match that isn't data at all: a
+  # code comment (line 147) that names the OLD literal in prose, explaining
+  # why the test below it now uses aheadByHours instead — matched by this
+  # script's regex incidentally, same as any other date-shaped text.
   ["ui/src/app/components/screens/new-run/new-run-rail.test.tsx"]=1
   ["ui/src/app/components/wardyn/model-access-banner.test.tsx"]=2
   ["ui/src/app/lib/model-access.test.ts"]=5

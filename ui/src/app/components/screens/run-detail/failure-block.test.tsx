@@ -167,7 +167,7 @@ describe("RunFailureBlock", () => {
 
   it("killed: names how far into the run it was killed, plus who and when on the audit row", () => {
     renderBlock("KILLED", [ev("run.kill", "success", { actor: "alice", actor_type: "human" })]);
-    // created_at 10:00 -> run.kill 10:26.
+    // CREATED -> run.kill EVENT_TIME, 26m apart.
     expect(screen.getByText(/An operator killed this run 26m 0s in\./)).toBeInTheDocument();
     expect(screen.getByText(/a killed run cannot resume/)).toBeInTheDocument();
     expect(screen.getByText(/run\.kill · success · alice/)).toBeInTheDocument();

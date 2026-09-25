@@ -137,7 +137,7 @@ describe("deriveIntegrations — AI providers", () => {
     // The member's OWN captured session still drives the SSO posture.
     const sso = baseStatus({
       bedrock: { ready: true, creds_present: false },
-      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(-1), expired: false }],
+      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(1), expired: false }],
     });
     expect(deriveIntegrations(sso, null, []).ai[0].posture.kind).toBe("session_expires");
     // Negative control: ready:false with region/model unset still reads region_model_unset.
@@ -155,7 +155,7 @@ describe("deriveIntegrations — AI providers", () => {
   it("Bedrock: an unexpired AWS SSO session reads 'Session expires HH:MM'", () => {
     const status = baseStatus({
       bedrock: { region: "us-east-1", model: "anthropic.claude-3", creds_present: false },
-      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(-1), expired: false }],
+      harness: [{ provider: "aws", captured: true, expires_at: aheadByHours(1), expired: false }],
     });
     const [row] = deriveIntegrations(status, null, []).ai;
     expect(row.bedrockLane).toBe("sso");
