@@ -45,7 +45,10 @@ export interface Me {
   method: string;
   operator: boolean;
   security_operator: boolean;
-  role: "admin" | "security_admin" | "member";
+  role: "admin" | "security_admin" | "user";
+  // The user type (0.8) this sign-in was given, with its display name. null
+  // for the admin token, local mode and API tokens, which carry none.
+  user_type?: { id: string; name: string } | null;
   email: string;
   // The IdP's display-name claim — "" outside SSO or when the IdP sent none,
   // absent on a pre-0.7.1 daemon. Display only: the header reads name, then
@@ -72,7 +75,7 @@ export interface Me {
   user_drive_denied_by_profile?: string;
   // "View as member" (0.7.4): this session is an ADMIN who asked to be treated
   // as a member. Every tier field above is already clamped — role reads
-  // "member", operator and security_operator read false — so nothing gates on
+  // "user", operator and security_operator read false — so nothing gates on
   // this; it exists so the shell can say which state you are in and keep the
   // way OUT on screen. Absent on a pre-0.7.4 daemon, which reads the same as
   // "off".
@@ -476,7 +479,7 @@ export const health = {
   // is refused on writes; see wardyn/operator-context.tsx for how the console
   // uses this to disable those controls instead of letting a viewer discover
   // the tier as a raw 403. `role` (B3) is the same B1-derived tier named
-  // directly — three-valued since 0.7 ("admin"/"security_admin"/"member");
+  // directly — three-valued since 0.7 ("admin"/"security_admin"/"user");
   // `email` is the OIDC claim (empty outside SSO).
   //
   // `security_operator` is the SECOND predicate (isSecurityOperator): admin OR

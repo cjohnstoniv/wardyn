@@ -64,6 +64,10 @@ function authErrorMessage(code: string): string {
       return SIGNIN.NO_ROLE;
     case "role_check_unavailable":
       return SIGNIN.ROLE_CHECK_UNAVAILABLE;
+    case "user_type_ambiguous":
+      return SIGNIN.USER_TYPE_AMBIGUOUS;
+    case "user_type_unknown":
+      return SIGNIN.USER_TYPE_UNKNOWN;
     case "claims_overage":
       return SIGNIN.CLAIMS_OVERAGE;
     case "oidc_transient":
