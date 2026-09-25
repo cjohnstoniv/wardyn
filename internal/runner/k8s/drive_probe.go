@@ -24,12 +24,14 @@ import (
 // only a caller running INSIDE a mounted pod could answer that, which is not
 // available before a sandbox exists (create, preflight, a /me poll).
 //
-// So this never claims DriveProbeReadable on evidence weaker than "the claim
-// exists and is Bound", and it never claims DriveProbeUnreadable at all — a
-// Pending or unreachable claim is not proof the agent uid cannot read it, it
-// is only proof this call could not tell. See DriveProbeUnknown's doc: a
-// probe that cannot see the storage must answer unknown, never a guess either
-// way.
+// So this NEVER claims DriveProbeReadable, on any evidence: a Bound claim is
+// proof the volume is provisioned and attachable, not proof the AGENT'S OWN
+// uid can read it once mounted (DriveProbeReadable's own contract,
+// runner.go), and this driver has no other evidence to reach for. It never
+// claims DriveProbeUnreadable either — a Pending or unreachable claim is not
+// proof the agent uid cannot read it, it is only proof this call could not
+// tell. Every arm answers DriveProbeUnknown: a probe that cannot see the
+// storage must say so, never guess either way (DriveProbeUnknown's own doc).
 func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner.DriveProbe, error) {
 	claim, err := d.clientset.CoreV1().PersistentVolumeClaims(d.cfg.Namespace).
 		Get(ctx, drive.ObjectName, metav1.GetOptions{})
@@ -42,7 +44,12 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 			Detail: fmt.Sprintf("get claim %q: %v", drive.ObjectName, err)}, nil
 	}
 	if claim.Status.Phase == corev1.ClaimBound {
-		return runner.DriveProbe{Result: runner.DriveProbeReadable}, nil
+		// Bound says the volume is provisioned and attachable — nothing about
+		// whether the AGENT'S OWN uid can read it once mounted (DriveProbeReadable's
+		// own contract, runner.go). Only a caller running inside a mounted pod
+		// could answer that, and none exists yet at create/preflight/`/me` — so
+		// this stays Unknown even on the positive case, never a guessed pass.
+		return runner.DriveProbe{Result: runner.DriveProbeUnknown, Detail: "claim Bound"}, nil
 	}
 	// Found but not (yet) Bound: PENDING/LOST is a fact about provisioning,
 	// not about read permission, so it is no more a proof of unreadability
