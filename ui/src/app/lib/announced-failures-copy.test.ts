@@ -19,8 +19,8 @@ import { parseFrozenTables } from "./copy-doc-parity";
 // Owner ruling 2026-09-25 (#726): this doc has no single owning module — its
 // 8 rows are bound here across 4 real modules (new-run-rail.ts, wardyn/
 // copy.ts, recording-copy.ts) plus a 5th, audit-copy.ts, created by this same
-// ruling to carry AUDIT.MEMBER_FEED_TITLE, which was an inline JSX literal at
-// audit.tsx:529 with no exported constant.
+// ruling to carry AUDIT.MEMBER_FEED_TITLE, which was an inline JSX literal in
+// audit.tsx's AuditScreen with no exported constant.
 //
 // Two doc-specific quirks, normalized here rather than in the shared parser:
 //   - The Key cell carries a trailing "(file.ts)" annotation

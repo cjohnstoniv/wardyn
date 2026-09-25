@@ -35,7 +35,7 @@ const DOC = resolve(process.cwd(), "../docs/design/admin-access-canon.md");
 // spurious "Id" -> "String" row (the literal header text), filtered out here
 // rather than in the shared parser.
 const rawDoc = parseFrozenTables(DOC, /^## Frozen strings/);
-const doc = new Map([...rawDoc].filter(([key]) => key !== "Id"));
+const doc = new Map([...rawDoc].filter(([key, value]) => !(key === "Id" && value === "String")));
 
 // SIGNIN_HELP.COUNTER is a function ((n: number) => `${n} / 1000`); the doc
 // spells its placeholder inline as "{n}" rather than the `KEY(args)` shape

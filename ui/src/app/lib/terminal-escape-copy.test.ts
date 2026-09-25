@@ -32,7 +32,9 @@ const DOC = resolve(process.cwd(), "../docs/design/terminal-escape-canon.md");
 const stripNote = (s: string): string => s.replace(/ \([^)]*\)$/, "");
 
 const rawDoc = parseFrozenTables(DOC, /^## Strings/);
-const doc = new Map([...rawDoc].filter(([key]) => key !== "Constant").map(([key, value]) => [key, stripNote(value)]));
+const doc = new Map(
+  [...rawDoc].filter(([key, value]) => !(key === "Constant" && value === "Value")).map(([key, value]) => [key, stripNote(value)]),
+);
 
 // Owner ruling 2026-09-25 (#726): canon follows the app. RECONNECTING_HINT
 // used to diverge — the doc still promised "Keystrokes are held until the
