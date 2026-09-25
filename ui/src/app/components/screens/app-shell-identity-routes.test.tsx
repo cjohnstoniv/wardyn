@@ -160,7 +160,7 @@ describe("AppShell — a settled-but-unknown identity gets no route", () => {
     expect(screen.queryByRole("link", { name: /^Audit/ })).toBeNull();
   });
 
-  it("a RESOLVED operator is unchanged: admin nav, admin route, Settings link", async () => {
+  it("a RESOLVED operator is unchanged: admin nav, admin route, Settings in the rail", async () => {
     stubMe({
       principal: "root@wardyn.local",
       method: "token",
@@ -177,11 +177,8 @@ describe("AppShell — a settled-but-unknown identity gets no route", () => {
       screen.getAllByRole("link", { name: /^Audit/ }).length,
     ).toBeGreaterThan(0);
 
-    await userEvent.setup().click(accountTrigger());
-    const menu = screen.getByRole("menu");
-    expect(
-      within(menu).getByRole("menuitem", { name: /Settings/ }),
-    ).toBeInTheDocument();
+    // M-2: Settings left the avatar menu for the rail's lower slot.
+    expect(screen.getAllByRole("link", { name: /^Settings/ }).length).toBeGreaterThan(0);
   });
 });
 

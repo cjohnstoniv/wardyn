@@ -295,7 +295,7 @@ test.describe("member Getting Started (mocked /me role)", () => {
 });
 
 // Sibling negative control: the SAME route, unspliced (the harness's real
-// admin session) — the operator funnel, the Demos entry, and none of the
+// admin session) — the operator funnel, and none of the
 // member-only section titles.
 test.describe("admin session at /setup (unmocked — negative control)", () => {
   test.beforeEach(async ({ page }) => {
@@ -310,19 +310,11 @@ test.describe("admin session at /setup (unmocked — negative control)", () => {
     });
   });
 
-  test("the admin still sees the barrier step, Demos, and no member sections", async ({ page }) => {
+  test("the admin still sees the barrier step, and no member sections", async ({ page }) => {
     await gotoConsole(page);
     await navToRoute(page, "/setup");
 
     await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible();
-
-    // /setup renders the funnel's own <header> inside the shell, so scope to the
-    // shell's top bar (the first header in DOM order) before taking the last
-    // button — the account-menu trigger. An unscoped .last() lands on a funnel
-    // button and no menu ever opens.
-    await page.locator("header").first().getByRole("button").last().click();
-    const menu = page.getByRole("menu");
-    await expect(menu.getByText("Demos")).toBeVisible();
 
     for (const title of MEMBER_SECTION_TITLES) {
       await expect(page.getByRole("heading", { name: title })).toHaveCount(0);

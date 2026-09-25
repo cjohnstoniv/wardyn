@@ -51,6 +51,7 @@ import { cn } from "../ui/utils";
 import { Field, Switch } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { PageHeader } from "../wardyn/page-header";
+import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
@@ -265,7 +266,7 @@ export function PermissionsScreen() {
 
   return (
     <div className="mx-auto max-w-[1120px] px-6 py-6">
-      <PageHeader title={PERM.TITLE} description={PERM.LEAD} />
+      <PageHeader title={PERM.TITLE} description={PERM.LEAD} actions={<PreviewAsNewUser />} />
 
       <div className="space-y-2">
         <Fact icon={ShieldCheck}>{PERM.DOCTRINE}</Fact>

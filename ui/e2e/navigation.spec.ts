@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, mockMemberRole, navTo, navToRoute, sidebarLink, type NavLabel } from "./fixtures";
+import { test, expect, gotoConsole, mockMemberRole, navTo, sidebarLink, type NavLabel } from "./fixtures";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { HEALTH_POLL_MS } from "../src/app/App";
@@ -11,12 +11,14 @@ import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 
 // Navigation + theme + error-boundary coverage for the Wardyn admin console.
 //
-// The shell (app-shell.tsx) renders a FLAT eight-item sidebar — Runs, Approvals,
-// Workspaces, Policies, Permissions, Secrets, Audit, Recordings — of react-router
-// <NavLink>s (role="link"), with no group headings, plus Settings last under a
-// divider, admin only (#217, #460 Q460-1 — it also keeps its long-standing
-// account-menu entry for every role, so existing muscle memory doesn't
-// break). SSH keys and Demos remain account-menu only.
+// The shell (app-shell.tsx) renders one flat sidebar per view (M-2, packet
+// M-A) of react-router <NavLink>s (role="link"), with no group headings. The
+// Admin view: Runs, Approvals, Workspaces, Policies, Governance, Permissions,
+// Secrets, Audit, Recordings, then Setup and Settings under a divider (#217's
+// slot). The User view: Runs, Approvals, Workspaces, then Getting started and
+// Your account. The harness is a single-operator install, so the URL is the
+// view: gotoConsole(page, "admin") lands in the Admin view. The avatar menu
+// holds identity and Sign out only (view-switch.spec.ts).
 // The top bar carries a "Toggle theme" button (aria-label) and no posture
 // chips (0.7.3 F6 removed the Fence/NetworkPolicy chips — posture lives on
 // the setup Environment step). Each screen supplies its own <h1> via
@@ -63,8 +65,11 @@ const SIDEBAR_LABELS: NavLabel[] = [
   "Recordings",
 ];
 
-async function expectSidebarMounted(page: import("@playwright/test").Page) {
-  for (const label of SIDEBAR_LABELS) {
+// The User view's sidebar, the one "/" lands in once onboarded (D1).
+const USER_SIDEBAR_LABELS: NavLabel[] = ["Runs", "Approvals", "Workspaces", "Getting started", "Your account"];
+
+async function expectSidebarMounted(page: import("@playwright/test").Page, labels = SIDEBAR_LABELS) {
+  for (const label of labels) {
     await expect(sidebarLink(page, label)).toBeVisible();
   }
 }
@@ -85,11 +90,11 @@ test.describe("navigation + shell", () => {
     // are present on boot.
     await expect(page.getByRole("heading", { name: "Runs", level: 1 })).toBeVisible();
     await expect(page.getByText(/each confined behind its own barrier/i)).toBeVisible();
-    await expectSidebarMounted(page);
+    await expectSidebarMounted(page, USER_SIDEBAR_LABELS);
   });
 
   test("every sidebar destination loads its screen heading + content", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     for (const dest of DESTINATIONS) {
       await navTo(page, dest.label);
       // The screen's own <h1> title (PageHeader renders an h1, distinct from the
@@ -105,7 +110,7 @@ test.describe("navigation + shell", () => {
   });
 
   test("the app shell (sidebar) stays mounted across navigation", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     // Capture the Runs sidebar link handle, then navigate the full circuit and
     // back; the same shell element must remain attached the entire time.
     const runsNav = sidebarLink(page, "Runs");
@@ -127,7 +132,7 @@ test.describe("navigation + shell", () => {
   });
 
   test("navigating away from a screen and back re-renders it", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
 
     // Boot lands on Runs already; leave to Audit, then come back to Runs.
     await navTo(page, "Runs");
@@ -146,7 +151,7 @@ test.describe("navigation + shell", () => {
   });
 
   test("the active sidebar item reflects the current screen", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     // The seeded backend has PENDING approvals; the Approvals entry must exist
     // and be navigable. Clicking it lands on the Approvals screen.
     await navTo(page, "Approvals");
@@ -157,67 +162,46 @@ test.describe("navigation + shell", () => {
     await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toHaveCount(0);
   });
 
-  // #217 — Settings used to live ONLY in the account menu; it now sits last in
-  // the sidebar too, under a divider (the mock's binding default), and takes
-  // you to the same screen the account-menu entry does.
-  test("#217 — Settings is last in the sidebar, after Recordings, and opens the real screen", async ({ page }) => {
-    await gotoConsole(page);
+  // #217 — Settings sits last in the Admin view's rail, under a divider, with
+  // Setup above it (M-2, packet M-A).
+  test("#217 — Settings is last in the sidebar, after Setup and Recordings, and opens the real screen", async ({ page }) => {
+    await gotoConsole(page, "admin");
     // Order is the contract: within the desktop rail, Settings is the LAST
-    // link — one past Recordings — not merely present somewhere in the list.
+    // link, Setup above it, Recordings above that.
     const rail = page.locator("aside").getByRole("link");
     const names = await rail.allTextContents();
     expect(names[names.length - 1]).toMatch(/^Settings/);
-    expect(names[names.length - 2]).toMatch(/^Recordings/);
+    expect(names[names.length - 2]).toMatch(/^Setup/);
+    expect(names[names.length - 3]).toMatch(/^Recordings/);
 
     await navTo(page, "Settings");
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
     await expect(page.getByText(/This host, what runs your agents/i)).toBeVisible();
   });
 
-  // #460 (Q460-1): Settings joined the sidebar (#217) as an ADMIN-ONLY entry
-  // — a member's own three-item nav (Runs/Approvals/Workspaces) stays exactly
-  // as small as it was. The route and the account-menu entry are unchanged
-  // for a member (Q460-2, "Members see no change" is about the SIDEBAR only).
-  // M-1b: /settings is deleted — a member's route is now /account (an admin's
-  // is /admin/settings, pinned by the M-1b tests below).
-  test("#460 — Settings is in the sidebar for an admin, not for a member", async ({ page }) => {
+  // M-1b — /settings is deleted, and the rail's lower slot splits by view: the
+  // Admin view's Settings is /admin/settings, the User view's Your account is
+  // /account. Both mount the same screen until M-5, so the h1 alone can't tell
+  // them apart — the URL is the pin, and a user must never meet the refusal.
+  // M-2 slimmed the avatar menu, so the rail is the one door.
+  test("M-1b — as admin, the sidebar Settings lands on /admin/settings", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navTo(page, "Settings");
+    await expect(page).toHaveURL(/\/admin\/settings$/);
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    await page.locator("header").getByRole("button").last().click();
+    await expect(page.getByRole("menu").getByRole("menuitem", { name: "Settings" })).toHaveCount(0);
+  });
+
+  test("M-1b — as a user, the sidebar Your account lands on /account, never the refusal", async ({ page }) => {
     await mockMemberRole(page);
     await gotoConsole(page);
     await expect(sidebarLink(page, "Settings")).toHaveCount(0);
-    // Still reachable by route and from the account menu — only the sidebar
-    // entry is gone.
-    await navToRoute(page, "/account");
-    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
-  });
-
-  // M-1b — /settings is deleted, and the two Settings doors split by role: an
-  // admin tier lands on the Admin view's /admin/settings, a user on their own
-  // /account. Both mount the same screen today, so the h1 alone can't tell
-  // them apart — the URL is the pin, and a user must never meet the refusal.
-  test("M-1b — as admin, the sidebar and account-menu Settings both land on /admin/settings", async ({ page }) => {
-    await gotoConsole(page);
-    await navTo(page, "Settings");
-    await expect(page).toHaveURL(/\/admin\/settings$/);
-    await navTo(page, "Runs");
-    await page.locator("header").getByRole("button").last().click();
-    await page.getByRole("menu").getByRole("menuitem", { name: "Settings" }).click();
-    await expect(page).toHaveURL(/\/admin\/settings$/);
-    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
-  });
-
-  // M-1b — #460 above already pins that a member has no sidebar Settings
-  // entry at all, so this covers the account-menu-only door open to a
-  // member: /account, never the refusal.
-  test("M-1b — as a user, the account-menu Settings lands on /account, never the refusal", async ({ page }) => {
-    await mockMemberRole(page);
-    await gotoConsole(page);
-    await page.locator("header").getByRole("button").last().click();
-    await page.getByRole("menu").getByRole("menuitem", { name: "Settings" }).click();
+    await navTo(page, "Your account");
     await expect(page).toHaveURL(/\/account$/);
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
     await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toHaveCount(0);
   });
-
 
   // B1 — the sidebar itself is the surface the fail-open bug widened: a
   // settled-but-unknown /me used to render the FULL admin nav (every item in
@@ -238,7 +222,7 @@ test.describe("navigation + shell", () => {
     await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
     // #217 — the sidebar Settings link is gated on the same expression as the
     // account menu's own entry, so it disappears here too.
-    for (const label of [...SIDEBAR_LABELS, "Workspaces", "Settings"] as NavLabel[]) {
+    for (const label of [...SIDEBAR_LABELS, ...USER_SIDEBAR_LABELS, "Setup", "Settings"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });
@@ -343,7 +327,7 @@ test.describe("theme toggle", () => {
   });
 
   test("theme choice persists across navigation", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     const toggle = page.getByRole("button", { name: "Toggle theme" });
 
     // Switch to light, then navigate to another screen.
@@ -376,7 +360,7 @@ test.describe("mobile navigation drawer", () => {
     // gotoConsole waits on the DESKTOP sidebar link — below md that aside is
     // hidden entirely (md:flex), so the viewport switch has to come AFTER
     // landing, not before (the mobile hamburger only exists once mounted).
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await page.setViewportSize({ width: 667, height: 375 });
     await page.getByRole("button", { name: "Open navigation menu" }).click();
     const drawer = page.getByRole("dialog");
@@ -389,7 +373,8 @@ test.describe("mobile navigation drawer", () => {
     const box = await recordings.boundingBox();
     expect(box, "Recordings link boundingBox").not.toBeNull();
     expect(box!.y, "Recordings top edge").toBeGreaterThanOrEqual(0);
-    expect(box!.y + box!.height, "Recordings bottom edge").toBeLessThanOrEqual(375);
+    // +1: scrolled flush to the sheet's bottom, the edge lands on a sub-pixel.
+    expect(box!.y + box!.height, "Recordings bottom edge").toBeLessThanOrEqual(376);
 
     await recordings.click();
     await expect(page.getByRole("heading", { name: "Recordings", level: 1 })).toBeVisible();
@@ -413,7 +398,7 @@ test.describe("header compaction at phone width", () => {
     }));
     expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.innerWidth);
 
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await expect(userMenuTrigger).toBeVisible();
     await expect(userMenuTrigger).toBeInViewport();
   });
@@ -453,7 +438,7 @@ test.describe("error boundary (no spurious fallback)", () => {
     // wrong". The seeded backend exposes runs in ALL nine RunStates (incl. the
     // COMPLETED-state value that previously threw during render). Visiting every
     // screen must NOT trip the boundary — proving the fail-soft rendering holds.
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     for (const dest of DESTINATIONS) {
       await navTo(page, dest.label);
       await expect(page.getByRole("heading", { name: dest.heading, level: 1 })).toBeVisible();

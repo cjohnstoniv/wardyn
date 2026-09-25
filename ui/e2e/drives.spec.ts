@@ -446,7 +446,7 @@ test.describe("drives — the door is a governance limit, not a drives control",
   const DOOR = "no-drives-here";
 
   test("the profile editor's third limit shuts it, and the profiles table chips it", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
     await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
 
@@ -491,13 +491,14 @@ test.describe("drives — the door is a governance limit, not a drives control",
 //    authorization is Go's (the operatorOnly route group).
 // ---------------------------------------------------------------------------
 
-test.describe("drives — the registry is SUPER's, and it has no nav item for anyone", () => {
+test.describe("drives — the registry is SUPER's, and no super admin's nav lists it", () => {
   test("an admin reaches it from Workspaces and from the Settings card — and never from the sidebar", async ({
     page,
   }) => {
     await gotoConsole(page);
-    // There is no Drives nav entry at all: the sidebar's NAV_ITEMS never grew
-    // one, on purpose (§6) — the two entry points below are the whole door.
+    // No Drives nav entry for a super admin, in either view (§6): the two entry
+    // points below are the whole door. Only a security admin's Admin view
+    // lists it, for its grants and preview (packet M-A, view-switch.spec.ts).
     await expect(page.getByRole("link", { name: new RegExp(`^${DRIVES.TITLE}`) })).toHaveCount(0);
 
     await navTo(page, "Workspaces");

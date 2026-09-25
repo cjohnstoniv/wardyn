@@ -130,7 +130,7 @@ function uniqueName(prefix: string) {
 // ---- specs ---------------------------------------------------------------
 
 test.beforeEach(async ({ page }) => {
-  await gotoConsole(page);
+  await gotoConsole(page, "admin");
   await navTo(page, "Policies");
   // Screen header proves we navigated.
   await expect(page.getByRole("heading", { name: "Policies", exact: true })).toBeVisible();
@@ -526,7 +526,7 @@ test.describe("Policies — member and security-admin reads", () => {
     page,
   }) => {
     await mockSecurityAdminRole(page);
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Policies");
     await expect(page.getByRole("heading", { name: "Policies", level: 1 })).toBeVisible();
     await expect(page.getByText(OPERATOR_ONLY_REASON).first()).toBeVisible();

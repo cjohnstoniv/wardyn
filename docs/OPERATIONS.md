@@ -2192,7 +2192,7 @@ One FIELD rides beside the reason since 0.7.4: `member_mode: true`, on every
 ADMIN-TIER `403` below — the two `requireOperator` / `requireSecurityOperator`
 chokepoints and the in-handler refusals that raise the same two reasons — when
 the refused caller is an admin exercising
-[view as member](#exercising-member-mode-as-an-admin). It is a marker, not a
+[the User view](#exercising-member-mode-as-an-admin). It is a marker, not a
 reason — the `reason`, the status code and the body are unchanged, and the key
 is absent entirely for an ordinary member. A burst of denials carrying it is an
 admin walking the member path, not an incident.
@@ -2292,14 +2292,16 @@ per-user roles or multi-org depth — not the governance itself.
 You have an admin session and you want to see what a member sees. There are two
 ways, they answer different questions, and they compose.
 
-**1. The toggle — "view as member".** The account menu (top right) offers
-**View as member** to a signed-in SSO admin. It sets a flag on your EXISTING
-session cookie; your role is never rewritten, only the *effective* role your
-requests resolve to, and only downward. The console reloads and you land
-exactly where a member lands: the member nav, the member Getting Started, a
-`GET /me` answering `operator: false`, and every operator-only route 403-ing.
-A persistent banner says so on every screen and carries the way back out
-(**Exit member mode**). Every audit row the session writes still names **your
+**1. The switch — the User view.** The **Console view** switch beside the
+wordmark offers **Admin view** | **User view** to a signed-in SSO admin. Choosing
+**User view** sets a flag on your EXISTING session cookie; your role is never
+rewritten, only the *effective* role your requests resolve to, and only downward.
+The console reloads and you land exactly where a user lands: the User-view nav,
+the user's Getting Started, a `GET /me` answering `operator: false`, and every
+operator-only route 403-ing. The pressed **User view** segment says so on every
+screen, and **Admin view** is the way back; there is no band, because the User
+view is a normal state. Other tabs follow the session into the same view. Every
+audit row the session writes still names **your
 own sub** — this is not impersonation, and there is no way to become anybody
 else. The transition itself is audited as `auth.member_mode`
 (`enabled`, `real_role`, and `no_credential` on the preview below), and each `403` an **admin-tier gate** raises while the
@@ -2310,16 +2312,17 @@ rather than as an incident. (Denials with a *different* `reason` —
 an ungranted capability, a foreign resource — are the ones a member would meet
 identically, and carry no marker.)
 
-**Both admin tiers get the control** — a `security_admin` as well as a super
+**Both admin tiers get the switch** — a `security_admin` as well as a super
 admin — and both clamp to `user`, because the clamp knows only one direction;
-exiting restores whichever tier you were actually signed in as. It is offered
-over SSO only: the admin token, local mode and a deployment with no identity
-provider are one shared credential with no per-person role to pause, so there is
-nothing to pause and the route answers those callers `400`.
+exiting restores whichever tier you were actually signed in as. The switch is
+shown on every install that has both views. On a single-operator install (local
+mode, or the admin token with no identity provider) it only changes the URL:
+that is one shared credential with no per-person role to pause, so nothing is
+clamped or POSTed, and `POST /me/member-mode` answers those callers `400` if
+called directly.
 
-**The no-credential preview — "view as a new member (not signed in)".** The
-same menu offers a second entry, **View as a new member (not signed in)**. It is
-the plain toggle plus one thing: your OWN captured AWS SSO session reads as
+**The no-credential preview — "Preview as a new user".** The Permissions page
+header offers **Preview as a new user**. It is the User view plus one thing: your OWN captured AWS SSO session reads as
 absent for the rest of the session. On a `per_user` deployment that is the state
 every new member is in before they sign in, and it is the one state the plain
 toggle structurally cannot show — it clamps your role and leaves your subject
@@ -2335,12 +2338,11 @@ and comes back the moment you exit. The transition is audited as
 Inside the preview, **signing in is refused** — `POST /setup/harness-login`
 answers `409` while the posture is on, deliberately: the preview shows a new
 member's STATE, not their flow, and a sign-in completed there would capture a
-credential against the admin's own principal. Both the banner (visibly, since
-the 0.7.5 fix wave) and its tooltip say so, and the sign-in pane offers no "Try
+credential against the admin's own principal. The preview's band says so, and the sign-in pane offers no "Try
 again" for that refusal — the way out is to exit the mode.
 
-**It appears only where the org gives each person their own sign-in.** The menu
-entry is offered, and the posture granted, only when the model-access agent's
+**It appears only where the org gives each person their own sign-in.** The
+button is offered, and the posture granted, only when the model-access agent's
 roster row is `per_user` — on a `shared` deployment there is no per-member
 sign-in to be missing, so the entry does not exist and a request for it enters
 the plain mode instead (`GET /me` publishes `member_preview_available`, and the
@@ -2401,18 +2403,15 @@ people's runs is registered outside the mode.
 > identity — recipe below. The two compose: toggle for the fast look, second
 > identity for the proof.
 >
-> **Ceiling 4, and why the tooltip stops short of naming the other item.** The
-> *second* posture — **View as a new member (not signed in)** — is what shows the
-> not-signed-in state, and it is reached from the account menu **before** entering
-> member mode: both menu items disappear while either mode is on, and the item is
-> not offered at all on a deployment whose roster row is `shared` (there is
-> nothing for the preview to hide) or against a pre-0.7.5 daemon
+> **Ceiling 4, and the other posture.** The *second* posture — **Preview as a
+> new user** — is what shows the not-signed-in state, and it is reached from the
+> Permissions header in the **Admin view**: it is not offered from inside the
+> User view, and not at all on a deployment whose roster row is `shared` (there
+> is nothing for the preview to hide) or against a pre-0.7.5 daemon
 > (`member_preview_available`, `internal/api/me.go`, is ANDed with the caller's
 > EFFECTIVE (clamped) admin tier — the same clamp that made ceiling 4 true in
-> the first place, so the entry vanishes from the menu the instant either mode
-> clamps `isOperator`/`isSecurityOperator` false).
-> So the ceiling states the limit and stops; it does not point at a control that
-> is, at that moment, not on screen. Inside that second posture the ceiling reads
+> the first place, so the button is gone the instant either posture clamps
+> `isOperator`/`isSecurityOperator` false). Inside that second posture the ceiling reads
 > the other way round: your sign-in is *hidden, not removed*, and a rolling
 > upgrade (ceiling 3) hides nothing at all.
 >
@@ -2429,8 +2428,8 @@ people's runs is registered outside the mode.
 > does not refuse harness-login — so *"sign-in is refused inside the preview"*
 > does not hold mid-upgrade. In the other direction a 0.7.5 console POSTing
 > `no_credential` to a 0.7.4 replica gets a `400` from the strict body decode
-> (`DisallowUnknownFields`), the mode is NOT entered, and the menu item says so;
-> the plain toggle keeps working throughout, because the console sends the key
+> (`DisallowUnknownFields`), the mode is NOT entered, and the button says so;
+> the switch keeps working throughout, because the console sends the key
 > only for the new posture. Finish the rollout before you rely on what you see.
 
 Note the name collision: the `WARDYN_USER_DESKTOP` environment variable
@@ -2726,7 +2725,7 @@ writable, though a row stored under an earlier release still loads, still sits i
 `SiteConfig`, and is still injected by `internal/api/integrations_run.go`; and
 `azure_openai` is gone as a kind.
 
-**Settings** (account menu) is the one surface for these — a Model provider card,
+**Settings** (the Admin view's sidebar) is the one surface for these — a Model provider card,
 a radio group over concrete lanes; the standalone `/integrations` page is deleted.
 **The Git host card retired in 0.7.2.** Its three git
 credential lanes (GitHub App, PAT, SSH key) now render INSIDE the provider row
