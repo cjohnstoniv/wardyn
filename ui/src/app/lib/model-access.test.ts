@@ -190,6 +190,14 @@ describe("resolveDoor — which door an entrance opens", () => {
     expect(resolveDoor(noDefault, { login: "aws" }, "user")).toMatchObject({ provider: { id: "bedrock-dev" } });
   });
 
+  it("a login request skips a turned-off provider of its kind, default or first", () => {
+    const off = { ...bedrock, id: "bedrock-off", name: "Bedrock (off)", disabled: true };
+    const first = providerStatus([{ provider: off }, { provider: bedrock }]);
+    expect(resolveDoor(first, { login: "aws" }, "user")).toMatchObject({ provider: { id: "bedrock-prod" } });
+    const offDefault = providerStatus([{ provider: off, defaultFor: ["claude-code"] }, { provider: bedrock }]);
+    expect(resolveDoor(offDefault, { login: "aws" }, "user")).toMatchObject({ provider: { id: "bedrock-prod" } });
+  });
+
   it("a login request with no provider of its kind stays today's door (the server's refusal says where to go)", () => {
     const status = providerStatus([{ provider: gateway, defaultFor: ["claude-code"] }]);
     expect(resolveDoor(status, { login: "aws" }, "user")).toEqual({ kind: "legacy", login: "aws" });

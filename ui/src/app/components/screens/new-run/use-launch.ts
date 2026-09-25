@@ -151,8 +151,11 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
         void navigate(`/runs/${encodeURIComponent(created.id)}`);
       }
     } catch (e) {
-      const sentence = getErrorMessage(e) || "Failed to launch run.";
-      if (!mounted.current) return sentence;
+      const server = getErrorMessage(e);
+      // B9 renders the SERVER's sentence verbatim: with none, the strip says
+      // nothing rather than showing this screen's own fallback.
+      if (!mounted.current) return server || undefined;
+      const sentence = server || "Failed to launch run.";
       setError(sentence);
       setErrorSeq((n) => n + 1);
       setCredentialRefused(isCredentialRefusal(e));

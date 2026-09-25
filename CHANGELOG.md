@@ -544,7 +544,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   sent and stores it through `/model-providers/{id}/credential`. The shell strip then lists what
   needs the person per provider (packet MP-D B1–B5, B8 from two), with "Not now" per provider,
   and shows a relaunch refused after its New Run screen was gone (B9). Installs with no model
-  providers, and the Admin view, keep today's door and strip.
+  providers keep today's door and strip; on an install with model providers the Admin view opens
+  today's door and shows no strip.
 
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and

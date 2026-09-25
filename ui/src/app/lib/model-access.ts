@@ -239,7 +239,7 @@ export function resolveDoor(
     const p = providers.find((v) => v.id === request.provider);
     return p && status ? providerDoor(status, p) : null;
   }
-  const ofKind = providers.filter((p) => SIGN_IN_KINDS[p.kind] === request.login);
+  const ofKind = providers.filter((p) => !p.disabled && SIGN_IN_KINDS[p.kind] === request.login);
   const p = ofKind.find((v) => v.default_for?.includes(MODEL_ACCESS_AGENT)) ?? ofKind[0];
   return p && status ? providerDoor(status, p) : { kind: "legacy", login: request.login };
 }
