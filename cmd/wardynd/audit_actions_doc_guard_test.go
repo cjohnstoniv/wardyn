@@ -561,6 +561,11 @@ func TestAuditActionsDoc_Grammar(t *testing.T) {
 	if !ok {
 		t.Fatal(`docs/AUDIT-ACTIONS.md has no "## Renamed in 0.8" heading — this guard's scope boundary moved; re-anchor it`)
 	}
+	// One heading: this guard and the forward guard both cut at the first, so a
+	// second copy would move their boundary without either noticing.
+	if n := strings.Count(string(raw), "\n## Renamed in 0.8\n"); n != 1 {
+		t.Fatalf(`docs/AUDIT-ACTIONS.md has %d "## Renamed in 0.8" headings, want 1 — fold them into one section`, n)
+	}
 
 	verbs := map[string]bool{}
 	for _, line := range strings.Split(body, "\n") {
