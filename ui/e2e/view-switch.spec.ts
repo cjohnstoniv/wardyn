@@ -16,7 +16,7 @@ import { PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-c
 // provider, which is a single-operator install: the switch only navigates. An
 // SSO admin is a stateful splice at the CONTEXT level, so every tab in it sees
 // one session: POST /me/view flips the state and /me answers from it,
-// clamped as the server clamps (role member, both tiers false). What the
+// clamped as the server clamps (role user, both tiers false). What the
 // server itself refuses inside the User view is pinned in Go
 // (membermode_test.go's TestMemberMode_DeniedOnEveryOperatorOnlyRoute) and on a
 // real OIDC session in live/sso-member.spec.ts.
