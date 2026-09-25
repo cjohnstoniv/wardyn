@@ -1021,6 +1021,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   /model-providers/{id}/credential` refuses such a caller with an audited 403
   (`capability_model_provider`) and stores nothing, the same check the launch door makes, so a
   security admin who isn't listed is refused too. Deleting a key stays open to everyone.
+- **An image reference with a backslash, or an empty, `.` or `..` path segment, is refused (#612, #923).**
+  No registry names an image that way, and an image reference is also a value the Images tab
+  builds a control from, so a workspace's `base_image.image` could plant `../policy/<uuid>`
+  there. `POST /workspaces`, `PUT /workspaces/{id}`, `POST /base-images`, and image grants and
+  availability writes now answer 400. The availability route decodes its value first, so
+  `%2e%2e` is refused as `..` and an encoded reference is stored as the reference it spells.
 - **A person's credentials can be erased in one step, and dead sign-ins are deleted (#590).**
   `DELETE /api/v1/people/{principal}/credentials` (admin or `security_admin`) deletes every
   credential that person has stored — keys, tokens and captured sign-ins — and answers with the

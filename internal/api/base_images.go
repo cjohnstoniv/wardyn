@@ -51,15 +51,19 @@ func validateBaseImageWrite(b types.BaseImageEntry) string {
 }
 
 // image400DotSegment — DRAFT (M2 canon pending). %s is the field name.
-const image400DotSegment = `%s is not an image reference — an image reference has no "", "." or ".." path segment`
+const image400DotSegment = `%s is not an image reference — an image reference has no backslash and no "", "." or ".." path segment`
 
-// imageRefPathSafe reports whether an image ref has no empty, "." or ".."
-// segment. No registry names an image that way, and an image ref is also a
-// capability value the console builds a control path from (the Images tab's
-// Available to), so a member-typed `../policy/<uuid>` must never be stored.
+// imageRefPathSafe reports whether an image ref has no backslash and no
+// empty, "." or ".." segment. No registry names an image that way, and an
+// image ref is also a capability value the console builds a control path from
+// (the Images tab's Available to), so a member-typed `../policy/<uuid>` must
+// never be stored.
 // Not repoLocatorPathSafe: that reads "host:5000/..." and "img:tag" as
 // scp-form and checks only what follows the colon.
 func imageRefPathSafe(ref string) bool {
+	if strings.Contains(ref, `\`) {
+		return false
+	}
 	for _, seg := range strings.Split(strings.TrimSpace(ref), "/") {
 		if seg == "" || seg == "." || seg == ".." {
 			return false

@@ -7,8 +7,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -49,6 +52,14 @@ func TestImageRefDotSegmentsRefused(t *testing.T) {
 			}
 		})
 	}
+	t.Run(`refused: a backslash, ..\policy\x`, func(t *testing.T) {
+		if code := post(t, "/api/v1/base-images", `{"kind":"byo","image":"..\\policy\\x"}`); code != http.StatusBadRequest {
+			t.Errorf("POST /base-images = %d, want 400", code)
+		}
+		if _, err := canonicalGrantValue(capImage, `..\policy\x`); err == nil {
+			t.Error(`canonicalGrantValue(image, ..\policy\x) accepted it`)
+		}
+	})
 	for _, img := range good {
 		t.Run("taken: "+img, func(t *testing.T) {
 			if code := post(t, "/api/v1/workspaces", fmt.Sprintf(`{"name":"w","base_image":{"kind":"byo","image":%q}}`, img)); code != http.StatusCreated {
@@ -59,6 +70,44 @@ func TestImageRefDotSegmentsRefused(t *testing.T) {
 			}
 			if _, err := canonicalGrantValue(capImage, img); err != nil {
 				t.Errorf("canonicalGrantValue(image, %q) = %v, want accepted", img, err)
+			}
+		})
+	}
+}
+
+// TestAvailabilityTargetIsDecoded: the availability route's value is judged
+// and stored as the ref it spells, not as its escapes — so an encoded ref
+// lands under the real ref and an encoded dot segment or backslash is refused.
+func TestAvailabilityTargetIsDecoded(t *testing.T) {
+	const prefix = "/api/v1/permissions/availability/image/"
+	t.Run("an encoded ref stores as the real ref", func(t *testing.T) {
+		const ref = "ghcr.io/acme/agent:1"
+		srv, st := permServer(t)
+		st.grants = []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, utDev, capImage, ref, types.CapabilityAllow)}
+		w := doSSO(t, srv, http.MethodPut, prefix+"ghcr.io%2Facme%2Fagent:1", permAdmin(t), `{"restricted":true}`)
+		if w.Code != http.StatusOK || !st.restricted[capImage][ref] || len(st.restricted[capImage]) != 1 {
+			t.Fatalf("PUT = %d %s, restricted = %v; want %q alone restricted", w.Code, w.Body.String(), st.restricted, ref)
+		}
+	})
+	// No client can send a bad escape (net/url refuses to build the request),
+	// so the unescape error is driven at availabilityTarget itself.
+	t.Run("refused: a bad escape", func(t *testing.T) {
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("kind", capImage)
+		rctx.URLParams.Add("*", "ghcr.io%zz")
+		r := httptest.NewRequest(http.MethodPut, prefix+"x", nil)
+		r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+		w := httptest.NewRecorder()
+		if _, _, ok := availabilityTarget(w, r); ok || w.Code != http.StatusBadRequest {
+			t.Fatalf("availabilityTarget = ok %v, %d %s; want 400", ok, w.Code, w.Body.String())
+		}
+	})
+	for _, enc := range []string{"%2e%2e%2Fpolicy%2Fx", "..%5Cpolicy%5Cx"} {
+		t.Run("refused: "+enc, func(t *testing.T) {
+			srv, st := permServer(t)
+			w := doSSO(t, srv, http.MethodPut, prefix+enc, permAdmin(t), `{"restricted":false}`)
+			if w.Code != http.StatusBadRequest || len(st.restricted[capImage]) != 0 {
+				t.Fatalf("PUT = %d %s, restricted = %v; want 400 and nothing written", w.Code, w.Body.String(), st.restricted)
 			}
 		})
 	}

@@ -10,6 +10,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -47,7 +48,15 @@ func availabilityTarget(w http.ResponseWriter, r *http.Request) (kind, value str
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("%q can't be restricted to a list; only the resources people are offered can be.", kind))
 		return "", "", false
 	}
-	value, err := canonicalGrantValue(kind, chi.URLParam(r, "*"))
+	// chi hands the wildcard over still escaped, so an encoded ref would be
+	// stored as its escapes and an encoded %2e%2e would slip past the dot-segment
+	// rule; decode it first so both are judged as the ref they spell.
+	raw, err := url.PathUnescape(chi.URLParam(r, "*"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid availability target: value: not a valid path escape")
+		return "", "", false
+	}
+	value, err = canonicalGrantValue(kind, raw)
 	if err == nil && value == capWildcard {
 		err = fmt.Errorf("value: name one resource, not every one")
 	}
