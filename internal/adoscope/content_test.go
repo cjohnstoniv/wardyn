@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -107,13 +108,16 @@ func TestParsePush(t *testing.T) {
 		t.Errorf("ParsePush = %+v", p)
 	}
 	for name, bad := range map[string]string{
-		"no ref":         `{"refUpdates":[],"commits":[]}`,
-		"no item":        `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[{"changes":[{"changeType":"add"}]}]}`,
-		"a .. segment":   `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[{"changes":[{"item":{"path":"/a/../b"}}]}]}`,
-		"a backslash":    `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[{"changes":[{"item":{"path":"/a\\b"}}]}]}`,
-		"the root":       `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[{"changes":[{"item":{"path":"/"}}]}]}`,
-		"a repeated key": `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[],"COMMITS":[]}`,
-		"not JSON":       `{"refUpdates":`,
+		"no ref":            `{"refUpdates":[],"commits":[]}`,
+		"no item":           `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[{"changes":[{"changeType":"add"}]}]}`,
+		"a .. segment":      `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[{"changes":[{"item":{"path":"/a/../b"}}]}]}`,
+		"a backslash":       `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[{"changes":[{"item":{"path":"/a\\b"}}]}]}`,
+		"the root":          `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[{"changes":[{"item":{"path":"/"}}]}]}`,
+		"a repeated key":    `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[],"COMMITS":[]}`,
+		"not JSON":          `{"refUpdates":`,
+		"no commits at all": `{"refUpdates":[{"name":"refs/heads/a"}],"commits":[]}`,
+		"a newObjectId the request does not show": `{"refUpdates":[{"name":"refs/heads/a","newObjectId":"` +
+			strings.Repeat("a", 40) + `"}],"commits":[{"changes":[{"item":{"path":"/x"}}]}]}`,
 	} {
 		if _, err := ParsePush(contentReq(http.MethodPost, "", bad)); err == nil {
 			t.Errorf("%s: parsed, want an error", name)

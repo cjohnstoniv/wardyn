@@ -153,6 +153,9 @@ func TestADORESTPushRulesRefuseWhatTheyCannotRead(t *testing.T) {
 			}, false},
 		{"a wiki page write", http.MethodPut, "/acme/proj/_apis/wiki/wikis/proj.wiki/pages?path=/x&api-version=7.1",
 			func(*adoHarness) string { return `{"content":"x"}` }, false},
+		{"a push with no commits and a set newObjectId", http.MethodPost, restPushTarget, func(h *adoHarness) string {
+			return `{"refUpdates":[{"name":"` + branch(h) + `","newObjectId":"` + strings.Repeat("a", 40) + `"}],"commits":[]}`
+		}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

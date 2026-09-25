@@ -182,6 +182,9 @@ func ParsePush(req Request) (Push, error) {
 		return Push{}, err
 	}
 	var push struct {
+		RefUpdates []struct {
+			NewObjectID string `json:"newObjectId"`
+		} `json:"refUpdates"`
 		Commits []struct {
 			Changes []struct {
 				Item *struct {
@@ -193,6 +196,11 @@ func ParsePush(req Request) (Push, error) {
 	}
 	if err := decodeUnique(body, &push); err != nil {
 		return Push{}, err
+	}
+	for _, u := range push.RefUpdates {
+		if strings.Trim(u.NewObjectID, "0") != "" {
+			return Push{}, fmt.Errorf("adoscope: a push that points a ref at a commit the request does not show")
+		}
 	}
 	out := Push{Refs: refs}
 	for _, c := range push.Commits {
@@ -211,6 +219,9 @@ func ParsePush(req Request) (Push, error) {
 				out.Paths = append(out.Paths, p)
 			}
 		}
+	}
+	if len(out.Paths) == 0 {
+		return Push{}, fmt.Errorf("adoscope: a push that names no path cannot be judged")
 	}
 	sum := sha256.Sum256(body)
 	out.Digest = hex.EncodeToString(sum[:])
