@@ -57,8 +57,8 @@ func IsLocalHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// CheckURL is the one rule both ends apply to the control-plane URL a proxy
-// dials. https:// always passes. http:// passes only when the host is local
+// CheckURL is the one rule wardynd, every proxy and wardyn-tetragon-ingest
+// apply to the control-plane URL. https:// always passes. http:// passes only when the host is local
 // (IsLocalHost): plaintext that never leaves the loopback interface. Anything
 // else is refused, with the fix in the message.
 func CheckURL(raw string) error {
@@ -73,8 +73,8 @@ func CheckURL(raw string) error {
 		if IsLocalHost(u.Hostname()) {
 			return nil
 		}
-		return fmt.Errorf("control-plane URL %q is plain http:// to a non-loopback host — the proxy resolves credential values over it, "+
-			"so they would cross the network in cleartext. Point WARDYN_CONTROL_PLANE_URL at wardynd's internal TLS listener "+
+		return fmt.Errorf("control-plane URL %q is plain http:// to a non-loopback host — every caller's bearer (and, for a proxy, "+
+			"resolved credential values) would cross the network in cleartext. Point WARDYN_CONTROL_PLANE_URL at wardynd's internal TLS listener "+
 			"(https://<host>:8443, WARDYN_INTERNAL_LISTEN); http:// is accepted only for localhost/127.0.0.1/::1", raw)
 	default:
 		return fmt.Errorf("control-plane URL %q: scheme must be https (or http to a loopback host)", raw)

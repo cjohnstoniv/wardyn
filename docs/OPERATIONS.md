@@ -3166,13 +3166,24 @@ it.
   control-plane call and must be relaunched. To rotate early, stop `wardynd`,
   delete the row (`DELETE FROM secrets WHERE owned_by = '' AND name =
   'wardyn-internal-ca';`) and start it again.
-- **What is not on this hop.** `wardyn-tetragon-ingest` still posts to the
-  console listener in plaintext with an audit-write-only bearer: an integrity
-  exposure, not a confidentiality one — a captured token can forge ground-truth
-  events until it rotates, and cannot read or mint a credential. Moving it onto
-  the TLS listener is #606. The console listener also still serves
-  `/api/v1/internal/*` for test harnesses and for runs dispatched before the
-  upgrade, which finish on the plaintext path they started with. The proxy authenticates to `wardynd` with its run token
+- **The ground-truth ingest rides the same hop.** `wardyn-tetragon-ingest` posts
+  its audit-write-only bearer (`aud=wardyn-groundtruth`) to
+  `WARDYN_CONTROL_PLANE_URL` = `https://wardynd:8443` and trusts wardynd's
+  internal CA alone. `wardynd` publishes that CA's public certificate at boot as
+  `control-plane-ca.pem` beside `WARDYN_GROUNDTRUTH_TOKEN_FILE` (compose: the
+  shared `groundtruth_token` volume), and the ingest reads it from
+  `WARDYN_CONTROL_PLANE_CA_FILE`. The ingest applies `hoptls.CheckURL` too, and
+  refuses to start on a non-loopback `http://` URL or an `https://` URL with no
+  readable CA file; a server its CA did not sign gets no request. It reads the
+  CA once, so restart it after a CA rotation.
+- **What is not on this hop.** The console listener still serves
+  `/api/v1/internal/*` in plaintext, because the test harnesses
+  (`test/e2e/e2e.sh`, `scripts/test-drive.sh`) call it there and the internal
+  listener is never published to the host. No shipped component calls it: the
+  proxy and the ingest both refuse a non-loopback `http://` URL. The chart no
+  longer grants the runs namespace the `http` port, so a proxy dispatched
+  before 0.7.12 has no route back after an upgrade to 0.8; stop such runs
+  before upgrading. The proxy authenticates to `wardynd` with its run token
   (bearer, not mTLS — `threatmodel/THREAT-MODEL.md` B6).
 
 ### Corporate TLS-inspection root

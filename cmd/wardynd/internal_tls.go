@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -80,6 +81,28 @@ func loadHopTLS(ctx context.Context, secrets secretKeyStore, controlURL string) 
 		caPEM:  string(ca.CertPEM),
 		server: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13},
 	}, nil
+}
+
+// hopCAFileName is the internal CA's public certificate as wardynd publishes it
+// for wardyn-tetragon-ingest: beside WARDYN_GROUNDTRUTH_TOKEN_FILE, on the
+// volume the two already share, so the ingest can pin this listener the way a
+// proxy pins it from its sealed config.
+const hopCAFileName = "control-plane-ca.pem"
+
+// publishHopCA writes the CA certificate beside gtFile. No-op without a
+// listener (loopback http) or without a groundtruth token file. Every replica
+// writes the same bytes from the same stored CA, atomically. A failure is
+// logged, not fatal: the ingest then refuses to start rather than post in
+// plaintext, and the daemon itself does not depend on the file.
+func publishHopCA(hop *hopTLS, gtFile string) error {
+	if hop == nil || gtFile == "" {
+		return nil
+	}
+	err := writeTokenFileAtomic(filepath.Join(filepath.Dir(gtFile), hopCAFileName), hop.caPEM)
+	if err != nil {
+		slog.Error("wardynd: could not publish the internal CA for wardyn-tetragon-ingest; the ingest will refuse to start", slog.Any("err", err))
+	}
+	return err
 }
 
 // internalRoutesOnly narrows the listener to what a proxy calls: the

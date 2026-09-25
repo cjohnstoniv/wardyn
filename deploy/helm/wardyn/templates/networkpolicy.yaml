@@ -21,11 +21,9 @@ re-open only what wardynd needs:
   - a SEPARATE ingress rule for the internal TLS listener (k8s.enabled), whose
     peers are this namespace and k8s.runsNamespace — never
     networkPolicy.ingress.from, so an ingress controller or a scraper added
-    for the console never reaches the port proxies resolve credentials on
-  - a SEPARATE ingress rule, http only, when k8s.enabled and
-    k8s.runsNamespace differs from this release's namespace, so runs in
-    flight at an upgrade from 0.7.11 finish — never SSH, which is an
-    operator/human surface
+    for the console never reaches the port proxies resolve credentials on.
+    The runs namespace gets that port and nothing else: no http, so no bearer
+    reaches wardynd in plaintext from a run
 */}}
 {{- /*
 `default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
@@ -82,7 +80,11 @@ spec:
     # with its OWN peers: run proxies resolve credentials here, and nothing an
     # operator adds to networkPolicy.ingress.from for the console (an ingress
     # controller, a metrics scraper) is ever granted it. Peers: this namespace
-    # (where runs land when k8s.runsNamespace is empty) and the runs namespace.
+    # (where runs land when k8s.runsNamespace is empty) and the runs namespace,
+    # matched on the built-in kubernetes.io/metadata.name label: the chart never
+    # labels that namespace, so a custom-label selector would match nothing and
+    # strand every proxy with no route back. The runs namespace gets this port
+    # only — never http (no plaintext bearer from a run), ssh or the UI gateway.
     - from:
         - podSelector: {}
         {{- if and .Values.k8s.runsNamespace (ne .Values.k8s.runsNamespace .Release.Namespace) }}
@@ -102,10 +104,10 @@ spec:
     # i.e. runs land in this same namespace. So the http rule's peer already
     # includes every agent pod and every proxy sidecar the k8s substrate
     # creates, and ingress rules are additive: a port listed there is granted to
-    # them, full stop. The runsNamespace-differs rule below already withholds
-    # ssh/ui correctly for a SEPARATE namespace; this is that same invariant for
-    # the default, same-namespace case, which is the case almost every install
-    # is actually in.
+    # them, full stop. A SEPARATE runs namespace is granted only the internal
+    # port above, so ssh/ui are already withheld there; this is that same
+    # invariant for the default, same-namespace case, which is the case almost
+    # every install is actually in.
     #
     # `wardyn.managed` is stamped on every object the k8s runner substrate
     # creates (internal/runner/k8s/naming.go's wardynLabels) and is stamped
@@ -145,29 +147,6 @@ spec:
         - protocol: TCP
           port: ui
         {{- end }}
-    {{- end }}
-    {{- if and .Values.k8s.enabled .Values.k8s.runsNamespace (ne .Values.k8s.runsNamespace .Release.Namespace) }}
-    # A different runs namespace carries no chart labels (the chart never
-    # creates/labels it — see values.yaml's k8s.runsNamespace doc) — match
-    # the built-in, Kubernetes-applied kubernetes.io/metadata.name label
-    # instead of inventing a custom one a bare operator namespace would
-    # never carry. A custom-label selector here would silently match NOTHING
-    # and strand every run's proxy sidecar with no route back to wardynd
-    # (credential mints, approval checks, recording uploads all go dark,
-    # with no render-time or even boot-time signal). A SEPARATE rule (not
-    # folded into the one above): this peer gets http only, never ssh and
-    # never the UI-sandbox gateway — a run's proxy sidecar has no business on
-    # either operator/human port. Proxies dispatched since 0.7.12 reach wardynd
-    # on the internal TLS port (the rule above); http stays here only so a run
-    # already in flight at the upgrade finishes on the path it was dispatched
-    # with. ponytail: drop this rule once no pre-0.7.12 proxy can be running.
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.k8s.runsNamespace }}
-      ports:
-        - protocol: TCP
-          port: http
     {{- end }}
   egress:
     # DNS resolution (kube-dns / CoreDNS). The ONLY rule in this chart that may

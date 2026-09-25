@@ -761,7 +761,11 @@ services:
     profiles: ["groundtruth"]
     environment:
       WARDYN_TETRAGON_EXPORT: "/var/log/tetragon/tetragon.log"
-      WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
+      # wardynd's internal TLS listener, pinned to its own internal CA, which
+      # wardynd writes beside the token file below. http:// to a non-loopback
+      # host is refused at start: the bearer never crosses in plaintext.
+      WARDYN_CONTROL_PLANE_URL: "https://wardynd:8443"
+      WARDYN_CONTROL_PLANE_CA_FILE: "/var/run/wardyn-gt/control-plane-ca.pem"
       # Host-sensor token (aud=wardyn-groundtruth). PREFERRED: the shared file below,
       # which wardynd's rotator keeps fresh so this sidecar RECOVERS when the ~1h token
       # expires instead of going permanently blind. WARDYN_GROUNDTRUTH_TOKEN is
@@ -775,7 +779,8 @@ services:
     volumes:
       # Read the Tetragon JSON export.
       - tetragon_export:/var/log/tetragon:ro
-      # The host-sensor token wardynd's rotator keeps fresh; read-only here.
+      # The host-sensor token wardynd's rotator keeps fresh, and the internal
+      # CA certificate wardynd publishes at boot; read-only here.
       - groundtruth_token:/var/run/wardyn-gt:ro
       # Read the host docker socket to list wardyn-managed containers for
       # correlation. Daemon-trust tradeoff applies (see the top-of-file note);
@@ -905,6 +910,7 @@ volumes:
   postgres_data:
   # Shared host-sensor token file: wardynd's rotator writes it, the tetragon-ingest
   # sidecar reads it, so the ground-truth stream survives the ~1h token TTL.
+  # wardynd also writes its internal CA certificate here (control-plane-ca.pem).
   groundtruth_token:
   recordings:
     # Empty under the default `pg` store; used only with

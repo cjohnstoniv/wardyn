@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -562,6 +563,8 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		return of, herr
 	}
 	of.hop = hop
+	// Before anything serves, so an ingest waiting on wardynd's healthcheck finds it.
+	_ = publishHopCA(hop, strings.TrimSpace(os.Getenv("WARDYN_GROUNDTRUTH_TOKEN_FILE")))
 
 	return of, nil
 }

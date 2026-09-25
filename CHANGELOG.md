@@ -508,6 +508,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **`wardyn-tetragon-ingest` posts over TLS, pinned to wardynd's internal CA (#606).** The
+  ground-truth sidecar sent its audit-write-only bearer (`aud=wardyn-groundtruth`) to wardynd's
+  console listener in plaintext (`http://wardynd:8080`), so a peer on the path could capture it and
+  forge ground-truth events until it rotated. It now defaults to the internal TLS listener
+  (`https://wardynd:8443`) and trusts wardynd's internal CA alone, read from the new
+  `WARDYN_CONTROL_PLANE_CA_FILE`. wardynd writes that certificate at boot as `control-plane-ca.pem`
+  beside `WARDYN_GROUNDTRUTH_TOKEN_FILE`, which compose already shares with the ingest. The ingest
+  applies the proxy's rule, refusing to start on `http://` to a non-loopback host or on `https://`
+  without a readable CA file. The chart no longer grants the runs namespace wardynd's `http` port:
+  since 0.7.12 proxies use the internal port. **Upgrading:** stop any run dispatched before 0.7.12
+  before you upgrade, because it has no route back afterwards. If you run the ingest outside
+  compose, set `WARDYN_CONTROL_PLANE_URL` to the internal listener and point
+  `WARDYN_CONTROL_PLANE_CA_FILE` at the published file. THREAT-MODEL B6 no longer lists a plaintext
+  residual for current-version callers.
 - **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
   that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
   sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the

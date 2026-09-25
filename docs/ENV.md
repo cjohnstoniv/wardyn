@@ -145,7 +145,7 @@ log them.
 | `WARDYN_INTERNAL_LISTEN` | string | `:8443` | listen address of the proxy-facing TLS listener: `/api/v1/internal/*` and `/healthz` only, served with a certificate from wardynd's own internal CA (secret-store row `wardyn-internal-ca`, minted on first boot, kept across restarts and upgrades). Runs whenever `WARDYN_CONTROL_PLANE_URL` is `https://`; a bind failure ends the daemon. Never publish it outside the network your proxies share with wardynd (flag `-internal-listen`) |
 | `WARDYN_PROXY_IMAGE` | string | (unset) | OCI image for the wardyn-proxy sidecar (flag `-proxy-image`). **Bump it in lockstep with wardynd.** The sidecar is pinned here by the operator, independently of the daemon, and every run's proxy config is written by whatever wardynd is running — so a sidecar left at an older tag/digest meets config keys its binary does not know. Since 0.7 that is a loud failure rather than a silent one: the sidecar decodes its config strictly (`LoadConfigBytes`, `internal/egress/proxy/config.go`) and refuses to start on a key it cannot honour, naming the key. Before 0.7 the same skew was accepted with no error and the unknown keys were discarded — a routing document half in force |
 | `WARDYN_PROXY_URL_OVERRIDE` | string | `http://wardyn-proxy:3128` | sandbox `WARDYN_PROXY_URL` override (flag `-proxy-url`) |
-| `WARDYN_GROUNDTRUTH_TOKEN_FILE` 🔒 | string | (unset) | file holding the host-sensor token |
+| `WARDYN_GROUNDTRUTH_TOKEN_FILE` 🔒 | string | (unset) | file holding the host-sensor token. wardynd keeps it fresh and, when the internal TLS listener runs, also writes its internal CA certificate beside it as `control-plane-ca.pem` for `wardyn-tetragon-ingest` |
 | `WARDYN_PRINT_GROUNDTRUTH_TOKEN` | bool | `false` | mint+print a host-sensor token and exit (flag `-print-groundtruth-token`) |
 | `WARDYN_AGENT_IMAGES` | string (JSON) | (unset) | agent-name → OCI image ref map (flag `-agent-images`). The `base` key is what the setup connectivity probe resolves — it needs no coding agent, only `curl` |
 | `WARDYN_AGENT_ANTHROPIC_MODEL` | string | (unset) | pin `ANTHROPIC_MODEL` inside claude-code sandboxes (flag `-agent-anthropic-model`) |
@@ -289,7 +289,8 @@ count means the collector is slow/down and events are being shed after
 | Variable | Type | Default | Notes |
 |---|---|---|---|
 | `WARDYN_TETRAGON_EXPORT` | string | `/var/log/tetragon/tetragon.log` | Tetragon JSON export path (flag `-export`) |
-| `WARDYN_CONTROL_PLANE_URL` | string | `http://wardynd:8080` | control plane base URL (flag `-control-plane-url`) |
+| `WARDYN_CONTROL_PLANE_URL` | string | `https://wardynd:8443` | wardynd's internal TLS listener (`WARDYN_INTERNAL_LISTEN`), the same hop the proxies ride. **`http://` is refused at start** unless the host is loopback (`hoptls.CheckURL`), so the bearer never crosses the network in plaintext. See [OPERATIONS.md](OPERATIONS.md#control-plane-to-proxy-tls) (flag `-control-plane-url`) |
+| `WARDYN_CONTROL_PLANE_CA_FILE` | string (path) | (unset) | wardynd's internal CA certificate, the only root the ingest trusts for the control plane (never the system roots). wardynd writes it at boot as `control-plane-ca.pem` beside its own `WARDYN_GROUNDTRUTH_TOKEN_FILE`; compose sets `/var/run/wardyn-gt/control-plane-ca.pem`. Required for an `https://` URL: unset, missing or empty refuses start. Read once, so restart the ingest after a CA rotation (flag `-control-plane-ca-file`) |
 | `WARDYN_GROUNDTRUTH_TOKEN` 🔒 | string | (unset) | host-sensor bearer (aud=wardyn-groundtruth) (flag `-token`) |
 | `WARDYN_GROUNDTRUTH_TOKEN_FILE` 🔒 | string | (unset) | file source for the sensor token |
 | `WARDYN_GROUNDTRUTH_HEARTBEAT` | duration | `30s` | sensor heartbeat interval (flag `-heartbeat`) |

@@ -700,6 +700,9 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$rules" | grep "^$$ir: " | grep -qE "ingress-nginx|monitoring" && { echo "the internal TLS port rides networkPolicy.ingress.from — the console's ingress controller and scrapers can reach the port proxies resolve credentials on"; exit 1; }; \
 	echo "$$rules" | grep "^$$ir: " | grep -q "podSelector: {}" || { echo "the internal TLS port rule lost its same-namespace peer — run proxies in this namespace lose their control plane"; exit 1; }; \
 	echo "$$rules" | grep "^$$ir: " | grep -q "kubernetes.io/metadata.name: wardyn-runs" || { echo "the internal TLS port rule lost the runs-namespace peer — every proxy in k8s.runsNamespace loses its control plane"; exit 1; }; \
+	for r in $$(echo "$$rules" | awk -F': ' '/port: http$$/{print $$1}' | sort -u); do \
+	  echo "$$rules" | grep "^$$r: " | grep -q "kubernetes.io/metadata.name: wardyn-runs" && { echo "the runs namespace is granted wardynd's plaintext http port — a run could send its bearer to wardynd in cleartext (#606); it gets the internal TLS port only"; exit 1; }; \
+	done; \
 	true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set service.internalPort=8080 2>&1 | grep -q "service.internalPort 8080 collides" || { echo "chart no longer refuses service.internalPort == service.port"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn 2>&1 | grep -q "the public API would 401" || { echo "chart no longer refuses an install with neither an admin token nor an OIDC issuer"; exit 1; }

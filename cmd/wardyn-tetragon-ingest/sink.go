@@ -7,18 +7,60 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// controlPlaneClient is the ingest's end of wardynd's internal TLS hop
+// (internal/hoptls), under the proxy's rule: http:// only to a loopback host,
+// and https:// trusts wardynd's internal CA alone — never the system roots.
+// The bearer is audit-write-only, so what a plaintext hop would expose is
+// integrity: a captured token forges ground-truth events until it rotates.
+// caFile is the CA certificate wardynd writes beside
+// WARDYN_GROUNDTRUTH_TOKEN_FILE. ponytail: read once at boot; a CA rotation
+// (replace-at-boot, years apart) needs an ingest restart.
+func controlPlaneClient(controlURL, caFile string) (*http.Client, error) {
+	if err := hoptls.CheckURL(controlURL); err != nil {
+		return nil, err
+	}
+	var caPEM []byte
+	if u, _ := url.Parse(strings.TrimSpace(controlURL)); strings.EqualFold(u.Scheme, "https") {
+		if caFile == "" {
+			return nil, errors.New("an https control-plane URL needs wardynd's internal CA: set -control-plane-ca-file / WARDYN_CONTROL_PLANE_CA_FILE " +
+				"(wardynd writes control-plane-ca.pem beside WARDYN_GROUNDTRUTH_TOKEN_FILE)")
+		}
+		b, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read control-plane CA: %w", err)
+		}
+		if len(bytes.TrimSpace(b)) == 0 {
+			return nil, fmt.Errorf("control-plane CA file %s is empty", caFile)
+		}
+		caPEM = b
+	}
+	cfg, err := hoptls.ClientConfig(string(caPEM))
+	if err != nil {
+		return nil, err
+	}
+	// Proxy cleared: Clone keeps ProxyFromEnvironment, and the bearer has no
+	// business on a forward proxy's wire.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	tr.TLSClientConfig = cfg
+	return &http.Client{Timeout: 10 * time.Second, Transport: tr}, nil
+}
 
 // tokenSource yields the current host-sensor bearer token. It is an injectable
 // seam so the refresh-on-401 path is testable and so the token can be re-read or
@@ -241,7 +283,7 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 
 	backoff := 250 * time.Millisecond
 	for attempt := 1; attempt <= maxPostAttempts; attempt++ {
-		status := s.doPost(body, s.currentToken())
+		status, postErr := s.doPost(body, s.currentToken())
 
 		// On a 401 (expired/rotated aud token — the embedded identity mints with a
 		// fixed ~1h ceiling) refresh the token from the source and retry ONCE. If
@@ -254,7 +296,7 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 			slog.Warn("wardyn-tetragon-ingest: ground-truth token rejected (401); refreshed and retrying batch",
 				slog.Int("events", len(batch)),
 			)
-			status = s.doPost(body, refreshed)
+			status, postErr = s.doPost(body, refreshed)
 		}
 
 		switch {
@@ -268,6 +310,7 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 					slog.Int("attempts", attempt),
 					slog.Int("events", len(batch)),
 					slog.Int("status", status),
+					slog.Any("err", postErr),
 				)
 				return
 			}
@@ -276,6 +319,7 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 				slog.Int("max_attempts", maxPostAttempts),
 				slog.Int("events", len(batch)),
 				slog.Int("status", status),
+				slog.Any("err", postErr),
 			)
 			time.Sleep(backoff)
 			backoff *= 2
@@ -295,24 +339,25 @@ func (s *eventSink) post(batch []types.AuditEvent) {
 }
 
 // doPost performs a single POST with the given bearer token. It returns the HTTP
-// status code, or 0 on a transport error (so the caller can distinguish a
-// network failure from an HTTP reject and decide whether to refresh the token).
-func (s *eventSink) doPost(body []byte, token string) int {
+// status code, or 0 and the transport error (so the caller can distinguish a
+// network failure from an HTTP reject, and its log names the cause, such as a
+// certificate the pinned internal CA did not sign).
+func (s *eventSink) doPost(body []byte, token string) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		// Best-effort: a failed post must not block the tail.
-		return 0
+		return 0, err
 	}
 	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
-	return resp.StatusCode
+	return resp.StatusCode, nil
 }
 
 func (s *eventSink) droppedCount() uint64 { return s.dropped.Load() }
