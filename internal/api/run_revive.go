@@ -39,6 +39,12 @@ import (
 // (`agent-run --revive`; Claude Code continues its conversation). Only the
 // run's own page does this; the admin bulk restart is proxy-only.
 //
+// An outage run's agent is stopped the same way once its end passes while it
+// is still lost, but its lost_reason stays outage (run_lost.go); this is
+// detected by probing the agent's own status rather than trusted from the
+// label, and takes the same start-again path a reboot does (F1.2, Fable
+// review).
+//
 // Authority is the OWNER's, never the caller's: an admin's own ceiling is
 // empty (effectiveCeiling's operator short-circuit), so resolving the caller
 // would let an admin's click strip a member's limits. The ceiling comes from
@@ -124,10 +130,14 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveEligible(run, startAgent); rerr != nil {
 		return reviveResult{}, rerr
 	}
-	rebooted := run.LostReason == types.LostReboot
+	rebooted := s.reviveNeedsAgentStart(ctx, run)
 	starter, canStart := s.cfg.Runner.(runner.SandboxStarter)
 	if rebooted && !canStart {
 		return reviveResult{}, reviveRefused(http.StatusConflict, runner.ErrReviveUnsupported.Error())
+	}
+	if rebooted && !startAgent {
+		return reviveResult{}, reviveRefused(http.StatusConflict,
+			"run's agent is stopped and a bulk restart cannot start it; revive it from the run's page")
 	}
 	if _, busy := s.reviving.LoadOrStore(run.ID, struct{}{}); busy {
 		return reviveResult{}, reviveRefused(http.StatusConflict, "a revive of this run is already in progress")
@@ -242,6 +252,28 @@ func (s *Server) reviveEligible(run types.AgentRun, startAgent bool) *reviveErro
 		return reviveRefused(http.StatusConflict, "run was lost ("+string(run.LostReason)+") and cannot be revived")
 	}
 	return nil
+}
+
+// reviveNeedsAgentStart reports whether a revive must start run's agent
+// again, behind its new proxy, before it can be called live: always true for
+// a reboot, and true for an outage run only when the agent itself is not
+// running (F1.2, long-holds design rev 4 §4.1; Fable review).
+//
+// stopLostSandbox (run_lost.go) stops an outage run's agent too, once its end
+// passes while it is still lost, but leaves lost_reason=outage —
+// relabeling it there would add a second writer racing the very sweeps that
+// already set it. Trusting the agent's OWN status instead of the label is
+// smaller and safer: a probe is read-only and can never drift, where a
+// relabel CAS could land wrong and stay wrong.
+func (s *Server) reviveNeedsAgentStart(ctx context.Context, run types.AgentRun) bool {
+	if run.LostReason == types.LostReboot {
+		return true
+	}
+	if run.LostReason != types.LostOutage {
+		return false
+	}
+	st, err := s.cfg.Runner.Status(ctx, run.SandboxRef)
+	return err == nil && st.State != types.RunRunning
 }
 
 func reviveFrom(run types.AgentRun) string {

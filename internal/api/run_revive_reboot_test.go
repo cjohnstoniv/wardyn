@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -144,5 +145,57 @@ func TestReviveRun_TheBulkRestartNeverStartsAnAgent(t *testing.T) {
 	}
 	if lostAt, reason := f.st.lost(); lostAt == nil || reason != types.LostReboot {
 		t.Errorf("lost = %v %q; want the run left lost (reboot)", lostAt, reason)
+	}
+}
+
+// TestReviveRun_AfterAnExtension is F1's fix (long-holds design rev 4 §2.3,
+// §4.1): an outage run's agent is stopped too once its end passes while it
+// is still lost (run_lost.go stopLostSandbox), but lost_reason stays
+// outage — relabeling would add a second writer racing the sweeps that set
+// it. Extending the end is how such a run becomes revivable again, and the
+// revive must not trust the outage label alone: it probes the agent and
+// starts it again, exactly as a reboot's revive would (F1.2).
+func TestReviveRun_AfterAnExtension(t *testing.T) {
+	f := newReviveFixture(t) // already lost to an outage
+	end := f.now.Add(time.Hour)
+	f.st.mu.Lock()
+	f.st.run.EndsAt = &end
+	f.st.mu.Unlock()
+
+	// The end passes while the run is still lost: the lease sweep stops the
+	// agent, but the label stays outage.
+	f.now = end.Add(time.Minute)
+	f.sweep(t)
+	if f.rn.endCount() != 1 {
+		t.Fatalf("setup: EndSandbox calls = %d, want 1 (an outage run's agent stops once its end passes)", f.rn.endCount())
+	}
+	if _, reason := f.st.lost(); reason != types.LostOutage {
+		t.Fatalf("setup: lost reason = %q, want it to stay outage even though the agent stopped", reason)
+	}
+
+	sr := &startingRunner{reviveRunner: f.rr}
+	sr.status = types.RunStopped // what a real driver's Status would now report
+	f.srv.cfg.Runner = sr
+
+	later := f.now.Add(24 * time.Hour)
+	if w := do(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.run.ID.String(), adminToken, endsAtBody(later)); w.Code != http.StatusOK {
+		t.Fatalf("extend past its end: code %d body %s, want 200", w.Code, w.Body.String())
+	}
+
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive after the extension: code %d, want 200", code)
+	}
+	if got := sr.starts(); !slices.Equal(got, []int{1}) {
+		t.Fatalf("StartSandbox calls, by proxies replaced before each = %v; want one start, after the new proxy", got)
+	}
+	if lostAt, _ := f.st.lost(); lostAt != nil || f.st.State() != types.RunRunning {
+		t.Errorf("lost %v, state %s; want the run live and RUNNING", lostAt, f.st.State())
+	}
+	ev := f.audit.eventsFor(f.run.ID, "run.revive")
+	if len(ev) != 1 || ev[0].Outcome != "success" {
+		t.Fatalf("run.revive events = %+v, want one success", ev)
+	}
+	if data := leaseAuditData(t, ev[0]); data["from"] != "outage" || data["agent_started"] != true {
+		t.Errorf("run.revive data = %v; want from outage, agent_started (the agent was stopped, so revive started it)", data)
 	}
 }

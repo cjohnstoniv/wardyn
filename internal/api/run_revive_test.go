@@ -72,12 +72,26 @@ type reviveRunner struct {
 	cfg        []byte
 	replaced   [][]byte
 	replaceErr error
+	// status overrides the container's OWN reported status (Status, not
+	// AgentStatus): "" keeps fakeRunner's RUNNING default. F1.2: an outage run
+	// whose end passed has its agent stopped too (run_lost.go), which revive
+	// detects by probing this, never by trusting lost_reason alone.
+	status types.RunState
 }
 
 func (r *reviveRunner) ProxyConfig(context.Context, string) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.cfg, nil
+}
+
+func (r *reviveRunner) Status(context.Context, string) (runner.Status, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.status == "" {
+		return runner.Status{State: types.RunRunning}, nil
+	}
+	return runner.Status{State: r.status}, nil
 }
 
 func (r *reviveRunner) ReplaceProxy(_ context.Context, _ string, cfg []byte) error {

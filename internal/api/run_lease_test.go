@@ -111,7 +111,7 @@ func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromEnd *t
 	defer s.mu.Unlock()
 	cur := s.run.EndsAt
 	sameEnd := (fromEnd == nil && cur == nil) || (fromEnd != nil && cur != nil && fromEnd.Equal(*cur))
-	if !sameEnd || fromWait != s.run.WaitBudgetSec || s.run.LostAt != nil || s.state.IsTerminal() {
+	if !sameEnd || fromWait != s.run.WaitBudgetSec || s.run.LostReason == types.LostEnded || s.state.IsTerminal() {
 		return false, nil
 	}
 	s.run.EndsAt, s.run.WaitBudgetSec = toEnd, toWait
