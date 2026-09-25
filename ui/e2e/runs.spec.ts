@@ -1079,15 +1079,17 @@ test.describe("Focus mode — Escape inside a Deny confirm", () => {
 // attentionFor (run-state-glyph.tsx) grades it "permission", runs.tsx's
 // existing needsYou split (predates #160, untouched) pins every "permission"
 // run to the "Needs you" lane BEFORE grouping, and a TitleGroup only ever
-// receives what's left. The counted held/reauth chip vocabulary itself is
-// pinned directly against TitleGroup in runs/title-group.test.tsx (which
-// renders it with its own run list, independent of that split); board-groups
-// .test.ts and run-card.test.tsx pin the same predicate isHeld/isStaleHold
-// drive. What's reachable live, and pinned below: the STARTING chip (a
-// run.state fact, not an approval one), the "Checking…" pre-resolve window,
-// a STALE credential_reauth (which drops out of "permission" once stale and
-// so stays grouped), and a stale TOOL_CALL hold's card degrading to Open in
-// the lane it's still pinned to (RunCard is the same component either way).
+// receives what's left. #509 — a PENDING tool_call/credential_reauth row is
+// now ALWAYS held (no client-side ceiling can drop it), so a live PENDING row
+// of either kind is ALWAYS pinned to the Needs-you lane, never left grouped —
+// there is no more live "stale but still counted in the group" case to prove
+// here; the counted held/reauth chip vocabulary itself stays pinned directly
+// against TitleGroup's own signals in runs/title-group.test.tsx, board-groups
+// .test.ts and run-card.test.tsx. What's reachable live, and pinned below:
+// the STARTING chip (a run.state fact, not an approval one), the
+// "Checking…" pre-resolve window, and a long-PENDING TOOL_CALL/
+// credential_reauth hold that STAYS live (Review, not Open; the Needs-you
+// lane, not a "was held" demotion) no matter how old it is.
 async function createGroupRun(page: Page, title: string, task: string): Promise<string> {
   const res = await page.request.post("/api/v1/runs", {
     headers: auth,
@@ -1098,30 +1100,20 @@ async function createGroupRun(page: Page, title: string, task: string): Promise<
 }
 
 test.describe("Runs board — group wait row (#160) and run links (#215)", () => {
-  test("the group header counts waiting-to-start and a stale hold — its own runs, not the ones pinned to the Needs-you lane — and its title opens from a real, keyboard-reachable link", async ({
+  test("the group header counts waiting-to-start — its own run, not the ones pinned to the Needs-you lane — and its title opens from a real, keyboard-reachable link", async ({
     page,
   }) => {
     const title = "e2e wait row";
     const starting = await createGroupRun(page, title, "wait starting");
     const clean = await createGroupRun(page, title, "wait clean");
-    const staleReauth = await createGroupRun(page, title, "wait stale reauth");
-    const ids = [starting, clean, staleReauth];
+    const ids = [starting, clean];
 
-    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id IN ('${clean}','${staleReauth}')`);
+    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${clean}'`);
     // status_reason is derived server-side from status_detail, never stored
     // (lib/types/runs.ts's own note) — the stored column is status_detail,
     // in the substrate's own "<component>: <Reason>[: <message>]" shape.
     sql(
       `UPDATE agent_runs SET state = 'STARTING', status_detail = 'pod: ImagePullBackOff: rpc error: image not found' WHERE id = '${starting}'`,
-    );
-    // credential_reauth past the 60-minute ceiling: isHeld no longer counts
-    // it live, and (unlike a WAITING_FOR_CONFIRMATION tool_call) its run
-    // state alone does not force "permission" either — it stays in the
-    // group instead of the lane, which is what makes it the one live way to
-    // see the header's stale-hold chip.
-    sql(
-      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
-       ('${randomUUID()}','${staleReauth}','credential_reauth','{}'::jsonb,'PENDING',now() - interval '90 minutes')`,
     );
 
     try {
@@ -1130,18 +1122,9 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
       await expect(group).toBeVisible();
       const waitRow = group.getByLabel("What this group is waiting on");
       await expect(waitRow.getByText(RUNS_WAIT.STARTING(1))).toBeVisible();
-      await expect(waitRow.getByText(RUNS_WAIT.STALE_GROUP(1))).toBeVisible();
       await expect(waitRow.getByText(RUNS_WAIT.NONE)).toHaveCount(0);
-      // Exactly two chips here — no third.
-      await expect(waitRow.locator(":scope > *")).toHaveCount(2);
-
-      // The stale-hold card itself: the neutral sentence, no Review/Open
-      // button (credential_reauth never had one), RunStateBadge untouched.
-      const staleCard = page.getByTestId("run-card").filter({ hasText: "wait stale reauth" });
-      await expect(staleCard.getByText(RUNS_WAIT.STALE_CARD)).toBeVisible();
-      await expect(staleCard.getByRole("button", { name: "Review" })).toHaveCount(0);
-      await expect(staleCard.getByRole("button", { name: "Open" })).toHaveCount(0);
-      await expect(staleCard.getByText("Running", { exact: true })).toBeVisible();
+      // Exactly one chip here — no second.
+      await expect(waitRow.locator(":scope > *")).toHaveCount(1);
 
       // #215 — the clean run's own title is a real, keyboard-reachable link,
       // not a div with onClick.
@@ -1197,14 +1180,20 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
     }
   });
 
-  test("a stale tool_call hold, still pinned to the Needs-you lane by its own wire state, offers Open instead of Review — RunStateBadge unchanged", async ({
+  // #509 — a PENDING tool_call/credential_reauth row is live until the
+  // SERVER says otherwise: the sandbox stays parked on it for up to
+  // WARDYN_APPROVAL_EXPIRY_AFTER (24h default), so the board must never call
+  // it dead sooner. 23 hours — far past the old 60-minute client ceiling
+  // and just inside the server's own 24h expiry — still reads Review/held on the board
+  // card, never "Open"/"was held".
+  test("a tool_call PENDING for 23 hours still offers Review and states 'sandbox held' — RunStateBadge unchanged", async ({
     page,
   }) => {
-    const solo = await createGroupRun(page, "e2e stale solo", "stale solo run");
+    const solo = await createGroupRun(page, "e2e long-held solo", "long-held solo run");
     sql(`UPDATE agent_runs SET state = 'WAITING_FOR_CONFIRMATION' WHERE id = '${solo}'`);
     sql(
       `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
-       ('${randomUUID()}','${solo}','tool_call','{"tool":"Bash","cmd":"rm -rf build"}'::jsonb,'PENDING',now() - interval '90 minutes')`,
+       ('${randomUUID()}','${solo}','tool_call','{"tool":"Bash","cmd":"rm -rf build"}'::jsonb,'PENDING',now() - interval '23 hours')`,
     );
 
     try {
@@ -1212,14 +1201,39 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
       const lane = page.getByRole("region", { name: "Needs you" });
       // Ungrouped (ONE run holds this title): the card names itself by the
       // title, not the task — rowHeadline's `grouped` fallback chain.
-      const card = lane.getByTestId("run-card").filter({ hasText: "e2e stale solo" });
+      const card = lane.getByTestId("run-card").filter({ hasText: "e2e long-held solo" });
       await expect(card).toBeVisible();
-      await expect(card.getByRole("button", { name: "Open" })).toBeVisible();
-      await expect(card.getByRole("button", { name: "Review" })).toHaveCount(0);
-      await expect(card.getByText(RUNS_WAIT.STALE_CARD)).toBeVisible();
-      // The DELIBERATE LIMIT: the run's own wire state, via RunStateBadge,
-      // still reads exactly what it is.
+      await expect(card.getByRole("button", { name: "Review" })).toBeVisible();
+      await expect(card.getByRole("button", { name: "Open" })).toHaveCount(0);
+      await expect(card.getByText(RUN_COCKPIT.waitingHeld(1))).toBeVisible();
+      // The run's own wire state, via RunStateBadge, reads exactly what it is.
       await expect(card.getByText("Awaiting confirmation")).toBeVisible();
+    } finally {
+      sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
+    }
+  });
+
+  // The credential_reauth twin: it carries no Review/Open button of its own
+  // (canDecideApproval refuses everyone), but it must stay pinned to the
+  // Needs-you lane and keep stating the live "AWS sign-in" sentence — never
+  // demoted to a "was held" claim — at the same 25-hour age.
+  test("a credential_reauth PENDING for 23 hours stays pinned to Needs-you and keeps stating the live AWS sign-in wait", async ({
+    page,
+  }) => {
+    const solo = await createGroupRun(page, "e2e long-held reauth", "long-held reauth run");
+    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${solo}'`);
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
+       ('${randomUUID()}','${solo}','credential_reauth','{}'::jsonb,'PENDING',now() - interval '23 hours')`,
+    );
+
+    try {
+      await openRuns(page);
+      const lane = page.getByRole("region", { name: "Needs you" });
+      const card = lane.getByTestId("run-card").filter({ hasText: "e2e long-held reauth" });
+      await expect(card).toBeVisible();
+      await expect(card.getByText(/AWS sign-in/)).toBeVisible();
+      await expect(card.getByText(/was held/)).toHaveCount(0);
     } finally {
       sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
     }

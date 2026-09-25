@@ -217,6 +217,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   runbook's quoted age recipient and `secrets.allowEphemeralAgeKey` flag) are now a path/regex
   allowlist in `.gitleaks.toml` instead, which matches regardless of commit, and a repo guard
   refuses a `.gitleaksignore` path that keeps churning fingerprints (#665).
+- **The Runs board declared a still-live `tool_call`/`credential_reauth` hold dead after a
+  60-minute client-side ceiling, while `wardyn-toolgate` keeps the agent parked on it for up to
+  `WARDYN_APPROVAL_EXPIRY_AFTER` (24h default).** An operator back from lunch saw the group chip
+  say "1 was held", the card swap Review for Open, and the cockpit drop "sandbox held" — for a run
+  whose agent was still frozen waiting for exactly that decision (#509). A PENDING row is now live
+  until the server's own state says otherwise; a hold the server has expired or cancelled simply
+  stops showing as held.
 - The New Run rail's launch and preflight failures are now `role="alert"` regions, announced to a
   screen reader on arrival (a repeated, identical failure re-announces too), and disabled controls
   that used to explain themselves only through a `title` tooltip — the record pane's operator-only
