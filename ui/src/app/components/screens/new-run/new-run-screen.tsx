@@ -209,7 +209,7 @@ export function NewRunScreen() {
         if (!alive) return;
         setLlmReady(st.unreachable ? null : hasLlmPath(st));
         setHarnesses(st.harnesses);
-        setModelProviders(st.unreachable ? undefined : st.model_providers);
+        setModelProviders(st.unreachable ? undefined : st.model_providers ?? undefined);
         setProviderAccess(st.unreachable ? undefined : st.provider_access);
         if (st.unreachable) return;
         const classes = (st.runner.confinement_classes ?? []).filter(Boolean);

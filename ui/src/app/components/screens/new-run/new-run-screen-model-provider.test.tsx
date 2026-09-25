@@ -345,3 +345,17 @@ describe("NewRunScreen — a command run never carries a model provider", () => 
     expect(createRunMock.mock.calls[0][0].model_provider).toBeUndefined();
   });
 });
+
+// #1042 sends `"model_providers": null` for an install with no provider block
+// (omitempty dropped). null must read like absent: no picker, no gate, and
+// Launch still works.
+describe("NewRunScreen — a legacy install's null model_providers", () => {
+  it("renders and launches with no model_provider on the wire", async () => {
+    getSetupStatusMock.mockResolvedValue({ ...baseStatus(), model_providers: null });
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Legacy null block");
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    expect(createRunMock.mock.calls[0][0].model_provider).toBeUndefined();
+  });
+});
