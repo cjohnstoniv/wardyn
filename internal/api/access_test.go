@@ -34,7 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the store double ───────────────────────────────────────────────────────
+// the store double
 
 // roleMapStore holds role_mappings rows in memory, mirroring permStore's
 // shape for capability grants: UpsertRoleMapping flips an existing (value)
@@ -44,6 +44,30 @@ type roleMapStore struct {
 	store.Store
 	rows    []types.RoleMapping
 	listErr error
+	// userTypes is the user_types table beyond the built-in row, which
+	// ListUserTypes always includes (the migration seeds it).
+	userTypes    []types.UserType
+	userTypesErr error
+}
+
+func (s *roleMapStore) ListUserTypes(context.Context) ([]types.UserType, error) {
+	if s.userTypesErr != nil {
+		return nil, s.userTypesErr
+	}
+	return append([]types.UserType{{ID: types.UserTypeStandard, Name: "Standard user", BuiltIn: true}}, s.userTypes...), nil
+}
+
+func (s *roleMapStore) GetUserType(ctx context.Context, id string) (types.UserType, error) {
+	list, err := s.ListUserTypes(ctx)
+	if err != nil {
+		return types.UserType{}, err
+	}
+	for _, t := range list {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return types.UserType{}, store.ErrNotFound
 }
 
 // ListAPITokens completes the double for the read the write handlers now make:
@@ -65,6 +89,7 @@ func (s *roleMapStore) UpsertRoleMapping(_ context.Context, m types.RoleMapping)
 	for i, ex := range s.rows {
 		if ex.Value == m.Value {
 			s.rows[i].Role = m.Role
+			s.rows[i].UserType = m.UserType
 			s.rows[i].CreatedBy = m.CreatedBy
 			return s.rows[i], nil
 		}
@@ -99,13 +124,13 @@ func (b accessOIDCBridge) ListRoleMappings(ctx context.Context) ([]oidc.RoleMapp
 	}
 	out := make([]oidc.RoleMapping, len(rows))
 	for i, m := range rows {
-		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role}
+		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role, UserType: m.UserType}
 	}
 	return out, nil
 }
 
-// ─── a REAL *oidc.Authenticator, not the zero-value stub every other API
-// test uses ───────────────────────────────────────────────────────────────
+// a real *oidc.Authenticator, not the zero-value stub every other API
+// test uses
 //
 // Every other internal/api test authenticates through a session cookie whose
 // ROLE the router trusts directly (ssoSession) — it never needs the
@@ -142,8 +167,9 @@ func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, 
 	t.Cleanup(httpSrv.Close)
 
 	var mappings oidc.RoleMappingSource
+	var userTypes oidc.UserTypeSource
 	if st != nil {
-		mappings = accessOIDCBridge{st: st}
+		mappings, userTypes = accessOIDCBridge{st: st}, st
 	}
 	cfg := oidc.Config{
 		IssuerURL:         httpSrv.URL,
@@ -154,6 +180,7 @@ func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, 
 		DefaultRole:       defaultRole,
 		LegacyAdminEmails: legacyAdminEmails,
 		RoleMappings:      mappings,
+		UserTypes:         userTypes,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -178,11 +205,17 @@ func newAccessAuth(t *testing.T, roleMap map[string]string, defaultRole string, 
 // state a genuinely group-less human produces.
 func accessSession(t *testing.T, sub, email, role string, groups []string) *http.Cookie {
 	t.Helper()
+	return accessSessionOfType(t, sub, email, role, types.UserTypeStandard, groups)
+}
+
+// accessSessionOfType is accessSession stamped with a given user type.
+func accessSessionOfType(t *testing.T, sub, email, role, userType string, groups []string) *http.Cookie {
+	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
 		// Hand-rolled payload: stamp the codec version or decodeSession reads it
 		// as a pre-0.7 cookie and refuses it (see ssoSession in rbac_test.go).
 		V:   oidc.SessionCodecVersion,
-		Sub: sub, Email: email, Role: role, UserType: "standard", Expiry: time.Now().UTC().Add(time.Hour), Groups: groups,
+		Sub: sub, Email: email, Role: role, UserType: userType, Expiry: time.Now().UTC().Add(time.Hour), Groups: groups,
 	})
 	if err != nil {
 		t.Fatalf("marshal session: %v", err)
@@ -205,7 +238,7 @@ func accessServer(t *testing.T, auth *oidc.Authenticator, st *roleMapStore) *Ser
 	return New(cfg)
 }
 
-// ─── 503 when OIDC is not configured ───────────────────────────────────────
+// 503 when OIDC is not configured
 
 func TestAccess_Unconfigured503(t *testing.T) {
 	cfg := baseTestConfig(newHarness(t), &roleMapStore{})
@@ -235,7 +268,7 @@ func TestAccess_Unconfigured503(t *testing.T) {
 	}
 }
 
-// ─── canonicalization + collision ──────────────────────────────────────────
+// canonicalization + collision
 
 func TestAccess_CanonicalizesValueOnWrite(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
@@ -325,7 +358,7 @@ func TestAccess_CollisionWithOperatorAllowlist400(t *testing.T) {
 	}
 }
 
-// ─── Q7 adjudication: email-shaped console mappings ────────────────────────
+// Q7 adjudication: email-shaped console mappings
 
 // TestAccess_EmailMappingRefusedByDefault pins EMAIL_KEY_REFUSED
 // byte-for-byte (docs/design/people-access-prompt.md's Adjudication §Q7) —
@@ -502,7 +535,7 @@ func TestAccess_GetReflectsEmailDomainsConfigured(t *testing.T) {
 	}
 }
 
-// ─── A-5: guard matrix over a SHADOWED row (merged map, not raw counts) ────
+// A-5: guard matrix over a shadowed row (merged map, not raw counts)
 
 // TestAccess_ShadowedRowGuards: chart is EMPTY; the console's ONLY row
 // collides with the OPERATOR ALLOWLIST and is shadowed (mergeRoleMaps drops
@@ -617,7 +650,7 @@ func TestAccess_InvalidShapeRejected(t *testing.T) {
 	}
 }
 
-// ─── posture-flip guard: pure-function matrix over accessRolePosture ───────
+// posture-flip guard: pure-function matrix over accessRolePosture
 
 func TestAccessRolePosture_Matrix(t *testing.T) {
 	cases := []struct {
@@ -642,7 +675,7 @@ func TestAccessRolePosture_Matrix(t *testing.T) {
 				emails = []string{"ops@corp.example"}
 			}
 			auth := newAccessAuth(t, nil, tc.defaultRole, emails, nil)
-			before, after, changes := accessRolePosture(auth)
+			before, after, changes := accessRolePosture(auth, nil)
 			if before != tc.wantBefore || after != tc.wantAfter || changes != tc.wantChanges {
 				t.Errorf("accessRolePosture = (%q, %q, %v), want (%q, %q, %v)",
 					before, after, changes, tc.wantBefore, tc.wantAfter, tc.wantChanges)
@@ -685,8 +718,9 @@ func TestAccess_PostureFlipGuard_InertWhenChartNonEmpty(t *testing.T) {
 	auth := newAccessAuth(t, map[string]string{"chart-row": oidc.RoleUser}, "", []string{"ops@corp.example"}, nil)
 	srv := accessServer(t, auth, &roleMapStore{})
 
-	// Same operator-emails + no-default combination TestAccess_PostureFlipGuard_FiresAndAcknowledges
-	// used to trip the guard — but the chart is non-empty here, so it must not.
+	// Same operator-emails + no-default combination that trips the guard in
+	// TestAccess_PostureFlipGuard_FiresAndAcknowledges — but the chart is non-empty here, so it
+	// must not.
 	w := do(t, srv, http.MethodPost, "/api/v1/access/mappings", adminToken, `{"value":"eng-team","role":"user"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (guard inert when the chart map is non-empty); body=%s", w.Code, w.Body.String())
@@ -747,7 +781,7 @@ func TestAccess_ReversePostureFlipGuard(t *testing.T) {
 	}
 }
 
-// ─── lockout guard ──────────────────────────────────────────────────────────
+// lockout guard
 
 // TestAccess_LockoutGuard_SSOAdminBlockedFromDemotingSelf: an SSO admin
 // deleting the console row that is their ONLY source of admin — with a
@@ -821,15 +855,15 @@ func TestAccess_LockoutGuard_POST(t *testing.T) {
 	}
 }
 
-// ─── A-1: stale-snapshot guard, distinct from a genuine lockout ────────────
+// A-1: stale-snapshot guard, distinct from a genuine lockout
 
 // TestAccess_StaleSnapshot_NilGroupsNeverReadsAsLockout: an admin session
 // whose groups snapshot is nil (a pre-0.6 cookie, or a group that fell off
 // the 2048-byte truncation) cannot re-derive the admin access the caller
 // demonstrably holds — PreviewRoleAgainst against the snapshot alone comes
-// out non-admin regardless of the write. Before the fix this 400'd with the
-// LOCKOUT message on every such write (false positive); now it must get the
-// distinct accessStaleSnapshot refusal instead, and the row must survive.
+// out non-admin regardless of the write. Such a write must get the distinct
+// accessStaleSnapshot refusal, not the lockout message (a false positive),
+// and the row must survive.
 func TestAccess_StaleSnapshot_NilGroupsNeverReadsAsLockout(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
 	st := &roleMapStore{rows: []types.RoleMapping{
@@ -926,7 +960,7 @@ func TestAccess_LockoutGuard_GenuineLockoutStillRefused(t *testing.T) {
 	}
 }
 
-// ─── GET /access shape ──────────────────────────────────────────────────────
+// GET /access shape
 
 func TestAccess_GetShapeIncludesShadowedRow(t *testing.T) {
 	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, oidc.RoleUser, []string{"ops@corp.example"}, nil)
@@ -1100,7 +1134,7 @@ func TestAccess_MappingsAreSortedByValueThenSource(t *testing.T) {
 	}
 }
 
-// ─── preview ────────────────────────────────────────────────────────────────
+// preview
 
 func TestAccess_PreviewExplicitClaims(t *testing.T) {
 	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, "", nil, nil)
@@ -1124,8 +1158,9 @@ func TestAccess_PreviewExplicitClaims(t *testing.T) {
 
 // TestAccess_PreviewWireShape pins the RAW bytes of POST /access/preview's
 // matched[] now that it marshals oidc.Match directly instead of an api-local
-// twin: the three lowercase keys the TS twin declares
-// (ui/src/app/lib/types/access.ts:108-112) and, for a no-match preview, [] and
+// twin: the four lowercase keys the TS twin declares (AccessPreviewMatch in
+// ui/src/app/lib/types/access.ts; user_type only on a user-tier match) and, for
+// a no-match preview, [] and
 // never null — the console reads matched.length, which throws on null.
 func TestAccess_PreviewWireShape(t *testing.T) {
 	auth := newAccessAuth(t, map[string]string{"eng-team": oidc.RoleUser}, "", nil, nil)
@@ -1145,10 +1180,10 @@ func TestAccess_PreviewWireShape(t *testing.T) {
 		t.Fatalf("matched = %v, want exactly one entry; body=%s", raw.Matched, w.Body.String())
 	}
 	got := raw.Matched[0]
-	if len(got) != 3 {
-		t.Errorf("match object = %v, want exactly the 3 wire keys (a new exported field on oidc.Match must not leak onto this route)", got)
+	if len(got) != 4 {
+		t.Errorf("match object = %v, want exactly the 4 wire keys (a new exported field on oidc.Match must not leak onto this route)", got)
 	}
-	for _, k := range []string{"value", "role", "source"} {
+	for _, k := range []string{"value", "role", "user_type", "source"} {
 		if _, ok := got[k]; !ok {
 			t.Errorf("match object %v is missing key %q", got, k)
 		}
@@ -1228,7 +1263,7 @@ func TestAccess_PreviewStoreErrorIsOutcomeNot500(t *testing.T) {
 	}
 }
 
-// ─── DELETE unknown id ──────────────────────────────────────────────────────
+// DELETE unknown id
 
 func TestAccess_DeleteUnknownID404(t *testing.T) {
 	auth := newAccessAuth(t, nil, "", nil, nil)
@@ -1240,7 +1275,7 @@ func TestAccess_DeleteUnknownID404(t *testing.T) {
 	}
 }
 
-// ─── A-6: delete audit records WHICH mapping was removed ──────────────────
+// A-6: delete audit records which mapping was removed
 
 // TestAccess_DeleteRecordsValueAndRoleInAudit: once a row is gone, the store
 // can no longer say what it named — the audit event must carry the matched
@@ -1287,12 +1322,12 @@ func TestAccess_DeleteRecordsValueAndRoleInAudit(t *testing.T) {
 	}
 }
 
-// ─── A-10: acknowledge_access_change via strconv.ParseBool ────────────────
+// A-10: acknowledge_access_change via strconv.ParseBool
 
-// TestAccess_DeleteAcknowledgeAcceptsParseBoolForms: the query param used to
-// accept only the literal "true" — strconv.ParseBool also takes "1"/"T"/
-// "TRUE", and a garbage value must still read as false (never error the
-// request), same as an absent param.
+// TestAccess_DeleteAcknowledgeAcceptsParseBoolForms: the query param accepts
+// every strconv.ParseBool form ("1"/"T"/"TRUE" as well as "true"), and a
+// garbage value must still read as false (never error the request), same as
+// an absent param.
 func TestAccess_DeleteAcknowledgeAcceptsParseBoolForms(t *testing.T) {
 	// emails + no default: the reverse posture-flip guard fires on an
 	// unacknowledged delete of the deployment's only row, which is exactly
@@ -1324,7 +1359,7 @@ func TestAccess_DeleteAcknowledgeAcceptsParseBoolForms(t *testing.T) {
 	}
 }
 
-// ─── the third tier: security_admin (0.7 §B, migration 0053) ──────────────
+// the third tier: security_admin (0.7 §B, migration 0053)
 
 // TestAccess_SecurityAdminMappingPersists_PGBacked is the ONE test in this
 // file that cannot use roleMapStore, and that is the entire point: the bug it

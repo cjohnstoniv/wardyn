@@ -259,8 +259,8 @@ export function useSiteConfigStep(
   const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
-    reloadSiteConfig();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void reloadSiteConfig();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once prologue by design (see doc comment above); reloadSiteConfig's identity rides adminReads and must not re-fire this on that account
   }, []);
 
   const mutate = async (next: SiteConfig, errorMessage: string): Promise<boolean> => {

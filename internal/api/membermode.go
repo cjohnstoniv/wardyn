@@ -20,7 +20,6 @@ package api
 // that proof (docs/OPERATIONS.md names both, and the mode's three ceilings).
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -143,8 +142,8 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	// no_credential rides the datum ONLY when the mode was turned ON with the
 	// preview posture asked for: every row a 0.7.4 deployment could write stays
 	// byte-identical, and the key is a MARKER of which posture was entered
-	// rather than a field every row answers — the same rule authzDeniedDatum's
-	// member_mode marker below follows.
+	// rather than a field every row answers — the same rule authz.Datum's
+	// member_mode marker follows.
 	// noCred is what the SESSION now carries, never what the body asked for.
 	// Besides the roster gate above it drops the REAL-MEMBER case: SetMemberMode
 	// writes that caller no cookie at all, so echoing their request would report
@@ -161,36 +160,4 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"member_mode": req.Enabled, "member_mode_no_credential": noCred,
 	})
-}
-
-// authzDeniedDatum builds the `authz.denied` Data map, marking the refusals met
-// INSIDE member mode so a denial stream reads as "an admin exercising the member
-// path" rather than as an incident. The key is OMITTED when the mode is off — it
-// is a marker, not a field every row has to answer.
-//
-// Every admin-tier refusal goes through this, not only the two middleware
-// chokepoints (requireOperator and requireSecurityOperator, http.go). The
-// IN-HANDLER refusals go through it too — getWorkspaceAuthorized's
-// operator-owned-workspace arm (helpers.go), secrets.go's ?owner= gate,
-// resolveAlwaysTarget's operator-only `always` scope (approvals.go) and
-// denyMemberField, which carries the workspaces.llm_cred admin-tier arm
-// (runs_create_validate.go). They exist precisely so the audit trail does not
-// depend on WHERE a refusal happens to live, and secrets.go says so in a
-// shape-identity comment; a marker present at only some of the sites would make
-// the field unreliable for the one reader it was added for — an operator
-// filtering the denial stream to tell an admin walking the member path from a
-// member incident.
-//
-// A hand-rolled map at an admin-tier emit is the regression to look for: the
-// two refusals above were exactly that, and each was reachable by
-// an admin in member mode doing what the member Getting Started card invites —
-// deciding their own run's held egress at scope `always`, creating a workspace.
-// authz_denied_doc_test.go's scanner reads this call, so a reason introduced
-// here is still held to the published enum.
-func authzDeniedDatum(ctx context.Context, reason, method string) map[string]any {
-	d := map[string]any{"reason": reason, "method": method}
-	if oidc.MemberModeFromContext(ctx) {
-		d["member_mode"] = true
-	}
-	return d
 }

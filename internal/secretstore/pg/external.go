@@ -271,7 +271,8 @@ func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, n
 
 func (s *Store) atTarget(target string, e envelope) bool {
 	if target == MigrateLocal {
-		return e.version == encVersion && e.kekID == s.kek.ID()
+		// Any local row: moving between local keys is -rewrap's, not this.
+		return e.version == encVersion
 	}
 	store, _ := splitRef(e.kekID)
 	return e.version == extVersion && store == target
@@ -327,11 +328,12 @@ func (s *Store) migrateRow(ctx context.Context, target, owner, name string, onRe
 		return true, false, nil
 	}
 
-	wrapped, ct, err := seal(ctx, s.kek, owner, name, plain)
+	k := s.writer(owner, name)
+	wrapped, ct, err := seal(ctx, k, owner, name, plain)
 	if err != nil {
 		return false, false, err
 	}
-	if err := flipRow(ctx, tx, owner, name, encVersion, s.kek.ID(), wrapped, ct); err != nil {
+	if err := flipRow(ctx, tx, owner, name, encVersion, k.ID(), wrapped, ct); err != nil {
 		return false, false, err
 	}
 	store, loc := splitRef(e.kekID)

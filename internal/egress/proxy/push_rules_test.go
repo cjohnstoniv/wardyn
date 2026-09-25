@@ -613,11 +613,11 @@ func TestPushRulesGlobMatching(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.pattern+" vs "+c.path, func(t *testing.T) {
 			rs := compilePushRules(&types.PushRulesSpec{DenyPaths: []string{c.pattern}})
-			_, total, _, err := rs.match([]gitpack.Change{{Path: c.path, Mode: "100644"}})
+			hits, _, err := match(rs.deny, []gitpack.Change{{Path: c.path, Mode: "100644"}})
 			if err != nil {
 				t.Fatalf("match: %v", err)
 			}
-			if got := total > 0; got != c.want {
+			if got := len(hits) > 0; got != c.want {
 				t.Errorf("matched = %v, want %v", got, c.want)
 			}
 		})
@@ -644,7 +644,7 @@ func TestPushRulesBoundTheirOwnWork(t *testing.T) {
 				changes[i] = gitpack.Change{Path: fmt.Sprintf("src/mod%06d/file.go", i), Mode: mode}
 			}
 			start := time.Now()
-			_, _, _, err := rs.match(changes)
+			_, _, err := match(rs.deny, changes)
 			elapsed := time.Since(start)
 
 			if !errors.Is(err, errGlobBudget) {

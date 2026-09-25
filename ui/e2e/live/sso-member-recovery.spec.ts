@@ -64,19 +64,18 @@
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
+import { USER_PREVIEW } from "../../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
 import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/capture-confirm";
-import { LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/login-pane-copy";
+import { LOGIN_SANDBOX_UNREADABLE, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
 import {
   LOGIN_SANDBOX_SLOW_START,
   LOGIN_SANDBOX_READ_RETRYING,
-  LOGIN_SANDBOX_STUCK_LEAD_IN,
 } from "../../src/app/components/screens/settings/login-start-wait";
 // 0.7.6 lane starting-detail (finding 6). run-status-detail.ts is deliberately
 // CSS-free and component-free so a Playwright spec can import it — the same
 // rule helpers.ts states for SELFRUN_MARKER.
-import { STARTING_UNSCHEDULABLE, STUCK_IMAGE_PULL } from "../../src/app/components/screens/run-status-detail";
+import { STARTING_UNSCHEDULABLE } from "../../src/app/components/screens/run-status-detail";
 // 0.7.6 lanes ui-model-access-door (the strip) and ui-new-run-model-access (the
 // rail), by constant name from local/v076/canon/*-docs.md.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
@@ -708,9 +707,14 @@ test("E (login-pane): a sign-in held 65 s in STARTING reads as slow, never as un
   // SUBSTRATE's sentence instead of the hedged clock one: it names SCHEDULING
   // for a wait that is not a pull, which is the whole of finding 6 in one
   // assertion. The 65 s hold above is load-bearing for it: below
-  // RUN_POLL_SLOW_START_MS (60 s) the pane still shows LOGIN_SANDBOX_STARTING,
-  // because Unschedulable is NOT terminal and therefore grades on the clock.
+  // RUN_POLL_SLOW_START_MS (60 s) the pane shows only its first step, because
+  // Unschedulable is NOT terminal and therefore grades on the clock.
   await expect(page.getByText(STARTING_UNSCHEDULABLE)).toBeVisible();
+  // #628: the whole hold was narrated in the door itself, on its first step —
+  // the person was never sent to a blank tab to wait.
+  await expect(
+    page.getByTestId("signin-progress").getByRole("listitem").filter({ hasText: SIGNIN_PROGRESS.STEP_START }),
+  ).toHaveAttribute("data-state", "active");
   // …and the sentence it REPLACED is gone. Asserting only the new one would
   // pass on a pane that showed both, which is the thing finding 6 is against.
   await expect(page.getByText(LOGIN_SANDBOX_SLOW_START)).toHaveCount(0);
@@ -954,8 +958,10 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
   try {
     // The rollout replaced the pod; wait for the new one to actually serve
     // before driving a browser at it.
+    // The old pod drops its connections mid-rollout (ECONNRESET); a thrown
+    // request is "not serving yet", not a failure.
     await expect
-      .poll(async () => (await request.get("/healthz")).status(), { timeout: 120_000 })
+      .poll(async () => (await request.get("/healthz").catch(() => null))?.status() ?? 0, { timeout: 120_000 })
       .toBe(200);
 
     await dexSignIn(page, MEMBER_EMAIL);
@@ -967,25 +973,25 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
     // only makes it stricter.
     const started = Date.now();
 
-    // The lead-in names the speaker; the sentence after it is the SUBSTRATE's,
-    // and the registry's own message follows the colon because that is what
-    // names the fix.
-    await expect(page.getByText(STUCK_IMAGE_PULL)).toBeVisible({ timeout: 20_000 });
+    // #628 state 7: the door's download step reads failed, and the alert is
+    // the server's own status_detail as is — the registry's words are in it,
+    // because they are what names the fix.
+    await expect(
+      page.getByTestId("signin-progress").getByRole("listitem").filter({ hasText: SIGNIN_PROGRESS.STEP_DOWNLOAD_FAILED }),
+    ).toBeVisible({ timeout: 20_000 });
     const elapsed = Date.now() - started;
     expect(elapsed, "a terminal reason must end the wait on the reason, not on the 5-minute clock").toBeLessThan(
       20_000,
     );
-    await expect(page.getByText(LOGIN_SANDBOX_STUCK_LEAD_IN)).toBeVisible();
+    await expect(page.getByTestId("harness-login-pane").getByRole("alert")).toContainText("no-such-tag-0f0f");
     // Neither of the two clock-graded sentences: this wait never became "slow",
     // and Wardyn could read the run throughout.
     await expect(page.getByText(LOGIN_SANDBOX_SLOW_START)).toHaveCount(0);
     await expect(page.getByText(LOGIN_SANDBOX_UNREADABLE)).toHaveCount(0);
-    // CANCEL ONLY. "Try again" is suppressed on a terminal reason (round-2 UX
-    // B3/S9) — trying again gets the same answer until somebody changes the
-    // image, and offering it would be the pane pretending the answer is not
-    // final.
-    await expect(page.getByRole("button", { name: /try again/i })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Cancel" }).first()).toBeVisible();
+    // The approved packet offers Retry here (it starts a fresh sandbox), and
+    // Cancel beside it.
+    await expect(page.getByRole("button", { name: SIGNIN_PROGRESS.RETRY })).toBeVisible();
+    await expect(page.getByRole("button", { name: SIGNIN_PROGRESS.CANCEL }).first()).toBeVisible();
 
     // The same evidence on the wire, which is what makes the sentence above
     // more than a console string: a run that went STARTING → FAILED between two
@@ -1098,10 +1104,10 @@ test("F (member-preview): an admin previews the state a member is in before they
   await signInThroughPane(page, openAdminLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
 
-  // Into the preview.
-  await page.locator("header").getByRole("button").last().click();
-  await page.getByRole("menuitem", { name: MEMBER_MODE.MENU_NEW }).click();
-  await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeVisible({ timeout: 60_000 });
+  // Into the preview, from the Permissions header (M-2).
+  await page.goto("/admin/permissions");
+  await page.getByRole("button", { name: USER_PREVIEW.MENU_NEW }).click();
+  await expect(page.getByText(USER_PREVIEW.BANNER)).toBeVisible({ timeout: 60_000 });
   await expect.poll(async () => (await me(page)).member_mode_no_credential, { timeout: 30_000 }).toBe(true);
 
   // The state every new member is in, and the one the plain toggle structurally
@@ -1127,8 +1133,8 @@ test("F (member-preview): an admin previews the state a member is in before they
 
   // Nothing was deleted: the admin's session sits untouched in the store and
   // comes back the moment they exit.
-  await page.getByRole("button", { name: MEMBER_MODE.EXIT }).click();
-  await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeHidden({ timeout: 60_000 });
+  await page.getByRole("button", { name: USER_PREVIEW.EXIT }).click();
+  await expect(page.getByText(USER_PREVIEW.BANNER)).toBeHidden({ timeout: 60_000 });
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("live");
 });
 

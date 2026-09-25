@@ -124,7 +124,8 @@ jobs:
         include:
           # `make lint` = go vet (all three tag sets) + the golangci-lint
           # function-size/complexity gate (.golangci.yml) + the file-size gate
-          # and the other static gates — single-sourced in the Makefile.
+          # and the other static gates + the console's ESLint — single-sourced
+          # in the Makefile.
           # tidy-check: go.mod/go.sum must stay tidy (go mod tidy -diff).
           - suite: lint
             target: build tidy-check lint
@@ -172,9 +173,25 @@ jobs:
           restore-keys: |
             go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-
             go-${{ matrix.suite }}-
+      # The lint leg's `make lint` also runs the console's ESLint
+      # (ui/eslint.config.js), so that leg sets up pnpm and node.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: matrix.suite == 'lint'
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: matrix.suite == 'lint'
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      # ESLint needs no browser; PUPPETEER_SKIP_DOWNLOAD skips the mermaid-cli
+      # chromium download.
       - name: make ${{ matrix.target }}
         if: matrix.suite == 'lint' || needs.changes.outputs.code != 'false'
         run: make ${{ matrix.target }}
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
       # files built under its tag (their packages run with -tags; the rest ran in
@@ -507,9 +524,9 @@ jobs:
   # `helm` above only proves the chart RENDERS (`helm template`); it has
   # never proven an install actually CONVERGES to a running, healthy control
   # plane. Builds the image locally (no registry — ghcr publishing is
-  # publish-image.yml, a separate push-triggered workflow with no PR
-  # trigger), loads it straight into a throwaway kind cluster (`kind load
-  # docker-image` — no pull), then `make helm-install-test` does the
+  # publish-image.yml, a separate workflow that runs after this one passes
+  # on main and never for a PR), loads it straight into a throwaway kind
+  # cluster (`kind load docker-image` — no pull), then `make helm-install-test` does the
   # in-cluster kubectl/helm work: a plain-manifest Postgres, `helm install`
   # against the loaded image, a bounded rollout wait, and a real /healthz
   # assertion through the Service via `kubectl port-forward` (see the
@@ -533,12 +550,12 @@ jobs:
       # main's layers and adds no entries of its own. use: false keeps any plain
       # `docker build` later in this job on the default builder, loading into
       # the daemon as before.
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
         with:
           use: false
       - name: Build wardynd image (local only — publishing is publish-image.yml)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           builder: ${{ steps.buildx.outputs.name }}
           context: .
@@ -631,14 +648,14 @@ jobs:
             go-conformance-k8s-${{ hashFiles('go.sum', 'Makefile') }}-
             go-conformance-k8s-
       # Cached image build: see helm-install-test's build step.
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
         if: needs.changes.outputs.backend != 'false'
         with:
           use: false
       - name: Build wardyn-proxy image (local only — publishing is publish-image.yml)
         if: needs.changes.outputs.backend != 'false'
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           builder: ${{ steps.buildx.outputs.name }}
           context: .
@@ -795,14 +812,14 @@ jobs:
           out=$(timeout 120 docker compose --env-file /etc/wardyn/wardyn.env \
             -f deploy/desktop/docker-compose.yaml -p wardyn-desk-ci \
             run --rm -T --name wardyn-desk-ci-hybrid-refusal \
-            -e WARDYN_ORG_URL=https://org-controlplane.example.com -e WARDYN_MEMBER_MODE=false \
+            -e WARDYN_ORG_URL=https://org-controlplane.example.com -e WARDYN_USER_DESKTOP=false \
             wardynd 2>&1)
           code=$?
           set -e
           echo "${out}"
           [ "${code}" -ne 0 ] \
-            || { echo "::error::wardynd booted (exit 0) with WARDYN_ORG_URL set and WARDYN_MEMBER_MODE unset — validateHybridPosture's refusal did not fire"; exit 1; }
-          echo "${out}" | grep -qF 'WARDYN_ORG_URL is set but WARDYN_MEMBER_MODE is not' \
+            || { echo "::error::wardynd booted (exit 0) with WARDYN_ORG_URL set and WARDYN_USER_DESKTOP unset — validateHybridPosture's refusal did not fire"; exit 1; }
+          echo "${out}" | grep -qF 'WARDYN_ORG_URL is set but WARDYN_USER_DESKTOP is not' \
             || { echo "::error::wardynd exited ${code}, but not with the expected refusal (124 = still running after 120s, i.e. it booted): ${out}"; exit 1; }
           docker compose --env-file /etc/wardyn/wardyn.env \
             -f deploy/desktop/docker-compose.yaml -p wardyn-desk-ci down -v
@@ -907,14 +924,14 @@ jobs:
         if: needs.changes.outputs.backend != 'false'
         run: docker run --rm hello-world
       # Cached image build: see helm-install-test's build step.
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
         id: buildx
         if: needs.changes.outputs.backend != 'false'
         with:
           use: false
       - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
         if: needs.changes.outputs.backend != 'false'
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           builder: ${{ steps.buildx.outputs.name }}
           context: .
@@ -925,7 +942,7 @@ jobs:
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=wardyn-proxy' || '' }}
       - name: Build agent-claude-code image (local only — the boot under measurement)
         if: needs.changes.outputs.backend != 'false'
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           builder: ${{ steps.buildx.outputs.name }}
           context: .
@@ -934,6 +951,9 @@ jobs:
           load: true
           cache-from: type=gha,scope=agent-claude-code
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=agent-claude-code' || '' }}
+      - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
+        if: needs.changes.outputs.backend != 'false'
+        run: make build-conformance-agent-image
       - name: Run conformance tests (docker)
         if: needs.changes.outputs.backend != 'false'
         env:
@@ -1219,8 +1239,9 @@ jobs:
   #     CLI, NOT gitleaks-action: the action's default scan range is only the
   #     triggering push/PR diff even with fetch-depth: 0, which silently made
   #     the "full history" claim false. Do not swap back without fixing its
-  #     scan range. `--log-opts="HEAD --full-history"` (Makefile:gitleaks) keeps
-  #     the scan to commits reachable from THIS branch — gitleaks' unscoped
+  #     scan range. `--log-opts="HEAD --full-history --diff-filter=tuxdb"`
+  #     (Makefile:gitleaks) keeps the scan to commits reachable from THIS
+  #     branch, with gitleaks' own diff filter restated — gitleaks' unscoped
   #     default also walks every other fetched branch, so one branch's finding
   #     used to red every unrelated PR and main alike (#372/G6).
   #     Accepted test/dev-fixture secrets are allowlisted by commit fingerprint
@@ -1257,6 +1278,7 @@ jobs:
           restore-keys: |
             go-notices-${{ hashFiles('go.sum', 'Makefile') }}-
             go-notices-
+      - run: go mod download
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 9

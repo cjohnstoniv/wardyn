@@ -24,9 +24,10 @@ document is that process, written down.
   maintainer following this list literally was waiting on a phantom job while
   skipping the one that catches a GPL regression. Two more publish
   workflows are not part of this job list at all (see "Container images"
-  below): `publish-image` (`.github/workflows/publish-image.yml`, push to
-  `main` only) and `release` (`.github/workflows/release.yml`, triggered by
-  step 5's tag push itself, so it cannot be a prerequisite of tagging).
+  below): `publish-image` (`.github/workflows/publish-image.yml`, after CI
+  passes on a push to `main`) and `release` (`.github/workflows/release.yml`,
+  triggered by step 5's tag push itself, so it cannot be a prerequisite of
+  tagging).
 - The multi-arch build is green on that commit too. It is `nightly.yml`'s
   `buildx-smoke` (checks named `multi-arch build (…)`), not a `ci.yml` job, so
   a pull request never runs it: read the latest nightly, or run it on the
@@ -176,10 +177,11 @@ another maintainer. Use the chosen version throughout this checklist.
 
    **Also add a `ROADMAP.md` Shipped row for the release you are cutting**
    (a past review found the Shipped table stuck on "Built, awaiting release" for
-   three released versions in a row) — a new row plus flipping that release's
-   own `### What vX.Y shipped` intro from "Built, awaiting release" to
-   "Shipped as `vX.Y.Z`", pointing at the CHANGELOG's now-dated entry instead
-   of `[Unreleased]`.
+   three released versions in a row) — a new row in the `## Shipped` table,
+   its Status cell reading "**Shipped (pre-alpha)** — `vX.Y.Z`, <date> (see
+   [CHANGELOG.md](CHANGELOG.md))", pointing at the CHANGELOG's now-dated entry
+   instead of `[Unreleased]`. ROADMAP.md carries no per-version narrative to
+   flip any more — CHANGELOG.md is the only per-release detail.
 
    **Also regenerate `docs/TEST-GAPS.md`: `make test-gaps`** (needs the union
    coverage profile `make ci`/`cover-check` already produced this run) —
@@ -370,7 +372,7 @@ job.
 Two workflows publish images, on two different triggers — neither overlaps
 the other:
 
-- **Continuous (every push to `main`).**
+- **Continuous (every push to `main` that passes CI).**
   `.github/workflows/publish-image.yml` builds and pushes `wardynd` only, to
   `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`). **Signed
   (keyless, by digest) but not SBOM- or provenance-attested**, and under the

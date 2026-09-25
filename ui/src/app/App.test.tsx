@@ -140,7 +140,8 @@ function renderApp(initialPath = "/") {
   );
 }
 
-describe("App — a 401 only carries a reason when the console WAS authed (H1)", () => {
+describe("App — a 401 only carries a reason when the console WAS authed", () => {
+  // ticket: H1
   afterEach(() => {
     vi.unstubAllGlobals();
     cleanup();
@@ -178,7 +179,8 @@ describe("App — a 401 only carries a reason when the console WAS authed (H1)",
 // (the SECOND /me request, deferred here) is still pending, nothing that
 // only fires once `auth === "authed"` (the badge poll's `limit=1000` reads)
 // may have gone out yet.
-describe("App — identity resolves before auth flips on re-auth (L4)", () => {
+describe("App — identity resolves before auth flips on re-auth", () => {
+  // ticket: L4
   afterEach(() => {
     vi.unstubAllGlobals();
     window.history.pushState({}, "", "/");
@@ -260,7 +262,8 @@ describe("App — identity resolves before auth flips on re-auth (L4)", () => {
 // path, not the capture/restore wiring). The pure `safeReturnPath`/
 // `roleCanReach` functions are unit-pinned directly instead.
 
-describe("roleCanReach — pure (M2)", () => {
+describe("roleCanReach — pure", () => {
+  // ticket: M2
   it("a member cannot reach an operator-only route", () => {
     expect(roleCanReach("/admin/drives", "user")).toBe(false);
     expect(roleCanReach("/admin/providers", "user")).toBe(false);
@@ -292,7 +295,8 @@ describe("roleCanReach — pure (M2)", () => {
   // for every role) have no sidebar entry but ARE reachable, or a member's
   // own mid-session 401 on any of the three would bounce to /runs instead of
   // restoring. M-1b: /settings is deleted; /account is its member-side twin.
-  it("M3: a member reaches the three self-service routes with no sidebar entry", () => {
+  it("a member reaches the three self-service routes with no sidebar entry", () => {
+    // ticket: M3
     expect(roleCanReach("/secrets", "user")).toBe(true);
     expect(roleCanReach("/account", "user")).toBe(true);
     expect(roleCanReach("/ssh-keys", "user")).toBe(true);

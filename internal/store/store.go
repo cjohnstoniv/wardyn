@@ -223,8 +223,8 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 
 // execRun is the one body the scoped single-column agent_runs writers below
 // share: Exec, wrap a driver error as "store: <verb>", and translate "no row
-// matched" into ErrNotFound. verb is exactly the error text each writer used to
-// spell for itself, so the wrapped message a caller matches on is unchanged.
+// matched" into ErrNotFound. verb is the error text a caller matches on, so
+// each writer passes its own.
 // UpdateRunStateIf/UpdateRunStateIfIdle deliberately do NOT route through here:
 // zero rows affected is a legitimate no-op for a guarded transition, not a
 // missing row.

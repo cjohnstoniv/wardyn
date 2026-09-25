@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
@@ -261,13 +262,17 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 	if s.cfg.Approvals == nil {
 		return
 	}
-	// Counted BEFORE the cancel, because after it there is nothing of this kind
-	// left PENDING to count: wardyn_credential_reauth_total{outcome="cancelled"}
-	// is a STATE-TRANSITION counter, and the first shape bumped it at a later
-	// resolve that happened to meet a terminal row — which counts retries, and
-	// never fires at all once the sidecar has given up.
-	reauth := s.countPendingReauth(ctx, runID)
-	n, err := s.cfg.Approvals.CancelForRun(ctx, runID, s.terminalCancelReason(ctx, runID))
+	// wardyn_credential_reauth_total{outcome="cancelled"} is a STATE-TRANSITION
+	// counter, so it counts the credential_reauth rows the cancel actually MOVED
+	// — not a pre-read of PENDING rows, which also counted one a human decided
+	// between the read and the CAS (#151). Counting at a later resolve that
+	// meets a terminal row counts retries instead, and never fires once the
+	// sidecar has given up. AWS SSO re-auth rows only, the series' HELP: an
+	// Azure DevOps sign-in or consent row is credential_reauth too, and is not.
+	byKind, err := s.cfg.Approvals.CancelForRun(ctx, runID, s.terminalCancelReason(ctx, runID))
+	for range byKind[approval.TallyReauthAWSSSO] {
+		s.metrics.credentialReauthRecorded(credentialReauthOutcomeCancelled)
+	}
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not cancel a terminal run's pending approvals",
 			slog.String("run_id", runID.String()), slog.Any("err", err))
@@ -275,29 +280,14 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 			runID.String(), "failure", mustJSON(map[string]any{"approval_cancel_error": err.Error()})))
 		return
 	}
-	for i := 0; i < reauth; i++ {
-		s.metrics.credentialReauthRecorded(credentialReauthOutcomeCancelled)
+	n := 0
+	for _, c := range byKind {
+		n += c
 	}
 	if n > 0 {
 		slog.InfoContext(ctx, "wardynd: cancelled a terminal run's pending approvals",
 			slog.String("run_id", runID.String()), slog.Int("cancelled", n))
 	}
-}
-
-// countPendingReauth is how many credential_reauth rows this run still has
-// open. Best-effort: a read that fails costs a metric, never a cancellation.
-func (s *Server) countPendingReauth(ctx context.Context, runID uuid.UUID) int {
-	rows, err := s.runApprovals(ctx, runID, types.ApprovalPending)
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for _, ap := range rows {
-		if ap.Kind == types.ApprovalCredentialReauth {
-			n++
-		}
-	}
-	return n
 }
 
 // CancelTerminalRunApprovals is cancelRunApprovals' exported seam for the THIRD

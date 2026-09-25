@@ -179,6 +179,11 @@ export interface AgentProvider {
   // (bedrock_sso + per_user). ADMIN-OWNED for the same reason sso_start_url is.
   sso_account_id?: string;
   sso_role_name?: string;
+  // The model provider (model_providers[].id) a new run of this agent uses
+  // unless the person chooses another. Must name a provider enabled for this
+  // agent; that provider may be turned off, which makes this default's runs
+  // refused rather than moved. Absent is today.
+  default_provider?: string;
 }
 
 // The org's model-provider configuration. Hand-maintained mirror of Go's
