@@ -27,6 +27,7 @@ package proxy
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -62,6 +63,11 @@ func (p *Proxy) governADOContent(w http.ResponseWriter, r *http.Request, host st
 			slog.String("rule_source", src), slog.String("reason", msg))
 		writeADORefusal(w, http.StatusForbidden, "GitPushRulesException", msg)
 		return false
+	}
+	if rules.unreadable != "" {
+		return refuse(ruleSourceGitPackBlind, fmt.Sprintf("Wardyn refused this Azure DevOps request: this run's "+
+			"push rules cannot be enforced: push_rules entry %q is not a pattern the broker can read; ask an "+
+			"operator to correct it", rules.unreadable))
 	}
 	req := adoscope.Request{Method: r.Method, Host: host, Path: adoRawPath(r), Header: r.Header,
 		Org: grant.Organization, BodyWithheld: true}

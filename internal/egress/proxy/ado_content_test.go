@@ -181,6 +181,19 @@ func TestADORESTPushRulesRefuseWhatTheyCannotRead(t *testing.T) {
 			}
 		})
 	}
+	// An unreadable rule entry is the same failure the git door reports at
+	// compile time: an unenforceable rule refuses every push, not just the
+	// ones it would have matched.
+	t.Run("an unreadable rule entry", func(t *testing.T) {
+		h, _ := newADORESTRules(t, contentRulesSpec(".github/**", "src//secret"), types.ApprovalApproved, caps...)
+		rec := h.do(t, http.MethodPost, restPushTarget, restPush(h.branch(), "/src/main.go"), nil)
+		if rec.Code != http.StatusForbidden || len(h.fake.Requests()) != 0 {
+			t.Fatalf("status = %d body %s, upstream %d; want a 403 and nothing forwarded", rec.Code, rec.Body.String(), len(h.fake.Requests()))
+		}
+		if log := h.log(); !strings.Contains(log, `"`+ruleSourceGitPackBlind+`"`) {
+			t.Errorf("decision log %s does not name %s", log, ruleSourceGitPackBlind)
+		}
+	})
 }
 
 // A pull request that is only created, or a ref that is only deleted, writes
