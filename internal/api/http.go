@@ -202,7 +202,7 @@ func withHumanIdentity(ctx context.Context, sub, email, role string, groups []st
 // errorBody is the uniform JSON error envelope.
 type errorBody struct {
 	Error  string `json:"error"`
-	Reason string `json:"reason,omitempty"` // a machine-readable class for the few refusals a console surface acts on; absent everywhere else
+	Reason string `json:"reason,omitempty"` // machine-readable refusal class; the SDK exposes it as APIError.Reason; coverage phased in under #204
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

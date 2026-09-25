@@ -149,6 +149,38 @@ func TestADOSignIn_CountsTowardMaxReauthHolds(t *testing.T) {
 	}
 }
 
+// A raise that cannot even ask (the approval store errors) used to answer 503
+// with no audit trace at all — it and its capability and consent siblings
+// bypassed fail(). #204 routes it through fail() like every other refusal, so it now
+// leaves the same secret.read failure row and carries reason on the wire.
+func TestADOSignIn_RaiseFailureIsAudited(t *testing.T) {
+	f := newADOSignInFixture(t)
+	f.approvals.requestErr = errors.New("approvals store unavailable")
+	f.fake.SetInvalidGrant(true)
+	f.at(time.Now().Add(time.Minute))
+
+	w := f.resolveQ(t, "")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d body %s, want 503", w.Code, w.Body.String())
+	}
+	rows := f.audit.find("secret.read")
+	if len(rows) != 1 || rows[0].Outcome != "failure" {
+		t.Fatalf("secret.read rows = %+v, want exactly one failure", rows)
+	}
+	var d map[string]any
+	_ = json.Unmarshal(rows[0].Data, &d)
+	if d["reason"] != "raise_failed" {
+		t.Errorf("audit reason = %v, want raise_failed", d["reason"])
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != "raise_failed" {
+		t.Errorf("wire reason = %q, want raise_failed", body.Reason)
+	}
+}
+
 // Consent rows are credential_reauth too, but they have their own cap
 // (maxADOCapabilityHoldsPerRun): a run that asked for consent maxReauthHolds
 // times can still be asked to sign in.

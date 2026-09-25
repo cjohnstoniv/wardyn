@@ -96,6 +96,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   error goes to the daemon log; the same holds for a lost agent exec-id write, a failed per-run CA
   and a record session that could not launch (its card and its run's hint). The driver-text guard
   now also watches `failAndRevoke` and `refuseADOEntraDispatch`.
+- **The per-person Azure DevOps injection lane's refusals now carry a machine `reason` on the
+  wire, not just the audit row** — the proxy sidecar (and now the Go SDK, via the new
+  `client.APIError.Reason` field) can branch on why a resolve, capability ask or sign-in hold
+  was refused instead of string-matching the human sentence. The three refusals in the lane that
+  bypassed its own audited refusal path (a capability, consent or sign-in hold that could not even
+  raise its approval request) now leave the same `secret.read` failure row every sibling refusal
+  does (#204).
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
