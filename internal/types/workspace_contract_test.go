@@ -36,7 +36,7 @@ func foldJSON(t *testing.T, m map[string]WorkspaceRequirement) string {
 	return string(b)
 }
 
-// ─── the identities ──────────────────────────────────────────────────────────
+// the identities
 
 // Zero attachments (or all-ephemeral): the fold IS the overlay, byte-for-byte.
 // Every pre-split workspace migrates with all rows in the overlay and no
@@ -77,7 +77,7 @@ func TestFoldWorkspaceContract_SingleSourceNoOverlay(t *testing.T) {
 	}
 }
 
-// ─── the precedence table, one rule at a time ───────────────────────────────
+// the precedence table, one rule at a time
 
 // Rule 2: "off" is this workspace refusing the requirement — the source keeps
 // declaring it, siblings keep inheriting it, THIS fold drops it.

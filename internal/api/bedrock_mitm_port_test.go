@@ -14,19 +14,20 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestAuthorBedrockBearerInjection_MITMEntryIsPortScoped is the pin for F037.
+// TestAuthorBedrockBearerInjection_MITMEntryIsPortScoped pins the Bedrock
+// bearer lane's MITM entry to a port.
 //
 // A MITM-eligibility entry is ANY-PORT when it carries no ":port" suffix:
 // proxy.parseMITMHostPort returns port 0 for a bare host, and handleConnect
-// then matches with `cport == 0 || cport == port`. planArtifactRedirect has
-// authored net.JoinHostPort(host, port) since W13-S1-5 for exactly that reason
-// (and internal/egress/proxy/mitm_test.go's
+// then matches with `cport == 0 || cport == port`. planArtifactRedirect
+// authors net.JoinHostPort(host, port) for exactly that reason (and
+// internal/egress/proxy/mitm_test.go's
 // TestMITMCorpHost_PortMismatchFallsThroughOpaque proves a port-scoped entry
-// falls through opaque on any other port). The Bedrock bearer lane, a LIVE
-// caller, still authored a bare host — so an agent that could reach the
-// Bedrock host at all could CONNECT to it on a port nobody configured, have
-// that tunnel TLS-terminated with the Wardyn leaf, and have the OPERATOR's
-// Bearer injected onto whatever answered there.
+// falls through opaque on any other port). The Bedrock bearer lane is a live
+// caller: authoring a bare host there would let an agent that can reach the
+// Bedrock host at all CONNECT to it on a port nobody configured, have that
+// tunnel TLS-terminated with the Wardyn leaf, and have the operator's Bearer
+// injected onto whatever answers there.
 //
 // The pin holds the property (the entry is port-scoped, at the port the run
 // actually reaches), not a literal, so a future endpoint knob cannot re-widen

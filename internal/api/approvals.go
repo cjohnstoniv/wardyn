@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/approval"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -596,8 +597,7 @@ func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request,
 			// Audited only once the approval is confirmed to genuinely exist
 			// and be decidable in kind — a run lookup failure here would be a
 			// data-integrity oddity, not a clean "not owned".
-			s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
-				"authz.denied", id.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+			s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(ap.RunID))
 		}
 		return ap, run, false, false
 	}
@@ -626,12 +626,8 @@ func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request,
 		return ap, run, false, false
 	}
 	if !allowed {
-		writeError(w, http.StatusForbidden, "you are not granted egress host "+host+
-			" — an admin decides this one, or can grant it to you")
-		s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", id.String(), "denied", mustJSON(map[string]any{
-				"reason": "capability_" + capEgressHost, "host": host,
-			})))
+		s.refuse(w, r, authz.Deny(authz.ReasonCapabilityEgressHost, id.String(), "you are not granted egress host "+host+
+			" — an admin decides this one, or can grant it to you").OnRun(ap.RunID).With("host", host))
 		return ap, run, false, false
 	}
 	return ap, run, true, true
@@ -821,12 +817,9 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 	if run.CreatedBy == "" || run.CreatedBy != principal {
 		return false, true
 	}
-	writeError(w, http.StatusForbidden, envEgressSecondHuman+
-		" is set: a second human must decide this — you created this run, so someone else approves or denies its egress")
-	s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorType, principal,
-		"authz.denied", id.String(), "denied", mustJSON(map[string]any{
-			"reason": "second_human_required", "host": approvalHost(ap),
-		})))
+	s.refuse(w, r, authz.Deny(authz.ReasonSecondHumanRequired, id.String(), envEgressSecondHuman+
+		" is set: a second human must decide this — you created this run, so someone else approves or denies its egress").
+		OnRun(ap.RunID).With("host", approvalHost(ap)))
 	return false, false
 }
 
@@ -902,7 +895,6 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	// discloses nothing they do not already know — while a 404 would read as
 	// "your own approval vanished". Do not "fix" this back.
 	if !s.isSecurityOperator(r.Context()) { // LOCKSTEP with authorizeMemberDecision; see http.go
-		writeError(w, http.StatusForbidden, "decision_scope always is operator-only")
 		// Audited, like every other member denial on this path (the capability
 		// refusal above and the four-eyes one below both write this row): a
 		// member reaching for `always` is reaching for a permanent workspace
@@ -910,14 +902,10 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 		// rule 6 exists to close, and a closed door nobody records is a door
 		// nobody can prove was tried. security_admin_surface is the reason for
 		// this predicate — the same one requireSecurityOperator writes.
-		// authzDeniedDatum (membermode.go), never a hand-rolled map: the datum
-		// carries the member_mode MARKER, and a marker missing from one
-		// admin-tier refusal is a marker a denial-stream filter cannot rely on
-		// at any of them. An admin in member mode reaching for `always` on
-		// their OWN run is the walk the member Getting Started card invites.
-		s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", ap.ID.String(), "denied",
-			mustJSON(authzDeniedDatum(r.Context(), "security_admin_surface", r.Method))))
+		// The datum carries the member_mode MARKER (authz.Datum): an admin in
+		// member mode reaching for `always` on their OWN run is the walk the
+		// member Getting Started card invites.
+		s.refuse(w, r, authz.Deny(authz.ReasonSecurityAdminSurface, ap.ID.String(), "decision_scope always is operator-only").OnRun(ap.RunID))
 		return uuid.Nil, false
 	}
 
