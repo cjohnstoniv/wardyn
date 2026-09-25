@@ -372,8 +372,19 @@ func TestStoreMode_DeleteEverywhereHalfway(t *testing.T) {
 		}
 	}
 
-	// Key Vault refuses every call naming bob's secret; alice's own delete is
-	// unaffected, so it goes through before bob's is reached.
+	// Both secret names, computed up front while both rows are guaranteed to
+	// still exist: deleteExternalEverywhere's SELECT has no ORDER BY, so which
+	// owner survives is not fixed, and reading a row's kek_id after a mutation
+	// has already removed it would fail here instead of at the assertion below.
+	snAlice, _, _, _ := ext.parse("alice", "k", strings.TrimPrefix(kekID(t, pool, "alice", "k"), "azurekv:"))
+	snBob, _, _, _ := ext.parse("bob", "k", strings.TrimPrefix(kekID(t, pool, "bob", "k"), "azurekv:"))
+
+	// Key Vault refuses every call naming bob's secret. Per the ORDER BY note
+	// above, this produces the half-way shape (one owner through, one
+	// refused) only if Postgres visits alice's row before bob's — true in
+	// practice for a freshly inserted 2-row match, though not guaranteed; the
+	// assertions below don't assume WHICH owner that is, only that exactly
+	// one of them is.
 	f.mu.Lock()
 	f.denyPath = ext.stem("bob", "k")
 	f.mu.Unlock()
@@ -381,17 +392,16 @@ func TestStoreMode_DeleteEverywhereHalfway(t *testing.T) {
 	if _, err := s.DeleteEverywhere(ctx, []string{"k"}); err == nil {
 		t.Fatal("DeleteEverywhere succeeded with bob's delete refused")
 	}
-	snAlice, _, _, _ := ext.parse("alice", "k", strings.TrimPrefix(kekID(t, pool, "alice", "k"), "azurekv:"))
-	snBob, _, _, _ := ext.parse("bob", "k", strings.TrimPrefix(kekID(t, pool, "bob", "k"), "azurekv:"))
 	f.mu.Lock()
 	_, aliceLive := f.secrets[snAlice]
 	_, bobLive := f.secrets[snBob]
 	f.mu.Unlock()
-	if aliceLive {
-		t.Fatal("alice's value is still in Key Vault; want it gone (her delete went through before bob's was refused)")
+	if aliceLive == bobLive {
+		t.Fatalf("alice live=%v, bob live=%v; want exactly one owner's value removed (the half-way shape)", aliceLive, bobLive)
 	}
-	if !bobLive {
-		t.Fatal("bob's value is gone from Key Vault; want it kept (his delete was refused)")
+	deletedOwner, keptOwner, keptValue := "alice", "bob", "v-bob"
+	if aliceLive {
+		deletedOwner, keptOwner, keptValue = "bob", "alice", "v-alice"
 	}
 
 	var n int
@@ -408,14 +418,14 @@ func TestStoreMode_DeleteEverywhereHalfway(t *testing.T) {
 	f.denyPath = ""
 	f.mu.Unlock()
 
-	// alice's row is now a dangling pointer: a definitive refusal, never
-	// ErrNotFound, so loadOrCreateSecret can never mint a boot key over it.
-	if _, err := s.For("alice").Get(ctx, "k"); err == nil || errors.Is(err, secretstore.ErrNotFound) {
-		t.Fatalf("Get on alice's dangling pointer = %v; want a refusal that is NOT ErrNotFound", err)
+	// deletedOwner's row is now a dangling pointer: a definitive refusal,
+	// never ErrNotFound, so loadOrCreateSecret can never mint a boot key over it.
+	if _, err := s.For(deletedOwner).Get(ctx, "k"); err == nil || errors.Is(err, secretstore.ErrNotFound) {
+		t.Fatalf("Get on %s's dangling pointer = %v; want a refusal that is NOT ErrNotFound", deletedOwner, err)
 	}
-	// bob's value is untouched.
-	if v, err := s.For("bob").Get(ctx, "k"); err != nil || string(v) != "v-bob" {
-		t.Fatalf("Get on bob = (%q, %v); want the value intact", v, err)
+	// keptOwner's value is untouched.
+	if v, err := s.For(keptOwner).Get(ctx, "k"); err != nil || string(v) != keptValue {
+		t.Fatalf("Get on %s = (%q, %v); want the value intact", keptOwner, v, err)
 	}
 
 	// A retry with the fault cleared completes and leaves no rows.

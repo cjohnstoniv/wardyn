@@ -306,8 +306,12 @@ func TestStoreMode_DeleteEverywhereHalfway(t *testing.T) {
 		}
 	}
 
-	// Vault refuses every call naming bob's path; alice's own delete is
-	// unaffected, so it goes through before bob's is reached.
+	// Vault refuses every call naming bob's path. deleteExternalEverywhere's
+	// SELECT carries no ORDER BY, so this produces the half-way shape (one
+	// owner through, one refused) only if Postgres visits alice's row before
+	// bob's — true in practice for a freshly inserted 2-row match, though not
+	// guaranteed by the query itself; the assertions below don't assume WHICH
+	// owner that is, only that exactly one of them is.
 	f.mu.Lock()
 	f.denyPath = "people/" + strings.ToLower(b32.EncodeToString([]byte("bob"))) + "/"
 	f.mu.Unlock()
@@ -321,11 +325,12 @@ func TestStoreMode_DeleteEverywhereHalfway(t *testing.T) {
 	_, aliceLive := f.kv[alicePath]
 	_, bobLive := f.kv[bobPath]
 	f.mu.Unlock()
-	if aliceLive {
-		t.Fatal("alice's value is still in Vault; want it gone (her delete went through before bob's was refused)")
+	if aliceLive == bobLive {
+		t.Fatalf("alice live=%v, bob live=%v; want exactly one owner's value removed (the half-way shape)", aliceLive, bobLive)
 	}
-	if !bobLive {
-		t.Fatal("bob's value is gone from Vault; want it kept (his delete was refused)")
+	deletedOwner, keptOwner, keptValue := "alice", "bob", "v-bob"
+	if aliceLive {
+		deletedOwner, keptOwner, keptValue = "bob", "alice", "v-alice"
 	}
 
 	var n int
@@ -342,14 +347,14 @@ func TestStoreMode_DeleteEverywhereHalfway(t *testing.T) {
 	f.denyPath = ""
 	f.mu.Unlock()
 
-	// alice's row is now a dangling pointer: a definitive refusal, never
-	// ErrNotFound, so loadOrCreateSecret can never mint a boot key over it.
-	if _, err := s.For("alice").Get(ctx, "k"); err == nil || errors.Is(err, secretstore.ErrNotFound) {
-		t.Fatalf("Get on alice's dangling pointer = %v; want a refusal that is NOT ErrNotFound", err)
+	// deletedOwner's row is now a dangling pointer: a definitive refusal,
+	// never ErrNotFound, so loadOrCreateSecret can never mint a boot key over it.
+	if _, err := s.For(deletedOwner).Get(ctx, "k"); err == nil || errors.Is(err, secretstore.ErrNotFound) {
+		t.Fatalf("Get on %s's dangling pointer = %v; want a refusal that is NOT ErrNotFound", deletedOwner, err)
 	}
-	// bob's value is untouched.
-	if v, err := s.For("bob").Get(ctx, "k"); err != nil || string(v) != "v-bob" {
-		t.Fatalf("Get on bob = (%q, %v); want the value intact", v, err)
+	// keptOwner's value is untouched.
+	if v, err := s.For(keptOwner).Get(ctx, "k"); err != nil || string(v) != keptValue {
+		t.Fatalf("Get on %s = (%q, %v); want the value intact", keptOwner, v, err)
 	}
 
 	// A retry with the fault cleared completes and leaves no rows.
