@@ -16,13 +16,13 @@
  *   - one run, created by the SIGNED-IN HUMAN (never the admin token: sshAuth
  *     compares run.created_by against the key's principal, so a run created by
  *     `admin-token` refuses the owner's own key — sshgateway.go),
- *   - two successful ssh.auth rows for that run (the holder and the read-only
+ *   - two successful ssh.authenticate rows for that run (the holder and the read-only
  *     observer, both the owner's own principal, two different keys),
- *   - exactly one ssh.auth FAILURE, reason "not the run owner", written under a
+ *   - exactly one ssh.authenticate FAILURE, reason "not the run owner", written under a
  *     second, genuinely foreign principal whose key IS registered (an
  *     unregistered key would log "unregistered key" instead and the money beat
  *     would be about the wrong thing),
- *   - both ssh sessions DETACHED. session.recording is emitted at detach
+ *   - both ssh sessions DETACHED. session.recording.write is emitted at detach
  *     (attach.go's finishRecording, and sshgateway_channels.go calls the same
  *     one), so a still-connected ssh client means an empty Session picker at
  *     beat 6 and a video that narrates a tape nobody can play.
@@ -125,8 +125,8 @@ interface AuditRow {
  * UI over the wrong run:
  *  1. WARDYN_DEMO_RUN_ID — the operator naming it outright.
  *  2. The handoff file the terminal lane just wrote (the normal path).
- *  3. The newest run that has an ssh.auth row at all. That is a tighter fallback
- *     than "the newest RUNNING run": ssh.auth only exists because beats 1-3
+ *  3. The newest run that has an ssh.authenticate row at all. That is a tighter fallback
+ *     than "the newest RUNNING run": ssh.authenticate only exists because beats 1-3
  *     happened, so it can only ever name the run this take attacked.
  */
 async function demoRunId(page: Page): Promise<string> {
@@ -137,12 +137,12 @@ async function demoRunId(page: Page): Promise<string> {
   if (handed) return handed;
 
   // Newest-first for the global window (audit.tsx's never-resort invariant), so
-  // the first ssh.auth row carrying a run id is the most recent one.
-  const rows = await apiList<AuditRow>(page, "/api/v1/audit?action=ssh.auth");
+  // the first ssh.authenticate row carrying a run id is the most recent one.
+  const rows = await apiList<AuditRow>(page, "/api/v1/audit?action=ssh.authenticate");
   const withRun = rows.find((e) => !!e.run_id);
   expect(
     withRun?.run_id,
-    "no ssh.auth audit row anywhere — beats 1-3 (the terminal lane) never ran, so there is nothing for this half to film",
+    "no ssh.authenticate audit row anywhere — beats 1-3 (the terminal lane) never ran, so there is nothing for this half to film",
   ).toBeTruthy();
   return withRun!.run_id!;
 }
@@ -176,7 +176,7 @@ test("beat 4 — the trail", async () => {
   await caption(page, "And each event tells us who or what caused it.");
   await beat(page, PACE.read);
 
-  // The Actor facet. Options are the three ActorTypes; ssh.auth is written as
+  // The Actor facet. Options are the three ActorTypes; ssh.authenticate is written as
   // types.ActorHuman on BOTH the success and the failure path (sshgateway.go),
   // which is the whole reason this facet is the one the beat opens with.
   // SAY-ON-CLICK "Human." rides the OPTION click, not the combobox opener —
@@ -193,10 +193,10 @@ test("beat 4 — the trail", async () => {
   await beat(page, PACE.read);
 
   // Search reads the raw dotted action, not the rendered verb (audit.tsx's
-  // filter) — so "ssh.auth" is the honest query even though no row shows it.
+  // filter) — so "ssh.authenticate" is the honest query even though no row shows it.
   const search = page.getByPlaceholder("Search events, domains, run IDs…");
   await spotlight(page, search);
-  await search.fill("ssh.auth");
+  await search.fill("ssh.authenticate");
   await spotlight(page, null);
   await beat(page, PACE.read);
 
@@ -205,9 +205,9 @@ test("beat 4 — the trail", async () => {
   // filter below is what actually picks the ssh rows out.
   //
   // B-DEPENDENT (flagged in the script as "audit facets/chips"): the rendered
-  // verb is ACTION_VERB["ssh.auth"] = "an ssh authentication attempt against a
+  // verb is ACTION_VERB["ssh.authenticate"] = "an ssh authentication attempt against a
   // run's terminal", capitalized and suffixed with the event's TARGET, which for
-  // ssh.auth is the key fingerprint. The script's friction note claiming ssh.*
+  // ssh.authenticate is the key fingerprint. The script's friction note claiming ssh.*
   // has no ACTION_VERB is STALE — it has one today, which is the only reason
   // this beat reads as prose on camera.
   const sshRows = page.locator("main div.divide-y > div").filter({ hasText: /ssh authentication attempt/ });
@@ -217,7 +217,7 @@ test("beat 4 — the trail", async () => {
   await expect(sshRows).not.toHaveCount(0, { timeout: AUDIT_SETTLES });
   expect(
     await sshRows.count(),
-    "fewer than three ssh.auth rows — beats 1-3 did not produce two successes and a refusal",
+    "fewer than three ssh.authenticate rows — beats 1-3 did not produce two successes and a refusal",
   ).toBeGreaterThanOrEqual(3);
 
   // THE MONEY ROW. OutcomeBadge renders outcome "failure" as the red "failure"
@@ -344,20 +344,20 @@ test("beat 6 — the tape", async () => {
 
   // WHICH session to replay, decided BEFORE navigating.
   //
-  // The picker is built from this run's session.recording rows in server order
+  // The picker is built from this run's session.recording.write rows in server order
   // (oldest-first for a per-run trail), prefixed by the run's own "Agent
   // session" — so an ssh session's option index is fixed the moment the list is
   // read. It is read here, not after the click, because opening /runs/:id lands
   // on Overview, Overview MOUNTS AttachTerminal, and leaving that tab detaches
-  // it — writing a BRAND NEW session.recording row that the 4s detail poll can
+  // it — writing a BRAND NEW session.recording.write row that the 4s detail poll can
   // append to the picker mid-beat. Picking "the last Attached option" would then
   // replay this browser's own five seconds instead of beat 1's keystrokes.
-  const rows = await apiList<AuditRow>(page, `/api/v1/audit?run_id=${encodeURIComponent(runId)}&action=session.recording`);
+  const rows = await apiList<AuditRow>(page, `/api/v1/audit?run_id=${encodeURIComponent(runId)}&action=session.recording.write`);
   const recorded = rows.filter((e) => e.outcome === "success" && !!e.target); // attachSessions(), run-detail.tsx
   const sshIndex = recorded.map((e) => e.target!).reduce((last, t, i) => (t.includes("~ssh-") ? i : last), -1);
   expect(
     sshIndex,
-    "no ssh attach session was recorded for this run — either beats 1-3 never attached, or an ssh client is still connected (session.recording is written at DETACH)",
+    "no ssh attach session was recorded for this run — either beats 1-3 never attached, or an ssh client is still connected (session.recording.write is written at DETACH)",
   ).toBeGreaterThanOrEqual(0);
 
   await page.goto(`/runs/${encodeURIComponent(runId)}`);

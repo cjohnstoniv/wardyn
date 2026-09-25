@@ -35,7 +35,7 @@
 // Set-Cookie: wardyn_* dropped (cookie tossing). Both directions are pinned by
 // tests in uigateway_test.go.
 //
-// No content is recorded. ui.auth/ui.start/ui.open/ui.close say that a human
+// No content is recorded. ui.authorize/ui.start/ui.open/ui.close say that a human
 // opened and closed an app; there is no keystroke, screen or page capture on
 // this path, and these actions are deliberately distinct from session.attach so
 // a relay session can never appear in the recording picker as if it were one.
@@ -216,7 +216,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	// the run's own origin never sees — and would put one run's cookie on
 	// another run's origin. Refuse instead.
 	if want := s.uiRunOrigin(runID); want != "" && !strings.EqualFold(r.Host, want) {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.auth", app, "denied",
+		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
 			map[string]any{"reason": "wrong host for run", "host": r.Host})
 		writeError(w, http.StatusForbidden, "this run's UI apps are served on a different host")
 		return
@@ -232,7 +232,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.auth", app, "denied",
+		s.auditUI(&runID, types.ActorHuman, "unknown", "ui.authorize", app, "denied",
 			map[string]any{"reason": "invalid, expired, or already-used ticket"})
 		writeError(w, http.StatusForbidden, "invalid, expired, or already-used attach ticket")
 		return
@@ -247,7 +247,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	if ta.role != oidc.RoleAdmin && run.CreatedBy != ta.principal {
-		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.auth", app, "denied",
+		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			map[string]any{"reason": "not the run owner"})
 		writeError(w, http.StatusForbidden, "attach ticket does not authorize this run")
 		return
@@ -258,7 +258,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	}
 	// A kept run is RUNNING with its agent stopped: nothing to open.
 	if runIsKept(run) {
-		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.auth", app, "denied",
+		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			map[string]any{"reason": "run has ended"})
 		writeError(w, http.StatusConflict, "run has ended; cannot open a UI app")
 		return
@@ -278,7 +278,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !found {
-		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.auth", app, "denied",
+		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			map[string]any{"reason": "app not declared in the run's policy ui_apps"})
 		writeError(w, http.StatusForbidden, "no UI app named "+strconv.Quote(app)+" is declared in this run's policy ui_apps")
 		return
@@ -299,7 +299,7 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		Secure:   s.cfg.OIDCSecureCookies,
 		Expires:  now.Add(ttl),
 	})
-	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.auth", declared.Name, "success",
+	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "success",
 		map[string]any{"app": declared.Name, "port": declared.Port})
 	http.Redirect(w, r, uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), http.StatusFound)
 }

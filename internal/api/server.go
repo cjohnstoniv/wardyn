@@ -513,7 +513,7 @@ type Config struct {
 	// of auto-enabling TLS-MITM + injecting the live host token. Default false =
 	// the safe proxy-side default whenever a SubscriptionToken provider is wired.
 	DisableSubscriptionInject bool
-	// AuditCoalesceWindow folds IDENTICAL consecutive auth.failed audit rows —
+	// AuditCoalesceWindow folds IDENTICAL consecutive auth.fail audit rows —
 	// same boundary, reason, path and peer — into the first row plus one summary
 	// row carrying count/first_seen/last_seen (env WARDYN_AUDIT_COALESCE_WINDOW,
 	// default 5m at the boot flag; 0 or unset = off, one row per refusal exactly
@@ -821,16 +821,16 @@ type Server struct {
 	uiReassert   map[string]time.Time
 	uiProxyOnce  sync.Once
 	uiProxy      *httputil.ReverseProxy
-	// authFailedLimiter rate-bounds the auth.failed audit emit (see
+	// authFailedLimiter rate-bounds the auth.fail audit emit (see
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.
 	authFailedLimiter authFailedLimiter
-	// authFailedStreak is the open run of identical consecutive auth.failed rows
+	// authFailedStreak is the open run of identical consecutive auth.fail rows
 	// the coalescer is folding (see coalesceAuthFailed, http.go). Process-local
 	// like the bounds above. Zero value is ready to use.
 	authFailedStreakMu sync.Mutex
 	authFailedStreak   *authFailedStreak
-	// identityExpiredSeen is the per-run once-guard behind run.identity.expired
+	// identityExpiredSeen is the per-run once-guard behind run.identity.expire
 	// (claimIdentityExpired, http.go): a run whose identity has expired keeps
 	// calling /internal/* and 401ing, so the row has to be emitted once per run
 	// rather than once per request, or the audit log floods.

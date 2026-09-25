@@ -652,7 +652,7 @@ func (s *Server) dropUnauthoredBedrockBearerInjections(ctx context.Context, run 
 		if ig.Rule.SecretName != bedrockAPIKeySecret {
 			return false
 		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.dropped",
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.drop",
 			ig.GrantID.String(), "denied", mustJSON(map[string]any{
 				"grant_id": ig.GrantID, "secret_name": bedrockAPIKeySecret, "host": ig.Rule.Host,
 				"reason": "bedrock_bearer_not_dispatch_authored",

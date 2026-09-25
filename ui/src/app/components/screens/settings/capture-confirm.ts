@@ -214,7 +214,7 @@ export const CAPTURE_HANDOFF =
 // The audit action ssotoken.go emits synchronously after the store write
 // (handleUploadSSOToken) — a member can read their own run's trail, and this
 // is exact by construction: THIS run's capture, or nothing.
-const CAPTURE_AUDIT_ACTION = "harness.credential.captured";
+const CAPTURE_AUDIT_ACTION = "harness.credential.capture";
 
 // Codex #9: the ceiling on the watch's OWN life, independent of the run's —
 // AutoStopAfterSec is an IDLE limit (attach keepalives extend it), not a
@@ -269,7 +269,7 @@ function sleep(ms: number, signal: AbortSignal, wake?: EventTarget): Promise<voi
 // background watch that starts the moment the pane attaches, independent of
 // any PTY hint, so a sign-in whose marker AND success line are both lost
 // still converges instead of waiting forever. Two reads, two jobs:
-//   · GET /audit?run_id=&action=harness.credential.captured — a WAKE-UP HINT
+//   · GET /audit?run_id=&action=harness.credential.capture — a WAKE-UP HINT
 //     ONLY (Codex #8): ssotoken.go emits this audit row best-effort AFTER the
 //     store write, so an audit-first watcher could miss a genuinely stored
 //     capture forever if it trusted silence. A hit only makes the

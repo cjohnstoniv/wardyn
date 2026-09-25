@@ -130,7 +130,7 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   // recording, scan-result, llm, sso-token, and git's :branch-ns-off suffix).
   if (source.startsWith("brokered:")) return { label: "Brokered", tone: "neutral" };
   if (source === "site-config:internal-host") return { label: "Declared internal host", tone: "info" };
-  if (source.startsWith("egress.decisions.dropped:")) return { label: "Decisions dropped", tone: "neutral" };
+  if (source.startsWith("egress:dropped-decisions-")) return { label: "Decisions dropped", tone: "neutral" };
   return { label: source, tone: "neutral" };
 }
 
@@ -151,7 +151,7 @@ export interface EgressDecision {
   domain: string;
   decision: "allow" | "deny" | "pending";
   bytes?: number;
-  // B3: the approval an `egress.pending` row raised (the audit row's own
+  // B3: the approval an `egress.hold` row raised (the audit row's own
   // data.approval_id — docs/AUDIT-ACTIONS.md). Absent on allow/deny rows and on
   // an older trail. It exists because a pending ROW is history, not state — the
   // hold it records may have been approved a minute later — so this is the only

@@ -51,7 +51,7 @@ func (s *Server) routes() chi.Router {
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
 		// A sign-in refused over its user type (ambiguous or unknown) is an
-		// auth.failed row; the oidc package stays audit-agnostic.
+		// auth.fail row; the oidc package stays audit-agnostic.
 		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.auditSignInDenied))
 	}
 
@@ -301,7 +301,7 @@ func (s *Server) routes() chi.Router {
 			// to model access at all. A member with no such row still gets 403 —
 			// from authorizeHarnessLogin, which also requires capAgent on the row's
 			// agent. Every connect/disconnect is audited
-			// (harness.credential.captured/disconnected).
+			// (harness.credential.capture/disconnected).
 			s.mountSetupMutationRoutes(r, operatorOnly)
 
 			// Policy management (gated to authenticated humans — a valid SSO

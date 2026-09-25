@@ -132,7 +132,7 @@ describe("ruleSourceLabel", () => {
       label: "Declared internal host",
       tone: "info",
     });
-    expect(ruleSourceLabel("egress.decisions.dropped:3")).toEqual({
+    expect(ruleSourceLabel("egress:dropped-decisions-3")).toEqual({
       label: "Decisions dropped",
       tone: "neutral",
     });

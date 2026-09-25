@@ -107,7 +107,7 @@ const RUN_TITLE = process.env.WARDYN_DEMO_V07_TITLE || "Drive it yourself — in
 const SENTINEL = "sk-ant-oat01-wardyn-inert-sentinel-proxy-injects-the-live-token";
 
 /** The injection event beat 5 reads (audit.tsx gives it a verb now). */
-const INJECT_ACTION = "run.llm.subscription_inject";
+const INJECT_ACTION = "run.subscription.inject";
 
 /** The owner's staccato lines read fast; PACE.read after one is dead air. */
 const BEAT_SHORT = 1400;

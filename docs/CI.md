@@ -333,7 +333,7 @@ its entry says so:
   the interactive shell reaching tmux, the `ssh.exec` /
   `session.attach{transport:ssh}` rows for both, and both authorization arms —
   a second principal's `member` key refused on a run it does not own (audited
-  `ssh.auth` failure) and a third principal's `admin` key reaching that same
+  `ssh.authenticate` failure) and a third principal's `admin` key reaching that same
   run with `data.override=true`. Those two principals go in through
   `kubectl exec deploy/postgres`, because the API only ever stamps the
   *caller's* key and this install has one credential. It does **not** create or

@@ -58,11 +58,11 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 
-	// A synthetic "blind" decision is PURELY an LLM-inspection coverage signal
+	// A synthetic "bypass" decision is PURELY an LLM-inspection coverage signal
 	// (an opaque CONNECT to a model host that could not be inspected). Emit only
-	// the llm.scan.blind degradation event — not a duplicate egress.allow for
+	// the llm.scan.bypass degradation event — not a duplicate egress.allow for
 	// the tunnel, which the real CONNECT decision already recorded.
-	if dl.Scan != nil && dl.Scan.Action == "blind" {
+	if dl.Scan != nil && dl.Scan.Action == "bypass" {
 		s.recordLLMScanAudit(r.Context(), runID, claims.SPIFFEID, r.RemoteAddr, dl.Scan, dl.Request.Host)
 		writeJSON(w, http.StatusAccepted, nil)
 		return
@@ -102,7 +102,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// wardyn_egress_denies_total is exposed as "denied by policy", and it
 	// is the only egress counter Wardyn has. A builtin:dial-failed (a flaky
 	// upstream, on a request policy ALLOWED) and the synthetic
-	// egress.decisions.dropped:<n> audit-fidelity summary both arrive here as
+	// egress:dropped-decisions-<n> audit-fidelity summary both arrive here as
 	// egress.Deny; counting them would page operators for policy denials that
 	// never happened and make the true deny rate unreadable off the series. Both
 	// still record their egress.deny AUDIT row unchanged — only the counter is
@@ -153,7 +153,7 @@ func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor,
 	switch sc.Action {
 	case "block":
 		outcome = "denied"
-	case "error":
+	case "fail":
 		outcome = "failure"
 	}
 	// finding_count is the number of findings the scan PRODUCED before the cap
@@ -423,7 +423,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	default:
 		// Recorded: this refusal is the forgery the case above exists to
 		// stop — a sidecar asking Wardyn to raise a `credential` approval. Same
-		// rate-bound auth.failed row, limiter and suppressed
+		// rate-bound auth.fail row, limiter and suppressed
 		// counter as every other refusal; the KIND is a closed enum of our own
 		// types, never echoed from the body.
 		s.auditAuthFailedAs(r, internalApprovalActor, "unsupported_internal_approval_kind")

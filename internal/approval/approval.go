@@ -431,13 +431,13 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 			RunID:     &runID,
 			ActorType: types.ActorSystem,
 			Actor:     "wardyn/approval-cancel",
-			Action:    "approval.cancelled",
+			Action:    "approval.cancel",
 			Target:    runID.String(),
 			Outcome:   outcome,
 			Data:      json.RawMessage(auditData),
 		}
 		// Log-loud instead of swallowing, same rule as the expiry sweep: a dropped
-		// approval.cancelled row would leave the queue's emptying unexplained.
+		// approval.cancel row would leave the queue's emptying unexplained.
 		if rerr := st.Record(ctx, ev); rerr != nil {
 			audit.LogWriteFailure(ctx, ev, rerr)
 		}

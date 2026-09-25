@@ -421,7 +421,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// top of the branch so no handler, and no context the branch
 			// publishes, ever sees a forged request.
 			if err := s.sameOriginOrRefuse(r); err != nil {
-				// Audited on the EXISTING auth.failed action: this refusal
+				// Audited on the EXISTING auth.fail action: this refusal
 				// short-circuits ABOVE adminAuth, the chokepoint that emits for
 				// every other public-API refusal, so without this call a
 				// threat-model-registered control would leave no trail at all.
@@ -627,7 +627,7 @@ func (s *Server) requireSecurityOperator(next http.Handler) http.Handler {
 // empty configured AdminToken denies everything (fail closed): the public API
 // must not be unauthenticated. SSO/Dex replaces this in a later milestone.
 //
-// Every 401 here is audited as auth.failed (#19a) — this is the ONE chokepoint
+// Every 401 here is audited as auth.fail (#19a) — this is the ONE chokepoint
 // every public-API auth failure funnels through (humanOrAdminAuth composes
 // oidc.Middleware(adminAuth(...)), and a rejected session cookie still falls
 // through to here), so one emit call covers both "adminAuth 401s" and
@@ -654,7 +654,7 @@ func (s *Server) adminAuth(next http.Handler) http.Handler {
 	})
 }
 
-// auditAuthFailed emits auth.failed (actor system) for an authentication
+// auditAuthFailed emits auth.fail (actor system) for an authentication
 // failure on the public API. reason is the adminAuth-local bounded enum
 // ("admin_token_not_configured", "missing_bearer_token",
 // "invalid_admin_token"); it is overridden by a more specific
@@ -684,7 +684,7 @@ func (s *Server) auditAuthFailed(r *http.Request, reason string) {
 }
 
 // adminAuthActor / internalAuthActor / groundtruthAuthActor /
-// internalApprovalActor name WHICH boundary refused, as the auth.failed row's
+// internalApprovalActor name WHICH boundary refused, as the auth.fail row's
 // Actor. They exist because the row's reason enum alone cannot say
 // whether a refusal came from the PUBLIC lane (a human or an API token) or from
 // the INTERNAL lane (a sandbox sidecar or the host sensor) — and those are
@@ -770,7 +770,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 	// wrote it verbatim as well — counted twice, once as a row and once in the
 	// count — and skipped the suppressed counter for it.
 	if absorbed {
-		// Counted in the SAME series the limiter's drops are: a dropped auth.failed
+		// Counted in the SAME series the limiter's drops are: a dropped auth.fail
 		// row is a countable fact whichever mechanism dropped it, and an operator
 		// alerting on volume must not have to know which one did. The summary row
 		// carries the count as well, so the trail is not the only witness.
@@ -783,20 +783,20 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 		// is bounding: a credential-stuffing run and a handful of typos look
 		// identical in the audit log, and the attack looks QUIETER the harder
 		// it is pushed. This counter is what carries the real rate — a flat
-		// auth.failed row count with this series climbing is the signal, and it
+		// auth.fail row count with this series climbing is the signal, and it
 		// is a series precisely so it can be alerted on rather than grepped
 		// for. Same treatment the spool's torn/quarantined drops already get
 		// (metrics.go): a discarded event is a countable fact.
 		s.metrics.authFailedSuppressedInc()
 		return
 	}
-	ev := s.auditEvent(nil, types.ActorSystem, actor, "auth.failed", r.URL.Path,
+	ev := s.auditEvent(nil, types.ActorSystem, actor, "auth.fail", r.URL.Path,
 		"failure", mustJSON(map[string]any{"reason": reason}))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
 }
 
-// auditRunIdentityExpired records run.identity.expired ONCE per run when a
+// auditRunIdentityExpired records run.identity.expire ONCE per run when a
 // NON-TERMINAL run presents an expired identity on the internal lane.
 //
 // This keeps quieting the sidecar from hiding a real failure. The proxy's
@@ -808,7 +808,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 // rollout) holds a dead identity for the rest of its life, and every /internal/*
 // call it makes 401s. That fact surfaces as one row, keyed to the run, which
 // the cockpit's evidence rail already renders — never an undifferentiated
-// pile of auth.failed rows.
+// pile of auth.fail rows.
 //
 // The row does not end the run. The lapsed-token sweep does, once the token has
 // gone unrenewed past runTokenLapseAfter (run_lost.go): an interactive run is
@@ -824,7 +824,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 //     population a flood would come from.
 //   - only an *identity.ExpiredTokenError reaches here with a run id at all. A
 //     revoked, forged or wrong-audience token names no run of ours and stays
-//     exactly as coarse as the auth.failed row beside it.
+//     exactly as coarse as the auth.fail row beside it.
 func (s *Server) auditRunIdentityExpired(r *http.Request, verifyErr error) {
 	var exp *identity.ExpiredTokenError
 	if !errors.As(verifyErr, &exp) || s.cfg.Store == nil {
@@ -852,7 +852,7 @@ func (s *Server) auditRunIdentityExpired(r *http.Request, verifyErr error) {
 	if isTerminalRunState(run.State) {
 		return
 	}
-	ev := s.auditEvent(&exp.RunID, types.ActorSystem, "wardynd", "run.identity.expired",
+	ev := s.auditEvent(&exp.RunID, types.ActorSystem, "wardynd", "run.identity.expire",
 		exp.RunID.String(), "failure", mustJSON(map[string]any{
 			"run_state": string(run.State),
 			"path":      r.URL.Path,
@@ -864,7 +864,7 @@ func (s *Server) auditRunIdentityExpired(r *http.Request, verifyErr error) {
 }
 
 // claimIdentityExpired returns true for the FIRST caller to claim a run's single
-// run.identity.expired row, and false for every caller after it. Consult and
+// run.identity.expire row, and false for every caller after it. Consult and
 // insert are one locked operation so two concurrent refusals cannot both win.
 //
 // Bounded like lastTouch (internal.go's shouldTouch), and for the same reason:

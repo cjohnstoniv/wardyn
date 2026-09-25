@@ -18,7 +18,7 @@ import (
 // when the middleware set one, and those four values are declared in
 // internal/auth/oidc and appear at no call site at all. withSessionRejectedCall
 // walks them too, so a fifth rejection reason added upstream cannot land in
-// auth.failed with this fence green.
+// auth.fail with this fence green.
 //
 // `(?s)` and `[^)]` (rather than `[^),]`) so a call gofmt has wrapped across
 // lines is still read — a multi-line emit was invisible to the first version of
@@ -74,12 +74,12 @@ func constStrings(src string, into map[string]string) { constLines(src, goString
 func constAliases(src string, into map[string]string) { constLines(src, goQualifiedConstAlias, into) }
 
 // TestAuthFailedReasonEnumIsDocumented is the fence under AUDIT-ACTIONS.md's
-// claim that `auth.failed`'s `reason` is a CLOSED ENUM — the row an operator
+// claim that `auth.fail`'s `reason` is a CLOSED ENUM — the row an operator
 // builds a SIEM rule from.
 //
 // It exists because the claim drifted the moment it was tested: the CSRF lane
 // added `cross_origin_refused`, said in csrf.go that it "joins the enum the
-// auth.failed row documents", and the row was then left without it through a
+// auth.fail row documents", and the row was then left without it through a
 // hand-resolved rebase conflict. Nothing went red, because nothing tied the
 // emits to the doc.
 //
@@ -211,15 +211,15 @@ func TestAuthFailedReasonEnumIsDocumented(t *testing.T) {
 		t.Fatalf("found %d withSessionRejected reasons; oidc.Middleware stamps 4 — the walk stopped enumerating", rejections)
 	}
 
-	row := auditDocRowFor(t, root, "auth.failed")
+	row := auditDocRowFor(t, root, "auth.fail")
 	for reason := range reasons {
 		if !strings.Contains(row, "`"+reason+"`") {
-			t.Errorf("auth.failed reason %q is emitted but is NOT in docs/AUDIT-ACTIONS.md's closed enum", reason)
+			t.Errorf("auth.fail reason %q is emitted but is NOT in docs/AUDIT-ACTIONS.md's closed enum", reason)
 		}
 	}
 	for actor := range actors {
 		if !strings.Contains(row, "`"+actor+"`") {
-			t.Errorf("auth.failed actor %q refuses requests but is NOT named in docs/AUDIT-ACTIONS.md's row", actor)
+			t.Errorf("auth.fail actor %q refuses requests but is NOT named in docs/AUDIT-ACTIONS.md's row", actor)
 		}
 	}
 }

@@ -226,7 +226,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if sinkReservedSecret(minted.Injection.SecretName) {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
-			mustJSON(map[string]any{"reason": "reserved-secret-name", "grant_id": grantID})))
+			mustJSON(map[string]any{"reason": "reserved_secret_name", "grant_id": grantID})))
 		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
 		return
 	}
@@ -241,7 +241,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if !egress.ValidHeaderName(minted.Injection.Header) {
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
-			mustJSON(map[string]any{"reason": "invalid-header-name", "grant_id": grantID})))
+			mustJSON(map[string]any{"reason": "invalid_header_name", "grant_id": grantID})))
 		writeError(w, http.StatusForbidden, "injection header name is not a valid HTTP header")
 		return
 	}

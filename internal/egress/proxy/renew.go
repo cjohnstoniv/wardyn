@@ -127,7 +127,7 @@ func defaultRenewerTuning() renewerTuning {
 // The control plane — not this loop — decides whether renewal is still allowed:
 // a revoked or terminal run is refused there. What the loop decides is how long
 // to keep ASKING: retrying forever at a fixed interval on any failure floods the
-// audit log with `auth.failed` rows from a run whose token the control plane
+// audit log with `auth.fail` rows from a run whose token the control plane
 // will never renew again, burying real security events outside the console's
 // retention window. So:
 //
@@ -143,7 +143,7 @@ func defaultRenewerTuning() renewerTuning {
 //
 // Giving up is ONE log line and nothing else. The sidecar has no audit writer,
 // and the control plane owns the audit story for this case (internalAuth's
-// run.identity.expired row) — the sidecar keeps running on a dead identity,
+// run.identity.expire row) — the sidecar keeps running on a dead identity,
 // visibly, rather than quietly hammering a door that will not open, until the
 // control plane's lapsed-token sweep removes it (internal/api/run_lost.go).
 //

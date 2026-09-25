@@ -340,8 +340,8 @@ func TestMemberPreview_HarnessLoginRefused409(t *testing.T) {
 	if !strings.Contains(w.Body.String(), userViewPreviewSignInRefusal) {
 		t.Errorf("body = %q, want %q", w.Body.String(), userViewPreviewSignInRefusal)
 	}
-	if rows := audit.find("harness.login.started"); len(rows) != 0 {
-		t.Errorf("a refused sign-in stamped %d harness.login.started row(s)", len(rows))
+	if rows := audit.find("harness.login.start"); len(rows) != 0 {
+		t.Errorf("a refused sign-in stamped %d harness.login.start row(s)", len(rows))
 	}
 	st.mu.Lock()
 	runs := len(st.runs)

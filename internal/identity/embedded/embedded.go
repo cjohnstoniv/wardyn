@@ -227,7 +227,7 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 		// presented string: a healthy long run whose renews were refused through
 		// a control-plane outage holds a dead token and 401s every /internal/*
 		// call from then on, forever, with nothing in the audit trail naming the
-		// run (see internal/api's run.identity.expired). Expiry is checked here,
+		// run (see internal/api's run.identity.expire). Expiry is checked here,
 		// BEFORE revocation below, so an expired token never reads as a revoked
 		// one; the run id comes from the actor claim, which the signature above
 		// already covered. Everything else — a forged signature, a wrong

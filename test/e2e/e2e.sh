@@ -305,13 +305,13 @@ AUDIT_JSON="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit
 EGRESS_DENY="$(printf '%s' "${AUDIT_JSON}" \
   | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="egress.deny" and e["outcome"]=="denied"))')"
 EGRESS_PENDING="$(printf '%s' "${AUDIT_JSON}" \
-  | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="egress.pending"))')"
+  | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="egress.hold"))')"
 EGRESS_ALLOW="$(printf '%s' "${AUDIT_JSON}" \
   | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="egress.allow"))')"
 if [[ "${EGRESS_DENY}" -ge 1 ]]; then ok "(c) ${EGRESS_DENY} egress.deny audit event(s) (metadata builtin) via API";
 else bad "(c) expected >=1 egress.deny audit event, got ${EGRESS_DENY}"; fi
-if [[ "${EGRESS_PENDING}" -ge 1 ]]; then ok "(c) ${EGRESS_PENDING} egress.pending audit event(s) (first-use hold) via API";
-else bad "(c) expected >=1 egress.pending audit event, got ${EGRESS_PENDING}"; fi
+if [[ "${EGRESS_PENDING}" -ge 1 ]]; then ok "(c) ${EGRESS_PENDING} egress.hold audit event(s) (first-use hold) via API";
+else bad "(c) expected >=1 egress.hold audit event, got ${EGRESS_PENDING}"; fi
 if [[ "${EGRESS_ALLOW}" -ge 1 ]]; then ok "(d) ${EGRESS_ALLOW} egress.allow audit event(s) visible via API";
 else bad "(d) expected >=1 egress.allow audit event, got ${EGRESS_ALLOW}"; fi
 

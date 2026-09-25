@@ -105,9 +105,9 @@ func TestADOSignIn_MidRunHoldIsResolvedByACapture(t *testing.T) {
 			if again := pendingID(t, f.resolveQ(t, ""), reauthPendingState); again != id {
 				t.Fatalf("a second resolve for the same lapse raised %s, want the same request %s", again, id)
 			}
-			if req := f.audit.find("credential.reauth.requested"); len(req) != 1 ||
+			if req := f.audit.find("credential.reauth.request"); len(req) != 1 ||
 				!strings.Contains(string(req[0].Data), `"reason":"`+string(name)+`"`) {
-				t.Fatalf("credential.reauth.requested rows = %+v, want exactly one with reason %s", req, name)
+				t.Fatalf("credential.reauth.request rows = %+v, want exactly one with reason %s", req, name)
 			}
 			if got := f.srv.reconcileADOReauthOnRead(context.Background(), f.row(id)); got.State != types.ApprovalPending {
 				t.Fatalf("resolved before any sign-in: %s", got.State)

@@ -48,7 +48,7 @@ func TestInternalDecisionTouchesRun(t *testing.T) {
 	// the egress audit write) — but a burst inside touchDebounce coalesces to ONE
 	// UPDATE on the hot agent_runs row, so the second decision here is debounced.
 	blind := `{"request":{"host":"api.anthropic.com","method":"CONNECT"},"decision":"allow",` +
-		`"scan":{"scanned":false,"coverage":"tunneled-opaque","action":"blind"}}`
+		`"scan":{"scanned":false,"coverage":"tunneled-opaque","action":"bypass"}}`
 	if w := do(t, srv, http.MethodPost, path, tok, blind); w.Code != http.StatusAccepted {
 		t.Fatalf("blind decision code = %d, want 202", w.Code)
 	}
