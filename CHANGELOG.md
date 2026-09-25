@@ -724,6 +724,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The `webhook` audit sink takes a `timeout` key** (per HTTP request, default and maximum `15s`,
   the final flush wardynd's shutdown grace is sized on); a zero or negative value, or one above
   `15s`, is refused at startup, since it would let shutdown hang on a wedged collector (#471).
+- **The six list routes that still returned an unbounded body now page like every other list
+  route (#657): `GET /secrets`, `/integrations`, `/me/ssh-keys`, `/me/tokens`,
+  `/runs/{id}/grants` and `/me/capabilities` all accept `?limit=&offset=` and set
+  `X-Wardyn-Truncated` when a further page exists, the same contract `/runs`, `/approvals`,
+  `/policies`, `/workspaces` and `/audit` already carry. `/secrets`, `/integrations` and
+  `/me/capabilities` keep their existing wrapped response shape (`{"names":...,"mine":...}`,
+  `{"integrations":...}`, the grants list inside `meCapabilitiesResponse`) — only the list
+  inside is windowed. The Go SDK gains `ListGrantsPage`, `ListSSHKeysPage` and
+  `ListSecretsPage`, each surfacing the truncation signal the same way `ListRunsPage` does;
+  `ListGrants`, `ListSSHKeys` and `ListSecrets` now also accept a `ListOpts` to page.
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away

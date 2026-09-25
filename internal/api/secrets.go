@@ -593,6 +593,10 @@ func secretOwnerAuditData(owner string, known bool) json.RawMessage {
 // operator's secret read as missing.
 func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
+		return
+	}
 	// The list is a READ: an unresolved namespace simply has no rows, and the
 	// marker belongs on the writes that create one.
 	owner, _, ok := s.secretOwnerParam(w, r)
@@ -645,10 +649,22 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"secret.list", owner, "success", mustJSON(map[string]any{
 				"secret_owner": owner,
-				"names":        len(mine),
+				// The FULL count, not the page window below: this row records
+				// enumeration size for an investigator, not response size.
+				"names": len(mine),
 			})))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"names": names, "mine": mine})
+	// Paginated by ?limit=&offset= (see parseListPage), same uniform contract as
+	// every other list route (#657). names and mine are two independent lists
+	// (an admin's names == mine; a member's names is the grant-paired operator
+	// view) windowed by the SAME page — secretsMaxPerOwner (100) already bounds
+	// either one, so truncation is expected to be rare, not the common case.
+	namesPage, namesTruncated := pageWindow(names, page.Offset, page.Limit)
+	minePage, mineTruncated := pageWindow(mine, page.Offset, page.Limit)
+	if namesTruncated || mineTruncated {
+		w.Header().Set("X-Wardyn-Truncated", "true")
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"names": namesPage, "mine": minePage})
 }
 
 // memberVisibleOperatorSecretNames is handleListSecrets' member-facing

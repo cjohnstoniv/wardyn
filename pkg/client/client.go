@@ -15,7 +15,7 @@
 // automates); it is a curated subset, NOT a 1:1 mirror of every route:
 //
 //   - runs (/api/v1/runs):               CreateRun, Preflight, GetRun, ListRuns, ListRunsPage,
-//     ListGrants, KillRun, SynthesizeProfile, GetRecording, RunFiles
+//     ListGrants, ListGrantsPage, KillRun, SynthesizeProfile, GetRecording, RunFiles
 //   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
@@ -23,12 +23,13 @@
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
-//   - secrets (/api/v1/secrets):         ListSecrets, SetSecret, DeleteSecret
+//   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
-//   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/AddSSHKey
-//     (/api/v1/me/ssh-keys). The rest of /api/v1/me is NOT wrapped: see below.
+//   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
+//     ListSSHKeysPage/AddSSHKey (/api/v1/me/ssh-keys). The rest of /api/v1/me is
+//     NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
@@ -91,7 +92,8 @@
 //
 // EVERY list family surfaces that signal, through a *Page variant returning it
 // as a bool: ListRunsPage, ListApprovalsPage, ListPoliciesPage,
-// ListWorkspacesPage, AuditEventsPage. The plain forms are thin wrappers that
+// ListWorkspacesPage, AuditEventsPage, ListGrantsPage, ListSSHKeysPage,
+// ListSecretsPage. The plain forms are thin wrappers that
 // discard it, so existing callers are unchanged — but they leave the caller to
 // infer completeness from len(page) == the limit it happened to pass, a guess
 // that silently breaks the moment a caller omits Limit and gets the server's
@@ -453,14 +455,24 @@ func (c *Client) ListRuns(ctx context.Context, opts ...ListOpts) ([]types.AgentR
 	return runs, err
 }
 
+// ListGrantsPage is ListGrants plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists and this one is not the whole
+// list. See the package doc's "# Pagination".
+// Returns 404/APIError when the run does not exist.
+func (c *Client) ListGrantsPage(ctx context.Context, runID uuid.UUID, opts ...ListOpts) (grants []types.CredentialGrant, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/runs/"+runID.String()+"/grants", opts), nil, &grants, &hdr)
+	return grants, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
 // ListGrants returns the credential-grant eligibility records for a run.
 // These are eligibility records (what the run MAY request), not issued
-// credentials — some may never be minted.
+// credentials — some may never be minted. Pass a ListOpts to page; prefer
+// ListGrantsPage, which also returns the server's truncation signal.
 // Returns 404/APIError when the run does not exist.
-func (c *Client) ListGrants(ctx context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
-	var out []types.CredentialGrant
-	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+runID.String()+"/grants", nil, &out)
-	return out, err
+func (c *Client) ListGrants(ctx context.Context, runID uuid.UUID, opts ...ListOpts) ([]types.CredentialGrant, error) {
+	grants, _, err := c.ListGrantsPage(ctx, runID, opts...)
+	return grants, err
 }
 
 // KillRunResponse is the body returned by POST /api/v1/runs/{id}/kill.
@@ -646,17 +658,29 @@ func (c *Client) RecentAuditEvents(ctx context.Context, opts ...ListOpts) ([]typ
 	return out, err
 }
 
-// ListSecrets returns the managed secret NAMES (never values). Reserved
-// platform-internal keys are excluded server-side. GET /api/v1/secrets, which
-// responds {"names":[...]}.
-func (c *Client) ListSecrets(ctx context.Context) ([]string, error) {
+// ListSecretsPage is ListSecrets plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists and this one is not the whole
+// list. See the package doc's "# Pagination". GET /api/v1/secrets, which
+// responds {"names":[...],"mine":[...]} — this method surfaces only names,
+// same as ListSecrets.
+func (c *Client) ListSecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
 	var out struct {
 		Names []string `json:"names"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/api/v1/secrets", nil, &out); err != nil {
-		return nil, err
+	var hdr http.Header
+	if err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/secrets", opts), nil, &out, &hdr); err != nil {
+		return nil, false, err
 	}
-	return out.Names, nil
+	return out.Names, hdr.Get("X-Wardyn-Truncated") == "true", nil
+}
+
+// ListSecrets returns the managed secret NAMES (never values). Reserved
+// platform-internal keys are excluded server-side. Pass a ListOpts to page;
+// prefer ListSecretsPage, which also returns the server's truncation signal.
+// GET /api/v1/secrets, which responds {"names":[...]}.
+func (c *Client) ListSecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListSecretsPage(ctx, opts...)
+	return names, err
 }
 
 // SetSecret stores (or overwrites) a named secret. The value is write-only — no

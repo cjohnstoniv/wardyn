@@ -129,7 +129,7 @@ func (s PG) TouchAPIToken(ctx context.Context, id uuid.UUID, now time.Time) erro
 func (s PG) ListAPITokensByPrincipal(ctx context.Context, principal string) ([]types.APIToken, error) {
 	const q = `
 		SELECT ` + apiTokenCols + `
-		FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC`
+		FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC, id`
 	return queryAPITokens(ctx, s, q, principal)
 }
 
