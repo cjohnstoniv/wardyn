@@ -63,8 +63,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// A lookup failure for either is non-fatal but NOT free: the exclusion is a
 	// CLAMP on the lift, so an empty clamp would widen the lift instead of
 	// narrowing it. The failure is carried into the Proxy as ExclusionUnknown,
-	// which makes the clamp refuse every lift/trust instead, and it is logged
-	// (F002).
+	// which makes the clamp refuse every lift/trust instead, and it is logged.
 	localSubnets, subnetsOK := localInterfaceSubnets()
 	cpIPs, cpOK := resolveControlPlaneIPs(cfg.ControlPlaneURL)
 	exclusionUnknown := !subnetsOK || !cpOK
@@ -240,7 +239,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		MITMLLM:              cfg.MITMLLM,
 		GitGrants:            cfg.GitGrants,
 		PATGrants:            cfg.PATGrants,
-		ADOGrants:            newADOGrantSource(cfg.ADOGrants),
+		ADOGrants:            newADOGrantsByHost(cfg.ADOGrant),
 		ControlPlaneURL:      cfg.ControlPlaneURL,
 		RunToken:             ts,
 		Upstream:             up,
@@ -250,6 +249,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		InternalHosts:        cfg.InternalHosts,
 		LLMUpstreams:         cfg.LLMUpstreams,
 		LLMUnavailableDetail: cfg.LLMUnavailableDetail,
+		Unattended:           cfg.Unattended,
 		LocalSubnets:         localSubnets,
 		ControlPlaneIPs:      cpIPs,
 		ExclusionUnknown:     exclusionUnknown,
@@ -332,7 +332,7 @@ func (s *Server) Addr() string { return s.http.Addr }
 // whether the lookup SUCCEEDED. The second return is the point: a nil slice
 // from a failed net.InterfaceAddrs() is indistinguishable from a host with no
 // addresses, and the caller must be able to tell, because an empty exclusion
-// set widens the internal-host lift rather than narrowing it (F002). Used ONLY
+// set widens the internal-host lift rather than narrowing it. Used ONLY
 // by the lift's own-subnet exclusion (Proxy.onOwnSubnetOrControlPlane).
 func localInterfaceSubnets() ([]*net.IPNet, bool) {
 	addrs, err := net.InterfaceAddrs()
@@ -353,7 +353,7 @@ func localInterfaceSubnets() ([]*net.IPNet, bool) {
 // step — but it runs before any Proxy exists (NewServer, ahead of newProxy), so
 // it cannot go through a *Proxy method. The bool reports whether the resolve
 // succeeded, which the caller needs because a nil result must fail the
-// exclusion CLOSED rather than silently widen the lift (F002).
+// exclusion CLOSED rather than silently widen the lift.
 //
 // Every answer, not ips[0]: vetTrustedHost already checks every answer of a
 // gateway host, and a wardynd behind two A records had exactly one of them

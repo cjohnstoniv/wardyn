@@ -158,7 +158,7 @@ func (w *CastWriter) HadOutput() bool {
 // LastOutputElapsed returns the elapsed-seconds timestamp of the LAST output
 // ("o") event found in data, scanning backwards from the end. It mirrors the
 // console's former client-side probe byte for byte (recordings.ts's
-// lastOutputAt), so a run's server-projected duration (R4-F077) and a
+// lastOutputAt), so a run's server-projected duration and a
 // manually-fetched cast's duration read the same number.
 //
 // data need not be the whole document — StatAndTail hands this only a TAIL

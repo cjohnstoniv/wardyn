@@ -56,7 +56,7 @@ func HostOf(rawURL string) string {
 // public-registry hosts a corporate redirect REPLACES.
 //
 // These values are spelled out here rather than referencing workspacescan's
-// marker-table literals, which they used to share. The two are the same strings
+// marker-table literals. The two are the same strings
 // for different reasons — the marker table answers "a repo with this file
 // probably needs these hosts" (scanner inference, being deleted), this answers
 // "these are the hosts a corp mirror stands in for" (runtime egress

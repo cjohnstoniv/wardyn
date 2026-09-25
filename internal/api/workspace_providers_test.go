@@ -386,7 +386,7 @@ func TestProviderForMatchRule(t *testing.T) {
 		{"an unparseable clone URL is refused",
 			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}), "", false, ""},
 
-		// THE TRAVERSAL ROWS (V1 lens A). Every one of these was ADMITTED by the
+		// The traversal rows (V1 lens A). Every one of these was admitted by the
 		// /acme row before the guard: the server compared the DECODED, unsquashed
 		// path against the base URL while the sandbox's git squashed the dot
 		// segments and sent %2F raw, so the proxy minted the acme PAT for

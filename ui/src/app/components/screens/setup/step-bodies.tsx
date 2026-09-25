@@ -259,8 +259,8 @@ export function useSiteConfigStep(
   const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
-    reloadSiteConfig();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void reloadSiteConfig();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once prologue by design (see doc comment above); reloadSiteConfig's identity rides adminReads and must not re-fire this on that account
   }, []);
 
   const mutate = async (next: SiteConfig, errorMessage: string): Promise<boolean> => {
@@ -425,7 +425,7 @@ export function DeploymentStep({
         </p>
         <div className="mt-3 flex items-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link to="/permissions">{PT.MULTI_USER_PERMISSIONS_ACTION}</Link>
+            <Link to="/admin/permissions">{PT.MULTI_USER_PERMISSIONS_ACTION}</Link>
           </Button>
           <span className="text-xs text-muted-foreground">{PT.MULTI_USER_PERMISSIONS_HINT}</span>
         </div>
