@@ -2,13 +2,16 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# test-dco.sh — pins `make dco` (Makefile:1110-1133): every commit in
+# test-dco.sh — pins `make dco` (Makefile:1111-1136): every commit in
 # DCO_RANGE, merges included, must carry a well-formed Signed-off-by
 # trailer, with exactly one exemption — a 2+-parent merge commit whose
-# committer is GitHub <noreply@github.com>, and only when the caller opts
-# in with DCO_ALLOW_GITHUB_MERGES=1. That exemption models push/merge_group,
-# where GitHub itself makes the merge; PR ranges end at the PR head instead
-# and never see one.
+# committer is EXACTLY GitHub <noreply@github.com>, and only when the
+# caller opts in with DCO_ALLOW_GITHUB_MERGES=1. That exemption models
+# push/merge_group's own "Merge pull request" commits AND a GitHub
+# "Update branch" merge landed on a PR branch itself (branch protection
+# can force that update) — PR ranges end at the PR head, so only the
+# synthetic refs/pull/N/merge test-merge tip is excluded, never a real
+# merge already on the branch.
 #
 # Each case builds its own throwaway repo under mktemp, with local (not
 # global) user.name/user.email, then runs the REAL repo Makefile's `dco`
@@ -24,6 +27,10 @@
 #        DCO_ALLOW_GITHUB_MERGES=0 -> non-zero, =1 -> 0
 #   4. an unsigned NON-merge commit committed as GitHub, ALLOW=1 -> non-zero
 #      (the exemption covers merges only)
+#   5. ALLOW=1 exempts an exact committer match ONLY, not "any merge":
+#        (a) an unsigned merge committed as an impersonating identity,
+#            Mallory <evil-noreply@github.com>              -> non-zero
+#        (b) an unsigned plain human merge                   -> non-zero
 #
 # Daemon-free, network-free.
 set -euo pipefail
@@ -121,6 +128,42 @@ GIT_COMMITTER_NAME="GitHub" GIT_COMMITTER_EMAIL="noreply@github.com" \
 	git -C "$r4" commit -q -am "non-merge, committed as GitHub, unsigned"
 if run_dco "$r4" "$base4" DCO_ALLOW_GITHUB_MERGES=1; then
 	fail "case 4 (unsigned non-merge as GitHub, ALLOW=1) expected non-zero exit, got 0"
+fi
+
+# ── case 5a: unsigned merge committed as an impersonating identity ─────────
+# Mallory <evil-noreply@github.com> is not GitHub <noreply@github.com> — the
+# committer email must match exactly, not just look GitHub-ish.
+r5a="$TMP/case5a"
+mkrepo "$r5a"
+base5a="$(git -C "$r5a" rev-parse HEAD)"
+echo main1 >>"$r5a/f.txt"
+git -C "$r5a" commit -q -am "main: signed change" -s
+git -C "$r5a" checkout -q -b feature
+echo feat1 >"$r5a/g.txt"
+git -C "$r5a" add g.txt
+git -C "$r5a" commit -q -m "feature: signed change" -s
+git -C "$r5a" checkout -q main
+GIT_COMMITTER_NAME="Mallory" GIT_COMMITTER_EMAIL="evil-noreply@github.com" \
+	git -C "$r5a" merge -q --no-ff -m "Merge pull request (unsigned, impersonating GitHub)" feature
+if run_dco "$r5a" "$base5a" DCO_ALLOW_GITHUB_MERGES=1; then
+	fail "case 5a (unsigned merge committed as Mallory <evil-noreply@github.com>, ALLOW=1) expected non-zero exit, got 0"
+fi
+
+# ── case 5b: unsigned plain human merge, ALLOW=1 ────────────────────────────
+# ALLOW=1 is not "any merge is exempt" — only GitHub's own exact identity.
+r5b="$TMP/case5b"
+mkrepo "$r5b"
+base5b="$(git -C "$r5b" rev-parse HEAD)"
+echo main1 >>"$r5b/f.txt"
+git -C "$r5b" commit -q -am "main: signed change" -s
+git -C "$r5b" checkout -q -b feature
+echo feat1 >"$r5b/g.txt"
+git -C "$r5b" add g.txt
+git -C "$r5b" commit -q -m "feature: signed change" -s
+git -C "$r5b" checkout -q main
+git -C "$r5b" merge -q --no-ff -m "Merge branch 'feature' (unsigned, plain human)" feature
+if run_dco "$r5b" "$base5b" DCO_ALLOW_GITHUB_MERGES=1; then
+	fail "case 5b (unsigned plain human merge, ALLOW=1) expected non-zero exit, got 0"
 fi
 
 echo "All DCO cases behaved as expected."

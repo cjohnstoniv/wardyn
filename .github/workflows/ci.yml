@@ -1383,8 +1383,11 @@ jobs:
           PR_HEAD=${{ github.event.pull_request.head.sha }}
           if [ -n "$PR_HEAD" ]; then
             # End at the PR head, not HEAD: HEAD is GitHub's synthetic refs/pull/N/merge
-            # commit (committer GitHub, no sign-off); every real merge in the PR is audited.
-            make dco DCO_RANGE="$BASE..$PR_HEAD"
+            # commit, which this range excludes entirely. GitHub's own "Update branch"
+            # button can still land an unsigned merge (committer GitHub <noreply@github.com>)
+            # ON the PR branch itself — branch protection can force that update — so the
+            # exemption applies here too; it admits only that exact committer.
+            make dco DCO_RANGE="$BASE..$PR_HEAD" DCO_ALLOW_GITHUB_MERGES=1
           elif [ -n "$BASE" ]; then
             # merge_group: the queue's own merge commits are committed by GitHub
             # and carry no Signed-off-by — exempt only those.

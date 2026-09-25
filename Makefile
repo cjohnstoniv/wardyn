@@ -1122,9 +1122,12 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 # exactly like a missing one. `.+ <.+@.+>` is the whole contract — name, space,
 # angle-bracketed address with an @ — and it also covers the empty case.
 DCO_RANGE ?= origin/main..HEAD
-# 1 only where GitHub itself makes merge commits (push, merge_group): its
-# "Merge pull request" commits (committer GitHub <noreply@github.com>, 2+
-# parents) carry no Signed-off-by. PR ranges end at the PR head instead.
+# 1 only where a 2+-parent commit is committed by GitHub <noreply@github.com>
+# itself, which carries no Signed-off-by: push/merge_group's own "Merge pull
+# request" commits, and "Update branch"'s merge, which GitHub can also land
+# ON a PR branch (branch protection can force that update). The synthetic
+# refs/pull/N/merge test-merge tip is unaffected — PR ranges end at the PR
+# head, so it never appears at all.
 DCO_ALLOW_GITHUB_MERGES ?= 0
 dco: ## Every commit in DCO_RANGE (merges included) carries a Signed-off-by trailer
 	@echo "Checking DCO sign-off (Signed-off-by) over: $(DCO_RANGE)..."

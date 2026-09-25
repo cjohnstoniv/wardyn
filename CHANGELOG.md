@@ -15,9 +15,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   on main since the 0.7.12 fork; it had also become a workaround for `ci.yml` passing
   `BASE..HEAD` on `pull_request`, where `HEAD` is GitHub's synthetic, unsigned test-merge tip.
   PR ranges now end at `pull_request.head.sha`, and the only exemption left is
-  `DCO_ALLOW_GITHUB_MERGES=1`, which excuses a merge commit committed by
-  `GitHub <noreply@github.com>` (push and merge_group only, where GitHub makes such merges
-  itself).
+  `DCO_ALLOW_GITHUB_MERGES=1`, which excuses a 2+-parent commit committed by
+  `GitHub <noreply@github.com>` and nothing else — push and merge_group's own
+  "Merge pull request" commits, and a GitHub "Update branch" merge landed on a
+  PR branch itself (branch protection can force that update).
 - **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
   map being set was previously enough to hide the "Who is an admin" setup row and the shell
   banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
