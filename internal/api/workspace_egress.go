@@ -133,9 +133,9 @@ func unionSiteConfigScmHosts(spec *types.RunPolicySpec, sc types.SiteConfig) []s
 // reaches one of the redirect's public hosts, so an unrelated run never gains the
 // corp host or planArtifactRedirect's injected token. A network-only row's deny
 // side is NOT scoped: see appendNetworkRedirectDenials. Dropped hosts match port-
-// and wildcard-aware ("*.pythonhosted.org", "pypi.org:443"). Returns a FRESH slice
-// (the input when nothing is configured); a malformed From/To leaves its public
-// host(s) in place (fail safe: never drop egress a build still needs).
+// and wildcard-aware ("*.pythonhosted.org", "pypi.org:443"), so public reach never
+// survives beside the corp mirror. Returns a FRESH slice (input if unconfigured);
+// a malformed From/To keeps its public host(s): never drop egress a build needs.
 func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 	if len(sc.EgressRedirects) == 0 {
 		return domains

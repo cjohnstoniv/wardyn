@@ -42,12 +42,12 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 // drives mean one drive's members author the other's storage (alice's writable
 // home can hold another drive's root, and she can swap a segment for a link).
 // Strict nesting only: equal roots are the ordinary "one share, two allocations"
-// shape. Checked on the stored strings AND the resolved paths, because
-// UserDriveHostRootCheck sees one root, and a SYMLINKED root nests just the same.
-// A resolve failure on the OTHER row falls back to the lexical answer: this
-// drive's root already resolved (gate 3), and a dead stored row must not block
-// every new drive. A read then an unconditional write, like driveRehomeGuard:
-// two concurrent creates can both pass; the database-level form is deferred.
+// shape. Checked on stored strings AND resolved paths (UserDriveHostRootCheck
+// sees one root; a SYMLINKED root nests just the same). A resolve failure on the
+// OTHER row falls back to the lexical answer: this drive's root already resolved
+// (gate 3), and a dead stored row binds nothing (no tree left to share), so it
+// must not block every new drive. A read then an unconditional write, like
+// driveRehomeGuard: two concurrent creates can both pass (DB-level form deferred).
 func (s *Server) driveHostRootNesting(r *http.Request, d types.UserDrive) (int, string) {
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {

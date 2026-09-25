@@ -15,10 +15,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ReconcileWorkspaceEgressDecisions re-applies decided `always`-scoped egress
-// decisions to their run's primary workspace: the write-back
-// (persistWorkspaceEgressDecision) is not atomic with Decide, so a PG blip could
-// drop a permanent verdict; the upsert is idempotent. Returns the count. It runs once
+// ReconcileWorkspaceEgressDecisions re-applies decided `always` egress verdicts
+// to the run's primary workspace (persistWorkspaceEgressDecision is not atomic
+// with Decide). AddWorkspaceEgressDecision is an idempotent upsert that also
+// clears the mirror list. Returns the count re-applied. It runs once
 // at boot (cmd/wardynd). ponytail: boot-only heals on the next restart; a periodic
 // tick would heal sooner on a laptop that rarely reboots — add one if that window
 // proves too wide.

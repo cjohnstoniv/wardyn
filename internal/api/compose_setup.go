@@ -274,10 +274,10 @@ const maxWorkspaceSecretRows = 5
 // except that a contract-Required name ABSENT from the store escalates to Kind
 // "secret": applyWorkspaceRequirements never auto-grants it, so it will not be
 // there at launch. A granted one is already setupSecretItems' satisfied row.
-// Names go through sanitizeSecretName (as groundAPIKeySecretNames does) so the
-// add-secret fix can't dead-end on secretNameRE; contract names are already
-// secretNameRE-shaped. Scanner names are UNTRUSTED workspace content (charset-capped
-// by DeriveProfile) and stay in the label with their provenance.
+// Names go through sanitizeSecretName (compose_ground.go's secretNameRE fold) so
+// the add-secret fix can't dead-end on secretNameRE; contract names are already
+// secretNameRE-shaped. Scanner names are UNTRUSTED workspace content
+// (charset-capped by DeriveProfile) and stay in the label with their provenance.
 func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[string]bool) []SetupItem {
 	type needRow struct {
 		raw, ws  string
