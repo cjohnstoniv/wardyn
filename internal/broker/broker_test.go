@@ -77,6 +77,9 @@ type fakeDB struct {
 	// mintedErr fails MintedCredentials — RevokeRun's only input. Zero value
 	// (nil) is the ordinary behaviour every other test sees.
 	mintedErr error
+	// onCommit runs after a successful Commit — the SIEM test cancels the
+	// request ctx here to model a client hanging up once the mint is durable.
+	onCommit func()
 }
 
 // auditRow captures an in-tx INSERT INTO audit_events, recording whether it ran
@@ -191,6 +194,9 @@ func (tx *fakeTx) Commit(_ context.Context) error {
 		return tx.db.commitErr
 	}
 	tx.committed = true
+	if tx.db.onCommit != nil {
+		tx.db.onCommit()
+	}
 	return nil
 }
 func (tx *fakeTx) Rollback(_ context.Context) error { return nil }

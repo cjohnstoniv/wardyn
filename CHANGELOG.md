@@ -76,6 +76,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   that no longer exists could fail a lint run that never touched that file. `make lint` now points
   `GOLANGCI_LINT_CACHE` at a `.golangci-cache/` directory inside the current worktree (gitignored),
   so one worktree's cache can never leak into another's.
+- **A credential mint's SIEM record no longer depends on the client staying connected.** The
+  broker fanned the committed `credential.mint` event to the file, webhook and syslog sinks on the
+  request context, and the syslog sink skips an event whose context is already done — so a git
+  helper that hung up after its mint committed could leave a live credential with no SIEM record.
+  The fan-out now detaches from request cancellation; tests pin one SIEM event per winning mint,
+  none for a concurrent loser or a refused mint, and no token bytes in the event (#716).
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
