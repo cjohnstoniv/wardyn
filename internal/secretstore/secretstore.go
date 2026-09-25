@@ -150,6 +150,9 @@ var PlatformNames = map[string]bool{
 	"wardyn-ui-session-key": true,
 	"wardyn-ssh-host-key":   true,
 	"wardyn-internal-ca":    true,
+	// The hybrid laptop's org device credential (cmd/wardynd's bootHybrid),
+	// bootstrapped through loadOrCreateSecret like the keys above.
+	"wardyn-org-device-credential": true,
 }
 
 // Kind is the store-side kind of the row (owner, name): "platform" for a boot

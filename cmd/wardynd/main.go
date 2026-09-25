@@ -367,11 +367,15 @@ func run() error {
 	// inputs only exist this far into boot: lm.enabled is the RESOLVED
 	// local-mode fact — local mode auto-enables, so the raw flag is not the
 	// answer — and feats.authn is the resolved "OIDC is configured" one.
-	if err := validateMemberModePosture(*f.memberMode, lm.enabled, feats.authn != nil); err != nil {
+	//
+	// Hybrid enrolment (issue #103) runs in the same call, after both checks
+	// and before the server that serves its status; orgFederation is nil when
+	// WARDYN_ORG_URL is unset.
+	st := store.NewPG(pool)
+	orgFederation, err := checkPostureAndBootHybrid(bootCtx, rootCtx, f, lm.enabled, feats.authn != nil, secrets, st, maskedRec)
+	if err != nil {
 		return err
 	}
-
-	st := store.NewPG(pool)
 	// The roster half of the model-identity posture, WARNED at boot beside the
 	// model-ARN one above (validateModelEndpoints). See warnBedrockSSOPinPosture.
 	warnBedrockSSOPinPosture(bootCtx, st, *f.bedrockModel)
@@ -492,7 +496,8 @@ func run() error {
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run
 		// request. It is cancelled on SIGINT/SIGTERM at shutdown.
-		BaseCtx: rootCtx,
+		BaseCtx:       rootCtx,
+		OrgFederation: orgFederation,
 	})
 
 	// The login-grant edge, joined after both sides exist and before anything is

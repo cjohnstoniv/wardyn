@@ -327,7 +327,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		ModelProviderID: mpChoice.provider.ID,
 	}
 	s.captureRunLimits(&run, ceiling)
-	created, err := s.cfg.Store.CreateRun(ctx, run)
+	created, err := s.createRun(ctx, run)
 	if err != nil {
 		writeServerError(w, r, "create run", err)
 		return

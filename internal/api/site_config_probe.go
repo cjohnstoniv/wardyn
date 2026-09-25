@@ -489,7 +489,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	if err != nil {
 		return runID, probeRunResult{}, err
 	}
-	created, err := s.cfg.Store.CreateRun(launchCtx, run)
+	created, err := s.createRun(launchCtx, run)
 	if err != nil {
 		s.cfg.Identity.RevokeRun(launchCtx, runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
 		return runID, probeRunResult{}, fmt.Errorf("create probe run: %w", err)

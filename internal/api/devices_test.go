@@ -179,8 +179,12 @@ func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, pee
 	if d.RevokedAt != nil {
 		return store.DeviceIngestResult{}, store.ErrDeviceRevoked
 	}
+	held := map[int64]string{} // newest ingested row per device seq
+	for _, r := range f.ingested[id] {
+		held[r.Seq] = r.RowHash
+	}
 	start := 0
-	for start < len(rows) && rows[start].Seq <= d.LastSeq {
+	for start < len(rows) && rows[start].Seq <= d.LastSeq && held[rows[start].Seq] == rows[start].RowHash {
 		start++
 	}
 	fresh := rows[start:]
@@ -190,7 +194,7 @@ func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, pee
 	reset := false
 	if fresh[0].PrevHash == "" {
 		reset = d.LastRowHash != ""
-	} else if fresh[0].PrevHash != d.LastRowHash {
+	} else if fresh[0].Seq <= d.LastSeq || fresh[0].PrevHash != d.LastRowHash {
 		return store.DeviceIngestResult{}, store.ErrConflict
 	}
 	for i := 1; i < len(fresh); i++ {
@@ -276,7 +280,7 @@ func enrolTestDevice(t *testing.T, srv *Server, name string) (uuid.UUID, string)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("enrol: %d %s", w.Code, w.Body.String())
 	}
-	var got deviceEnrolResponse
+	var got types.DeviceEnrolResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +310,7 @@ func ackedSeq(t *testing.T, w *httptest.ResponseRecorder) int64 {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
 	}
-	var ack deviceAck
+	var ack types.DeviceAck
 	if err := json.Unmarshal(w.Body.Bytes(), &ack); err != nil {
 		t.Fatal(err)
 	}
