@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -164,7 +165,13 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 		// secret here would let a member redirect every run's egress to a
 		// server of their own choosing with no SSRF guard on that hop at all,
 		// not merely widen what a vetted destination allows.
-		getSecret = s.cfg.Secrets.For("").Get
+		// A closure, not the method value: the read carries its purpose
+		// (the Audited store refuses a read without one), and the read guard
+		// can see it.
+		sec := s.cfg.Secrets.For("")
+		getSecret = func(ctx context.Context, name string) ([]byte, error) {
+			return sec.Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), name)
+		}
 	}
 	detail := map[string]any{
 		"secret_ref": siteCfg.UpstreamProxySecretRef, "url_configured": siteCfg.UpstreamProxyURL != "",
@@ -402,6 +409,13 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// matter what the request said.
 	if p.holdLane() {
 		sandboxEnv["WARDYN_TOOL_APPROVALS"] = "hold"
+		// The same ceiling the approval-expiry sweeper actually expires a
+		// PENDING approval at (Config.ApprovalExpiryAfter — see the field's
+		// doc). agent-run's hold branch reads it to size MCP_TOOL_TIMEOUT and
+		// wardyn-toolgate defaults -deadline from it (RL-1): without this, a
+		// tool call's wait is bounded by their own hardcoded literals instead
+		// of the operator's real, possibly-raised, ceiling.
+		sandboxEnv["WARDYN_APPROVAL_EXPIRY_AFTER"] = p.ApprovalExpiryAfter.String()
 	}
 	// The RESOLVED autonomy level, read off the run row the launch gate froze
 	// it on (resolveRunAutonomy, runs_autonomy.go) rather than off a dispatch

@@ -14,6 +14,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
 // api answers the three GitHub REST reads the broker makes — a repository's
@@ -241,6 +245,10 @@ func TestPushRulesReadTheForgeWithTheRunsOwnCredential(t *testing.T) {
 	if n, _ := r.forge.reads(); n != 0 {
 		t.Errorf("a push refused from its own bytes read the forge %d time(s)", n)
 	}
+	forgeRow := `"rule_source":"` + ruleSourceGitForgeRead + `"`
+	if strings.Contains(r.decisions.String(), forgeRow) {
+		t.Errorf("a push that read nothing from the forge recorded a %s row", ruleSourceGitForgeRead)
+	}
 
 	runGit(t, r.work, "reset", "-q", "--hard", "HEAD~1")
 	r.editMain(t, "allowed")
@@ -249,6 +257,21 @@ func TestPushRulesReadTheForgeWithTheRunsOwnCredential(t *testing.T) {
 	n, auth := r.forge.reads()
 	if n == 0 || auth != "Bearer gh-tok" {
 		t.Errorf("forge reads = %d with Authorization %q, want some with the lane's own token", n, auth)
+	}
+	// Issue #508 F6: the broker's own credentialed reads are in the run's
+	// decision stream, not only on the sidecar's log line.
+	var rows []egress.DecisionLog
+	for _, line := range strings.Split(strings.TrimSpace(r.decisions.String()), "\n") {
+		var d egress.DecisionLog
+		if json.Unmarshal([]byte(line), &d) == nil && d.RuleSource == ruleSourceGitForgeRead {
+			rows = append(rows, d)
+		}
+	}
+	if len(rows) != 1 {
+		t.Fatalf("%s rows = %d, want exactly one for the push that read the forge\n%s", ruleSourceGitForgeRead, len(rows), r.decisions)
+	}
+	if d := rows[0]; d.Decision != egress.Allow || d.Request.Host != githubAPIHost || d.Request.Port != 443 || d.Request.RunID == uuid.Nil {
+		t.Errorf("forge-read row = %+v, want an ALLOW for this run naming %s:443", d, githubAPIHost)
 	}
 	if n := r.forge.mintCount(); n != 1 {
 		t.Errorf("mints after reading the forge = %d, want still 1", n)

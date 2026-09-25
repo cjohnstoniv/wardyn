@@ -93,7 +93,7 @@ func agentPolicyDispatchParams(t *testing.T, fr *fakeRunner, agent string, level
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Agent, run.AutonomyLevel = agent, level
 	run.Task = task
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded()), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Interactive: p.Interactive, ToolApprovals: p.ToolApprovals,
 	})

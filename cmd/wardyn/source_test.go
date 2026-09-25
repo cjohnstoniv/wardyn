@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// W6-S1-6: --kind and --locator are cobra-required, so a missing one fails
+// --kind and --locator are cobra-required, so a missing one fails
 // locally with cobra's own "required flag(s)" message rather than
 // round-tripping to the server and surfacing its misleading 400.
 func TestSourceCreateCmd_RequiresKindAndLocator(t *testing.T) {
