@@ -110,7 +110,7 @@ func TestRecordingK8s(t *testing.T) {
 	}
 	host := "wardyn-hopfake-" + uuid.NewString()[:8]
 	token := "recording-run-token-k8s"
-	startHopFakeK8s(t, restCfg, cs, ns, ca, host, uuid.New(), token)
+	startHopFakeK8s(t, restCfg, cs, ns, agentImage, ca, host, uuid.New(), token)
 
 	var runID uuid.UUID
 	conformance.CheckRecordingCapability(t, r, conformance.RecordingOptions{
@@ -170,15 +170,16 @@ func k8sTestClient(t *testing.T) (*rest.Config, *kubernetes.Clientset) {
 	return restCfg, cs
 }
 
-// startHopFakeK8s builds test/conformance/hopfake, runs it in a plain busybox
-// pod in ns fronted by a same-named ClusterIP Service (so the proxy sidecar
+// startHopFakeK8s builds test/conformance/hopfake, runs it in a pod (using
+// the already-kind-loaded agent image, which is busybox plus wardyn-rec) in
+// ns fronted by a same-named ClusterIP Service (so the proxy sidecar
 // can resolve host over cluster DNS), with a serving cert for host signed by
 // ca. Unlike docker's startHopFake (CopyToContainer before the container's
 // main process starts), a k8s pod has no such "not started yet" window to
 // copy into: the pod starts with an idle loop, waits for the binary and its
 // TLS credentials to land via the exec subresource (kubectl cp's own
 // mechanism), then execs hopfake in the loop's place.
-func startHopFakeK8s(t *testing.T, restCfg *rest.Config, cs *kubernetes.Clientset, ns string, ca *hoptls.CA, host string, grant uuid.UUID, token string) {
+func startHopFakeK8s(t *testing.T, restCfg *rest.Config, cs *kubernetes.Clientset, ns, agentImage string, ca *hoptls.CA, host string, grant uuid.UUID, token string) {
 	t.Helper()
 	bin := buildHopfakeBinary(t)
 	cert, err := ca.ServingCert(host, time.Now())
@@ -202,13 +203,25 @@ func startHopFakeK8s(t *testing.T, restCfg *rest.Config, cs *kubernetes.Clientse
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
 			Containers: []corev1.Container{{
-				Name:  "hopfake",
-				Image: "busybox:1.36",
-				// Idles until the copy below lands /tmp/hopfake, sources the
-				// credentials it wrote alongside it, then execs in place —
-				// so the pod's own stdout (what waitForHopfakeLog reads) is
-				// hopfake's log, not a wrapper shell's.
-				Command: []string{"sh", "-c", "while [ ! -x /tmp/hopfake ]; do sleep 0.2; done; . /tmp/hopfake.env; exec /tmp/hopfake"},
+				Name: "hopfake",
+				// The already-kind-loaded agent image, not a bare busybox
+				// pull: it's busybox plus wardyn-rec (see
+				// deploy/kind/Dockerfile.conformance-agent), so it already
+				// has sh, tar and sleep, and needs no extra image pinned or
+				// loaded just to host this fake.
+				Image: agentImage,
+				// Idles until the copy exec below has fully landed
+				// /tmp/hopfake and touched the /tmp/.ready sentinel, then
+				// sources the credentials written alongside it and execs in
+				// place — so the pod's own stdout (what waitForHopfakeLog
+				// reads) is hopfake's log, not a wrapper shell's. Waiting on
+				// `-x /tmp/hopfake` is not enough: busybox tar creates the
+				// member file (and sets its mode) before it streams that
+				// member's content, so the executable bit can be visible
+				// while the binary's bytes are still incomplete. The
+				// sentinel is only touched once the whole tar stream has
+				// been read.
+				Command: []string{"sh", "-c", "while [ ! -e /tmp/.ready ]; do sleep 0.2; done; . /tmp/hopfake.env; exec /tmp/hopfake"},
 				SecurityContext: &corev1.SecurityContext{
 					RunAsNonRoot:             boolPtr(true),
 					RunAsUser:                int64Ptr(65534), // busybox has no numeric non-root USER; pin one explicitly (PSS-restricted admission)
@@ -262,7 +275,7 @@ func startHopFakeK8s(t *testing.T, restCfg *rest.Config, cs *kubernetes.Clientse
 		t.Fatal(err)
 	}
 
-	if out, err := execInPod(ctx, restCfg, cs, ns, host, "hopfake", []string{"sh", "-c", "cd /tmp && tar -xf -"}, &tarBuf); err != nil {
+	if out, err := execInPod(ctx, restCfg, cs, ns, host, "hopfake", []string{"sh", "-c", "cd /tmp && tar -xf - && touch /tmp/.ready"}, &tarBuf); err != nil {
 		t.Fatalf("copy hopfake into pod: %v\n%s", err, out)
 	}
 }
