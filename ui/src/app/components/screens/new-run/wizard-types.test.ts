@@ -14,7 +14,7 @@ import {
   impliedEgressHosts,
   secretAutoGrants,
 } from "./wizard-types";
-import type { Workspace, WorkspaceKind, WorkspaceRequirementsMap } from "../../../lib/types";
+import type { Workspace, WorkspaceRequirementsMap } from "../../../lib/types";
 import { makeWorkspace } from "../../../../test/factories";
 
 function localDirWorkspace(id: string, requirements: WorkspaceRequirementsMap = {}): Workspace {
@@ -195,7 +195,7 @@ describe("primaryWorkspaceId — mounts-then-repos, mirroring the server's own p
     const mixedWs = makeWorkspace({
       id: "ws-mixed",
       name: "mixed",
-      kind: "" as unknown as WorkspaceKind,
+      kind: "",
       source: "",
       sources: [
         { type: "repo", source: "acme/widgets" },
