@@ -227,6 +227,9 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 // here); a NULL result (no run-scoped bound — wait_budget_sec 0 and ends_at
 // NULL) means the request is open until the deployment's own approval-expiry
 // ceiling reaps it, which is approval.ExpireStale's job, not the idle reaper's.
+// That ceiling only exists while its sweeper runs (WARDYN_APPROVAL_EXPIRY_INTERVAL
+// > 0); with it disabled, openHoldSQL has no other bound for the NULL case, so
+// such a request — and the run parked on it — stays open until decided.
 func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error) {
 	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now()

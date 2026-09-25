@@ -27,11 +27,8 @@ const touchDebounce = lifecycle.TouchDebounce
 // ruleSource excludes the ONE decision that is not real agent activity:
 // credential:reauth-timeout is the proxy's own signal that a re-auth hold's
 // WAIT ran out with nobody there (ruleSourceCredentialReauthTimeout, mirrored
-// from internal/egress/proxy). Touching on it would fight the hold-aware idle
-// reaper (RL-5, store.openHoldSQL): the run would look freshly active at the
-// exact moment its open request stopped being open, so a chatty retrying
-// client could keep an otherwise-idle run alive forever purely by repeating
-// the timeout it is causing.
+// from internal/egress/proxy). A timeout reports that nobody answered, not
+// that the agent did something, so it should not restart the idle clock.
 func (s *Server) shouldTouch(runID uuid.UUID, ruleSource string) bool {
 	if ruleSource == ruleSourceCredentialReauthTimeout {
 		return false
