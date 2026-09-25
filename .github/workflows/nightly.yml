@@ -519,6 +519,20 @@ jobs:
             test/reports/e2e/kind-sso/**
           if-no-files-found: error
 
+  # Coverage-guided fuzzing of the session-cookie decoder: a cookie whose HMAC
+  # does not verify must never decode into a session. Every PR runs the seed
+  # corpus as an ordinary test; this lane searches past it.
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Fuzz the session decoder
+        run: go test -run '^$' -fuzz '^FuzzDecodeSession$' -fuzztime 5m ./internal/auth/oidc/
+
   # ── The notification this workflow never had ───────────────────────────────
   # Nothing in .github/workflows/ used `if: failure()`, opened an issue, or
   # notified anywhere, and no nightly job is a branch-protection context — so a
@@ -584,7 +598,7 @@ jobs:
         run: ./scripts/nightly-migration-merge-check.sh
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, fuzz]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -605,7 +619,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build) or kind-sso-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk or fuzz." \
               "" \
               "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
               "" \
