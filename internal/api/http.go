@@ -217,7 +217,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorBody{Error: msg})
+	writeErrorReason(w, status, "", msg)
+}
+
+// writeErrorReason is writeError with a machine reason (errorBody.Reason) on the
+// wire. A refusal that carries a reason goes through here rather than a bare
+// writeJSON(errorBody{...}), so #173's driver-text guard
+// (server_error_driver_text_guard_test.go) still sees the call.
+func writeErrorReason(w http.ResponseWriter, status int, reason, msg string) {
+	writeJSON(w, status, errorBody{Error: msg, Reason: reason})
 }
 
 // bearerToken extracts a bearer token from the Authorization header.

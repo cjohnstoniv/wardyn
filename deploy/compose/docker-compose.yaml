@@ -161,6 +161,10 @@ services:
     # sidecar is launched by the docker runner (not a compose service), so its
     # restart posture is set container-side, not here.
     restart: unless-stopped
+    # docker stop's default 10s would SIGKILL wardynd's orderly stop, which
+    # needs up to ~65s (HTTP drain, detached launches and teardowns, audit
+    # flush); see terminationGracePeriodSeconds in the Helm values.
+    stop_grace_period: 70s
     # The docker runner needs to reach the host daemon to create sandboxes.
     # Run as root inside the container so it can open the bind-mounted socket
     # (demo only; see the DAEMON-TRUST note above).
@@ -307,7 +311,6 @@ services:
       # validateHybridPosture (cmd/wardynd/boot_posture.go).
       WARDYN_ORG_URL: "${WARDYN_ORG_URL:-}"
       WARDYN_ORG_ENROLMENT_TOKEN: "${WARDYN_ORG_ENROLMENT_TOKEN:-}"
-      WARDYN_ORG_DEVICE_NAME: "${WARDYN_ORG_DEVICE_NAME:-}"
       # Four-eyes on egress approvals: the human who DECIDES an egress_domain
       # approval must not be the human who created the run. Unforwarded, the m'
       # envelope's WARDYN_EGRESS_SECOND_HUMAN=true read as ON in the file MDM

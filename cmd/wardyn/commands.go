@@ -103,7 +103,7 @@ func normalizeConfinement(s string) string {
 func runCmd(client clientFn) *cobra.Command {
 	var repo, agent, task, policyID, confinement, policyFile, image, taskMode, workspaceID string
 	var title, description string
-	var devcontainerRepo, devcontainerRef string
+	var devcontainerRepo, devcontainerRef, modelProvider string
 	var interactive, wait, createJSON, dryRun bool
 	var timeout time.Duration
 	cmd := &cobra.Command{
@@ -130,6 +130,7 @@ func runCmd(client clientFn) *cobra.Command {
 				ConfinementClass: normalizeConfinement(confinement), Interactive: interactive,
 				Image: image, TaskMode: taskMode,
 				DevcontainerRepo: devcontainerRepo, DevcontainerRef: devcontainerRef,
+				ModelProvider: modelProvider,
 			}
 			// --policy is a policy UUID; --workspace attaches an onboarded
 			// workspace by id (see setOptionalID for the parse-here rationale).
@@ -212,6 +213,7 @@ func runCmd(client clientFn) *cobra.Command {
 	cmd.Flags().StringVar(&image, "image", "", "user-supplied base image (Bring Your Own Image; requires the server's image builder, mutually exclusive with devcontainer builds — enforced server-side; wraps the image only — nothing runs until inside the run's confinement tier, unlike --devcontainer-repo, which builds unconfined on the host)")
 	cmd.Flags().StringVar(&devcontainerRepo, "devcontainer-repo", "", "git repo whose .devcontainer is built into the sandbox image (requires the server's image builder — WITHOUT it the run silently uses the convention image, so check 'wardyn run get <id>'; mutually exclusive with --image; builds/runs on the host, unconfined — trust the repo)")
 	cmd.Flags().StringVar(&devcontainerRef, "devcontainer-ref", "", "git ref (branch/tag/sha) to build for --devcontainer-repo")
+	cmd.Flags().StringVar(&modelProvider, "model-provider", "", "model provider id to run on (optional; unset uses the workspace's pinned provider, else the agent's default, else the one provider serving the agent — see GET /model-providers)")
 	cmd.Flags().StringVar(&taskMode, "task-mode", "", "how the sandbox executes --task: harness (default; runs the agent) or exec (runs the task as a plain shell command — no agent, and the operator's model access is not auto-injected; an explicit policy grant or a workspace's declared secret still applies)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "resolve and check the run without launching it: prints the setup checklist and the confinement class that would be enforced")
 	cmd.Flags().BoolVar(&wait, "wait", false, "block until the run reaches a terminal state and exit with the run's outcome (COMPLETED=0, FAILED=agent exit code, KILLED/STOPPED=2, timeout=124)")

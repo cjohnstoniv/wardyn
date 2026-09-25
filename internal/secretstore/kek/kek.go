@@ -8,9 +8,10 @@
 // A KEK never sees a credential value: it wraps and unwraps a 32-byte DEK,
 // bound to the row's owner and name. Each provider is one implementation of
 // KEK; the row records the provider's ID as kek_id, and a read picks the KEK by
-// that id. Only `local` exists today, one key per purpose (NewLocalPurpose);
-// Vault/OpenBao Transit and Azure Key Vault are the next two, each a
-// Wrap/Unwrap over its own service's API.
+// that id. `local` lives here, one key per purpose (NewLocalPurpose); Vault
+// Transit (package vaultkv, which holds the Vault client) wraps through the
+// service's own encrypt and decrypt. WARDYN_KEK selects the one every write
+// uses.
 package kek
 
 import (
@@ -36,6 +37,17 @@ type KEK interface {
 	ID() string
 	Wrap(ctx context.Context, dek []byte, bind map[string]string) ([]byte, error)
 	Unwrap(ctx context.Context, wrapped []byte, bind map[string]string) ([]byte, error)
+}
+
+// Versioned is a KEK whose key has versions (Vault Transit): each wrap names
+// the version it was made under, and `wardynd -rewrap` moves every row still
+// wrapped under an older one to the latest, so the old versions can be retired.
+type Versioned interface {
+	KEK
+	// WrapVersion is the key version wrapped was made under.
+	WrapVersion(wrapped []byte) (int, error)
+	// LatestVersion is the version a wrap made now would name.
+	LatestVersion(ctx context.Context) (int, error)
 }
 
 // The bind keys: the KMS encryption context / Transit associated data a
@@ -142,8 +154,16 @@ var _ KEK = (*Local)(nil)
 // round-trips to; age exposes no raw scalar. The id is "local:" plus the first
 // 8 bytes of SHA-256 over the public recipient, hex — so a row names which
 // age key sealed it without naming the key.
+//
+// The recipient is X25519 of the identity, which GODEBUG=fips140=only forbids.
+// age drops that error and leaves the recipient empty, which would give every
+// identity the same kek_id, so a recipient that does not parse is refused.
 func NewLocal(identity *age.X25519Identity) (*Local, error) {
-	return newLocal(identity.String(), identity.Recipient().String(), "local:", localInfo)
+	recipient, err := localRecipient(identity)
+	if err != nil {
+		return nil, err
+	}
+	return newLocal(identity.String(), recipient, "local:", localInfo)
 }
 
 // NewLocalPurpose derives the local KEK of one purpose: HKDF info
@@ -155,7 +175,22 @@ func NewLocalPurpose(identity *age.X25519Identity, purpose string) (*Local, erro
 	if purpose != PurposePlatform && purpose != PurposeCred {
 		return nil, fmt.Errorf("local KEK: unknown purpose %q", purpose)
 	}
-	return newLocal(identity.String(), identity.Recipient().String(), "local/"+purpose+":", localInfo+"/"+purpose)
+	recipient, err := localRecipient(identity)
+	if err != nil {
+		return nil, err
+	}
+	return newLocal(identity.String(), recipient, "local/"+purpose+":", localInfo+"/"+purpose)
+}
+
+// localRecipient is the identity's public recipient, refused when it does not
+// parse (the fips140=only case NewLocal's doc describes), for both
+// constructors: an empty one would give every age key the same id.
+func localRecipient(identity *age.X25519Identity) (string, error) {
+	recipient := identity.Recipient().String()
+	if _, err := age.ParseX25519Recipient(recipient); err != nil {
+		return "", errors.New("local KEK: the age identity has no public recipient (X25519 failed; GODEBUG=fips140=only forbids it) — the local key cannot run in FIPS 140-only mode; use a store mode (WARDYN_SECRET_STORE=vaultkv), which needs no WARDYN_AGE_KEY")
+	}
+	return recipient, nil
 }
 
 // newLocal is NewLocal over the strings it reads, so the golden vectors can
@@ -198,15 +233,24 @@ func (l *Local) Unwrap(_ context.Context, wrapped []byte, bind map[string]string
 	return dek, nil
 }
 
-// aad is AAD_kek = Encode("wardyn/kek/v1", owner, name, kek_id): the kek_id
+func (l *Local) aad(bind map[string]string) ([]byte, error) {
+	aad, err := WrapAAD(bind, l.id)
+	if err != nil {
+		return nil, fmt.Errorf("local KEK: %w", err)
+	}
+	return aad, nil
+}
+
+// WrapAAD is AAD_kek = Encode("wardyn/kek/v1", owner, name, kek_id): what every
+// provider binds a wrap to, as associated data (local, Transit). The kek_id
 // carries the purpose, so the label stays one for every local KEK. A bind
 // missing either key is refused rather than defaulted: a zero value here would
 // seal a DEK to the wrong row.
-func (l *Local) aad(bind map[string]string) ([]byte, error) {
+func WrapAAD(bind map[string]string, kekID string) ([]byte, error) {
 	owner, okO := bind[BindOwner]
 	name, okN := bind[BindName]
 	if !okO || !okN {
-		return nil, errors.New("local KEK: bind must carry both " + BindOwner + " and " + BindName)
+		return nil, errors.New("bind must carry both " + BindOwner + " and " + BindName)
 	}
-	return Encode(localInfo, owner, name, l.id), nil
+	return Encode(localInfo, owner, name, kekID), nil
 }

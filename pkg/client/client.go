@@ -15,7 +15,7 @@
 // automates); it is a curated subset, NOT a 1:1 mirror of every route:
 //
 //   - runs (/api/v1/runs):               CreateRun, Preflight, GetRun, ListRuns, ListRunsPage,
-//     ListGrants, KillRun, SynthesizeProfile, GetRecording, RunFiles
+//     ListGrants, ListGrantsPage, KillRun, SynthesizeProfile, GetRecording, RunFiles
 //   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
@@ -23,12 +23,13 @@
 //     ListWorkspacesPage, UpdateWorkspace, DeleteWorkspace, ScanWorkspace, RecordWorkspaceTask
 //   - sources (/api/v1/sources):         ListSources, CreateSource, GetSource, ScanSource, DeleteSource
 //   - audit (/api/v1/audit):             AuditEvents, AuditEventsPage, RecentAuditEvents
-//   - secrets (/api/v1/secrets):         ListSecrets, SetSecret, DeleteSecret
+//   - secrets (/api/v1/secrets):         ListSecrets, ListSecretsPage, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
-//   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/AddSSHKey
-//     (/api/v1/me/ssh-keys). The rest of /api/v1/me is NOT wrapped: see below.
+//   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
+//     ListSSHKeysPage/AddSSHKey (/api/v1/me/ssh-keys). The rest of /api/v1/me is
+//     NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
 //   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
@@ -45,12 +46,14 @@
 //   - /api/v1/access         — directory search and group->role mappings (0.7)
 //   - /api/v1/tokens         — admin-tier API tokens (0.7); /api/v1/me/tokens is the
 //     self-service half, also unwrapped
+//   - /api/v1/people         — erasing a person's stored credentials (0.8, offboarding)
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
 //     URLs, credential lanes) and storage ceilings (0.7.2). Admin-only, and
 //     authored through the console's providers page rather than by tooling
 //   - /api/v1/agent-providers — the org's agent roster: which coding agents this
 //     deployment offers, each one's model-access lane, and whether that
 //     credential is shared or per-person (0.7.2). Admin-only, same page
+//   - /api/v1/model-providers — the org's model-provider records (0.8). Admin-only
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
@@ -89,7 +92,8 @@
 //
 // EVERY list family surfaces that signal, through a *Page variant returning it
 // as a bool: ListRunsPage, ListApprovalsPage, ListPoliciesPage,
-// ListWorkspacesPage, AuditEventsPage. The plain forms are thin wrappers that
+// ListWorkspacesPage, AuditEventsPage, ListGrantsPage, ListSSHKeysPage,
+// ListSecretsPage. The plain forms are thin wrappers that
 // discard it, so existing callers are unchanged — but they leave the caller to
 // infer completeness from len(page) == the limit it happened to pass, a guess
 // that silently breaks the moment a caller omits Limit and gets the server's
@@ -303,6 +307,13 @@ type CreateRunRequest struct {
 	// corporate-network id — those apply operator-wide already, and are never
 	// run-selectable) is a 400.
 	IntegrationID string `json:"integration_id,omitempty"`
+	// ModelProvider chooses this run's model provider (GET /model-providers,
+	// by id), ahead of a workspace's provider pin and the agent's default. It
+	// must be one the caller is granted, that is on and that serves Agent —
+	// otherwise the run is refused, never moved to another provider. Named on a
+	// deployment with no model providers, or on a run that calls no model, it
+	// is refused rather than ignored.
+	ModelProvider string `json:"model_provider,omitempty"`
 	// Drive opts this run into the member's USER DRIVE — the per-user storage
 	// an admin allocated them. Nil (the default) mounts nothing, byte for byte
 	// today. Nothing here names a path or a drive: the server resolves which
@@ -444,14 +455,24 @@ func (c *Client) ListRuns(ctx context.Context, opts ...ListOpts) ([]types.AgentR
 	return runs, err
 }
 
+// ListGrantsPage is ListGrants plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists and this one is not the whole
+// list. See the package doc's "# Pagination".
+// Returns 404/APIError when the run does not exist.
+func (c *Client) ListGrantsPage(ctx context.Context, runID uuid.UUID, opts ...ListOpts) (grants []types.CredentialGrant, truncated bool, err error) {
+	var hdr http.Header
+	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/runs/"+runID.String()+"/grants", opts), nil, &grants, &hdr)
+	return grants, hdr.Get("X-Wardyn-Truncated") == "true", err
+}
+
 // ListGrants returns the credential-grant eligibility records for a run.
 // These are eligibility records (what the run MAY request), not issued
-// credentials — some may never be minted.
+// credentials — some may never be minted. Pass a ListOpts to page; prefer
+// ListGrantsPage, which also returns the server's truncation signal.
 // Returns 404/APIError when the run does not exist.
-func (c *Client) ListGrants(ctx context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
-	var out []types.CredentialGrant
-	err := c.do(ctx, http.MethodGet, "/api/v1/runs/"+runID.String()+"/grants", nil, &out)
-	return out, err
+func (c *Client) ListGrants(ctx context.Context, runID uuid.UUID, opts ...ListOpts) ([]types.CredentialGrant, error) {
+	grants, _, err := c.ListGrantsPage(ctx, runID, opts...)
+	return grants, err
 }
 
 // KillRunResponse is the body returned by POST /api/v1/runs/{id}/kill.
@@ -561,70 +582,6 @@ func (c *Client) Deny(ctx context.Context, id uuid.UUID, reason string, opts ...
 	return out, err
 }
 
-// PolicyRequest is the body for POST/PUT /api/v1/policies. Name is required;
-// Spec is validated server-side before persistence (a bad spec is rejected
-// with 400, fail closed).
-type PolicyRequest struct {
-	Name string              `json:"name"`
-	Spec types.RunPolicySpec `json:"spec"`
-}
-
-// ListPoliciesPage is ListPolicies plus the server's X-Wardyn-Truncated signal:
-// truncated=true means a further page exists.
-func (c *Client) ListPoliciesPage(ctx context.Context, opts ...ListOpts) (policies []types.RunPolicy, truncated bool, err error) {
-	var hdr http.Header
-	err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/policies", opts), nil, &policies, &hdr)
-	return policies, hdr.Get("X-Wardyn-Truncated") == "true", err
-}
-
-// ListPolicies returns run policies in reverse creation order. Pass a ListOpts to page.
-// Prefer ListPoliciesPage, which also returns the server's truncation signal.
-func (c *Client) ListPolicies(ctx context.Context, opts ...ListOpts) ([]types.RunPolicy, error) {
-	policies, _, err := c.ListPoliciesPage(ctx, opts...)
-	return policies, err
-}
-
-// GetPolicy fetches a single RunPolicy by its UUID.
-// Returns 404/APIError when the policy does not exist.
-func (c *Client) GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, error) {
-	var out types.RunPolicy
-	err := c.do(ctx, http.MethodGet, "/api/v1/policies/"+id.String(), nil, &out)
-	return out, err
-}
-
-// GetDefaultPolicy fetches the control plane's configured default policy
-// spec — the ceiling every run created without a policy_id gets, and the
-// ceiling composer.Clamp bounds a member-authored inline policy against
-// (W14-S1-6: previously unexposed by UI, CLI or API).
-func (c *Client) GetDefaultPolicy(ctx context.Context) (types.RunPolicySpec, error) {
-	var out types.RunPolicySpec
-	err := c.do(ctx, http.MethodGet, "/api/v1/policies/default", nil, &out)
-	return out, err
-}
-
-// CreatePolicy validates and persists a new policy.
-// Returns the created RunPolicy (status 201) on success; 400 on an invalid
-// name or spec.
-func (c *Client) CreatePolicy(ctx context.Context, req PolicyRequest) (types.RunPolicy, error) {
-	var out types.RunPolicy
-	err := c.do(ctx, http.MethodPost, "/api/v1/policies", req, &out)
-	return out, err
-}
-
-// UpdatePolicy validates and replaces an existing policy's name and spec.
-// Returns the updated RunPolicy on success; 404 when unknown; 400 when invalid.
-func (c *Client) UpdatePolicy(ctx context.Context, id uuid.UUID, req PolicyRequest) (types.RunPolicy, error) {
-	var out types.RunPolicy
-	err := c.do(ctx, http.MethodPut, "/api/v1/policies/"+id.String(), req, &out)
-	return out, err
-}
-
-// DeletePolicy removes a policy by id.
-// Returns nil on success (204); 404/APIError when the policy does not exist.
-func (c *Client) DeletePolicy(ctx context.Context, id uuid.UUID) error {
-	return c.do(ctx, http.MethodDelete, "/api/v1/policies/"+id.String(), nil, nil)
-}
-
 // AuditFilter narrows an audit query by the server's optional predicates —
 // ?since=&until=&action_prefix=&actor_type=&outcome= (see docs/sdk.md's Raw
 // HTTP section). The zero value applies no filter. Since/Until are RFC3339
@@ -701,17 +658,29 @@ func (c *Client) RecentAuditEvents(ctx context.Context, opts ...ListOpts) ([]typ
 	return out, err
 }
 
-// ListSecrets returns the managed secret NAMES (never values). Reserved
-// platform-internal keys are excluded server-side. GET /api/v1/secrets, which
-// responds {"names":[...]}.
-func (c *Client) ListSecrets(ctx context.Context) ([]string, error) {
+// ListSecretsPage is ListSecrets plus the server's X-Wardyn-Truncated signal:
+// truncated=true means a further page exists and this one is not the whole
+// list. See the package doc's "# Pagination". GET /api/v1/secrets, which
+// responds {"names":[...],"mine":[...]} — this method surfaces only names,
+// same as ListSecrets.
+func (c *Client) ListSecretsPage(ctx context.Context, opts ...ListOpts) (names []string, truncated bool, err error) {
 	var out struct {
 		Names []string `json:"names"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/api/v1/secrets", nil, &out); err != nil {
-		return nil, err
+	var hdr http.Header
+	if err = c.do(ctx, http.MethodGet, appendListOpts("/api/v1/secrets", opts), nil, &out, &hdr); err != nil {
+		return nil, false, err
 	}
-	return out.Names, nil
+	return out.Names, hdr.Get("X-Wardyn-Truncated") == "true", nil
+}
+
+// ListSecrets returns the managed secret NAMES (never values). Reserved
+// platform-internal keys are excluded server-side. Pass a ListOpts to page;
+// prefer ListSecretsPage, which also returns the server's truncation signal.
+// GET /api/v1/secrets, which responds {"names":[...]}.
+func (c *Client) ListSecrets(ctx context.Context, opts ...ListOpts) ([]string, error) {
+	names, _, err := c.ListSecretsPage(ctx, opts...)
+	return names, err
 }
 
 // SetSecret stores (or overwrites) a named secret. The value is write-only — no

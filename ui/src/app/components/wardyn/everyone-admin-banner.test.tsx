@@ -46,7 +46,7 @@ describe("EveryoneAdminBanner (#484)", () => {
     expect(screen.getByText(ADMIN_ACCESS_BANNER.TITLE)).toBeInTheDocument();
     expect(screen.getByText(ADMIN_ACCESS_BANNER.BODY)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: ADMIN_ACCESS_BANNER.ACTION }));
-    expect(screen.getByTestId("where")).toHaveTextContent("/setup?step=people");
+    expect(screen.getByTestId("where")).toHaveTextContent("/admin/setup?step=people");
   });
 
   it("hidden for a member, even if a warn row somehow reached them", () => {

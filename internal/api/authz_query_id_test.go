@@ -80,9 +80,11 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityPrincipal, readers: []string{"secretOwnerParam", "handleListSecrets"},
 		foreign: 403, pinnedBy: "TestListSecrets_AdminOwnerParam_Member403",
 	},
+	// A PUT refuses ?owner= for an admin too (K7-A), so the probe's "an admin
+	// is admitted" arm cannot hold; the dedicated test carries both refusals.
 	"PUT /api/v1/secrets/{name}?owner": {
-		entity: entityPrincipal, readers: []string{"secretOwnerParam"},
-		foreign: 403, pinnedBy: "TestPutSecret_AdminOwnerParam_LandsInMemberNamespace",
+		entity: entityPrincipal, readers: []string{"handlePutSecret"},
+		pinnedBy: "TestPutSecret_OwnerParamIsRefused",
 	},
 	"DELETE /api/v1/secrets/{name}?owner": {
 		entity: entityPrincipal, readers: []string{"secretOwnerParam", "handleDeleteSecret"},

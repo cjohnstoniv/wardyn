@@ -20,12 +20,14 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
 // envelopeDB is a fresh, migrated database on the WARDYN_TEST_PG server,
@@ -114,7 +116,7 @@ func TestPG_BootConvertsV0BeforeBootKeysAreRead(t *testing.T) {
 	seedV0Row(t, pool, id, secretSigningKey, pemBytes)
 
 	rec := &capturingRecorder{}
-	secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, rec)
+	secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, rec)
 	if err != nil {
 		t.Fatalf("first v1 boot: %v", err)
 	}
@@ -149,7 +151,7 @@ func TestPG_BootConvertsV0BeforeBootKeysAreRead(t *testing.T) {
 		t.Fatalf("signing-key row enc_version = %d after boot, want 1", version)
 	}
 
-	if _, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, &capturingRecorder{}); err != nil {
+	if _, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, &capturingRecorder{}); err != nil {
 		t.Fatalf("second boot: %v", err)
 	}
 	v2, w2, ct2 := envelopeColumns(t, pool, secretSigningKey)
@@ -166,7 +168,7 @@ func TestPG_BootAbortsOnAnUndecryptableV0Row(t *testing.T) {
 	stray, _ := age.GenerateX25519Identity()
 	seedV0Row(t, pool, stray, "github-app-key", []byte("under-another-key"))
 
-	_, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
+	_, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
 	if err == nil {
 		t.Fatal("boot succeeded over an undecryptable v0 row")
 	}
@@ -187,14 +189,14 @@ func TestPG_BootAbortsOnAnUndecryptableV0Row(t *testing.T) {
 // written under an EARLIER ephemeral key are unrecoverable and must be deleted.
 func TestPG_BootRefusesAnEphemeralKeyOverAgeSealedRows(t *testing.T) {
 	empty := envelopeDB(t)
-	if _, err := buildSecretStore(t.Context(), empty, "", nil, "", nil, 0, &capturingRecorder{}); err != nil {
+	if _, err := buildSecretStore(t.Context(), empty, "", nil, "", storeClients{}, &capturingRecorder{}); err != nil {
 		t.Fatalf("an ephemeral key over an empty store must boot: %v", err)
 	}
 
 	for label, seed := range map[string]func(*testing.T, *pgxpool.Pool){
 		"v1 local rows": func(t *testing.T, pool *pgxpool.Pool) {
 			id, _ := age.GenerateX25519Identity()
-			s, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
+			s, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -210,7 +212,7 @@ func TestPG_BootRefusesAnEphemeralKeyOverAgeSealedRows(t *testing.T) {
 		t.Run(label, func(t *testing.T) {
 			pool := envelopeDB(t)
 			seed(t, pool)
-			_, err := buildSecretStore(t.Context(), pool, "", nil, "", nil, 0, &capturingRecorder{})
+			_, err := buildSecretStore(t.Context(), pool, "", nil, "", storeClients{}, &capturingRecorder{})
 			if err == nil || !strings.Contains(err.Error(), "WARDYN_AGE_KEY is unset, but 1 stored secrets") {
 				t.Fatalf("ephemeral boot over %s = %v, want the rule-14 refusal", label, err)
 			}
@@ -230,7 +232,7 @@ func TestPG_TamperedBootKeyFailsClosed(t *testing.T) {
 	pool := envelopeDB(t)
 	ctx := t.Context()
 	id, _ := age.GenerateX25519Identity()
-	secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
+	secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,5 +256,33 @@ func TestPG_TamperedBootKeyFailsClosed(t *testing.T) {
 	_, w, ct := envelopeColumns(t, pool, secretSigningKey)
 	if !bytes.Equal(w, tamperedW) || !bytes.Equal(ct, tamperedCT) {
 		t.Fatal("loadOrCreateSecret wrote over the tampered row; a refusal must never be treated as not-found")
+	}
+}
+
+// TestPG_ServedStoreSweepsExpiredCredentials: the store buildSecretStore hands
+// the server is wrapped for auditing, and the daily sweep
+// (api.Server.SweepExpiredCredentials) must still reach its DeleteExpired —
+// a wrapper that hides it turns least retention off without a word.
+func TestPG_ServedStoreSweepsExpiredCredentials(t *testing.T) {
+	pool := envelopeDB(t)
+	ctx := t.Context()
+	id, _ := age.GenerateX25519Identity()
+	secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatalf("buildSecretStore: %v", err)
+	}
+	sw, ok := secrets.(interface {
+		DeleteExpired(context.Context) ([]secretstore.Expired, error)
+	})
+	if !ok {
+		t.Fatalf("buildSecretStore returned %T, which has no DeleteExpired: the expiry sweep never runs", secrets)
+	}
+	past := secretstore.WithExpiry(ctx, time.Now().Add(-time.Hour))
+	if err := secrets.For("bob").Put(past, "wardyn-harness-aws-oauth", []byte(`{"refresh_token":"x"}`)); err != nil {
+		t.Fatalf("put an expired sign-in: %v", err)
+	}
+	gone, err := sw.DeleteExpired(ctx)
+	if err != nil || len(gone) != 1 || gone[0].Owner != "bob" || gone[0].Name != "wardyn-harness-aws-oauth" {
+		t.Fatalf("DeleteExpired = %+v, %v; want bob's expired sign-in", gone, err)
 	}
 }

@@ -202,8 +202,9 @@ type AgentRun struct {
 	// (the default idle-container + `docker exec` path). Empty for exec-less /
 	// main-process substrates (krun) and before Exec runs. Persisted so the crash
 	// reconciler can observe AGENT liveness via ExecInspect across a wardynd
-	// restart: for an idle-container run the container is `sleep infinity`, so
-	// container liveness != agent liveness, and the exec id otherwise lived only in
+	// restart: for an idle-container run the container runs the TERM-aware idle
+	// loop (AgentIdleScript / `agent-run --idle`), so container liveness !=
+	// agent liveness, and the exec id otherwise lived only in
 	// the driver's in-memory map — lost on restart, stranding the run.
 	AgentExecID string `json:"agent_exec_id,omitempty"`
 	// FailureHint is an operator-facing one-line reason a run FAILED, stamped by
@@ -273,6 +274,17 @@ type AgentRun struct {
 	// live run. Migration 0073.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
+	// ModelProviderID freezes the id of the model provider chooseModelProvider
+	// (internal/api's run_model_provider.go, MP-6a #526) resolved this run to
+	// at create time — multi-provider design §2.4 step 5, "Persist and
+	// revalidate". The KIND is NOT frozen here: a provider's kind can change
+	// later (a kind change mints a fresh UID, #521), and a column would then
+	// read a kind the id no longer has. The kind lives only on the run.create
+	// audit event's model_provider snapshot ({id, kind}, #527), taken at the
+	// moment of choice. Empty for a run under no provider block (today's path)
+	// and for every run created before this field existed. Migration 0076 adds
+	// the column NOT NULL DEFAULT ''.
+	ModelProviderID string `json:"model_provider_id,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
@@ -449,9 +461,11 @@ type CredentialGrant struct {
 // ResolvedInjection is the ONE wire contract of GET
 // /api/v1/internal/injection/{grantID}: the control plane's injection-resolve
 // result, carrying the header name and the FORMATTED secret value (formatting
-// applied server-side). ExpiresAt (unix ms, 0 = never) marks a rotating
-// credential the proxy must re-resolve before it lapses (the subscription OAuth
-// token); a static api-key grant leaves it 0.
+// applied server-side). ExpiresAt (unix ms, 0 = never) marks a credential the
+// proxy must re-resolve before it lapses: an OAuth token's real expiry, or the
+// ten-minute one the sink gives a stored key so a removed or refused key stops
+// being injected. Only an approval-gated grant, whose mint is single-use,
+// leaves it 0.
 //
 // It lives here, in the neutral package both sides already import, because the
 // api server (encoder) and the wardyn-proxy (decoder) previously each kept a

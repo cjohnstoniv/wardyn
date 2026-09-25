@@ -570,11 +570,17 @@ Footer buttons: `Next: <step>` and, on the last step, **Finish setup**.
 
 ### Act 3 — the guardrails (five of the eight Egress demos; the Secrets demos phase that follows is not on camera)
 
+> **M-6 (#637):** the demos moved out of this admin funnel to the User
+> view's own Getting Started (`member-getting-started.tsx`) — `demo-card-<id>`
+> lives there now, not on this funnel walk. This beat sheet describes where
+> the footage still needs to be shot, pending the re-record against the new
+> surface (admin-member-modes-design.md §6 item 4), not where the product
+> renders these demos today.
+
 Each step's start button is `demo-start-<id>` (**Start demo**), its audit panel
 `demo-audit-panel`, and it ends with **End demo**. Approvals render as
 `live-approval-row` with **Approve** / **Deny** — always decided BY HOST, never
-by position (see below). Note `demo-card-<id>` now lives on the funnel's own
-`DemoDetail` (the `/demos` catalog is gone — Getting Started is the one surface).
+by position (see below).
 
 | Step | Typed into the terminal | What must happen on camera |
 |---|---|---|
@@ -584,7 +590,7 @@ by position (see below). Note `demo-card-<id>` now lives on the funnel's own
 | **Lines that can't be crossed** | `example.com`, `169.254.169.254`, `192.168.1.1` | Public host works; metadata and LAN refused **with egress wide open** |
 | **Once, or for good** | the same curl **twice**, then once more | First is refused *and* raises an approval → the split button's caret → **Once** → the retry returns `HTTP/2 200` → the SAME command a third time is refused again and raises a brand-new approval, left undecided |
 
-### Act 4 — your work (Your work phase)
+### Act 4 — code and workspaces (Code and workspaces phase, renamed from "Your work" in M-6)
 
 **Providers** → which git hosts a run may clone, and the storage ceilings it
 works inside; add or confirm the rows a run will need before onboarding a

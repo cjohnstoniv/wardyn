@@ -112,6 +112,22 @@ export interface MeIdentity {
   // with no <OperatorProvider> (every existing test) must never invent a
   // posture warning nothing has actually reported.
   confinementPosture: ConfinementPosture;
+
+  // #510-F6 — /healthz's `demo_video_base_url`, the operator-run mirror the
+  // Getting Started demo episodes stream from on an air-gapped deployment.
+  // Read ONCE (app-shell's useMeta, on the shell's existing /healthz load)
+  // and handed down here: the previous shape gave every episode card its own
+  // effect and its own health().health() call — 24 requests on one Getting
+  // Started mount (EPISODES has 23 entries) for a value that is the same for
+  // the whole page load, plus a race where `configured` flipped mid-load per
+  // card instead of once.
+  //
+  // undefined (not "") is the default and the "no mirror" case both — see
+  // lib/api/health.ts's demo_video_base_url doc comment. episodeUrl's own
+  // default parameter (lib/demo-videos.ts) is what actually falls back to the
+  // hardcoded GitHub base; this field only needs to report a value when one
+  // overrides it.
+  demoVideoBaseUrl: string | undefined;
 }
 
 // THE TRADE, named rather than assumed: one read per PAGE LOAD, not per
@@ -173,6 +189,7 @@ const DEFAULT_ME_IDENTITY: MeIdentity = {
   memberLocalDirRoot: null,
   userDrive: NO_USER_DRIVE,
   confinementPosture: "",
+  demoVideoBaseUrl: undefined,
 };
 
 const MeIdentityContext = React.createContext<MeIdentity>(DEFAULT_ME_IDENTITY);
@@ -187,6 +204,7 @@ export function OperatorProvider({
   userDriveDeniedByProfile = "",
   userDriveUnavailable = "",
   confinementPosture = "",
+  demoVideoBaseUrl = undefined,
   children,
 }: {
   operator: boolean;
@@ -210,6 +228,10 @@ export function OperatorProvider({
    *  (no posture reported), so every existing caller keeps today's silent
    *  behaviour. */
   confinementPosture?: ConfinementPosture;
+  /** #510-F6 — see MeIdentity.demoVideoBaseUrl above. Optional, defaulting
+   *  undefined ("no mirror configured"), so every existing caller keeps
+   *  today's GitHub-default behaviour. */
+  demoVideoBaseUrl?: string | undefined;
   children: React.ReactNode;
 }) {
   // Memoised: the two /me fields are a fresh object literal on every shell
@@ -234,8 +256,9 @@ export function OperatorProvider({
       memberLocalDirRoot,
       userDrive: drive,
       confinementPosture,
+      demoVideoBaseUrl,
     }),
-    [operator, operatorResolved, securityOperator, principal, memberLocalDirRoot, drive, confinementPosture],
+    [operator, operatorResolved, securityOperator, principal, memberLocalDirRoot, drive, confinementPosture, demoVideoBaseUrl],
   );
   return <MeIdentityContext.Provider value={identity}>{children}</MeIdentityContext.Provider>;
 }
@@ -375,4 +398,9 @@ export function useRoleResolved(): boolean {
 // sites still each read only this one value out of it.
 export function useConfinementPosture(): ConfinementPosture {
   return React.useContext(MeIdentityContext).confinementPosture;
+}
+
+// The operator-run demo mirror — see MeIdentity.demoVideoBaseUrl above.
+export function useDemoVideoBaseUrl(): string | undefined {
+  return React.useContext(MeIdentityContext).demoVideoBaseUrl;
 }

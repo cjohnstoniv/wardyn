@@ -136,6 +136,8 @@ ds-bundle/
 !/docs/design/ado-card-canon.md
 # #484's frozen-strings table (the mock round's canon; the mock itself stays local).
 !/docs/design/admin-access-canon.md
+# #536's frozen-strings table (mock packet MP-A; the packet stays local).
+!/docs/design/model-providers-canon.md
 # CONSOLE-RULES.md is a permanent doc, not a mock round: docs/README.md indexes it
 # and every UI review cites it, so it ships with the repo like any other doc.
 !/docs/design/SYNC.md
@@ -169,6 +171,10 @@ ds-bundle/
 # announced-failures-canon.md is the shipped canon for #459's frozen strings
 # (RAIL.LAUNCH_ERROR_LABEL etc.) — the accompanying copy modules cite it.
 !/docs/design/announced-failures-canon.md
+# model-providers-mock is #537/#543's owner-approved mock round: the provider
+# editor and refusal doors, and the frozen canon table that draws them.
+!/docs/design/model-providers-prompt.md
+!/docs/design/model-providers-mock/
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 

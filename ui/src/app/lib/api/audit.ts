@@ -242,7 +242,11 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
       // NO detail: this row's `error` is byte-identical to the run's own
       // failure_hint, which the failure block already renders for an ending
       // with no copy of its own — printing it here would say it twice.
-      mechanism: str(credential.data?.mechanism),
+      // A provider row (#532) also writes its kind as `mechanism`, for readers
+      // that predate `provider`; this one reads `provider` there instead.
+      ...(str(credential.data?.provider)
+        ? { provider: str(credential.data?.provider) }
+        : { mechanism: str(credential.data?.mechanism) }),
     };
   }
   return { kind: "unknown", action: "" };

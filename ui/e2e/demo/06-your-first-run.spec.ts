@@ -32,9 +32,9 @@
  * owner's pen and marked [OWNER SLOT — drafted]. Lines the reuse made false
  * (the no-network framing, the inline first_use_approval mode-choice, the
  * "designed to fail" off-list beat) are DIALOG-STALE — pulled from the take,
- * flagged in local/episode-06-firstrun-proposal.md, never edited in place.
- * local/episode-06-stanza-check.py (untracked) holds spec and proposal in lockstep. Short
- * stanzas ride BEAT_SHORT; full-length lines keep PACE.read.
+ * flagged in the episode-06 proposal, never edited in place. An untracked
+ * stanza-check script holds spec and proposal in lockstep. Short stanzas
+ * ride BEAT_SHORT; full-length lines keep PACE.read.
  *
  * WHY AN OFFLINE COMMAND UNDER A 2-HOST POLICY. first-policy allows two hosts
  * (github.com, npmjs.org), holds everything else for review (deny_with_review),
@@ -341,7 +341,7 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   // every inline-authoring line is DIALOG-STALE.
   //
   // DIALOG-STALE (the inline-authoring block, in original take order; all pulled,
-  // none reworded — see local/episode-06-firstrun-proposal.md):
+  // none reworded — see the episode-06 proposal):
   //   · "Every rule for this run lives in one small spec — where it can go, what
   //     it can touch, and how much isolation it requires." (a drafted doc intro;
   //     no spec textarea on screen under reuse, and 05 is the spec episode)

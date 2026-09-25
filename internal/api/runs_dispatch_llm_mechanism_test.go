@@ -471,12 +471,12 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 // widget's only join key), and it is absent — not empty — when nothing narrowed.
 func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 	warns := []string{"resources capped to operator maximum", `dropped 1 egress domain(s) not in operator allowlist: ["evil.example"]`}
-	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", warns, types.AutonomyResolution{}, false)
+	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", warns, types.AutonomyResolution{}, false, runProviderChoice{})
 	got, ok := data["clamp_warnings"].([]string)
 	if !ok || len(got) != len(warns) || got[0] != warns[0] {
 		t.Fatalf("clamp_warnings = %#v, want %#v", data["clamp_warnings"], warns)
 	}
-	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", nil, types.AutonomyResolution{}, false)["clamp_warnings"]; present {
+	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", nil, types.AutonomyResolution{}, false, runProviderChoice{})["clamp_warnings"]; present {
 		t.Error("clamp_warnings must be absent when launch narrowed nothing")
 	}
 }
@@ -488,11 +488,11 @@ func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 // false negative.
 func TestCreateRunAuditData_CredentialConfinement(t *testing.T) {
 	req := createRunRequest{Agent: "claude-code"}
-	data := createRunAuditData(req, nil, types.CC1, "", "jti", nil, types.AutonomyResolution{}, true)
+	data := createRunAuditData(req, nil, types.CC1, "", "jti", nil, types.AutonomyResolution{}, true, runProviderChoice{})
 	if got := data["credential_confinement"]; got != credentialConfinementBelowFloor {
 		t.Errorf("credential_confinement = %v, want %q", got, credentialConfinementBelowFloor)
 	}
-	if _, present := createRunAuditData(req, nil, types.CC3, "", "jti", nil, types.AutonomyResolution{}, false)["credential_confinement"]; present {
+	if _, present := createRunAuditData(req, nil, types.CC3, "", "jti", nil, types.AutonomyResolution{}, false, runProviderChoice{})["credential_confinement"]; present {
 		t.Error("credential_confinement must be absent when the caller reports no below-floor advisory")
 	}
 }
@@ -504,10 +504,10 @@ func TestCreateRunAuditData_CredentialConfinement(t *testing.T) {
 // distinction survives (docs/AUDIT-ACTIONS.md's run.create row).
 func TestCreateRunAuditData_ConfinementSource(t *testing.T) {
 	req := createRunRequest{Agent: "claude-code"}
-	if got := createRunAuditData(req, nil, types.CC1, "", "jti", nil, types.AutonomyResolution{}, false)["confinement_source"]; got != "defaulted" {
+	if got := createRunAuditData(req, nil, types.CC1, "", "jti", nil, types.AutonomyResolution{}, false, runProviderChoice{})["confinement_source"]; got != "defaulted" {
 		t.Errorf("confinement_source = %v, want \"defaulted\" for an empty reqCC", got)
 	}
-	if got := createRunAuditData(req, nil, types.CC1, types.CC1, "jti", nil, types.AutonomyResolution{}, false)["confinement_source"]; got != "requested" {
+	if got := createRunAuditData(req, nil, types.CC1, types.CC1, "jti", nil, types.AutonomyResolution{}, false, runProviderChoice{})["confinement_source"]; got != "requested" {
 		t.Errorf("confinement_source = %v, want \"requested\" when the caller named CC1 explicitly", got)
 	}
 }
@@ -733,6 +733,62 @@ func TestResolveLLMInjections_RefusesBeforeResolvingAnySSOScope(t *testing.T) {
 	}
 	if len(sandboxEnv) != 0 {
 		t.Errorf("the refused run had credential env staged anyway: %v", sandboxEnv)
+	}
+}
+
+// TestResolveLLMInjections_AuditsBedrockOnlyOnceBothGatesHold (#518): the
+// run.llm.bedrock "success" row is recorded after enforceConfiguredLLMMechanism
+// and bedrockCredGradeHolds, so a run either gate refuses shows no injection
+// row for a credential it was never handed.
+func TestResolveLLMInjections_AuditsBedrockOnlyOnceBothGatesHold(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		sc       types.SiteConfig
+		grade    bedrockCredGrade
+		policy   *types.RunPolicySpec
+		wantRows int
+	}{
+		{"both gates hold", types.SiteConfig{}, bedrockCredUngraded(), nil, 1},
+		{"graded without a Bedrock credential (autonomy_grade_drift)", types.SiteConfig{}, bedrockCredGrade{graded: true}, nil, 0},
+		{"declared mechanism is not Bedrock", agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}),
+			bedrockCredUngraded(), nil, 0},
+		// #518 follow-up: both dispatch gates hold (mechanism + autonomy grade),
+		// but a LATER refusal — enforceInspectableLLM, past where the audit row
+		// used to be recorded — still fails the run closed. Bedrock is always
+		// opaque (enforceInspectableLLM's own doc comment), so
+		// require_inspectable_llm refuses it regardless of intercept_tls. Proves
+		// the row moved past this gate too, not just the two named in the test's
+		// own name.
+		{"a later refusal (enforceInspectableLLM) fires after both gates hold", types.SiteConfig{}, bedrockCredUngraded(),
+			&types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{Mode: "alert", RequireInspectableLLM: true}}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			st := &mechanismGateStore{}
+			cfg := bedrockStaticCfg()
+			cfg.Identity, cfg.Audit, cfg.Store = h.idp, h.audit, st
+			srv := New(cfg)
+			run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", Task: "t", State: types.RunStarting}
+			policy := tc.policy
+			if policy == nil {
+				policy = &types.RunPolicySpec{}
+			}
+
+			_, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, map[string]string{},
+				nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, tc.sc, true, false, tc.grade)
+			if ok != (tc.wantRows == 1) || st.failed == ok {
+				t.Fatalf("admitted = %v, run failed = %v; want admitted = %v", ok, st.failed, tc.wantRows == 1)
+			}
+			rows := 0
+			for _, ev := range h.audit.events {
+				if ev.Action == "run.llm.bedrock" {
+					rows++
+				}
+			}
+			if rows != tc.wantRows {
+				t.Errorf("run.llm.bedrock rows = %d, want %d", rows, tc.wantRows)
+			}
+		})
 	}
 }
 

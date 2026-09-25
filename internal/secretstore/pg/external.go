@@ -99,11 +99,11 @@ func (s *Store) putExternal(ctx context.Context, name string, value []byte) erro
 		return fmt.Errorf("pg secretstore: put %s to %s: %w", ref, s.ext.Name(), err)
 	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext)
-		VALUES ($1, $2, $3, $4, ''::bytea, ''::bytea)
+		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
+		VALUES ($1, $2, $3, $4, ''::bytea, ''::bytea, $5)
 		ON CONFLICT (owned_by, name) DO UPDATE
-			SET enc_version=$3, kek_id=$4, wrapped_dek=''::bytea, ciphertext=''::bytea, updated_at=now()`,
-		s.owner, name, extVersion, s.ext.Name()+":"+loc,
+			SET enc_version=$3, kek_id=$4, wrapped_dek=''::bytea, ciphertext=''::bytea, expires_at=$5, updated_at=now()`,
+		s.owner, name, extVersion, s.ext.Name()+":"+loc, expiresAt(ctx),
 	)
 	if err == nil {
 		err = tx.Commit(ctx)
@@ -206,6 +206,29 @@ func (s *Store) deleteExternal(ctx context.Context, name string) error {
 	return nil
 }
 
+// deleteExternalEverywhere is deleteExternal for every owner's pointer row of
+// each name, before DeleteEverywhere removes the rows: the first failure
+// refuses the whole delete, so no row goes while its value stays behind.
+func (s *Store) deleteExternalEverywhere(ctx context.Context, names []string) error {
+	rows, err := s.pool.Query(ctx,
+		`SELECT owned_by, name FROM secrets WHERE name = ANY($1) AND enc_version=$2`, names, extVersion)
+	if err != nil {
+		return fmt.Errorf("pg secretstore: delete everywhere: %w", err)
+	}
+	ptrs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Owner, Name string }])
+	if err != nil {
+		return fmt.Errorf("pg secretstore: delete everywhere: %w", err)
+	}
+	for _, p := range ptrs {
+		view := *s
+		view.owner = p.Owner
+		if err := view.deleteExternal(ctx, p.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // MigrateLocal is the -migrate-secrets target that seals rows locally.
 const MigrateLocal = "local"
 
@@ -232,8 +255,8 @@ type MigrateResult struct {
 // first row it cannot move, naming it, with every earlier row committed.
 func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, name string)) (MigrateResult, error) {
 	var res MigrateResult
-	if target == MigrateLocal && s.kek == nil {
-		return res, fmt.Errorf("pg secretstore: migrating to local needs WARDYN_AGE_KEY")
+	if target == MigrateLocal && s.kek == nil && !s.serviceWrites {
+		return res, fmt.Errorf("pg secretstore: migrating to local needs WARDYN_AGE_KEY or WARDYN_KEK=transit")
 	}
 	if target != MigrateLocal && !s.reachable(target) {
 		return res, fmt.Errorf("pg secretstore: migration target %q is not configured", target)

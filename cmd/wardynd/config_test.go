@@ -826,6 +826,12 @@ func (s *memSecretStore) Delete(_ context.Context, name string) error {
 }
 func (s *memSecretStore) List(context.Context) ([]string, error) { return nil, nil }
 func (s *memSecretStore) For(string) secretstore.Store           { return s }
+func (s *memSecretStore) DeleteEverywhere(context.Context, []string) (int, error) {
+	return 0, nil
+}
+func (s *memSecretStore) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, nil
+}
 
 // ssoOnlyBootFlags builds the *bootFlags a real buildOptionalFeatures call
 // needs to reach validateSSOOnlyPosture: a live OIDC issuer (so of.authn is

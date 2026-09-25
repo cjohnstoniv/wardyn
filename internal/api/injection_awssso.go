@@ -178,7 +178,11 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		}
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", types.AWSSSOAccessTokenSecret, "failure", mustJSON(data)))
-		writeError(w, status, body)
+		// reason reaches the wire now (#656, following #204's ADO-lane
+		// precedent): the same machine class already recorded on the audit
+		// row, so the proxy can branch on it instead of string-matching the
+		// human sentence in body.
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 
@@ -187,32 +191,46 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 		// The grant exists (the broker just minted it) but its scope carries no
 		// snapshot: a 0.7.5-authored grant re-resolved by a 0.7.6 daemon, or a
 		// hand-authored one. Fail closed — the snapshot IS the authorization.
-		return fail(http.StatusForbidden, "missing_scope_snapshot", credentialReauthScopeChangedRefusal, nil)
+		return fail(http.StatusForbidden, reasonMissingScopeSnapshot, credentialReauthScopeChangedRefusal, nil)
 	}
 
 	// (2) + (3): re-derive from the LIVE roster and require equality.
 	run, rerr := s.cfg.Store.GetRun(ctx, claims.RunID)
 	if rerr != nil {
-		return fail(http.StatusServiceUnavailable, "run_unreadable", credentialReauthRunUnreadableBody, nil)
+		return fail(http.StatusServiceUnavailable, reasonRunUnreadable, credentialReauthRunUnreadableBody, nil)
 	}
 	siteCfg, scErr := s.cfg.Store.GetSiteConfig(ctx)
 	if scErr != nil {
 		// NEVER resolve a scope from a read that failed: the zero SiteConfig is
 		// indistinguishable from "a roster with no row", whose fallback is the
 		// OPERATOR namespace — the exact substitution this arm refuses.
-		return fail(http.StatusServiceUnavailable, "roster_unreadable", credentialReauthScopeChangedRefusal, nil)
+		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, credentialReauthScopeChangedRefusal, nil)
 	}
+	// A run that chose a model provider — or a grant naming one — resolves
+	// only from that provider's record and its owner's own session; the
+	// roster never decides it (providerSSOScopeAt).
 	scope := awsSSOScopeFor(siteCfg, run.Agent, claims.Sub)
-	if drift := snapshot.driftFrom(siteCfg, run.Agent, scope, claims.Sub); drift != "" {
-		return fail(http.StatusForbidden, "scope_changed", credentialReauthScopeChangedRefusal,
+	drift := ""
+	if run.ModelProviderID != "" || snapshot.ProviderUID != "" {
+		scope, drift = providerSSOScopeAt(siteCfg, run, snapshot, claims.Sub)
+	} else {
+		drift = snapshot.driftFrom(siteCfg, run.Agent, scope, claims.Sub)
+	}
+	if drift != "" {
+		return fail(http.StatusForbidden, reasonScopeChanged, credentialReauthScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
 
 	// (4) read + renew through that scope — the SAME single-flight, skew, spent
 	// map and harness.credential.refresh audit dispatch uses.
 	blob, found, berr := s.readAWSSSOBlob(ctx, scope)
-	if berr != nil {
-		return fail(http.StatusServiceUnavailable, "store_error", credentialReauthStoreErrorBody, nil)
+	switch {
+	case errors.Is(berr, secretstore.ErrUnavailable):
+		// Transient: the proxy may ride it out on its last-good header.
+		return fail(http.StatusServiceUnavailable, "store-unavailable", sinkStoreUnreachable, nil)
+	case berr != nil:
+		// Definitive (storeReadRefusal): the store refused the session.
+		return fail(http.StatusForbidden, reasonStoreError, credentialReauthStoreErrorBody, nil)
 	}
 	reason := awsSSOReauthReasonNotFound
 	if found {
@@ -239,12 +257,14 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	// (5) the host pin, checked for the LIVE and the DEAD path alike: a grant
 	// pointing somewhere else must be refused, never held.
 	if !hostEqual(minted.Injection.Host, ssoPortalHost(snapshot.Region, s.cfg.AWSSSOEndpointOverride)) {
-		return fail(http.StatusForbidden, "sso-host-not-portal", credentialReauthHostPinRefusal,
+		return fail(http.StatusForbidden, reasonSSOHostNotPortal, credentialReauthHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
 	}
 
 	if reason != "" {
-		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, reason)
+		// A provider run is held like any other: its owner's sign-in through
+		// that provider's own door (provider_signin.go) answers the hold.
+		return s.holdOrRefuseCredentialReauth(w, r, claims, snapshot, run.ModelProviderID, reason)
 	}
 
 	// (6) LIVE. Per-run masking is ADDITIVE to the global registration
@@ -293,7 +313,7 @@ const (
 // sweeper) answers TERMINAL at once, so the hold ends within one poll instead of
 // running its whole budget against a question nobody can answer.
 func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Request,
-	claims *identity.Claims, snapshot awsSSOScopeSnapshot, reason string,
+	claims *identity.Claims, snapshot awsSSOScopeSnapshot, modelProvider, reason string,
 ) bool {
 	ctx := r.Context()
 	rows, lerr := s.runApprovals(ctx, claims.RunID, "")
@@ -301,7 +321,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		// Fail closed: an unbounded raise path is the thing being bounded, so
 		// "we could not tell how many this run has" must not read as "raise
 		// another one".
-		writeError(w, http.StatusServiceUnavailable, credentialReauthApprovalsUnreadableBody)
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonApprovalsUnreadable, credentialReauthApprovalsUnreadableBody)
 		return true
 	}
 	workflows := 0
@@ -335,21 +355,28 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		// the measured ~30 s SDK cadence one cancelled row would score dozens of
 		// "outcomes". expired and cancelled are counted where the state changes
 		// — the sweeper and cancelRunApprovals.
-		writeError(w, http.StatusForbidden, credentialReauthClosedRefusal(terminal.State))
+		writeErrorReason(w, http.StatusForbidden, reasonSigninClosed, credentialReauthClosedRefusal(terminal.State))
 		return true
 	}
 	if workflows >= maxReauthHolds {
-		writeError(w, http.StatusForbidden, credentialReauthTooManyRefusal)
+		writeErrorReason(w, http.StatusForbidden, reasonSigninHoldsExhausted, credentialReauthTooManyRefusal)
 		return true
 	}
 
 	// The scope is the DEDUP KEY, so it carries identity and nothing else: the
-	// reason lives on the audit row, not here.
-	reqScope, _ := json.Marshal(map[string]string{
+	// reason lives on the audit row, not here. A provider run's hold also names
+	// its provider — the id to show, the UID to match (reauthResolvableBy) — so
+	// only a sign-in for that provider answers it; a roster run's scope stays
+	// byte-for-byte what it was.
+	scopeFields := map[string]string{
 		"mechanism":         snapshot.Mechanism,
 		"credential_source": snapshot.CredentialSource,
 		"owner":             snapshot.OwnerSubject,
-	})
+	}
+	if snapshot.ProviderUID != "" {
+		scopeFields["provider"], scopeFields["provider_uid"] = modelProvider, snapshot.ProviderUID
+	}
+	reqScope, _ := json.Marshal(scopeFields)
 	// The id is minted HERE so this caller can tell whether it RAISED the request
 	// or merely found one. RequestApproval's dedup — the pre-insert
 	// scan and the partial unique index's loser alike — answers with the WINNER'S
@@ -365,7 +392,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		ID: raisedID, RunID: claims.RunID, Kind: types.ApprovalCredentialReauth, RequestedScope: reqScope,
 	})
 	if aerr != nil {
-		writeError(w, http.StatusServiceUnavailable, loggedMsg(ctx, credentialReauthRaiseFailedBody, aerr))
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonRaiseFailed, loggedMsg(ctx, credentialReauthRaiseFailedBody, aerr))
 		return true
 	}
 	if created.ID != raisedID {
@@ -381,11 +408,11 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	// unanswerable from the trail.
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
 		"credential.reauth.requested", created.ID.String(), "success",
-		mustJSON(map[string]any{
+		mustJSON(withModelProvider(map[string]any{
 			"approval_id": created.ID, "owner": snapshot.OwnerSubject,
 			"credential_source": snapshot.CredentialSource, "provider": awsSSOProvider,
 			"reason": reason, "detail": credentialReauthRaisedSentence,
-		})))
+		}, modelProvider))))
 	s.metrics.credentialReauthRecorded(credentialReauthOutcomeRequested)
 	writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 	return true
@@ -455,6 +482,10 @@ func (sn awsSSOScopeSnapshot) driftFrom(sc types.SiteConfig, agentID string, sco
 	// which the run token — not the roster, and not the grant — is authority for.
 	// A policy-authored grant naming another owner cannot pass this.
 	if scope.perUser && sn.OwnerSubject != subject {
+		// A field-drift label for the audit row's "drift" key, not the wire
+		// reason enum — every driftFrom cause reaches the wire as
+		// reasonScopeChanged (this lane has no separate owner_not_caller
+		// wire reason, unlike Azure DevOps's own top-level owner check).
 		return "owner_not_caller"
 	}
 	// Legacy open mode has no roster to drift from. When no roster
@@ -541,13 +572,16 @@ func reauthResolvableBy(ap types.ApprovalRequest, scope awsSSOScope, loginRun ty
 	var sc struct {
 		Owner            string `json:"owner"`
 		CredentialSource string `json:"credential_source"`
+		ProviderUID      string `json:"provider_uid"`
 	}
 	if json.Unmarshal(ap.RequestedScope, &sc) != nil {
 		return false
 	}
 	// I2 — whose credential this capture became, decided at the login run's
-	// LAUNCH (loginRunScope), never from the live roster.
-	if sc.Owner != scope.owner || sc.CredentialSource != awsSSOCredentialSourceLabel(scope) {
+	// LAUNCH (loginRunScope), never from the live roster. And which provider's:
+	// a capture answers only its own provider's holds, a roster capture only
+	// roster holds (both "").
+	if sc.Owner != scope.owner || sc.CredentialSource != awsSSOCredentialSourceLabel(scope) || sc.ProviderUID != scope.provider {
 		return false
 	}
 	// I6 — generation. Strictly after: a login run created in the same instant
@@ -582,19 +616,17 @@ func (s *Server) resolveReauth(ctx context.Context, ap types.ApprovalRequest, re
 	if !ok {
 		return errReauthResolverUnavailable
 	}
-	var owner string
 	var sc struct {
-		Owner string `json:"owner"`
+		Owner    string `json:"owner"`
+		Provider string `json:"provider"`
 	}
-	if json.Unmarshal(ap.RequestedScope, &sc) == nil {
-		owner = sc.Owner
-	}
+	_ = json.Unmarshal(ap.RequestedScope, &sc)
 	ev := s.auditEvent(&ap.RunID, types.ActorHuman, resolvedBy,
 		"credential.reauth.resolved", ap.ID.String(), "success",
-		mustJSON(map[string]any{
-			"approval_id": ap.ID, "owner": owner, "resolved_by": resolvedBy,
+		mustJSON(withModelProvider(map[string]any{
+			"approval_id": ap.ID, "owner": sc.Owner, "resolved_by": resolvedBy,
 			"capture_run_id": captureRunID, "provider": awsSSOProvider,
-		}))
+		}, sc.Provider)))
 	if _, err := resolver.ResolveReauthApproval(ctx, ap.ID, types.ApprovalDecision{
 		State: types.ApprovalApproved, DecidedBy: resolvedBy, Reason: "signed in again",
 	}, ev); err != nil {
@@ -630,7 +662,10 @@ func (s *Server) reconcileReauthOnRead(ctx context.Context, ap types.ApprovalReq
 	if scErr != nil {
 		return ap // never derive a scope from a read that failed
 	}
-	scope := awsSSOScopeFor(siteCfg, run.Agent, runIdentitySubject(ctx, run.CreatedBy))
+	scope, ok := reauthScopeForRun(siteCfg, run, runIdentitySubject(ctx, run.CreatedBy))
+	if !ok {
+		return ap
+	}
 	blob, found, berr := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), scope)
 	if berr != nil || !found || blob.SourceRunID == "" {
 		return ap

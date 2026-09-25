@@ -29,6 +29,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -526,6 +527,11 @@ type Config struct {
 	AuditCoalesceWindow time.Duration
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
+	// OrgFederation is the hybrid audit forwarder's status (cmd/wardynd's
+	// bootHybrid), nil when WARDYN_ORG_URL is unset. It feeds /healthz's
+	// org_federation block, the wardyn_org_federation_lag gauge and the
+	// create-run refusal once the organisation has revoked this device.
+	OrgFederation func() federation.Status
 	// BaseCtx is the process-lifetime base context used for detached background
 	// work that MUST outlive the request that started it — specifically the
 	// completion watcher dispatch starts after Exec. The request/dispatch ctx is
@@ -540,15 +546,14 @@ type Config struct {
 	// and the recommended production default, for honest /healthz visibility. Nil
 	// => the components object is omitted.
 	Components map[string]ComponentInfo
-	// AgeKeyDurable reports whether the secret store's age key was SUPPLIED
-	// (WARDYN_AGE_KEY/-age-key non-empty) vs ephemerally generated at boot. When
-	// false, stored secrets are unreadable after a restart — surfaced by
-	// /setup/status as a durability warning. Computed at boot in cmd/wardynd;
-	// true in store mode, where no local key holds anything.
+	// AgeKeyDurable: the age key was SUPPLIED (WARDYN_AGE_KEY), not generated at boot, or no local key holds anything (store
+	// mode, a key service). False, stored secrets are unreadable after a restart: /setup/status warns. Computed in cmd/wardynd.
 	AgeKeyDurable bool
 	// SecretStoreExternal names the store every credential is written to in store mode ("Vault at
 	// vault.example:8200"), "" in local mode; set, /setup/status shows store_external, not the age-key row.
 	SecretStoreExternal string
+	// SecretKeyService: the key service wrapping every stored data key ("Vault Transit at host"), or "" for the local key; set, /setup/status shows kek_service.
+	SecretKeyService string
 	// PlatformKeySeparate: WARDYN_PLATFORM_KEY_FILE gives the boot keys their own local key; false in local mode, /setup/status shows platform_shared (§2.13 c).
 	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
@@ -838,22 +843,9 @@ type Server struct {
 	// dirLimiter rate-bounds GET /access/directory/search PER PRINCIPAL — it is
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
-	dirLimiter principalLimiter
-	// enrolLimiter bounds the ONE anonymous device route, POST
-	// /devices/enrol, per TCP peer (devices_auth.go's peerKey), with per-entry
-	// eviction so the map cannot grow without bound. Configured in New.
-	enrolLimiter principalLimiter
-	// The device routes' failure-row bounds (device_audit_bounds.go):
-	// enrolFailures is the anonymous route's one stream, ingestFailures one
-	// stream per device, ingestFailureLimiter that stream's per-device bucket.
-	enrolFailures        failureStreams
-	ingestFailures       failureStreams
-	ingestFailureLimiter principalLimiter
-	// ingestInFlight holds the id of every device with a push in progress —
-	// handleDeviceAuditIngest's one-push-per-device cap. Process-local like
-	// the limiters above; an entry lives only as long as its request.
-	ingestInFlight sync.Map
-	runLeaseState  // the run lease sweep's process state (run_lease_server.go)
+	dirLimiter       principalLimiter
+	deviceRouteState // the device routes' process state (server_devices.go)
+	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
@@ -919,8 +911,10 @@ func New(cfg Config) *Server {
 		cfg.BaseCtx = context.Background()
 	}
 	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
-		enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
-		ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
+		deviceRouteState: deviceRouteState{
+			enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
+			ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
+		},
 	}
 	s.router = s.routes()
 	// drain the durable audit-fallback spool back into the store once it

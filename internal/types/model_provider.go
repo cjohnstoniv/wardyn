@@ -33,6 +33,11 @@ func (p *ModelProviders) Empty() bool {
 	return p == nil || len(p.Providers) == 0
 }
 
+// ModelProviderSecretPrefix starts every per-person model-provider credential
+// name: wardyn-provider-<uid>-{key,oauth,sso}, stored in its owner's own
+// namespace (internal/api owns the scheme).
+const ModelProviderSecretPrefix = "wardyn-provider-"
+
 // ModelProviderKind is what kind of credential each person brings to a
 // provider, and so which dispatch lane serves it. A closed set.
 type ModelProviderKind string

@@ -153,8 +153,32 @@ describe("SignInHelpCard (#484)", () => {
     );
   });
 
+  // #489: https only. A new http:// link is withheld like any other bad link;
+  // one already stored as http:// does not block saving the text around it
+  // (the server lets an unchanged link through and setup warns about it).
+  it("withholds Save for a new http:// link", async () => {
+    renderCard();
+    const text = await screen.findByLabelText(SIGNIN_HELP.TEXT_LABEL);
+    const save = screen.getByRole("button", { name: SIGNIN_HELP.SAVE });
+    await userEvent.type(text, "Ask IT.");
+    expect(save).toBeEnabled();
+    await userEvent.type(screen.getByLabelText(SIGNIN_HELP.URL_LABEL), "http://helpdesk.corp.example/");
+    expect(save).toBeDisabled();
+  });
+
+  it("keeps Save for text beside an http:// link stored before #489", async () => {
+    getSnapshot.mockResolvedValue({
+      siteConfig: { ...BASE, sign_in_help_url: "http://helpdesk.corp.example/" },
+      etag: '"v1"',
+    });
+    renderCard();
+    const text = await screen.findByLabelText(SIGNIN_HELP.TEXT_LABEL);
+    await userEvent.type(text, "Ask IT.");
+    expect(screen.getByRole("button", { name: SIGNIN_HELP.SAVE })).toBeEnabled();
+  });
+
   it("shows the server's 400 verbatim", async () => {
-    const msg = "invalid site config: sign_in_help_url: must be an http:// or https:// address — it is shown to people who have not signed in";
+    const msg = "invalid site config: sign_in_help_url: must be an https:// address — it is shown to people who have not signed in";
     putSiteConfig.mockRejectedValueOnce(new HttpError(400, msg));
     renderCard();
     await userEvent.type(await screen.findByLabelText(SIGNIN_HELP.TEXT_LABEL), "x");

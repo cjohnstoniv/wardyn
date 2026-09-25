@@ -55,7 +55,11 @@ export default function DemoDetail({
   /** SetupStatus.secrets.github_app. Only a `needsGitHubApp` demo reads it;
    *  defaults TRUE so an unloaded status never invents a gate. */
   githubAppReady?: boolean;
-  onJump: (id: SetupStepId) => void;
+  /** Absent for a caller with no Environment step to send anyone to (a
+   *  member's Getting Started — the barrier is an admin fact, never a
+   *  member's to set). The not-ready hint then names the step in plain text
+   *  instead of a control that would go nowhere. */
+  onJump?: (id: SetupStepId) => void;
   onDemoLaunched: (demoId: string) => void;
 }) {
   const { runs, starting, start, end, createErrors } = useDemoRuns(onDemoLaunched);
@@ -83,13 +87,17 @@ export default function DemoDetail({
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           <p>
             Demos need the sandbox runner — finish the{" "}
-            <button
-              type="button"
-              onClick={() => onJump("environment")}
-              className="font-medium underline underline-offset-2 hover:text-foreground"
-            >
-              Environment step
-            </button>{" "}
+            {onJump ? (
+              <button
+                type="button"
+                onClick={() => onJump("environment")}
+                className="font-medium underline underline-offset-2 hover:text-foreground"
+              >
+                Environment step
+              </button>
+            ) : (
+              <span className="font-medium">Environment step</span>
+            )}{" "}
             first, then come back.
           </p>
         </div>
@@ -146,7 +154,12 @@ export default function DemoDetail({
       {/* "Try it" sits directly under the policy so a running demo frames the
           policy, the terminal, and the audit/approvals together — everything
           relevant in one shot. The manual "set up yourself" steps are the
-          supplementary alternative, so they move to the bottom. */}
+          supplementary alternative, so they move to the bottom.
+          M-6 (D5), owner ruling 2026-09-25: a demo whose policy the caller's
+          own ceiling would narrow is never offered here at all — the caller
+          (setup/steps.ts's ceilingNarrows) filters it out of the list before
+          a row for it ever renders, so this control always matches the
+          policy shown above. */}
       <Section title="Try it">
         <DemoRunControls
           demo={demo}

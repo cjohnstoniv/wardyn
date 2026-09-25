@@ -6,6 +6,8 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"slices"
 	"testing"
 
 	"github.com/google/uuid"
@@ -71,6 +73,23 @@ func (s *memSecrets) List(_ context.Context) ([]string, error) {
 		out = append(out, k)
 	}
 	return out, nil
+}
+
+func (s *memSecrets) DeleteEverywhere(_ context.Context, names []string) (int, error) {
+	n := 0
+	for _, rows := range append([]map[string][]byte{s.m}, slices.Collect(maps.Values(s.owned))...) {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				delete(rows, name)
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+func (s *memSecrets) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, nil
 }
 
 // For returns an owner-scoped view sharing the same backing maps as s — see

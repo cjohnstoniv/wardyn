@@ -17,13 +17,13 @@ import (
 
 // the closed kind set
 //
-// Seven kinds, and this slice is the ONLY place the set is written down —
+// Eight kinds, and this slice is the ONLY place the set is written down —
 // migration 0042 deliberately puts no CHECK on capability_grants.capability, so
-// an eighth kind is a constant here plus its enforcement call site, with no DDL.
+// a ninth kind is a constant here plus its enforcement call site, with no DDL.
 // The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
 // mirrors these ids and must not drift.
 //
-// Six of the seven NARROW what a member may already do; capImage WIDENS (a
+// Seven of the eight NARROW what a member may already do; capImage WIDENS (a
 // member cannot name a custom image at all today). Both directions resolve
 // through the one resolver below (capBatch.decide) — the difference is the
 // kind's row in capKinds.
@@ -101,23 +101,33 @@ const (
 	// be an ACL this feature does not have (admission is URL-prefix), and the
 	// row is the unit an admin actually writes down.
 	capWorkspaceProvider = "workspace_provider"
+	// capModelProvider NARROWS: it bounds which model provider a person's run
+	// may use (SiteConfig.ModelProviders, by id, plus `*`) — the one a request
+	// names, a workspace pins, or an agent's default reaches them by. Narrowing
+	// on capAgent's rule: every member could already reach every provider.
+	//
+	// Unlike capIntegration it gates the workspace PIN too. Every model
+	// credential is the person's own, so a pin is no longer an admin handing a
+	// member access they could not otherwise get; a pin naming an ungranted
+	// provider is refused, never exempt (enforceRunModelProvider).
+	capModelProvider = "model_provider"
 )
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
-var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider}
+var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capModelProvider}
 
 // capKindsVersion numbers the kind table, and GET /me/capabilities returns it so
 // a client holding a copy of the set (the console's CAPABILITY_KINDS) can tell
 // its copy is stale. Monotonic: a change to capKinds — a kind added, or a row's
 // direction changed — bumps it by one and it never goes down.
 // TestCapKindsVersionPinsTheTable fails on a table change that forgets to.
-const capKindsVersion = 1
+const capKindsVersion = 2
 
-// validCapabilityKind reports whether kind is one of the seven. The API write
+// validCapabilityKind reports whether kind is one of the eight. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
 func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }
 
-// capWildcard matches every value of its kind. Spelled the same for all seven so
+// capWildcard matches every value of its kind. Spelled the same for all eight so
 // an admin does not have to learn a per-kind syntax for "all of them".
 const capWildcard = "*"
 
@@ -231,8 +241,9 @@ type capKind struct {
 	// offered). Read by UT-10's step 3; nothing reads it yet.
 	restrictable bool
 	// gatesAdminPins: the kind also bounds a value an ADMIN pinned, not only the
-	// member's own choice. False for all seven — "a capability bounds what a
-	// member chose, never what an admin pre-authorized" (capIntegration).
+	// member's own choice. False for the first seven — "a capability bounds what
+	// a member chose, never what an admin pre-authorized" (capIntegration); true
+	// for capModelProvider, whose workspace pin enforceRunModelProvider checks.
 	gatesAdminPins bool
 	// reason is the authz.denied reason a refusal of this kind carries. The
 	// widening kind's refusal is the BYOI one: image is refused as a member
@@ -250,6 +261,7 @@ var capKinds = map[string]capKind{
 	capAgent:             {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityAgent},
 	capIntegration:       {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityIntegration},
 	capWorkspaceProvider: {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspaceProvider},
+	capModelProvider:     {direction: capNarrowing, restrictable: true, gatesAdminPins: true, reason: authz.ReasonCapabilityModelProvider},
 }
 
 // the wrappers

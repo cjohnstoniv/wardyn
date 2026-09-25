@@ -28,6 +28,7 @@ const (
 	ReasonCapabilitySecret               Reason = "capability_secret"
 	ReasonCapabilityWorkspace            Reason = "capability_workspace"
 	ReasonCapabilityWorkspaceProvider    Reason = "capability_workspace_provider"
+	ReasonCapabilityModelProvider        Reason = "capability_model_provider"
 	ReasonGovernanceProfile              Reason = "governance_profile"
 	ReasonGrantPairingNotEligible        Reason = "grant_pairing_not_eligible"
 	ReasonGroupsSnapshotStale            Reason = "groups_snapshot_stale"
@@ -67,6 +68,7 @@ var refusals = map[Reason]Refusal{
 	ReasonCapabilitySecret:               {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityWorkspace:            {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityWorkspaceProvider:    {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityModelProvider:        {Effect: EffectDeny, Audit: true},
 	ReasonGovernanceProfile:              {Effect: EffectDeny, Audit: true},
 	ReasonGrantPairingNotEligible:        {Effect: EffectDeny, Audit: true},
 	ReasonGroupsSnapshotStale:            {Effect: EffectDeny, Audit: true},

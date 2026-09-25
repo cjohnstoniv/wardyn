@@ -630,8 +630,8 @@ BOOT_SEED_PREP_GONE='wardyn: workspace preparation ended without finishing — s
 # would silently reintroduce exactly that bug on a big repo: at the cap the pane
 # would start the agent on the operator's already-submitted prompt against a
 # half-cloned tree. --idle writes prep-done LAST and UNCONDITIONALLY (even when
-# the clone failed) and then `exec sleep infinity` as PID 1, so "the idle process
-# is gone" is the only honest other end, and this cannot hang.
+# the clone failed) and then idles in a TERM-aware wait loop as PID 1 (same pid),
+# so "the idle process is gone" is the only honest other end, and this cannot hang.
 #
 # Says so BEFORE the loop, not after: a human attaching during an 18 s prep joins
 # this pane, and a blank one reads as a broken run.
@@ -644,8 +644,8 @@ BOOT_SEED_PREP_GONE='wardyn: workspace preparation ended without finishing — s
 boot_seed_wait_for_prep() {
     printf '%s\n' "$BOOT_SEED_PREPARING" >&2
     # PID 1 is the fallback because it IS `agent-run --idle` on both runners (the
-    # driver launches it as the container's whole main process, and it later execs
-    # `sleep infinity` keeping the same pid); WARDYN_IDLE_PID is the exact one
+    # driver launches it as the container's whole main process, and it then idles
+    # in a TERM-aware wait loop as PID 1, same pid); WARDYN_IDLE_PID is the exact one
     # start_wardyn_session handed over.
     local idle_pid="${WARDYN_IDLE_PID:-1}"
     while [[ ! -f "$HOME/.wardyn/prep-done" ]] && kill -0 "$idle_pid" 2>/dev/null; do sleep 1; done

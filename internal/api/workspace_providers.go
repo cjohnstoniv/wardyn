@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -118,33 +119,40 @@ func adoServerHosts(sc types.SiteConfig) []string {
 // forAddresses), so a write naming no such address costs no read. A config
 // that cannot be read yields none — the narrower answer: only the Azure DevOps
 // service hosts then take the name rule, and an escaped name on any other host
-// is refused as it always was. A nil loader answers none.
-type adoHostsLoader func() []string
+// is refused as it always was — together with the read error, so a write door
+// can say the store, not the address, is what it could not check
+// (storeNamedLocatorRefusal). A nil loader answers none.
+type adoHostsLoader func() ([]string, error)
 
 func (s *Server) adoHostsLoader(ctx context.Context) adoHostsLoader {
 	var once sync.Once
 	var hosts []string
-	return func() []string {
+	var readErr error
+	return func() ([]string, error) {
 		once.Do(func() {
 			if s.cfg.Store == nil {
 				return
 			}
-			if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
-				hosts = adoServerHosts(sc)
+			sc, err := s.cfg.Store.GetSiteConfig(ctx)
+			if err != nil {
+				slog.WarnContext(ctx, "wardynd: could not read the site config for the Azure DevOps Server hosts", slog.Any("error", err))
+				readErr = err
+				return
 			}
+			hosts = adoServerHosts(sc)
 		})
-		return hosts
+		return hosts, readErr
 	}
 }
 
 // forAddresses is the Azure DevOps Server hosts to canonicalise and validate
 // values with. Only a "%" or whitespace makes the answer matter — the name
 // rule leaves every other address as written — so without one nothing is read.
-func (l adoHostsLoader) forAddresses(values ...string) []string {
+func (l adoHostsLoader) forAddresses(values ...string) ([]string, error) {
 	if l == nil || !slices.ContainsFunc(values, func(v string) bool {
 		return strings.ContainsFunc(v, func(r rune) bool { return r == '%' || unicode.IsSpace(r) })
 	}) {
-		return nil
+		return nil, nil
 	}
 	return l()
 }

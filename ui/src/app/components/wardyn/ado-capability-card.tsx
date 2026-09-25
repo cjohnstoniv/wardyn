@@ -50,7 +50,13 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 import { Check, CheckCircle2, ChevronDown, Loader2, X } from "lucide-react";
 import type { AgentRun, ApprovalRequest, DecisionOptions } from "../../lib/types";
-import { canDecideAdoCapability, isAdoConsentRequest, type AdoCapabilityScope, type AdoConsentScope } from "../../lib/types/approvals";
+import {
+  ADO_HOLD_WINDOW_MS,
+  canDecideAdoCapability,
+  isAdoConsentRequest,
+  type AdoCapabilityScope,
+  type AdoConsentScope,
+} from "../../lib/types/approvals";
 import { isTerminalRunState } from "../../lib/types";
 import { ADO } from "../../lib/ado-entra-copy";
 import { Button } from "../ui/button";
@@ -123,11 +129,12 @@ const SCOPE_LABEL: Record<"once" | "run", string> = { once: "Once", run: "This r
 // names. No expiry timestamp reaches the client (unlike egress's
 // HOLD_TIMEOUT_MS), so this is derived from requested_at, exactly the way
 // isHeld (lib/types/approvals.ts) derives egress's own HOLD_TIMEOUT_MS check.
-const HOLD_WINDOW_MS = 240_000;
-
+// ADO_HOLD_WINDOW_MS is the SAME 240_000 isHeld itself now reads for this
+// exact row shape (#725/F1) — imported rather than redeclared so the two
+// never drift apart again.
 function stillHeld(requestedAt: string): boolean {
   const at = Date.parse(requestedAt);
-  return Number.isNaN(at) ? true : Date.now() - at < HOLD_WINDOW_MS; // unparseable — fail toward showing the hold
+  return Number.isNaN(at) ? true : Date.now() - at < ADO_HOLD_WINDOW_MS; // unparseable — fail toward showing the hold
 }
 
 // boldFirstWord — round-2 fix N2: REQ_APPROVING_ONCE/RUN and REQ_DENYING
@@ -221,7 +228,7 @@ export function AdoCapabilityCard({
     setHeld(stillHeld(item.requested_at));
     const at = Date.parse(item.requested_at);
     if (Number.isNaN(at)) return;
-    const msLeft = HOLD_WINDOW_MS - (Date.now() - at);
+    const msLeft = ADO_HOLD_WINDOW_MS - (Date.now() - at);
     if (msLeft <= 0) return; // already past the window — no timer to set
     const timer = setTimeout(() => setHeld(false), msLeft);
     return () => clearTimeout(timer);

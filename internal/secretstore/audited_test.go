@@ -33,6 +33,12 @@ func (f *fallbackStore) Delete(context.Context, string) error { return nil }
 
 func (f *fallbackStore) List(context.Context) ([]string, error) { return nil, nil }
 
+func (f *fallbackStore) DeleteEverywhere(context.Context, []string) (int, error) { return 0, nil }
+
+func (f *fallbackStore) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, nil
+}
+
 func (f *fallbackStore) For(owner string) Store { return &fallbackStore{rows: f.rows, owner: owner} }
 
 func (f *fallbackStore) Get(ctx context.Context, name string) ([]byte, error) {

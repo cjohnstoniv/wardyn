@@ -70,3 +70,10 @@ export const WORKSPACE_DETAIL_DRAFT = {
   SESSIONS_SUBTITLE:
     "Run a task once with everything open. Wardyn watches what it reaches and you approve the hosts. Replay it confined to prove that approval is enough.",
 } as const;
+
+// M-6 (QM-10/§4.6, admin-member-modes-design.md, modes-b.html) — Record
+// stays an Admin view control, but it runs on the admin's own model
+// connection, made in the User view (record-pane.tsx's dependency line).
+export const RECORD = {
+  NEEDS_OWN_CONNECTION: "Record uses your own model connection — connect it in the user view.",
+} as const;

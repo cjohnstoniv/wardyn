@@ -77,6 +77,7 @@ import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
+import { useConsoleMode, type ConsoleView } from "../wardyn/console-view";
 import {
   RECORDING_DISABLED_DESC,
   RECORDING_DISABLED_TITLE,
@@ -104,6 +105,7 @@ type Tab = "overview" | "approvals" | "audit" | "recording";
 export function RunDetailScreen() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const view = useConsoleMode(); // M-7: no relaunch/SSH/credential door in admin view.
 
   const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
   const [grants, setGrants] = React.useState<CredentialGrant[]>([]);
@@ -426,7 +428,7 @@ export function RunDetailScreen() {
             onCopyLink={copyLink}
             linkCopied={copied}
             onKill={kill}
-            onClone={onClone}
+            onClone={view === "user" ? onClone : undefined}
           />
 
           <RunDetailCommandBar
@@ -458,7 +460,7 @@ export function RunDetailScreen() {
               scrolls, which e2e asserts. */}
           <TabsContent value="overview" className="mt-0 flex min-h-0 flex-1 flex-col">
             <Cockpit
-              run={run}
+              run={run} view={view}
               terminal={terminal}
               grants={grants}
               egress={egress}
@@ -530,8 +532,7 @@ export function RunDetailScreen() {
 // terminal, it does not build it, because building it needs the attach /
 // recording / approvals graph that lives here.
 function Cockpit({
-  run,
-  terminal,
+  run, view, terminal,
   grants,
   egress,
   audit,
@@ -543,6 +544,7 @@ function Cockpit({
   onGoRecording,
 }: {
   run: RunDetail;
+  view: ConsoleView; // M-7: no relaunch/SSH/credential door in admin view.
   terminal: boolean;
   grants: CredentialGrant[];
   egress: EgressDecision[];
@@ -612,7 +614,7 @@ function Cockpit({
           lives on the run header instead (0.7.3 F7), a strict superset of
           the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
-      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
+      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} adminView={view === "admin"} />
       <TerminalPane
         run={run}
         terminal={terminal}
@@ -637,7 +639,7 @@ function Cockpit({
               {VIEWER_APPROVAL_BLOCKS_NOTE}
             </p>
           )}
-          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} run={run} />
+          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} run={run} adminView={view === "admin"} />
         </div>
       )}
     </>
@@ -647,8 +649,7 @@ function Cockpit({
     run,
     finished: terminal,
     principal,
-    // The ssh widget's gate is owner-or-admin, like the card it places.
-    operator,
+    operator, view, // ssh widget: owner-or-admin AND the user view (M-7).
     grants,
     egress,
     // B3 — the SAME derivation the command bar's "sandbox held" and the board's

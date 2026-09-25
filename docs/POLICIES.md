@@ -727,6 +727,17 @@ body (`"tool_approvals": "hold"`), which is why it is absent from the spec
 below: `wardyn policy render -f` rejects the whole file with
 `invalid RunPolicySpec: json: unknown field "tool_approvals"` if you paste it in.
 
+A caller's own `"tool_approvals": "auto"` can still be overridden: since 0.8, a
+non-interactive run resolved to autonomy level `L1` under a governance profile's
+rubric has it derived down to `hold` regardless of what was requested, and the
+201 carries a warning saying so (an agent with no tool-approval lane is refused
+instead) — see
+[OPERATIONS.md § Three roles, and who sets the walls](OPERATIONS.md#three-roles-and-who-sets-the-walls)
+for the rubric that decides it. The level never rewrites `tool_rules`, but it
+decides whether they take effect: under `auto` the tool gate is not wired and
+the rules are never consulted, so the `L1` switch to `hold` is what brings a
+run's `tool_rules` into force.
+
 ```json
 {
   "tool_rules": [

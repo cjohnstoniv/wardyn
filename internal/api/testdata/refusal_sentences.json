@@ -55,6 +55,11 @@
     "sentence": "\"you are not granted integration \" + req.IntegrationID + \" — ask an admin to grant it, or launch without integration_id\""
   },
   {
+    "reason": "capKinds[capModelProvider].reason",
+    "target": "\"model_provider.sign_in\"",
+    "sentence": "fmt.Sprintf(mpsNotGranted, p.ID)"
+  },
+  {
     "reason": "capKinds[capWorkspaceProvider].reason",
     "target": "target",
     "sentence": "fmt.Sprintf(capProvider403, row.Kind)"
@@ -73,6 +78,11 @@
     "reason": "capability_egress_host",
     "target": "id.String()",
     "sentence": "\"you are not granted egress host \" + host + \" — an admin decides this one, or can grant it to you\""
+  },
+  {
+    "reason": "capability_model_provider",
+    "target": "\"runs.model_provider\"",
+    "sentence": "choice.refusal"
   },
   {
     "reason": "governance_profile",

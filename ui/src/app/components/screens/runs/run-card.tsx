@@ -32,6 +32,8 @@ import {
 } from "../../ui/dropdown-menu";
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../../wardyn/primitives";
 import { usePrincipal } from "../../wardyn/operator-context";
+import { OpenInUserView, runPath, useConsoleMode } from "../../wardyn/console-view";
+import { ownerLabel } from "../../wardyn/copy/console-view";
 import { RunStateGlyph } from "../../wardyn/run-state-glyph";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import { RUN } from "../../wardyn/copy";
@@ -119,6 +121,12 @@ export function RunCard({
   // whose AWS sign-in a held run is waiting on. usePrincipal()'s default is ""
   // — "not mine" — which is the fail-closed direction for this comparison.
   const principal = usePrincipal();
+  // M-7: the admin board shows every run's owner (admin-member-modes-design.md
+  // §6) — the user board never does, since every card there is already yours.
+  // The admin's own run is marked "(you)" and carries the switch link back to
+  // its doors (modes-b §1, QM-7).
+  const view = useConsoleMode();
+  const ownInAdmin = view === "admin" && !!principal && run.created_by === principal;
   const attention = runAttention(run, signals);
   const terminal = isTerminalRunState(run.state);
   const done = terminal;
@@ -170,7 +178,7 @@ export function RunCard({
             the card; stopPropagation here just keeps the click from firing
             twice. */}
         <Link
-          to={`/runs/${encodeURIComponent(run.id)}`}
+          to={runPath(view, run.id)}
           onClick={(e) => e.stopPropagation()}
           className="min-w-0 flex-1 truncate text-body font-medium leading-snug text-foreground hover:underline"
         >
@@ -212,6 +220,7 @@ export function RunCard({
             <TerminalSquare className="size-3.5" /> Attach
           </Button>
         )}
+        {ownInAdmin && <OpenInUserView runId={run.id} className="h-7 shrink-0" />}
         <RunActions run={run} terminal={terminal} attachable={attachable} onOpen={onOpen} onKill={onKill} />
       </div>
 
@@ -224,6 +233,11 @@ export function RunCard({
         >
           {repo.text}
         </span>
+        {view === "admin" && (
+          <span className="max-w-[10rem] truncate font-mono" title={run.created_by}>
+            {ownerLabel(run.created_by, ownInAdmin)}
+          </span>
+        )}
         <ConfinementChip value={run.confinement_class} />
         <RunStateBadge state={run.state} variant="label" />
         {/* 0.7.6 finding 6: the same reason the table row carries, so a person
@@ -286,6 +300,8 @@ export function RunActions({
   // menu's close/unmount.
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
   const navigate = useNavigate();
+  // M-7: the admin monitor never relaunches (modes-b §1), like the run header.
+  const view = useConsoleMode();
   // 0.7.3 F7 — the Runs-list door onto the same clone the run header offers
   // (byte-for-byte: task_mode / interactive_start / seed_auto_tools /
   // tool_approvals all come from the run.create audit row). Fetched on CLICK,
@@ -336,7 +352,7 @@ export function RunActions({
               <TerminalSquare className="size-4" /> Attach
             </DropdownMenuItem>
           )}
-          {terminal && (
+          {terminal && view === "user" && (
             <DropdownMenuItem onClick={cloneRun}>
               <RotateCcw className="size-4" /> {RUN.CLONE_CTA}
             </DropdownMenuItem>

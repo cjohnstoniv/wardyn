@@ -213,17 +213,30 @@ func TestInternalPushContentRaise(t *testing.T) {
 }
 
 // TestDispatchStampsUnattended: the sidecar learns a run is unattended from
-// dispatch, from the same flag that decides whether anyone drives it.
+// dispatch, from the same flag that decides whether anyone drives it — and
+// only when the policy has review paths, the one thing the flag changes, so a
+// previous-release proxy (which refuses the key) still loads every other run.
 func TestDispatchStampsUnattended(t *testing.T) {
-	for _, interactive := range []bool{true, false} {
+	review := &types.PushRulesSpec{RequireReviewPaths: []string{"infra/"}}
+	for _, c := range []struct {
+		interactive bool
+		rules       *types.PushRulesSpec
+		want        bool
+	}{
+		{true, review, false},
+		{false, review, true},
+		{false, &types.PushRulesSpec{DenyPaths: []string{"infra/"}}, false},
+		{false, nil, false},
+	} {
 		fr := &fakeRunner{}
 		srv, _, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
 		run.Task = ""
 		srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
-			RunToken: "run-token", Image: "wardyn/claude-code:latest", Interactive: interactive,
+			RunToken: "run-token", Image: "wardyn/claude-code:latest", Interactive: c.interactive,
+			Policy: types.RunPolicySpec{PushRules: c.rules},
 		})
-		if got := fr.lastSpec.ProxyConfig.Unattended; got == interactive {
-			t.Errorf("Interactive=%v dispatched ProxyConfig.Unattended=%v", interactive, got)
+		if got := fr.lastSpec.ProxyConfig.Unattended; got != c.want {
+			t.Errorf("Interactive=%v PushRules=%+v dispatched ProxyConfig.Unattended=%v, want %v", c.interactive, c.rules, got, c.want)
 		}
 	}
 }

@@ -338,6 +338,14 @@ func TestBedrockBearerSink_RecordNotMatchingTheRosterIsRefused(t *testing.T) {
 				!strings.Contains(string(ev.Data), "scope_changed") {
 				t.Fatalf("audit = %s %s, want a scope_changed failure", ev.Outcome, ev.Data)
 			}
+			// #656: the wire body now carries the same reason.
+			var eb errorBody
+			if err := json.Unmarshal([]byte(body), &eb); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if eb.Reason != reasonScopeChanged {
+				t.Errorf("wire reason = %q, want %q", eb.Reason, reasonScopeChanged)
+			}
 		})
 	}
 }
@@ -372,8 +380,17 @@ func assertBedrockBearerRefused(t *testing.T, rr *httptest.ResponseRecorder, h *
 		}
 	}
 	ev := lastAuditEvent(t, h.audit.events, "secret.read")
-	if !strings.Contains(string(ev.Data), wantReason) {
+	if !strings.Contains(string(ev.Data), `"reason":"`+wantReason+`"`) {
 		t.Fatalf("audit data = %s, want reason %q", ev.Data, wantReason)
+	}
+	// #656: the same machine reason now reaches the WIRE body, not just the
+	// audit row — the proxy has no audit access.
+	var body errorBody
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Reason != wantReason {
+		t.Errorf("wire reason = %q, want %q", body.Reason, wantReason)
 	}
 }
 

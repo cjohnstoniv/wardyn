@@ -180,6 +180,14 @@ export interface AgentRun {
   // stay for the ended-run grace. The run stays RUNNING meanwhile.
   lost_at?: string;
   lost_reason?: "ended";
+  // internal/types/types.go's AgentRun.ModelProviderID (migration 0076, #527) —
+  // the id of the model provider chooseModelProvider (#526) resolved this run
+  // to at create time. The KIND is not here (it can change later on the
+  // provider row itself); it lives only on the run.create audit event's
+  // model_provider snapshot. Absent for a run under no provider block, a
+  // block serving no provider for the agent, or a run created before this
+  // field existed.
+  model_provider_id?: string;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that

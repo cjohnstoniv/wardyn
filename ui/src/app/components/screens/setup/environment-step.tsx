@@ -440,8 +440,10 @@ export function EnvironmentStep({
         <div className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3">
           <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
           <p className="text-sm text-muted-foreground">
-            Recommended is the strongest barrier installed on this host. {recStronger.join(" and ")} are
-            stronger and each needs a one-time setup step.
+            Recommended is the strongest barrier installed on this host. {recStronger.join(" and ")}{" "}
+            {/* #510-F9 — subject/verb: recStronger is length 1 when rec is CC2 (only CC3 left to
+                name), and "X are stronger" reads wrong for a single tier. */}
+            {recStronger.length === 1 ? "is" : "are"} stronger and each needs a one-time setup step.
           </p>
         </div>
       )}

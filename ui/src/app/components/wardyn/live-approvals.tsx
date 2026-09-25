@@ -34,7 +34,9 @@ import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
-import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
+import { useModelAccessDoor, useClaimModelAccessDoor, useShellSetupStatus } from "./model-access-context";
+import { resolveDoor } from "../../lib/model-access";
+import { OpenInUserView, viewOfPath } from "./console-view";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
@@ -168,6 +170,12 @@ export function LiveApprovals({
   // finished once, and every test mount is exactly that "never resolves"
   // shape if it defaulted to undefined instead.
   run = null,
+  // M-7 (admin-member-modes-design.md §4.6): the admin monitor's own mount
+  // (run-detail.tsx) passes true. The demo runner is a user act (D5). Record
+  // (record-pane.tsx) is an Admin-view sandbox (QM-10) and still passes
+  // nothing: its door moves with its dependency line and switch link in M-6
+  // (#637).
+  adminView = false,
 }: {
   runId: string;
   reasonApprove?: string;
@@ -175,6 +183,7 @@ export function LiveApprovals({
   idleHint?: string;
   hasWorkspace?: boolean;
   run?: AdoCardRun | null;
+  adminView?: boolean;
 }) {
   // Decides here go straight to the API with no ReasonDialog stop, so this is
   // the one gate for all FOUR mount sites (run detail, demo screen, and
@@ -485,7 +494,7 @@ export function LiveApprovals({
         const scoped = a.kind === "egress_domain";
         const telemetry = scoped && isKnownTelemetryHost(label);
         if (a.kind === "credential_reauth") {
-          return <ReauthRow key={a.id} request={a} />;
+          return <ReauthRow key={a.id} request={a} adminView={adminView} runId={runId} />;
         }
         return (
           <div key={a.id} className="flex items-center gap-2" data-testid="live-approval-row">
@@ -812,15 +821,50 @@ function ScopeMenu({
  * non-owner (the admin reading a member's held run) the sentence that names
  * whose sign-in is awaited — and no button the server would refuse (Codex #7
  * risk (d); round-2 general S5).
+ *
+ * M-7 (admin-member-modes-design.md §4.6, §6) — `adminView` narrows `canAct`
+ * further, for the per_user lane only: the admin monitor carries no personal
+ * door, even on the admin's OWN run, where `reauthAudience` would otherwise
+ * grade this viewer able to act. The shared lane is untouched — a
+ * shared-credential re-sign stays an admin-mode control until MP-4b — and on
+ * the admin's own row the sentence gets a switch link back to the door
+ * instead (packet M-B, QM-7).
  */
-function ReauthRow({ request }: { request: ApprovalRequest }) {
+function ReauthRow({
+  request,
+  runId,
+  adminView = false,
+}: {
+  request: ApprovalRequest;
+  /** This strip's own run — the switch link's target on the admin's own row
+   *  (§below) needs no `useLocation()`: it is always this exact run's user
+   *  twin, `/runs/{id}`, whatever admin subpath this strip happens to be
+   *  mounted under. (The row itself does read `window.location` directly,
+   *  for `viewOfPath` below — never the `useLocation()` hook, since this row
+   *  is mounted without a router in its suites.) */
+  runId: string;
+  adminView?: boolean;
+}) {
   const door = useModelAccessDoor();
   // door.operator / door.principal, never useOperator() / usePrincipal():
   // those answer the FAIL-OPEN default while /me is in flight, which is exactly
   // the window in which this row would paint a door for the wrong audience.
   // The door grades nothing until the viewer is known, and so does this.
-  const audience = reauthAudience(request, { operator: door.operator, principal: door.principal });
-  const canAct = audience.canAct;
+  const audience = reauthAudience(request, {
+    operator: door.operator,
+    principal: door.principal,
+    // The path, not useLocation(), as the door's own context reads it: this
+    // row is mounted without a router in its suites.
+    view: viewOfPath(window.location.pathname),
+  });
+  // M-7 narrows who is offered a door, and so which sentence the row reads.
+  const mayAct = adminView && !audience.shared ? false : audience.canAct;
+  // A hold whose provider this person has no door for any more gets its hint
+  // alone, never a button that opens nothing (#543) — the sentence stays
+  // `mayAct`'s, as /approvals' card keeps it.
+  const { status } = useShellSetupStatus();
+  const canAct = mayAct && (!audience.provider || !!resolveDoor(status, { provider: audience.provider }, "user"));
+  const ownRow = adminView && !audience.shared && audience.mine;
   // Nobody should claim the door for a control they are not rendering.
   useClaimModelAccessDoor(canAct);
   return (
@@ -831,7 +875,7 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
           {REAUTH_ROW.label}
         </Mono>
         <span className="text-meta font-normal normal-case text-muted-foreground">
-          {reauthRowHint(audience)}
+          {reauthRowHint(mayAct === audience.canAct ? audience : { ...audience, canAct: mayAct })}
         </span>
       </div>
       {canAct && (
@@ -840,11 +884,14 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
           variant="outline"
           className="h-7 shrink-0"
           aria-label={REAUTH_ROW.ariaLabel}
-          onClick={() => door.openDoor()}
+          // The hold's OWN provider's door (#543): the claude-code default
+          // may be another AWS provider, whose sign-in cannot clear it.
+          onClick={() => door.openDoor(audience.provider ? { for: { provider: audience.provider } } : undefined)}
         >
           {REAUTH_ROW.action}
         </Button>
       )}
+      {ownRow && <OpenInUserView runId={runId} className="h-7 shrink-0" />}
     </div>
   );
 }

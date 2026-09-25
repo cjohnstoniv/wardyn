@@ -473,7 +473,8 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	// blob), an absent credential is (it was disconnected mid-flight). Through
 	// the SAME scope the caller read it with: re-reading the operator's row for a
 	// per_user principal would renew — and re-persist — the wrong credential.
-	if cur, found, rerr := s.readAWSSSOBlob(ctx, scope); rerr == nil {
+	cur, found, rerr := s.readAWSSSOBlob(ctx, scope)
+	if rerr == nil {
 		if !found {
 			return blob, awsSSORefreshSpentRefusal(scope.perUser)
 		}
@@ -493,6 +494,12 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		spent := errors.Is(err, errAWSSSOCredentialSpent)
 		if spent {
 			s.markAWSSSOTokenSpent(ctx, fingerprint, scope.owner)
+			// Only the blob re-read under the lock is known to be the stored
+			// one: the caller's copy may predate a rotation, and deleting on its
+			// refusal would delete the pair that rotation persisted.
+			if rerr == nil {
+				s.deleteSpentAWSSSOBlob(ctx, scope)
+			}
 		}
 		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
 			slog.Bool("credential_spent", spent), slog.Any("err", err))
@@ -529,9 +536,10 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	}
 	// Mask BEFORE anything can persist or log the new values, and globally for
 	// the same reason the capture path masks globally: one credential is reused
-	// across every run that selects this lane.
-	s.cfg.MaskRegistry.AddGlobal([]byte(next.AccessToken))
-	s.cfg.MaskRegistry.AddGlobal([]byte(next.RefreshToken))
+	// across every run that selects this lane. The access token is let go one
+	// grace after its expiry even if no later refresh replaces it (#151).
+	s.cfg.MaskRegistry.AddGlobalUntil(scope.rowOwner(), scope.ssoSecret(), s.cfg.Now(), next.ExpiresAt,
+		[]byte(next.AccessToken), []byte(next.RefreshToken), []byte(next.ClientSecret))
 
 	data := map[string]any{
 		"provider":   awsSSOProvider,

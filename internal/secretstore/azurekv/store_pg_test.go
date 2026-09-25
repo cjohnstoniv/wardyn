@@ -503,3 +503,33 @@ func TestStoreMode_WriteIsBounded(t *testing.T) {
 	f.after = nil
 	f.mu.Unlock()
 }
+
+// CS-5 in Key Vault store mode: the erase says what the vault kept, so the
+// erase text can name the recoverable window (§3 ERASE.BODY_AZURE), and the
+// expiry sweep removes the value before the row.
+func TestStoreMode_EraseAndSweepSayWhatTheVaultKept(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeKV(t)
+	f.purgeForbidden = true
+	s := storeMode(t, pool, newFakeStore(t, f), nil)
+	ctx := t.Context()
+	past := secretstore.WithExpiry(ctx, time.Now().Add(-time.Hour))
+	for _, owner := range []string{"alice", "bob"} {
+		if err := s.For(owner).Put(past, "sso", []byte("v-"+owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rep, err := secretstore.EraseOwner(ctx, s, "alice")
+	if err != nil || rep != (secretstore.EraseReport{Count: 1, Store: Name, Purged: false, RecoverableDays: 90}) {
+		t.Fatalf("EraseOwner(alice) = (%+v, %v), want 1 erased, soft-deleted for 90 days", rep, err)
+	}
+	gone, err := s.DeleteExpired(ctx)
+	if err != nil || len(gone) != 1 || gone[0].Owner != "bob" {
+		t.Fatalf("DeleteExpired = (%+v, %v), want bob's sso", gone, err)
+	}
+	rc, err := s.Reconcile(ctx)
+	if err != nil || rc.Checked != 0 || len(rc.Dangling) != 0 || len(rc.Orphans) != 0 || len(rc.SoftDeleted) != 2 {
+		t.Fatalf("reconcile = (%+v, %v), want no rows, no orphans, and the two soft-deleted values", rc, err)
+	}
+}

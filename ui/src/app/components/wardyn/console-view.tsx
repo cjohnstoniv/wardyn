@@ -11,6 +11,7 @@ import { useRoleResolved } from "./operator-context";
 import { releaseUnloadGuard } from "../../lib/use-unsaved-guard";
 import {
   CONSOLE_VIEW,
+  OPEN_IN_USER_VIEW,
   VIEW_ADMIN_TOKEN,
   VIEW_REFUSAL,
   VIEW_TO_ADMIN,
@@ -109,6 +110,19 @@ export function viewHome(view: ConsoleView): string {
   return view === "admin" ? "/admin" : "/runs";
 }
 
+// A run's own detail path in the given view — the Admin monitor's link
+// target everywhere a run is opened FROM the Admin view (board card, table
+// row, the approvals queue's run link), so that link never doubles as an
+// unannounced view switch (ViewGate's TWIN rule sends the plain /runs/:id
+// path to the User view for a "url"-access install, and refuses it for an
+// admin-only token — see viewVerdict). OpenInUserView is the one deliberate
+// exception, since crossing views is its whole job: with a `runId` it targets
+// that run in the User view; without one (since c52adb584) it targets this
+// page's own User-view twin instead.
+export function runPath(view: ConsoleView, id: string): string {
+  return view === "admin" ? `/admin/runs/${encodeURIComponent(id)}` : `/runs/${encodeURIComponent(id)}`;
+}
+
 // Where a tab lands once its session is found in the other view (§2.4): the
 // same object in that view when it has a twin, else that view's home. `rest`
 // is the search and hash, kept on a twin as ViewGate's own redirect keeps them.
@@ -152,6 +166,49 @@ export async function switchView(to: ConsoleView, target: string, noCredential =
   }
   viewChannel()?.postMessage(to);
   window.location.assign(target);
+}
+
+/** M-7 (§4.6, QM-7): what the Admin view gives in place of a personal door on
+ *  the admin's own run — with `runId`, that run in the User view; without it
+ *  (#543's failed-run block and approvals card), this same page there, where
+ *  the door opens. ViewSwitch's rule: a single-operator install only
+ *  navigates; an SSO session flips its clamp first, and says so when that
+ *  fails. The admin token is not a person and has no User view, so it gets
+ *  nothing. Stops the click, since the rows it sits in open the run in this
+ *  view. */
+export function OpenInUserView({ runId, className }: { runId?: string; className?: string } = {}) {
+  const access = useViewAccess();
+  const navigate = useNavigate();
+  const { pathname, search, hash } = useLocation();
+  const [busy, setBusy] = React.useState(false);
+  const [failed, setFailed] = React.useState(false);
+  if (access === "admin-only") return null;
+  const target = runId ? `/runs/${encodeURIComponent(runId)}` : viewTarget("user", pathname, `${search}${hash}`);
+  const go = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (access === "url") {
+      void navigate(target);
+      return;
+    }
+    setBusy(true);
+    setFailed(false);
+    switchView("user", target).catch(() => {
+      setBusy(false);
+      setFailed(true);
+    });
+  };
+  return (
+    <>
+      <Button size="sm" variant="outline" className={className} disabled={busy} onClick={go}>
+        {OPEN_IN_USER_VIEW}
+      </Button>
+      {failed && (
+        <span role="alert" className="text-xs text-danger">
+          {CONSOLE_VIEW.SWITCH_FAILED}
+        </span>
+      )}
+    </>
+  );
 }
 
 function ViewNotice({ title, body, children }: { title?: string; body: string; children: React.ReactNode }) {

@@ -140,6 +140,37 @@ describe("approvalSignals — held vs passive", () => {
     expect(s.get("run-1")).toEqual({ pending: 1, held: true, reauth: true });
   });
 
+  // #725/F1 — an Azure DevOps capability escalation (tool_call with grant_id +
+  // requested_scope.lane "azure_devops") releases its OWN hold after 4
+  // minutes (isHeld's ADO_HOLD_WINDOW_MS arm), while a plain tool_call stays
+  // held for as long as it is PENDING (#509). At 5 minutes it must be a passive
+  // pending — never held — so the board card
+  // renders RUN_WAIT.waiting(n) rather than waitingHeld(n), matching what
+  // the ADO card itself already says at that age.
+  it("an Azure DevOps capability tool_call at 5 minutes is a passive pending, not held", () => {
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60_000).toISOString();
+    const s = approvalSignals([
+      approval({
+        kind: "tool_call",
+        grant_id: "grant-1",
+        requested_scope: { lane: "azure_devops", provider_id: "p1", org: "o1", grant_id: "grant-1", capability: "pr", repo: "r1", tool: "t", cmd: "c" },
+        requested_at: fiveMinutesAgo,
+      }),
+    ]);
+    expect(s.get("run-1")).toEqual({ pending: 1, passiveHold: true });
+  });
+
+  it("an Azure DevOps capability tool_call still inside its own 4-minute window is held", () => {
+    const s = approvalSignals([
+      approval({
+        kind: "tool_call",
+        grant_id: "grant-1",
+        requested_scope: { lane: "azure_devops", provider_id: "p1", org: "o1", grant_id: "grant-1", capability: "pr", repo: "r1", tool: "t", cmd: "c" },
+      }),
+    ]);
+    expect(s.get("run-1")).toEqual({ pending: 1, held: true });
+  });
+
   // A row the server has actually moved off PENDING (decided or expired) is
   // filtered before isHeld even runs — it produces no signal at
   // all, the same as any other decided approval.

@@ -76,6 +76,12 @@ func (c *countingSecretStore) List(context.Context) ([]string, error) {
 	c.ownerList.Add(1)
 	return c.own[c.owner], nil
 }
+func (c *countingSecretStore) DeleteEverywhere(context.Context, []string) (int, error) {
+	return 0, nil
+}
+func (c *countingSecretStore) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, nil
+}
 func (c *countingSecretStore) For(owner string) secretstore.Store {
 	cp := *c
 	cp.owner = owner

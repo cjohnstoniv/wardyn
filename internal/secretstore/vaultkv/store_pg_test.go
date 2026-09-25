@@ -15,6 +15,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/google/uuid"
@@ -255,6 +256,40 @@ func TestStoreMode_DeleteRemovesTheStoreBeforeTheRow(t *testing.T) {
 	}
 }
 
+// DeleteEverywhere removes every owner's value from the store, not only the
+// rows, and a store failure keeps every row.
+func TestStoreMode_DeleteEverywhereRemovesEveryOwnersValue(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	s := storeMode(t, pool, newFakeStore(t, f), nil)
+	ctx := t.Context()
+	for _, owner := range []string{"", "alice", "bob"} {
+		if err := s.For(owner).Put(ctx, "k", []byte("v-"+owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.mu.Lock()
+	f.force = []int{403, 403}
+	f.mu.Unlock()
+	if _, err := s.DeleteEverywhere(ctx, []string{"k"}); err == nil {
+		t.Fatal("DeleteEverywhere succeeded with Vault refusing")
+	}
+	if v, err := s.For("bob").Get(ctx, "k"); err != nil || string(v) != "v-bob" {
+		t.Fatalf("after a failed DeleteEverywhere, Get = (%q, %v); want the value intact", v, err)
+	}
+	f.mu.Lock()
+	f.force = nil
+	f.mu.Unlock()
+	if n, err := s.DeleteEverywhere(ctx, []string{"k"}); err != nil || n != 3 {
+		t.Fatalf("DeleteEverywhere = (%d, %v), want 3 rows removed", n, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.kv) != 0 {
+		t.Fatalf("DeleteEverywhere left %d paths in Vault", len(f.kv))
+	}
+}
+
 // Rule 22: migrate both ways, idempotent, nothing left behind.
 func TestMigrate_BothWaysLeavesNothingBehind(t *testing.T) {
 	pool := throwawayDB(t)
@@ -465,5 +500,53 @@ func TestRekey_LeavesPointerRowsAlone(t *testing.T) {
 		if v, err := after.Get(ctx, name); err != nil || string(v) != want {
 			t.Fatalf("Get %s after the rotation = (%q, %v), want %q", name, v, err, want)
 		}
+	}
+}
+
+// CS-5 in store mode: the erase and the expiry sweep remove the value from
+// Vault before the row, so -reconcile finds neither an orphan nor a dangling
+// row afterwards; and a sweep that Vault refuses keeps the row (fail closed,
+// retried by the next sweep) rather than dropping the pointer.
+func TestStoreMode_EraseAndSweepLeaveNothingInVault(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	s := storeMode(t, pool, newFakeStore(t, f), nil)
+	ctx := t.Context()
+	past := secretstore.WithExpiry(ctx, time.Now().Add(-time.Hour))
+	for _, w := range []struct {
+		ctx         context.Context
+		owner, name string
+	}{{ctx, "alice", "pat"}, {past, "alice", "sso"}, {past, "bob", "sso"}, {ctx, "bob", "pat"}} {
+		if err := s.For(w.owner).Put(w.ctx, w.name, []byte("v-"+w.owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if rep, err := secretstore.EraseOwner(ctx, s, "alice"); err != nil || rep.Count != 2 {
+		t.Fatalf("EraseOwner(alice) = (%+v, %v), want 2", rep, err)
+	}
+
+	f.mu.Lock()
+	f.force = []int{403, 403}
+	f.mu.Unlock()
+	if gone, err := s.DeleteExpired(ctx); err == nil || len(gone) != 0 {
+		t.Fatalf("DeleteExpired with Vault refusing = (%v, %v), want an error and nothing deleted", gone, err)
+	}
+	if v, err := s.For("bob").Get(ctx, "sso"); err != nil || string(v) != "v-bob" {
+		t.Fatalf("bob's expired row after a refused sweep = (%q, %v), want it kept intact", v, err)
+	}
+	gone, err := s.DeleteExpired(ctx)
+	if err != nil || len(gone) != 1 || gone[0].Owner != "bob" || gone[0].Name != "sso" {
+		t.Fatalf("DeleteExpired = (%+v, %v), want bob's sso", gone, err)
+	}
+
+	rep, err := s.Reconcile(ctx)
+	if err != nil || rep.Checked != 1 || len(rep.Dangling) != 0 || len(rep.Orphans) != 0 {
+		t.Fatalf("reconcile = (%+v, %v), want only bob's pat, nothing dangling or orphaned", rep, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.kv) != 1 {
+		t.Fatalf("Vault holds %d paths, want only bob's pat", len(f.kv))
 	}
 }

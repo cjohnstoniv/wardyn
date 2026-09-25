@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
@@ -814,9 +816,22 @@ func (s *Server) writeMintError(w http.ResponseWriter, r *http.Request, err erro
 		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictScopeMismatch, "error": "requested scope does not match grant (no-widening)"})
 	case errors.Is(err, broker.ErrAlreadyMinted):
 		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictAlreadyMinted, "error": "credential already minted (single-use)"})
+	case mintUnreachable(err):
+		// Transient, like the store's own outage: a run's proxy rides it out
+		// on its last-good header (K8) instead of dropping it at once.
+		writeError(w, http.StatusServiceUnavailable, sinkStoreUnreachable)
 	default:
 		writeServerError(w, r, "mint", err)
 	}
+}
+
+// mintUnreachable reports whether a mint failed because nothing answered: a
+// connection that could not be made or was lost, or a timeout. A database
+// that answered with an error (a *pgconn.PgError) is not one.
+func mintUnreachable(err error) bool {
+	var connErr *pgconn.ConnectError
+	var netErr net.Error
+	return errors.As(err, &connErr) || errors.As(err, &netErr) || pgconn.Timeout(err)
 }
 
 // tokenRenewResponse is the POST /api/v1/internal/token/renew success body: a

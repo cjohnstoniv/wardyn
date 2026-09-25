@@ -8,7 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -97,6 +99,38 @@ func (s *memSecrets) List(_ context.Context) ([]string, error) {
 	var out []string
 	for k := range src {
 		out = append(out, k)
+	}
+	return out, nil
+}
+
+func (s *memSecrets) DeleteEverywhere(_ context.Context, names []string) (int, error) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
+	n := 0
+	for _, rows := range append([]map[string][]byte{s.m}, slices.Collect(maps.Values(s.owned))...) {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				delete(rows, name)
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+func (s *memSecrets) Holders(_ context.Context, names []string) (map[string][]string, error) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
+	out := map[string][]string{}
+	for _, name := range names {
+		if _, ok := s.m[name]; ok {
+			out[name] = append(out[name], "")
+		}
+		for owner, rows := range s.owned {
+			if _, ok := rows[name]; ok {
+				out[name] = append(out[name], owner)
+			}
+		}
 	}
 	return out, nil
 }

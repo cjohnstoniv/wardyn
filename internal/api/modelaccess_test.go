@@ -114,6 +114,35 @@ func (s *scopedSecrets) List(context.Context) ([]string, error) {
 	return out, nil
 }
 
+func (s *scopedSecrets) DeleteEverywhere(_ context.Context, names []string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, rows := range s.rows {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				delete(rows, name)
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+func (s *scopedSecrets) Holders(_ context.Context, names []string) (map[string][]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string][]string{}
+	for owner, rows := range s.rows {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				out[name] = append(out[name], owner)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (s *scopedSecrets) For(owner string) secretstore.Store {
 	return &scopedSecrets{owner: owner, mu: s.mu, reads: s.reads, rows: s.rows}
 }
@@ -1021,6 +1050,12 @@ func (w wedgedSecrets) Get(context.Context, string) ([]byte, error) {
 func (w wedgedSecrets) Delete(context.Context, string) error   { return w.err }
 func (w wedgedSecrets) List(context.Context) ([]string, error) { return nil, w.err }
 func (w wedgedSecrets) For(string) secretstore.Store           { return w }
+func (w wedgedSecrets) DeleteEverywhere(context.Context, []string) (int, error) {
+	return 0, w.err
+}
+func (w wedgedSecrets) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, w.err
+}
 
 // TestSetupHarnessCreds_AWedgedStoreGradesNoState: an outage is not a credential
 // fact, and the probe must not turn one into the other.

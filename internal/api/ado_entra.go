@@ -590,9 +590,13 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, adoSignInErrorPath+reason, http.StatusFound)
 		return
 	}
-	// Mask BEFORE anything can log or persist either value.
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.AccessToken))
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.RefreshToken))
+	// Mask BEFORE anything can log or persist either value. Merge, not replace:
+	// until the store write below succeeds, the sign-in already stored stays the
+	// live one, so its tokens must stay current rather than be retired and swept.
+	// The access token is let go one grace after its expiry (#151).
+	now := s.cfg.Now()
+	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
+	s.cfg.MaskRegistry.MergeGlobalUntil(subject, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(resp.RefreshToken))
 
 	if reason, ok := s.bindADOEntraIdentity(ctx, cfg, resp.IDToken, nonce, subject); !ok {
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
@@ -613,11 +617,10 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the identity provider returned no renewable Azure DevOps grant", http.StatusBadGateway)
 		return
 	}
-	now := s.cfg.Now()
 	blob := adoEntraBlob{
 		RefreshToken: resp.RefreshToken,
 		Scopes:       granted,
-		ExpiresAt:    now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC(),
+		ExpiresAt:    accessExpiry,
 		TenantID:     cfg.TenantID,
 		ClientID:     cfg.ClientID,
 		Subject:      subject,
@@ -639,6 +642,8 @@ func (s *Server) handleADOCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "storing the captured Azure DevOps sign-in failed", http.StatusInternalServerError)
 		return
 	}
+	// Stored: this sign-in is now the credential, and the one it replaced is not.
+	s.cfg.MaskRegistry.AddGlobalUntil(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), blob.ExpiresAt, []byte(resp.AccessToken), []byte(resp.RefreshToken))
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{
 		"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		"scopes": granted, "source": adoEntraSourceSignIn,

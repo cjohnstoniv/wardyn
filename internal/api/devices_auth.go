@@ -77,24 +77,6 @@ const (
 	maxDeviceIngestBytes = 8 << 20
 )
 
-// deviceEnrolRequest / deviceEnrolResponse are POST /devices/enrol's wire
-// shapes; deviceAck is what the ingest and heartbeat routes answer — the
-// organisation's recorded cursor for the device, which the forwarder advances
-// to.
-type deviceEnrolRequest struct {
-	Token string `json:"token"`
-}
-
-type deviceEnrolResponse struct {
-	DeviceID uuid.UUID `json:"device_id"`
-	Name     string    `json:"name"`
-	Token    string    `json:"token"`
-}
-
-type deviceAck struct {
-	AckedSeq int64 `json:"acked_seq"`
-}
-
 type deviceCtxKey struct{}
 
 // deviceFromContext is the device deviceAuth resolved. It is the ONLY identity
@@ -149,6 +131,7 @@ func (s *Server) deviceAuth(next http.Handler) http.Handler {
 		ds, ok := s.cfg.Store.(store.DeviceStore)
 		if !ok {
 			s.auditAuthFailedAs(r, deviceAuthActor, "device_store_unavailable")
+			w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 			writeError(w, http.StatusUnauthorized, "this deployment does not accept device credentials")
 			return
 		}
@@ -164,6 +147,7 @@ func (s *Server) deviceAuth(next http.Handler) http.Handler {
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			s.auditAuthFailedAs(r, deviceAuthActor, "invalid_device_token")
+			w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 			writeError(w, http.StatusUnauthorized, "invalid device token")
 			return
 		}
@@ -210,7 +194,7 @@ func (s *Server) handleDeviceEnrol(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, http.StatusText(http.StatusNotImplemented))
 		return
 	}
-	var req deviceEnrolRequest
+	var req types.DeviceEnrolRequest
 	if !decodeStrict(w, r, &req) {
 		return
 	}
@@ -239,7 +223,7 @@ func (s *Server) handleDeviceEnrol(w http.ResponseWriter, r *http.Request) {
 		mustJSON(map[string]any{"name": d.Name, "enrolment_token_id": t.ID, "minted_by": t.MintedBy}))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
-	writeJSON(w, http.StatusCreated, deviceEnrolResponse{DeviceID: d.ID, Name: d.Name, Token: raw})
+	writeJSON(w, http.StatusCreated, types.DeviceEnrolResponse{DeviceID: d.ID, Name: d.Name, Token: raw})
 }
 
 // auditEnrolFailure writes one device.enrol failure row, bounded the way
@@ -282,6 +266,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 	d, ok := deviceFromContext(r.Context())
 	ds, isDS := s.cfg.Store.(store.DeviceStore)
 	if !ok || !isDS {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 		writeError(w, http.StatusUnauthorized, "invalid device token")
 		return
 	}
@@ -328,6 +313,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		// Revoked after deviceAuth admitted this request: the same 401 its
 		// next request gets, recorded as the revocation it is.
 		s.auditIngestFailure(r, d, "revoked", len(rows))
+		w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 		writeError(w, http.StatusUnauthorized, "invalid device token")
 		return
 	case errors.Is(err, store.ErrFederatedRowInvalid):
@@ -358,11 +344,14 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		ev.SourceIP = r.RemoteAddr
 		s.recordAudit(r.Context(), ev)
 	}
+	// Every row of the batch is now held here — ingested, or recognised by its
+	// seq AND hash — so the ack is the batch's own end; an empty batch answers
+	// the recorded cursor, as a heartbeat does.
 	acked := d.LastSeq
-	if res.Accepted > 0 {
+	if len(rows) > 0 {
 		acked = rows[len(rows)-1].Seq
 	}
-	writeJSON(w, http.StatusOK, deviceAck{AckedSeq: acked})
+	writeJSON(w, http.StatusOK, types.DeviceAck{AckedSeq: acked})
 }
 
 // invalidFederatedRow is the boundary check the store cannot give a useful
@@ -420,5 +409,5 @@ func (s *Server) handleDeviceHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid device token")
 		return
 	}
-	writeJSON(w, http.StatusOK, deviceAck{AckedSeq: d.LastSeq})
+	writeJSON(w, http.StatusOK, types.DeviceAck{AckedSeq: d.LastSeq})
 }

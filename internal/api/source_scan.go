@@ -250,7 +250,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if err != nil {
 		return types.AgentRun{}, release(err)
 	}
-	created, err := s.cfg.Store.CreateRun(ctx, run)
+	created, err := s.createRun(ctx, run)
 	if err != nil {
 		return types.AgentRun{}, release(fmt.Errorf("create scan run: %w", err))
 	}

@@ -381,16 +381,29 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListAPITokens is GET /api/v1/me/tokens: the caller's own tokens,
-// revoked ones included (a human has to be able to SEE that the credential they
-// retired is retired). No row anywhere in this response carries the plaintext or
-// the hash.
+// paginated by ?limit=&offset= (see parseListPage). Revoked ones are INCLUDED
+// (a human has to be able to SEE that the credential they retired is
+// retired). No row anywhere in this response carries the plaintext or the
+// hash.
 func (s *Server) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
-	tokens, err := s.cfg.Store.ListAPITokensByPrincipal(r.Context(), principalFromRequest(r))
-	if err != nil {
-		writeServerError(w, r, "list api tokens", err)
+	ctx := r.Context()
+	principal := principalFromRequest(r)
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, tokens)
+	// APITokensByPrincipalPager, not the plain Pager: the query is already
+	// scoped WHERE principal=$1 (ListAPITokensByPrincipal), so an absent
+	// implementation falls back safely to the full fetch + in-Go window.
+	var pageFn func(store.Page) ([]types.APIToken, error)
+	if pg, ok := s.cfg.Store.(store.APITokensByPrincipalPager); ok {
+		pageFn = func(p store.Page) ([]types.APIToken, error) {
+			return pg.ListAPITokensByPrincipalPage(ctx, principal, p)
+		}
+	}
+	servePage(w, r, page, pageFn, func() ([]types.APIToken, error) {
+		return s.cfg.Store.ListAPITokensByPrincipal(ctx, principal)
+	})
 }
 
 // handleListAllAPITokens is GET /api/v1/tokens: every token in the deployment.

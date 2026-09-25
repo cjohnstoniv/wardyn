@@ -68,12 +68,34 @@ type awsSSOScope struct {
 	// is the SSO lane, which is what per_user meant before a member could store
 	// a bearer. Meaningless under shared, where both are operator reads.
 	bearer bool
+	// provider is the UID of the model provider whose credential this is (always
+	// perUser): its session lives under wardyn-provider-<uid>-sso rather than the
+	// harness name. "" on every roster-derived scope.
+	provider string
+}
+
+// ssoSecret is the name the captured AWS SSO session is stored under in this
+// scope's namespace.
+func (sc awsSSOScope) ssoSecret() string {
+	if sc.provider != "" {
+		return providerSecretName(sc.provider, providerSSOPart)
+	}
+	return harnessCredSecretName(awsSSOProvider)
 }
 
 // namespaced reports whether this scope names a per-principal namespace a read
 // can actually be made in. False under perUser with no owner — the fail-closed
 // direction, since the alternative is reading the operator's row.
 func (sc awsSSOScope) namespaced() bool { return sc.perUser && sc.owner != "" }
+
+// rowOwner is the owner of the row this scope reads: its principal when
+// namespaced, else the operator's "".
+func (sc awsSSOScope) rowOwner() string {
+	if sc.namespaced() {
+		return sc.owner
+	}
+	return ""
+}
 
 // readsBearer / readsSSO report whether a resolve under sc may select the
 // stored bearer / the captured AWS SSO session: always under shared (one

@@ -39,10 +39,10 @@ import (
 //
 // It is NOT "this needs fixing" — nearly every warn/fail row does — and NOT a
 // severity ranking. Two families must never carry it. Rows graded through the
-// CALLER's own credential rather than the install: llmProviderCheck's and
-// bedrockProviderCheck's per_user arms, and awsSSOCredentialRow, which grades
-// the caller's own AWS SSO session. Confiscating the console over a fact about
-// one person is exactly what this flag exists to prevent. And advisory
+// CALLER's own credential rather than the install: llmProviderCheck's per_user
+// and provider arms, bedrockProviderCheck's per_user arm, providerAccessCheck and
+// awsSSOCredentialRow (the caller's own AWS SSO session). Confiscating the console
+// over a fact about one person is exactly what this flag exists to prevent. And advisory
 // install rows, whose grade belongs on every surface that renders them but
 // whose fix is nobody's emergency: the SCM safest-path ladder, an ephemeral age
 // key, TLS cookie posture, an acknowledged egress canary. (harnessCredential-
@@ -314,8 +314,8 @@ const (
 // detail, "" when there is none). INFO when there is NO model provider at
 // all — it is OPTIONAL, needed only for agent-harness runs, so "no model" is
 // a deliberate non-blocking state, never a gap the operator must clear. WARN
-// is reserved for the per_user arm below: there a provider IS declared and
-// THIS person's half of it is missing, which is a real, actionable gap.
+// is reserved for the per_user and provider arms below: there a provider IS
+// declared and THIS person's half of it is missing, a real, actionable gap.
 //
 // bedrock is read ONLY when llmDetail is "" — llmProvenance's own winning
 // signal always outranks it (unchanged), and the "no provider configured"
@@ -324,7 +324,8 @@ const (
 // fact than "nothing is configured" (a cross-row contradiction:
 // bedrock_provider says Bedrock IS configured two rows down), so it gets its
 // own per-principal sentence instead of the generic optional-provider one.
-func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
+// access (provider_access) is read last: granted providers aren't "nothing configured".
+func llmProviderCheck(llmDetail string, bedrock SetupBedrock, access []SetupProviderAccess) SetupCheck {
 	if llmDetail != "" {
 		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "ok", Detail: llmDetail}
 	}
@@ -336,6 +337,9 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 			ID: "llm_provider", Label: "LLM access", Status: "warn",
 			Detail: llmProviderPerUserDetail, Fix: llmProviderPerUserFix,
 		}
+	}
+	if chk, ok := providerAccessLLMCheck(access); ok {
+		return chk
 	}
 	return SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
@@ -485,33 +489,37 @@ func ageKeyCheck(durable bool) SetupCheck {
 	}
 }
 
-// secretStoreCheck is store_external in store mode (design §3,
-// SETUP_CHECK.STORE_EXTERNAL): the credentials live in the organisation's
-// store, and there is no local key to be durable. Otherwise the age-key row.
-func secretStoreCheck(external string, durable bool) SetupCheck {
-	if external == "" {
-		return ageKeyCheck(durable)
+// secretStoreChecks are the credential-storage rows (design §3, canon SETUP_CHECK.*): store_external in store
+// mode; kek_service (KEK_SERVICE; keyService is "Vault Transit at {host}") when a key service wraps every data
+// key; else the age-key row, kek_local on a multi-user install (whoever holds the database and the local key
+// reads every credential), and platform_shared while no WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of
+// the age key then also forges run identities and sessions).
+func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate bool) []SetupCheck {
+	if external != "" {
+		return []SetupCheck{{ID: "store_external", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there."}}
 	}
-	return SetupCheck{
-		ID: "store_external", Label: "Credential storage", Status: "ok",
-		Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there.",
+	if keyService != "" {
+		return []SetupCheck{{ID: "kek_service", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in " + keyService +
+				" and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log."}}
 	}
-}
-
-// secretStoreRows is secretStoreCheck's row, then platform_shared in local
-// mode while no WARDYN_PLATFORM_KEY_FILE is set (design §3, §2.13 c): the age
-// key then protects wardynd's own signing and session keys and people's
-// credentials alike, so one leak of it forges run identities and sessions.
-func secretStoreRows(external string, durable, platformSeparate bool) []SetupCheck {
-	rows := []SetupCheck{secretStoreCheck(external, durable)}
-	if external == "" && !platformSeparate {
-		rows = append(rows, SetupCheck{
+	checks := []SetupCheck{ageKeyCheck(durable)}
+	if durable && multiUser {
+		checks = append(checks, SetupCheck{
+			ID: "kek_local", Label: "Credential key", Status: "warn",
+			Detail: "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart.",
+			Fix:    "Set WARDYN_KEK=transit with a Vault Transit key (docs/OPERATIONS.md), then run `wardynd -rewrap`.",
+		})
+	}
+	if !platformSeparate {
+		checks = append(checks, SetupCheck{
 			ID: "platform_shared", Label: "Platform key separation", Status: "warn",
 			Detail: "Wardyn's own signing and session keys are protected by the same key as people's credentials.",
 			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap` once, then restart wardynd with it set.",
 		})
 	}
-	return rows
+	return checks
 }
 
 // siteConfigCheck reports whether an operator-wide corporate baseline (upstream
@@ -591,19 +599,6 @@ func internalHostsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 		ID: "internal_hosts", Label: internalHostsCheckLabel, Status: "info",
 		Detail: internalHostsDeclaredSentence(sc.InternalHosts),
 	}, true
-}
-
-// siteConfigStatusChecks bundles the /setup/status rows derived from one
-// site-config read — siteConfigCheck, artifactRepoCheck, the conditional
-// internalHostsCheck — into a single call. Factored out of handleSetupStatus
-// (setup.go) to keep that function under the funlen gate as this list grows;
-// purely mechanical, no behavior beyond what three separate append calls had.
-func siteConfigStatusChecks(checks []SetupCheck, sc types.SiteConfig, present map[string]bool) []SetupCheck {
-	checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
-	if chk, ok := internalHostsCheck(sc); ok {
-		checks = append(checks, chk)
-	}
-	return checks
 }
 
 // platformChecks are the platform rows — permanent and non-fixable, so always

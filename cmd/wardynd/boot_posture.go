@@ -60,15 +60,14 @@ func validateMemberModePosture(memberMode, localMode, oidcConfigured bool) error
 }
 
 // validateHybridPosture enforces the org control-plane settings' preconditions
-// (issue #100, docs/design/0.8/PLAN.md): WARDYN_ORG_URL, WARDYN_ORG_ENROLMENT_TOKEN
-// and WARDYN_ORG_DEVICE_NAME. Kept as its OWN function rather than folded into
+// (issue #100, docs/design/0.8/PLAN.md): WARDYN_ORG_URL and
+// WARDYN_ORG_ENROLMENT_TOKEN. Kept as its OWN function rather than folded into
 // validateMemberModePosture above: that one owns the local-mode/OIDC
 // preconditions, and duplicating them here is exactly how the two would drift
 // apart — this one owns hybrid's preconditions instead, and calls neither.
 //
-// nil when orgURL is empty: no hybrid posture is asserted, nothing to check
-// (orgDeviceName carries no posture of its own and never reaches this
-// function). Otherwise, in order:
+// nil when orgURL is empty: no hybrid posture is asserted, nothing to check.
+// Otherwise, in order:
 //
 //  1. memberMode must be on. An org URL with no member-mode assertion is a
 //     laptop that claims to report to an org control plane while still
@@ -108,25 +107,11 @@ func validateHybridPosture(orgURL, enrolToken string, memberMode, allowPlaintext
 	}
 	if !strings.EqualFold(u.Scheme, "https") && !allowPlaintextListen && !listenIsLoopback(u.Hostname()) {
 		return fmt.Errorf("refusing to start: WARDYN_ORG_URL %q is not https:// and its host is not loopback — "+
-			"the enrolment token travels with every request this daemon makes to it, and a plaintext non-loopback URL "+
+			"the device credential travels with every request this daemon makes to it, and a plaintext non-loopback URL "+
 			"sends that credential in cleartext to any peer on the path; use https://, point WARDYN_ORG_URL at a "+
 			"loopback host for local testing, or set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", orgURL)
 	}
 	return nil
-}
-
-// checkMemberAndHybridBootPosture runs validateMemberModePosture then
-// validateHybridPosture in sequence, folded into ONE function call so run()
-// (cmd/wardynd/main.go) gains no extra `if err != nil` branch for the second,
-// adjacent refusal — gocyclo's function-complexity gate is already at its
-// ceiling there. The two validators stay separate on purpose (see
-// validateHybridPosture's own doc comment on why it does not extend
-// validateMemberModePosture); this is only the call site folded together.
-func checkMemberAndHybridBootPosture(memberMode, localMode, oidcConfigured bool, orgURL, enrolToken string, allowPlaintextListen bool) error {
-	if err := validateMemberModePosture(memberMode, localMode, oidcConfigured); err != nil {
-		return err
-	}
-	return validateHybridPosture(orgURL, enrolToken, memberMode, allowPlaintextListen)
 }
 
 // validateSSOOnlyPosture enforces WARDYN_SSO_ONLY's precondition: SSO must
@@ -379,6 +364,29 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 			"use e.g. \"https://run-{run}.ui.example.com\", or unset it for the documented shared-origin mode", originTemplate)
 	}
 	return nil
+}
+
+// validateBootPosture runs the flag-only posture refusals (UI-sandbox gateway,
+// hybrid org control plane) — neither depends on anything db.Migrate, secrets,
+// identity, the broker or the runner resolve — in one call, right beside
+// validateConfig in run() and before connectAndMigrate. Other flag-only checks
+// (validateModelEndpoints, validateOIDCRedirectURL, the demo-video URL) still
+// run after migration. Folded into one function, not one `if err != nil` branch
+// per validator, for the same reason the deleted checkMemberAndHybridBootPosture
+// wrapper existed: run()'s gocyclo budget (.golangci.yml) is already at its
+// ceiling, and a misconfigured posture belongs at the FIRST validation step,
+// not discovered after the daemon has done real work.
+//
+// validateMemberModePosture stays OUT of this list on purpose: it needs
+// lm.enabled (local mode's RESOLVED fact, not the raw flag — local mode
+// auto-enables) and feats.authn != nil (OIDC actually configured, which a
+// failed OIDC discovery leaves nil), and neither exists this early in boot.
+// It is still called directly, at its own later point in run().
+func validateBootPosture(f *bootFlags, posture tlsPosture) error {
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, posture, *f.allowPlaintextListen); err != nil {
+		return err
+	}
+	return validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen)
 }
 
 // subscriptionInjectPosture decides whether this deployment may resolve a SHARED

@@ -1,0 +1,121 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model providers packet</title>
+<!--
+  Model-providers mock packet (#537, #543) · static, for owner review.
+  The landing page: what each screen is for, the states it shows, and the decisions this
+  packet asks for. The design brief is docs/design/model-providers-prompt.md; the model is
+  the multi-provider design (packet 0) and packets A–E, all approved 2026-09-22 (epic #551).
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Model providers — mock packet for #537 and #543</h1>
+    <div class="sub">Approved 2026-09-25 — all five decisions as drawn.</div>
+  </div>
+  <nav><a class="cur" href="index.html">Packet</a><a href="provider-editor.html">Provider editor</a><a href="door-cards.html">Refusals and doors</a><a href="canon.html">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>What this is</span><b>The two console issues in epic #551 still marked needs-mock</b></div>
+  <p class="lead" style="margin-top:0">A model provider is admin configuration: which service, where requests go, and which agents may use it. The credential is always each person's own. Packets B and E already approved most of the words; this packet draws every state #537 and #543 name, in the console's own look, so the two lanes can build from it.</p>
+  <p class="lead">When you approve, #537 (the provider editor for the key and endpoint kinds) and #543 (a refusal opens its own provider's door; the failure block and reauth card name the provider) lose <span class="mono">needs-mock</span> and can start once their dependencies land: #536 for #537; #532 and #540 for #543.</p>
+</section>
+
+<section class="state">
+  <div class="tag"><span>The screens</span><b>Three pages, one stylesheet</b></div>
+  <div class="grid2">
+    <a class="pagecard" href="provider-editor.html">
+      <b>Provider editor (#537)</b>
+      <p>Settings → Model providers → Add model provider, and editing one. Configuration only: there is no key or token field anywhere in it.</p>
+      <ul>
+        <li>Kind step (three kinds, and decision 1's five)</li>
+        <li>E1 key provider, empty and filled</li>
+        <li>E2 endpoint on both agents, empty and filled</li>
+        <li>E5 an agent that can't be ticked</li>
+        <li>Saving and saved</li>
+        <li>E6 save refused (three real server 400s)</li>
+        <li>Editing; E7 remove confirm; E8 remove blocked</li>
+        <li>E9 address change, tokens and keys</li>
+      </ul>
+    </a>
+    <a class="pagecard" href="door-cards.html">
+      <b>Refusals and doors (#543)</b>
+      <p>What a person sees after a run is refused over its model credential, and which door opens.</p>
+      <ul>
+        <li>The run's provider in the run header, including "(removed)"</li>
+        <li>Failure block, the owner: AWS, token, key, Claude</li>
+        <li>Failure block, anyone else and the Admin view</li>
+        <li>Off, not available, not granted: no door</li>
+        <li>Which door opens (§5.8), drawn on New Run</li>
+        <li>Reauth card: owner, anyone else, the admin's own run</li>
+      </ul>
+    </a>
+  </div>
+  <a class="pagecard" href="canon.html" style="margin-top:18px">
+    <b>Canon</b>
+    <p>One row per string the two pages show, with a stable id and where it came from: packets A–E, shipped today, changed, new in this packet, or a server sentence shown verbatim.</p>
+  </a>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Decisions</span><b>Five, each drawn as recommended. The rest of the packet repeats what A–E approved.</b></div>
+  <ol class="decisions">
+    <li><b>The kind step before #538 ships.</b> Drawn: #537's step lists only the three kinds it builds (Anthropic API key, OpenAI API key, Your own endpoint), and #538 adds Amazon Bedrock and Claude subscription. The other option is to hold #537 until #538 is ready, so the step opens with all five at once.
+      <p>Recommended: three kinds. Each lane then ships a step that works, and no in-between state is left undrawn (your #539 rule).</p></li>
+    <li><b>E7 and E9 for keys, for one person, and for nobody.</b> Packet B worded E7 and E9 for tokens only. Drawn: the same sentences with "keys"; for one person, "The token 1 person added was given for the old address, so it is deleted. They add it again."; and when nobody has added a credential yet, Save saves with no confirm.
+      <p>Recommended: as drawn. Four new sentences, all in canon.html.</p></li>
+    <li><b>Editing an existing provider.</b> Drawn: the title is the provider's name, with its kind as a chip beside it. The provider id that the CLI and workspace pins use is made from the name at first save ("Corp gateway" becomes <span class="mono">corp-gateway</span>), stays fixed after that, and isn't shown in the editor. The other option is to show the id read-only under Name, which needs a new label and hint.
+      <p>Recommended: as drawn. It keeps the form to what an admin sets. The trade-off: an admin who needs the id for <span class="mono">--model-provider</span> has to find it outside the editor.</p></li>
+    <li><b>After Save.</b> Drawn: the editor closes back to Settings → Model providers, with the toast "Provider saved." The other option is to keep the editor open after saving.
+      <p>Recommended: close. The list row then shows the result, including the admin's own connection chip (packet A).</p></li>
+    <li><b>Where a run shows its provider.</b> Drawn: a neutral chip in the run header's chip bar, "Model provider · Corp gateway". The other option is a line in the run's summary.
+      <p>Recommended: the chip. The header bar is the one strip every run page shows at every width, and the failure block below it names the same provider.</p></li>
+  </ol>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Settled without asking</span><b>Called out so none of them is a surprise</b></div>
+  <ul style="font-size:13px;color:var(--muted-foreground);max-width:86ch;padding-left:18px">
+    <li>"Open in member view" (packet E) is drawn as "Open in user view", and "Member view" as "User view", following the user-types rename (user-types packet B, approved 2026-09-23).</li>
+    <li>The reauth card's title changes from today's "Sign in to AWS again — this run is paused" to "AWS sign-in needed for this run" (packet E, Q146-2).</li>
+    <li>An endpoint's Path is drawn as required, as packet B (QB-2) treats it. The server (<span class="mono">validProviderPath</span>, <span class="mono">internal/api/model_providers.go</span>) also accepts an empty path, meaning the base URL itself, so the console is stricter than the server here.</li>
+    <li>A new provider starts with every compatible agent ticked, the rule setup already uses for case (a).</li>
+    <li>The failure block's three new buttons get accessible names on the pattern of today's "Sign in to AWS — for this failed run".</li>
+  </ul>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Not drawn</span><b>Out of these two issues, or not described by them</b></div>
+  <ul style="font-size:13px;color:var(--muted-foreground);max-width:86ch;padding-left:18px">
+    <li>The Bedrock and Claude subscription kinds, E3 and E4 (#538, packet B).</li>
+    <li>The Model providers list itself (#536, packet A), the Agents tab (#539), Your model connections and the shell strip (#540, #541).</li>
+    <li>The doors' own states: opening, device code, saved, cancelled (#544, packet E).</li>
+    <li>A save that races another admin's save (the <span class="mono">If-Match</span> 412) and an agent turned off on the roster while ticked. Neither issue describes them; the lanes should raise them if they come up.</li>
+  </ul>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>

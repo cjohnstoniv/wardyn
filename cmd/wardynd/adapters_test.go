@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -259,7 +260,7 @@ func TestMaskingRecorder_NilRunID_OtherRunsSecretDoesNotLeak(t *testing.T) {
 func TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	const secret = "ghp_supersecrettoken123"
-	reg.AddGlobal([]byte(secret))
+	reg.AddGlobal("", "test-credential", time.Now(), []byte(secret))
 
 	inner := &fakeAuditRecorder{}
 	rec := maskingRecorder{inner: inner, reg: reg}

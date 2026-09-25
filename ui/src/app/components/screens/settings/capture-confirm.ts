@@ -121,6 +121,18 @@ export function serverConfirmsCapture(
   return rows.some((h) => h.captured);
 }
 
+// serverConfirmsProviderCapture is serverConfirmsCapture for a sign-in through
+// a model provider's door (#544). Its capture lands under the provider's own
+// name, which /setup/status's harness rows never carry, so no source_run_id
+// can prove THIS run. The proof is the audit row the upload writes for this
+// run after its store write (`audited`, harness.credential.captured) — a row
+// the sandbox cannot write — and the provider's own row must agree the
+// credential is there. Strict by construction: no presence-only fallback.
+export function serverConfirmsProviderCapture(status: SetupStatus, modelProvider: string, audited: boolean): boolean {
+  const state = status.provider_access?.find((a) => a.provider === modelProvider)?.state;
+  return audited && (state === "live" || state === "expiring");
+}
+
 // confirmCaptureWithServer is the round trip itself: read /setup/status, give a
 // stale-but-honest answer a moment to catch up, and report what the server
 // actually agrees to.
@@ -135,10 +147,17 @@ export function serverConfirmsCapture(
 export async function confirmCaptureWithServer(
   provider: string,
   runId?: string | null,
+  modelProvider?: string,
 ): Promise<{ confirmed: boolean; unreachable: boolean }> {
+  let audited = false;
+  const confirms = (s: SetupStatus) =>
+    modelProvider ? serverConfirmsProviderCapture(s, modelProvider, audited) : serverConfirmsCapture(s, provider, runId);
   // A THROW stays fail-closed and is never retried: a propagated 401 is an
   // answer, not a blip, and retrying it would only delay the refusal.
   const read = async (): Promise<SetupStatus | null> => {
+    if (modelProvider && runId && !audited) {
+      audited = await auditApi.listAudit(runId, CAPTURE_AUDIT_ACTION).then((r) => r.length > 0, () => false);
+    }
     try {
       return await setupApi.getSetupStatus();
     } catch {
@@ -156,11 +175,11 @@ export async function confirmCaptureWithServer(
   // so re-read before accusing the sandbox. A forged marker never converges
   // and still lands on the refusal 1.5s later.
   for (let i = 0; i < CAPTURE_CONFIRM_RETRIES; i++) {
-    if (!status || status.unreachable || serverConfirmsCapture(status, provider, runId)) break;
+    if (!status || status.unreachable || confirms(status)) break;
     await new Promise((r) => setTimeout(r, CONFIRM_RETRY_MS));
     status = await read();
   }
-  if (status && !status.unreachable && serverConfirmsCapture(status, provider, runId)) {
+  if (status && !status.unreachable && confirms(status)) {
     return { confirmed: true, unreachable: false };
   }
   return { confirmed: false, unreachable: !!status?.unreachable };
@@ -272,11 +291,14 @@ export async function watchForCapture({
   runId,
   signal,
   wake,
+  modelProvider,
 }: {
   provider: string;
   runId: string;
   signal: AbortSignal;
   wake?: EventTarget;
+  /** A provider door's sign-in: the audit hit is the proof, not a hint. */
+  modelProvider?: string;
 }): Promise<boolean> {
   const startedAt = Date.now();
   let terminalAt: number | null = null;
@@ -302,7 +324,10 @@ export async function watchForCapture({
       lastStatusCheck = Date.now();
       try {
         const status = await setupApi.getSetupStatus();
-        if (!status.unreachable && serverConfirmsCapture(status, provider, runId, { strict: true })) return true;
+        const confirmed = modelProvider
+          ? serverConfirmsProviderCapture(status, modelProvider, hinted)
+          : serverConfirmsCapture(status, provider, runId, { strict: true });
+        if (!status.unreachable && confirmed) return true;
       } catch {
         /* a read failure is a tick, never a verdict */
       }

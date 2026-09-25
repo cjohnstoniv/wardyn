@@ -13,13 +13,18 @@ import (
 // seam impl, so a blank import (cmd/wardynd) makes "pg" selectable.
 func init() {
 	secretstore.Register("pg", func(d secretstore.Deps) (secretstore.Store, error) {
-		s := &Store{pool: d.Pool}
-		if err := s.setLocalKeys(d.AgeIdentity, d.PlatformIdentity); err != nil {
-			return nil, err
-		}
 		// A configured external store is read-only here: pointer rows written
-		// in store mode stay readable, and every write seals locally (§2.2).
-		s.ext, s.extTimeout = d.External, d.ExternalTimeout
+		// in store mode stay readable, and every write seals in Postgres (§2.2)
+		// under the key service when it writes, else under the local KEKs.
+		s := &Store{pool: d.Pool, ext: d.External, extTimeout: d.ExternalTimeout}
+		if d.AgeIdentity != nil || !d.KEKWrites {
+			if err := s.setLocalKeys(d.AgeIdentity, d.PlatformIdentity); err != nil {
+				return nil, err
+			}
+		}
+		// A key service alone (no age key): local rows cannot be read, and
+		// wardynd refuses to boot while any exist.
+		s.withKEK(d)
 		return s, nil
 	})
 }
@@ -27,7 +32,9 @@ func init() {
 // RegisterExternal registers name as a store-mode secret store: the same pg
 // Store, writing every value to the external store the Deps carry (which must
 // be the one called name) and keeping only a pointer row. The age identity is
-// optional there; without it local rows are refused by name. Each external
+// optional there; without it local rows are refused by name. A key service
+// (Deps.KEK) keeps reading the rows sealed under it and, when it writes, seals
+// what -migrate-secrets -to=local writes. Each external
 // backend calls this from its own init().
 func RegisterExternal(name string) {
 	secretstore.Register(name, func(d secretstore.Deps) (secretstore.Store, error) {
@@ -40,6 +47,7 @@ func RegisterExternal(name string) {
 				return nil, err
 			}
 		}
+		s.withKEK(d)
 		return s, nil
 	})
 }

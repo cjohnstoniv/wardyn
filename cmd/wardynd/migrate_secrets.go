@@ -74,11 +74,11 @@ func secretStoreMaintenance(f *bootFlags) error {
 	if err != nil {
 		return err
 	}
-	ext, err := buildExternalStore(ctx, f.vault, f.azure, *f.trustedCAFile)
+	c, err := buildStoreClients(ctx, f)
 	if err != nil {
 		return err
 	}
-	s, err := newSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, ext, *f.vault.timeout, rec)
+	s, err := newSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, c, rec)
 	if err != nil {
 		return err
 	}

@@ -241,6 +241,7 @@ func TestListCarriersFailClosed(t *testing.T) {
 // edited, because a client compares the number, not the list.
 var capKindsGolden = map[int]string{
 	1: "egress_host:narrowing,secret:narrowing,workspace:narrowing,image:widening,agent:narrowing,integration:narrowing,workspace_provider:narrowing",
+	2: "egress_host:narrowing,secret:narrowing,workspace:narrowing,image:widening,agent:narrowing,integration:narrowing,workspace_provider:narrowing,model_provider:narrowing",
 }
 
 // TestCapKindsVersionPinsTheTable fails on a kind-table change that does not

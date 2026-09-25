@@ -284,6 +284,21 @@ secretStore:
     # deleted secrets for the vault's soft-delete retention.
     purge: auto
 
+# The key that wraps each stored credential's data key when secretStore.backend
+# is pg (docs/OPERATIONS.md "Key service: Vault Transit"). "local": derived
+# from the age key. "transit": your Vault's Transit key, over the
+# secretStore.vault client (addr, auth, role and TLS above); the key never
+# leaves Vault, and once `wardynd -rewrap` reports no row left under the age
+# key, the age key can be removed.
+kek:
+  provider: local
+  transit:
+    mount: transit
+    # Transit key (type aes256-gcm96). Required with provider transit; set
+    # with provider local it only reads the rows sealed under it (the way
+    # back with `wardynd -rewrap`).
+    key: ""
+
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default
 # policy (WARDYN_DEFAULT_POLICY), etc. See cmd/wardynd/main.go for the full list.
@@ -537,6 +552,16 @@ networkPolicy:
     extra: []
 
 podAnnotations: {}
+
+# How long Kubernetes waits after SIGTERM before SIGKILL. wardynd's orderly
+# stop needs up to ~65s: http.Server.Shutdown (15s), then the detached work it
+# waits for (a run launch, a superseded sign-in's teardown: up to 35s), then
+# the audit sinks' final flush (the webhook sink's own timeout: 15s). The
+# Kubernetes default of 30s can SIGKILL a teardown mid-KillSandbox, leaving
+# the run KILLED with its sandbox still up and no run.kill row. Keep it at 70
+# or above. 0 is not supported: the template's `| default` treats an explicit
+# 0 the same as unset and falls back to the chart default.
+terminationGracePeriodSeconds: 70
 
 # Pod-level security context. distroless:nonroot runs as uid/gid 65532.
 podSecurityContext:

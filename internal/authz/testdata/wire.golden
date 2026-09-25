@@ -26,3 +26,4 @@ reason run_not_found
 reason run_terminal
 reason second_human_required
 reason run_quota
+reason capability_model_provider

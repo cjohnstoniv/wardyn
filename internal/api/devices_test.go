@@ -179,8 +179,12 @@ func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, pee
 	if d.RevokedAt != nil {
 		return store.DeviceIngestResult{}, store.ErrDeviceRevoked
 	}
+	held := map[int64]string{} // newest ingested row per device seq
+	for _, r := range f.ingested[id] {
+		held[r.Seq] = r.RowHash
+	}
 	start := 0
-	for start < len(rows) && rows[start].Seq <= d.LastSeq {
+	for start < len(rows) && rows[start].Seq <= d.LastSeq && held[rows[start].Seq] == rows[start].RowHash {
 		start++
 	}
 	fresh := rows[start:]
@@ -190,7 +194,7 @@ func (f *fakeDeviceStore) IngestDeviceAudit(_ context.Context, id uuid.UUID, pee
 	reset := false
 	if fresh[0].PrevHash == "" {
 		reset = d.LastRowHash != ""
-	} else if fresh[0].PrevHash != d.LastRowHash {
+	} else if fresh[0].Seq <= d.LastSeq || fresh[0].PrevHash != d.LastRowHash {
 		return store.DeviceIngestResult{}, store.ErrConflict
 	}
 	for i := 1; i < len(fresh); i++ {
@@ -276,7 +280,7 @@ func enrolTestDevice(t *testing.T, srv *Server, name string) (uuid.UUID, string)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("enrol: %d %s", w.Code, w.Body.String())
 	}
-	var got deviceEnrolResponse
+	var got types.DeviceEnrolResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +310,7 @@ func ackedSeq(t *testing.T, w *httptest.ResponseRecorder) int64 {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
 	}
-	var ack deviceAck
+	var ack types.DeviceAck
 	if err := json.Unmarshal(w.Body.Bytes(), &ack); err != nil {
 		t.Fatal(err)
 	}
@@ -430,11 +434,16 @@ func TestDevices_RevokedDeviceIngestIs401(t *testing.T) {
 	if w := do(t, srv, http.MethodDelete, "/api/v1/admin/devices/"+id.String(), adminToken, ""); w.Code != http.StatusNoContent {
 		t.Fatalf("revoke = %d, want 204: %s", w.Code, w.Body.String())
 	}
+	const wantRealm = `Bearer realm="wardyn-device", error="invalid_token"`
 	if w := do(t, srv, http.MethodPost, ingest, tok, string(mustJSON(chainRows(4, 1, "h3")))); w.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked device's next ingest = %d, want 401: %s", w.Code, w.Body.String())
+	} else if got := w.Header().Get("WWW-Authenticate"); got != wantRealm {
+		t.Fatalf("revoked device's next ingest WWW-Authenticate = %q, want %q", got, wantRealm)
 	}
 	if w := do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/heartbeat", tok, ""); w.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked device's heartbeat = %d, want 401: %s", w.Code, w.Body.String())
+	} else if got := w.Header().Get("WWW-Authenticate"); got != wantRealm {
+		t.Fatalf("revoked device's heartbeat WWW-Authenticate = %q, want %q", got, wantRealm)
 	}
 	// A second revoke is an act that did not happen: 404 and no second row.
 	if w := do(t, srv, http.MethodDelete, "/api/v1/admin/devices/"+id.String(), adminToken, ""); w.Code != http.StatusNotFound {

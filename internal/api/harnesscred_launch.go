@@ -153,8 +153,10 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	// runner / no capabilities / no confinement class, the governance limit
 	// below, the roster fail-closed arm and the admin-token-under-per_user arm
 	// all answer here, with no run to show for it either way.
-	run, dispatch, err := s.launchHarnessLoginRun(r.Context(), actor, hl, startURL,
-		awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName}, scope)
+	run, dispatch, err := s.launchHarnessLoginRun(r.Context(), actor, hl, loginTarget{
+		startURL: startURL, region: cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion),
+		pin: awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName}, scope: scope,
+	})
 	if err != nil {
 		// A governance limit is the acting principal's own profile refusing, not a
 		// daemon fault — answered the way launchRecordRun's caller answers it

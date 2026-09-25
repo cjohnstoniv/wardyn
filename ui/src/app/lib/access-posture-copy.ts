@@ -20,7 +20,7 @@ export const ADMIN_ACCESS_BANNER = {
 } as const;
 
 // The People step, where role mappings live (setup/steps.ts's "people").
-export const ADMIN_ACCESS_PEOPLE_STEP = "/setup?step=people";
+export const ADMIN_ACCESS_PEOPLE_STEP = "/admin/setup?step=people";
 
 // #484 — the People step's "When someone can't sign in" card
 // (setup/sign-in-help-card.tsx), frozen byte-for-byte from the same canon doc.
@@ -37,7 +37,7 @@ export const SIGNIN_HELP = {
   COUNTER: (n: number) => `${n} / 1000`,
   URL_LABEL: "Link",
   URL_PLACEHOLDER: "https://",
-  URL_HINT: 'Optional. Must start with http:// or https://. It shows as "Request access" — the address itself is public.',
+  URL_HINT: 'Optional. Must start with https://. It shows as "Request access" — the address itself is public.',
   EMPTY_NOTE: "Nothing set. People see Wardyn's own sentence and are told to ask their Wardyn admin.",
   PREVIEW_HEADING: "What a signed-out person sees",
   APPLIES_NOTE:

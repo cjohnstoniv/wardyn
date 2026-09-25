@@ -70,6 +70,9 @@ var docTierRows = []struct{ route, token string }{
 	// could widen, and that must red here rather than pass on the write's row.
 	{"GET /api/v1/agent-providers", "`GET /agent-providers`"},
 	{"PUT /api/v1/agent-providers", "`PUT /agent-providers`"},
+	// Model providers (0.8), per verb for the same reason.
+	{"GET /api/v1/model-providers", "`GET /model-providers`"},
+	{"PUT /api/v1/model-providers", "`PUT /model-providers`"},
 	// securityOps (SEC) — the eight the pre-0.7 table marked admin-only, plus
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},
@@ -162,6 +165,7 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 	{"GET /api/v1/admin/devices/enrolment-tokens", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 	{"DELETE /api/v1/admin/devices/enrolment-tokens/{id}", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
+	{"DELETE /api/v1/people/{principal}/credentials", "`DELETE /people/{principal}/credentials`"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each

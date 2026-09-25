@@ -134,8 +134,9 @@ type dispatchParams struct {
 // set RUNNING but SKIPS the agent Exec entirely (no `claude -p`) and does NOT
 // start the completion watcher (there is no agent process to wait on — the
 // watcher would otherwise mark the idle run COMPLETED the moment Wait failed).
-// The sandbox comes up idle (the container holds open via `sleep infinity`) so a
-// human can `wardyn attach <id>` and drive it. A non-interactive run is
+// The sandbox comes up idle (the container holds open via the TERM-aware idle
+// loop, AgentIdleScript / `agent-run --idle`) so a human can `wardyn attach
+// <id>` and drive it. A non-interactive run is
 // unchanged. Pair an interactive run with a never-reap policy (AutoStopAfterSec
 // < 0) or the idle reaper will stop the idle sandbox.
 //
@@ -276,7 +277,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	applyEphemeralDirsEnv(sandboxEnv, p.EphemeralDirs)
 	applyUserDriveEnv(sandboxEnv, p.Drive)
 	// The agent-side half of this run's autonomy level — see agentPolicyFor.
-	agentPolicy, apErr := s.agentPolicyFor(ctx, run)
+	agentPolicy, apErr := s.agentPolicyFor(ctx, run, p.holdLane())
 	if apErr != nil {
 		// apErr wraps s.cfg.Runner.Capabilities' own error, which can carry
 		// driver/substrate text (a Docker daemon socket error, a k8s API
@@ -286,8 +287,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, fmt.Sprintf(
 			"this run was not launched: its runner's capabilities could not be confirmed, "+
-				"so whether it can deliver this run's managed settings (autonomy level %s) is unknown",
-			run.AutonomyLevel))
+				"so whether it can deliver this run's managed settings (%s) is unknown",
+			agentPolicyBasis(run.AutonomyLevel, p.holdLane())))
 		return
 	}
 	// Caller-supplied non-secret env (p.ExtraEnv): the AWS harness login's
@@ -519,8 +520,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// knows only that no injection matched (see llmUnavailableDetail).
 			LLMUnavailableDetail: plan.llmUnavailableDetail,
 			// Nobody drives a task run, so a push its push_rules would hold
-			// for review is refused instead (push_hold.go).
-			Unattended: !p.Interactive,
+			// for review is refused instead (push_hold.go). Set only when the
+			// policy has review paths, the one thing it changes: an older
+			// proxy refuses the key, and must not refuse every task run.
+			Unattended: !p.Interactive && policy.PushRules != nil && len(policy.PushRules.RequireReviewPaths) > 0,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/

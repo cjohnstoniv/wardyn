@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,12 +31,33 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// sshHandshakeTimeoutNS bounds ONLY the pre-auth handshake (net.Conn deadline,
+// cleared once ssh.NewServerConn succeeds) — NewServerConn otherwise blocks
+// with no default timeout, and a slowloris against wardynd's pre-auth
+// listener is a containment incident, not a nuisance.
+//
+// An atomic.Int64 of nanoseconds (not a const) purely so a test can shrink it
+// instead of waiting out the real 15s to exercise the "the deadline actually
+// closes it" path, without racing the background connection goroutine
+// (sshGo) that reads it concurrently with the test's own cleanup — see
+// TestSSHHandshakeTimeout_ProductionValueUnchanged for the guard that the
+// production default itself is untouched. sshHandshakeTimeout/setSSHHandshakeTimeout
+// wrap it so call sites read like the old time.Duration var.
+var sshHandshakeTimeoutNS = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(15 * time.Second))
+	return &v
+}()
+
+func sshHandshakeTimeout() time.Duration {
+	return time.Duration(sshHandshakeTimeoutNS.Load())
+}
+
+func setSSHHandshakeTimeout(d time.Duration) (prev time.Duration) {
+	return time.Duration(sshHandshakeTimeoutNS.Swap(int64(d)))
+}
+
 const (
-	// sshHandshakeTimeout bounds ONLY the pre-auth handshake (net.Conn deadline,
-	// cleared once ssh.NewServerConn succeeds) — NewServerConn otherwise blocks
-	// with no default timeout, and a slowloris against wardynd's pre-auth
-	// listener is a containment incident, not a nuisance.
-	sshHandshakeTimeout = 15 * time.Second
 	// sshMaxAuthTries bounds per-connection auth attempts. Set explicitly
 	// (rather than relying on ssh.ServerConfig's own default-when-zero of 6)
 	// so the bound is self-documenting here, not implicit in a zero value.
@@ -366,7 +388,7 @@ func (s *Server) sshVerifiedAuth(conn ssh.ConnMetadata, key ssh.PublicKey, perms
 // handler outlives its connection.
 func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.ServerConfig) {
 	defer nc.Close()
-	_ = nc.SetDeadline(time.Now().Add(sshHandshakeTimeout))
+	_ = nc.SetDeadline(time.Now().Add(sshHandshakeTimeout()))
 
 	sconn, chans, globalReqs, err := ssh.NewServerConn(nc, cfg)
 	if err != nil {

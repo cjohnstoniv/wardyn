@@ -150,12 +150,48 @@ func (a *audited) Delete(ctx context.Context, name string) error { return a.inne
 
 func (a *audited) List(ctx context.Context) ([]string, error) { return a.inner.List(ctx) }
 
+func (a *audited) DeleteEverywhere(ctx context.Context, names []string) (int, error) {
+	return a.inner.DeleteEverywhere(ctx, names)
+}
+
+// Holders is not audited: it reads which namespaces hold a row, never a value.
+func (a *audited) Holders(ctx context.Context, names []string) (map[string][]string, error) {
+	return a.inner.Holders(ctx, names)
+}
+
 // StoresExternally forwards the wrapped store's description of the external
 // store its writes go to (the pg store in store mode), or "": metadata for the
 // setup row, never a value.
 func (a *audited) StoresExternally() string {
 	if d, ok := a.inner.(interface{ StoresExternally() string }); ok {
 		return d.StoresExternally()
+	}
+	return ""
+}
+
+// ErrNoExpirySweep is DeleteExpired's answer from a wrapper whose store cannot
+// sweep: least retention is off, and the caller must say so rather than read
+// it as nothing to delete.
+var ErrNoExpirySweep = errors.New("secretstore: this store has no expiry sweep")
+
+// DeleteExpired forwards the wrapped store's expiry sweep (pg Store.DeleteExpired),
+// or answers ErrNoExpirySweep when it has none. Without it the daily sweep never
+// reaches the store wardynd serves with, which is always wrapped.
+func (a *audited) DeleteExpired(ctx context.Context) ([]Expired, error) {
+	if sw, ok := a.inner.(interface {
+		DeleteExpired(context.Context) ([]Expired, error)
+	}); ok {
+		return sw.DeleteExpired(ctx)
+	}
+	return nil, ErrNoExpirySweep
+}
+
+// KeyService forwards the wrapped store's description of the key service that
+// wraps its writes (the pg store under WARDYN_KEK=transit), or "": metadata
+// for the setup row, never a value.
+func (a *audited) KeyService() string {
+	if d, ok := a.inner.(interface{ KeyService() string }); ok {
+		return d.KeyService()
 	}
 	return ""
 }

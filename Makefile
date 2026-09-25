@@ -259,8 +259,7 @@ test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster nee
 # routine churn. Raise it as coverage climbs.
 # scripts/cover-union.sh documents exactly what is and is not counted.
 # RATCHET (W6-01, v0.7.4 blind-verify lane): the coordinator's W5 final-tree
-# `make ci` measured the union at 78.3% at tree 532ca5d4 (see
-# local/v074/evidence/w5-ci2/make-ci.log:199) — 3.3 points above the old 75
+# `make ci` measured the union at 78.3% at tree 532ca5d4 — 3.3 points above the old 75
 # floor, slack wide enough that a real coverage regression could land and
 # still pass. Raised to 78, a margin below that measurement rather than the
 # measurement itself. Never lower it without a coverage regression forcing
@@ -289,9 +288,10 @@ cover-union: ## Enforce COVER_MIN over the unit/docker/k8s profiles already in t
 # race detector over the concurrency proofs CI gates on). Still not a full CI
 # replica: the live-service jobs need a
 # daemon or service — conformance, conformance-k8s, envbuild-integration,
-# helm-install-test, the Playwright ui-e2e, desktop-envelope and trivy — and
-# run separately with those prerequisites; nightly.yml's multi-arch build
-# (buildx-smoke) too. See RELEASING.md and ci.yml for their local setup.
+# helm-install-test (with its desktop envelope), the Playwright ui-e2e and
+# trivy — and run separately with those prerequisites; nightly.yml's
+# multi-arch build (buildx-smoke) too. See RELEASING.md and ci.yml for their
+# local setup.
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
@@ -309,7 +309,7 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 # 20m, not 10m: this suite is no longer the runner-contract cases alone. 0.7.5's
 # boot-egress measurement boots the REAL claude-code image, walks its first screens
 # through a PTY and then waits out two fixed settle sleeps on the proxy's decision
-# stream — 74-192 s measured (local/v075/evidence/agent-boot-egress), against its own
+# stream — 74-192 s measured, against its own
 # 6m context. A -timeout expiry is a panic that discards every verdict already
 # produced, so the ceiling belongs to the case that takes minutes, not the ones that
 # take seconds. The two :local images it needs (wardyn/wardyn-proxy,
@@ -326,8 +326,8 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 # at all. A -timeout expiry is a panic that discards every verdict already produced, so this is
 # headroom for slow evictions, not a licence for a slower suite (pinned by
 # TestEphemeralCaseBudgetFitsTheMakefileTimeout, which reads BOTH numbers). The margin over that
-# 24m is the REST of the suite: a green k8s run is 457 s of other cases
-# (local/v075/evidence/k8s-emptydir/green-conformance-k8s.log), and a ceiling set to the eviction
+# 24m is the REST of the suite: a green k8s run is 457 s of other cases,
+# and a ceiling set to the eviction
 # case alone loses the whole run whenever the pathological case and an ordinary suite land
 # together.
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
@@ -543,6 +543,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-install-sh.sh
 	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
+	./scripts/test-nightly-migration-merge-check.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
 	./scripts/test-reset-capture-hint.sh
@@ -628,6 +629,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "kind: NetworkPolicy" || { echo "chart rendered no NetworkPolicy (default-on L0 egress control)"; exit 1; }; \
 	echo "$$out" | grep -q "runAsNonRoot: true" || { echo "chart rendered no runAsNonRoot: true securityContext"; exit 1; }; \
 	echo "$$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }; \
+	echo "$$out" | grep -q "terminationGracePeriodSeconds: 70$$" || { echo "chart no longer renders terminationGracePeriodSeconds: 70 — the Kubernetes default of 30s SIGKILLs wardynd's orderly stop (HTTP 15s + detached work 35s + audit flush 15s) mid-teardown"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" || { echo "chart rendered no WARDYN_ADMIN_TOKEN — the API would 401 every request"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_RECORDING_STORE" | grep -q 'value: "off"' || { echo "chart no longer pins WARDYN_RECORDING_STORE=off on a stock install — with wardynd's pg default it silently persists every PTY asciicast into Postgres, forever, while values.yaml/README say recording is off (and 0.7.0's fs + empty-dir spelling crash-looped the pod)"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_RECORDING_DIR" && { echo "chart set WARDYN_RECORDING_DIR without persistence — an empty value keeps wardynd's default, which writes to the read-only root FS"; exit 1; }; \
@@ -646,6 +648,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
+	echo "$$out" | grep -q "terminationGracePeriodSeconds: 90" || { echo "terminationGracePeriodSeconds is not carried into the pod spec"; exit 1; }; \
 	echo "$$out" | grep -q 'value: "/data/recordings"' || { echo "WARDYN_RECORDING_DIR does not follow the persistent mount"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_AGE_KEY" || { echo "inline secrets.ageKey is not injected — every stored secret dies on restart"; exit 1; }; \
 	echo "$$out" | grep -q "name: wardyn-oidc" || { echo "extraEnv did not render (secret-bearing env has no secretKeyRef path)"; exit 1; }; \
@@ -715,6 +718,14 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: false')" = "2" ] || { echo "store mode turned on the API-server token automount — the Vault token is a separate projected volume"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv 2>&1 | grep -q "needs secretStore.vault.addr" || { echo "chart no longer refuses vaultkv with no Vault address"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 2>&1 | grep -q "needs secretStore.vault.role" || { echo "chart no longer refuses Kubernetes auth with no Vault role"; exit 1; }
+	@# #682: store mode with secretFiles is the env-free install — no secret-carrying var (cmd/wardynd secretFileSettings) reaches the pod as a value or a secretKeyRef, and no age key is wired at all.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn --set secretFiles.enabled=true) || { echo "store mode with secretFiles.enabled no longer renders"; exit 1; }; \
+	dep=$$(echo "$$out" | awk '/^---/{r=0} /^kind: Deployment$$/{r=1} r'); \
+	echo "$$dep" | grep -q "kind: Deployment" || { echo "store mode with secretFiles.enabled rendered no Deployment — the absence checks below would be vacuous"; exit 1; }; \
+	echo "$$dep" | grep -q "secretKeyRef" && { echo "store mode with secretFiles.enabled still renders a secretKeyRef env var"; exit 1; }; \
+	echo "$$dep" | grep -qE 'name: WARDYN_(PG_DSN|PG_MIGRATE_DSN|ADMIN_TOKEN|AGE_KEY|OIDC_CLIENT_SECRET|DIRECTORY_CLIENT_SECRET|AUDIT_SINKS|ORG_ENROLMENT_TOKEN|VAULT_TOKEN)$$' && { echo "store mode with secretFiles.enabled renders a secret-carrying var as a value"; exit 1; }; \
+	echo "$$dep" | grep -q "name: WARDYN_AGE_KEY" && { echo "store mode wired an age key (value or _FILE) — it needs none"; exit 1; }; \
+	for v in PG_DSN ADMIN_TOKEN; do echo "$$dep" | grep -A1 "name: WARDYN_$${v}_FILE" | grep -q 'value: "/etc/wardyn/secrets/' || { echo "store mode with secretFiles.enabled did not point WARDYN_$${v}_FILE into the boot-secrets mount"; exit 1; }; done
 	@# Two Vault roles (#646): rolePlatform renders WARDYN_VAULT_ROLE_PLATFORM, and a second role that separates nothing is a render refusal.
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn-credentials --set secretStore.vault.rolePlatform=wardyn-platform | grep -A1 "name: WARDYN_VAULT_ROLE_PLATFORM" | grep -q 'value: "wardyn-platform"' || { echo "secretStore.vault.rolePlatform did not render WARDYN_VAULT_ROLE_PLATFORM"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn --set secretStore.vault.rolePlatform=wardyn 2>&1 | grep -q "needs secretStore.vault.auth=kubernetes and a role other than" || { echo "chart no longer refuses a platform role equal to the credentials role"; exit 1; }
@@ -1069,6 +1080,7 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	docker compose -f $(COMPOSE_FILE) config >/dev/null
 	WARDYN_CI_TOOLS_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.ci.yaml config >/dev/null
 	WARDYN_VAULT_ADDR=https://vault.example:8200 WARDYN_VAULT_TOKEN_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.vault.yaml config >/dev/null
+	WARDYN_VAULT_ADDR=https://vault.example:8200 WARDYN_VAULT_TOKEN_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.transit.yaml config >/dev/null
 	@# The desktop entrypoint too: it `include:`s the base file, and an include
 	@# that collides with the imported stack only fails when Compose RESOLVES it —
 	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).

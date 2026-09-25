@@ -86,6 +86,7 @@ declare -A ALLOWLIST=(
   ["internal/db/appclock_test.go"]=3
   ["internal/egress/egress_test.go"]=1
   ["internal/egress/proxy/llm_unavailable_detail_test.go"]=3
+  ["internal/egress/proxy/tool_rules_test.go"]=1
   ["internal/runner/k8s/drives_test.go"]=2
   ["internal/types/types_test.go"]=1
   ["pkg/client/client_more_test.go"]=2
@@ -96,44 +97,20 @@ declare -A ALLOWLIST=(
   ["ui/e2e/record-loop.spec.ts"]=4
   ["ui/e2e/recording.spec.ts"]=2
   ["ui/e2e/workspace-egress-tiers.spec.ts"]=3
-  ["ui/src/app/components/attach-terminal-session.test.tsx"]=1
-  ["ui/src/app/components/attach-terminal.test.tsx"]=1
-  ["ui/src/app/components/screens/approvals-credential-kind.test.tsx"]=1
-  ["ui/src/app/components/screens/approvals.test.tsx"]=1
-  ["ui/src/app/components/screens/audit.test.tsx"]=3
-  ["ui/src/app/components/screens/drives/allocations.test.tsx"]=5
-  ["ui/src/app/components/screens/drives/drives-screen.test.tsx"]=3
-  ["ui/src/app/components/screens/governance/governance-screen.test.tsx"]=4
-  ["ui/src/app/components/screens/governance/profile-editor.test.tsx"]=2
+  # #195-b: every ui/src file above this line was converted to test-clock-relative
+  # values (aheadByHours) and dropped out of this allowlist entirely (0 literal
+  # dates left). These three keep a literal because it is genuinely
+  # display-only passthrough (never compared to the clock — see the
+  # "// passthrough, never compared to the clock" notes at each site): an
+  # older daemon's opaque `action` sentence rendered verbatim, with no
+  # `deadline` field for the client to parse or grade. model-access-banner.
+  # test.tsx's count of 2 also includes one match that isn't data at all: a
+  # code comment (line 147) that names the OLD literal in prose, explaining
+  # why the test below it now uses aheadByHours instead — matched by this
+  # script's regex incidentally, same as any other date-shaped text.
   ["ui/src/app/components/screens/new-run/new-run-rail.test.tsx"]=1
-  ["ui/src/app/components/screens/permissions.test.tsx"]=1
-  ["ui/src/app/components/screens/policies.test.tsx"]=2
-  ["ui/src/app/components/screens/recording.test.tsx"]=2
-  ["ui/src/app/components/screens/run-detail-ssh.test.tsx"]=3
-  ["ui/src/app/components/screens/run-detail.test.tsx"]=1
-  ["ui/src/app/components/screens/run-detail/failure-block.test.tsx"]=3
-  ["ui/src/app/components/screens/run-detail/focus-mode.test.tsx"]=6
-  ["ui/src/app/components/screens/run-detail/widgets/effective-policy.test.tsx"]=1
-  ["ui/src/app/components/screens/run-detail/widgets/widgets.test.tsx"]=2
-  ["ui/src/app/components/screens/runs/run-card.test.tsx"]=1
-  ["ui/src/app/components/screens/setup/access-panel.test.tsx"]=8
-  ["ui/src/app/components/screens/setup/step-bodies.test.tsx"]=2
-  ["ui/src/app/components/screens/setup/steps.test.ts"]=2
-  ["ui/src/app/components/screens/ssh-keys.test.tsx"]=5
-  ["ui/src/app/components/screens/workspace-detail/session-helpers.test.ts"]=12
-  ["ui/src/app/components/wardyn/audit-decision.test.tsx"]=1
-  ["ui/src/app/components/wardyn/live-approvals.test.tsx"]=2
   ["ui/src/app/components/wardyn/model-access-banner.test.tsx"]=2
-  ["ui/src/app/lib/api/approvals.wire.test.ts"]=1
-  ["ui/src/app/lib/api/audit.test.ts"]=1
-  ["ui/src/app/lib/api/health.test.ts"]=1
-  ["ui/src/app/lib/api/integrations.test.ts"]=2
-  ["ui/src/app/lib/api/runs.test.ts"]=2
-  ["ui/src/app/lib/api/ssh-keys.test.ts"]=2
-  ["ui/src/app/lib/api/workspaces.test.ts"]=2
-  ["ui/src/app/lib/capabilities.test.ts"]=1
   ["ui/src/app/lib/model-access.test.ts"]=5
-  ["ui/src/app/lib/types/approvals.test.ts"]=2
 )
 
 fail=0

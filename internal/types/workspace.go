@@ -54,6 +54,12 @@ type WorkspaceLLMCred struct {
 	// IntegrationRef names the Integration (SiteConfig.Integrations[i].ID) this
 	// workspace's model/harness access resolves through.
 	IntegrationRef string `json:"integration_ref,omitempty"`
+	// ProviderRef pins a run on this workspace to one model provider
+	// (SiteConfig.ModelProviders, by id). Beside IntegrationRef, which it
+	// replaces once the AI-kind integrations retire. A pin the run's owner is
+	// not granted, or that is off or does not serve the run's agent, refuses
+	// the run — it never falls through to another provider.
+	ProviderRef string `json:"provider_ref,omitempty"`
 }
 
 // UnmarshalJSON decodes WorkspaceLLMCred, tolerating the pre-Integration wire
@@ -67,11 +73,12 @@ type WorkspaceLLMCred struct {
 func (c *WorkspaceLLMCred) UnmarshalJSON(b []byte) error {
 	var wire struct {
 		IntegrationRef string `json:"integration_ref"`
+		ProviderRef    string `json:"provider_ref"`
 	}
 	if err := json.Unmarshal(b, &wire); err != nil {
 		return err
 	}
-	c.IntegrationRef = wire.IntegrationRef
+	c.IntegrationRef, c.ProviderRef = wire.IntegrationRef, wire.ProviderRef
 	return nil
 }
 

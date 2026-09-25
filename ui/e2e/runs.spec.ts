@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { test, expect, ADMIN_TOKEN, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
 import { RUN, RUN_COCKPIT, RUNS_WAIT } from "../src/app/components/wardyn/copy";
+import { RUN_WAIT } from "../src/app/components/wardyn/copy/run-wait";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
@@ -547,6 +548,45 @@ test.describe("Run header — the failure-hint chip survives a narrow viewport",
     // The registry's own words are what name the fix, so they must survive to
     // the title even though the chip cannot hold them.
     await expect(header.getByTitle(new RegExp(`${STUCK_IMAGE_PULL} .*pull access denied`))).toBeVisible();
+  });
+
+  // #725/F3 — the header's status chip is max-w-[160px] shrink truncate
+  // exactly so a long sentence can never force the box wider than its own
+  // box (the sentence itself rides only the `title`, where width is free).
+  // An unrecognised reason token falls through statusDetailChip's default
+  // arm ("Waiting: <reason>") with no length limit of its own — the one
+  // arm that can still carry an arbitrarily long string into the chip.
+  test("an unrecognised, long startup reason never widens the chip past its own box", async ({ page }) => {
+    const longReason = "SomeVeryLongUnrecognisedSubstrateReasonTokenNeverSeenBeforeInThisRegistry";
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 1") {
+        json.status_detail = `agent: ${longReason}`;
+        json.status_reason = longReason;
+      }
+      await route.fulfill({ response, json });
+    });
+    await openRuns(page);
+    await page.getByText("e2e fixture 1").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+
+    const header = page.getByTestId("run-summary-header");
+    // The chip's visible text is the SHORT register (statusDetailChip: just
+    // the reason token, "Waiting: <reason>") — its `title` carries the full
+    // SENTENCE register instead (statusDetailSentence: the raw "component:
+    // reason" line), which is why the two differ here.
+    await expect(header.getByText(`Waiting: ${longReason}`, { exact: true })).toBeVisible();
+    const chip = header.getByTitle(`Waiting: agent: ${longReason}`);
+    await expect(chip).toBeVisible();
+    const overflow = await chip.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+    expect(overflow.scrollWidth, "status chip scrollWidth").toBeLessThanOrEqual(overflow.clientWidth);
+    // The box itself stays capped too: without max-w-[160px] the chip grows to
+    // fit the whole reason and the overflow check above still passes.
+    const chipBox = await chip.boundingBox();
+    expect(chipBox, "status chip boundingBox").not.toBeNull();
+    expect(chipBox!.width, "status chip width").toBeLessThanOrEqual(160);
   });
 
   test("no horizontal overflow at 420px, Kill stays in the viewport, and the hint chip is still visible", async ({
@@ -1168,14 +1208,17 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
       await expect(waitRow.getByText(RUNS_WAIT.NONE)).toHaveCount(0);
 
       releaseApprovals();
-      await page.unroute("**/api/v1/approvals**");
+      // unrouteAll (not the narrower unroute) so an in-flight handler's
+      // rejection after the route is torn down is swallowed, not surfaced as
+      // an unhandled rejection — the same polled-route fix as line ~758.
+      await page.unrouteAll({ behavior: "ignoreErrors" });
 
       // Resolved, and clean — Checking… is gone and the group settles on the
       // one thing it was already allowed to say.
       await expect(waitRow.getByText(RUNS_WAIT.CHECKING)).toHaveCount(0);
       await expect(waitRow.getByText(RUNS_WAIT.STARTING(1))).toBeVisible();
     } finally {
-      await page.unroute("**/api/v1/approvals**").catch(() => {});
+      await page.unrouteAll({ behavior: "ignoreErrors" });
       sql(`DELETE FROM agent_runs WHERE id IN ('${starting}','${clean}')`);
     }
   });
@@ -1235,6 +1278,70 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
       await expect(card.getByText(/AWS sign-in/)).toBeVisible();
       await expect(card.getByText(/was held/)).toHaveCount(0);
     } finally {
+      sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
+    }
+  });
+
+  // #725/F1 — an Azure DevOps capability escalation (a tool_call row with
+  // grant_id + requested_scope.lane "azure_devops") releases its OWN hold
+  // after 4 minutes (isHeld's ADO_HOLD_WINDOW_MS arm — the same window
+  // ado-capability-card.tsx's own stillHeld() already used), unlike every
+  // other tool_call, held for as long as it is PENDING (#509). A RUNNING run
+  // (not WAITING_FOR_CONFIRMATION, so attention is graded purely off the
+  // approval signal) with a 5-minute-old row must therefore read as a plain
+  // passive pending: no Review button, no "sandbox held" wording, and no
+  // pin to the Needs-you lane.
+  test("an Azure DevOps capability tool_call at 5 minutes reads as a passive pending, not a live hold", async ({ page }) => {
+    const solo = await createGroupRun(page, "e2e ado hold solo", "ado hold solo run");
+    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${solo}'`);
+
+    // Hermetic (fixtures.ts's `sql` inserts through a real column: grant_id
+    // is a UUID FK onto credential_grants, which no e2e fixture seeds) — the
+    // same route-splice technique approvals-ado.spec.ts's escalationRow
+    // uses, rather than a real approvals row.
+    const requestedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    const escalation = {
+      id: randomUUID(),
+      run_id: solo,
+      grant_id: randomUUID(),
+      kind: "tool_call",
+      requested_scope: {
+        lane: "azure_devops",
+        provider_id: "e2e-row-1",
+        org: "acme",
+        grant_id: "e2e-grant-1",
+        capability: "pr",
+        repo: "payments-api",
+        tool: "Azure DevOps",
+        cmd: "open a pull request",
+      },
+      state: "PENDING",
+      requested_at: requestedAt,
+    };
+    await page.route("**/api/v1/approvals*", async (route) => {
+      const req = route.request();
+      if (req.method() !== "GET") return route.fallback();
+      const url = new URL(req.url());
+      const state = url.searchParams.get("state");
+      const response = await route.fetch();
+      const body = (await response.json()) as unknown[];
+      const pending = state === "PENDING" || state === "" ? [...body, escalation] : body;
+      await route.fulfill({ response, json: pending });
+    });
+
+    try {
+      await openRuns(page);
+      await expect(page.getByRole("region", { name: "Needs you" })).toHaveCount(0);
+      const card = page.getByTestId("run-card").filter({ hasText: "e2e ado hold solo" });
+      await expect(card).toBeVisible();
+      await expect(card.getByText(RUN_WAIT.waiting(1))).toBeVisible();
+      await expect(card.getByText(RUN_WAIT.waitingHeld(1))).toHaveCount(0);
+      await expect(card.getByRole("button", { name: "Review" })).toHaveCount(0);
+    } finally {
+      // unrouteAll (not the narrower unroute) so an in-flight handler's
+      // rejection after the route is torn down is swallowed, not surfaced as
+      // an unhandled rejection — the same polled-route fix as line ~758.
+      await page.unrouteAll({ behavior: "ignoreErrors" });
       sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
     }
   });

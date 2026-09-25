@@ -19,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -286,13 +287,15 @@ func canonicalGrantValue(capability, value string) (string, error) {
 			return "", fmt.Errorf("value: %q is not a workspace id — a workspace capability names a workspace by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v)
 		}
 		return id.String(), nil
-	case capSecret, capIntegration, capWorkspaceProvider:
+	case capSecret, capIntegration, capWorkspaceProvider, capModelProvider:
 		grammar, what := secretNameRE, "secret name"
 		switch capability {
 		case capIntegration:
 			grammar, what = integrationRefRE, "integration id"
 		case capWorkspaceProvider:
 			grammar, what = integrationRefRE, "git provider id"
+		case capModelProvider:
+			grammar, what = modelProviderIDPattern, "model provider id"
 		}
 		if !oidc.ASCIIOnly(v) {
 			return "", fmt.Errorf("value: %q is not a %s — one is written in lowercase ASCII, so this value can never match a stored row", v, what)
@@ -444,14 +447,35 @@ type meCapabilitiesResponse struct {
 // nil-vs-empty distinction capabilitySubjects documents: a pre-0.6 cookie or a
 // session with no group claim at all must read as "can't tell yet", not as
 // silently holding no group grants.
+//
+// Grants is paginated by ?limit=&offset= (see parseListPage), same contract as
+// every other list route (#657), though ListCapabilityGrantsFor's own doc
+// explains why a deployment's grant list rarely truncates in practice: this is
+// the uniform contract, not evidence the table is expected to grow unbounded.
 func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
-	users, groups, stale := capabilitySubjects(r.Context())
-	grants, err := s.cfg.Store.ListCapabilityGrantsFor(r.Context(), users, groups)
+	ctx := r.Context()
+	users, groups, stale := capabilitySubjects(ctx)
+	page, ok := parseListPage(w, r, defaultListLimit)
+	if !ok {
+		return
+	}
+	// CapabilityGrantsForPager, not the plain Pager: the query is already
+	// scoped to users/groups (ListCapabilityGrantsFor), so an absent
+	// implementation falls back safely to the full fetch + in-Go window.
+	var pageFn func(store.Page) ([]types.CapabilityGrant, error)
+	if pg, capable := s.cfg.Store.(store.CapabilityGrantsForPager); capable {
+		pageFn = func(p store.Page) ([]types.CapabilityGrant, error) {
+			return pg.ListCapabilityGrantsForPage(ctx, users, groups, p)
+		}
+	}
+	grants, truncated, err := pagedItems(page, pageFn, func() ([]types.CapabilityGrant, error) {
+		return s.cfg.Store.ListCapabilityGrantsFor(ctx, users, groups)
+	})
 	if err != nil {
 		writeServerError(w, r, "list capability grants", err)
 		return
 	}
-	enf, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())
+	enf, err := s.cfg.Store.GetCapabilityEnforcement(ctx)
 	if err != nil {
 		writeServerError(w, r, "get capability enforcement", err)
 		return
@@ -462,6 +486,9 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 	// shipping an empty string. GET /permissions (operatorOnly) still carries it.
 	for i := range grants {
 		grants[i].CreatedBy = ""
+	}
+	if truncated {
+		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
 	writeJSON(w, http.StatusOK, meCapabilitiesResponse{
 		Grants:              grants,

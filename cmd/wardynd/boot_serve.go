@@ -49,6 +49,8 @@ import (
 //     via the recordingSweepable interface in adapters.go; a future
 //     object-storage backend would use its own bucket lifecycle rules
 //     instead).
+//   - Credential expiry sweeper: delete stored sign-ins past their expires_at,
+//     daily (api.Server.SweepExpiredCredentials).
 //   - Boot-time reconciliation (C3): re-derive the state of any run left
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
@@ -113,6 +115,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// holding credentials for every run it ever dispatched. Unconditional — a
 	// no-op without a mask registry, and there is nothing to configure.
 	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval) })
+	go goSafe("credential.sweeper", func() { runCredentialSweeper(rootCtx, srv, credentialSweepInterval) })
 
 	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot
 	// is independent of s.cfg.Runner (its own doc comment, internal/api/reconcile.go)
@@ -273,13 +276,19 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		return fmt.Errorf("serve: %w", err)
 	}
 
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), api.HTTPShutdownTimeout)
 	defer shutCancel()
 	if internalSrv != nil {
 		_ = internalSrv.Shutdown(shutCtx)
 	}
-	if err := httpSrv.Shutdown(shutCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+	// A timed-out HTTP drain (shutErr != nil) must not skip what follows: an
+	// early return here would answer the "shutdown is done" question honestly
+	// for HTTP, but still drop the run.kill row and both revocations the same
+	// way a SIGKILL would (see WaitBackground below), on precisely the slow
+	// shutdown where they matter most.
+	shutErr := httpSrv.Shutdown(shutCtx)
+	if shutErr != nil {
+		slog.Warn("wardynd: HTTP drain hit its budget", slog.Any("err", shutErr))
 	}
 
 	// httpSrv.Shutdown only waits for in-flight HANDLERS to return — it knows
@@ -302,5 +311,8 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 
 	// fan.Close() is the deferred drain above — reached from here and from the
 	// serve-error return alike.
+	if shutErr != nil {
+		return fmt.Errorf("shutdown: %w", shutErr)
+	}
 	return nil
 }

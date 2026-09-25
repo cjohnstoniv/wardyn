@@ -10,6 +10,7 @@
 package api
 
 import (
+	"cmp"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -729,6 +730,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}
+	imageOK := s.claudeSignInImageOK(r.Context(), cfg.ModelProviders)
 	// SEAM-1: serializes this read-modify-write (it carries the STORED
 	// Integrations forward from its own read, below) against the three
 	// integration-write handlers' own RMWs on the same document
@@ -776,8 +778,16 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
 	// After the carry-forward: the roster's defaults are checked against the
-	// providers this document will actually hold, whichever side was named.
-	if err := validateDefaultProviders(cfg.AgentProviders, cfg.ModelProviders); err != nil {
+	// providers this document will actually hold, whichever side was named; the
+	// sign-in help link against the stored one (signInHelpURLHTTPS).
+	if err := cmp.Or(validateDefaultProviders(cfg.AgentProviders, cfg.ModelProviders),
+		signInHelpURLHTTPS(cfg.SignInHelpURL, existing.SignInHelpURL)); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		return
+	}
+	// E4 against the stored block: this door is the one re-applied on every
+	// boot, so a subscription it already holds must never be refused here.
+	if err := validateModelProviderImagePrereqs(cfg.ModelProviders, existing.ModelProviders, imageOK); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}
@@ -796,6 +806,13 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		narrowed = &n
+	}
+	// Rule 8 on this door too: it mints UIDs and accepts address changes the
+	// same as PUT /model-providers, so it purges the same way, before the save.
+	invalidated, err := s.purgeProviderCredentials(r.Context(), existing.ModelProviders, cfg.ModelProviders)
+	if err != nil {
+		writeServerError(w, r, "purge model provider credentials", err)
+		return
 	}
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
 	if err != nil {
@@ -844,6 +861,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// row it always wrote.
 	if saved.ModelProviders != nil {
 		datum["model_providers"] = enabledModelProviderCount(saved)
+	}
+	if saved.ModelProviders != nil || invalidated > 0 {
+		datum["per_user_credentials_invalidated"] = invalidated
 	}
 	// Only when the body NAMED the block — see the count above.
 	if narrowed != nil {
