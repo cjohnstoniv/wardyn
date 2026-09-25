@@ -190,12 +190,8 @@ func (s *Server) routes() chi.Router {
 			r.Post("/runs/preflight", s.handlePreflightRun)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
-			// The run's end and wait (#569): owner or SUPER admin, clamped to the
-			// run's captured limits — handleSetRunEndAndWait.
-			r.Patch("/runs/{id}", s.handleSetRunEndAndWait)
+			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
-			r.Post("/runs/{id}/kill", s.handleKillRun)
-			r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
@@ -693,6 +689,16 @@ func (s *Server) routes() chi.Router {
 
 	s.mountUI(r)
 	return r
+}
+
+// mountRunLeaseRoutes registers a run's end/wait change, its kill and its
+// revive on r — carved out of routes() purely for funlen.
+func (s *Server) mountRunLeaseRoutes(r chi.Router) {
+	// The run's end and wait (#569): owner or SUPER admin, clamped to the
+	// run's captured limits — handleSetRunEndAndWait.
+	r.Patch("/runs/{id}", s.handleSetRunEndAndWait)
+	r.Post("/runs/{id}/kill", s.handleKillRun)
+	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go)
 }
 
 // mountAccountRoutes registers the caller's own account surfaces — per-user
