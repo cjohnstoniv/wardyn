@@ -22,7 +22,7 @@ import (
 //
 // A table over doors rather than a test per door, because the kind is worth
 // nothing if one of them answers differently: six doors, six legs each. Three
-// of the six route around denyMemberRequest entirely, and three of those clone
+// of the six route around denyUserRequest entirely, and three of those clone
 // SERVER-SIDE (scan, build) or re-point what will be cloned (update), which is
 // why "a member may only reach their own workspace" is not the same answer as
 // "a member may bring work from this provider".
@@ -99,7 +99,7 @@ func assertNotRefused(t *testing.T, w *httptest.ResponseRecorder, why string) {
 	}
 }
 
-// ─── the doors ────────────────────────────────────────────────────────────────
+// the doors
 
 // providerDoor is one way a repository reaches a clone. fire drives ONE request
 // through it under the given capability rows and site config, as the given
@@ -136,14 +136,14 @@ func providerWorkspaceDoor(name string, fire func(t *testing.T, srv *Server, st 
 		name: name,
 		sub:  ownerMemberSub,
 		member: func(t *testing.T) *http.Cookie {
-			return ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+			return ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 		},
 		operator: func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
 		},
 		fire: func(t *testing.T, cs *capStore, sc types.SiteConfig, session *http.Cookie) (*Server, *httptest.ResponseRecorder) {
 			t.Helper()
-			srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+			srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 			st.caps, st.siteConfig = cs, sc
 			return srv, fire(t, srv, st, session)
 		},
@@ -166,7 +166,7 @@ func providerDoors() []providerDoor {
 	}}
 	const wsBody = `{"name":"app","sources":[{"type":"repo","source":"` + capProviderRepo + `"}]}`
 	return []providerDoor{
-		// The LEGACY single `repo` field, which reaches neither denyMemberRequest
+		// The LEGACY single `repo` field, which reaches neither denyUserRequest
 		// nor the resolved-spec gate and is nonetheless cloned by the sandbox,
 		// broker-minted for and unioned into the run's egress.
 		providerRunDoor("POST /runs (legacy repo field)",
@@ -231,7 +231,7 @@ func TestCapabilityWorkspaceProviderAtEveryDoor(t *testing.T) {
 				assertNotRefused(t, w, "a member holding the row's id may bring work from it")
 			})
 
-			// THE UPGRADE PIN: no provider rows is legacy open mode, and must be
+			// The upgrade pin: no provider rows is legacy open mode, and must be
 			// byte-identical to 0.7.1.
 			t.Run("no provider rows: not refused", func(t *testing.T) {
 				_, w := door.fire(t, &capStore{enf: capProviderEnforced()}, types.SiteConfig{}, door.member(t))
@@ -244,7 +244,7 @@ func TestCapabilityWorkspaceProviderAtEveryDoor(t *testing.T) {
 			})
 
 			// A row that CLAIMS the host and refuses anyway still names itself, so
-			// denyMemberWorkspaceProviders keys on it (see that helper's own doc:
+			// denyUserWorkspaceProviders keys on it (see that helper's own doc:
 			// keying on providerFor's admission BIT would skip exactly this case).
 			// At the DOOR, though, ADMISSION reaches it first (0.7.2, A3) and
 			// refuses it outright — a disabled row is the admin saying "off",
@@ -312,11 +312,11 @@ func TestCapabilityWorkspaceProviderUnclaimedHostIsANoOp(t *testing.T) {
 // half-onboards a workspace, or leaves a re-pointed source behind, is worse than
 // no gate at all.
 func TestCapabilityWorkspaceProviderRefusalCostsNoState(t *testing.T) {
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	const wsBody = `{"name":"app","sources":[{"type":"repo","source":"` + capProviderRepo + `"}]}`
 
 	t.Run("POST /workspaces writes nothing", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.caps, st.siteConfig = &capStore{enf: capProviderEnforced()}, capProviderSite()
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", member, wsBody)
 		assertProviderDenied(t, srv, w)
@@ -326,7 +326,7 @@ func TestCapabilityWorkspaceProviderRefusalCostsNoState(t *testing.T) {
 	})
 
 	t.Run("PUT /workspaces/{id} leaves the stored sources alone", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.caps, st.siteConfig = &capStore{enf: capProviderEnforced()}, capProviderSite()
 		id := st.put(types.Workspace{OwnedBy: ownerMemberSub})
 		before, _ := st.GetWorkspace(t.Context(), id)
@@ -344,7 +344,7 @@ func TestCapabilityWorkspaceProviderRefusalCostsNoState(t *testing.T) {
 	// The same PUT from a member who HOLDS the row lands, which is what makes
 	// the assertion above mean "refused" rather than "this fixture never writes".
 	t.Run("PUT /workspaces/{id} with the grant does re-point them", func(t *testing.T) {
-		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 		st.caps = &capStore{enf: capProviderEnforced(), grants: capProviderAllow(ownerMemberSub)}
 		st.siteConfig = capProviderSite()
 		id := st.put(types.Workspace{OwnedBy: ownerMemberSub})

@@ -66,13 +66,14 @@ import { Field, Switch } from "../../wardyn/form-primitives";
 import { useOperator } from "../../wardyn/operator-context";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TruncatedNote } from "../../wardyn/states";
-import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText } from "../permissions";
+import { SUBJECTS, SUBJECT_LABEL, Segmented, subjectText, type PickableSubjectType } from "../permissions";
 import { Note, enforcementGloss, modeText, modeTone, question, sizeText } from "./display";
 
 // PREVIEW_RESULT's {tier}, frozen in §7.3's table rather than in prose.
 const TIER_LABEL: Record<CapabilitySubjectType, string> = {
   user: DRIVES.PREVIEW_TIER_USER,
   group: DRIVES.PREVIEW_TIER_GROUP,
+  user_type: DRIVES.PREVIEW_TIER_USER_TYPE,
   all: DRIVES.PREVIEW_TIER_ALL,
 };
 
@@ -235,7 +236,7 @@ export function AllocationsBlock({
               className={buttonVariants({ variant: "outline" })}
               onClick={(e) => {
                 e.preventDefault();
-                if (toRemove) remove(toRemove);
+                if (toRemove) void remove(toRemove);
               }}
             >
               {busy ? <Loader2 className="size-4 animate-spin" /> : null}
@@ -302,7 +303,7 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
    *  drive editor is open, so a note that outlived it would be a note about
    *  fields that are gone. */
   const [replaced, setReplaced] = React.useState(false);
-  const [subjectType, setSubjectType] = React.useState<CapabilitySubjectType>("group");
+  const [subjectType, setSubjectType] = React.useState<PickableSubjectType>("group");
   const [subject, setSubject] = React.useState("");
   const [driveID, setDriveID] = React.useState("");
   const [priority, setPriority] = React.useState("0");

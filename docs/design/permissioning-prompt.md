@@ -184,6 +184,8 @@ Byte-exact source of truth: `ui/src/app/lib/permissions-copy.ts`. Screens import
 | `image` | Base images | **widens** | Which base images a member may name on a run of their own. |
 | `agent` | Agents | narrows | Which agents a member may launch a run with. *(0.7 ADDITION, not from this round — see below.)* |
 | `integration` | Model providers | narrows | Which model provider a member may name on a run of their own. *(0.7 ADDITION.)* |
+| `feature` | SSH keys and API tokens | narrows | Whether a member may add an SSH key or mint an API token. *(0.8 DRAFT, #614.)* |
+| `policy` | Stored policies | narrows | Which stored policies a member may select for a run of their own. *(0.8 DRAFT, #613.)* |
 
 | kind | `valueLabel` | `valueHint` |
 |---|---|---|
@@ -193,6 +195,8 @@ Byte-exact source of truth: `ui/src/app/lib/permissions-copy.ts`. Screens import
 | `image` | Image ref | The exact image ref, registry and tag included. Use * for every image. |
 | `agent` | Agent | The exact agent id, spelled as --agent takes it. Use * for every agent. |
 | `integration` | Integration | The exact integration id. Use * for every integration. |
+| `feature` | Feature | ssh_key or api_token. Use * for both. |
+| `policy` | Policy | The policy's id. Use * for every policy. |
 
 **`unenforced`** — the off-state body, per kind (this is the row that proves the default posture is
 0.5 byte-for-byte):
@@ -205,6 +209,8 @@ Byte-exact source of truth: `ui/src/app/lib/permissions-copy.ts`. Screens import
 | `image` | Members can't name their own base image at all. Runs use what the workspace carries. |
 | `agent` | Members can launch a run with any agent this deployment carries. |
 | `integration` | Members can name any model provider integration on a run they launch. |
+| `feature` | Members can add SSH keys and mint API tokens. |
+| `policy` | Members can select any stored policy for a run they launch. |
 
 **`enforced`** — the on-state body, per kind:
 
@@ -216,6 +222,8 @@ Byte-exact source of truth: `ui/src/app/lib/permissions-copy.ts`. Screens import
 | `image` | A member can name an image granted to them. Every other ref is still refused. |
 | `agent` | A member can only launch agents granted to them. A run naming another one is refused at launch, with the reason. |
 | `integration` | A member can only name providers granted to them. A workspace's own provider and the site default still apply — a grant bounds what the member chose, never what an admin set up for them. |
+| `feature` | A member can only add SSH keys or mint API tokens when granted. Keys and tokens they already have keep working until removed or revoked. |
+| `policy` | A member can only select policies granted to them. A run naming another one is refused at launch, with the reason. A run with no policy is never refused for it. |
 
 **The two 0.7 ADDITIONS** (`agent`, `integration`) land here rather than in a
 governance-prompt addendum, the same way `ENFORCE_OFF_TITLE` lands in §7.2

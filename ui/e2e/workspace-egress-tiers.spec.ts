@@ -76,7 +76,8 @@ async function openDetail(page: Page) {
   await expect(page.getByRole("heading", { name: "egress-tiers-e2e" })).toBeVisible();
 }
 
-test.describe("Workspace detail — the two egress tiers a security admin straddles (F030/F031)", () => {
+test.describe("Workspace detail — the two egress tiers a security admin straddles", () => {
+  // ticket: F030/F031
   test("a security admin keeps the one-write remove and loses the two-write one", async ({ page }) => {
     await mockSecurityAdminRole(page);
     await openDetail(page);

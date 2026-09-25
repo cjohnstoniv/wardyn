@@ -46,18 +46,18 @@ func TestSubstrateRegistry_K8sResolvesUnderK8sTag(t *testing.T) {
 	}
 }
 
-// TestBuildRunnerFromFlags_K8sConstructFailureNotMislabeled is the W27-S1-3
-// regression: a REGISTERED substrate (k8s) that fails to CONSTRUCT — the
-// canary's flagship refuse-to-construct chief among such failures — must not
-// be printed under the "unknown -runner ... requires -tags docker" headline
-// meant for a typo'd or not-compiled-in -runner; that headline sent every k8s
-// boot refusal down the wrong troubleshooting path. Empty ProxyImage forces
+// TestBuildRunnerFromFlags_K8sConstructFailureNotMislabeled: a registered
+// substrate (k8s) that fails to construct — the canary's flagship
+// refuse-to-construct chief among such failures — must not be printed under
+// the "unknown -runner ... requires -tags docker" headline meant for a typo'd
+// or not-compiled-in -runner; that headline sends every k8s boot refusal down
+// the wrong troubleshooting path. Empty ProxyImage forces
 // newWithClient's errProxyImageUnset before any cluster I/O (the same
 // zero-live-cluster-risk trick the test above uses directly on substrate.New),
 // a real construction failure this unit test can trigger safely.
 func TestBuildRunnerFromFlags_K8sConstructFailureNotMislabeled(t *testing.T) {
-	sel, cmap, img := "k8s", "", ""
-	f := &bootFlags{runnerSel: &sel, confinementMap: &cmap, proxyImage: &img}
+	sel, cmap, img, probeImg := "k8s", "", "", ""
+	f := &bootFlags{runnerSel: &sel, confinementMap: &cmap, proxyImage: &img, driveProbeImage: &probeImg}
 
 	_, _, err := buildRunnerFromFlags(f, nil, nil)
 	if err == nil {

@@ -293,8 +293,8 @@ func TestOrchestrator_NameIsSoleSubstrate(t *testing.T) {
 
 // TestOrchestrator_ClassesCachedWithinTTL pins Capabilities()/substrateFor()
 // memoize each substrate's ClassSupport for capsCacheTTL, so repeated hot-path
-// calls collapse to ONE daemon probe per substrate per TTL (they previously did a
-// live docker Info() round-trip every call). A countable fake proves the probe
+// calls collapse to one daemon probe per substrate per TTL, not a live docker
+// Info() round-trip every call. A countable fake proves the probe
 // count; a fake clock proves the TTL boundary forces exactly one refresh.
 func TestOrchestrator_ClassesCachedWithinTTL(t *testing.T) {
 	oci := &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1, types.CC2}, resolved: map[types.ConfinementClass]string{types.CC1: "oci/runc"}}
@@ -492,6 +492,97 @@ func TestOrchestrator_EndSandbox(t *testing.T) {
 	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
 	if err := k8s.EndSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrEndUnsupported) {
 		t.Errorf("EndSandbox on a substrate that cannot keep a sandbox = %v, want ErrEndUnsupported", err)
+	}
+}
+
+// proxyStoppingSubstrate is a fakeSubstrate that can remove a proxy alone.
+type proxyStoppingSubstrate struct {
+	*fakeSubstrate
+	proxyStops []string
+}
+
+func (p *proxyStoppingSubstrate) StopProxy(_ context.Context, ref string) error {
+	p.rec(&p.proxyStops, ref)
+	return nil
+}
+
+// TestOrchestrator_StopProxy: a lost run's proxy removal reaches a substrate
+// that can do it and keeps the route; one that cannot (Kubernetes) answers
+// ErrEndUnsupported, which the control plane turns into a full teardown.
+func TestOrchestrator_StopProxy(t *testing.T) {
+	ctx := context.Background()
+	oci := &proxyStoppingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
+	o := New(oci)
+	if err := o.StopProxy(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("StopProxy: %v", err)
+	}
+	if err := o.KillSandbox(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("KillSandbox after StopProxy: %v", err)
+	}
+	if len(oci.proxyStops) != 1 || len(oci.kills) != 1 {
+		t.Errorf("proxy stops %v kills %v; want the stop forwarded and the route kept", oci.proxyStops, oci.kills)
+	}
+
+	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
+	if err := k8s.StopProxy(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrEndUnsupported) {
+		t.Errorf("StopProxy on a substrate that cannot keep a sandbox = %v, want ErrEndUnsupported", err)
+	}
+}
+
+// revivingSubstrate is a fakeSubstrate that can replace a proxy in place.
+type revivingSubstrate struct {
+	*fakeSubstrate
+	replaced, started []string
+}
+
+func (r *revivingSubstrate) ProxyConfig(context.Context, string) ([]byte, error) {
+	return []byte(`{"run_token":"t"}`), nil
+}
+
+func (r *revivingSubstrate) EnsureProxyImage(context.Context) error { return nil }
+
+func (r *revivingSubstrate) ReplaceProxy(_ context.Context, ref string, _ []byte) error {
+	r.rec(&r.replaced, ref)
+	return nil
+}
+
+func (r *revivingSubstrate) StartSandbox(_ context.Context, ref string) error {
+	r.rec(&r.started, ref)
+	return nil
+}
+
+// TestOrchestrator_ProxyReviver: a revive reaches a substrate that can replace
+// a proxy in place and start a kept agent; one that cannot (Kubernetes)
+// answers ErrReviveUnsupported for every part.
+func TestOrchestrator_ProxyReviver(t *testing.T) {
+	ctx := context.Background()
+	oci := &revivingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
+	o := New(oci)
+	if cfg, err := o.ProxyConfig(ctx, "wardyn-agent-x"); err != nil || string(cfg) != `{"run_token":"t"}` {
+		t.Fatalf("ProxyConfig = %s, %v", cfg, err)
+	}
+	if err := o.ReplaceProxy(ctx, "wardyn-agent-x", nil); err != nil || len(oci.replaced) != 1 {
+		t.Fatalf("ReplaceProxy: %v, replaced %v", err, oci.replaced)
+	}
+	if err := o.EnsureProxyImage(ctx); err != nil {
+		t.Errorf("EnsureProxyImage: %v, want nil", err)
+	}
+
+	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
+	if err := k8s.EnsureProxyImage(ctx); err != nil {
+		t.Errorf("EnsureProxyImage on a substrate that cannot revive: %v, want nil (nothing to ensure)", err)
+	}
+	if _, err := k8s.ProxyConfig(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("ProxyConfig on a substrate that cannot = %v, want ErrReviveUnsupported", err)
+	}
+	if err := k8s.ReplaceProxy(ctx, "wardyn-agent-y", nil); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("ReplaceProxy on a substrate that cannot = %v, want ErrReviveUnsupported", err)
+	}
+	if err := o.StartSandbox(ctx, "wardyn-agent-x"); err != nil || len(oci.started) != 1 {
+		t.Errorf("StartSandbox: %v, started %v", err, oci.started)
+	}
+	if err := k8s.StartSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrReviveUnsupported) {
+		t.Errorf("StartSandbox on a substrate that cannot = %v, want ErrReviveUnsupported", err)
 	}
 }
 

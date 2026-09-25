@@ -22,20 +22,19 @@ import (
 // A token carries the role and group snapshot of the session that minted it and
 // replays them on every request. The SSH-key analogue of that stamp is published
 // as residual #15 and is bounded-stale: every login re-stamps the key and a TTL
-// expires the override. The token stamp originally had neither the bound nor the
-// residual; 0.7 gave the ROLE half the login bound, and #152 widened it to the
-// GROUP half too. The remaining gap is the same shape #15 has: no TTL, so a human
-// who never signs in again keeps the stamp indefinitely — and since 0.7 stamps
-// `security_admin` verbatim, that now carries governance authority, so the only
+// expires the override. The token stamp has the login bound on both its role and
+// group halves. The remaining gap is the same shape #15 has: no TTL, so a human
+// who never signs in again keeps the stamp indefinitely — and because the stamp
+// carries `security_admin` verbatim, it carries governance authority, so the only
 // thing standing between a demoted security admin who never signs in again and
 // the profile/grant/approval surface is an operator remembering to revoke.
 //
-// WHAT THIS GUARD READS (its scope IS part of its correctness): the migration
+// What this guard reads (its scope is part of its correctness): the migration
 // that creates api_tokens, internal/store/store_apitokens.go, this package's
 // boot_deps.go, docs/OPERATIONS.md and threatmodel/THREAT-MODEL.md. What it does
-// NOT read: the CLI's help strings, the console's token screen, docs/MEMBERS.md
+// NOT read: the CLI's help strings, the console's token screen, docs/USERS.md
 // and docs/SSH.md. Those were checked by hand when this was written and make no
-// competing claim about token staleness (MEMBERS.md says only that tokens are
+// competing claim about token staleness (USERS.md says only that tokens are
 // independently revocable, which stays true) — but a claim added there later is
 // outside this net.
 func TestAPITokenStampResidualIsPublished(t *testing.T) {
@@ -66,14 +65,15 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// same shape residual #15 already has. Removing either from this list means
 	// the group half stopped being refreshed again and the docs would overstate
 	// what is bounded.
-	allowed := []string{"last_used_at", "revoked_at", "role", "groups", "groups_truncated"}
+	// `user_type` joined with #611, re-stamped in the same UPDATE.
+	allowed := []string{"last_used_at", "revoked_at", "role", "user_type", "groups", "groups_truncated"}
 	for _, c := range updated {
 		if !slices.Contains(allowed, c) {
 			t.Errorf("internal/store/store_apitokens.go now UPDATEs api_tokens.%s — an unexpected column is re-stamped; "+
 				"re-read OPERATIONS.md and residual #38 against what actually happens", c)
 		}
 	}
-	for _, want := range []string{"role", "groups", "groups_truncated"} {
+	for _, want := range []string{"role", "user_type", "groups", "groups_truncated"} {
 		if !slices.Contains(updated, want) {
 			t.Errorf("internal/store/store_apitokens.go no longer UPDATEs api_tokens.%s — the login re-stamp that bounds "+
 				"that half is gone, so OPERATIONS.md and residual #38 overstate what is bounded", want)
@@ -83,7 +83,7 @@ func TestAPITokenStampResidualIsPublished(t *testing.T) {
 	// (3) The contrast the docs draw is real: SSH keys DO get re-stamped on
 	// login, which is why the token stamp is the worse of the two.
 	//
-	// READ AS STRUCTURE, NOT AS A STRING. This was
+	// Read as structure, not as a string. This was
 	// strings.Contains(boot_deps.go, "RefreshAPITokenRoles"), and the refactor
 	// that fixed the transposition half of this finding DEFEATED it — in the one
 	// direction it was the only cover for. At the time, that name occurred in

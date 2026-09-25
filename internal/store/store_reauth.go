@@ -17,7 +17,7 @@ import (
 )
 
 // ResolveReauthApproval moves a credential_reauth approval to APPROVED and
-// writes its credential.reauth.resolved audit row in ONE transaction.
+// writes its credential.reauth.resolve audit row in ONE transaction.
 //
 // Why a transaction, when DecideApproval + Record would have compiled. This is
 // the mint's own argument (internal/broker's b.mint, whose credential.mint row
@@ -39,7 +39,7 @@ import (
 // resolver (two captures, or a capture racing the reconcile-on-read) loses
 // cleanly with ErrAlreadyDecided and writes no second audit row.
 func (s PG) ResolveReauthApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision, ev types.AuditEvent) (types.ApprovalRequest, error) {
-	if ev.Action != "credential.reauth.resolved" {
+	if ev.Action != "credential.reauth.resolve" {
 		// This method exists for ONE transition. Accepting an arbitrary action
 		// here would make it a general "decide anything and audit it however you
 		// like" primitive, which is precisely the shape approval.Decide's own

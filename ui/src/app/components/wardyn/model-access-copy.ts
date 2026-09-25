@@ -57,6 +57,12 @@ export const MODEL_ACCESS_BANNER = {
   // CONSOLE-RULES §9's transient case: the strip vanishes on the next status
   // read, and a surface that disappears is not a confirmation.
   SIGNED_IN_TOAST: "Signed in to AWS — your runs can use your session now",
+  // Canon (packet E, Q151-2) — the provider sign-in doors' one line about the
+  // sandbox the person watches start.
+  DIALOG_CLEANUP_NOTE: "This sign-in runs in its own sandbox. It is stopped as soon as your sign-in is stored.",
+  // B9 (packet MP-D): beside the server's sentence for a refusal that landed
+  // after the person left New Run.
+  REFUSAL_DISMISS: "Dismiss",
   // The per-viewer, per-session set-aside. Offered ONLY where the viewer cannot
   // act (W0-mock ruling 3): the first-run state, and a dead SHARED credential
   // for a non-operator. A lapse of something the person already had is never
@@ -116,6 +122,16 @@ export const MODEL_ACCESS_RUN_DOOR = {
   // carry (the SIGN_IN_AWS_ARIA_CARD precedent in wardyn/copy.ts). The
   // visible label stays AGENTS.SIGN_IN_AWS — one spelling of one control.
   SIGN_IN_ARIA: "Sign in to AWS — for this failed run",
+  // #543 (packet 1, canon Table 2): a provider run's refusal opens that
+  // provider's own door, so the Claude, key and token buttons get names on
+  // SIGN_IN_ARIA's pattern, and the key and token doors their own note.
+  SIGN_IN_CLAUDE_ARIA: "Sign in to Claude — for this failed run",
+  ADD_KEY_ARIA: "Add your key — for this failed run",
+  ADD_TOKEN_ARIA: "Add your token — for this failed run",
+  NOTE_KEY: "Add it here. This run stays failed — relaunch it from the run header.",
+  // Anyone but the owner, and every run in the Admin view: the credential is
+  // the owner's alone, so there is no door.
+  NOT_OWNER: (owner: string) => `It ran on ${owner}'s own credential — only they can reconnect it.`,
 } as const;
 
 // DRAFT (M2 canon pending) — the mid-run re-auth row (Finding 4), ruled by the
@@ -151,6 +167,9 @@ export const REAUTH_ROW = {
   // generic one.
   notYoursHint: (owner: string) =>
     `Waiting on ${owner || "the run owner"}'s AWS sign-in — only they can complete it.`,
+  // #543: under the card's title, which AWS provider the hold is for — a
+  // sign-in to another one cannot clear it.
+  PROVIDER: (name: string) => `Model provider · ${name}`,
 } as const;
 
 /** Who a held re-auth row is addressed to, for THIS viewer. */
@@ -161,6 +180,13 @@ export interface ReauthAudience {
   shared: boolean;
   /** The subject a capture is matched against; "" on a shared row. */
   owner: string;
+  /** The model provider the hold names (#530), "" on a roster run's row. Its
+   *  door is the one that opens: a sign-in to another AWS provider cannot
+   *  clear it (#543). */
+  provider: string;
+  /** The row names this viewer — true for the admin's own run in the Admin
+   *  view too, where a provider's door does not open (canAct is false). */
+  mine: boolean;
 }
 
 /**
@@ -178,15 +204,20 @@ export interface ReauthAudience {
  * /me is in flight, which grades every per_user row as "not yours" — the
  * fail-closed direction, and the same one failure-block.tsx's `!!principal`
  * takes.
+ *
+ * `view` is the page's console view: a provider's door opens in the User view
+ * only (packet MP-E), so in the Admin view nobody is offered it (#543).
  */
 export function reauthAudience(
   request: Pick<ApprovalRequest, "requested_scope">,
-  viewer: { operator: boolean; principal: string },
+  viewer: { operator: boolean; principal: string; view?: "admin" | "user" },
 ): ReauthAudience {
   const shared = String((request.requested_scope?.credential_source as string) ?? "") === "shared";
   const owner = String((request.requested_scope?.owner as string) ?? "");
-  const canAct = shared ? viewer.operator : !!viewer.principal && owner === viewer.principal;
-  return { canAct, shared, owner };
+  const provider = String((request.requested_scope?.provider as string) ?? "");
+  const mine = !!viewer.principal && owner === viewer.principal;
+  const canAct = shared ? viewer.operator : mine && !(provider && viewer.view === "admin");
+  return { canAct, shared, owner, provider, mine };
 }
 
 /** The row's sentence for that audience — the door's own hint, or the one
@@ -218,5 +249,6 @@ export const REAUTH_SIGNED_IN_TOAST = "Signed in";
 
 // The /approvals card's title for the kind: a request that mints nothing must
 // not be titled "Mint a scoped credential", and the card carries no
-// blast-radius claim. "paused" is the word for PEOPLE; "held" is the wire's.
-export const REAUTH_TITLE = "Sign in to AWS again — this run is paused";
+// blast-radius claim, and no claim that the run is paused, which a PENDING
+// row does not prove (#146 defect 3): it names the need.
+export const REAUTH_TITLE = "AWS sign-in needed for this run";

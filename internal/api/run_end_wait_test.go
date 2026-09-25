@@ -77,7 +77,7 @@ func endsAtBody(at time.Time) string {
 }
 
 func ownerSession(t *testing.T) *http.Cookie {
-	return ssoSession(t, endWaitOwner, "owner@corp.example", oidc.RoleMember)
+	return ssoSession(t, endWaitOwner, "owner@corp.example", oidc.RoleUser)
 }
 
 // TestSetRunEnd_ExtendingIsTheLease: without the gate an owner extends within
@@ -259,4 +259,47 @@ func TestSetRunEnd_Refusals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPatchRunEnds_ExtendsALostRun is F1's fix (long-holds design rev 4
+// §2.3): a run lost to a reboot or a control-plane outage, even past its own
+// end, is still extendable — that is how it becomes revivable again (§4.1).
+// Only a run whose OWN lease ended (LostEnded) stays refused: its end is what
+// put it in the kept state in the first place.
+func TestPatchRunEnds_ExtendsALostRun(t *testing.T) {
+	for _, reason := range []types.LostReason{types.LostOutage, types.LostReboot} {
+		t.Run(string(reason), func(t *testing.T) {
+			f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+			past := f.now.Add(-time.Hour)
+			f.st.mu.Lock()
+			f.st.run.EndsAt, f.st.run.LostAt, f.st.run.LostReason = &past, &past, reason
+			f.st.mu.Unlock()
+
+			later := f.now.Add(48 * time.Hour)
+			code, out := f.patch(t, ownerSession(t), endsAtBody(later))
+			if code != http.StatusOK || out.EndsAt == nil || !out.EndsAt.Equal(later) {
+				t.Fatalf("extend a %s run past its end = %d %+v; want 200 at %v", reason, code, out, later)
+			}
+			end, _ := f.stored()
+			if end == nil || !end.Equal(later) {
+				t.Fatalf("stored end = %v, want %v", end, later)
+			}
+			lostAt, lostReason := f.st.lost()
+			until, ok := f.srv.keptUntil(types.AgentRun{EndsAt: end, LostAt: lostAt, LostReason: lostReason})
+			if !ok || !until.Equal(later) {
+				t.Errorf("keptUntil = %v %v; want the new end (grace 0 in this fixture)", until, ok)
+			}
+		})
+	}
+
+	t.Run("a run whose own lease ended stays refused", func(t *testing.T) {
+		f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+		past := f.now.Add(-time.Hour)
+		f.st.mu.Lock()
+		f.st.run.EndsAt, f.st.run.LostAt, f.st.run.LostReason = &past, &past, types.LostEnded
+		f.st.mu.Unlock()
+		if code, _ := f.patch(t, ownerSession(t), endsAtBody(f.now.Add(24*time.Hour))); code != http.StatusConflict {
+			t.Errorf("status = %d, want 409", code)
+		}
+	})
 }

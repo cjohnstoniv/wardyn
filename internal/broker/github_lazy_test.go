@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 )
 
 // The lazy GitHub minter must read its App credentials at MINT time, not at
@@ -55,7 +57,7 @@ func TestGitHubMinter_LazyReadsSecretsAtMintTime(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id": 42}`))
 		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_lazy_ok","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_lazy_ok","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

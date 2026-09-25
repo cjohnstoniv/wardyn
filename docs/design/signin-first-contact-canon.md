@@ -54,8 +54,9 @@ at the call site, not baked into the string.
 ## Frozen strings
 
 `ui/src/app/lib/sign-in-copy.ts`'s `SIGNIN` table, transcribed verbatim. "Where" names the
-screen/element; "Status" is New (introduced by #457), Changed (existing string reworded), or
-Reused (unchanged, listed for completeness because #457 touches its neighbors).
+screen/element; "Status" is New (introduced by #457, or by #778 for the two `user_type_*` rows
+below), Changed (existing string reworded), or Reused (unchanged, listed for completeness
+because #457 touches its neighbors).
 
 | Key | Status | Where | String |
 |---|---|---|---|
@@ -70,6 +71,8 @@ Reused (unchanged, listed for completeness because #457 touches its neighbors).
 | `SIGNIN.CLAIMS_OVERAGE` | Changed | `auth_error=claims_overage` | Your identity provider sent too many groups to list in a sign-in token, so Wardyn can't tell what access you should have — and won't guess. Ask your Wardyn admin to map your role by App Role or email instead. Trying again won't help. |
 | `SIGNIN.EMAIL_VERIFIED_ABSENT` | Changed | `auth_error=email_verified_absent` | Your identity provider doesn't send an email_verified claim at all (common on Entra ID), so Wardyn can't confirm your email on its own. Ask your Wardyn admin to map your role by App Role or group instead. |
 | `SIGNIN.ROLE_CHECK_UNAVAILABLE` | Changed | `auth_error=role_check_unavailable` | Couldn't check your access — try again, or ask your Wardyn admin. |
+| `SIGNIN.USER_TYPE_AMBIGUOUS` | New | `auth_error=user_type_ambiguous` | Your account matches two user types with the same priority, so Wardyn won't pick one. Ask your Wardyn admin to give one of them a higher priority. |
+| `SIGNIN.USER_TYPE_UNKNOWN` | New | `auth_error=user_type_unknown` | Your account maps to a user type that doesn't exist. Ask your Wardyn admin to create it or change the mapping. |
 | `SIGNIN.OIDC_CONFIG` | Changed | `auth_error=oidc_config` | Sign-in with your identity provider failed. Try again; if it keeps happening, ask your Wardyn admin to check the sign-in configuration. |
 | `SIGNIN.OIDC_TRANSIENT` | Reused | `auth_error=oidc_transient` | Your identity provider didn't respond in time. This is usually temporary — try signing in again. |
 | `SIGNIN.AUTH_FAILED` | Changed | `auth_error=<unrecognized>` (default arm) | Sign-in failed. Try again, or ask your Wardyn admin. |
@@ -81,6 +84,11 @@ Reused (unchanged, listed for completeness because #457 touches its neighbors).
 | `STATES.ERROR_TITLE` | Reused | `ErrorState` heading, every pane | Something went wrong |
 | `STATES.ERROR_DEFAULT` | Changed | `ErrorState` body, no `message` passed | Wardyn isn't answering. Try again. |
 | `STATES.RETRY` | Reused | `ErrorState` retry button | Retry |
+
+**`USER_TYPE_AMBIGUOUS` / `USER_TYPE_UNKNOWN`** were added by #778 (0.8 user types), transcribed
+byte-exact from the shipped `sign-in-copy.ts` — #778 landed on `main` in train 10 with its own
+wording for these two `auth_error` arms; this row makes that wording canon rather than leaving it
+verified only by the app.
 
 **Not carried forward:** `SIGNIN.ROLE_SOURCE` ("Your role — admin, security admin or member —
 comes from your SSO role assignment. Everyone is an admin only when neither a role map nor the

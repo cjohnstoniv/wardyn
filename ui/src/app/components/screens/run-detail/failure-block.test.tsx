@@ -11,22 +11,34 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import type { AgentRun, AuditEvent, RunState, SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { RunFailureBlock } from "./failure-block";
 import { ModelAccessBanner } from "../../wardyn/model-access-banner";
 import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { MODEL_ACCESS_RUN_DOOR } from "../../wardyn/model-access-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { OPEN_IN_USER_VIEW } from "../../wardyn/copy/console-view";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 
-const CREATED = "2026-08-28T10:00:00Z";
+// The "killed: names how far into the run..." test below asserts an exact
+// "26m 0s" elapsed (ending.time or run.updated_at, minus run.created_at —
+// failure-block.tsx:185-186). aheadByHours calls Date.now() fresh on every
+// call, and CREATED (a module-level constant) vs. the ev()/run() defaults
+// (evaluated per-test, much later) could drift by however long the suite
+// takes to reach this file's tests — enough to round the seconds differently.
+// A single frozen anchor keeps the two exactly 26 minutes apart regardless of
+// when the test actually runs.
+const NOW_MS = Date.now();
+const CREATED = new Date(NOW_MS - 26 * 60 * 1000).toISOString();
+const EVENT_TIME = new Date(NOW_MS).toISOString();
 
 function run(state: RunState): AgentRun {
-  return {
+  return makeRun({
     id: "run_3b7f10c4-0000-0000-0000-000000000000",
     created_at: CREATED,
-    updated_at: "2026-08-28T10:26:00Z",
+    updated_at: EVENT_TIME,
     created_by: "alice",
     agent: "claude",
     repo: "acme/payments-api",
@@ -34,13 +46,13 @@ function run(state: RunState): AgentRun {
     spiffe_id: "spiffe://wardyn/run/3b7f10c4",
     runner_target: "runner://local",
     confinement_class: "CC2",
-  } as AgentRun;
+  });
 }
 
 function ev(action: string, outcome: AuditEvent["outcome"], extra: Partial<AuditEvent> = {}): AuditEvent {
   return {
     id: `ev-${action}-${outcome}`,
-    time: "2026-08-28T10:26:00Z",
+    time: EVENT_TIME,
     actor_type: "system",
     actor: "wardynd",
     action,
@@ -156,7 +168,7 @@ describe("RunFailureBlock", () => {
 
   it("killed: names how far into the run it was killed, plus who and when on the audit row", () => {
     renderBlock("KILLED", [ev("run.kill", "success", { actor: "alice", actor_type: "human" })]);
-    // created_at 10:00 -> run.kill 10:26.
+    // CREATED -> run.kill EVENT_TIME, 26m apart.
     expect(screen.getByText(/An operator killed this run 26m 0s in\./)).toBeInTheDocument();
     expect(screen.getByText(/a killed run cannot resume/)).toBeInTheDocument();
     expect(screen.getByText(/run\.kill · success · alice/)).toBeInTheDocument();
@@ -291,6 +303,7 @@ function renderCredentialBlock({
   operator = false,
   onRefresh = vi.fn(),
   withStrip = false,
+  adminView = false,
 }: {
   access?: SetupModelAccess;
   row?: SetupHarnessTool;
@@ -299,6 +312,7 @@ function renderCredentialBlock({
   operator?: boolean;
   onRefresh?: () => void;
   withStrip?: boolean;
+  adminView?: boolean;
 } = {}) {
   render(
     <MemoryRouter initialEntries={["/runs/3b7f10c4"]}>
@@ -316,6 +330,7 @@ function renderCredentialBlock({
             run={{ ...run("FAILED"), failure_hint: REFUSAL }}
             audit={trail}
             onGoAudit={vi.fn()}
+            adminView={adminView}
           />
         </OperatorProvider>
       </ModelAccessProvider>
@@ -325,6 +340,7 @@ function renderCredentialBlock({
 }
 
 const doorButton = () => screen.queryByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA });
+const switchLink = () => screen.queryByRole("button", { name: OPEN_IN_USER_VIEW });
 
 describe("the credential ending's door — only where a sign-in repairs THIS run", () => {
   it("renders the SERVER's sentence and the sign-in, and the sentence exactly once", () => {
@@ -335,6 +351,29 @@ describe("the credential ending's door — only where a sign-in repairs THIS run
     expect(screen.getByText(MODEL_ACCESS_RUN_DOOR.NOTE)).toBeInTheDocument();
     // No invented "What to do" — the server's sentence IS the reason.
     expect(screen.queryByText("What to do")).not.toBeInTheDocument();
+  });
+
+  // M-7 (admin-member-modes-design.md §4.6, §6) — the admin monitor carries
+  // no credential door, even on the admin's own failed run (principal ===
+  // created_by === "alice" here, same as the default sign-in case above).
+  it("the admin view gets no button, even on the admin's own run — the switch link back to it instead", () => {
+    renderCredentialBlock({ adminView: true });
+    expect(doorButton()).not.toBeInTheDocument();
+    expect(screen.queryByText(MODEL_ACCESS_RUN_DOOR.NOTE)).not.toBeInTheDocument();
+    expect(switchLink()).toBeInTheDocument();
+  });
+
+  it("the admin view gives no switch link on a run that is not the admin's own, nor on the shared lane", () => {
+    renderCredentialBlock({ adminView: true, principal: "bob", operator: true });
+    expect(switchLink()).toBeNull();
+    cleanup();
+    renderCredentialBlock({ adminView: true, row: { ...PER_USER_ROW, credential_source: "shared" } });
+    expect(switchLink()).toBeNull();
+  });
+
+  it("the user view never shows the switch link", () => {
+    renderCredentialBlock();
+    expect(switchLink()).toBeNull();
   });
 
   it("refreshes the door once on mount — the context can be five minutes stale", () => {

@@ -18,22 +18,17 @@ import {
 } from "./wizard-types";
 import { mergeRunSelections } from "./wizard-spec";
 import type { WizardState } from "./wizard-types";
-import type { Workspace } from "../../../lib/types";
+import type { Workspace, WorkspaceRequirementsMap } from "../../../lib/types";
+import { makeWorkspace } from "../../../../test/factories";
 
-// Workspace.requirements isn't on the shared Workspace TS type yet (see
-// wizard-types.ts's own import comment) — cast, matching how the module itself
-// reads it.
-function localDirWorkspace(id: string, requirements: Record<string, unknown> = {}): Workspace {
-  return {
+function localDirWorkspace(id: string, requirements: WorkspaceRequirementsMap = {}): Workspace {
+  return makeWorkspace({
     id,
     name: id,
     kind: "local_dir",
     source: `/home/me/${id}`,
-    status: "scanned",
-    created_at: "",
-    updated_at: "",
     requirements,
-  } as Workspace;
+  });
 }
 
 // buildSpec's composition-model additions: run.workspaces[] (enabled_optional +
@@ -320,7 +315,8 @@ describe("buildSpec — runType (agent run vs governed command)", () => {
 // operator ever toggling them on the Egress step. impliedEgressHosts is the
 // ONE list both buildSpec and step-egress.tsx's "Added by grants:" row read,
 // so the two can never drift on what counts as implied.
-describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx renders (D6/claim3)", () => {
+describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx renders", () => {
+  // ticket: D6 claim3
   it("returns nothing when no grant is active and no repo workspace is selected", () => {
     expect(impliedEgressHosts(initialWizardState())).toEqual([]);
   });
@@ -347,15 +343,14 @@ describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx r
   // egress even with the GitHub switch untouched — the operator never visits
   // a control that mentions GitHub. Same two hosts, a different "why".
   it("names the SAME hosts 'repo workspace' when a repo is selected without the GitHub grant", () => {
-    const repoWs = {
+    const repoWs = makeWorkspace({
       id: "ws-1",
       name: "app",
       kind: "repo",
       source: "acme/app",
-      status: "scanned",
       created_at: "",
       updated_at: "",
-    } as Workspace;
+    });
     const state = { ...initialWizardState(), workspaces: [{ workspaceId: "ws-1" }] };
     expect(impliedEgressHosts(state, [repoWs])).toEqual([
       { host: "github.com", why: "repo workspace" },
@@ -364,15 +359,14 @@ describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx r
   });
 
   it("prefers 'GitHub access' over 'repo workspace' when both are true", () => {
-    const repoWs = {
+    const repoWs = makeWorkspace({
       id: "ws-1",
       name: "app",
       kind: "repo",
       source: "acme/app",
-      status: "scanned",
       created_at: "",
       updated_at: "",
-    } as Workspace;
+    });
     const state = {
       ...initialWizardState(),
       githubEnabled: true,
@@ -429,23 +423,20 @@ describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx r
 // silently attach NOTHING, a 400 "mount source is empty" at launch with no
 // operator fix available.
 describe("buildSpec — multi-source workspaces (PARITY-2)", () => {
-  const multiWs = {
+  const multiWs = makeWorkspace({
     id: "ws-multi",
     name: "monorepo-plus-scratch",
     // The single-mirror fields a real multi-source record leaves EMPTY —
     // asserting the fix does NOT read these.
-    kind: "" as unknown as Workspace["kind"],
+    kind: "",
     source: "",
-    status: "scanned",
-    created_at: "",
-    updated_at: "",
     sources: [
       { type: "local_dir", path: "/home/me/api" },
       { type: "repo", source: "acme/widgets" },
       { type: "ephemeral", target: "/home/agent/scratch" },
     ],
     requirements: { "write:/home/me/api": { level: "required", provenance: "operator_set" } },
-  } as Workspace;
+  });
 
   it("emits one workspace_mounts entry per local_dir source and one workspace_repos entry per repo source", () => {
     const { inline_policy } = buildSpec(
@@ -479,16 +470,13 @@ describe("buildSpec — multi-source workspaces (PARITY-2)", () => {
   // sources=[{type:ephemeral,...}] + a custom base_image — mirrors as
   // Kind="ephemeral", Source="".
   it("a purely ephemeral (migrated legacy container) workspace attaches no mount/repo but conveys its identity via workspace_id", () => {
-    const ephemeralWs = {
+    const ephemeralWs = makeWorkspace({
       id: "ws-eph",
       name: "old-container",
-      kind: "ephemeral" as unknown as Workspace["kind"],
+      kind: "ephemeral",
       source: "",
-      status: "scanned",
-      created_at: "",
-      updated_at: "",
       sources: [{ type: "ephemeral", target: "/home/agent/work" }],
-    } as Workspace;
+    });
     const { run, inline_policy } = buildSpec(
       { ...initialWizardState(), workspaces: [{ workspaceId: "ws-eph" }] },
       [ephemeralWs],
@@ -849,7 +837,8 @@ describe("buildSpec — drive", () => {
 // and NAMES the one thing it cannot carry. A clone that silently dropped
 // `tool_approvals: hold` would launch a less supervised run than the one it
 // copied, which is exactly the class of failure this product exists to prevent.
-describe("B4b — runPrefill: the clone carries both sources, and says what it cannot", () => {
+describe("runPrefill: the clone carries both sources, and says what it cannot", () => {
+  // ticket: B4b
   // A killed run as the two sources actually leave it behind.
   const row = {
     agent: "codex-cli",

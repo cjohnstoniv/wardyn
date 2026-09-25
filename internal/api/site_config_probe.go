@@ -20,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -286,13 +287,20 @@ fi
 // (proxyProbeInterceptedCode) and 252 is probe 2's "no connection fact was
 // produced" exit (redirectProbeInconclusiveCode); probe 1 still propagates
 // curl's own code.
-const redirectProbeScript = `to() { curl -sS -f -o /dev/null --connect-timeout 5 --max-time 15 "$@"; }
+//
+// The connect/max-time budgets are shell defaults (${VAR:-N}) so a test that
+// deliberately stalls a probe (an accept-and-hold listener) can shrink
+// WARDYN_PROBE_CONNECT_TIMEOUT/WARDYN_PROBE_MAX_TIME instead of waiting out the
+// real 5s/15s per curl; unset, production gets the same 5/15 it always has.
+const redirectProbeScript = `ct=${WARDYN_PROBE_CONNECT_TIMEOUT:-5}
+mt=${WARDYN_PROBE_MAX_TIME:-15}
+to() { curl -sS -f -o /dev/null --connect-timeout "$ct" --max-time "$mt" "$@"; }
 if [ -n "$WARDYN_PROBE_TO_CONNECT" ]; then
   to --connect-to "$WARDYN_PROBE_TO_CONNECT" "$WARDYN_PROBE_TO_URL" || exit $?
 else
   to "$WARDYN_PROBE_TO_URL" || exit $?
 fi
-out=$(curl -sS -o /dev/null -w '%{http_code} %{num_connects}' --connect-timeout 5 --max-time 15 --noproxy '*' "$WARDYN_PROBE_FROM_URL")
+out=$(curl -sS -o /dev/null -w '%{http_code} %{num_connects}' --connect-timeout "$ct" --max-time "$mt" --noproxy '*' "$WARDYN_PROBE_FROM_URL")
 rc=$?
 code=${out%% *}
 conns=${out##* }
@@ -488,7 +496,7 @@ func (s *Server) runSiteConfigProbe(ctx context.Context, actor, script string, a
 	if err != nil {
 		return runID, probeRunResult{}, err
 	}
-	created, err := s.cfg.Store.CreateRun(launchCtx, run)
+	created, err := s.createRun(launchCtx, run)
 	if err != nil {
 		s.cfg.Identity.RevokeRun(launchCtx, runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
 		return runID, probeRunResult{}, fmt.Errorf("create probe run: %w", err)
@@ -760,7 +768,7 @@ func (s *Server) reclaimProbeRun(ctx context.Context, runID uuid.UUID) {
 		return
 	}
 	if applied, _ := s.casRunState(ctx, runID, run.State, types.RunKilled); applied {
-		s.finalizeRunTail(ctx, runID, run.SandboxRef, "site_config.test_probe",
+		s.finalizeRunTail(ctx, runID, run.SandboxRef, "site_config.probe.kill",
 			"failure", map[string]any{"reason": "probe wait timed out; run reclaimed"})
 	}
 }
@@ -851,8 +859,12 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	var getSecret func(context.Context, string) ([]byte, error)
 	if s.cfg.Secrets != nil {
 		// Operator namespace ONLY, matching resolveRunUpstreamProxy: the probe
-		// must resolve the same value real dispatch would.
-		getSecret = s.cfg.Secrets.For("").Get
+		// must resolve the same value real dispatch would. A status read: the
+		// probe grades the value, it does not use it.
+		sec := s.cfg.Secrets.For("")
+		getSecret = func(ctx context.Context, name string) ([]byte, error) {
+			return sec.Get(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), name)
+		}
 	}
 	resolvedUpstream, upstreamFailReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxyURL, siteCfg.UpstreamProxySecretRef, getSecret)
 	var upstream string
@@ -901,7 +913,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	}
 	resp := classifyProxyProbe(res, subj, s.cfg.ControlPlaneURL)
 	resp.Warning = s.probeRecordingWarning(ctx, resp.State, runID)
-	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.test_proxy",
+	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.proxy.test",
 		"site_config", outcomeBool(resp.State == "reached"), mustJSON(map[string]any{
 			"state": resp.State, "target_host": strings.Join(hosts, ", "), "elapsed_ms": resp.ElapsedMS,
 			"custom_target": custom != "", "intercepted": resp.Intercepted,
@@ -980,7 +992,7 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 	}
 	resp := classifyRedirectProbe(res, toHost, fromHost, s.cfg.ControlPlaneURL)
 	resp.Warning = s.probeRecordingWarning(ctx, resp.State, runID)
-	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.test_redirect",
+	s.recordAudit(ctx, s.auditEvent(&runID, actorTypeFromRequest(r), actor, "site_config.redirect.test",
 		"site_config", outcomeBool(resp.State == "reached"), mustJSON(map[string]any{
 			"state": resp.State, "to_host": toHost, "from_host": fromHost, "elapsed_ms": resp.ElapsedMS,
 		})))

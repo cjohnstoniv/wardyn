@@ -76,6 +76,32 @@ func pageWindow[T any](items []T, offset, limit int) ([]T, bool) {
 	return items[offset:end], true
 }
 
+// pagedItems fetches one page of a list via pageFn (DB-side window, when the
+// store implements the scoped pager) or allFn (fetch-all + in-Go window via
+// pageWindow), returning the page and whether a further page exists. This is
+// servePage's fetch half, factored out for callers (#657: /secrets,
+// /integrations, /me/capabilities) whose response wraps the list in a larger
+// JSON object rather than serving it as the bare page servePage writes.
+func pagedItems[T any](page store.Page, pageFn func(store.Page) ([]T, error), allFn func() ([]T, error)) ([]T, bool, error) {
+	if pageFn != nil {
+		got, err := pageFn(store.Page{Limit: page.Limit + 1, Offset: page.Offset})
+		if err != nil {
+			return nil, false, err
+		}
+		truncated := len(got) > page.Limit
+		if truncated {
+			got = got[:page.Limit]
+		}
+		return got, truncated, nil
+	}
+	got, err := allFn()
+	if err != nil {
+		return nil, false, err
+	}
+	items, truncated := pageWindow(got, page.Offset, page.Limit)
+	return items, truncated, nil
+}
+
 // servePage writes one page of a list endpoint. When pageFn is non-nil (the
 // store implements store.Pager — production PG) it fetches page.Limit+1 rows at
 // the DB so truncation is exact and the payload is bounded there; otherwise it
@@ -94,25 +120,10 @@ func pageWindow[T any](items []T, offset, limit int) ([]T, bool) {
 // route they did not call. A caller that wants a noun in its 500 owns its own
 // writeServerError at its own site.
 func servePage[T any](w http.ResponseWriter, r *http.Request, page store.Page, pageFn func(store.Page) ([]T, error), allFn func() ([]T, error)) {
-	var items []T
-	var truncated bool
-	if pageFn != nil {
-		got, err := pageFn(store.Page{Limit: page.Limit + 1, Offset: page.Offset})
-		if err != nil {
-			writeServerError(w, r, "list", err)
-			return
-		}
-		items = got
-		if truncated = len(items) > page.Limit; truncated {
-			items = items[:page.Limit]
-		}
-	} else {
-		got, err := allFn()
-		if err != nil {
-			writeServerError(w, r, "list", err)
-			return
-		}
-		items, truncated = pageWindow(got, page.Offset, page.Limit)
+	items, truncated, err := pagedItems(page, pageFn, allFn)
+	if err != nil {
+		writeServerError(w, r, "list", err)
+		return
 	}
 	if truncated {
 		w.Header().Set("X-Wardyn-Truncated", "true")
@@ -200,7 +211,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	// the run payload — the console's UI-apps lane needs it, and the run row
 	// cannot answer it (agent_runs carries policy_id only, and an inline or
 	// default policy has no row to fetch). Resolved from the same
-	// run.policy.effective envelope the UI gateway itself trusts. A store
+	// run.policy.resolve envelope the UI gateway itself trusts. A store
 	// failure is logged and the field omitted rather than failing the whole run
 	// read: every other field is already loaded and correct, and a missing
 	// ui_apps renders the lane's "no apps declared" state, which is the
@@ -216,13 +227,13 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // effectivePolicyAuditScan bounds how many of a run's earliest audit events are
-// scanned for its run.policy.effective envelope. Dispatch writes that event
+// scanned for its run.policy.resolve envelope. Dispatch writes that event
 // before the sandbox exists, so it is always among a run's first events; the
 // bound keeps a long-lived run's audit tail out of the query.
 const effectivePolicyAuditScan = 200
 
 // effectiveUIApps returns the ui_apps of the run's EFFECTIVE policy — the
-// authorization envelope dispatch recorded as run.policy.effective
+// authorization envelope dispatch recorded as run.policy.resolve
 // (runs_dispatch.go), which is the ONLY post-hoc source of a run's real spec:
 // agent_runs.policy_id has no spec column, run_policies.spec is overwritten in
 // place, and an inline/default policy has no stored row at all. Resolving
@@ -241,7 +252,7 @@ func (s *Server) effectiveUIApps(ctx context.Context, runID uuid.UUID) ([]types.
 	}
 	var apps []types.UIApp
 	for _, ev := range events {
-		if ev.Action != "run.policy.effective" || len(ev.Data) == 0 {
+		if ev.Action != "run.policy.resolve" || len(ev.Data) == 0 {
 			continue
 		}
 		var spec types.RunPolicySpec

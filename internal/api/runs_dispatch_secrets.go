@@ -21,6 +21,7 @@ package api
 import (
 	"context"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -30,7 +31,7 @@ import (
 // refuses a raw value on any write) is looked up in the secret store and
 // appended to WorkspaceSecretValues on THIS dispatch's local policy copy only
 // — never a stored/ceiling spec, never re-read, never logged (the
-// run.policy.effective audit above redacts it to a count).
+// run.policy.resolve audit above redacts it to a count).
 //
 // Belt-and-braces: every resolved value is ALSO registered with the
 // run's mask registry, so a verbatim leak into PTY capture, a session
@@ -49,7 +50,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		return
 	}
 	if s.cfg.Secrets == nil {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.secrets_resolve",
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.resolve",
 			run.ID.String(), "failure", mustJSON(map[string]any{
 				"reason": "no secret store configured", "names": li.WorkspaceSecretNames,
 			})))
@@ -90,11 +91,11 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		// dispatch records on its own grant (resolveBedrockBearerInjection), which
 		// this owner-then-operator read cannot honour — on a per_user member's run
 		// it would put the OPERATOR's key into that run's corpus.
-		if sinkReservedSecret(name) || name == bedrockAPIKeySecret {
+		if nameSinkReservedSecret(name) || name == bedrockAPIKeySecret {
 			reserved = append(reserved, name)
 			continue
 		}
-		val, err := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(ctx, name)
+		val, err := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), name)
 		if err != nil || len(val) == 0 {
 			missing++
 			continue
@@ -115,16 +116,16 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 	if len(reserved) > 0 {
 		data["reserved_skipped"] = reserved
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.secrets_resolve",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm_inspection.resolve",
 		run.ID.String(), outcome, mustJSON(data)))
 }
 
 // envAllowMemberEnvSecret opts a deployment IN to letting MEMBERS hold
 // env_secret grants. DEFAULT CLOSED: unset means a member's env_secret grant is
-// dropped by filterMemberGrants even when the operator's ceiling lists the exact
+// dropped by filterUserGrants even when the operator's ceiling lists the exact
 // (name, secret) pairing. An operator's own runs are unaffected — the ceiling
 // authority is never clamped by its own ceiling.
-const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"
+const envAllowMemberEnvSecret = "WARDYN_ALLOW_USER_ENV_SECRET"
 
 // resolveEnvSecretGrants resolves this run's env_secret grants store->sandbox
 // env at dispatch: each grant's scope names a stored secret and the variable to
@@ -156,6 +157,9 @@ const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"
 // all of it, not just the part written so far. Non-empty, not merely present:
 // an empty value carries no configuration to protect, and treating it as
 // occupied would make a placeholder key unfillable for no gain.
+// Under a governing model-provider block it never sees a grant that would set
+// a model-credential variable (modelEnvNames): resolveProviderLane refuses that
+// run before anything is authored, so no key rides beside the provider's.
 // It REPORTS the variable names it actually filled, because those values are
 // credential material and must not ride a substrate's readable object model:
 // splitSecretEnv moves them onto SandboxSpec.SecretEnv, which the k8s driver
@@ -171,7 +175,7 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 		switch {
 		case err != nil:
 			skip = "scope invalid: " + err.Error()
-		case sinkReservedSecret(secretName):
+		case nameSinkReservedSecret(secretName):
 			skip = "references a reserved platform-internal secret name"
 		case secretName == bedrockAPIKeySecret:
 			// The bearer is proxy-injected and never resident, and its namespace
@@ -188,7 +192,7 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 			// runIdentitySubject(run.CreatedBy): same owner-then-operator-fallback
 			// rule as resolveLLMInspectionSecrets above, through the same
 			// chokepoint.
-			val, gerr := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(ctx, secretName)
+			val, gerr := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), secretName)
 			if gerr != nil || len(val) == 0 {
 				skip = "secret could not be resolved"
 			} else {

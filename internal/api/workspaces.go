@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -33,16 +34,26 @@ type workspaceRequest = client.WorkspaceRequest
 
 // validateWorkspaceLLMCred checks an operator-supplied cred binding: a NAME
 // only — whether the named Integration actually exists/resolves is
-// resolveWorkspaceIntegration's job (llmcred.go). nil, or an empty
-// IntegrationRef (clears the binding), is always valid.
+// resolveWorkspaceIntegration's job (llmcred.go), and whether the named
+// provider admits a run is enforceRunModelProvider's. nil, or empty refs
+// (clears the binding), is always valid.
 func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
-	if c == nil || c.IntegrationRef == "" {
+	if c == nil {
 		return ""
 	}
-	if !repoFieldSafe(c.IntegrationRef) {
+	if c.IntegrationRef != "" && !repoFieldSafe(c.IntegrationRef) {
 		return fmt.Sprintf(repoField400Charset, "llm_cred.integration_ref")
 	}
+	if c.ProviderRef != "" && !modelProviderIDPattern.MatchString(c.ProviderRef) {
+		return fmt.Sprintf("llm_cred.provider_ref: %q is not a provider id — lowercase letters, digits and ._- , at most 64 characters", c.ProviderRef)
+	}
 	return ""
+}
+
+// llmCredBinds reports whether c binds anything — the shape a write stores
+// rather than clears.
+func llmCredBinds(c *types.WorkspaceLLMCred) bool {
+	return c != nil && (c.IntegrationRef != "" || c.ProviderRef != "")
 }
 
 // defaultEphemeralTarget is the composition floor's in-sandbox scratch path
@@ -101,7 +112,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 			repos = append(repos, src.Source)
 		}
 	}
-	adoServerHosts := ado.forAddresses(repos...)
+	adoServerHosts, hostsErr := ado.forAddresses(repos...)
 	for i := range req.Sources {
 		req.Sources[i].Admitted = nil
 		if req.Sources[i].Type == types.WorkspaceSourceTypeRepo {
@@ -116,7 +127,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 	seenTargets := make(map[string]int, len(req.Sources))
 	for i, src := range req.Sources {
 		if msg := validateWorkspaceSource(src, adoServerHosts); msg != "" {
-			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, msg)
+			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, storeNamedLocatorRefusal(msg, "source", src.Source, hostsErr))
 		}
 		// (Mirrors validatePolicyWorkspaces' own unique-target
 		// invariant, policy.go): an EXPLICIT target shared by two sources
@@ -259,6 +270,9 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 		if !repoFieldSafe(b.Image) {
 			return fmt.Sprintf(repoField400Charset, "base_image.image")
 		}
+		if !imageRefPathSafe(b.Image) {
+			return fmt.Sprintf(image400DotSegment, "base_image.image")
+		}
 	}
 	// base_image.steps validation is GONE, because the thing it validated is
 	// never executed. See types.BaseImageEntry.Steps — operator RUN lines would
@@ -281,7 +295,7 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 // owns the rows that would have filled it.
 //
 // ponytail: the capWorkspace capability is NOT re-applied here. It governs
-// which workspace a member may LAUNCH a run against (denyMemberRequest,
+// which workspace a member may LAUNCH a run against (denyUserRequest,
 // runs_create_validate.go), and re-deriving it per row would pay two indexed
 // reads per listed workspace on the console's hot path to hide a NAME the
 // launch seam already refuses. Filter the list too only if a deployment ever
@@ -456,7 +470,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.admitRepoSources(w, r, repoSourceLocators(req.Sources)...) {
 		return
 	}
-	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
+	if s.denyUserWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
 		return
 	}
 	// Ownership stamp (0048). A MEMBER's workspace is owner-stamped from the
@@ -479,16 +493,16 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// believes the workspace is bound to the integration they named.
 	// owner != "" IS the member test (secretOwnerFromRequest is "" for an
 	// operator), so this is the same ownership stamp the line above reads.
-	if owner != "" && req.LLMCred != nil && req.LLMCred.IntegrationRef != "" {
-		s.denyMemberField(w, r, "workspaces.llm_cred", "admin_surface",
+	if owner != "" && llmCredBinds(req.LLMCred) {
+		s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, "workspaces.llm_cred",
 			"llm_cred is operator-only — an admin binds a workspace's model/harness credential "+
-				"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding")
+				"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding"))
 		return
 	}
 	// A member's own local_dir sources must clear the member-safe mount gate
 	// (root allowlist + canonicalized real path + credential-dotfile deny +
 	// the writable allowlist). An operator's are unaffected.
-	if msg := s.memberSourcesAllowed(r, owner, req.Sources); msg != "" {
+	if msg := s.userSourcesAllowed(r, owner, req.Sources); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -540,8 +554,8 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		Warnings: s.legacyHostAdmissionWarnings(r.Context(), repoSourceLocators(req.Sources)...)})
 }
 
-// memberSourcesAllowed gates a MEMBER-owned workspace's local_dir sources
-// through the member-safe mount rules (internal/runner's MemberMountPolicy):
+// userSourcesAllowed gates a MEMBER-owned workspace's local_dir sources
+// through the member-safe mount rules (internal/runner's UserMountPolicy):
 // the operator/MDM root allowlist matched on the CANONICALIZED real path, the
 // credential-dotfile deny-list, and — only for a source asking to be writable —
 // the separate writable allowlist minus its deny carve-out. It returns "" (fine)
@@ -551,9 +565,9 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 // mounts keep exactly the reach they have today (runner.ValidateMountSource
 // alone, already run by validateWorkspaceSource). This function only ever
 // NARROWS, never widens — it is additive on top of that deny-list, matching
-// SandboxSpec.MemberMountRoots' nil-means-today's-behavior contract at the
+// SandboxSpec.UserMountRoots' nil-means-today's-behavior contract at the
 // other end of the same path.
-func (s *Server) memberSourcesAllowed(r *http.Request, owner string, sources []types.WorkspaceSource) string {
+func (s *Server) userSourcesAllowed(r *http.Request, owner string, sources []types.WorkspaceSource) string {
 	if owner == "" {
 		return ""
 	}
@@ -561,7 +575,7 @@ func (s *Server) memberSourcesAllowed(r *http.Request, owner string, sources []t
 		if src.Type != types.WorkspaceSourceTypeLocalDir {
 			continue
 		}
-		if err := s.cfg.MemberMounts.ValidateMemberMount(owner, src.Path, src.Writable); err != nil {
+		if err := s.cfg.UserMounts.ValidateUserMount(owner, src.Path, src.Writable); err != nil {
 			return fmt.Sprintf("sources[%d]: %s", i, err.Error())
 		}
 	}
@@ -603,7 +617,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	if msg := s.memberSourcesAllowed(r, ws.OwnedBy, req.Sources); msg != "" {
+	if msg := s.userSourcesAllowed(r, ws.OwnedBy, req.Sources); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -614,7 +628,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.admitRepoSources(w, r, repoSourceLocators(req.Sources)...) {
 		return
 	}
-	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
+	if s.denyUserWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
 		return
 	}
 	// this GET→mutate→UPDATE can race an async repo-scan upload and
@@ -847,7 +861,7 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 			if msg := validateWorkspaceLLMCred(&req); msg != "" {
 				return nil, msg
 			}
-			if req.IntegrationRef == "" {
+			if !llmCredBinds(&req) {
 				return nil, "" // nil clears the binding
 			}
 			return &req, ""
@@ -856,11 +870,11 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 			return s.cfg.Store.SetWorkspaceLLMCred(ctx, id, cred)
 		},
 		func(cred *types.WorkspaceLLMCred) map[string]any {
-			ref := ""
+			var c types.WorkspaceLLMCred
 			if cred != nil {
-				ref = cred.IntegrationRef
+				c = *cred
 			}
-			return map[string]any{"integration_ref": ref}
+			return map[string]any{"integration_ref": c.IntegrationRef, "provider_ref": c.ProviderRef}
 		})
 }
 

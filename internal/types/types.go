@@ -116,9 +116,19 @@ var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWa
 // LostReason says why a kept run lost its sandbox (AgentRun.LostReason).
 type LostReason string
 
-// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
-// and kept for the ended-run grace.
-const LostEnded LostReason = "ended"
+const (
+	// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
+	// and kept for the ended-run grace.
+	LostEnded LostReason = "ended"
+	// LostReboot is an interactive run whose agent container exited under it
+	// (a host reboot, a Docker Desktop restart, a long suspend) but still
+	// exists: kept with its files and its proxy stopped.
+	LostReboot LostReason = "reboot"
+	// LostOutage is an interactive run whose run token lapsed because the
+	// control plane was unreachable past the token's life: its proxy is stopped
+	// so it has no egress, and its agent is left running.
+	LostOutage LostReason = "outage"
+)
 
 // PauseReason says why a run's agent is frozen (AgentRun.PausedReason).
 type PauseReason string
@@ -214,8 +224,9 @@ type AgentRun struct {
 	// (the default idle-container + `docker exec` path). Empty for exec-less /
 	// main-process substrates (krun) and before Exec runs. Persisted so the crash
 	// reconciler can observe AGENT liveness via ExecInspect across a wardynd
-	// restart: for an idle-container run the container is `sleep infinity`, so
-	// container liveness != agent liveness, and the exec id otherwise lived only in
+	// restart: for an idle-container run the container runs the TERM-aware idle
+	// loop (AgentIdleScript / `agent-run --idle`), so container liveness !=
+	// agent liveness, and the exec id otherwise lived only in
 	// the driver's in-memory map — lost on restart, stranding the run.
 	AgentExecID string `json:"agent_exec_id,omitempty"`
 	// FailureHint is an operator-facing one-line reason a run FAILED, stamped by
@@ -269,7 +280,7 @@ type AgentRun struct {
 	EndsAt *time.Time `json:"ends_at"`
 	// WaitBudgetSec is how long a request this run raises stays open for a
 	// decision. Captured at create, already folded under the deployment's
-	// approval expiry; 0 (every run created before migration 0069) means the
+	// approval expiry; 0 (every run created before migration 0072) means the
 	// deployment's approval expiry alone.
 	WaitBudgetSec int `json:"wait_budget_sec,omitempty"`
 	// RunLimits are the owner's profile run limits as they stood at create, and
@@ -279,10 +290,10 @@ type AgentRun struct {
 	RunLimits           RunLimits  `json:"run_limits"`
 	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`
 	// LostAt / LostReason mark a run that lost its sandbox but is KEPT: its
-	// agent is stopped and its proxy gone, so it has no network, while its
-	// files stay. The run keeps its RunState (RUNNING, so it still holds a quota
-	// slot); only a kill or the ended-run grace makes it terminal. Nil / "" is a
-	// live run. Migration 0070.
+	// proxy is gone, so it has no network, while its files stay (its agent is
+	// stopped too, except for LostOutage). The run keeps its RunState
+	// (RUNNING, so it still holds a quota slot); only a kill or the ended-run
+	// grace makes it terminal. Nil / "" is a live run. Migration 0073.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
 	// PausedAt / PausedReason mark a run whose agent container is frozen in
@@ -290,15 +301,31 @@ type AgentRun struct {
 	// memory, files and proxy; a person typing, an exec, the request it waits
 	// on closing, or POST /runs/{id}/resume thaws it. A paused run is not
 	// contained: kill still is. Nil / "" is a run that is not paused.
-	// Migration 0071.
+	// Migration 0087.
 	PausedAt     *time.Time  `json:"paused_at,omitempty"`
 	PausedReason PauseReason `json:"paused_reason,omitempty"`
 	// ActiveAt is the presence clock: the last input a person typed into the
 	// run, the agent's last egress decision, or the last bytes the proxy moved
-	// for it. Keepalives never move it. Nil (a run from before migration 0071,
+	// for it. Keepalives never move it. Nil (a run from before migration 0087,
 	// or one nothing has happened in yet) reads as CreatedAt.
 	ActiveAt *time.Time `json:"active_at,omitempty"`
-	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
+	// ModelProviderID freezes the id of the model provider chooseModelProvider
+	// (internal/api's run_model_provider.go, MP-6a #526) resolved this run to
+	// at create time — multi-provider design §2.4 step 5, "Persist and
+	// revalidate". The KIND is NOT frozen here: a provider's kind can change
+	// later (a kind change mints a fresh UID, #521), and a column would then
+	// read a kind the id no longer has. The kind lives only on the run.create
+	// audit event's model_provider snapshot ({id, kind}, #527), taken at the
+	// moment of choice. Empty for a run under no provider block (today's path)
+	// and for every run created before this field existed. Migration 0076 adds
+	// the column NOT NULL DEFAULT ''.
+	ModelProviderID string `json:"model_provider_id,omitempty"`
+	// UserType freezes the user type the run's creator resolved as at create
+	// time: the chosen type for a run launched in the user view, the stamped
+	// one otherwise. Empty for a run with no human creator (admin token, local
+	// mode) or created before migration 0080.
+	UserType string `json:"user_type,omitempty"`
+	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
 	// request opts in with ?include=recording_meta (wantsRecordingMeta,
@@ -310,7 +337,7 @@ type AgentRun struct {
 	// RecordingDurationSec is the last captured output frame's elapsed time,
 	// read from a small tail of the payload (see
 	// internal/recording.LastOutputElapsed) — the same number recordings.ts's
-	// former client-side probe used to compute by fetching the WHOLE document.
+	// former client-side probe computed by fetching the WHOLE document.
 	// HasRecording is the ONLY "no recording" signal: a zero
 	// RecordingDurationSec on a has_recording=true run is a real, header-only
 	// cast that captured no output, never "unknown" or "none".
@@ -367,7 +394,7 @@ const (
 	//
 	// It is mask-registered at dispatch, and ADMIN-ONLY by default: a member's
 	// env_secret grant is dropped unless the operator opens
-	// WARDYN_ALLOW_MEMBER_ENV_SECRET. Scope is {"name":"MY_TOKEN",
+	// WARDYN_ALLOW_USER_ENV_SECRET. Scope is {"name":"MY_TOKEN",
 	// "secret_name":"stored-name"}. See threatmodel/THREAT-MODEL.md §5.1a.
 	GrantEnvSecret GrantKind = "env_secret"
 )
@@ -474,9 +501,11 @@ type CredentialGrant struct {
 // ResolvedInjection is the ONE wire contract of GET
 // /api/v1/internal/injection/{grantID}: the control plane's injection-resolve
 // result, carrying the header name and the FORMATTED secret value (formatting
-// applied server-side). ExpiresAt (unix ms, 0 = never) marks a rotating
-// credential the proxy must re-resolve before it lapses (the subscription OAuth
-// token); a static api-key grant leaves it 0.
+// applied server-side). ExpiresAt (unix ms, 0 = never) marks a credential the
+// proxy must re-resolve before it lapses: an OAuth token's real expiry, or the
+// ten-minute one the sink gives a stored key so a removed or refused key stops
+// being injected. Only an approval-gated grant, whose mint is single-use,
+// leaves it 0.
 //
 // It lives here, in the neutral package both sides already import, because the
 // api server (encoder) and the wardyn-proxy (decoder) previously each kept a
@@ -493,12 +522,12 @@ type ResolvedInjection struct {
 	// Organisation is the Azure DevOps organisation a per-person Azure DevOps
 	// credential was dispatched for, on that lane's resolves only (empty on
 	// every other). It is informational: the proxy does not read it. The
-	// proxy's REST gate pins the organisation from the dispatch-time ADOGrants
+	// proxy's REST gate pins the organisation from the dispatch-time ADOGrant
 	// in its own configuration (proxy.ADOGrantConfig), never from a resolve.
 	Organisation string `json:"organisation,omitempty"`
 	// Capabilities is the same lane's GRANTED capability set, in the
 	// internal/adoscope vocabulary. The gate does NOT hold requests to it: it
-	// reads the dispatch-time ADOGrants. The proxy reads it in one place only,
+	// reads the dispatch-time ADOGrant. The proxy reads it in one place only,
 	// on a capability ask's resolve (ado_hold.go), to confirm the capability it
 	// asked for came back granted. Empty on every other lane.
 	Capabilities []string `json:"capabilities,omitempty"`
@@ -521,8 +550,15 @@ const (
 	// this kind and the console renders a door instead of an Approve/Deny pair.
 	// The row still moves to APPROVED — so every existing list, count and
 	// terminal-cascade reader works unchanged — but through ResolveReauth and
-	// its own credential.reauth.resolved audit action, never approval.decide.
+	// its own credential.reauth.resolve audit action, never approval.decide.
 	ApprovalCredentialReauth ApprovalKind = "credential_reauth"
+	// ApprovalPushContent: a brokered git push touched a path the run's
+	// push_rules.require_review_paths names, and the proxy is HOLDING it while
+	// an admin decides (internal/egress/proxy/push_hold.go). Its requested
+	// scope is a PushContentScope. Admin-decidable only: a member deciding
+	// their own run's workflow-file edit is the exfiltration the rule stops,
+	// so authorizeUserDecision keeps members to egress_domain.
+	ApprovalPushContent ApprovalKind = "push_content"
 )
 
 // ApprovalKinds is the closed set. It exists for the same reason
@@ -533,6 +569,7 @@ const (
 // against the constants above.
 var ApprovalKinds = []ApprovalKind{
 	ApprovalCredential, ApprovalEgressDomain, ApprovalToolCall, ApprovalCredentialReauth,
+	ApprovalPushContent,
 }
 
 // ApprovalState is the approval lifecycle.
@@ -566,7 +603,7 @@ var ApprovalStates = []ApprovalState{
 
 // The approval sentinels live here, in the one package both internal/store and
 // internal/approval already import, so the FSM can errors.Is a store error
-// instead of matching its message text (which it used to do, silently breaking
+// instead of matching its message text (matching text silently breaks
 // the moment either message was reworded or wrapped). store.ErrAlreadyDecided /
 // approval.ErrAlreadyDecided and store.ErrDuplicatePending are aliases of these.
 var (
@@ -681,7 +718,7 @@ type ApprovalRequest struct {
 	// min(requested_at + the run's WaitBudgetSec, the run's EndsAt). Computed
 	// on read from the run row, never stored or accepted from a caller, so a
 	// change to the run's end or wait reaches its open requests at once. Nil
-	// when the run has neither (a run created before migration 0069); the
+	// when the run has neither (a run created before migration 0072); the
 	// deployment's approval expiry still applies to every row.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
@@ -724,8 +761,8 @@ type ApprovalDecision struct {
 //	                  kernel.process.exec    — observed execve
 //	                  kernel.network.connect — observed outbound TCP connect
 //	                  kernel.file.write      — observed write to a sensitive path
-//	                  kernel.sensor.heartbeat— sensor liveness (run_id NULL)
-//	                  kernel.sensor.blind    — host eBPF blind to a run (CC3/Kata)
+//	                  kernel.sensor.ping     — sensor liveness (run_id NULL)
+//	                  kernel.sensor.bypass   — host eBPF blind to a run (CC3/Kata)
 //
 // Data shape for the kernel.* (ebpf) stream. audit_events.data is JSONB, so
 // this requires NO schema change — it is a documented convention over the
@@ -772,6 +809,12 @@ type AuditEvent struct {
 	SourceIP  string          `json:"source_ip,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 
+	// DeviceID names the enrolled device that forwarded this row, and is nil
+	// on every row the organisation wrote itself. Derived on read from the
+	// stored row (store.FederatedDeviceID), never a column and never taken
+	// from a caller: a device that claims one is refused.
+	DeviceID *uuid.UUID `json:"device_id,omitempty"`
+
 	// PrevHash/RowHash are the tamper-evidence chain (migration 0047):
 	// RowHash = SHA-256(PrevHash || canonical serialization of the fields
 	// above), hex, computed BY POSTGRES in the audit_events BEFORE INSERT
@@ -802,7 +845,7 @@ type AuditEvent struct {
 // two rows can never disagree about which key they name) and the value shown
 // to a human for "verify on first connect".
 //
-// Role is the registering session's OWN role (oidc.RoleAdmin/RoleMember),
+// Role is the registering session's OWN role (oidc.RoleAdmin/RoleUser),
 // stamped at registration by handleAddSSHKey (migration 0043) and REFRESHED
 // on every OIDC login for the authenticating principal's keys (migration
 // 0046). It is a BOUNDED-STALE stamp, not a live check — SSH carries no
@@ -815,6 +858,10 @@ type AuditEvent struct {
 // upgrading to 0046" — a pre-migration row, or a key registered before an
 // OIDC-configured deployment's first login for that principal — and sshAuth
 // treats nil as infinitely stale, never as fresh.
+//
+// Capped marks a key registered while an admin's session was in the user view
+// (migration 0070): Role stays user through every login re-stamp, and
+// sshAuth never grants it the admin override.
 type SSHPublicKey struct {
 	Fingerprint   string     `json:"fingerprint"`
 	Principal     string     `json:"principal"`
@@ -822,6 +869,7 @@ type SSHPublicKey struct {
 	PublicKey     string     `json:"public_key"` // authorized_keys line; never a secret
 	Role          string     `json:"role"`
 	RoleCheckedAt *time.Time `json:"role_checked_at,omitempty"`
+	Capped        bool       `json:"capped"`
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
@@ -841,6 +889,10 @@ type SSHPublicKey struct {
 // Groups distinguishes nil from empty exactly as the session path does (see
 // oidcGroupsCtxKey in internal/api/http.go): nil means "snapshot unavailable",
 // empty means "the IdP sent no usable groups".
+//
+// UserType is the user type of the minting session (migration 0082), stamped
+// and re-stamped beside Role. A person whose type changes on the People page
+// has their tokens revoked rather than re-stamped (revokeDemotedRoleSnapshots).
 //
 // Token carries the PLAINTEXT credential and is populated on exactly one
 // response — the create call — and is never stored, listed or logged. Every
@@ -862,6 +914,7 @@ type APIToken struct {
 	Principal       string     `json:"principal"`
 	Email           string     `json:"email,omitempty"`
 	Role            string     `json:"role"`
+	UserType        string     `json:"user_type"`
 	Groups          []string   `json:"groups,omitempty"`
 	GroupsTruncated *bool      `json:"groups_truncated,omitempty"`
 	Name            string     `json:"name"`
@@ -888,13 +941,19 @@ const (
 	// CapabilitySubjectAll is every signed-in human — the baseline for an IdP
 	// that emits no usable groups claim. Subject is "" for this type.
 	CapabilitySubjectAll CapabilitySubjectType = "all"
+	// CapabilitySubjectUserType is everyone of one user type, named by the
+	// type's id (UserType.ID). A person holds exactly one type, stamped at
+	// sign-in. For the governance ceiling and drives it is a tier between
+	// group and all; for capability grants it is one more subject, so a DENY
+	// written against a type is a wall no user or group allow lifts.
+	CapabilitySubjectUserType CapabilitySubjectType = "user_type"
 )
 
-// Valid reports whether t is one of the three subject types. Used to reject a
+// Valid reports whether t is one of the four subject types. Used to reject a
 // garbage value at the API write boundary, mirroring ApprovalScope.Valid.
 func (t CapabilitySubjectType) Valid() bool {
 	switch t {
-	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll:
+	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll, CapabilitySubjectUserType:
 		return true
 	default:
 		return false
@@ -950,10 +1009,16 @@ type CapabilityGrant struct {
 //
 // Value is expected already canonical (trimmed, lowercased, ASCII) by the API
 // write boundary that owns writes to this table — see the migration comment.
+//
+// UserType is the row's user type when Role is the user tier (migration
+// 0070_user_tier_rename's column, a foreign key to user_types); "" on a tier
+// row, and on a user row written before types existed, which reads as the
+// built-in "standard".
 type RoleMapping struct {
 	ID        uuid.UUID `json:"id"`
 	Value     string    `json:"value"`
 	Role      string    `json:"role"`
+	UserType  string    `json:"user_type,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	CreatedBy string    `json:"created_by,omitempty"`
 }

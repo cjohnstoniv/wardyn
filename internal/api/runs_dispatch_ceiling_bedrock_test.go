@@ -97,7 +97,7 @@ func TestCeilingReassert_WithholdsTheResidentBedrockLane(t *testing.T) {
 			if len(mitm) != 0 {
 				t.Errorf("bedrock MITM hosts = %v, want none for a lane that was withheld", mitm)
 			}
-			for _, m := range buildRunMounts(*policy, llm, memberMountPosture{}) {
+			for _, m := range buildRunMounts(*policy, llm, userMountPosture{}) {
 				if m.Target == sandboxAWSDir {
 					t.Errorf("the operator's host ~/.aws is still bind-mounted at %s", m.Target)
 				}
@@ -120,7 +120,7 @@ func TestCeilingReassert_NoProfileLeavesBedrockAlone(t *testing.T) {
 		before[k] = v
 	}
 	keysBefore := slices.Clone(llm.secretEnvKeys)
-	mountsBefore := buildRunMounts(*policy, llm, memberMountPosture{})
+	mountsBefore := buildRunMounts(*policy, llm, userMountPosture{})
 
 	var injections []runner.InjectionGrant
 	p := dispatchParams{}
@@ -142,7 +142,7 @@ func TestCeilingReassert_NoProfileLeavesBedrockAlone(t *testing.T) {
 	if !llm.bedrockReady || len(mitm) != 1 {
 		t.Errorf("bedrockReady=%v mitm=%v; an unassigned principal's run must be untouched", llm.bedrockReady, mitm)
 	}
-	if len(buildRunMounts(*policy, llm, memberMountPosture{})) != len(mountsBefore) {
+	if len(buildRunMounts(*policy, llm, userMountPosture{})) != len(mountsBefore) {
 		t.Error("the mount set changed for a run with no assigned profile")
 	}
 }

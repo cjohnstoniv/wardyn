@@ -112,8 +112,8 @@ func (s *recordLLMModeStore) lastRecord() RecordTaskResult {
 	return s.records[len(s.records)-1]
 }
 
-// TestLaunchRecordRun_ManagedSubscriptionCorrectsLLMMode is W20-llm-transport-
-// matrix-2: launchRecordRun computes llm_mode/model BEFORE dispatch, from a
+// TestLaunchRecordRun_ManagedSubscriptionCorrectsLLMMode: launchRecordRun
+// computes llm_mode/model before dispatch, from a
 // mount-target check (specHasMountTarget(claudeCredTarget)) that only ever
 // sees a HOST-STAGED resident subscription. The Wardyn-MANAGED subscription
 // (no mount at all — compose-mode, gated on s.managedInjectReady/ManagedToken)
@@ -153,15 +153,14 @@ func TestLaunchRecordRun_ManagedSubscriptionCorrectsLLMMode(t *testing.T) {
 	}
 }
 
-// TestLaunchRecordRun_HonorsSiteWideDefaultIntegration is
-// W20-W20-llm-transport-matrix-1: model access resolves in three tiers
-// (docs/OPERATIONS.md "Model access resolves") — run-explicit integration_id,
-// then the workspace's own LLMCred.IntegrationRef binding, then the
-// operator's site-wide DefaultFor:agent_runs integration. launchRecordRun
-// used to gate its ENTIRE foldRunIntegration call on the workspace carrying
-// its own binding, so an unbound workspace's record session never consulted
-// tier 3 at all and fell straight to the generic ceiling/convention grant —
-// silently skipping the operator's configured default integration. This
+// TestLaunchRecordRun_HonorsSiteWideDefaultIntegration: model access resolves
+// in three tiers (docs/OPERATIONS.md "Model access resolves") — run-explicit
+// integration_id, then the workspace's own LLMCred.IntegrationRef binding,
+// then the operator's site-wide DefaultFor:agent_runs integration.
+// launchRecordRun must not gate its foldRunIntegration call on the workspace
+// carrying its own binding, or an unbound workspace's record session never
+// consults tier 3 and falls straight to the generic ceiling/convention grant
+// — silently skipping the operator's configured default integration. This
 // workspace has NO LLMCred binding; the site config has one AI-provider
 // integration marked DefaultFor: agent_runs, so the record session's minted
 // credential grant must carry THAT integration's secret, not the convention
@@ -215,7 +214,7 @@ func TestLaunchRecordRun_HonorsSiteWideDefaultIntegration(t *testing.T) {
 }
 
 // TestLaunchRecordRun_RepoDevcontainerImageWarnsMissingCLI is
-// W20-W20-record-image-6: a workspace whose primary source is a repo
+// A workspace whose primary source is a repo
 // carrying its OWN devcontainer builds that devcontainer AS-IS
 // (resolveWorkspaceImage's repo-own-devcontainer lane) — which never bakes
 // claude-code. The Record pane tells the operator to drive the agent in this

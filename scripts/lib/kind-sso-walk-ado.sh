@@ -208,12 +208,12 @@ grep -q 'vso.code' "${EVIDENCE_DIR}/authorize-member.url" \
   || die "the member's authorization request carried no Azure DevOps scope — the login was not widened"
 grep -q 'vso.code' "${EVIDENCE_DIR}/authorize-admin.url" \
   && die "the admin's authorization request carried an Azure DevOps scope before any row existed"
-[[ "$(me_role "${WORK}/member.jar" member)" == "member" ]] || die "the member's session is not role member (see ${EVIDENCE_DIR}/me-member.json)"
+[[ "$(me_role "${WORK}/member.jar" member)" == "user" ]] || die "the member's session is not role user (see ${EVIDENCE_DIR}/me-member.json)"
 
 step "asserting the capture: one blob, the member's, and none for the admin"
-curl -s -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE_URL}/api/v1/audit?action=scm.ado.signin.captured" \
+curl -s -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE_URL}/api/v1/audit?action=ado.signin.capture" \
   >"${EVIDENCE_DIR}/audit-capture.json"
-jq -e --arg m "${MEMBER_SUB}" '[.. | objects | select(.action? == "scm.ado.signin.captured" and .outcome? == "success") | .actor] == [$m]' \
+jq -e --arg m "${MEMBER_SUB}" '[.. | objects | select(.action? == "ado.signin.capture" and .outcome? == "success") | .actor] == [$m]' \
   "${EVIDENCE_DIR}/audit-capture.json" >/dev/null \
   || die "the capture audit is not exactly one success for the member (see ${EVIDENCE_DIR}/audit-capture.json)"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" exec deployment/postgres -- psql -U wardyn -d wardyn -tAc \
@@ -277,6 +277,31 @@ jq -e --arg m "${MEMBER_SUB}" '.callers[$m].endpoints["projects.get"] >= 1 and .
   || die "the fake Azure DevOps did not see the member's REST read AND git advertisement, all authorized (see ${EVIDENCE_DIR}/seen.json)"
 jq -e --arg a "${ADMIN_SUB}" '.callers | has($a) | not' "${EVIDENCE_DIR}/seen.json" >/dev/null \
   || die "the admin's subject reached the fake Azure DevOps (see ${EVIDENCE_DIR}/seen.json)"
+
+# ── 8. the browser leg (#751) ────────────────────────────────────────────────
+# Everything above is curl: no browser has ever driven the console's own
+# Azure DevOps connect UI against this cluster. ui/e2e/live/ado-connect.spec.ts
+# signs a real Chromium in through the same fake Entra picker, then asserts
+# on the real /account connect popup that it never leaves the person
+# sitting on about:blank, and that a blocked popup falls back to #628's
+# "Open Azure DevOps sign-in" link, not a stranded dialog. ${FAKE_LOCAL} is still
+# up (the port-forward opened in step 2 lives until this script's trap), so
+# it is the browser's route to "login.microsoftonline.com" too.
+step "running the browser leg (ui/e2e/live/ado-connect.spec.ts)"
+export WARDYN_TEST_K8S=1
+export WARDYN_E2E_LIVE_BASE_URL="${BASE_URL}"
+export WARDYN_LIVE_ADO_MEMBER_EMAIL="${MEMBER_USER}"
+export WARDYN_LIVE_ADO_PROXY_URL="${FAKE_LOCAL}"
+./scripts/run-ui-e2e.sh ado-connect 2>&1 | tee "${EVIDENCE_DIR}/browser-leg.log"
+browser_rc="${PIPESTATUS[0]}"
+if [[ "${browser_rc}" != "0" ]]; then
+  if [[ -d "${ROOT}/ui/test-results" ]]; then
+    rm -rf "${EVIDENCE_DIR}/test-results/ado-connect"
+    mkdir -p "${EVIDENCE_DIR}/test-results"
+    cp -r "${ROOT}/ui/test-results" "${EVIDENCE_DIR}/test-results/ado-connect"
+  fi
+  die "the ado-connect browser leg failed (see ${EVIDENCE_DIR}/browser-leg.log)"
+fi
 
 echo
 echo "kind-sso-walk (ado): PASS — evidence in ${EVIDENCE_DIR}"

@@ -12,7 +12,7 @@
 // every existing importer — agents-tab.tsx, this pane's own tests — keeps its
 // import path.
 import * as React from "react";
-import { AWS_BLURB_MANAGED_OPENING } from "./login-pane-copy";
+import { AWS_BLURB_MANAGED_OPENING, SIGNIN_PROGRESS } from "./login-pane-copy";
 
 // Per-provider login conventions. Adding a provider is a new row here (mirrors
 // the server-side agentHarnessLogin table), not a forked component.
@@ -29,6 +29,9 @@ export type CaptureMode = "scrape" | "helper";
 export type LoginFlow = {
   cmd: string;
   title: string;
+  // The provider's short name in the door's progress copy (#628): "Waiting
+  // for AWS", "Open Claude sign-in".
+  providerName: string;
   // U-8: taken as a function of `startURLManaged` because the aws flow's opening
   // clause is false under a managed row (there is no field, and the server
   // ignores a supplied URL). Every other flow ignores the argument.
@@ -60,6 +63,7 @@ export const LOGIN_FLOWS: Record<string, LoginFlow> = {
   anthropic: {
     cmd: "claude setup-token",
     title: "Connect a Claude subscription via container login",
+    providerName: "Claude",
     capture: "scrape",
     doneLabel: "your Claude subscription is connected",
     expects: [
@@ -69,8 +73,9 @@ export const LOGIN_FLOWS: Record<string, LoginFlow> = {
         machine is touched.
       </>,
       <>
-        A new tab opens on claude.ai asking you to sign in and approve — you&apos;ll need an active Claude
-        subscription. If the pop-up is blocked, a click-through link appears here instead.
+        When the Claude login page is ready, &ldquo;{SIGNIN_PROGRESS.OPEN("Claude")}&rdquo; opens it in a new tab —
+        sign in and approve; you&apos;ll need an active Claude subscription. If nothing opens, copy the link from
+        here instead.
       </>,
       <>Some logins hand you a code: paste it into the field under the terminal, not the terminal itself.</>,
       <>
@@ -81,8 +86,8 @@ export const LOGIN_FLOWS: Record<string, LoginFlow> = {
     blurb: () => (
       <>
         Wardyn opened a sandbox and is running{" "}
-        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">claude setup-token</code> for you. It opens the
-        Claude login page in a new tab — approve it, then paste the code it gives you into the{" "}
+        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">claude setup-token</code> for you. Once the
+        Claude login page is ready, open it with &ldquo;{SIGNIN_PROGRESS.OPEN("Claude")}&rdquo; and approve, then paste the code it gives you into the{" "}
         <span className="font-medium">field below</span> (not the terminal) and hit Send. Wardyn captures the printed
         token automatically and connects your subscription; the token is injected proxy-side into every run and the
         sandbox never holds a live credential.
@@ -95,6 +100,7 @@ export const LOGIN_FLOWS: Record<string, LoginFlow> = {
     // login succeeds — the operator never has to run a second command.
     cmd: "aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso",
     title: "Connect an AWS SSO session via container login",
+    providerName: "AWS",
     doneLabel: "your AWS SSO session is connected",
     capture: "helper",
     doneMarker: "wardyn: aws sso credential captured",
@@ -107,8 +113,8 @@ export const LOGIN_FLOWS: Record<string, LoginFlow> = {
         start from.
       </>,
       <>
-        A browser tab opens the AWS verification page: enter the short code the terminal shows and approve with your
-        IAM Identity Center login.
+        When the AWS verification page is ready, &ldquo;{SIGNIN_PROGRESS.OPEN("AWS")}&rdquo; opens it in a new tab:
+        enter the code shown beside the button and approve with your IAM Identity Center login.
       </>,
       <>
         The SSO session is uploaded from inside the sandbox and stored write-only; Bedrock runs exchange it for

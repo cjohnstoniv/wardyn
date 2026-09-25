@@ -130,7 +130,7 @@ var _ RunsByCreatorPager = PG{}
 // upload's own KILLED guard is the belt.
 //
 // task and agent, not "provider": a run row carries no provider column (the
-// provider lives in the harness.login.started audit datum), and task+agent is
+// provider lives in the harness.login.start audit datum), and task+agent is
 // what actually separates one lane's login box from another's.
 type ActiveRunsByCreatorReader interface {
 	ActiveRunsByCreator(ctx context.Context, createdBy, task, agent string) ([]types.AgentRun, error)
@@ -168,10 +168,10 @@ func (s PG) ActiveRunsByCreator(ctx context.Context, createdBy, task, agent stri
 // A capability interface for ActiveRunsByCreatorReader's reasons (widening
 // Store would make every double and embedding in the tree implement a lock they
 // are not about), and its ABSENCE is handled the same way that neighbour's is:
-// the call site takes NO fallback and proceeds UNLOCKED. That is deliberate
-// and it is the whole failure model — a store that cannot lock is exactly as
-// serialized as 0.7.8 was, which is to say not at all, and nobody is refused a
-// sign-in over it. PG is the production store and implements it.
+// the call site takes NO fallback and proceeds UNLOCKED — a store that cannot
+// lock is exactly as serialized as 0.7.8 was. PG is the production store and
+// implements it, so this arm is reached only by test doubles. A lock that
+// EXISTS but cannot be taken in time is a refusal, not this.
 //
 // Keyed by ACTOR — the login run's creator — not by the credential scope: under
 // the `shared` roster every sign-in resolves to the same empty scope owner, so
@@ -184,6 +184,12 @@ type LoginLocker interface {
 // Compile-time assertion: PG satisfies LoginLocker.
 var _ LoginLocker = PG{}
 
+// ErrLoginLockNoCapacity is the one LockLoginSupersede error a caller may
+// proceed unlocked on: the pool cannot spare a connection for the hold (always
+// true at the documented pool floor). Any other error is a wait that expired
+// or a database fault, and the caller refuses rather than run unserialized.
+var ErrLoginLockNoCapacity = db.ErrAdvisoryLockNoCapacity
+
 // LockLoginSupersede holds db.LoginSupersedeLockClass keyed to actor for up to
 // db.LoginSupersedeLockWait. Session-scoped, not transaction-scoped: the work it
 // guards is several independent statements (two supersede passes around a run
@@ -193,7 +199,8 @@ var _ LoginLocker = PG{}
 // where an operator sizing pool_max_conns can find it: one connection for the
 // duration of one hold, at most one per process at a time, and none at all
 // when the pool cannot spare two (db.AdvisoryLockKeyed). An error means the
-// lock was not taken and the caller proceeds unlocked.
+// lock was not taken; see ErrLoginLockNoCapacity for which one a caller may
+// proceed on.
 func (s PG) LockLoginSupersede(ctx context.Context, actor string) (func(), error) {
 	return db.AdvisoryLockKeyed(ctx, s.Pool, db.LoginSupersedeLockClass, loginLockObject(actor), db.LoginSupersedeLockWait)
 }
@@ -247,8 +254,7 @@ var _ ActiveRunsAtPathReader = PG{}
 // ponytail: no new index. workspace_path is selective and the state filter is a
 // cheap check over the rows that match it; a composite (workspace_path, state)
 // index is the upgrade if a deployment ever has enough runs on ONE path to
-// notice. What this replaces was not an index problem — it was reading the
-// whole table.
+// notice.
 func (s PG) ActiveRunsAtWorkspacePath(ctx context.Context, workspacePath string) ([]types.AgentRun, error) {
 	states := make([]string, 0, len(types.NonTerminalRunStates))
 	for _, st := range types.NonTerminalRunStates {
@@ -420,6 +426,89 @@ func (s PG) ListWorkspacesPageForOwner(ctx context.Context, owner string, p Page
 		return nil, err
 	}
 	return s.hydrateAll(ctx, wss)
+}
+
+// GrantsByRunPager is the scoped analogue of Pager for GET /runs/{id}/grants
+// (#657): the existing ListGrantsByRun is already WHERE run_id=$1, so unlike
+// RunsByCreatorPager an absent implementation is SAFE, not fail-closed — the
+// api-layer fallback fetches the same (already-scoped) rows and windows them
+// in Go, matching WorkspacesByOwnerPager's posture, not RunsByCreatorPager's.
+type GrantsByRunPager interface {
+	ListGrantsByRunPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.CredentialGrant, error)
+}
+
+// Compile-time assertion: PG satisfies GrantsByRunPager.
+var _ GrantsByRunPager = PG{}
+
+// ListGrantsByRunPage is ListGrantsByRun bounded by p.
+func (s PG) ListGrantsByRunPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.CredentialGrant, error) {
+	q, args := p.appendTo(`SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`, []any{runID})
+	return collect(ctx, s.Pool, "list", "grants", q, args, scanGrant)
+}
+
+// SSHKeysByPrincipalPager is the scoped analogue of Pager for GET
+// /me/ssh-keys (#657). Same safe-fallback posture as GrantsByRunPager: the
+// existing ListSSHKeysByPrincipal is already WHERE principal=$1.
+type SSHKeysByPrincipalPager interface {
+	ListSSHKeysByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.SSHPublicKey, error)
+}
+
+// Compile-time assertion: PG satisfies SSHKeysByPrincipalPager.
+var _ SSHKeysByPrincipalPager = PG{}
+
+// ListSSHKeysByPrincipalPage is ListSSHKeysByPrincipal bounded by p.
+func (s PG) ListSSHKeysByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.SSHPublicKey, error) {
+	q, args := p.appendTo(`SELECT `+sshKeyCols+` FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC, fingerprint`, []any{principal})
+	return collect(ctx, s.Pool, "list", "ssh keys", q, args, scanSSHKey)
+}
+
+// APITokensByPrincipalPager is the scoped analogue of Pager for GET
+// /me/tokens (#657). Same safe-fallback posture as GrantsByRunPager: the
+// existing ListAPITokensByPrincipal is already WHERE principal=$1.
+type APITokensByPrincipalPager interface {
+	ListAPITokensByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.APIToken, error)
+}
+
+// Compile-time assertion: PG satisfies APITokensByPrincipalPager.
+var _ APITokensByPrincipalPager = PG{}
+
+// ListAPITokensByPrincipalPage is ListAPITokensByPrincipal bounded by p.
+func (s PG) ListAPITokensByPrincipalPage(ctx context.Context, principal string, p Page) ([]types.APIToken, error) {
+	q, args := p.appendTo(`SELECT `+apiTokenCols+` FROM api_tokens WHERE principal = $1 ORDER BY created_at DESC, id`, []any{principal})
+	return queryAPITokens(ctx, s, q, args...)
+}
+
+// CapabilityGrantsForPager is the scoped analogue of Pager for GET
+// /me/capabilities (#657). Same safe-fallback posture as GrantsByRunPager: the
+// existing ListCapabilityGrantsFor is already scoped to users/groups — its own
+// doc explains a deployment's grant list is normally small enough that one
+// round trip beats two queries, so this exists for the uniform contract (every
+// list route answers ?limit=&offset= and X-Wardyn-Truncated) rather than
+// because production grant lists are expected to routinely truncate.
+type CapabilityGrantsForPager interface {
+	ListCapabilityGrantsForPage(ctx context.Context, users, groups []string, userType string, p Page) ([]types.CapabilityGrant, error)
+}
+
+// Compile-time assertion: PG satisfies CapabilityGrantsForPager.
+var _ CapabilityGrantsForPager = PG{}
+
+// ListCapabilityGrantsForPage is ListCapabilityGrantsFor bounded by p: the
+// same four subject arms, so a page never drops a `user_type` grant the
+// unpaged read returns (TestPG_ListCapabilityGrantsForPage_MatchesUnpaged).
+func (s PG) ListCapabilityGrantsForPage(ctx context.Context, users, groups []string, userType string, p Page) ([]types.CapabilityGrant, error) {
+	if users == nil {
+		users = []string{}
+	}
+	if groups == nil {
+		groups = []string{}
+	}
+	q, args := p.appendTo(`SELECT `+capabilityGrantCols+` FROM capability_grants
+		WHERE subject_type = 'all'
+		   OR (subject_type = 'user'  AND subject = ANY($1::text[]))
+		   OR (subject_type = 'group' AND subject = ANY($2::text[]))
+		   OR (subject_type = 'user_type' AND subject = $3)
+		ORDER BY capability, subject_type, subject, value`, []any{users, groups, userType})
+	return collect(ctx, s.Pool, "list", "capability grants for subject", q, args, scanCapabilityGrant)
 }
 
 // ListApprovalsPage returns approvals filtered by state (empty = all) in reverse

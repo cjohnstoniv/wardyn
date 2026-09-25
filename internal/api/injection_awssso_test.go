@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +45,7 @@ type reauthStore struct {
 	site      types.SiteConfig
 	grants    []types.CredentialGrant
 	approvals *fakeApprovals
-	// audit is where the TRANSACTION writes credential.reauth.resolved. The
+	// audit is where the TRANSACTION writes credential.reauth.resolve. The
 	// real store inserts it into audit_events inside the same tx, never through
 	// Server.recordAudit, so a fake that dropped it would make the row invisible
 	// to exactly the assertion that matters.
@@ -336,7 +337,7 @@ func TestResolveAWSSSOInjection_HostPinRefusesAnotherHost(t *testing.T) {
 	if strings.Contains(w.Body.String(), reauthToken) {
 		t.Fatal("the refusal body echoed the session token")
 	}
-	if !f.audit.hasReason("secret.read", "sso-host-not-portal") {
+	if !f.audit.hasReason("secret.read", "sso_host_not_portal") {
 		t.Error("no secret.read failure naming the host pin")
 	}
 }
@@ -412,6 +413,15 @@ func TestResolveAWSSSOInjection_GrantNamingAnotherOwnerIsRefused(t *testing.T) {
 	if !f.audit.hasReason("secret.read", "scope_changed") {
 		t.Error("no scope_changed failure for a grant naming another member")
 	}
+	// #656: the audited reason must also reach the wire body — the proxy has
+	// no audit access and used to see only the human sentence.
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != reasonScopeChanged {
+		t.Errorf("wire reason = %q, want %q", body.Reason, reasonScopeChanged)
+	}
 }
 
 // A DEAD session raises exactly ONE visible request and answers 423 with the id
@@ -450,8 +460,8 @@ func TestResolveAWSSSOInjection_DeadSessionRaisesOneRequestAndHolds(t *testing.T
 	if n != 1 {
 		t.Fatalf("pending credential_reauth rows = %d, want exactly 1", n)
 	}
-	if !f.audit.has("credential.reauth.requested", "success") {
-		t.Fatal("no credential.reauth.requested audit row")
+	if !f.audit.has("credential.reauth.request", "success") {
+		t.Fatal("no credential.reauth.request audit row")
 	}
 
 	// A second resolve joins the SAME request.
@@ -477,8 +487,17 @@ func TestResolveAWSSSOInjection_CancelledRequestIsTerminalNotHeld(t *testing.T) 
 	if _, err := f.srv.cfg.Approvals.CancelForRun(context.Background(), f.runID, "run_killed"); err != nil {
 		t.Fatal(err)
 	}
-	if w := f.resolve(t); w.Code != http.StatusForbidden {
+	w := f.resolve(t)
+	if w.Code != http.StatusForbidden {
 		t.Fatalf("resolve after the run was killed: code = %d, want 403 terminal; body=%s", w.Code, w.Body.String())
+	}
+	// #656: a terminal hold now carries a machine reason on the wire too.
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != reasonSigninClosed {
+		t.Errorf("wire reason = %q, want %q", body.Reason, reasonSigninClosed)
 	}
 }
 
@@ -508,8 +527,8 @@ func TestResolveAWSSSOInjection_CaptureResolvesAndTheRetrySucceeds(t *testing.T)
 	if got.State != types.ApprovalApproved {
 		t.Fatalf("after the capture the request is %s, want APPROVED", got.State)
 	}
-	if !f.audit.has("credential.reauth.resolved", "success") {
-		t.Error("no credential.reauth.resolved audit row")
+	if !f.audit.has("credential.reauth.resolve", "success") {
+		t.Error("no credential.reauth.resolve audit row")
 	}
 	if f.audit.has("approval.decide", "success") {
 		t.Error("approval.decide was written for a decision nobody made")
@@ -610,7 +629,7 @@ func TestReconcileReauthOnRead_ResolvesAStrandedRequest(t *testing.T) {
 	if got.State != types.ApprovalApproved {
 		t.Fatalf("the poll read %s, want APPROVED — a stranded request must be derivable from the capture's own provenance", got.State)
 	}
-	if !f.audit.has("credential.reauth.resolved", "success") {
+	if !f.audit.has("credential.reauth.resolve", "success") {
 		t.Error("the reconcile resolved the row without its audit row")
 	}
 
@@ -677,19 +696,19 @@ func TestResolveAWSSSOInjection_ConcurrentResolversRaiseOneRequest(t *testing.T)
 	if n != 1 {
 		t.Fatalf("pending credential_reauth rows = %d, want exactly 1 for 16 concurrent resolvers", n)
 	}
-	// …AND ONE TRAIL ENTRY, AND ONE COUNT (W6-S F4). RequestApproval's dedup
+	// …and one trail entry, and one count. RequestApproval's dedup
 	// answers the loser with the WINNER'S row, silently, so a caller that cannot
 	// tell them apart audits and counts a request it did not raise — 16 rows
 	// naming one approval id on a hash-chained log, and a `requested` counter
 	// that no longer means "requests raised".
 	raised := 0
 	for _, ev := range f.audit.events() {
-		if ev.Action == "credential.reauth.requested" {
+		if ev.Action == "credential.reauth.request" {
 			raised++
 		}
 	}
 	if raised != 1 {
-		t.Errorf("credential.reauth.requested rows = %d, want exactly 1 — the losers of the raise must "+
+		t.Errorf("credential.reauth.request rows = %d, want exactly 1 — the losers of the raise must "+
 			"not audit a request somebody else raised", raised)
 	}
 	if got := reauthCount(t, f.srv, "requested"); got != "1" {
@@ -720,6 +739,14 @@ func TestResolveAWSSSOInjection_WorkflowCapRefusesTheNinth(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "too many times") {
 		t.Errorf("cap refusal body = %s, want the capped sentence", w.Body.String())
 	}
+	// #656: the hold chain now carries a machine reason on the wire too.
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != reasonSigninHoldsExhausted {
+		t.Errorf("wire reason = %q, want %q", body.Reason, reasonSigninHoldsExhausted)
+	}
 }
 
 // I8 — the token appears in no sink this endpoint writes to.
@@ -746,11 +773,11 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		t.Fatalf("first resolve: code = %d, want 423", w.Code)
 	}
 	ap := onlyReauthRow(t, f.srv)
-	// BOTH TIERS (security NIT-5). The admin token is the security tier; the
-	// run's own member token is the other. The plan's promise is 409 on EVERY
-	// tier, and behind the member gate a member used to get that gate's refusal
-	// instead — refused either way, but for the wrong reason: "you may not use
-	// this verb" rather than "this verb does not exist for this kind".
+	// Both tiers. The admin token is the security tier; the run's own member
+	// token is the other. The plan's promise is 409 on every tier, so a member
+	// must get the 409 and not the member gate's refusal — refused either way,
+	// but "you may not use this verb" is the wrong reason where "this verb does
+	// not exist for this kind" is the right one.
 	for _, verb := range []string{"approve", "deny"} {
 		w := do(t, f.srv, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/"+verb, adminToken, "")
 		if w.Code != http.StatusConflict {
@@ -761,7 +788,7 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		}
 	}
 
-	// THE MEMBER TIER, through a real OIDC session — and the two halves of it
+	// The member tier, through a real OIDC session — and the two halves of it
 	// (security round-2 SHOULD-1). The run's OWNER is told the same thing the
 	// security operator is: the verb does not exist for this kind. A member who
 	// does NOT own the run is told nothing at all, because a 409 there would
@@ -775,8 +802,8 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		want  int
 		wantB string
 	}{
-		{"the run's owner", ssoSession(t, "alice@example.com", "alice@example.com", oidc.RoleMember), http.StatusConflict, "signing in"},
-		{"a foreign member", ssoSession(t, "member-sub", "member@corp.example", oidc.RoleMember), http.StatusNotFound, "approval not found"},
+		{"the run's owner", ssoSession(t, "alice@example.com", "alice@example.com", oidc.RoleUser), http.StatusConflict, "signing in"},
+		{"a foreign member", ssoSession(t, "member-sub", "member@corp.example", oidc.RoleUser), http.StatusNotFound, "approval not found"},
 	} {
 		for _, verb := range []string{"approve", "deny"} {
 			w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/"+verb, tc.sess, "")
@@ -790,7 +817,7 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 	}
 	// …and the foreign member's refusal is BYTE-IDENTICAL to the one a UUID that
 	// does not exist at all gets, so the two cannot be told apart.
-	foreignSess := func() *http.Cookie { return ssoSession(t, "member-sub", "member@corp.example", oidc.RoleMember) }
+	foreignSess := func() *http.Cookie { return ssoSession(t, "member-sub", "member@corp.example", oidc.RoleUser) }
 	fresh := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+uuid.New().String()+"/approve", foreignSess(), "")
 	foreign := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/approve", foreignSess(), "")
 	if fresh.Code != foreign.Code || fresh.Body.String() != foreign.Body.String() {
@@ -834,7 +861,7 @@ func onlyPendingReauthRow(t *testing.T, srv *Server) types.ApprovalRequest {
 	return types.ApprovalRequest{}
 }
 
-// THE RAISE REASON IS THE SPENT ONE when the session's refresh token is gone —
+// The raise reason is the spent one when the session's refresh token is gone —
 // and this case exists because a MERGE broke it silently.
 //
 // The run-credential-door lane turned awsSSORefreshSpentSentence into a FORMAT
@@ -872,7 +899,7 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 		t.Fatalf("resolve: code = %d, want 423; body=%s", w.Code, w.Body.String())
 	}
 	for _, ev := range f.audit.events() {
-		if ev.Action != "credential.reauth.requested" {
+		if ev.Action != "credential.reauth.request" {
 			continue
 		}
 		var d map[string]any
@@ -885,18 +912,18 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 		}
 		return
 	}
-	t.Fatal("no credential.reauth.requested row")
+	t.Fatal("no credential.reauth.request row")
 }
 
-// ─── legacy open mode: no roster (W6-S F1) ───────────────────────────────────
+// legacy open mode: no roster
 
-// THE TWO HALVES, JOINED. Dispatch and resolve each had thorough tests and they
+// The two halves, joined. Dispatch and resolve each had thorough tests and they
 // disagreed about the same deployment, because no test ever ran both: every
 // resolver case seeds a roster row (reauthRosterRow) and every no-roster case
 // stops at dispatch.
 //
 // The shape is an upgraded 0.7.5 install that never wrote a roster — legacy open
-// mode, which CHANGELOG and docs/MEMBERS.md both name as supported, and which
+// mode, which CHANGELOG and docs/USERS.md both name as supported, and which
 // awsSSOScopeFor answers with the operator namespace. Dispatch authors Phase B
 // for it (TestDispatchWiring_SwitchOnAuthorsThePhaseBLane dispatches with
 // SiteConfig{} and asserts the grant, the MITM entry and the CA). Then every
@@ -987,11 +1014,11 @@ func (d *dedupApprovals) Get(_ context.Context, id uuid.UUID) (types.ApprovalReq
 	return types.ApprovalRequest{}, errStoreNotFound
 }
 
-// THE LOSER AUDITS NOTHING AND COUNTS NOTHING (W6-S F4).
+// The loser audits nothing and counts nothing.
 //
 // It still gets its 423 naming the winner's approval id — the row is real, it is
 // PENDING, and the sidecar's hold joins the same workflow by that id — but
-// `credential.reauth.requested` and outcome=requested belong to whoever raised
+// `credential.reauth.request` and outcome=requested belong to whoever raised
 // it. With N resolvers for one lapse the alternative is N rows on a hash-chained
 // log all naming one approval, and a counter that no longer means "requests
 // raised".
@@ -1027,11 +1054,87 @@ func TestResolveAWSSSOInjection_ARaiseThatLostTheRaceAuditsNothing(t *testing.T)
 			body.ApprovalID, winner.ID)
 	}
 	for _, ev := range f.audit.events() {
-		if ev.Action == "credential.reauth.requested" {
-			t.Errorf("the loser audited credential.reauth.requested for %s, a request it did not raise", ev.Target)
+		if ev.Action == "credential.reauth.request" {
+			t.Errorf("the loser audited credential.reauth.request for %s, a request it did not raise", ev.Target)
 		}
 	}
 	if after := reauthCount(t, f.srv, "requested"); after != before {
 		t.Errorf("outcome=requested moved %s -> %s for a request this caller did not raise", before, after)
+	}
+}
+
+// #656, following #204's ADO-lane precedent: a raise that cannot even ask (the
+// approval store errors) now carries reason "raise_failed" on the wire, not
+// just the human sentence — the AWS SSO hold shares the ADO sign-in hold's
+// refusal vocabulary because it is the same shape (an approval-backed hold
+// whose own raise can fail).
+func TestResolveAWSSSOInjection_RaiseFailureCarriesReasonOnWire(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.putBlob(t, "alice@example.com", deadSSOBlob())
+	f.st.approvals.requestErr = errors.New("approvals store unavailable")
+
+	w := f.resolve(t)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("resolve: code = %d, want 503; body=%s", w.Code, w.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != reasonRaiseFailed {
+		t.Errorf("wire reason = %q, want %q", body.Reason, reasonRaiseFailed)
+	}
+}
+
+// #656: the re-auth hold's approvals_unreadable refusal answers outside fail(),
+// so it gets its own wire assertion like its three siblings: a dead session
+// whose run approvals cannot be listed is a 503 carrying that reason.
+func TestResolveAWSSSOInjection_ApprovalsUnreadableCarriesReasonOnWire(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.putBlob(t, "alice@example.com", deadSSOBlob())
+	f.st.approvals.listErr = errors.New("approvals store unavailable")
+
+	w := f.resolve(t)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("resolve: code = %d, want 503; body=%s", w.Code, w.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != "approvals_unreadable" {
+		t.Errorf("wire reason = %q, want %q", body.Reason, "approvals_unreadable")
+	}
+}
+
+// failingRaiseApprovals answers every Request the way approval.RequestApproval
+// does when its store insert fails: the pgx error, wrapped.
+type failingRaiseApprovals struct{ ApprovalService }
+
+const reauthRaiseDriverText = `failed to connect to host=pg.internal user=wardyn database=wardyn: SQLSTATE 57P01`
+
+func (failingRaiseApprovals) Request(context.Context, types.ApprovalRequest) (types.ApprovalRequest, error) {
+	return types.ApprovalRequest{}, fmt.Errorf("approval: create: %w", errors.New(reauthRaiseDriverText))
+}
+
+// A raise that fails answers the fixed 503 sentence and nothing else. The
+// reader is the run's own sandbox — the adversary #173 names — and the raise
+// error wraps the approval store's, so appending it handed the sandbox the
+// database host, user and SQLSTATE (#505 F3).
+func TestResolveAWSSSOInjection_RaiseFailureBodyCarriesNoDriverText(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.putBlob(t, "alice@example.com", deadSSOBlob())
+	f.srv.cfg.Approvals = failingRaiseApprovals{ApprovalService: f.srv.cfg.Approvals}
+
+	w := f.resolve(t)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("resolve = %d, want 503. body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "pg.internal") || strings.Contains(body, "SQLSTATE") || strings.Contains(body, "approval: create") {
+		t.Fatalf("the 503 body carries the store's error text to the sandbox: %s", body)
+	}
+	if !strings.Contains(body, credentialReauthRaiseFailedBody) {
+		t.Fatalf("the 503 body = %s, want the fixed sentence %q", body, credentialReauthRaiseFailedBody)
 	}
 }

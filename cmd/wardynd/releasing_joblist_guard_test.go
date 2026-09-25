@@ -13,14 +13,14 @@ import (
 )
 
 // RELEASING.md's tag gate names the ci.yml jobs a maintainer must see green
-// before pushing a tag. That list drifted in BOTH directions before 0.7:
+// before pushing a tag, and that list can drift in both directions:
 //
-//   - `sbom-stub` was named but had been DELETED along with `make sbom`, so a
-//     maintainer following the list literally waited on a job that can never
-//     report.
-//   - `notices` — the copyleft / unreviewed-dependency gate — was missing
-//     entirely, so the list told them to skip the one job that catches a GPL
-//     regression. On a release that adds an X stack, that is the expensive half.
+//   - a named job that does not exist (a deleted `sbom-stub`, say) leaves a
+//     maintainer following the list literally waiting on a job that can
+//     never report;
+//   - a missing job (`notices`, the copyleft / unreviewed-dependency gate)
+//     tells them to skip the one job that catches a GPL dependency. On a
+//     release that adds an X stack, that is the expensive half.
 //
 // Neither is a typo; both are drift, and drift recurs. This is the check that
 // makes it fail loudly instead.

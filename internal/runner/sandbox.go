@@ -62,7 +62,15 @@ const (
 // REPLACE the client trust store, so the bare CA there would break non-MITM'd
 // CONNECT-tunneled hosts. Keep in lockstep with install_mitm_ca in
 // deploy/images/common/agent-run-lib.sh. No-op when the run did not opt into
-// TLS-MITM (WARDYN_MITM_CA_PEM unset).
+// TLS-MITM (WARDYN_MITM_CA_PEM unset). The idle loop below (rather than `exec
+// sleep infinity`) is TERM-aware: as PID 1, `sleep` ignores SIGTERM, so a stop
+// always waited out the full kill timeout (k8s pod grace period + teardown
+// slack, docker's stop timeout) instead of exiting promptly. `trap ... TERM
+// INT; while :; do sleep 3600 & wait $!; done` is POSIX sh (busybox/dash
+// compatible): the shell (PID 1) receives the signal, `wait` returns at once
+// and the trap runs. Exits 143/130 (the usual SIGTERM/SIGINT codes), not 0:
+// an out-of-band container/pod stop (daemon restart, host shutdown, a manual
+// `docker stop`) must still read as a signal kill downstream, not success.
 const AgentIdleScript = `d=/tmp/wardyn
 if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
   mkdir -p "$d" 2>/dev/null; chmod 1777 "$d" 2>/dev/null || true
@@ -81,7 +89,9 @@ if [ -n "${WARDYN_MITM_CA_PEM:-}" ]; then
     cp "$d/mitm-ca.pem" /usr/local/share/ca-certificates/wardyn-mitm.crt 2>/dev/null && update-ca-certificates >/dev/null 2>&1 || true
   fi
 fi
-exec sleep infinity`
+trap 'exit 143' TERM
+trap 'exit 130' INT
+while :; do sleep 3600 & wait $!; done`
 
 // knownNonVaultRuntimes are OCI runtime families known to NOT boot a
 // per-sandbox KVM VM: runc/crun/sysbox share the host kernel, and runsc
@@ -220,6 +230,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 	cfg := proxy.Config{
 		RunID:                runID,
 		ControlPlaneURL:      pc.ControlPlaneURL,
+		ControlPlaneCAPEM:    pc.ControlPlaneCAPEM,
 		RunToken:             pc.RunToken,
 		Policy:               pc.Policy,
 		Injection:            inj,
@@ -230,13 +241,14 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		MITMLLM:              pc.MITMLLM,
 		GitGrants:            pc.GitGrants,
 		PATGrants:            pc.PATGrants,
-		ADOGrants:            pc.ADOGrants,
+		ADOGrant:             pc.ADOGrant,
 		UpstreamProxyURL:     pc.UpstreamProxyURL,
 		TrustedCAPEM:         pc.TrustedCAPEM,
 		InternalHosts:        pc.InternalHosts,
 		UpstreamProxyNoProxy: pc.UpstreamProxyNoProxy,
 		LLMUpstreams:         pc.LLMUpstreams,
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
+		Unattended:           pc.Unattended,
 	}
 	return json.Marshal(cfg)
 }

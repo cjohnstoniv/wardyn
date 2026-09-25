@@ -197,7 +197,7 @@ func drainExecStderr(channel ssh.Channel, sess *runner.ExecSession) {
 // for the interactive shell path.
 //
 // Returns the exit code (1 when Wait is absent or errors — clampExitCode's
-// same fold) and the total bytes copied Stdout->channel: what ssh.sftp's and
+// same fold) and the total bytes copied Stdout->channel: what ssh.sftp.transfer's and
 // ssh.forward's "bytes" audit field means — the direction that matters for a
 // download/forward is what came OUT of the sandbox.
 func (s *Server) sshBridgeExecSession(ctx context.Context, runID uuid.UUID, principal string, channel ssh.Channel, sess *runner.ExecSession, sendExit bool) (exitCode int, bytesOut int64) {
@@ -724,7 +724,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 	}
 	sess, err := s.cfg.Runner.ExecStream(ctx, run.SandboxRef, runner.ExecSpec{Argv: []string{sftpServerPath, "-e"}})
 	if err != nil {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp",
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
 			runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 		reason := sshExecStreamErrorMessage(err)
 		if !errors.Is(err, runner.ErrExecStreamUnsupported) {
@@ -736,7 +736,7 @@ func (s *Server) bridgeSSHSFTP(ctx context.Context, runID uuid.UUID, principal s
 	_, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, channel, sess, true)
 	// BaseCtx, not ctx — see bridgeSSHExec's identical trailing-write FINDING
 	// comment above (same shape, same connection-teardown race, same fix).
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp",
+	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.sftp.transfer",
 		runID.String(), "success", mustJSON(map[string]any{"bytes": bytesOut})))
 }
 

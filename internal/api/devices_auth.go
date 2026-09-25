@@ -45,7 +45,7 @@ const (
 	enrolmentTokenPrefix = "wde_"
 )
 
-// deviceAuthActor names the device routes' boundary on its auth.failed rows,
+// deviceAuthActor names the device routes' boundary on its auth.fail rows,
 // beside http.go's adminAuthActor/internalAuthActor; deviceEnrolActor names
 // the anonymous enrolment route on its device.enrol failure rows.
 const (
@@ -76,24 +76,6 @@ const (
 	maxDeviceIngestRows  = 500
 	maxDeviceIngestBytes = 8 << 20
 )
-
-// deviceEnrolRequest / deviceEnrolResponse are POST /devices/enrol's wire
-// shapes; deviceAck is what the ingest and heartbeat routes answer — the
-// organisation's recorded cursor for the device, which the forwarder advances
-// to.
-type deviceEnrolRequest struct {
-	Token string `json:"token"`
-}
-
-type deviceEnrolResponse struct {
-	DeviceID uuid.UUID `json:"device_id"`
-	Name     string    `json:"name"`
-	Token    string    `json:"token"`
-}
-
-type deviceAck struct {
-	AckedSeq int64 `json:"acked_seq"`
-}
 
 type deviceCtxKey struct{}
 
@@ -149,6 +131,7 @@ func (s *Server) deviceAuth(next http.Handler) http.Handler {
 		ds, ok := s.cfg.Store.(store.DeviceStore)
 		if !ok {
 			s.auditAuthFailedAs(r, deviceAuthActor, "device_store_unavailable")
+			w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 			writeError(w, http.StatusUnauthorized, "this deployment does not accept device credentials")
 			return
 		}
@@ -164,6 +147,7 @@ func (s *Server) deviceAuth(next http.Handler) http.Handler {
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			s.auditAuthFailedAs(r, deviceAuthActor, "invalid_device_token")
+			w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 			writeError(w, http.StatusUnauthorized, "invalid device token")
 			return
 		}
@@ -193,7 +177,7 @@ func (s *Server) deviceAuth(next http.Handler) http.Handler {
 // laptop holds — so the per-peer limiter runs before anything else. Spent,
 // expired and unknown tokens are one 401 (ConsumeEnrolmentToken does not tell
 // them apart), and the failure row is rate-bound by the same process-wide
-// bucket auth.failed uses, its drops counted in the same series.
+// bucket auth.fail uses, its drops counted in the same series.
 //
 // Consume and create are two statements: a failed create leaves the token
 // spent and no device, and the answer is an admin re-mint, not a retry.
@@ -210,7 +194,7 @@ func (s *Server) handleDeviceEnrol(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotImplemented, http.StatusText(http.StatusNotImplemented))
 		return
 	}
-	var req deviceEnrolRequest
+	var req types.DeviceEnrolRequest
 	if !decodeStrict(w, r, &req) {
 		return
 	}
@@ -239,16 +223,16 @@ func (s *Server) handleDeviceEnrol(w http.ResponseWriter, r *http.Request) {
 		mustJSON(map[string]any{"name": d.Name, "enrolment_token_id": t.ID, "minted_by": t.MintedBy}))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
-	writeJSON(w, http.StatusCreated, deviceEnrolResponse{DeviceID: d.ID, Name: d.Name, Token: raw})
+	writeJSON(w, http.StatusCreated, types.DeviceEnrolResponse{DeviceID: d.ID, Name: d.Name, Token: raw})
 }
 
 // auditEnrolFailure writes one device.enrol failure row, bounded the way
-// auth.failed is: identical consecutive refusals fold into one streak whose
+// auth.fail is: identical consecutive refusals fold into one streak whose
 // summary carries the count (enrolFailures), and every row that is written —
 // opening row or summary — pays the process-wide auth-failure bucket
 // (emitEnrolFailure).
 //
-// The streak key is the reason and the path, NOT the peer. auth.failed keys on
+// The streak key is the reason and the path, NOT the peer. auth.fail keys on
 // the peer because on a loopback deployment it separates principals; on this
 // anonymous route the peer is the caller's to rotate, and a key it can rotate
 // is a fold it can defeat. Each opening row still carries its peer, and the
@@ -282,6 +266,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 	d, ok := deviceFromContext(r.Context())
 	ds, isDS := s.cfg.Store.(store.DeviceStore)
 	if !ok || !isDS {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 		writeError(w, http.StatusUnauthorized, "invalid device token")
 		return
 	}
@@ -328,6 +313,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		// Revoked after deviceAuth admitted this request: the same 401 its
 		// next request gets, recorded as the revocation it is.
 		s.auditIngestFailure(r, d, "revoked", len(rows))
+		w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 		writeError(w, http.StatusUnauthorized, "invalid device token")
 		return
 	case errors.Is(err, store.ErrFederatedRowInvalid):
@@ -353,16 +339,19 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		// A genesis row after a recorded chain: a purge on the laptop. Accepted,
 		// because refusing would strand every later row, and made evidence here
 		// because a developer with root can purge.
-		ev := s.auditEvent(nil, types.ActorSystem, deviceActor(d.ID), "device.audit.chain_reset", d.ID.String(), "success",
+		ev := s.auditEvent(nil, types.ActorSystem, deviceActor(d.ID), "device.chain.reset", d.ID.String(), "success",
 			mustJSON(map[string]any{"prior_seq": d.LastSeq, "prior_row_hash": d.LastRowHash, "accepted": res.Accepted}))
 		ev.SourceIP = r.RemoteAddr
 		s.recordAudit(r.Context(), ev)
 	}
+	// Every row of the batch is now held here — ingested, or recognised by its
+	// seq AND hash — so the ack is the batch's own end; an empty batch answers
+	// the recorded cursor, as a heartbeat does.
 	acked := d.LastSeq
-	if res.Accepted > 0 {
+	if len(rows) > 0 {
 		acked = rows[len(rows)-1].Seq
 	}
-	writeJSON(w, http.StatusOK, deviceAck{AckedSeq: acked})
+	writeJSON(w, http.StatusOK, types.DeviceAck{AckedSeq: acked})
 }
 
 // invalidFederatedRow is the boundary check the store cannot give a useful
@@ -392,7 +381,7 @@ func invalidFederatedRow(rows []types.FederatedAuditEvent) string {
 
 // auditIngestFailure writes the device.audit.ingest failure row: which device,
 // why (a closed set), how many rows it sent and where this organisation's
-// record of its chain stood. Bounded like auth.failed, per device: identical
+// record of its chain stood. Bounded like auth.fail, per device: identical
 // consecutive refusals from one device fold into a streak (ingestFailures,
 // keyed on device and reason) and every row written pays that device's own
 // bucket — a forwarder replaying one refused batch on its backoff costs two
@@ -420,5 +409,5 @@ func (s *Server) handleDeviceHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid device token")
 		return
 	}
-	writeJSON(w, http.StatusOK, deviceAck{AckedSeq: d.LastSeq})
+	writeJSON(w, http.StatusOK, types.DeviceAck{AckedSeq: d.LastSeq})
 }

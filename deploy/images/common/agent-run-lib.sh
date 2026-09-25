@@ -309,6 +309,9 @@ provision_git_helper_secret() {
         return 0
     fi
     # Write 0400, agent-owned. umask guards the create window; chmod is explicit.
+    # A revive (booted_before) finds the last boot's 0400 file, which even its
+    # owner cannot open for writing: remove it first, or prep dies here.
+    rm -f "$secret_file"
     ( umask 077; printf '%s' "$secret" > "$secret_file" )
     chmod 0400 "$secret_file"
     export WARDYN_GIT_HELPER_SECRET="$secret"
@@ -606,6 +609,35 @@ start_wardyn_session() {
     return 1
 }
 
+# ── revive: a container started again after a reboot ─────────────────────────
+# booted_before — true when this container's `agent-run --idle` has run before:
+# the control plane revived a run lost to a reboot (long-holds design rev 4, §4
+# row 3), `docker start` re-ran the container's main process, and the writable
+# layer still holds the marker the first boot wrote. The first boot writes it
+# and answers false. Images call it at the top of --idle and, on true, take
+# their --revive branch instead: the same prep over the kept files, but the
+# run's seed is NEVER started again (it already ran; a revive continues or
+# starts fresh, it does not replay the operator's first prompt or startup
+# command). An image built before this function re-runs --idle as it was and
+# re-seeds; that is the documented ceiling for pre-revive images.
+booted_before() {
+    local m="${HOME:-/home/agent}/.wardyn/booted"
+    [[ -e "$m" ]] && return 0
+    mkdir -p "${m%/*}" 2>/dev/null || true
+    : > "$m" 2>/dev/null || true
+    return 1
+}
+
+# revive_markers — reset what the last boot left that would lie to this one:
+# prep-done, so attach-bashrc.sh and a revive pane wait for THIS boot's prep
+# (the clone skips a repo already there, but the CA, the git-helper secret and
+# the broker rewrites are redone), and agent-started, so a harness the image
+# does not continue is started fresh by attach-bashrc.sh on the first attach.
+# An image that does continue its harness writes agent-started back itself.
+revive_markers() {
+    rm -f "${HOME:-/home/agent}/.wardyn/prep-done" "${HOME:-/home/agent}/.wardyn/agent-started"
+}
+
 # DRAFT (M2 canon pending) — the only two lines a human reads in a boot pane
 # before the agent takes it over. The pane is created BEFORE the workspace prep
 # it waits on, so without the first line an operator who attaches during an 18 s
@@ -630,8 +662,8 @@ BOOT_SEED_PREP_GONE='wardyn: workspace preparation ended without finishing — s
 # would silently reintroduce exactly that bug on a big repo: at the cap the pane
 # would start the agent on the operator's already-submitted prompt against a
 # half-cloned tree. --idle writes prep-done LAST and UNCONDITIONALLY (even when
-# the clone failed) and then `exec sleep infinity` as PID 1, so "the idle process
-# is gone" is the only honest other end, and this cannot hang.
+# the clone failed) and then idles in a TERM-aware wait loop as PID 1 (same pid),
+# so "the idle process is gone" is the only honest other end, and this cannot hang.
 #
 # Says so BEFORE the loop, not after: a human attaching during an 18 s prep joins
 # this pane, and a blank one reads as a broken run.
@@ -644,8 +676,8 @@ BOOT_SEED_PREP_GONE='wardyn: workspace preparation ended without finishing — s
 boot_seed_wait_for_prep() {
     printf '%s\n' "$BOOT_SEED_PREPARING" >&2
     # PID 1 is the fallback because it IS `agent-run --idle` on both runners (the
-    # driver launches it as the container's whole main process, and it later execs
-    # `sleep infinity` keeping the same pid); WARDYN_IDLE_PID is the exact one
+    # driver launches it as the container's whole main process, and it then idles
+    # in a TERM-aware wait loop as PID 1, same pid); WARDYN_IDLE_PID is the exact one
     # start_wardyn_session handed over.
     local idle_pid="${WARDYN_IDLE_PID:-1}"
     while [[ ! -f "$HOME/.wardyn/prep-done" ]] && kill -0 "$idle_pid" 2>/dev/null; do sleep 1; done
@@ -834,4 +866,31 @@ selftest_report_repo_and_git() {
         echo "  caller-auth gate: not provisioned (no git grant; helper fails open so unmatched-host git is unaffected)"
     fi
     return $rc
+}
+
+# go_duration_to_ms converts a Go time.Duration string (h/m/s/ms components,
+# e.g. "24h0m0s", "90m", "1h30m0s" — the shape WARDYN_APPROVAL_EXPIRY_AFTER
+# arrives in, dispatch's mirror of the SAME ceiling the approval-expiry
+# sweeper expires a PENDING approval at) to whole milliseconds on stdout.
+# Unparseable input prints nothing (empty stdout) rather than failing the
+# run — callers fall back to their own default; it always returns 0, so a
+# bare `x=$(go_duration_to_ms ...)` is safe under set -e. RL-1: this is how
+# agent-run sizes MCP_TOOL_TIMEOUT to the real ceiling.
+go_duration_to_ms() {
+    local d="$1" total=0 num unit chunk
+    [[ -n "$d" ]] || return 0
+    while [[ "$d" =~ ^([0-9]+(\.[0-9]+)?)(h|ms|m|s) ]]; do
+        num="${BASH_REMATCH[1]}"
+        unit="${BASH_REMATCH[3]}"
+        case "$unit" in
+            h) chunk=$(awk "BEGIN{printf \"%.0f\", $num*3600000}") ;;
+            m) chunk=$(awk "BEGIN{printf \"%.0f\", $num*60000}") ;;
+            s) chunk=$(awk "BEGIN{printf \"%.0f\", $num*1000}") ;;
+            ms) chunk=$(awk "BEGIN{printf \"%.0f\", $num}") ;;
+        esac
+        total=$((total + chunk))
+        d="${d#"${BASH_REMATCH[0]}"}"
+    done
+    [[ -z "$d" ]] || return 0  # trailing garbage: refuse to guess, print nothing
+    if (( total > 0 )); then echo "$total"; fi
 }

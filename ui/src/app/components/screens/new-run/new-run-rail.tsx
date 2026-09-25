@@ -26,14 +26,14 @@ import type {
   SCMAccess,
   SetupHarnessTool,
 } from "../../../lib/types";
-import { Button } from "../../ui/button";
+import { Button, buttonVariants } from "../../ui/button";
 import { AutonomyChip, Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
 import { MODEL_ACCESS_AGENT } from "../../../lib/model-access";
@@ -42,6 +42,7 @@ import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import {
   useClaimModelAccessDoor,
   useModelAccessDoor,
+  useShellSetupStatus,
   type ModelAccessDoorHandle,
 } from "../../wardyn/model-access-context";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
@@ -67,7 +68,9 @@ interface RunRailProps {
   /** The run's tool_rules in one line, or null when it has none. */
   toolRules: string | null;
   launch: {
-    onLaunch: () => void;
+    /** Resolves to the server's refusal when the screen was gone before the
+     *  answer came (use-launch.ts) — the strip shows it then (B9, #146). */
+    onLaunch: () => void | Promise<string | void>;
     /** useDeferredBusy: disabled the instant it fires. */
     disabled: boolean;
     /** useDeferredBusy: the spinner arrives ~200ms later. */
@@ -76,10 +79,17 @@ interface RunRailProps {
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
     error: string | null;
+    /** Bumped on every failed launch (see use-launch.ts) so a repeated,
+     *  identical failure remounts the alert region and is re-announced (#459). */
+    errorSeq: number;
     /** The server refused this launch for the caller's own model credential (a
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
     credentialRefused: boolean;
+    /** The provider that refusal names (#532), "" when none: its door is the
+     *  one that opens (#543). Optional so a caller with no provider block
+     *  passes nothing. */
+    refusedProvider?: string;
     /** The 201's advisory `warnings[]`, once Launch has actually fired
      *  (§5c.8) — rendered here, inline, instead of a toast. */
     warnings: string[];
@@ -89,7 +99,12 @@ interface RunRailProps {
      *  navigation off the screen, so this must replace Launch instead. */
     onOpenRun: (() => void) | null;
   };
-  preflight: { error: string | null; result: PreflightResult | null };
+  preflight: {
+    error: string | null;
+    /** Same remount purpose as launch.errorSeq, for the preflight alert. */
+    errorSeq: number;
+    result: PreflightResult | null;
+  };
   /**
    * The picked agent's /setup/status roster row — withheld by the screen for a
    * run that makes no model call (a shell command), so its absence is also how
@@ -385,17 +400,35 @@ export function RunRail({
   const onLaunchRef = React.useRef(launch.onLaunch);
   onLaunchRef.current = launch.onLaunch;
   const autoOpened = React.useRef(false);
+  const { status: shellStatus } = useShellSetupStatus();
+  const refusedProvider = launch.refusedProvider ?? "";
+  const providerBlock = !!shellStatus?.model_providers;
   React.useEffect(() => {
     if (!launch.credentialRefused || autoOpened.current) return;
     autoOpened.current = true;
-    // The audience rule modelAccessDoor already states: a sign-in repairs a
-    // bedrock_sso lane for its per_user owner, or for any operator (a shared
-    // row); a member under a shared row keeps the server's sentence, no door.
-    if (door.open || !door.bedrockSSO || !(door.perUser || door.operator)) return;
-    door.openDoor(launchRef.current, () => onLaunchRef.current());
+    if (door.open) return;
+    if (refusedProvider) {
+      // #543 (§5.8): the door of the provider the refusal names — never the
+      // agent or provider selected on screen, which may have moved since the
+      // click (#146's ruling). A provider this person has no door for opens
+      // nothing (resolveDoor's null) and the sentence stands.
+      door.openDoor({ for: { provider: refusedProvider }, returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
+    } else {
+      // A refusal naming no provider under a provider block (a sign-in renewal
+      // that did not complete) has no door. #725/T-65: door.bedrockSSO grades
+      // the claude-code row ALONE (modelAccessDoor mirrors
+      // internal/api/modelaccess.go's modelAccessAgent) — it says nothing about
+      // which agent THIS run picked, so a codex launch refused for its OWN
+      // model_credential reason must not open "Sign in to AWS". Otherwise the
+      // audience rule modelAccessDoor already states: a sign-in repairs a
+      // bedrock_sso lane for its per_user owner, or for any operator (a shared
+      // row); a member under a shared row keeps the server's sentence, no door.
+      if (providerBlock || agentRow?.id !== MODEL_ACCESS_AGENT || !door.bedrockSSO || !(door.perUser || door.operator)) return;
+      door.openDoor({ returnTo: launchRef.current, onSignedIn: () => onLaunchRef.current() });
+    }
     // The strip and the line above catch up with what the server just said.
     void door.refresh();
-  }, [launch.credentialRefused, door.open, door.bedrockSSO, door.perUser, door.operator, door.openDoor, door.refresh]);
+  }, [launch.credentialRefused, refusedProvider, providerBlock, agentRow?.id, door]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
@@ -500,7 +533,7 @@ export function RunRail({
               sign-in at all"), independent of showModelWarning below (a
               deployment fact — some model path exists at all). */}
           {showModelAccess && (
-            <ModelAccessLine door={door} onSignIn={() => door.openDoor(launchRef.current)} />
+            <ModelAccessLine door={door} onSignIn={() => door.openDoor({ returnTo: launchRef.current })} />
           )}
           {/* The per-person line supersedes the deployment one when both would
               otherwise render: under a per_user row,
@@ -519,7 +552,7 @@ export function RunRail({
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* The action that fills the gap rides next to the
                   need, not only in a footer. Links are --info, never teal. */}
-              <Link to="/settings" className="font-medium text-info hover:underline">
+              <Link to="/account" className="font-medium text-info hover:underline">
                 {RAIL_MODEL_ACCESS.NO_PROVIDER_CTA}
               </Link>
             </p>
@@ -572,9 +605,18 @@ export function RunRail({
       </div>
 
       {launch.error && (
-        <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
+        // key={launch.errorSeq}: a re-announce of the SAME sentence still
+        // needs a fresh DOM node — an update in place is silent to a screen
+        // reader on a live region (#459).
+        <p
+          key={launch.errorSeq}
+          role="alert"
+          className="mt-3 flex items-start gap-1.5 text-xs text-danger"
+        >
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          {launch.error}
+          <span>
+            <span className="sr-only">{RAIL.LAUNCH_ERROR_LABEL}</span> {launch.error}
+          </span>
         </p>
       )}
 
@@ -610,7 +652,7 @@ export function RunRail({
             disabled={launch.disabled || !!launch.problem}
             onClick={() => {
               autoOpened.current = false;
-              launch.onLaunch();
+              void launch.onLaunch();
             }}
           >
             {/* The icon slot always renders (never just on launching) so the
@@ -630,9 +672,15 @@ export function RunRail({
       )}
 
       {preflight.error && (
-        <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
+        <p
+          key={preflight.errorSeq}
+          role="alert"
+          className="mt-3 flex items-start gap-1.5 text-xs text-danger"
+        >
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          {preflight.error}
+          <span>
+            <span className="sr-only">{RAIL.PREFLIGHT_ERROR_LABEL}</span> {preflight.error}
+          </span>
         </p>
       )}
       {/* Unframed: a bordered box inside the rail card is a card in a card
@@ -678,10 +726,10 @@ export function RunRail({
                 href={adoDialog.blockedUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-medium text-info hover:underline"
+                className={buttonVariants({ variant: "outline", size: "sm" })}
                 onClick={adoDialog.onFallbackClick}
               >
-                {ADO.CONNECT_CTA}
+                {ADO.CONNECT_POPUP_OPEN}
               </a>
             </p>
           )}

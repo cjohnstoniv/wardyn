@@ -34,7 +34,8 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import type { ConfinementClass, RecordResult, Workspace, WorkspaceProfile } from "../../../lib/types";
-import { AuthModeLine, DetectedHints, HonestyNote, stageChip } from "./record-pane-chips";
+import { useConsoleMode } from "../../wardyn/console-view";
+import { AuthModeLine, DetectedHints, HonestyNote, ModelAccessNote, stageChip } from "./record-pane-chips";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -64,7 +65,7 @@ import { AttachTerminal } from "../../attach-terminal";
 import { LiveApprovals } from "../../wardyn/live-approvals";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { CC_META } from "../../wardyn/cc-meta";
-import { Chip, SectionLabel } from "../../wardyn/primitives";
+import { Chip, OperatorOnlyHint, SectionLabel } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
@@ -157,6 +158,8 @@ export function RecordPane({
   // super-only /policies: the control is gated where its call lives, so this
   // pane never shows a security admin a live button the server refuses.
   const securityOperator = useSecurityOperator();
+  // M-6/QM-10: which not-ready copy the model-access note below shows.
+  const view = useConsoleMode();
   const sessions = recordSessions(ws);
   const orphans = orphanedVerifySessions(ws);
   // The record sandbox runs under the strongest class the host supports
@@ -198,24 +201,7 @@ export function RecordPane({
         off-policy host is <strong>blocked live</strong> and one click to approve.
       </p>
 
-      {/* Model-access note: a session runs the agent, so it uses the configured provider. */}
-      {modelReady ? (
-        <div className="flex items-start gap-2 rounded-lg border border-border bg-surface-2/60 px-3 py-2 text-xs text-muted-foreground">
-          <Info className="mt-0.5 size-4 shrink-0 text-primary" />
-          <p>
-            Sessions run with your configured model provider (injected proxy-side — nothing sensitive
-            stays resident) so the agent can make changes.
-          </p>
-        </div>
-      ) : (
-        <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <p>
-            No model provider is configured, so an agent won&apos;t reach a model in a session — set one up
-            in Getting started. You can still record plain build/test sessions.
-          </p>
-        </div>
-      )}
+      <ModelAccessNote modelReady={modelReady} view={view} />
 
       <OpenEgressBanner tier={tier} />
 
@@ -968,11 +954,11 @@ function CaughtHosts({
               variant="outline"
               className="h-7"
               disabled={!operator}
-              title={!operator ? OPERATOR_ONLY_REASON : undefined}
               onClick={() => onApproveHosts([host])}
             >
               <Check className="size-3.5" /> Approve
             </Button>
+            {!operator && <OperatorOnlyHint />}
           </li>
         ))}
       </ul>
@@ -980,13 +966,13 @@ function CaughtHosts({
         <Button
           size="sm"
           disabled={!operator || picked.length === 0}
-          title={!operator ? OPERATOR_ONLY_REASON : undefined}
           onClick={() => onApproveHosts(picked, replayName)}
         >
           <ShieldCheck className="size-3.5" /> Approve {picked.length} selected host
           {picked.length === 1 ? "" : "s"} and replay again
         </Button>
       )}
+      {replayName && !operator && <p className="text-meta text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
       <p className="text-meta leading-snug text-muted-foreground">
         These were denied or held for approval because they aren&apos;t in your approved set. Approve one
         only if this workspace legitimately needs it — otherwise leave it blocked. Anything denied live

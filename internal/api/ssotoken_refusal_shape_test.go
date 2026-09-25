@@ -68,10 +68,10 @@ func TestUploadSSOToken_BlobShapeNamesTheEmptyFields(t *testing.T) {
 
 // TestUploadSSOToken_RefusalAfterScopeCarriesOwner (lens-S S-9).
 //
-// harness.credential.refused carried {provider, reason} only, so on a per_user
+// harness.credential.refuse carried {provider, reason} only, so on a per_user
 // estate a refusal stream could not be grouped by person without joining each
-// row's run_id back to its harness.login.started. Its success twin
-// (harness.credential.captured) has carried owner + credential_source since the
+// row's run_id back to its harness.login.start. Its success twin
+// (harness.credential.capture) has carried owner + credential_source since the
 // scope landed — "whose session" is the first question after an incident — and
 // every refusal that happens AFTER loginRunScope has the scope in hand.
 func TestUploadSSOToken_RefusalAfterScopeCarriesOwner(t *testing.T) {
@@ -91,9 +91,9 @@ func TestUploadSSOToken_RefusalAfterScopeCarriesOwner(t *testing.T) {
 		t.Fatalf("replay: code = %d, want 409; body=%s", w.Code, w.Body.String())
 	}
 
-	rows := audit.find("harness.credential.refused")
+	rows := audit.find("harness.credential.refuse")
 	if len(rows) != 1 {
-		t.Fatalf("harness.credential.refused rows = %d, want 1", len(rows))
+		t.Fatalf("harness.credential.refuse rows = %d, want 1", len(rows))
 	}
 	var data map[string]any
 	if err := json.Unmarshal(rows[0].Data, &data); err != nil {

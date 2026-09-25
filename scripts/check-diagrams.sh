@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-DOCS=(README.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md)
+DOCS=(README.md ARCHITECTURE.md threatmodel/THREAT-MODEL.md docs/AZURE-DEVOPS.md)
 RENDER_DIR=""
 [ "${1:-}" = "--render-png" ] && RENDER_DIR="${2:?--render-png needs a dir}"
 
@@ -90,7 +90,7 @@ FAILED	internal/types/types.go
 KILLED	internal/types/types.go
 STOPPED	internal/types/types.go
 minted_jti	internal/broker/broker.go
-kernel.sensor.blind	internal/api/runs_dispatch.go
+kernel.sensor.bypass	internal/api/runs_dispatch.go
 /api/v1/internal/groundtruth	internal/api/server.go
 wardyn.run-id	cmd/wardyn-tetragon-ingest/main.go
 MANIFEST

@@ -136,6 +136,13 @@ export interface AgentRun {
   // runs. Server/crash-recovery bookkeeping only; no console reader today, kept
   // for mirror parity, same reason as source_id above.
   agent_exec_id?: string;
+  // The user type the run's creator resolved as at create time
+  // (internal/types/types.go's AgentRun.UserType, migration 0080) — the chosen
+  // type for a run launched in the user view, the stamped one otherwise. Empty
+  // for a run with no human creator or created before the migration. No
+  // console reader today, kept for mirror parity, same reason as source_id
+  // above.
+  user_type?: string;
   // Server-authored one-line reason for a pre-agent-start failure arm
   // (internal/types/types.go's AgentRun.FailureHint, migration 0044) — set
   // when the run never got as far as an exit code (e.g. workspace mount
@@ -167,7 +174,7 @@ export interface AgentRun {
   // (#99 is types/storage/mirrors only); this field exists so the console has
   // somewhere to read it the day #93 renders it.
   autonomy_level?: AutonomyLevel;
-  // Run limits captured at create (migration 0069, #567): the lease end (null =
+  // Run limits captured at create (migration 0072, #567): the lease end (null =
   // no end), the wait for a decision (absent = the deployment's approval
   // expiry), the owner's profile run limits and that profile's id (absent for
   // an unassigned or super-admin owner). Optional: a pre-0.8 daemon sends none.
@@ -175,19 +182,30 @@ export interface AgentRun {
   wait_budget_sec?: number;
   run_limits?: RunLimits;
   governance_profile_id?: string;
-  // Set when the run lost its sandbox but is kept (migration 0070, #568):
+  // Set when the run lost its sandbox but is kept (migration 0073, #568):
   // "ended" = its end passed, so it is stopped with no network and its files
-  // stay for the ended-run grace. The run stays RUNNING meanwhile.
+  // stay for the ended-run grace. "reboot" = its container exited under it
+  // and is kept stopped; "outage" = its token lapsed, so its proxy was removed
+  // and its agent left running with no network (#574). The run stays RUNNING
+  // meanwhile.
   lost_at?: string;
-  lost_reason?: "ended";
+  lost_reason?: "ended" | "reboot" | "outage";
   // Set while the run's agent is frozen because nobody is there (migration
-  // 0071, #572): "waiting" = parked on an open request, "idle" = unused past
+  // 0087, #572): "waiting" = parked on an open request, "idle" = unused past
   // its profile's pause_idle_after_sec. The run stays RUNNING; typing, an
   // exec, the request closing or POST /runs/{id}/resume thaws it. active_at is
   // the presence clock (absent = nothing stamped since create).
   paused_at?: string;
   paused_reason?: "waiting" | "idle";
   active_at?: string;
+  // internal/types/types.go's AgentRun.ModelProviderID (migration 0076, #527) —
+  // the id of the model provider chooseModelProvider (#526) resolved this run
+  // to at create time. The KIND is not here (it can change later on the
+  // provider row itself); it lives only on the run.create audit event's
+  // model_provider snapshot. Absent for a run under no provider block, a
+  // block serving no provider for the agent, or a run created before this
+  // field existed.
+  model_provider_id?: string;
 }
 
 // GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
@@ -508,7 +526,7 @@ export interface PreflightResult {
   risk_assessment?: RiskItem[];
   overall_risk?: RiskLevel;
   // Clamp notices — non-empty only for a MEMBER whose inline_policy the server
-  // bounded (composer.Clamp) or whose grant it dropped (filterMemberGrants). The
+  // bounded (composer.Clamp) or whose grant it dropped (filterUserGrants). The
   // same benign "Tightened by policy:" class the compose Review shows; here it
   // tells the member WHY the enforced policy differs from what they typed, since
   // launch itself stays silent. Absent on an older server that predates it.

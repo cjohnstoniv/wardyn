@@ -55,7 +55,8 @@ vi.spyOn(window, "open").mockReturnValue(null);
 
 import { HarnessLoginPane } from "./harness-login-pane";
 import { CAPTURE_HANDOFF, CAPTURE_NOT_CORROBORATED, CAPTURE_POST_RUN_GRACE_MS } from "./capture-confirm";
-import type { AgentRun, SetupStatus } from "../../../lib/types";
+import type { SetupStatus } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 
 // The aws-sso helper's own success marker (login-flows.tsx's `doneMarker`).
 const DONE_MARKER = "wardyn: aws sso credential captured";
@@ -92,7 +93,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     harnessLoginMock.mockReset().mockResolvedValue("run-123");
     killRunMock.mockReset().mockResolvedValue(undefined);
-    getRunMock.mockReset().mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    getRunMock.mockReset().mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
     getSetupStatusMock.mockReset().mockResolvedValue(status({}));
     listAuditMock.mockReset().mockResolvedValue([]);
     lastAttachOutput = undefined;
@@ -114,7 +115,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
   // is what ends this (the hint only swapped the sentence above).
   it("closes the pane on a confirmed capture though the marker never arrives", async () => {
     const { onDone } = await attachAwsRun();
-    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.captured" }]);
+    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.capture" }]);
     getSetupStatusMock.mockResolvedValue(
       status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
     );
@@ -186,7 +187,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
-    getRunMock.mockResolvedValue({ id: "run-123", state: "COMPLETED" } as AgentRun);
+    getRunMock.mockResolvedValue(makeRun({ id: "run-123", state: "COMPLETED" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(CAPTURE_POST_RUN_GRACE_MS + 60_000);
     });
@@ -202,7 +203,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
   // — `completedRef` inside completeCapture must let only the FIRST one act.
   it("a race between the marker and the watch converges on exactly one cleanup and one onDone", async () => {
     const { onDone } = await attachAwsRun();
-    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.captured" }]);
+    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.capture" }]);
     getSetupStatusMock.mockResolvedValue(
       status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
     );
