@@ -8,7 +8,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -101,6 +105,40 @@ func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
 	return data
 }
 
+// mintInjectionGrant is handleInternalInjection's prelude, extracted for its
+// funlen ratchet: the run's claims, the grant id, and the broker's mint of an
+// api_key injection grant. ok=false means the refusal is already written.
+func (s *Server) mintInjectionGrant(w http.ResponseWriter, r *http.Request) (*identity.Claims, uuid.UUID, broker.Minted, bool) {
+	claims, err := claimsFromContext(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "missing run claims")
+		return nil, uuid.Nil, broker.Minted{}, false
+	}
+	if s.cfg.Broker == nil {
+		writeError(w, http.StatusServiceUnavailable, "broker not configured")
+		return nil, uuid.Nil, broker.Minted{}, false
+	}
+	grantID, ok := parseIDParam(w, r, "grantID", "grant")
+	if !ok {
+		return nil, uuid.Nil, broker.Minted{}, false
+	}
+
+	// The broker enforces run ownership, kind dispatch, and audit (jti).
+	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, grantID)
+	if err != nil {
+		s.writeMintError(w, r, err)
+		return nil, uuid.Nil, broker.Minted{}, false
+	}
+	if minted.Kind != types.GrantAPIKey || minted.Injection == nil {
+		// Only api_key grants resolve here: github/cloud credentials are
+		// minted via the regular mint endpoint and never resolved to raw
+		// platform secrets.
+		writeError(w, http.StatusUnprocessableEntity, "grant is not an api_key injection grant")
+		return nil, uuid.Nil, broker.Minted{}, false
+	}
+	return claims, grantID, minted, true
+}
+
 // handleInternalInjection resolves an api_key grant to its injectable header
 // value for the run's wardyn-proxy sidecar (startup mint).
 //
@@ -112,31 +150,8 @@ func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
 // brokered forward for it. Every resolve emits credential.mint (broker) and
 // secret.read audit events.
 func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request) {
-	claims, err := claimsFromContext(r)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
-		return
-	}
-	if s.cfg.Broker == nil {
-		writeError(w, http.StatusServiceUnavailable, "broker not configured")
-		return
-	}
-	grantID, ok := parseIDParam(w, r, "grantID", "grant")
+	claims, grantID, minted, ok := s.mintInjectionGrant(w, r)
 	if !ok {
-		return
-	}
-
-	// The broker enforces run ownership, kind dispatch, and audit (jti).
-	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, grantID)
-	if err != nil {
-		s.writeMintError(w, r, err)
-		return
-	}
-	if minted.Kind != types.GrantAPIKey || minted.Injection == nil {
-		// Only api_key grants resolve here: github/cloud credentials are
-		// minted via the regular mint endpoint and never resolved to raw
-		// platform secrets.
-		writeError(w, http.StatusUnprocessableEntity, "grant is not an api_key injection grant")
 		return
 	}
 
