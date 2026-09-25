@@ -87,9 +87,9 @@ export const RAIL_CREDENTIAL = {
 // rather than resolved only by a dry run. RAIL_CREDENTIAL above still carries
 // the residency sentence every kind reuses; these are new to the picker
 // itself. R5's states (a disabled or wholly ungranted default) were excluded
-// from PR #1036's build (owner ruling) and are now drawn by the rail-gap
+// from PR #1036's build (owner ruling) and R5c is now drawn by the rail-gap
 // packet below (owner-approved 2026-09-25, docs/design/542-rail-gaps-mock/canon.md) —
-// NOT_GRANTED/DEFAULT_OFF/DEFAULT_OFF_ONLY.
+// DEFAULT_OFF/DEFAULT_OFF_ONLY.
 export const RAIL_PROVIDER = {
   LABEL: "Model provider",
   STATIC: (name: string) => `Model provider · ${name}`,
@@ -107,7 +107,13 @@ export const RAIL_PROVIDER = {
   NO_KEY: (name: string) => `You haven't added your key for ${name}.`,
   NOT_SIGNED_IN_CLAUDE: (name: string) => `You're not signed in to Claude for ${name}.`,
   // canon.md's "R5b — granted none": no candidate serves this person for this
-  // harness at all.
+  // harness at all. UNUSED for now (Opus review round 2, #542): the console
+  // has no signal to tell this apart from R9's silent shape —
+  // setupModelProviderState's capVisible (internal/api/provider_access.go)
+  // already narrows `model_providers` to granted providers before the wire,
+  // so an ungranted one never reaches the console to read as "all disabled".
+  // Kept defined because it is canon-pinned (new-run-rail.test.ts); a
+  // follow-up issue gives the console a real signal and wires this in.
   NOT_GRANTED: (harness: string) => `You haven't been granted a model provider for ${harness} — ask your admin.`,
   // canon.md's "R5c — the default is turned off": the admin's own default is a
   // disabled provider. DEFAULT_OFF names it when another candidate remains to

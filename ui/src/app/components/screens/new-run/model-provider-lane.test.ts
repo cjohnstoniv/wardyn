@@ -221,6 +221,58 @@ describe("resolveProviderSelection — R2/R6/R7/R8", () => {
     expect(result).toEqual({ selectedId: undefined, changeNote: null });
   });
 
+  // Opus review round 2 (F2) — the ORIGINAL bug: keeping any still-serving
+  // previousId unconditionally, before ever checking the pin, let an
+  // AUTOMATIC pick (this function's own earlier adoption) outlive a pin that
+  // resolved later — the workspace attaching or loading AFTER the providers
+  // already have is the ordinary sequence, not an edge case.
+  it("an AUTOMATIC previousId loses to a pin that arrives later", () => {
+    const candidates = [claude, gateway];
+    const result = resolveProviderSelection({
+      candidates,
+      agent: CLAUDE_CODE,
+      agentLabel: "Claude Code",
+      previousId: claude.id, // this function's own earlier R1/R2 adoption
+      previousName: claude.name,
+      agentChanged: false,
+      previousExplicit: false,
+      pin: gateway.id,
+    });
+    expect(result).toEqual({ selectedId: gateway.id, changeNote: null });
+  });
+
+  it("an EXPLICIT previousId still wins over a pin — a real human choice is never second-guessed", () => {
+    const candidates = [claude, gateway];
+    const result = resolveProviderSelection({
+      candidates,
+      agent: CLAUDE_CODE,
+      agentLabel: "Claude Code",
+      previousId: claude.id, // a real onModelProviderChange call
+      previousName: claude.name,
+      agentChanged: false,
+      previousExplicit: true,
+      pin: gateway.id,
+    });
+    expect(result).toEqual({ selectedId: claude.id, changeNote: null });
+  });
+
+  // The same root cause's other half: an automatic pick riding an agent
+  // switch into an agent whose own default is disabled must not bypass R5c's
+  // "never auto-carried" rule just because it still technically serves.
+  it("an agent switch into a default-off agent does not carry the automatic pick", () => {
+    const result = resolveProviderSelection({
+      candidates: [claude], // claude still serves the new agent
+      agent: CLAUDE_CODE,
+      agentLabel: "Claude Code",
+      previousId: claude.id,
+      previousName: claude.name,
+      agentChanged: true,
+      previousExplicit: false,
+      defaultDisabled: true, // the new agent's own named default is off
+    });
+    expect(result).toEqual({ selectedId: undefined, changeNote: null });
+  });
+
   // #542 rail-gap packet — R5c: a disabled default must never be replaced by
   // whichever OTHER candidate happened to survive the disabled filter.
   it("disabled default is not replaced", () => {
@@ -270,7 +322,13 @@ describe("providerGate — R5b/R5c (#542 rail-gap packet)", () => {
     });
   });
 
-  it("reads generically (R5b) when every serving row is disabled and none is a named default", () => {
-    expect(providerGate([{ ...gateway, disabled: true }], CLAUDE_CODE)).toEqual({ kind: "not_granted" });
+  // Opus review round 2 — R5b is NOT drawn: an all-disabled roster with no
+  // NAMED default is R9's shape (undefined), same as the server's own
+  // chooseModelProvider (len(serving)==0 launches on the silent advisory,
+  // never a refusal) — see providerGate's own doc comment for why the console
+  // has no "granted none" signal to read in the first place.
+  it("an all-disabled roster with no named default is R9's shape, not a gate", () => {
+    expect(providerGate([{ ...gateway, disabled: true }], CLAUDE_CODE)).toBeUndefined();
+    expect(providerGate([{ ...gateway, disabled: true }, { ...anthropicKey, disabled: true }], CLAUDE_CODE)).toBeUndefined();
   });
 });

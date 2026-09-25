@@ -148,12 +148,13 @@ interface RunRailProps {
     /** R7's info line, naming what the last agent switch changed; null every
      *  other state (R1/R2/R6/R8 stay silent — see resolveProviderSelection). */
     changeNote: string | null;
-    /** R5b/R5c (#542 rail-gap packet) — model-provider-lane.ts's providerGate,
-     *  undefined for the ordinary R1-R4/R6-R8 shapes and R9. */
+    /** R5c (#542 rail-gap packet) — model-provider-lane.ts's providerGate,
+     *  undefined for the ordinary R1-R4/R6-R8 shapes, R9, AND R5b (not drawn
+     *  — see providerGate's own doc comment). */
     gate?: ProviderGate;
     /** The picked agent's human label (wizard-types.ts's agentLabel), for
-     *  NOT_GRANTED/DEFAULT_OFF/DEFAULT_OFF_ONLY — the same label CHANGED
-     *  already names in changeNote. */
+     *  DEFAULT_OFF/DEFAULT_OFF_ONLY — the same label CHANGED already names in
+     *  changeNote. */
     harnessLabel: string;
   };
   /** The Connect Azure DevOps launch-door dialog (§2.4, #386): owned by the
@@ -353,10 +354,27 @@ function ProviderNotConnectedLine({
 // #542 — the Credentials section's provider half: R1 (one candidate, no
 // picker — QC-1) through R3/R6/R7/R8 (a select, each option stating what the
 // person provides and whether theirs is connected — QC-2), plus the rail-gap
-// packet's R5b/R5c (`gate`, owner-approved 2026-09-25). Rendered instead of
-// CredentialFacts whenever the picked agent has at least one candidate OR a
-// gate to name; RunRail falls back to CredentialFacts/showModelWarning for
-// everything else (no provider block, or none serving this agent at all — R9).
+// packet's R5c (`gate`, owner-approved 2026-09-25; R5b is not drawn — see
+// providerGate's own doc comment). Rendered instead of CredentialFacts
+// whenever the picked agent has at least one candidate OR a gate to name;
+// RunRail falls back to CredentialFacts/showModelWarning for everything else
+// (no provider block, or none serving this agent at all — R9).
+/** The exact sentence R5c's gate names — DEFAULT_OFF_ONLY with no other
+ *  candidate, DEFAULT_OFF otherwise — shared by ModelProviderSection's own
+ *  inline line below and RunRail's launch-problem caption (F4, Opus review
+ *  round 2): the caption is suppressed ONLY when launch.problem is exactly
+ *  this string, never for some OTHER, higher-priority problem (an empty
+ *  title, …) that happens to be showing while a gate is also active.
+ *  undefined with no gate (R9's shape, or the ordinary R1-R4/R6-R8 ones). */
+function gateSentence(modelProvider: RunRailProps["modelProvider"]): string | undefined {
+  const gate = modelProvider?.gate;
+  if (!modelProvider || gate?.kind !== "default_off") return undefined;
+  const name = gate.provider.name ?? gate.provider.id;
+  return modelProvider.candidates.length === 0
+    ? RAIL_PROVIDER.DEFAULT_OFF_ONLY(name, modelProvider.harnessLabel)
+    : RAIL_PROVIDER.DEFAULT_OFF(name, modelProvider.harnessLabel);
+}
+
 function ModelProviderSection({
   candidates,
   access,
@@ -373,17 +391,14 @@ function ModelProviderSection({
   onChange: (id: string) => void;
   changeNote: string | null;
   onSignIn: (provider: SetupModelProvider) => void;
-  /** R5b/R5c — model-provider-lane.ts's providerGate. */
+  /** R5c — model-provider-lane.ts's providerGate. R5b is NOT drawn (Opus
+   *  review round 2 — see providerGate's own doc comment): the console has no
+   *  signal for "granted none" today, so `gate` is never "not_granted". */
   gate?: ProviderGate;
   harnessLabel: string;
 }) {
-  // R5b — QC-4's sibling for zero survivors: nothing to choose among, so no
-  // select renders at all and Launch stays refused (RunRail's `problem`).
-  if (gate?.kind === "not_granted") {
-    return <p className="text-xs text-warning">{RAIL_PROVIDER.NOT_GRANTED(harnessLabel)}</p>;
-  }
-  // R5c, no other candidate: same shape as R5b, naming the disabled default
-  // instead of reading generically.
+  // R5c, no other candidate: no select renders at all, naming the disabled
+  // default (Launch stays refused via RunRail's `problem`).
   if (gate?.kind === "default_off" && candidates.length === 0) {
     const name = gate.provider.name ?? gate.provider.id;
     return <p className="text-xs text-warning">{RAIL_PROVIDER.DEFAULT_OFF_ONLY(name, harnessLabel)}</p>;
@@ -592,7 +607,7 @@ export function RunRail({
   const launchRef = React.useRef<HTMLButtonElement>(null);
 
   // #542 — a provider block with at least one candidate for the picked agent,
-  // OR a gate to name (R5b/R5c — the rail-gap packet), supersedes
+  // OR a gate to name (R5c — the rail-gap packet), supersedes
   // CredentialFacts/showModelWarning entirely; with neither (no block, or none
   // serving this agent — R9) that legacy path is unchanged below.
   const hasProviderCandidates = !!modelProvider && (modelProvider.candidates.length > 0 || !!modelProvider.gate);
@@ -900,11 +915,15 @@ export function RunRail({
       </div>
       {/* A disabled button that doesn't say why is a dead end: without
           client-side validation, an empty form would launch and the server's
-          rejection would arrive after the fact. Suppressed under a gate
-          (R5b/R5c): ModelProviderSection above already names the same fact
-          inline, beside the (missing, or placeholder) select itself — a
-          second copy of the same sentence below Launch would only repeat it. */}
-      {launch.problem && !launch.inFlight && !modelProvider?.gate && (
+          rejection would arrive after the fact. Suppressed ONLY when
+          launch.problem IS the gate's (R5c's) own sentence — Opus review
+          round 2, F4: ModelProviderSection above already names that exact
+          fact inline, beside the select itself, so repeating it below would
+          only echo it — but a DIFFERENT, higher-priority problem (an empty
+          title, an unparseable policy, …) must still show here even while a
+          gate is also active, since it's a separate reason nothing has
+          launched yet. */}
+      {launch.problem && !launch.inFlight && launch.problem !== gateSentence(modelProvider) && (
         <p className="mt-2 text-center text-xs text-muted-foreground">{launch.problem}</p>
       )}
 
