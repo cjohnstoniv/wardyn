@@ -112,12 +112,8 @@ export function RunDetailScreen() {
   const [egress, setEgress] = React.useState<EgressDecision[]>([]);
   const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
   const [audit, setAudit] = React.useState<AuditEvent[]>([]);
-  // The run's session.recording.write events, indexed SEPARATELY from the
-  // general audit trail — that trail is fetched oldest-first with a hard
-  // 1000-row cap (LIST_LIMIT), so a chatty run's earlier session.recording.write
-  // events can crowd out later ones (or vice versa: an early one falls off)
-  // before the recording picker ever sees them. A tiny second, filtered
-  // fetch spends its own 1000-row budget on just this action.
+  // The run's session.recording(.write) events (RECORDING_ACTIONS), via a
+  // SEPARATE action_prefix fetch so the general trail's cap can't crowd them out.
   const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
   // F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
   // trail — the first ones the 1000-row cap on `audit` above pushes off —
@@ -181,7 +177,7 @@ export function RunDetailScreen() {
         // and internal/api/approvals.go:56-61.
         approvalsApi.listApprovals("", id),
         auditApi.listAudit(id),
-        auditApi.listAudit(id, "session.recording.write"),
+        auditApi.listAudit(id, { actionPrefix: "session.recording" }), // both action names, one request
       ])
         .then(([r, g, runApprovals, a, recA]) => {
           if (r.status === "rejected") {
@@ -214,9 +210,9 @@ export function RunDetailScreen() {
             // Best-effort like the allSettled above: a rejected listAudit
             // leaves endingAudit at its last-good value, never unhandled.
             void Promise.all([
-              auditApi.listAudit(id, "run.complete"),
-              auditApi.listAudit(id, "run.kill"),
-              auditApi.listAudit(id, "run.autostop"),
+              auditApi.listAudit(id, { action: "run.complete" }),
+              auditApi.listAudit(id, { action: "run.kill" }),
+              auditApi.listAudit(id, { action: "run.autostop" }),
             ]).then((lists) => setEndingAudit(lists.flat())).catch(() => {});
           }
           setStatus("ready");
@@ -668,11 +664,15 @@ function Cockpit({
 // Every human attach session is recorded and masked, but under a COMPOSITE cast
 // key the console never asked for — so it is write-only without an index.
 // There is no list-casts endpoint (and no Store.List to add one on): the
-// index is a session.recording.write-FILTERED audit fetch — not the
-// general trail, whose own 1000-row cap a chatty run can blow through —
-// where the event's TARGET is that very key.
+// index is an action_prefix="session.recording"-FILTERED audit fetch — not
+// the general trail, whose own 1000-row cap a chatty run can blow through —
+// where the event's TARGET is that very key. RECORDING_ACTIONS is an EXACT
+// set, not the fetch's own prefix: session.recording is the never-rewritten
+// pre-0.8 name for session.recording.write (AUDIT-ACTIONS.md).
+const RECORDING_ACTIONS = new Set(["session.recording.write", "session.recording"]);
 function attachSessions(audit: AuditEvent[]): AuditEvent[] {
-  return audit.filter((e) => e.action === "session.recording.write" && e.outcome === "success" && e.target);
+  const seen = new Set<string>(); // dedup, belt-and-braces
+  return audit.filter((e) => RECORDING_ACTIONS.has(e.action) && e.outcome === "success" && e.target && !seen.has(e.id) && seen.add(e.id));
 }
 
 // Approvals tab (this run's approvals)

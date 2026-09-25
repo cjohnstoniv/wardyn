@@ -77,11 +77,16 @@ test("renders the seeded, day-grouped audit trail with append-only framing", asy
   ).toContainText("Stored a secret");
 });
 
-test("the truncated indicator is ABSENT below the 500-event cap", async ({ page }) => {
+// C-02 (#1062): scripts/e2e-backend.sh's "e2e fixture recording-history" run
+// alone seeds 1000+ audit rows, so the deployment's total now legitimately
+// exceeds LIST_LIMIT (1000, not the 500 this test used to name — that number
+// was already stale) — the global (admin) window is newest-first and shares
+// the SAME row cap a per-run trail does, so it now genuinely truncates. This
+// used to assert the opposite (absent below the cap); the cap is real now.
+test("the truncated indicator appears once the global window exceeds the 1000-row cap", async ({ page }) => {
   await expect(eventCount(page)).toBeVisible();
-  // Far under the cap, so the truncation warning must not appear.
-  await expect(page.getByText(/Showing the first 500 events/i)).toHaveCount(0);
-  await expect(page.getByText(/\(truncated\)/i)).toHaveCount(0);
+  await expect(page.getByText(/Showing the first 1000 events/i)).toBeVisible();
+  await expect(page.getByText(/\(truncated\)/i)).toBeVisible();
 });
 
 test("the Event facet narrows by kind (Credentials vs Lifecycle)", async ({ page }) => {
@@ -104,25 +109,34 @@ test("the Event facet narrows by kind (Credentials vs Lifecycle)", async ({ page
   await expect(verb(page, "Minted a workload identity").first()).toBeVisible();
 });
 
-test("the Actor facet narrows: seeded events are all system; human/agent are empty", async ({ page }) => {
+// C-02 (#1062): before this fixture, every seeded event was actor_type=system
+// (this test used to assert Human/Agent were both empty). The
+// "recording-history" run is now the ONLY source of human- and
+// agent-attributed rows anywhere in this seed — its 2 recording events
+// (actor_type=human) and its 1001 filler egress.allow rows (actor_type=agent)
+// — so System no longer accounts for the WHOLE window, and Human/Agent are no
+// longer empty. The facet itself filters client-side over the same capped
+// global fetch every other assertion here already shares (audit.tsx's
+// actorFilter), so this only changes what that fixed window now contains.
+test("the Actor facet narrows: System no longer keeps everything, and C-02's fixture is the sole human/agent source", async ({
+  page,
+}) => {
   await expect(eventCount(page)).toBeVisible();
   const fullCount = await eventCount(page).innerText();
 
-  // Every seeded event is actor_type=system, so System keeps them all.
   await selectFacet(page, "Actor", "System");
-  await expect(eventCount(page)).toHaveText(fullCount);
+  await expect(eventCount(page)).not.toHaveText(fullCount);
   await expect(verb(page, "Minted a workload identity").first()).toBeVisible();
   await expect(verb(page, "Created the run").first()).toBeVisible();
 
-  // No human-attributed events were seeded → empty state.
+  // Exactly the recording-history fixture's two recording rows (alice + bob).
   await selectFacet(page, "Actor", "Human");
-  await expect(page.getByText("No events match these filters.")).toBeVisible();
-  await expect(eventCount(page)).toHaveText("0 events");
+  await expect(eventCount(page)).toHaveText("2 events");
+  await expect(page.getByText("No events match these filters.")).toHaveCount(0);
 
-  // No agent-attributed events either.
+  // Whichever of the fixture's 1001 filler rows survived the global window's cap.
   await selectFacet(page, "Actor", "Agent");
-  await expect(page.getByText("No events match these filters.")).toBeVisible();
-  await expect(eventCount(page)).toHaveText("0 events");
+  await expect(page.getByText("No events match these filters.")).toHaveCount(0);
 
   // 'All actors' restores the full window.
   await selectFacet(page, "Actor", "All actors");

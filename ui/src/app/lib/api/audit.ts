@@ -21,6 +21,10 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
     "egress.allow": "allow",
     "egress.deny": "deny",
     "egress.hold": "pending",
+    // egress.pending is egress.hold's pre-0.8 name (docs/AUDIT-ACTIONS.md's
+    // "Renamed in 0.8") — a row written before the upgrade keeps it forever,
+    // so a run whose held decision predates 0.8 must still render as held.
+    "egress.pending": "pending",
   };
   return events
     // A tool call the run's own tool_rules answered is NOT a connection: its
@@ -252,17 +256,22 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
   return { kind: "unknown", action: "" };
 }
 
+export type AuditListFilter = { action?: string; actionPrefix?: string };
+
 export const audit = {
-  // GET /api/v1/audit?run_id=&action=   (both optional; server-side filter —
-  // see parseAuditFilter, internal/api/audit.go). `action` narrows the
-  // 1000-row cap to just that action instead of spending the whole budget
-  // on every action a chatty run logged: a run-scoped list is
-  // returned OLDEST-first, so a single wide fetch can cap out before it ever
-  // reaches a later action's events.
-  async listAudit(runId?: string, action?: string): Promise<AuditEvent[]> {
+  // GET /api/v1/audit?run_id=&action=|action_prefix=   (all optional;
+  // server-side filter — see parseAuditFilter, internal/api/audit.go). Either
+  // narrows the 1000-row cap to just the matching rows instead of spending
+  // the whole budget on every action a chatty run logged: a run-scoped list
+  // is returned OLDEST-first, so a single wide fetch can cap out before it
+  // ever reaches a later action's events. `actionPrefix` matches an exact
+  // action AND any dotted child of it (e.g. "session.recording" also matches
+  // "session.recording.write" — the pre-/post-0.8 pair, docs/AUDIT-ACTIONS.md).
+  async listAudit(runId?: string, filter?: AuditListFilter): Promise<AuditEvent[]> {
     const params = new URLSearchParams();
     if (runId) params.set("run_id", runId);
-    if (action) params.set("action", action);
+    if (filter?.action) params.set("action", filter.action);
+    if (filter?.actionPrefix) params.set("action_prefix", filter.actionPrefix);
     const qs = params.toString() ? `?${params.toString()}` : "";
     const res = await wfetch(withLimit(`/audit${qs}`), { method: "GET" });
     return unwrapList<AuditEvent>(await asJson<unknown>(res));

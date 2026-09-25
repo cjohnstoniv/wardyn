@@ -641,6 +641,9 @@ type loginRunStamp struct {
 	Model                string `json:"model,omitempty"`
 }
 
+// loginRunStamp also accepts a run launched before 0.8, whose row was written
+// under harness.login.started (canonicalAction — audit_legacy.go): a login
+// run launched pre-upgrade that only uploads after it must not lose its stamp.
 func (s *Server) loginRunStamp(ctx context.Context, runID uuid.UUID) (loginRunStamp, error) {
 	var out loginRunStamp
 	if s.cfg.Store == nil {
@@ -651,7 +654,7 @@ func (s *Server) loginRunStamp(ctx context.Context, runID uuid.UUID) (loginRunSt
 		return out, fmt.Errorf("read login run audit trail: %w", err)
 	}
 	for _, ev := range events {
-		if ev.Action != "harness.login.start" || ev.Outcome != "success" {
+		if canonicalAction(ev.Action) != "harness.login.start" || ev.Outcome != "success" {
 			continue
 		}
 		var data loginRunStamp

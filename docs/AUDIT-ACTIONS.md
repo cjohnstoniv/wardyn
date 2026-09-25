@@ -586,6 +586,16 @@ one release and move together.
 | `ui.auth` | `ui.authorize` | — |
 | `workspace.provider.legacy_host` | `workspace.provider.admit` | `reason` `legacy_host` |
 
+Wardyn's own readers of persisted rows (`legacyAuditActions`,
+`internal/api/audit_legacy.go`) accept both names for three rows above —
+`run.policy.effective`/`run.policy.resolve`, `harness.login.started`/
+`harness.login.start`, and `session.recording`/`session.recording.write` —
+because wardynd itself reads history back through them (a run's UI apps, a
+login run's launch stamp, and the console's recording picker). That one named
+table is the sole place an old action name may appear outside this appendix,
+the CHANGELOG, migrations and tests (owner ruling, 2026-09-25, #1062); it is
+exempt from the #905 re-sweep and from any widened #1020 guard.
+
 `authz.denied` keeps its past tense. It is the single heaviest-cited action
 in the tree (31 non-test call sites) and a compatibility surface
 `docs/OPERATIONS.md`'s "Every denial that isn't a 404" already commits to by

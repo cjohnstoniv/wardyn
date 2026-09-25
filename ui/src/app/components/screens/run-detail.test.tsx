@@ -340,6 +340,57 @@ describe("RunDetailScreen — the recording tab's session-picker copy", () => {
   });
 });
 
+// C-02 (#1062): session.recording is session.recording.write's pre-0.8 name
+// (docs/AUDIT-ACTIONS.md's "Renamed in 0.8"). A row written under it before
+// the upgrade is never rewritten, so the picker must still index it — old-only,
+// new-only, and mixed with the 0.8 name, and with no duplicate entries even
+// though one action_prefix=session.recording fetch matches both names.
+describe("RunDetailScreen — the recording picker indexes both the pre- and post-0.8 action names (C-02)", () => {
+  const oldSession = {
+    id: "e-old", time: aheadByHours(-2), actor_type: "human", actor: "alice",
+    action: "session.recording", target: "run-1~session-old", outcome: "success",
+  };
+  const newSession = {
+    id: "e-new", time: aheadByHours(-1), actor_type: "human", actor: "bob",
+    action: "session.recording.write", target: "run-1~session-new", outcome: "success",
+  };
+
+  it("old-only: a pre-0.8 session.recording row still indexes", async () => {
+    listAuditMock.mockResolvedValue([oldSession]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    expect(await screen.findByText(/alice/)).toBeInTheDocument();
+  });
+
+  it("new-only: an 0.8 session.recording.write row indexes as before", async () => {
+    listAuditMock.mockResolvedValue([newSession]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    expect(await screen.findByText(/bob/)).toBeInTheDocument();
+  });
+
+  it("mixed: both names index in time order with no duplicate entries", async () => {
+    listAuditMock.mockResolvedValue([oldSession, newSession]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+
+    const options = await screen.findAllByRole("option");
+    // "Agent session" (the bare run id) + the two distinct attach sessions,
+    // oldest first, no duplicate.
+    expect(options.map((o) => o.textContent)).toEqual([
+      "Agent session",
+      sessionOptionLabel(oldSession as AuditEvent),
+      sessionOptionLabel(newSession as AuditEvent),
+    ]);
+  });
+});
+
 // F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
 // trail — past the 1000-row cap on the general fetch, the exit code and
 // ending both silently went "unknown". Scoped fetches keep them known.
@@ -356,8 +407,8 @@ describe("RunDetailScreen — the exit code survives a truncated audit trail", (
       target: "example.com",
       outcome: "success",
     }));
-    listAuditMock.mockImplementation((_id: unknown, action?: string) => {
-      if (action === "run.complete") {
+    listAuditMock.mockImplementation((_id: unknown, filter?: { action?: string; actionPrefix?: string }) => {
+      if (filter?.action === "run.complete") {
         return Promise.resolve([
           {
             id: "complete-1",
@@ -371,7 +422,7 @@ describe("RunDetailScreen — the exit code survives a truncated audit trail", (
           },
         ]);
       }
-      if (action === "run.kill" || action === "run.autostop" || action === "session.recording.write") {
+      if (filter?.action === "run.kill" || filter?.action === "run.autostop" || filter?.actionPrefix === "session.recording") {
         return Promise.resolve([]);
       }
       return Promise.resolve(noise);
@@ -389,17 +440,17 @@ describe("RunDetailScreen — R-5 the ending trio is skipped while the run is li
   it("never fetches run.complete/run.kill/run.autostop for a RUNNING run", async () => {
     renderRun({ ...RUN, state: "RUNNING" });
     await screen.findAllByText(RUN.task);
-    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", "run.complete");
-    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", "run.kill");
-    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", "run.autostop");
+    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", { action: "run.complete" });
+    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", { action: "run.kill" });
+    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", { action: "run.autostop" });
   });
 
   // Neg: a terminal run still gets them — same tick, off its own fresh state.
   it("neg: still fetches them the moment the run's own state is terminal", async () => {
     renderRun({ ...RUN, state: "COMPLETED" });
-    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-1", "run.complete"));
-    expect(listAuditMock).toHaveBeenCalledWith("run-1", "run.kill");
-    expect(listAuditMock).toHaveBeenCalledWith("run-1", "run.autostop");
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-1", { action: "run.complete" }));
+    expect(listAuditMock).toHaveBeenCalledWith("run-1", { action: "run.kill" });
+    expect(listAuditMock).toHaveBeenCalledWith("run-1", { action: "run.autostop" });
   });
 });
 
@@ -620,7 +671,7 @@ describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, ()
   }
 
   it("shows a truncation cue when the per-run window hits the 1000 cap", async () => {
-    listAuditMock.mockImplementation((_id: string, action?: string) =>
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
       Promise.resolve(action ? [] : Array.from({ length: 1000 }, (_, i) => auditEvent(i))),
     );
     renderRun(RUN);
@@ -631,7 +682,7 @@ describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, ()
   });
 
   it("shows no truncation cue under the cap", async () => {
-    listAuditMock.mockImplementation((_id: string, action?: string) =>
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
       Promise.resolve(action ? [] : [auditEvent(1)]),
     );
     renderRun(RUN);
@@ -648,7 +699,7 @@ describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, ()
 // egress row whose target is the control plane. The tab must say who decided.
 describe("RunDetailScreen — Audit tab names a rule-decided tool call", () => {
   it("renders the decision and the rule, not the control-plane host", async () => {
-    listAuditMock.mockImplementation((_id: string, action?: string) =>
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
       Promise.resolve(
         action
           ? []
