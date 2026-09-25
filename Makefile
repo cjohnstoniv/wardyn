@@ -295,8 +295,8 @@ cover-union: ## Enforce COVER_MIN over the unit/docker/k8s profiles already in t
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
-	  echo "==> Postgres-gated suite"; $(MAKE) test-report-pg; \
-	  echo "==> Postgres-gated suite under the race detector"; $(MAKE) test-race-pg; \
+	  echo "==> Postgres-gated suite" && $(MAKE) test-report-pg && \
+	  echo "==> Postgres-gated suite under the race detector" && $(MAKE) test-race-pg; \
 	else \
 	  echo ">> SKIPPED test-report-pg + test-race-pg — set WARDYN_TEST_PG=postgres://... to run them (CI always does)"; \
 	fi
@@ -544,6 +544,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-migration-numbers.sh
 	./scripts/test-narrate-speakable.sh
 	./scripts/test-nightly-migration-merge-check.sh
+	./scripts/test-release-check.sh
 	./scripts/test-repo-guards.sh
 	./scripts/test-repo-scan-ok.sh
 	./scripts/test-reset-capture-hint.sh
