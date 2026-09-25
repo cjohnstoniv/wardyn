@@ -16,8 +16,8 @@ vi.mock("../../lib/api/runs", () => ({
   runs: { gradePolicy: (...a: unknown[]) => gradePolicyMock(...a) },
 }));
 
+import { FIELD_HELP } from "./policy-field-help";
 import {
-  FIELD_HELP,
   POLICY_TEMPLATES,
   PolicyPanel,
   templateText,
