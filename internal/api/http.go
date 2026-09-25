@@ -427,7 +427,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			}
 			// A user view whose type was deleted is refused here, before any
 			// handler reads the tier; GET /me alone drops back (user_view.go).
-			if r = s.userViewGate(w, r); r == nil {
+			if r = s.userViewGate(w, r, oidc.UserTypeFromContext(r.Context())); r == nil {
 				return
 			}
 			// Publish the verified human on an api-owned context key so

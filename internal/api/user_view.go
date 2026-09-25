@@ -187,8 +187,11 @@ func userViewLaunchRefusal(typeID string) string {
 // admin's real tier, carrying user_view_dropped. The switch routes pass
 // untouched, so the way out and "choose another type" always work.
 //
+// typeID is the session's view-aware type, read by the SSO branch in http.go:
+// the gate runs before withHumanIdentity publishes oidcUserTypeFromContext.
+//
 // It returns the request to serve, or nil when it answered.
-func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request) *http.Request {
+func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request, typeID string) *http.Request {
 	ctx := r.Context()
 	if !oidc.MemberModeFromContext(ctx) {
 		return r
@@ -197,7 +200,8 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request) *http.Requ
 	case "/api/v1/me/view", "/api/v1/me/member-mode":
 		return r
 	}
-	typeID := oidc.UserTypeFromContext(ctx)
+	// refusalEvent's rows name the viewed type through the api's own key.
+	ctx = withOIDCUserType(ctx, typeID)
 	ok, err := s.userTypeExists(ctx, typeID)
 	if err != nil {
 		writeServerError(w, r, "resolve user view type", err)
