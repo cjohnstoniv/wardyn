@@ -20,6 +20,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   know, so every task run failed at sidecar start on an operator who pinned that image. The key
   changes only what happens to a push matching `require_review_paths`, so dispatch now sets it
   only when the policy has review paths.
+- **A tool call held for a human was denied at once instead of waiting (#711).** The control plane
+  answers a raised approval with the created row, which carries both its `id` and
+  `"state":"PENDING"`; `wardyn-toolgate` read any `state` as a `tool_rules` decision and denied
+  the call as an unrecognised state. It now polls whenever an `id` is present and reads a state
+  with no `id` as the run's own `tool_rules` answer (anything but `APPROVED` still denies).
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
