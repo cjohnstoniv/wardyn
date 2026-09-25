@@ -1,0 +1,171 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rail gaps — the states</title>
+<!--
+  Every card below reproduces new-run-rail.tsx's Credentials RailSection
+  class for class (see mock.css's "#542 additions"), drawn standalone so the
+  states sit side by side. Each card is the SAME "aside.rounded-xl.border
+  .border-border.bg-card.p-4" the real rail renders, holding a section of
+  the same "border-b border-border pb-3" RailSection; only the state inside
+  it changes. "Existing" cards are what PR #1036 shipped (bedrock_sso,
+  custom_endpoint) — drawn only for comparison, not proposed here.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>New Run rail — the #542 gaps</h1>
+    <div class="sub">R3's three uncovered kinds, then R5b and R5c.</div>
+  </div>
+  <nav><a href="index.html">Problem + decisions</a><a class="cur" href="rail.html">The states</a><a href="canon.md">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<section class="state" style="margin-top:20px">
+<div class="tag"><span>R3</span><b>Selected, not connected — all five provider kinds</b></div>
+<p class="lead">Launch stays enabled in every card below: a 422 still opens the same connect door and relaunches (#543). The warning line and the button are what tells the person <em>before</em> they press it, not only after.</p>
+<div class="railgrid" style="margin-top:16px">
+
+<div>
+<p class="railkind">bedrock_sso <span class="tag-reused">Existing — PR #1036</span></p>
+<div class="railframe">
+<p class="railtitle">What this run can do</p>
+<p class="railsec">Credentials</p>
+<label class="raillabel">Model provider</label>
+<div class="railselect">Bedrock (prod) &mdash; your AWS sign-in &middot; not signed in <span style="margin-left:auto">&#9662;</span></div>
+<p class="railwarn">You're not signed in to AWS for Bedrock (prod).</p>
+<button class="btn sm" type="button" style="margin-top:6px">Sign in to AWS</button>
+<p class="railhint">Model credential &mdash; AWS credentials sign inside the sandbox, so this run holds them for its lifetime.</p>
+<div class="chips"><span class="chip neutral">Your own AWS sign-in</span></div>
+<div class="railrow"><button class="btn primary" type="button">Launch run</button></div>
+</div>
+</div>
+
+<div>
+<p class="railkind">custom_endpoint <span class="tag-reused">Existing — PR #1036</span></p>
+<div class="railframe">
+<p class="railtitle">What this run can do</p>
+<p class="railsec">Credentials</p>
+<label class="raillabel">Model provider</label>
+<div class="railselect">Corp gateway &mdash; your token &middot; not added <span style="margin-left:auto">&#9662;</span></div>
+<p class="railwarn">You haven't added your token for Corp gateway.</p>
+<button class="btn sm" type="button" style="margin-top:6px">Add your token</button>
+<p class="railhint">Model credential &mdash; injected by the proxy at launch; never written into the sandbox.</p>
+<div class="railrow"><button class="btn primary" type="button">Launch run</button></div>
+</div>
+</div>
+
+<div>
+<p class="railkind">anthropic_api_key <span class="tag-new">New — this packet</span></p>
+<div class="railframe">
+<p class="railtitle">What this run can do</p>
+<p class="railsec">Credentials</p>
+<label class="raillabel">Model provider</label>
+<div class="railselect">Direct Anthropic &mdash; your key &middot; not added <span style="margin-left:auto">&#9662;</span></div>
+<p class="railwarn">You haven't added your key for Direct Anthropic.</p>
+<button class="btn sm" type="button" style="margin-top:6px">Add your key</button>
+<p class="railhint">Model credential &mdash; injected by the proxy at launch; never written into the sandbox.</p>
+<div class="railrow"><button class="btn primary" type="button">Launch run</button></div>
+</div>
+</div>
+
+<div>
+<p class="railkind">openai_api_key <span class="tag-new">New — this packet</span></p>
+<div class="railframe">
+<p class="railtitle">What this run can do</p>
+<p class="railsec">Credentials</p>
+<label class="raillabel">Model provider</label>
+<div class="railselect">Direct OpenAI &mdash; your key &middot; not added <span style="margin-left:auto">&#9662;</span></div>
+<p class="railwarn">You haven't added your key for Direct OpenAI.</p>
+<button class="btn sm" type="button" style="margin-top:6px">Add your key</button>
+<p class="railhint">Model credential &mdash; injected by the proxy at launch; never written into the sandbox.</p>
+<div class="railrow"><button class="btn primary" type="button">Launch run</button></div>
+</div>
+</div>
+
+<div>
+<p class="railkind">anthropic_subscription <span class="tag-new">New — this packet</span></p>
+<div class="railframe">
+<p class="railtitle">What this run can do</p>
+<p class="railsec">Credentials</p>
+<label class="raillabel">Model provider</label>
+<div class="railselect">Personal Claude &mdash; your sign-in &middot; not signed in <span style="margin-left:auto">&#9662;</span></div>
+<p class="railwarn">You're not signed in to Claude for Personal Claude.</p>
+<button class="btn sm" type="button" style="margin-top:6px">Sign in to Claude</button>
+<p class="railhint">Model credential &mdash; injected by the proxy at launch; never written into the sandbox.</p>
+<div class="railrow"><button class="btn primary" type="button">Launch run</button></div>
+</div>
+</div>
+
+</div>
+</section>
+
+<section class="state">
+<div class="tag"><span>R5b</span><b>Granted none</b></div>
+<p class="lead">Providers serve Claude Code, but this person may use none of them. No select renders &mdash; there is nothing to choose among &mdash; and Launch is refused rather than let the run start with no model access.</p>
+<div class="compare" style="margin-top:16px;max-width:420px">
+<div>
+<div class="railframe">
+<p class="railtitle">What this run can do</p>
+<p class="railsec">Credentials</p>
+<p class="railwarn" style="margin-top:0">You haven't been granted a model provider for Claude Code &mdash; ask your admin.</p>
+<div class="railrow"><button class="btn primary" type="button" disabled>Launch run</button></div>
+</div>
+</div>
+</div>
+</section>
+
+<section class="state">
+<div class="tag"><span>R5c</span><b>The default is turned off</b></div>
+<p class="lead">Corp gateway is the admin's default for Claude Code and is disabled. The disabled provider is never offered in the list &mdash; only an explicit pick among what remains gets past it, even when exactly one candidate remains.</p>
+<div class="compare" style="margin-top:16px">
+<div>
+<div class="colhead">With another candidate</div>
+<div class="railframe">
+<p class="railtitle">What this run can do</p>
+<p class="railsec">Credentials</p>
+<label class="raillabel">Model provider</label>
+<div class="railselect ph">Choose a model provider <span style="margin-left:auto">&#9662;</span></div>
+<div class="railmenu">
+<div class="ph">Choose a model provider</div>
+<div>Direct Anthropic &mdash; your key &middot; added</div>
+<div>Personal Claude &mdash; your sign-in &middot; signed in</div>
+</div>
+<p class="railwarn">Corp gateway, the default for Claude Code, is turned off. Choose another model provider to launch.</p>
+<div class="railrow"><button class="btn primary" type="button" disabled>Launch run</button></div>
+</div>
+</div>
+<div>
+<div class="colhead">With no other candidate</div>
+<div class="railframe">
+<p class="railtitle">What this run can do</p>
+<p class="railsec">Credentials</p>
+<p class="railwarn" style="margin-top:0">Corp gateway, the default for Claude Code, is turned off. Ask your admin.</p>
+<div class="railrow"><button class="btn primary" type="button" disabled>Launch run</button></div>
+</div>
+</div>
+</div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>
