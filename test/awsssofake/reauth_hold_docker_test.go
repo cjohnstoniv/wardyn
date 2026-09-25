@@ -178,7 +178,7 @@ func TestDocker_SDKToleratesAParkedCredentialExchange(t *testing.T) {
 	// the AGENT gives up, not where the fake does.
 	s.SetParkRoleCreds(30 * time.Minute)
 
-	// THE REAL TOKEN, not the placeholder. In production the PROXY puts the
+	// The real token, not the placeholder. In production the proxy puts the
 	// session on the wire and the portal sees a valid bearer; here there is no
 	// proxy, so the sandbox carries it. A placeholder would be 401'd at the
 	// door and this would measure the fake's bearer check, not the SDK's

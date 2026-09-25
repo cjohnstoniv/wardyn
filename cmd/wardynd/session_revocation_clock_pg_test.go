@@ -3,15 +3,14 @@
 
 package main
 
-// PIN for the finding that the revocation cutoff and the things compared against
-// it were stamped on TWO CLOCKS.
+// Pins the revocation cutoff against two clocks: the cutoff and the things
+// compared against it are stamped by different clocks.
 //
-// oidc_session_revocations.revoked_at comes from Postgres (`VALUES ($1, now())`).
-// An SSO cookie's `iat` comes from wardynd's wall clock, and an API token's
-// created_at used to. With wardynd AHEAD of the database by d, a credential
-// minted BEFORE a revoke carries a timestamp AFTER the cutoff and survives it:
-// the admin's "revoke every session for this human" silently does nothing for
-// the next d.
+// oidc_session_revocations.revoked_at comes from Postgres (`VALUES ($1, now())`),
+// and an SSO cookie's `iat` comes from wardynd's wall clock. With wardynd ahead
+// of the database by d, a credential minted before a revoke carries a timestamp
+// after the cutoff, and a naive comparison lets it survive: the admin's "revoke
+// every session for this human" would silently do nothing for the next d.
 //
 // The skew is SIMULATED HONESTLY — by giving the adapter an APP CLOCK that runs
 // ahead of the database's (pgSessionRevocations.now) and stamping the session's
