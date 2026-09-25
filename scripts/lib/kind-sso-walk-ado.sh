@@ -208,7 +208,7 @@ grep -q 'vso.code' "${EVIDENCE_DIR}/authorize-member.url" \
   || die "the member's authorization request carried no Azure DevOps scope — the login was not widened"
 grep -q 'vso.code' "${EVIDENCE_DIR}/authorize-admin.url" \
   && die "the admin's authorization request carried an Azure DevOps scope before any row existed"
-[[ "$(me_role "${WORK}/member.jar" member)" == "member" ]] || die "the member's session is not role member (see ${EVIDENCE_DIR}/me-member.json)"
+[[ "$(me_role "${WORK}/member.jar" member)" == "user" ]] || die "the member's session is not role user (see ${EVIDENCE_DIR}/me-member.json)"
 
 step "asserting the capture: one blob, the member's, and none for the admin"
 curl -s -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE_URL}/api/v1/audit?action=scm.ado.signin.captured" \

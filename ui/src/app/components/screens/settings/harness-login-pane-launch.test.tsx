@@ -47,7 +47,7 @@ import { HarnessLoginPane, type HarnessLoginPaneHandle } from "./harness-login-p
 import { AWS_BLURB_MANAGED_OPENING } from "./login-pane-copy";
 import { HttpError } from "../../../lib/api/core";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
-import type { AgentRun } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_STUCK_LEAD_IN, RUN_POLL_SLOW_START_MS } from "./login-start-wait";
 import { STARTING_CONTAINER_CREATING } from "../run-status-detail";
 import { SIGNIN_PROGRESS } from "./login-pane-copy";
@@ -90,7 +90,7 @@ describe("a REFUSED launch offers no retry (U-11)", () => {
   it("Try again after a 500 relaunches", async () => {
     harnessLoginMock.mockRejectedValueOnce(new HttpError(500, "control plane unreachable"));
     harnessLoginMock.mockResolvedValue("run-123");
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "PENDING" } as AgentRun);
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "PENDING" }));
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
     await screen.findByRole("alert");
@@ -108,7 +108,7 @@ describe("the aws blurb under a managed access portal (U-8)", () => {
     harnessLoginMock.mockReset().mockResolvedValue("run-123");
     vi.mocked(runsApiMocked.getRun)
       .mockReset()
-      .mockResolvedValue({ id: "run-123", state: "PENDING" } as AgentRun);
+      .mockResolvedValue(makeRun({ id: "run-123", state: "PENDING" }));
     const { container } = render(
       <HarnessLoginPane
         provider="aws"
@@ -156,12 +156,12 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
   // fresh sandbox — and stops the stuck one, which is still STARTING.
   it("a STARTING run on an unpullable image fails the download step, verbatim, with Retry", async () => {
     const detail = "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied";
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({
       id: "run-123",
       state: "STARTING",
       status_detail: detail,
       status_reason: "ImagePullBackOff",
-    } as AgentRun);
+    }));
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
 
@@ -174,7 +174,7 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
     expect(screen.getByRole("button", { name: SIGNIN_PROGRESS.CANCEL })).toBeInTheDocument();
 
     harnessLoginMock.mockResolvedValue("run-456");
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-456", state: "PENDING" } as AgentRun);
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-456", state: "PENDING" }));
     await userEvent.click(screen.getByRole("button", { name: SIGNIN_PROGRESS.RETRY }));
     expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
     expect(await screen.findByTestId("login-sandbox-starting")).toBeInTheDocument();
@@ -185,17 +185,17 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
   // step the run was on when it ended is what says the download failed.
   it("a run that fails while Pulling fails the download step with the run's own sentence", async () => {
     vi.mocked(runsApiMocked.getRun)
-      .mockResolvedValueOnce({
+      .mockResolvedValueOnce(makeRun({
         id: "run-123",
         state: "STARTING",
         status_detail: "image: Pulling: ghcr.io/example/agent-aws-sso:0.8.0",
         status_reason: "Pulling",
-      } as AgentRun)
-      .mockResolvedValue({
+      }))
+      .mockResolvedValue(makeRun({
         id: "run-123",
         state: "FAILED",
         failure_hint: "docker: pull ghcr.io/example/agent-aws-sso:0.8.0: manifest unknown",
-      } as AgentRun);
+      }));
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
 
@@ -213,12 +213,12 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
   // the container will not start from it. Those keep the stuck lead-in and
   // offer no retry — it earns the identical answer until an admin acts.
   it("a container that will not start keeps the stuck lead-in and offers Cancel ONLY", async () => {
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({
       id: "run-123",
       state: "STARTING",
       status_detail: "agent: CrashLoopBackOff: back-off restarting failed container",
       status_reason: "CrashLoopBackOff",
-    } as AgentRun);
+    }));
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
 
@@ -232,13 +232,13 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
   // errors, which can land between two of the pane's polls. The server keeps a
   // TERMINAL reason on a FAILED run precisely so this branch still says why.
   it("the same run caught already FAILED says the same thing", async () => {
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({
       id: "run-123",
       state: "FAILED",
       failure_hint: "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): denied",
       status_detail: "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied",
       status_reason: "ImagePullBackOff",
-    } as AgentRun);
+    }));
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
 
@@ -252,12 +252,12 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
   // minutes is normal". The clock still says 'slow' — the sentence is the
   // substrate's, not a hedged guess from the pane.
   it("ContainerCreating past the slow window reads as the ordinary first start", async () => {
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({
       id: "run-123",
       state: "STARTING",
       status_detail: "agent: ContainerCreating",
       status_reason: "ContainerCreating",
-    } as AgentRun);
+    }));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
@@ -279,7 +279,7 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
   // The regression pin: a run with NO reason — a warm docker image, a pre-0.7.6
   // daemon — grades exactly as 0.7.5 did.
   it("with no reason at all, the 0.7.5 slow-start sentence still stands", async () => {
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "STARTING" } as AgentRun);
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "STARTING" }));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
@@ -308,7 +308,7 @@ describe("a terminal ending that arrived only as a failure_hint", () => {
   });
 
   it("the server's rebuilt detail reads exactly like the run that kept it", async () => {
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({
       id: "run-123",
       state: "FAILED",
       // What projectStatusDetail rebuilds from the hint when the row held nothing.
@@ -316,7 +316,7 @@ describe("a terminal ending that arrived only as a failure_hint", () => {
       status_reason: "ImagePullBackOff",
       failure_hint:
         "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): rpc error: pull access denied",
-    } as AgentRun);
+    }));
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
 
@@ -328,12 +328,12 @@ describe("a terminal ending that arrived only as a failure_hint", () => {
   // The old daemon: a reason and a hint, no detail. Never a lead-in with nothing
   // after it — the run's own sentence is better than a promise with no words.
   it("falls through to the run's own sentence rather than promising words it has not got", async () => {
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({
       id: "run-123",
       state: "FAILED",
       failure_hint:
         "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): rpc error: pull access denied",
-    } as AgentRun);
+    }));
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /start login/i }));
 
@@ -357,7 +357,9 @@ describe("a dismissal from outside the pane still ends the login run", () => {
   beforeEach(() => {
     harnessLoginMock.mockReset();
     vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
-    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue(undefined as unknown as AgentRun);
+    // Deliberately absent: these cases exercise the pane's `if (!run) return;`
+    // guard, not a real run shape.
+    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue(undefined as never);
   });
 
   it("ref.cancel() kills the run the pane is holding", async () => {
@@ -403,7 +405,7 @@ describe("the provider tab opens only from the Open button (#628)", () => {
     harnessLoginMock.mockReset().mockResolvedValue("run-123");
     lastAttachOutput = undefined;
     vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
-    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
     fakeWindow = { opener: {}, location: { href: "" } };
     // vitest 4: re-spying an already-spied global returns the SAME mock
     // instance, so clear its history per test.

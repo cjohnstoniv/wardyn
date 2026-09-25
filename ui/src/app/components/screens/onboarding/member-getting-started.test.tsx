@@ -8,6 +8,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { SetupStatus, AgentRun, SetupHarnessTool } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
 
 const getSetupStatusMock = vi.fn();
@@ -87,7 +88,7 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
 }
 
 function run(id: string): AgentRun {
-  return { id, created_at: "", updated_at: "" } as AgentRun;
+  return makeRun({ id, created_at: "", updated_at: "" });
 }
 
 // Appendix A finding 2 — a per_user roster row (modelKeyProvider's
@@ -114,7 +115,7 @@ const sharedBedrockHarness: SetupHarnessTool[] = [
 ];
 
 // The page reads its drive off the shell's ONE GET /me (operator-context's
-// UserDriveContext), not a fetch of its own — so a case states its /me body
+// MeIdentity.userDrive), not a fetch of its own — so a case states its /me body
 // here, exactly as app-shell hands it down.
 function renderPage(me: Me = baseMe()) {
   return render(

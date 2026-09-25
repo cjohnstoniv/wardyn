@@ -46,6 +46,9 @@ vi.mock("../../../lib/api/health", () => ({
     // (its own independent fetch) both GET the site config — default to the
     // unconfigured zero value.
     getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    // #492: setup-screen.tsx's reloadSiteConfig now reads the ETag-carrying
+    // snapshot — routed through the SAME mock these tests already drive.
+    getSiteConfigSnapshot: async (...a: unknown[]) => ({ siteConfig: await getSiteConfigMock(...a), etag: null }),
     putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
     // Corporate network's connectivity gate (corp-network-step.tsx) — the
     // walkthroughs below aren't testing the gate itself, so they clear it with

@@ -25,7 +25,7 @@ env:
   # decides who is who.
   WARDYN_OIDC_EMAIL_DOMAINS: ""
   WARDYN_OIDC_OPERATOR_EMAILS: "admin@wardyn.test"
-  WARDYN_OIDC_ROLE_MAP: "admin@wardyn.test=admin,member@wardyn.test=member"
+  WARDYN_OIDC_ROLE_MAP: "admin@wardyn.test=admin,member@wardyn.test=user"
   WARDYN_DAEMON_PROXY_URL: "http://wardyn-test-adofake.wardyn.svc.cluster.local:3128"
   WARDYN_DAEMON_NO_PROXY: ".svc,.cluster.local,localhost,127.0.0.1"
 extraEnv:

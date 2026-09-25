@@ -36,7 +36,7 @@ export function useRecordingDisabled(): boolean | undefined {
   const [disabled, setDisabled] = React.useState<boolean | undefined>(undefined);
   React.useEffect(() => {
     let alive = true;
-    health.health().then((h) => {
+    void health.health().then((h) => {
       const selected = h.components?.recording?.selected;
       // An absent field is unknown, not "on": only a value we actually read
       // settles this either way.

@@ -80,7 +80,7 @@ async function openClaudeDoor(page: Page): Promise<Door> {
   page.context().on("page", (p) => tabs.push(p));
 
   await gotoConsole(page);
-  await navToRoute(page, "/settings");
+  await navToRoute(page, "/admin/settings");
   await page.locator("#lane-subscription").click();
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Sign in to Claude" })).toBeVisible();

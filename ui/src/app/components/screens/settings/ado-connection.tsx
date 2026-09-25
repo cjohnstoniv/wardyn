@@ -18,10 +18,10 @@
 //
 // id="azure-devops" + the hash-focus effect (#458): the capability card's
 // consent CTA and the mid-run sign-in door (ado-capability-card.tsx) both
-// land here via `/settings#azure-devops` — a five-card page with no anchor
-// otherwise strands the reader at the top. tabIndex=-1 makes the section
-// programmatically focusable without joining the page's Tab order; the
-// browser's own focus-triggered scroll is the only scroll this does.
+// land here via `/account#azure-devops` (M-1b: was `/settings#azure-devops`)
+// — a five-card page with no anchor otherwise strands the reader at the top.
+// tabIndex=-1 makes the section programmatically focusable without joining
+// the page's Tab order; the browser's own focus-triggered scroll is the only scroll this does.
 //
 // PR #501 review F2: the effect used to depend on `access` (status.scm_access)
 // itself, which is a NEW object after every Settings reload — Re-check, a
@@ -63,9 +63,7 @@ export function AdoConnectionCard({ status, onChanged }: { status?: SetupStatus;
       // a mouse click (the consent door's own click, on the previous page).
       sectionRef.current?.focus({ focusVisible: true } as FocusOptions);
     }
-    // location.key, not location.hash (F2): a real navigation is what should
-    // re-run this, not every render this card happens to get.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- location.key, not location.hash (F2): a real navigation is what should re-run this, not every render this card happens to get
   }, [location.key, hasRow]);
   const handleConnect = async () => {
     if (await connect()) onChanged();

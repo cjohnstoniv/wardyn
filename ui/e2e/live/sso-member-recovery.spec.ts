@@ -64,7 +64,7 @@
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
+import { USER_PREVIEW } from "../../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
 import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/capture-confirm";
 import { LOGIN_SANDBOX_UNREADABLE, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
@@ -268,34 +268,36 @@ async function approvalsFor(page: Page, runID: string): Promise<unknown[]> {
  *  carry the e2e daemon's bearer token and base URL, neither of which applies
  *  on a cluster driven through Dex. */
 async function gotoAgentsTab(page: Page): Promise<void> {
-  // NEVER `page.goto("/settings")` as the admin. App.tsx's RequireSetup bounces
-  // the FIRST gated-route render of every full document load into /setup while
-  // any setup check grades fail or warn — which a fresh kind install always does
-  // — and only ONCE per load (setup-gate.ts's gateFiredThisLoad). 0.7.5's first
-  // green-looking walk sat 30 minutes on the welcome page for exactly this.
+  // NEVER `page.goto("/admin/settings")` as the admin. App.tsx's RequireSetup
+  // bounces the FIRST gated-route render of every full document load into
+  // /setup while any setup check grades fail or warn — which a fresh kind
+  // install always does — and only ONCE per load (setup-gate.ts's
+  // gateFiredThisLoad). 0.7.5's first green-looking walk sat 30 minutes on the
+  // welcome page for exactly this.
   //
   // AND NEVER TIME THE BOUNCE. The gate decides when /setup/status and /me have
   // BOTH answered, not when the URL changes: the second attempt here loaded
   // /runs, waited for "/runs or /setup" — which the URL satisfies the instant
-  // goto returns, before either answer — pushed /settings, and the gate then
-  // spent its one bounce ON /settings. So navigate client-side (pushState +
-  // popstate, what a <NavLink> click does — ui/e2e/fixtures.ts's navToRoute; a
-  // second full load would re-arm the gate) and let the page say when it took:
-  // the Settings card only paints once the gate has let the route through, and
-  // if the one bounce landed on top of this navigation the retry cannot be
-  // bounced again. Correct whichever side of the gate's decision it starts on.
+  // goto returns, before either answer — pushed /admin/settings, and the gate
+  // then spent its one bounce ON /admin/settings. So navigate client-side
+  // (pushState + popstate, what a <NavLink> click does — ui/e2e/fixtures.ts's
+  // navToRoute; a second full load would re-arm the gate) and let the page say
+  // when it took: the Settings card only paints once the gate has let the
+  // route through, and if the one bounce landed on top of this navigation the
+  // retry cannot be bounced again. Correct whichever side of the gate's
+  // decision it starts on.
   await page.goto("/runs");
   await expect(async () => {
-    if (!/\/settings$/.test(page.url())) {
+    if (!/\/admin\/settings$/.test(page.url())) {
       await page.evaluate((path) => {
         window.history.pushState({}, "", path);
         window.dispatchEvent(new PopStateEvent("popstate"));
-      }, "/settings");
+      }, "/admin/settings");
     }
     await expect(page.getByTestId("providers-card")).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 90_000 });
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
-  await expect(page).toHaveURL(/\/providers$/);
+  await expect(page).toHaveURL(/\/admin\/providers$/);
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
@@ -1102,10 +1104,10 @@ test("F (member-preview): an admin previews the state a member is in before they
   await signInThroughPane(page, openAdminLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
 
-  // Into the preview.
-  await page.locator("header").getByRole("button").last().click();
-  await page.getByRole("menuitem", { name: MEMBER_MODE.MENU_NEW }).click();
-  await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeVisible({ timeout: 60_000 });
+  // Into the preview, from the Permissions header (M-2).
+  await page.goto("/admin/permissions");
+  await page.getByRole("button", { name: USER_PREVIEW.MENU_NEW }).click();
+  await expect(page.getByText(USER_PREVIEW.BANNER)).toBeVisible({ timeout: 60_000 });
   await expect.poll(async () => (await me(page)).member_mode_no_credential, { timeout: 30_000 }).toBe(true);
 
   // The state every new member is in, and the one the plain toggle structurally
@@ -1131,8 +1133,8 @@ test("F (member-preview): an admin previews the state a member is in before they
 
   // Nothing was deleted: the admin's session sits untouched in the store and
   // comes back the moment they exit.
-  await page.getByRole("button", { name: MEMBER_MODE.EXIT }).click();
-  await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeHidden({ timeout: 60_000 });
+  await page.getByRole("button", { name: USER_PREVIEW.EXIT }).click();
+  await expect(page.getByText(USER_PREVIEW.BANNER)).toBeHidden({ timeout: 60_000 });
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("live");
 });
 
@@ -1195,13 +1197,26 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
 
   // The server's own story of THIS click: created (never refused), credentialed
   // on the fresh capture, and executed. A member reads their own run's trail.
-  const actions = (await page.evaluate(async (id: string) => {
-    const r = await fetch(`/api/v1/audit?run_id=${encodeURIComponent(id)}&limit=200`, { credentials: "include" });
-    const body = (await r.json()) as { items?: Array<{ action: string; outcome?: string }> } | Array<{ action: string; outcome?: string }>;
-    return (Array.isArray(body) ? body : (body.items ?? [])).map((e) => `${e.action}:${e.outcome ?? ""}`);
-  }, runID)) as string[];
+  // POLLED, not read once (#804): run.exec is a follow-on write after the
+  // create that already got this spec onto the run page, and under load the
+  // row can land after a single read — a live walk saw run.create,
+  // credential.mint, secret.read and identity.renew all present with run.exec
+  // still missing. Poll the trail (bounded by SANDBOX_UP, the same ceiling
+  // dispatch itself races against) until run.exec:success appears, and keep
+  // the LAST read for the assertions below rather than fetching again.
+  let actions: string[] = [];
+  const readAuditTrail = async (): Promise<string[]> => {
+    actions = (await page.evaluate(async (id: string) => {
+      const r = await fetch(`/api/v1/audit?run_id=${encodeURIComponent(id)}&limit=200`, { credentials: "include" });
+      const body = (await r.json()) as { items?: Array<{ action: string; outcome?: string }> } | Array<{ action: string; outcome?: string }>;
+      return (Array.isArray(body) ? body : (body.items ?? [])).map((e) => `${e.action}:${e.outcome ?? ""}`);
+    }, runID)) as string[];
+    return actions;
+  };
+  await expect
+    .poll(readAuditTrail, { timeout: SANDBOX_UP })
+    .toContain("run.exec:success");
   expect(actions, "the relaunch created the run").toContain("run.create:success");
-  expect(actions, "the run was dispatched on the fresh capture and executed").toContain("run.exec:success");
   expect(actions.filter((a) => a.startsWith("run.create:failure")), "never refused for its credential").toEqual([]);
 
   // The server agrees on both halves: the member is live again, and the run

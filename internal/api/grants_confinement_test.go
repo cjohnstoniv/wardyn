@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── Feature A: confinement_class (WS-2.6) ──────────────────────────────────
+// Feature A: confinement_class (WS-2.6)
 
 // TestParseConfinementClass locks in the request-field validation: empty is
 // allowed (inherit the policy minimum), the three known classes parse, and any
@@ -69,7 +69,7 @@ func TestCreateRunRejectsWeakerConfinement(t *testing.T) {
 	}
 }
 
-// ─── pool-backed end-to-end tests (WARDYN_TEST_PG) ──────────────────────────
+// pool-backed end-to-end tests (WARDYN_TEST_PG)
 
 // pgHarness builds a Server wired to a real Postgres pool. Guarded by
 // WARDYN_TEST_PG; skipped cleanly when unset (via pgHarnessWithRunner). Mirrors
@@ -298,7 +298,7 @@ func TestPreflightAndCreateAgreeOnConfinementDefault(t *testing.T) {
 	}
 }
 
-// ─── Feature B: GET /runs/{id}/grants (WS-2.4) ──────────────────────────────
+// Feature B: GET /runs/{id}/grants (WS-2.4)
 
 // TestListGrantsReturnsRecords creates a run (whose default policy seeds one
 // github_token eligibility grant) and asserts GET /runs/{id}/grants returns it.

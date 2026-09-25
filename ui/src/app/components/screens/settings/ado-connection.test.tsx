@@ -24,12 +24,13 @@ function status(scm_access?: SetupStatus["scm_access"]): SetupStatus {
 
 // #458: the card reads location.hash (the hash-focus effect), so every
 // render needs a Router in scope. initialEntries defaults to a plain
-// /settings landing — no hash, no focus.
-function renderCard(ui: React.ReactElement, initialEntries: string[] = ["/settings"]) {
+// /account landing — no hash, no focus.
+function renderCard(ui: React.ReactElement, initialEntries: string[] = ["/account"]) {
   return render(<MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>);
 }
 
-describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)", () => {
+describe("AdoConnectionCard — the connected panel's Settings home (#386)", () => {
+  // ticket: Q9
   beforeEach(() => {
     adoConnectMock.mockReset();
     adoBlockedUrl = null;
@@ -96,13 +97,13 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
   });
 
   // #458 — the capability card's consent CTA and the mid-run sign-in door
-  // both land on /settings#azure-devops; arriving with that hash must move
+  // both land on /account#azure-devops; arriving with that hash must move
   // focus onto this card (no other anchor exists on a five-card page).
   describe("arrival with #azure-devops focuses the card (#458)", () => {
     it("focuses the section when the URL hash matches and a row is configured", () => {
       renderCard(
         <AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />,
-        ["/settings#azure-devops"],
+        ["/account#azure-devops"],
       );
       const section = screen.getByText("Azure DevOps").closest("section")!;
       expect(section).toHaveAttribute("id", "azure-devops");
@@ -110,7 +111,7 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
       expect(document.activeElement).toBe(section);
     });
 
-    it("does not steal focus on a plain /settings landing (no hash)", () => {
+    it("does not steal focus on a plain /account landing (no hash)", () => {
       renderCard(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />);
       const section = screen.getByText("Azure DevOps").closest("section")!;
       expect(document.activeElement).not.toBe(section);
@@ -119,12 +120,13 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
     // PR #501 review F3 — a `.focus()` that follows a click (the consent
     // door's own click, on the page this card navigates FROM) can lose the
     // browser's focus-visible heuristic; force it instead of hoping.
-    it("F3: focus is forced visible (focusVisible: true), not left to the browser's own heuristic", () => {
+    it("focus is forced visible (focusVisible: true), not left to the browser's own heuristic", () => {
+      // ticket: F3
       const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
       try {
         renderCard(
           <AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={vi.fn()} />,
-          ["/settings#azure-devops"],
+          ["/account#azure-devops"],
         );
         expect(focusSpy).toHaveBeenCalledWith({ focusVisible: true });
       } finally {
@@ -138,7 +140,8 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
     // focus back here even though the reader had since focused something
     // else and the URL never changed. It must depend on navigation
     // (location.key) + row presence (a boolean), not on data identity.
-    it("F2: an equal-but-new status from a Settings reload does not steal focus back from elsewhere on the page", () => {
+    it("an equal-but-new status from a Settings reload does not steal focus back from elsewhere on the page", () => {
+      // ticket: F2
       function Harness({ s }: { s: SetupStatus }) {
         return (
           <div>
@@ -149,7 +152,7 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
       }
       const initial = status({ state: "not_configured", cause: "row_is_newer" });
       const { rerender } = render(
-        <MemoryRouter initialEntries={["/settings#azure-devops"]}>
+        <MemoryRouter initialEntries={["/account#azure-devops"]}>
           <Harness s={initial} />
         </MemoryRouter>,
       );
@@ -166,7 +169,7 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
       // so no navigation happens and location.key is unchanged.
       const reloaded = status({ state: "not_configured", cause: "row_is_newer" });
       rerender(
-        <MemoryRouter initialEntries={["/settings#azure-devops"]}>
+        <MemoryRouter initialEntries={["/account#azure-devops"]}>
           <Harness s={reloaded} />
         </MemoryRouter>,
       );
@@ -176,7 +179,8 @@ describe("AdoConnectionCard — the connected panel's Settings home (#386, Q9)",
 });
 
 // Review finding F9 — a blocked popup.
-describe("AdoConnectionCard — a blocked popup (F9)", () => {
+describe("AdoConnectionCard — a blocked popup", () => {
+  // ticket: F9
   beforeEach(() => {
     adoConnectMock.mockReset();
     adoBlockedUrl = "/api/v1/scm/azure-devops/signin";
@@ -192,7 +196,8 @@ describe("AdoConnectionCard — a blocked popup (F9)", () => {
 
   // Review follow-up N1: clicking the fallback link starts the SAME poll
   // (connectFallback), so the card reloads status on a real connection.
-  it("N1: clicking the fallback link starts the poll and reloads status once connected", async () => {
+  it("clicking the fallback link starts the poll and reloads status once connected", async () => {
+    // ticket: N1
     adoConnectMock.mockResolvedValueOnce(true);
     const onChanged = vi.fn();
     renderCard(<AdoConnectionCard status={status({ state: "not_configured", cause: "row_is_newer" })} onChanged={onChanged} />);
