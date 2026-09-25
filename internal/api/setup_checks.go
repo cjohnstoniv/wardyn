@@ -485,12 +485,11 @@ func ageKeyCheck(durable bool) SetupCheck {
 	}
 }
 
-// secretStoreChecks are the credential-storage rows (design §3): store_external
-// in store mode; kek_service when a key service wraps every data key; else the
-// age-key row, kek_local on a multi-user install (whoever holds the database
-// and the local key reads every credential), and platform_shared while no
-// WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of the age key then also
-// forges run identities and sessions).
+// secretStoreChecks are the credential-storage rows (design §3, canon SETUP_CHECK.*): store_external in store
+// mode; kek_service (KEK_SERVICE; keyService is "Vault Transit at {host}") when a key service wraps every data
+// key; else the age-key row, kek_local on a multi-user install (whoever holds the database and the local key
+// reads every credential), and platform_shared while no WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of
+// the age key then also forges run identities and sessions).
 func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate bool) []SetupCheck {
 	if external != "" {
 		return []SetupCheck{{ID: "store_external", Label: "Credential storage", Status: "ok",
@@ -498,7 +497,8 @@ func secretStoreChecks(external, keyService string, durable, multiUser, platform
 	}
 	if keyService != "" {
 		return []SetupCheck{{ID: "kek_service", Label: "Credential storage", Status: "ok",
-			Detail: "Credentials are encrypted with a key held in " + keyService + ". Wardyn holds no copy of it; every unlock is logged there."}}
+			Detail: "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in " + keyService +
+				" and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log."}}
 	}
 	checks := []SetupCheck{ageKeyCheck(durable)}
 	if durable && multiUser {

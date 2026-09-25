@@ -561,7 +561,9 @@ func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
 // does not.
 func TestSecretStoreChecks_KeyServiceAndLocalKey(t *testing.T) {
 	chks := secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false)
-	if len(chks) != 1 || chks[0].ID != "kek_service" || chks[0].Status != "ok" || !strings.Contains(chks[0].Detail, "Vault Transit at vault.example:8200") {
+	// SETUP_CHECK.KEK_SERVICE (owner decision 2026-09-25), byte for byte.
+	if len(chks) != 1 || chks[0].ID != "kek_service" || chks[0].Status != "ok" ||
+		chks[0].Detail != "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in Vault Transit at vault.example:8200 and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log." {
 		t.Fatalf("key service rows = %+v", chks)
 	}
 	chks = secretStoreChecks("", "", true, true, true)

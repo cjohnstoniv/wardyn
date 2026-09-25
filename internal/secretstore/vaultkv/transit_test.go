@@ -25,6 +25,10 @@ func TestTransit_WrapIsBoundToItsRow(t *testing.T) {
 	if tr.ID() != "transit:transit/wardyn" {
 		t.Fatalf("ID = %q", tr.ID())
 	}
+	// The {host} of SETUP_CHECK.KEK_SERVICE is the Transit address's host.
+	if want := "Vault Transit at " + strings.TrimPrefix(f.srv.URL, "http://"); tr.Describe() != want {
+		t.Fatalf("Describe = %q, want %q", tr.Describe(), want)
+	}
 	w, err := tr.Wrap(ctx, testDEK(), kek.Bind("alice", "pat"))
 	if err != nil {
 		t.Fatal(err)
