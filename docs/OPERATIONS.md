@@ -746,6 +746,15 @@ eBPF ground-truth state); `/metrics` is the trend surface. Audit sinks
 (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) are the event stream for SIEMs — metrics
 carry no per-run detail.
 
+### No core dumps, no attaching
+
+wardynd and wardyn-proxy hold credentials in memory, so each sets `RLIMIT_CORE`
+to 0 and marks itself non-dumpable (`PR_SET_DUMPABLE` 0) as its first act. A
+crash writes no core file and a `core_pattern` handler receives nothing, and a
+process of the same user can no longer `strace -p` or attach delve or gdb to it,
+or read its `/proc/<pid>/environ` or `/proc/<pid>/mem`. This is intentional and
+not configurable.
+
 ## Multi-user: who can change what
 
 The API authenticates with **either** an OIDC session (human SSO) **or** the
@@ -5112,8 +5121,10 @@ host.
 **When Vault is unavailable.** A sealed, throttled or unreachable Vault (a 429, a
 5xx, a timeout; each call retried three times first) is *transient*: the
 credential sink answers the proxy 503, "Wardyn couldn't reach the service that
-holds this run's credential", distinct from a missing credential's 424. (No
-last-good grace period rides out a transient failure yet.)
+holds this run's credential", distinct from a missing credential's 424. A run
+already using the credential keeps injecting the last value it read for up to
+15 minutes past that value's expiry (a stored key's is ten minutes after it was
+read), asking again every 30 s.
 A 401 or 403, a value that is gone, or a binding that does not match is
 *definitive*: revoking Wardyn's Vault role bites at once. (A 401 or 403 makes
 wardynd log in again, or re-read its token file, at most once every 30 s.)

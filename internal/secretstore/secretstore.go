@@ -40,9 +40,9 @@ import (
 // error. Every Store implementation must honor it (the conformance suite checks).
 var ErrNotFound = errors.New("secretstore: secret not found")
 
-// ErrUnavailable marks a TRANSIENT failure of an external store (sealed,
-// throttled, 5xx, network, timeout): the value may well be there, the store
-// just could not answer. Every other Get error is DEFINITIVE — the row, the
+// ErrUnavailable marks a TRANSIENT failure: an external store sealed,
+// throttled, 5xx, unreachable or timing out, or the database holding the rows
+// not answering. The value may well be there; the store just could not answer. Every other Get error is DEFINITIVE — the row, the
 // value, the binding or the access is gone, and retrying will not bring it
 // back. A 401/403 is definitive by design, so revoking Wardyn's access at the
 // store bites at once (design §2.3a.4, K8).

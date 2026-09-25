@@ -211,8 +211,13 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	// (4) read + renew through that scope — the SAME single-flight, skew, spent
 	// map and harness.credential.refresh audit dispatch uses.
 	blob, found, berr := s.readAWSSSOBlob(ctx, scope)
-	if berr != nil {
-		return fail(http.StatusServiceUnavailable, "store_error", credentialReauthStoreErrorBody, nil)
+	switch {
+	case errors.Is(berr, secretstore.ErrUnavailable):
+		// Transient: the proxy may ride it out on its last-good header.
+		return fail(http.StatusServiceUnavailable, "store-unavailable", sinkStoreUnreachable, nil)
+	case berr != nil:
+		// Definitive (storeReadRefusal): the store refused the session.
+		return fail(http.StatusForbidden, "store_error", credentialReauthStoreErrorBody, nil)
 	}
 	reason := awsSSOReauthReasonNotFound
 	if found {

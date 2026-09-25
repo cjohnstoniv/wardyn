@@ -85,14 +85,15 @@ const (
 	entraOAuthInteractionRequired = "interaction_required"
 )
 
-// The four failure classes a caller answers differently, as sentinels so a
+// The failure classes a caller answers differently, as sentinels so a
 // caller can switch on them with errors.Is and a log line still names the code
 // the authority sent.
 //
 // They are DISTINCT because the answers are: a dead credential must be
 // re-captured, a consent refusal needs an admin or a fresh consent prompt, an
 // interaction refusal needs the human at a keyboard on a compliant device, and
-// an unavailable authority needs nothing but a retry. Collapsing any pair of
+// an unavailable authority needs nothing but a retry, and a store that refuses
+// the stored sign-in must stop its use at once. Collapsing any pair of
 // them turns a transient outage into a fleet-wide re-sign-in.
 var (
 	// ErrADOEntraNotCaptured: this principal has no stored Azure DevOps
@@ -110,9 +111,15 @@ var (
 	// unusably. The credential is untouched and the next attempt redeems it
 	// normally.
 	ErrADOEntraUnavailable = errors.New("renewing the captured Azure DevOps sign-in did not complete")
+	// ErrADOEntraStoreRefused: the secret store answered and refused the
+	// stored sign-in (moved, changed at the store, or Wardyn's access to it
+	// revoked). Definitive, unlike ErrADOEntraUnavailable: a store that refuses
+	// must stop the run's use of the credential at once (credential-storage
+	// design K8, rule 21).
+	ErrADOEntraStoreRefused = errors.New("the secret store refused the captured Azure DevOps sign-in")
 )
 
-// ADOEntraFailure is the same four classes as a machine-readable label, for a
+// ADOEntraFailure is the same classes as a machine-readable label, for a
 // caller that puts the class in a refusal body or an audit row rather than
 // branching on it. "" means no failure.
 type ADOEntraFailure string
@@ -124,6 +131,7 @@ const (
 	ADOEntraFailureConsentRequired     ADOEntraFailure = "consent_required"
 	ADOEntraFailureInteractionRequired ADOEntraFailure = "interaction_required"
 	ADOEntraFailureUnavailable         ADOEntraFailure = "unavailable"
+	ADOEntraFailureStoreRefused        ADOEntraFailure = "store_refused"
 )
 
 // ADOEntraClassify maps an error from this lane onto its class. An error from
@@ -142,6 +150,8 @@ func ADOEntraClassify(err error) ADOEntraFailure {
 		return ADOEntraFailureConsentRequired
 	case errors.Is(err, ErrADOEntraInteractionRequired):
 		return ADOEntraFailureInteractionRequired
+	case errors.Is(err, ErrADOEntraStoreRefused):
+		return ADOEntraFailureStoreRefused
 	default:
 		return ADOEntraFailureUnavailable
 	}
@@ -388,8 +398,11 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	defer unlock()
 
 	blob, found, err := s.readADOEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeADORefresh), owner, cfg.RowID)
-	if err != nil {
+	switch {
+	case errors.Is(err, secretstore.ErrUnavailable):
 		return ADOEntraAccess{}, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
+	case err != nil:
+		return ADOEntraAccess{}, fmt.Errorf("%w: %w", ErrADOEntraStoreRefused, err)
 	}
 	if !found {
 		return ADOEntraAccess{}, ErrADOEntraNotCaptured
@@ -416,9 +429,17 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 
 	// Mask BEFORE anything can log or persist the new values, and globally for
 	// the same reason the AWS capture masks globally: one credential is reused
-	// across every run that selects this lane.
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.AccessToken))
-	s.cfg.MaskRegistry.AddGlobal([]byte(resp.RefreshToken))
+	// across every run that selects this lane. Register the refresh token the
+	// blob will hold: one the response left out is still in use, and leaving it
+	// out of this call would retire it (and sweep it an hour later) while live.
+	// The access token is let go one grace after its expiry (#151).
+	keep := blob.RefreshToken
+	if resp.RefreshToken != "" {
+		keep = resp.RefreshToken
+	}
+	now := s.cfg.Now()
+	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
+	s.cfg.MaskRegistry.AddGlobalUntil(owner, adoEntraSecretName(cfg.RowID), now, accessExpiry, []byte(resp.AccessToken), []byte(keep))
 
 	granted := strings.Fields(resp.Scope)
 	if len(granted) == 0 {
@@ -432,7 +453,7 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	access := ADOEntraAccess{
 		AccessToken: resp.AccessToken,
 		Scopes:      granted,
-		ExpiresAt:   s.cfg.Now().Add(time.Duration(resp.ExpiresIn) * time.Second).UTC(),
+		ExpiresAt:   accessExpiry,
 	}
 
 	// Persist the ROTATION. An absent refresh token in the response means keep

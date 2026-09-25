@@ -10,6 +10,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -616,25 +618,41 @@ func bedrockLaneSelectable(runAgent string, modelRun, subscriptionActive, haveSe
 // grant, and surface as an upstream 403 naming neither the lane it picked nor
 // the empty secret it picked it on.
 func (s *Server) bedrockBearerFor(ctx context.Context, scope awsSSOScope) []byte {
+	raw, _ := s.bedrockBearerRead(ctx, scope)
+	return raw
+}
+
+// bedrockBearerRead is bedrockBearerFor with the store's error kept, for the
+// injection sink, which must tell a store that did not answer from a key that
+// is gone or refused (storeReadRefusal). An absent or blank key is (nil, nil).
+func (s *Server) bedrockBearerRead(ctx context.Context, scope awsSSOScope) ([]byte, error) {
 	st := s.cfg.Secrets
 	if st == nil || !scope.readsBearer() {
-		return nil
+		return nil, nil
 	}
 	if scope.perUser {
 		if !scope.namespaced() || previewHidesOwnCredential(ctx) {
-			return nil
+			return nil, nil
 		}
 		st = st.For(scope.owner)
 		own, err := st.List(ctx)
-		if err != nil || !slices.Contains(own, bedrockAPIKeySecret) {
-			return nil
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(own, bedrockAPIKeySecret) {
+			return nil, nil
 		}
 	}
 	raw, err := st.Get(ctx, bedrockAPIKeySecret)
-	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
-		return nil
+	switch {
+	case errors.Is(err, secretstore.ErrNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	case len(bytes.TrimSpace(raw)) == 0:
+		return nil, nil
 	}
-	return raw
+	return raw, nil
 }
 
 func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun, refresh bool, ws *types.WorkspaceBedrockRef, sso awsSSOScope) bedrockAuth {
@@ -800,11 +818,12 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			// the caller): this captured credential is reused across every run that
 			// picks this mode, not minted fresh per run, so a per-run Add would miss
 			// every run after the first. Mirrors handleHarnessCredentialPaste
-			// (harnesscred.go). AddGlobal no-ops on the empty strings when a field
-			// wasn't captured (Registry.MinLen).
-			s.cfg.MaskRegistry.AddGlobal([]byte(blob.AccessToken))
-			s.cfg.MaskRegistry.AddGlobal([]byte(blob.RefreshToken))
-			s.cfg.MaskRegistry.AddGlobal([]byte(blob.ClientSecret))
+			// (harnesscred.go). It ignores the empty strings when a field wasn't
+			// captured (Registry.MinLen). Merge, not AddGlobal: this blob may predate
+			// a refresh that ran concurrently outside our read, and replacing the
+			// credential's set with it would retire the refresh's live tokens.
+			s.cfg.MaskRegistry.MergeGlobalUntil(sso.rowOwner(), harnessCredSecretName(awsSSOProvider), blob.ExpiresAt,
+				[]byte(blob.AccessToken), []byte(blob.RefreshToken), []byte(blob.ClientSecret))
 			// The POST-refresh blob's own pair: a refresh=true pass is the one allowed
 			// to redeem the rotating refresh token, and the identity the gate
 			// compares must be the one this run will actually present.

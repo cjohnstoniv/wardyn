@@ -456,7 +456,7 @@ func TestMITMCorpHost_ForwardEgressScanCoversBody(t *testing.T) {
 // so any registered secret it carries is masked (httpError) before it leaves.
 func TestMITMRefreshFailureMasksSecretInError(t *testing.T) {
 	const secret = "sk-ant-oat-LEAKED-0123456789"
-	procRegistry.AddGlobal([]byte(secret))
+	procMask([]byte(secret))
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "resolve failed for "+secret, http.StatusInternalServerError)
 	}))

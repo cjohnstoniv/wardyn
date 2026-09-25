@@ -5,9 +5,14 @@ package api
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
@@ -191,11 +196,17 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		}
 		tok, terr := provider.Current(r.Context())
 		if terr != nil {
-			// Fail closed: never inject an expired/absent token.
+			// Fail closed: never inject an expired/absent token. A store that
+			// did not answer (the managed token's) is the transient 503, as on
+			// the stored-key path below.
+			reason, status, body := "resolve-failed", http.StatusFailedDependency, "resolve "+source+" token: "+terr.Error()
+			if errors.Is(terr, secretstore.ErrUnavailable) {
+				reason, status, body = "store-unavailable", http.StatusServiceUnavailable, sinkStoreUnreachable
+			}
 			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 				"secret.read", sentinel, "failure",
-				mustJSON(map[string]any{"reason": "resolve-failed", "grant_id": grantID, "source": source})))
-			writeError(w, http.StatusFailedDependency, "resolve "+source+" token: "+terr.Error())
+				mustJSON(map[string]any{"reason": reason, "grant_id": grantID, "source": source})))
+			writeError(w, status, body)
 			return
 		}
 		// The OAuth token has exactly ONE correct wire shape: Authorization: Bearer
@@ -220,11 +231,15 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 			Value:  formatted,
 			JTI:    minted.JTI,
 		}
-		// Only advertise an expiry when the provider has a machine-readable one
-		// (resident subscription token). The managed setup-token has none (zero
-		// time), so the proxy treats it as static — no re-resolve churn.
-		if !tok.ExpiresAt.IsZero() {
+		// The resident subscription token has a machine-readable expiry, and
+		// the proxy re-resolves ahead of it. The managed setup-token has none:
+		// it is a stored credential, so it gets a stored key's expiry and a
+		// disconnected or replaced token stops being injected on that clock.
+		switch {
+		case !tok.ExpiresAt.IsZero():
 			resp.ExpiresAt = tok.ExpiresAt.UnixMilli()
+		case sentinel == types.ManagedOAuthSecret:
+			resp.ExpiresAt = s.storedKeyExpiry(minted)
 		}
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -299,30 +314,15 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	rctx, row := secretstore.SiteAudited(r.Context())
 	secret, err := s.cfg.Secrets.For(claims.Sub).Get(rctx, minted.Injection.SecretName)
 	if err != nil {
-		// Fail closed; the proxy refuses to start without its injections. The
-		// reason tells a store outage from a credential that is gone or refused.
-		reason := "refused"
-		switch {
-		case errors.Is(err, secretstore.ErrUnavailable):
-			reason = "store-unavailable"
-		case errors.Is(err, secretstore.ErrNotFound):
-			reason = "not-found"
-		}
+		// Fail closed; the proxy refuses to start without its injections, and
+		// mid-run it acts on the status: see storeReadRefusal.
+		status, reason, body := storeReadRefusal(minted.Injection.SecretName, err)
+		slog.WarnContext(r.Context(), "wardynd: a stored credential could not be read for injection",
+			slog.String("secret", minted.Injection.SecretName), slog.String("reason", reason), slog.Any("err", err))
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
 			mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}, row))))
-		if reason == "store-unavailable" {
-			// Transient: the organisation's store did not answer. A distinct
-			// status, so it is never mistaken for a credential that is gone.
-			writeError(w, http.StatusServiceUnavailable,
-				"Wardyn couldn't reach the service that holds this run's credential, so it couldn't unlock it. Nothing was substituted. Try again in a moment.")
-			return
-		}
-		msg := "secret " + minted.Injection.SecretName + " is not in the store (set it with `wardyn secret set`)"
-		if reason == "refused" { // the row exists: re-setting it would overwrite what an operator may need to inspect
-			msg = "secret " + minted.Injection.SecretName + " exists but could not be used: the store refused it (its value is gone, or bound to another row). Nothing was substituted; ask an admin to check it."
-		}
-		writeError(w, http.StatusFailedDependency, msg)
+		writeError(w, status, body)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
@@ -343,9 +343,54 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, injectionResponse{
-		Host:   minted.Injection.Host,
-		Header: minted.Injection.Header,
-		Value:  formattedValue,
-		JTI:    minted.JTI,
+		Host:      minted.Injection.Host,
+		Header:    minted.Injection.Header,
+		Value:     formattedValue,
+		JTI:       minted.JTI,
+		ExpiresAt: s.storedKeyExpiry(minted),
 	})
+}
+
+// storedKeyTTL is how long the proxy may inject a stored key before it asks
+// the sink again (CS-4). A stored key carries no expiry of its own, so before
+// this the proxy held it for the run's whole life, and a key removed, replaced
+// or refused at the store kept working in every run already using it.
+const storedKeyTTL = 10 * time.Minute
+
+// storedKeyExpiry is the ExpiresAt the sink gives a stored key: storedKeyTTL
+// from now. The proxy re-resolves ahead of it, and a definitive refusal on that
+// re-resolve stops the injection at once.
+//
+// An approval-gated grant stays static (0): each of its mints spends the
+// approval (broker.ErrAlreadyMinted unless a run-wide lease covers it), so a
+// re-resolve would fail the run at the first expiry. Its key is read once per
+// approval, as before.
+func (s *Server) storedKeyExpiry(m broker.Minted) int64 {
+	if m.ApprovalID != uuid.Nil {
+		return 0
+	}
+	return s.cfg.Now().Add(storedKeyTTL).UnixMilli()
+}
+
+// sinkStoreUnreachable is SINK.KEK_UNREACHABLE (credential-storage design §3).
+const sinkStoreUnreachable = "Wardyn couldn't reach the service that holds this run's credential, so it couldn't unlock it. Nothing was substituted. Try again in a moment."
+
+// storeReadRefusal is the sink's answer to a failed read of a stored
+// credential, split the way the proxy acts on it (design K8, rules 10 and 21).
+// A 503 means the store did not answer: transient, and the proxy keeps serving
+// its last-good header for a bounded grace. Every other status is definitive —
+// the credential is gone, or the store refused it (binding mismatch, access
+// denied, disabled) — and the proxy drops the header at once, so revoking
+// Wardyn's access at the store bites without waiting out the grace.
+func storeReadRefusal(name string, err error) (status int, reason, body string) {
+	switch {
+	case errors.Is(err, secretstore.ErrUnavailable):
+		return http.StatusServiceUnavailable, "store-unavailable", sinkStoreUnreachable
+	case errors.Is(err, secretstore.ErrNotFound):
+		return http.StatusFailedDependency, "not-found", "secret " + name + " is not in the store (set it with `wardyn secret set`)"
+	default:
+		// The row exists: re-setting it would overwrite what an operator may need to inspect.
+		return http.StatusFailedDependency, "refused", "secret " + name + " exists but could not be used: the store refused it " +
+			"(its value is gone or bound to another row, or Wardyn's access to it was revoked). Nothing was substituted; ask an admin to check it."
+	}
 }

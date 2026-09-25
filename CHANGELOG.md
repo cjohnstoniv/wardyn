@@ -534,6 +534,25 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `denied`: a credential is set only by the person it belongs to. `DELETE` and the name list keep
   `?owner=`, so an admin can still remove a person's credentials. Pre-provisioning a member's key
   before they sign in is no longer possible; they set it themselves.
+- **Credentials in memory: re-read, ridden out, let go (#589).** A stored key (an API key, the
+  Bedrock bearer key, the managed Claude token) used to be read once and injected for the run's
+  whole life, so removing it, or revoking Wardyn's access to it at the store, changed nothing for
+  a run already using it. The injection sink now gives it a ten-minute expiry and the proxy
+  re-reads it five minutes before that; an approval-gated grant, whose mint is single-use, is
+  still read once. A failed read is split two ways at every sink arm: the store (or the
+  database) not answering is a 503 ("Wardyn couldn't reach the service that holds this run's
+  credential…"), and the proxy keeps injecting the last value it had for up to 15 minutes past
+  its expiry, asking again every 30 s; any other failure is definitive (424 on the stored-key
+  paths, the Bedrock bearer arm included, which used to read an unreadable key as absent; 403 on
+  the captured AWS SSO and Azure DevOps arms, the latter as the new class `store_refused`), and the proxy
+  drops the value at once. The managed Claude token is cached for 60 s instead of read on every
+  resolve, and a capture or disconnect empties the cache. Process-wide mask copies of a
+  person's tokens (AWS SSO, Azure DevOps, the managed Claude token) are kept per credential:
+  a refresh or a disconnect retires the old values, which stay masked for an hour and are then
+  dropped instead of living for the daemon's life; an AWS SSO or Azure DevOps access token nothing
+  replaces is dropped an hour after its own expiry (#151). wardynd and wardyn-proxy set `RLIMIT_CORE` to
+  0 and mark themselves non-dumpable at start, so a crash writes no core file and another
+  process of the same user cannot read their memory or environment.
 - **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
   that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
   sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the
@@ -646,8 +665,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   variable; it refuses `http://` to a non-loopback Vault and uses a TLS config of its own. A
   sealed, throttled or unreachable Vault is transient (the credential sink answers 503, distinct
   from a missing credential's 424, and audits `secret.read` with `reason` `store-unavailable`); a
-  401/403 is definitive, and re-authenticates at most once every 30 s. There is no last-good grace
-  period yet: a transient failure fails the credential at once (the grace is CS-4). A KV v2 mount
+  401/403 is definitive, and re-authenticates at most once every 30 s. On a transient failure the
+  proxy keeps injecting its last value for a bounded grace (#589, above). A KV v2 mount
   that does not exist fails boot, and a write or delete Vault answers 404 fails rather than reading
   as done. The documented Vault policy grants `read` on `<mount>/config`, no `delete` on `data/`,
   and no `destroy/` or `undelete/`. `wardynd -migrate-secrets

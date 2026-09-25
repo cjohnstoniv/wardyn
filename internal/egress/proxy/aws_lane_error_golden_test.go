@@ -166,7 +166,7 @@ func TestAWSLaneErrorGolden_UpstreamError(t *testing.T) {
 // plane's own failure text must still never reach the sandbox, JSON or not.
 func TestAWSLaneErrorGolden_CredentialRefreshFailed(t *testing.T) {
 	const secret = "sk-ant-oat-AWS-LANE-GOLDEN-0123456789"
-	procRegistry.AddGlobal([]byte(secret))
+	procMask([]byte(secret))
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "resolve failed for "+secret, http.StatusInternalServerError)
 	}))

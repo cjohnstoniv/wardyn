@@ -22,7 +22,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
-	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -839,7 +838,8 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	// OWN asciicast has already buffered the `claude setup-token` output verbatim
 	// by the time this handler runs, so this does not redact that cast — see
 	// launchHarnessLoginRun for why the login terminal must not be recorded at all.
-	s.cfg.MaskRegistry.AddGlobal([]byte(token)) // nil-safe
+	s.cfg.MaskRegistry.AddGlobal("", hl.secretName, s.cfg.Now(), []byte(token)) // nil-safe
+	s.evictManagedToken()
 
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"harness.credential.captured", hl.secretName, "success",
@@ -876,7 +876,7 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "unknown provider: "+provider)
 		return
 	}
-	st := s.cfg.Secrets
+	st, owner := s.cfg.Secrets, ""
 	if hl.provider == awsSSOProvider {
 		// Only the AWS lane can be per-user (per_user is bedrock_sso-only,
 		// types.AgentProvider); every other provider keeps the operator-wide row
@@ -890,80 +890,16 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if scope.namespaced() {
-			st = st.For(scope.owner)
+			st, owner = st.For(scope.owner), scope.owner
 		}
 	}
 	if err := st.Delete(r.Context(), hl.secretName); err != nil {
 		writeServerError(w, r, "delete managed credential", err)
 		return
 	}
+	s.forgetCredential(owner, hl.secretName)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"harness.credential.disconnected", hl.secretName, "success",
 		mustJSON(map[string]any{"provider": hl.provider})))
 	writeJSON(w, http.StatusOK, map[string]any{"provider": hl.provider, "captured": false})
-}
-
-// Managed provider (subscription.Provider over the stored blob)
-
-// managedCredProvider serves the Wardyn-managed captured token through the SAME
-// subscription.Provider interface the resident host token uses, so the injection
-// sink treats them identically. It depends ONLY on the secret store (not the
-// Server), so it can be constructed in main.go BEFORE api.New builds the Server
-// — no construction cycle.
-//
-// No refresh path (v1): setup-token tokens are long-lived and Wardyn is not
-// their owner, so Current never mutates state — it returns the stored token and
-// lets Anthropic reject it on the wire if it has been revoked (fail closed at
-// the sink, surfaced as a run failure + an aging warning in setup status).
-type managedCredProvider struct {
-	store    secretstore.Store
-	provider string
-}
-
-// NewManagedCredProvider builds a managed subscription provider over store for a
-// provider id (e.g. "anthropic"). Returns nil when store is nil (managed mode
-// simply unavailable).
-func NewManagedCredProvider(store secretstore.Store, provider string) subscription.Provider {
-	if store == nil {
-		return nil
-	}
-	return &managedCredProvider{store: store, provider: provider}
-}
-
-func (p *managedCredProvider) read(ctx context.Context) (subscription.Token, error) {
-	// p.store is the operator-wide managed credential (NewManagedCredProvider's
-	// caller passes the raw, unscoped store) — not per-principal.
-	raw, err := p.store.Get(ctx, harnessCredSecretName(p.provider))
-	if errors.Is(err, secretstore.ErrNotFound) {
-		return subscription.Token{}, fmt.Errorf("no managed %s credential connected", p.provider)
-	}
-	if err != nil {
-		// A store-layer failure (decrypt/age-key mismatch, backend down) is NOT
-		// "not connected" — surface it distinctly so the sink fails closed on a
-		// real error rather than silently reading as "unconfigured".
-		return subscription.Token{}, fmt.Errorf("read managed %s credential: %w", p.provider, err)
-	}
-	var blob managedCredBlob
-	if uerr := json.Unmarshal(raw, &blob); uerr != nil {
-		return subscription.Token{}, fmt.Errorf("parse managed credential: %w", uerr)
-	}
-	if strings.TrimSpace(blob.Token) == "" {
-		return subscription.Token{}, fmt.Errorf("managed %s credential is empty; reconnect via container login", p.provider)
-	}
-	// ExpiresAt zero = "no machine-readable expiry" — the sink omits expires_at so
-	// the proxy treats the token as static (setup-token is long-lived; a revoked
-	// one fails on the wire, not on a clock).
-	return subscription.Token{Value: blob.Token}, nil
-}
-
-// Current returns the managed token (no refresh — see type doc).
-func (p *managedCredProvider) Current(ctx context.Context) (subscription.Token, error) {
-	return p.read(secretstore.WithPurpose(ctx, secretstore.PurposeManagedToken))
-}
-
-// Peek is identical to Current here (no refresh side effect to avoid). Its
-// callers only ask whether a token is there (managedInjectReady), so its read
-// is recorded as a status read.
-func (p *managedCredProvider) Peek() (subscription.Token, error) {
-	return p.read(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus))
 }

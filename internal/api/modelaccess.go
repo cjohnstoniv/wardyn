@@ -75,6 +75,15 @@ type awsSSOScope struct {
 // direction, since the alternative is reading the operator's row.
 func (sc awsSSOScope) namespaced() bool { return sc.perUser && sc.owner != "" }
 
+// rowOwner is the owner of the row this scope reads: its principal when
+// namespaced, else the operator's "".
+func (sc awsSSOScope) rowOwner() string {
+	if sc.namespaced() {
+		return sc.owner
+	}
+	return ""
+}
+
 // readsBearer / readsSSO report whether a resolve under sc may select the
 // stored bearer / the captured AWS SSO session: always under shared (one
 // precedence chain), and under per_user only the lane the row declares.
