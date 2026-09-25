@@ -140,18 +140,6 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, nil)
 }
 
-// isADOEntraHost reports whether host is one adoEntraHosts (any org) can
-// return: dev.azure.com, a service subdomain of it (vssps./vsrm./feeds./
-// pkgs./almsearch..., adoEntraServices), or any *.visualstudio.com. Not
-// adoEgressDomains, which answers a narrower question (the two-host egress
-// bundle to open for a git_pat/ssh_key grant) and misses the *.dev.azure.com
-// service subdomains the Entra lane's own credential hold also gates and
-// times out on.
-func isADOEntraHost(host string) bool {
-	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-	return h == "dev.azure.com" || strings.HasSuffix(h, ".dev.azure.com") || strings.HasSuffix(h, ".visualstudio.com")
-}
-
 // maxAuditFindings bounds how many per-finding records one llm.scan.* audit
 // event embeds. finding_count stays the honest total, so truncation costs
 // detail, never the signal — and one pathological scan cannot turn an
