@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
+  captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
+  in-sandbox helper still gets its answer and prints its done line), including when the console
+  tab was closed; the `run.kill` row carries `reason: sign_in_captured`. The `approval.cancelled`
+  row now carries `by_kind`, and the cancelled credential re-auth metric counts only rows the
+  cancel actually moved, not one a person decided at the same moment.
 - **The Getting Started funnel paints from the setup status the console already holds (#806).**
   A gated install redirected into `/setup` used to show "Checking Wardyn's setup…" with no step
   rail until the funnel's own second `/setup/status` read answered. The funnel now starts from the

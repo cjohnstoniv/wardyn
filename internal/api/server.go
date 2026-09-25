@@ -68,13 +68,13 @@ type ApprovalService interface {
 	Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error)
 	// CancelForRun moves every still-PENDING approval of a run that has just
-	// reached a terminal state to CANCELLED, returning how many it moved. It is
+	// reached a terminal state to CANCELLED, returning how many moved per kind. It is
 	// part of the terminal cascade, beside identity/broker revocation: an
 	// approval whose run has ended is a control that cannot function, and a row
 	// left PENDING renders live Approve/Deny buttons in the console. reason names
 	// the transition ("run_killed", "run_completed", ...). Idempotent by
 	// construction — a second call finds nothing PENDING and emits nothing.
-	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error)
+	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[types.ApprovalKind]int, error)
 	// ExpireOne moves one still-PENDING approval to EXPIRED (a no-op once decided):
 	// wardyn-toolgate's give-up signal (#811). actor is the withdrawing agent.
 	ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error
@@ -897,8 +897,8 @@ type Server struct {
 	// same shape as keepaliveEvery/pingEvery above: a test proving WaitBackground
 	// actually gives up at its bound needs to do so in milliseconds, not the
 	// real ~35s budget. Zero (the default) means "use backgroundShutdownBudget".
-	// See background.go for goBackground/WaitBackground themselves.
-	bgWaitBudget time.Duration
+	// See background.go; signInCaptureKillGrace is ssotoken.go's (tests set 0).
+	bgWaitBudget, signInCaptureKillGrace time.Duration
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -918,7 +918,7 @@ func New(cfg Config) *Server {
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()
 	}
-	s := &Server{cfg: cfg,
+	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
 		enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 		ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
 	}

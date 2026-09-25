@@ -142,7 +142,7 @@ func (a evictionApprovals) List(ctx context.Context, state types.ApprovalState) 
 	return a.st.ListApprovals(ctx, state)
 }
 
-func (a evictionApprovals) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
+func (a evictionApprovals) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[types.ApprovalKind]int, error) {
 	return approval.CancelForRun(ctx, a.st, runID, reason)
 }
 

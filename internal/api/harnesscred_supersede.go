@@ -46,6 +46,11 @@ const (
 	// reason put in it would audit every supersede as a failed kill and add a
 	// run.revoke row for a run that was torn down perfectly.
 	supersedeReasonNewLogin = "superseded_by_new_login"
+	// signInCapturedReason rides the run.kill DATA of a sign-in run the server
+	// ended itself once its capture was stored (ssotoken.go), for the same
+	// reason as supersedeReasonNewLogin: outside the error map, so a clean kill
+	// audits success.
+	signInCapturedReason = "sign_in_captured"
 	// supersedeCASAttempts bounds the re-read below. The only way the KILLED CAS
 	// loses is a dispatch forward-transition (PENDING->STARTING->RUNNING) landing
 	// between the read and the write, which can happen at most twice for one run

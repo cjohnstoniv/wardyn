@@ -461,6 +461,17 @@ func TestExpireOne_AlreadyDecidedIsSilent(t *testing.T) {
 
 // CancelForRun (B4: a run's terminal transition ends its open questions)
 
+// cancelForRunTotal is CancelForRun summed across kinds, for the cases that
+// assert only how many rows moved.
+func cancelForRunTotal(ctx context.Context, st approval.Store, runID uuid.UUID, reason string) (int, error) {
+	byKind, err := approval.CancelForRun(ctx, st, runID, reason)
+	n := 0
+	for _, c := range byKind {
+		n += c
+	}
+	return n, err
+}
+
 // TestCancelForRun_MovesOnlyThisRunsPending is the whole contract in one drive:
 // only PENDING rows move, only this run's, they land on CANCELLED with
 // decided_by=system and the transition as the reason, and the batch emits ONE
@@ -480,7 +491,7 @@ func TestCancelForRun_MovesOnlyThisRunsPending(t *testing.T) {
 		t.Fatalf("seed decide: %v", err)
 	}
 
-	n, err := approval.CancelForRun(ctx, st, killed, "run_killed")
+	n, err := cancelForRunTotal(ctx, st, killed, "run_killed")
 	if err != nil {
 		t.Fatalf("cancel for run: %v", err)
 	}
@@ -550,11 +561,11 @@ func TestCancelForRun_IdempotentAndSilentWithNothingPending(t *testing.T) {
 	runID := uuid.New()
 	_, _ = approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"a.example.com"}`)))
 
-	if n, err := approval.CancelForRun(ctx, st, runID, "run_killed"); err != nil || n != 1 {
+	if n, err := cancelForRunTotal(ctx, st, runID, "run_killed"); err != nil || n != 1 {
 		t.Fatalf("first cancel = (%d, %v), want (1, nil)", n, err)
 	}
 	before := len(st.audit)
-	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	n, err := cancelForRunTotal(ctx, st, runID, "run_killed")
 	if err != nil {
 		t.Fatalf("second cancel: %v", err)
 	}
@@ -581,7 +592,7 @@ func TestCancelForRun_PartialFailureStillRecordsWhatMoved(t *testing.T) {
 			json.RawMessage(`{"host":"h`+strconv.Itoa(i)+`.example.com"}`)))
 	}
 
-	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	n, err := cancelForRunTotal(ctx, st, runID, "run_killed")
 	if err == nil {
 		t.Fatal("a refused DecideApproval must be surfaced, not swallowed")
 	}
@@ -626,7 +637,7 @@ func TestCancelForRun_AFailureBeforeAnythingMovedRecordsNothing(t *testing.T) {
 	runID := uuid.New()
 	_, _ = approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"h.example.com"}`)))
 
-	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	n, err := cancelForRunTotal(ctx, st, runID, "run_killed")
 	if err == nil || n != 0 {
 		t.Fatalf("CancelForRun = (%d, %v), want (0, an error)", n, err)
 	}
@@ -851,7 +862,7 @@ func TestCancelForRun_AlreadyDecidedRaceIsNotAFailure(t *testing.T) {
 			json.RawMessage(`{"host":"h`+strconv.Itoa(i)+`.example.com"}`)))
 	}
 
-	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	n, err := cancelForRunTotal(ctx, st, runID, "run_killed")
 	if err != nil {
 		t.Fatalf("CancelForRun = %v; a row a human already decided must be skipped, not fail the cascade", err)
 	}
@@ -872,5 +883,54 @@ func TestCancelForRun_AlreadyDecidedRaceIsNotAFailure(t *testing.T) {
 	}
 	if err := json.Unmarshal(evs[0].Data, &data); err != nil || data.Count != 1 {
 		t.Errorf("audit count = %d (%v), want 1", data.Count, err)
+	}
+}
+
+// TestCancelForRun_CountsMovedRowsByKind (#151): the per-kind tally is what the
+// CAS actually moved, and the ONE summary row carries it beside the sum. The
+// terminal cascade's credential_reauth metric reads this tally instead of a
+// separate pre-read that a concurrent human decision could make wrong.
+func TestCancelForRun_CountsMovedRowsByKind(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+	for _, r := range []types.ApprovalRequest{
+		newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"a.example.com"}`)),
+		newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"b.example.com"}`)),
+		newReq(runID, types.ApprovalCredentialReauth, json.RawMessage(`{"provider":"aws"}`)),
+	} {
+		if _, err := approval.RequestApproval(ctx, st, r); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	byKind, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	if err != nil {
+		t.Fatalf("cancel for run: %v", err)
+	}
+	if byKind[types.ApprovalEgressDomain] != 2 || byKind[types.ApprovalCredentialReauth] != 1 || len(byKind) != 2 {
+		t.Errorf("by kind = %v, want {egress_domain:2 credential_reauth:1}", byKind)
+	}
+	var evs []types.AuditEvent
+	for _, ev := range st.audit {
+		if ev.Action == "approval.cancelled" {
+			evs = append(evs, ev)
+		}
+	}
+	if len(evs) != 1 {
+		t.Fatalf("approval.cancelled rows = %d, want exactly 1", len(evs))
+	}
+	var data struct {
+		Count  int            `json:"count"`
+		ByKind map[string]int `json:"by_kind"`
+	}
+	if uerr := json.Unmarshal(evs[0].Data, &data); uerr != nil {
+		t.Fatalf("decode audit data: %v", uerr)
+	}
+	if data.Count != 3 {
+		t.Errorf("audit count = %d, want 3 (the sum)", data.Count)
+	}
+	if data.ByKind["egress_domain"] != 2 || data.ByKind["credential_reauth"] != 1 || len(data.ByKind) != 2 {
+		t.Errorf("audit by_kind = %v, want {egress_domain:2 credential_reauth:1}", data.ByKind)
 	}
 }

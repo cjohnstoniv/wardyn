@@ -1959,10 +1959,10 @@ func (a *authzApprovals) List(_ context.Context, state types.ApprovalState) ([]t
 	return out, nil
 }
 
-func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (int, error) {
+func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (map[types.ApprovalKind]int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	n := 0
+	byKind := map[types.ApprovalKind]int{}
 	for id, ap := range a.byID {
 		if ap.RunID != runID || ap.State != types.ApprovalPending {
 			continue
@@ -1970,9 +1970,9 @@ func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason
 		ap.State = types.ApprovalCancelled
 		ap.DecidedBy, ap.Reason = "system", reason
 		a.byID[id] = ap
-		n++
+		byKind[ap.Kind]++
 	}
-	return n, nil
+	return byKind, nil
 }
 
 func (a *authzApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string) error {

@@ -177,13 +177,14 @@ func (f *fakeApprovals) List(_ context.Context, _ types.ApprovalState) ([]types.
 // CancelForRun mirrors approval.CancelForRun over the map: only PENDING rows of
 // THIS run move, and cancelled records what the handler passed so a test can
 // assert the reason the terminal transition supplied.
-func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (int, error) {
+func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (map[types.ApprovalKind]int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.cancelErr != nil {
-		return 0, f.cancelErr
+		return nil, f.cancelErr
 	}
 	n := 0
+	byKind := map[types.ApprovalKind]int{}
 	for id, ap := range f.byID {
 		if ap.RunID != runID || ap.State != types.ApprovalPending {
 			continue
@@ -192,11 +193,12 @@ func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason 
 		ap.DecidedBy, ap.Reason = "system", reason
 		f.byID[id] = ap
 		n++
+		byKind[ap.Kind]++
 	}
 	if n > 0 {
 		f.cancelled = append(f.cancelled, cancelCall{RunID: runID, Reason: reason, Count: n})
 	}
-	return n, nil
+	return byKind, nil
 }
 
 // ExpireOne mirrors approval.ExpireOne over the map: PENDING moves to EXPIRED
@@ -293,6 +295,10 @@ type harness struct {
 	approvals *fakeApprovals
 	broker    *fakeBroker
 	audit     *recRecorder
+	// baseCtx is every harness server's BaseCtx, cancelled when the test ends,
+	// so detached work waiting on it (a stored capture's post-grace sign-in
+	// kill, ssotoken.go) stops with its test instead of firing into the next.
+	baseCtx context.Context
 }
 
 func newHarness(t *testing.T) *harness {
@@ -304,7 +310,10 @@ func newHarness(t *testing.T) *harness {
 	}
 	approvals := newFakeApprovals()
 	brk := &fakeBroker{}
+	baseCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	srv := New(Config{
+		BaseCtx:     baseCtx,
 		Identity:    idp,
 		Approvals:   approvals,
 		Broker:      brk,
@@ -317,7 +326,7 @@ func newHarness(t *testing.T) *harness {
 		},
 		ControlPlaneURL: "http://wardynd:8080",
 	})
-	return &harness{srv: srv, idp: idp, approvals: approvals, broker: brk, audit: audit}
+	return &harness{srv: srv, idp: idp, approvals: approvals, broker: brk, audit: audit, baseCtx: baseCtx}
 }
 
 // baseTestConfig returns the Config preamble shared by most handler tests
@@ -334,6 +343,7 @@ func baseTestConfig(h *harness, st store.Store) Config {
 		TrustDomain:     "wardyn.local",
 		ControlPlaneURL: "http://wardynd:8080",
 		Store:           st,
+		BaseCtx:         h.baseCtx,
 	}
 }
 

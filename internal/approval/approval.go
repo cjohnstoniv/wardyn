@@ -320,7 +320,9 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string
 }
 
 // CancelForRun transitions every still-PENDING approval belonging to runID to
-// CANCELLED and returns how many it moved. reason is the transition that ended
+// CANCELLED and returns how many it moved, per kind — counted where the CAS
+// lands, so a row a human decided first is not in it (ExpireStaleByKind's
+// shape). reason is the transition that ended
 // the run ("run_killed", "run_completed", "run_failed", "run_stopped"), recorded
 // on each row and on the ONE audit event this emits.
 //
@@ -331,7 +333,7 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string
 // ErrAlreadyDecided is a race, not an error. DecidedBy is "system" for the same
 // reason the sweeper's is: nobody decided this, the run ended.
 //
-// ONE audit row for the batch, carrying the count, rather than one per approval:
+// ONE audit row for the batch, carrying the count and by_kind, rather than one per approval:
 // unlike an expiry sweep (whose rows are independent events spread over days),
 // these all belong to a single run transition an operator reads as one fact, and
 // the row is keyed to the run so it lands in that run's evidence rail. A run
@@ -342,12 +344,13 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string
 // move plus the error, so a partial cancel never leaves rows durably CANCELLED
 // with nothing in the trail — the same reason ExpireStale records inside its
 // own loop rather than after it.
-func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (int, error) {
+func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (map[types.ApprovalKind]int, error) {
 	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
 	if err != nil {
-		return 0, fmt.Errorf("approval: list for cancel: %w", err)
+		return nil, fmt.Errorf("approval: list for cancel: %w", err)
 	}
 	cancelled := 0
+	byKind := map[types.ApprovalKind]int{}
 	// recordCancelled writes the ONE summary row for whatever this call actually
 	// moved. failure is nil on the clean path and the CAS error on the partial
 	// one; either way a call that moved NOTHING writes nothing, because there is
@@ -357,9 +360,10 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 			return
 		}
 		data := map[string]any{
-			"run_id": runID,
-			"reason": reason,
-			"count":  cancelled,
+			"run_id":  runID,
+			"reason":  reason,
+			"count":   cancelled,
+			"by_kind": byKind,
 		}
 		outcome := "success"
 		if failure != nil {
@@ -404,12 +408,13 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 			}
 			cerr := fmt.Errorf("approval: cancel %s: %w", ap.ID, derr)
 			recordCancelled(cerr)
-			return cancelled, cerr
+			return byKind, cerr
 		}
 		cancelled++
+		byKind[ap.Kind]++
 	}
 	recordCancelled(nil)
-	return cancelled, nil
+	return byKind, nil
 }
 
 // scopeHash produces a stable content hash over (runID, kind, scope) for

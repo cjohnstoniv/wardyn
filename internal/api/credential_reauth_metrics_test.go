@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -160,6 +161,60 @@ func TestCredentialReauthMetrics_CancelledCountedWhenTheRunEnds(t *testing.T) {
 	}
 	if again := reauthCount(t, f.srv, "cancelled"); again != after {
 		t.Errorf("a resolve meeting the terminal row counted a second cancellation (%s -> %s)", after, again)
+	}
+}
+
+// humanWinsStore models a human deciding one row between CancelForRun's list
+// and its CAS: the row still lists PENDING, but its CAS answers
+// ErrAlreadyDecided because the human's decision landed first.
+type humanWinsStore struct {
+	*evictionApprovalStore
+	decidedByHuman uuid.UUID
+}
+
+func (s humanWinsStore) DecideApproval(ctx context.Context, id uuid.UUID, d types.ApprovalDecision) (types.ApprovalRequest, error) {
+	if id == s.decidedByHuman {
+		return types.ApprovalRequest{}, approval.ErrAlreadyDecided
+	}
+	return s.evictionApprovalStore.DecideApproval(ctx, id, d)
+}
+
+// humanWinsApprovals lists through the underlying store (so the raced row still
+// reads PENDING) and cancels through humanWinsStore.
+type humanWinsApprovals struct {
+	evictionApprovals
+	race humanWinsStore
+}
+
+func (a humanWinsApprovals) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[types.ApprovalKind]int, error) {
+	return approval.CancelForRun(ctx, a.race, runID, reason)
+}
+
+// …and only for rows the cancel actually MOVED (#151). A credential_reauth row
+// a human decides between the list and the CAS is theirs, not a cancellation:
+// counting it from a pre-read of PENDING rows scored an outcome that never
+// happened.
+func TestCredentialReauthMetrics_CancelledCountsOnlyMovedRows(t *testing.T) {
+	runID := uuid.New()
+	st := &evictionApprovalStore{rows: map[uuid.UUID]types.ApprovalRequest{}, rec: &syncAudit{}}
+	raced, moved := uuid.New(), uuid.New()
+	for _, id := range []uuid.UUID{raced, moved} {
+		st.rows[id] = types.ApprovalRequest{
+			ID: id, RunID: runID, Kind: types.ApprovalCredentialReauth, State: types.ApprovalPending,
+			RequestedScope: json.RawMessage(`{"row":"` + id.String() + `"}`),
+		}
+	}
+	srv := New(Config{Approvals: humanWinsApprovals{
+		evictionApprovals: evictionApprovals{st: st},
+		race:              humanWinsStore{evictionApprovalStore: st, decidedByHuman: raced},
+	}})
+	before := reauthCount(t, srv, "cancelled")
+
+	srv.cancelRunApprovals(context.Background(), runID)
+
+	if got := reauthCount(t, srv, "cancelled"); strings.TrimSpace(got) != "1" || strings.TrimSpace(before) != "0" {
+		t.Errorf("cancelled = %s -> %s, want 0 -> 1: only the row the cancel moved counts, "+
+			"not the one a human decided first", before, got)
 	}
 }
 
