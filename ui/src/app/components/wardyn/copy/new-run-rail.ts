@@ -81,6 +81,26 @@ export const RAIL_CREDENTIAL = {
   RUN_PREFLIGHT_HINT: "Run Preflight to see where this run's model credential will live.",
 } as const;
 
+// #542 (design §5.6, packet MP-C — approved as drawn 2026-09-25) — the New Run
+// rail's provider picker: which of THIS PERSON's own credentials a run
+// authenticates with, known from the chosen provider's kind before launch
+// rather than resolved only by a dry run. RAIL_CREDENTIAL above still carries
+// the residency sentence every kind reuses; these are new to the picker
+// itself. R5's states (a disabled or wholly ungranted default) are excluded
+// from this build (owner ruling) — NOT_GRANTED/DEFAULT_OFF/DEFAULT_OFF_ONLY
+// are deliberately not drawn here.
+export const RAIL_PROVIDER = {
+  LABEL: "Model provider",
+  STATIC: (name: string) => `Model provider · ${name}`,
+  OPTION: (name: string, what: string, state: string) => `${name} — your ${what} · ${state}`,
+  PLACEHOLDER: "Choose a model provider",
+  NOT_SIGNED_IN: (name: string) => `You're not signed in to AWS for ${name}.`,
+  NO_TOKEN: (name: string) => `You haven't added your token for ${name}.`,
+  LAUNCH_HINT: "Choose a model provider to launch.",
+  CHANGED: (next: string, prev: string, harness: string) =>
+    `Model provider changed to ${next} — ${prev} isn't available to ${harness}.`,
+} as const;
+
 // DRAFT (M2 canon pending) — U-15: the New Run rail's "recording is on"
 // sentence. It was an inline literal in the rail and re-typed in its vitest and
 // in ui/e2e/new-run.spec.ts, while its DISABLED twin
