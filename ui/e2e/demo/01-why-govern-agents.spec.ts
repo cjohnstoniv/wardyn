@@ -9,10 +9,10 @@
  * WHAT THIS FILMS. A slide deck, not the console: the problem statement the
  * whole series answers. Deliberately not Wardyn-specific until the last slide.
  *
- * THE DIALOG IS THE OWNER'S, VERBATIM (rewrite of 2026-08-21, from
- * local/episode-01-script-current.md as edited). Every SAY stanza in that
- * script is one caption here — do not reword lines; wording changes go
- * through the script file and the owner. The staccato rhythm (many short
+ * THE DIALOG IS THE OWNER'S, VERBATIM (rewrite of 2026-08-21, from the
+ * frozen script as edited). Every SAY stanza in that script is one caption
+ * here — do not reword lines; wording changes go through the script file
+ * and the owner. The staccato rhythm (many short
  * lines) is deliberate: short beats ride a tightened floor (BEAT_SHORT),
  * full-length lines keep PACE.read.
  *

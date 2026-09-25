@@ -259,8 +259,7 @@ test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster nee
 # routine churn. Raise it as coverage climbs.
 # scripts/cover-union.sh documents exactly what is and is not counted.
 # RATCHET (W6-01, v0.7.4 blind-verify lane): the coordinator's W5 final-tree
-# `make ci` measured the union at 78.3% at tree 532ca5d4 (see
-# local/v074/evidence/w5-ci2/make-ci.log:199) — 3.3 points above the old 75
+# `make ci` measured the union at 78.3% at tree 532ca5d4 — 3.3 points above the old 75
 # floor, slack wide enough that a real coverage regression could land and
 # still pass. Raised to 78, a margin below that measurement rather than the
 # measurement itself. Never lower it without a coverage regression forcing
@@ -309,7 +308,7 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 # 20m, not 10m: this suite is no longer the runner-contract cases alone. 0.7.5's
 # boot-egress measurement boots the REAL claude-code image, walks its first screens
 # through a PTY and then waits out two fixed settle sleeps on the proxy's decision
-# stream — 74-192 s measured (local/v075/evidence/agent-boot-egress), against its own
+# stream — 74-192 s measured, against its own
 # 6m context. A -timeout expiry is a panic that discards every verdict already
 # produced, so the ceiling belongs to the case that takes minutes, not the ones that
 # take seconds. The two :local images it needs (wardyn/wardyn-proxy,
@@ -326,8 +325,8 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 # at all. A -timeout expiry is a panic that discards every verdict already produced, so this is
 # headroom for slow evictions, not a licence for a slower suite (pinned by
 # TestEphemeralCaseBudgetFitsTheMakefileTimeout, which reads BOTH numbers). The margin over that
-# 24m is the REST of the suite: a green k8s run is 457 s of other cases
-# (local/v075/evidence/k8s-emptydir/green-conformance-k8s.log), and a ceiling set to the eviction
+# 24m is the REST of the suite: a green k8s run is 457 s of other cases,
+# and a ceiling set to the eviction
 # case alone loses the whole run whenever the pathological case and an ordinary suite land
 # together.
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)

@@ -6,9 +6,9 @@
 /*
  * Video 02 of the series — "Set up the host".
  *
- * THE DIALOG IS THE OWNER'S, VERBATIM (rewrite of 2026-08-21, from
- * local/episode-02-script-v2.md as edited). Every SAY stanza is one caption;
- * wording changes go through that file. Short stanzas ride BEAT_SHORT.
+ * THE DIALOG IS THE OWNER'S, VERBATIM (rewrite of 2026-08-21, from the
+ * frozen script as edited). Every SAY stanza is one caption; wording
+ * changes go through that script. Short stanzas ride BEAT_SHORT.
  *
  * WHAT THIS FILMS. Act 1: the REAL `make setup` of this very take, replayed —
  * record-demo.sh --video 02 wraps Act 0's make setup in util-linux script(1),
