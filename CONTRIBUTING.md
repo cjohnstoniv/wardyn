@@ -126,7 +126,9 @@ request, and reviewed before it reaches `main`.
   `docs: …`, `chore(deps): …`). The body links the issue: `Closes #N` on the PR
   that finishes it, `Refs #N` on the others.
 - Every commit is DCO-signed (`git commit -s`) and authored by the person who
-  submits it.
+  submits it. `make dco` audits every commit, merges included, from the PR
+  that closes #1070 onward; merges made before that PR were exempt (pre-fix
+  history is not rewritten).
 - Docs land in the same PR as the code they describe: the CHANGELOG
   `[Unreleased]` entry, `docs/AUDIT-ACTIONS.md` rows for new audit actions,
   `docs/ENV.md` rows for new variables.

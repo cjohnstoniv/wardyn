@@ -535,6 +535,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-ci-run-isolation.sh
 	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-ns-registry-port.sh
+	./scripts/test-dco.sh
 	./scripts/test-desktop-profile.sh
 	./scripts/test-fixture-dates.sh
 	./scripts/test-gpl-source-offer.sh
@@ -1107,7 +1108,8 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	  | grep -q 'WARDYN_OIDC_REDIRECT_URL: https://sso.corp.example/auth/callback' \
 	  || { echo "compose: WARDYN_OIDC_REDIRECT_URL is inert (no \$${VAR:-default} passthrough)"; exit 1; }
 
-# DCO sign-off: every non-merge commit in DCO_RANGE carries a Signed-off-by.
+# DCO sign-off: every commit, merges included, in DCO_RANGE carries a
+# Signed-off-by. See DCO_ALLOW_GITHUB_MERGES for the one exemption.
 # CI passes the PR range (BASE..HEAD); default is origin/main..HEAD for local use.
 #
 # git parses trailers itself (%(trailers:...) since 2.13), so there is no
@@ -1120,11 +1122,16 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 # exactly like a missing one. `.+ <.+@.+>` is the whole contract — name, space,
 # angle-bracketed address with an @ — and it also covers the empty case.
 DCO_RANGE ?= origin/main..HEAD
-dco: ## Every non-merge commit in DCO_RANGE carries a Signed-off-by trailer
+# 1 only where GitHub itself makes merge commits (push, merge_group): its
+# "Merge pull request" commits (committer GitHub <noreply@github.com>, 2+
+# parents) carry no Signed-off-by. PR ranges end at the PR head instead.
+DCO_ALLOW_GITHUB_MERGES ?= 0
+dco: ## Every commit in DCO_RANGE (merges included) carries a Signed-off-by trailer
 	@echo "Checking DCO sign-off (Signed-off-by) over: $(DCO_RANGE)..."
-	@signoffs=$$(git log --no-merges $(DCO_RANGE) --format='%H%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
+	@signoffs=$$(git log $(DCO_RANGE) --format='%H%x09%P%x09%ce%x09%(trailers:key=Signed-off-by,valueonly,separator=%x2C)') \
 	  || { echo "ERROR: git log failed for DCO_RANGE=$(DCO_RANGE) (bad/unreachable range) — failing closed"; exit 1; }; \
-	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' '$$2 !~ /.+ <.+@.+>/ {print $$1}'); \
+	bad=$$(printf '%s\n' "$$signoffs" | awk -F'\t' -v gh=$(DCO_ALLOW_GITHUB_MERGES) \
+	  '$$1=="" {next} gh==1 && split($$2,p," ")>1 && $$3=="noreply@github.com" {next} $$4 !~ /.+ <.+@.+>/ {print $$1}'); \
 	[ -z "$$bad" ] || { echo "ERROR: commit(s) lack a well-formed 'Signed-off-by: Name <email>' trailer:"; echo "$$bad"; echo "Add it with: git commit --signoff (or git commit -s)"; exit 1; }; \
 	echo "All commits carry Signed-off-by. DCO check passed."
 

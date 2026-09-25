@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`make dco` now audits merge commits too, and PR ranges end at the PR head (#1070).**
+  `--no-merges` hid every merge's `Signed-off-by` trailer, including 76 unsigned human merges
+  on main since the 0.7.12 fork; it had also become a workaround for `ci.yml` passing
+  `BASE..HEAD` on `pull_request`, where `HEAD` is GitHub's synthetic, unsigned test-merge tip.
+  PR ranges now end at `pull_request.head.sha`, and the only exemption left is
+  `DCO_ALLOW_GITHUB_MERGES=1`, which excuses a merge commit committed by
+  `GitHub <noreply@github.com>` (push and merge_group only, where GitHub makes such merges
+  itself).
 - **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
   map being set was previously enough to hide the "Who is an admin" setup row and the shell
   banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still

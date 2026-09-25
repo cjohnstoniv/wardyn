@@ -1380,26 +1380,30 @@ jobs:
       - name: Check DCO sign-off (Signed-off-by on all commits)
         run: |
           BASE=${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          if [ -z "$BASE" ]; then
+          PR_HEAD=${{ github.event.pull_request.head.sha }}
+          if [ -n "$PR_HEAD" ]; then
+            # End at the PR head, not HEAD: HEAD is GitHub's synthetic refs/pull/N/merge
+            # commit (committer GitHub, no sign-off); every real merge in the PR is audited.
+            make dco DCO_RANGE="$BASE..$PR_HEAD"
+          elif [ -n "$BASE" ]; then
+            # merge_group: the queue's own merge commits are committed by GitHub
+            # and carry no Signed-off-by — exempt only those.
+            make dco DCO_RANGE="$BASE..HEAD" DCO_ALLOW_GITHUB_MERGES=1
+          else
             # On push, check every commit the push introduced — `-1 HEAD`
             # checked only the tip, so a multi-commit direct push could land
             # unsigned commits behind one signed HEAD. github.event.before is
             # the ref's previous tip; it is all-zeros on a newly created ref,
             # and after a force-push it can name a commit this clone no longer
             # has — both fall back to the single-commit check rather than
-            # erroring the job.
+            # erroring the job. A push-landed "Merge pull request" commit is
+            # committed by GitHub and carries no Signed-off-by — exempt only that.
             BEFORE=${{ github.event.before }}
             if [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -qE '^0+$' \
                && git cat-file -e "$BEFORE" 2>/dev/null; then
-              make dco DCO_RANGE="$BEFORE..HEAD"
+              make dco DCO_RANGE="$BEFORE..HEAD" DCO_ALLOW_GITHUB_MERGES=1
             else
-              make dco DCO_RANGE="-1 HEAD"
+              make dco DCO_RANGE="-1 HEAD" DCO_ALLOW_GITHUB_MERGES=1
             fi
-          else
-            # checkout@v4 on pull_request (and on a merge_group, the queue's own
-            # merge commits) lands on an auto-generated merge commit, whose message has no Signed-off-by. `make dco` uses
-            # --no-merges to exclude that synthetic commit so only real
-            # contributor commits are checked (otherwise DCO fails on every PR).
-            make dco DCO_RANGE="$BASE..HEAD"
           fi
 
