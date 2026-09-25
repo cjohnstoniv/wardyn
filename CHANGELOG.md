@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
+  map being set was previously enough to hide the "Who is an admin" setup row and the shell
+  banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
+  fell through to admin, unwarned. `ssoRBACCheck` now warns on that condition too (whether or not
+  a role map is set), with its own setup-row detail/fix and banner sentence; a deployment with
+  neither a role map nor an admin list still reads #484's original warning, one banner, not two.
 - **`wardynd -rotate-age-key` now stamps `updated_at` on every row it re-encrypts (#717).**
   A rotation is a write, and least-retention sweeps read `updated_at` to decide what is
   stale; the Postgres secret store's whole-table rewrap (shared by `-rotate-age-key` and
