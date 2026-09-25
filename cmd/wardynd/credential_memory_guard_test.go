@@ -160,6 +160,7 @@ var decryptSites = map[string]string{
 	"internal/secretstore/pg/pg.go|rewrap|KEK.Unwrap":                     "-rotate-age-key rewraps a data key; the value itself is never opened",
 	"internal/secretstore/pg/convert.go|ageDecrypt|age.Decrypt":           "the one-time conversion of a pre-envelope (age) row to envelope v1",
 	"internal/secretstore/pg/external.go|Store.openExternal|External.Get": "a store-mode Get reads the value from the organisation's store, after the pointer row is checked",
+	"internal/secretstore/vaultkv/transit.go|Transit.selfTest|KEK.Unwrap": "the Transit boot self-test unwraps a random probe data key it just wrapped, never a stored one",
 }
 
 func TestDecryptSitesArePinned(t *testing.T) {
