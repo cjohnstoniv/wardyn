@@ -62,3 +62,27 @@ func TestMigrateRefusesUnknownAppliedMigrations(t *testing.T) {
 		t.Error("break-glass Migrate removed the newer wardynd's record")
 	}
 }
+
+// TestMigrateAcceptsARetiredMigrationName is the #675 regression: a v0.7.12
+// database records 0065_secret_envelope_v1.sql (this tree ships the
+// byte-identical file as 0069_secret_envelope_v1.sql — see retiredMigrations).
+// Migrate() must NOT read that row as "a newer wardynd migrated this
+// database"; it is the supported 0.7.12 -> 0.8 upgrade path.
+func TestMigrateAcceptsARetiredMigrationName(t *testing.T) {
+	pool, schema := probeSchemaPool(t) // a full, current Migrate() already ran
+	ctx := context.Background()
+
+	const retiredName = "0065_secret_envelope_v1.sql"
+	if _, ok := retiredMigrations[retiredName]; !ok {
+		t.Fatalf("precondition: %q is not in retiredMigrations; this test would not exercise the fix", retiredName)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO schema_migrations (filename) VALUES ($1)`, retiredName); err != nil {
+		t.Fatalf("stage a v0.7.12 database's retired-name row in %s: %v", schema, err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate refused a database carrying the retired name %q: %v; "+
+			"the supported 0.7.12 -> 0.8 upgrade is broken", retiredName, err)
+	}
+}

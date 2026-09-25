@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -32,6 +34,28 @@ type migrationExecutor interface {
 
 //go:embed migrations/*.sql
 var migrationFS embed.FS
+
+// retiredMigrations is the closed set of RELEASED migration filenames that a
+// later commit renamed or retired without changing what they applied — so a
+// database migrated by the old name is not "a newer wardynd migrated it", it
+// is this exact schema under a name this tree no longer ships.
+//
+// v0.7.12 shipped 0065_secret_envelope_v1.sql; main renumbered it to
+// 0069_secret_envelope_v1.sql (byte-identical text) to make room for migrations
+// 0065-0068 added after the 0.7 branch point. Every 0.7.12 database therefore
+// carries a schema_migrations row this binary does not ship under that name,
+// and unknownAppliedMigrations must not read that as a downgrade (#675).
+//
+// Built from evidence, not memory: for every released tag v0.7.0 through
+// v0.7.12, `git ls-tree --name-only <tag> internal/db/migrations/` compared
+// against this tree's migrations/ finds exactly this one name absent.
+// testdata/released_migrations_v0.7.txt pins that same tag-derived list so
+// TestRetiredMigrationsCoverEveryReleasedName fails the day a name is neither
+// shipped nor retired. A migration renamed again later adds a second entry
+// here; it never needs one removed.
+var retiredMigrations = map[string]string{
+	"0065_secret_envelope_v1.sql": "0069_secret_envelope_v1.sql",
+}
 
 // migrateAdvisoryLockKey is the fixed session-level advisory lock key that
 // serializes concurrent Migrate() runs (N5). Idempotent DDL makes a race benign
@@ -310,8 +334,11 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 	}
 	sort.Strings(names)
 
-	// Before anything is written: a newer wardynd migrated this database.
-	unknown, err := unknownAppliedMigrations(ctx, db, names)
+	// Before anything is written: a newer wardynd migrated this database — or
+	// this schema was migrated under a RELEASED name this tree later renamed
+	// (retiredMigrations), which is not a downgrade at all.
+	shipped := append(slices.Clone(names), slices.Sorted(maps.Keys(retiredMigrations))...)
+	unknown, err := unknownAppliedMigrations(ctx, db, shipped)
 	if err != nil {
 		return err
 	}
@@ -319,7 +346,7 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 		newest := unknown[len(unknown)-1]
 		if !allowUnknown {
 			return fmt.Errorf("db: this database records %d migration(s) this wardynd does not ship, newest %q — "+
-				"a newer wardynd migrated it and a downgrade is unsupported; restore the pre-upgrade dump or run "+
+				"it was migrated by a wardynd this binary cannot run under; restore the pre-upgrade dump or run "+
 				"the newer release (break-glass: WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true)", len(unknown), newest)
 		}
 		slog.WarnContext(ctx, "db: WARDYN_ALLOW_UNKNOWN_MIGRATIONS is set — booting an older wardynd against a schema a newer one migrated; "+
