@@ -163,6 +163,22 @@ export function buildSpec(
   // stays backward-compatible.
   if (state.runType === "command") {
     run.task_mode = "exec";
+    // A command whose target already carries a real base image — an explicit
+    // BYOI image, or a selected workspace with one — needs no agent: exec runs
+    // no harness, so naming one here was a formality that also fed the
+    // managed-subscription eligibility test for a harness this run never
+    // starts (agentRequirementError's own doc, server-side). Any OTHER
+    // command (no image, no image-backed workspace) still needs one — the
+    // server refuses those with nothing to run the command in.
+    const hasImageTarget =
+      state.image.trim() !== "" ||
+      state.workspaces.some((sel) => {
+        const w = resolveWorkspace(sel, workspaces);
+        return !!w?.base_image && w.base_image.kind !== "recommended";
+      });
+    if (hasImageTarget) {
+      delete run.agent;
+    }
   }
   // Run override: pins model/harness access to one specific integration,
   // overriding the workspace pin and server default (see step-access.tsx).
