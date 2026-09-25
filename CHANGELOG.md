@@ -1407,7 +1407,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   from global configuration afterward — a Bedrock run's `bedrock-runtime.<region>.amazonaws.com`, for
   one — nor the artifact-redirect substitution. A run whose model-provider host comes from global
   configuration can therefore be graded `sealed` or `reviewed` while it reaches that host, so its
-  level can be one rung too permissive. (The pre-veto superset the posture is graded on — a lane the
+  level can be more permissive. (The pre-veto superset the posture is graded on — a lane the
   provider row's per-host veto later drops still counts — is a separate effect, and grades
   conservatively.)
 - **A run's stored-credential residency is not a posture input for the autonomy rubric.** The rubric
