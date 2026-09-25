@@ -19,6 +19,7 @@ export function WithDoor({
   status,
   path = "/runs",
   operator = true,
+  operatorResolved = true,
   principal = "someone@corp.example",
   onRefresh = () => {},
   children,
@@ -26,6 +27,8 @@ export function WithDoor({
   status: SetupStatus | null;
   path?: string;
   operator?: boolean;
+  /** false: /me has not answered yet. */
+  operatorResolved?: boolean;
   principal?: string;
   onRefresh?: () => void | Promise<unknown>;
   children?: React.ReactNode;
@@ -33,7 +36,7 @@ export function WithDoor({
   return (
     <MemoryRouter initialEntries={[path]}>
       <ModelAccessProvider status={status} onRefresh={onRefresh}>
-        <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
+        <OperatorProvider operator={operator} securityOperator={operator} principal={principal} operatorResolved={operatorResolved}>
           <div role="status">
             <ModelAccessBanner />
           </div>

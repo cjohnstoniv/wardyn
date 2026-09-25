@@ -48,6 +48,7 @@ import { ReasonDialog } from "../wardyn/reason-dialog";
 import { REAUTH_ROW, REAUTH_TITLE, reauthAudience, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
 import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../wardyn/model-access-context";
 import { OpenInUserView, useConsoleMode } from "../wardyn/console-view";
+import { resolveDoor } from "../../lib/model-access";
 import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../wardyn/operator-context";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
@@ -601,6 +602,10 @@ function PendingCard({
   const reauthProvider = reauth.provider
     ? (status?.model_providers?.find((p) => p.id === reauth.provider)?.name || reauth.provider)
     : "";
+  // A hold whose provider this person has no door for any more (removed, or no
+  // agent of theirs uses it) gets its hint alone, never a button that opens
+  // nothing — the failure block's rule (ProviderDoor).
+  const reauthDoor = reauth.canAct && (!reauth.provider || !!resolveDoor(status, { provider: reauth.provider }, "user"));
   const banner = deriveBanner(item.kind, scope, reauth);
   // Deciding an egress_domain approval on an owned run is a MEMBER act (B3,
   // decide() in approvals.go); credential and tool_call stay admin-only
@@ -762,7 +767,7 @@ function PendingCard({
              disabled: a disabled Approve reads as "an admin can do this", and
              no tier can — the server answers 409 to either verb. The one
              control opens the same dialog every other sign-in surface opens. */
-          reauth.canAct ? (
+          reauthDoor ? (
             <ReauthAction provider={reauth.provider} />
           ) : reauth.mine && reauth.provider ? (
             // The admin's own hold, in the Admin view: its door is in the User view.

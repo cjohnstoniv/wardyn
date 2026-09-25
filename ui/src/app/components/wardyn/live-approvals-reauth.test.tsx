@@ -244,3 +244,21 @@ describe("LiveApprovals — a provider run's hold opens its own provider's door"
     expect(await screen.findByTestId("fake-pane")).toHaveAttribute("data-model-provider", bedrock.id);
   });
 });
+
+describe("LiveApprovals — a hold whose provider is gone", () => {
+  it("states the hint alone — no button that opens nothing", async () => {
+    listApprovalsMock.mockReset().mockResolvedValue([
+      reauthRow({
+        requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: "alice@corp", provider: "removed-provider" },
+      }),
+    ]);
+    render(
+      <WithDoor principal="alice@corp" operator={false} status={providerStatus([{ provider: MODEL_PROVIDERS.bedrock }])}>
+        <LiveApprovals runId="r1" />
+      </WithDoor>,
+    );
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByText(REAUTH_ROW.hint)).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeNull();
+  });
+});

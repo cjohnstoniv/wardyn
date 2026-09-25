@@ -34,7 +34,8 @@ import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
-import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
+import { useModelAccessDoor, useClaimModelAccessDoor, useShellSetupStatus } from "./model-access-context";
+import { resolveDoor } from "../../lib/model-access";
 import { viewOfPath } from "./console-view";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
@@ -827,7 +828,11 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
     // row is mounted without a router in its suites.
     view: viewOfPath(window.location.pathname),
   });
-  const canAct = audience.canAct;
+  // A hold whose provider this person has no door for any more gets its hint
+  // alone, never a button that opens nothing (#543).
+  const { status } = useShellSetupStatus();
+  const canAct =
+    audience.canAct && (!audience.provider || !!resolveDoor(status, { provider: audience.provider }, "user"));
   // Nobody should claim the door for a control they are not rendering.
   useClaimModelAccessDoor(canAct);
   return (

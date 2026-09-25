@@ -148,7 +148,7 @@ describe("/approvals — a provider run's hold (#543)", () => {
   const bedrockDev = { ...bedrock, id: "bedrock-dev", name: "Bedrock (dev)" };
   const HOLD = { mechanism: "bedrock_sso", credential_source: "per_user", owner: "bob@acme.example", provider: bedrock.id };
 
-  async function mountAt(path: string, principal: string, scope: Record<string, unknown> = HOLD) {
+  async function mountAt(path: string, principal: string, scope: Record<string, unknown> = HOLD, resolved = true) {
     mockScope = scope;
     window.history.pushState({}, "", path);
     render(
@@ -156,6 +156,7 @@ describe("/approvals — a provider run's hold (#543)", () => {
         path={path}
         principal={principal}
         operator={path.startsWith("/admin")}
+        operatorResolved={resolved}
         status={providerStatus([{ provider: bedrockDev, defaultFor: ["claude-code"] }, { provider: bedrock }])}
       >
         <ApprovalsScreen />
@@ -188,6 +189,18 @@ describe("/approvals — a provider run's hold (#543)", () => {
     expect(screen.getByText(REAUTH_ROW.notYoursHint("ann@acme.example"))).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeNull();
     expect(screen.getByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER })).toBeInTheDocument();
+  });
+
+  it("a hold whose provider is gone: the hint alone, no button that opens nothing", async () => {
+    await mountAt("/approvals", "bob@acme.example", { ...HOLD, provider: "removed-provider" });
+    expect(screen.getByText(REAUTH_ROW.hint)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeNull();
+  });
+
+  it("while /me is still resolving: no door and no Open in user view", async () => {
+    await mountAt("/admin/approvals", "bob@acme.example", HOLD, false);
+    expect(screen.queryByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeNull();
+    expect(screen.queryByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER })).toBeNull();
   });
 
   it("the title names the need, not a pause (#146 defect 3)", () => {

@@ -55,6 +55,7 @@ function renderBlock(opts: {
   principal?: string;
   createdBy?: string;
   path?: string;
+  resolved?: boolean;
 }) {
   const path = opts.path ?? "/runs/run_1";
   window.history.pushState({}, "", path);
@@ -62,6 +63,7 @@ function renderBlock(opts: {
     <WithDoor
       path={path}
       principal={opts.principal ?? "bob@acme.example"}
+      operatorResolved={opts.resolved ?? true}
       operator={path.startsWith("/admin")}
       status={providerStatus([
         { provider: bedrockDev, defaultFor: ["claude-code"] },
@@ -187,5 +189,15 @@ describe("state 3 — anyone but the owner, and every run in the Admin view: no 
     expect(screen.getByText(sentence)).toBeInTheDocument();
     expect(screen.queryByText(MODEL_ACCESS_RUN_DOOR.NOTE_KEY)).toBeNull();
     expect(screen.queryByText(MODEL_ACCESS_RUN_DOOR.NOT_OWNER("bob@acme.example"))).toBeNull();
+  });
+});
+
+describe("while /me is still resolving", () => {
+  it("renders neither whose credential it was nor a door — the owner is not yet known", () => {
+    const hint = refusal(bedrock.name, "you are not signed in to AWS for it", CONNECT);
+    renderBlock({ hint, audit: trail(bedrock.id, "bedrock_sso"), resolved: false });
+    expect(screen.getByText(hint)).toBeInTheDocument();
+    expect(screen.queryByText(MODEL_ACCESS_RUN_DOOR.NOT_OWNER("bob@acme.example"))).toBeNull();
+    expect(screen.queryByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA })).toBeNull();
   });
 });
