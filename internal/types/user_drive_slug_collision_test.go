@@ -3,7 +3,7 @@
 
 package types
 
-// THE PREMISE MIGRATION 0061'S INDEX RESTS ON.
+// The premise migration 0061's index rests on.
 //
 // The index refuses two Wardyn-named drives whose names fold to one DriveSlug.
 // That is the right namespace only while the minted object name is a function of
@@ -66,7 +66,7 @@ func TestDriveSlugIsStableForTheColumn(t *testing.T) {
 		{"corp-nas-eng", "corp-nas-eng"},
 		{"---", ""},
 		{"Ünïcode Drive", "n-code-drive"},
-		// THE ONE CLASS WHERE 0061's SQL BACKFILL DIFFERS, pinned so it is a
+		// The one class where 0061's SQL backfill differs, pinned so it is a
 		// known quantity rather than a surprise: Go's strings.ToLower maps
 		// U+0130 into ASCII, while the backfill's lower(... COLLATE "C") lowers
 		// ASCII only and the fold then replaces the character — "ice" here,

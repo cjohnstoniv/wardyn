@@ -16,6 +16,13 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # @types/node follows the runtime's Node LTS major (agent images: node:24).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # Needs the vite major first; tracked for 0.8.1.
+      - dependency-name: "@vitejs/plugin-react"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
