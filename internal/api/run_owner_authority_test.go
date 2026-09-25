@@ -211,49 +211,96 @@ func TestRevive_HonoursAvailableTo(t *testing.T) {
 	}
 }
 
-// userTypeReviveStore is the revive fixture's store with the user types
-// GetUserType finds.
-type userTypeReviveStore struct {
-	*reviveStore
-	userTypes []string
-}
+// ownerUserTypes are the user types the #1019 fixtures' GetUserType finds.
+var ownerUserTypes = []string{"contractor", "partner"}
 
-func (s userTypeReviveStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
-	if slices.Contains(s.userTypes, id) {
+func getOwnerUserType(id string) (types.UserType, error) {
+	if slices.Contains(ownerUserTypes, id) {
 		return types.UserType{ID: id}, nil
 	}
 	return types.UserType{}, store.ErrNotFound
 }
 
-// TestRevive_AnAdminCountsTheOwnersStampedUserType (#1019): an admin's revive
-// knows the owner by sub and by the user type stamped on the run, so an allow
-// row for that type lets the owner's restricted value in. Another type, a
-// stamp naming a type deleted since, or no stamp (a pre-0080 run) is refused.
-func TestRevive_AnAdminCountsTheOwnersStampedUserType(t *testing.T) {
+// userTypeReviveStore and userTypeLeaseStore are the revive and end-wait
+// fixtures' stores with ownerUserTypes.
+type userTypeReviveStore struct{ *reviveStore }
+
+func (userTypeReviveStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	return getOwnerUserType(id)
+}
+
+type userTypeLeaseStore struct{ *leaseStore }
+
+func (userTypeLeaseStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	return getOwnerUserType(id)
+}
+
+// TestReviveRestartExtend_AnAdminCountsTheOwnersStampedUserType (#1019): an admin's
+// revive, restart with current limits or extension knows the owner by sub and
+// by the user type stamped on the run, so an allow row for that type lets the
+// owner's restricted value in. Another type, a stamp naming a type deleted
+// since, or no stamp (a pre-0080 run) is refused.
+func TestReviveRestartExtend_AnAdminCountsTheOwnersStampedUserType(t *testing.T) {
+	otherAdmin := ssoSession(t, "sub-other-admin", "admin@corp.example", oidc.RoleAdmin)
 	for _, tc := range []struct {
 		name, stamp string
-		want        int
+		allowed     bool
 	}{
-		{"owner stamped the allowed type", "contractor", http.StatusOK},
-		{"owner stamped another type", "partner", http.StatusForbidden},
-		{"stamped type deleted", "contractor-old", http.StatusForbidden},
-		{"no stamp", "", http.StatusForbidden},
+		{"owner stamped the allowed type", "contractor", true},
+		{"owner stamped another type", "partner", false},
+		{"stamped type deleted", "contractor-old", false},
+		{"no stamp", "", false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f, _ := newOwnerFixture(t)
-			f.srv.cfg.Store = userTypeReviveStore{reviveStore: f.rs, userTypes: []string{"contractor", "partner"}}
-			f.st.run.UserType = tc.stamp
-			f.st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, "contractor", capAgent, "claude-code", types.CapabilityAllow)}
+		want := http.StatusForbidden
+		if tc.allowed {
+			want = http.StatusOK
+		}
+		// arrange restricts the agent to one user type's allow row: the
+		// allowed type's, or in the deleted case the deleted type's own, so
+		// only the failed lookup refuses.
+		arrange := func(st *leaseStore) {
+			subject := "contractor"
 			if tc.stamp == "contractor-old" {
-				f.st.caps[0].Subject = tc.stamp
+				subject = tc.stamp
 			}
-			f.st.enf = map[string]bool{capAgent: true}
-			f.st.restricted = map[string]map[string]bool{capAgent: {"claude-code": true}}
-			if code, body := f.reviveAs(t, false); code != tc.want {
-				t.Fatalf("admin revive = %d %s, want %d", code, body, tc.want)
+			st.run.UserType = tc.stamp
+			st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, subject, capAgent, "claude-code", types.CapabilityAllow)}
+			st.enf = map[string]bool{capAgent: true}
+			st.restricted = map[string]map[string]bool{capAgent: {"claude-code": true}}
+		}
+		t.Run("revive/"+tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			f.srv.cfg.Store = userTypeReviveStore{f.rs}
+			arrange(f.st)
+			if code, body := f.reviveAs(t, false); code != want {
+				t.Fatalf("admin revive = %d %s, want %d", code, body, want)
 			}
-			if tc.want == http.StatusForbidden {
+			if !tc.allowed {
 				f.assertReviveRefused(t, "capability_"+capAgent)
+			}
+		})
+		t.Run("restart/"+tc.name, func(t *testing.T) {
+			f, _ := newOwnerFixture(t)
+			f.srv.cfg.Store = userTypeReviveStore{f.rs}
+			arrange(f.st)
+			f.st.run.LostAt, f.st.run.LostReason = nil, ""
+			w := doSSO(t, f.srv, http.MethodPost, "/api/v1/admin/runs/restart", otherAdmin, `{"run_ids":["`+f.run.ID.String()+`"]}`)
+			var out struct {
+				Results []adminRestartResult `json:"results"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusOK || len(out.Results) != 1 {
+				t.Fatalf("restart = %d %s (%v), want 200 with one result", w.Code, w.Body.String(), err)
+			}
+			if r := out.Results[0]; r.OK != tc.allowed || (!tc.allowed && !strings.Contains(r.Error, "the agent capability for claude-code")) {
+				t.Fatalf("result = %+v; want ok=%v, a refusal naming the agent capability", r, tc.allowed)
+			}
+		})
+		t.Run("extend/"+tc.name, func(t *testing.T) {
+			f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400})
+			f.srv.cfg.Store = userTypeLeaseStore{f.st}
+			arrange(f.st)
+			if code, _ := f.patch(t, otherAdmin, endsAtBody(f.now.Add(7*24*time.Hour))); code != want {
+				t.Fatalf("admin extend = %d, want %d", code, want)
 			}
 		})
 	}
