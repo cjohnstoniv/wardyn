@@ -236,7 +236,7 @@ describe("RunDetailScreen — a stale recording fetch never overwrites a later s
         time: new Date().toISOString(),
         actor_type: "human",
         actor: "alice",
-        action: "session.recording",
+        action: "session.recording.write",
         target: "run-1~session-a",
         outcome: "success",
       },
@@ -245,7 +245,7 @@ describe("RunDetailScreen — a stale recording fetch never overwrites a later s
         time: new Date().toISOString(),
         actor_type: "human",
         actor: "bob",
-        action: "session.recording",
+        action: "session.recording.write",
         target: "run-1~session-b",
         outcome: "success",
       },
@@ -285,7 +285,7 @@ describe("RunDetailScreen — the recording tab's session-picker copy", () => {
     time: aheadByHours(-1),
     actor_type: "human",
     actor: "alice",
-    action: "session.recording",
+    action: "session.recording.write",
     target: "run-1~session-a",
     outcome: "success",
   };
@@ -362,7 +362,7 @@ describe("RunDetailScreen — the exit code survives a truncated audit trail", (
           },
         ]);
       }
-      if (action === "run.kill" || action === "run.autostop" || action === "session.recording") {
+      if (action === "run.kill" || action === "run.autostop" || action === "session.recording.write") {
         return Promise.resolve([]);
       }
       return Promise.resolve(noise);

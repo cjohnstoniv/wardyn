@@ -19,7 +19,7 @@ import (
 // as literals so the values have names where they are USED and a rename
 // upstream is a grep away rather than a silent no-op.
 //
-// sessionRevocationUnavailable is declared in http.go, beside the auth.failed
+// sessionRevocationUnavailable is declared in http.go, beside the auth.fail
 // emit that already branches on it.
 const (
 	sessionExpired = "expired_session"
@@ -83,7 +83,7 @@ func sessionRejectionResponse(reason string) (status int, msg string, ok bool) {
 // alongside a stale browser cookie still authenticates through adminAuth
 // exactly as it did before.
 // The reason is returned alongside the answer so the caller can hand it to
-// auditAuthFailed by NAME: the auth.failed reason enum is guarded against
+// auditAuthFailed by NAME: the auth.fail reason enum is guarded against
 // docs/AUDIT-ACTIONS.md by a source walk, and passing "" there (letting
 // auditAuthFailedAs re-resolve it from the same context) reads to that guard as
 // an unnamed reason.
@@ -96,12 +96,12 @@ func rejectedSessionAnswer(r *http.Request) (reason string, status int, msg stri
 	return reason, status, msg, ok
 }
 
-// auditRejectedSession emits this boundary's auth.failed row for a rejected
+// auditRejectedSession emits this boundary's auth.fail row for a rejected
 // session cookie.
 //
 // The switch is not ceremony. auditAuthFailedAs substitutes the context's
 // rejection reason for whatever it is handed, so one call passing a variable
-// would be correct at runtime — but the auth.failed `reason` enum is fenced
+// would be correct at runtime — but the auth.fail `reason` enum is fenced
 // against docs/AUDIT-ACTIONS.md by a SOURCE walk (cmd/wardynd's
 // TestAuthFailedReasonEnumIsDocumented), which can only see reasons written as
 // literals or named constants at a call site. Each arm therefore passes the

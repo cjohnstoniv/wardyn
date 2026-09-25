@@ -75,7 +75,7 @@ type llmTransport struct {
 	// by dispatch's splitSecretEnv, which moves them onto SandboxSpec.SecretEnv
 	// so a substrate does not have to publish them in a readable pod spec.
 	secretEnvKeys []string
-	// bedrockAudit is the run.llm.bedrock row applyBedrockTransport computed but
+	// bedrockAudit is the run.bedrock.configure row applyBedrockTransport computed but
 	// did NOT record — recording it is deferred to resolveLLMInjections, past
 	// every gate that can still refuse the run (enforceConfiguredLLMMechanism,
 	// bedrockCredGradeHolds, MITM CA provisioning, grant authoring,
@@ -87,7 +87,7 @@ type llmTransport struct {
 
 // bedrockTransportAudit is the detail applyBedrockTransport computes about
 // WHICH of the four Bedrock modes (bearer / sso-inject / aws-dir-mount /
-// resident) credentials a run, for the run.llm.bedrock audit row. Carried on
+// resident) credentials a run, for the run.bedrock.configure audit row. Carried on
 // llmTransport rather than recorded immediately, so the caller can record it
 // only once the dispatch gates that follow (enforceConfiguredLLMMechanism,
 // bedrockCredGradeHolds) have actually let the run through.
@@ -405,7 +405,7 @@ func (s *Server) applyBedrockTransport(run types.AgentRun, b bedrockAuth, policy
 	}
 }
 
-// recordBedrockTransport records, for a Bedrock run, the run.llm.bedrock row
+// recordBedrockTransport records, for a Bedrock run, the run.bedrock.configure row
 // applyBedrockTransport computed, once resolveLLMInjections' gates have all
 // held (#518). `provider` names the model provider a provider run chose (#530).
 func (s *Server) recordBedrockTransport(ctx context.Context, run types.AgentRun, llm llmTransport) {
@@ -420,7 +420,7 @@ func (s *Server) recordBedrockTransport(ctx context.Context, run types.AgentRun,
 	if run.ModelProviderID != "" {
 		data["provider"] = run.ModelProviderID
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.bedrock.configure",
 		run.ID.String(), "success", mustJSON(data)))
 }
 
@@ -652,7 +652,7 @@ func (s *Server) dropUnauthoredBedrockBearerInjections(ctx context.Context, run 
 		if ig.Rule.SecretName != bedrockAPIKeySecret {
 			return false
 		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.dropped",
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.drop",
 			ig.GrantID.String(), "denied", mustJSON(map[string]any{
 				"grant_id": ig.GrantID, "secret_name": bedrockAPIKeySecret, "host": ig.Rule.Host,
 				"reason": "bedrock_bearer_not_dispatch_authored",
@@ -916,7 +916,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// grant-authoring steps between here and bedrockCredGradeHolds, any one of
 	// which can still fail closed — is it true that this run actually gets the
 	// Bedrock credential applyBedrockTransport resolved. Recording the
-	// run.llm.bedrock row here, instead of right after bedrockCredGradeHolds
+	// run.bedrock.configure row here, instead of right after bedrockCredGradeHolds
 	// (or inside applyBedrockTransport itself), is what keeps a run ANY later
 	// refusal takes from showing a "success" injection row for a credential it
 	// was never handed (#518).

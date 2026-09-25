@@ -545,7 +545,7 @@ func laneVetoAudit(t *testing.T, srv *Server) []map[string]any {
 	}
 	var out []map[string]any
 	for _, ev := range rec.events {
-		if ev.Action != "run.provider.lane_dropped" {
+		if ev.Action != "run.provider.veto" {
 			continue
 		}
 		var d map[string]any
@@ -877,7 +877,7 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 		}
 		var out []string
 		for _, ev := range rec.events {
-			if ev.Action == "workspace.provider.legacy_host" {
+			if ev.Action == "workspace.provider.admit" {
 				out = append(out, ev.Target)
 			}
 		}
@@ -1088,7 +1088,7 @@ func TestAdmittedIsNeverTakenFromAWriteBody(t *testing.T) {
 // host-level SSH ceiling STAYS (an SSH clone URL carries no path to compare), so
 // what is pinned here is that it is said out loud rather than closed: a run whose
 // SSH repository slipped a path-scoped row's org bound earns the 201 warning and
-// the run.provider.ssh_host_level audit row — the one admission outcome that is
+// the run.provider.admit audit row — the one admission outcome that is
 // WIDER than the policy an admin wrote.
 func TestSSHHostLevelAdmissionIsNeverSilent(t *testing.T) {
 	runID := uuid.New()
@@ -1111,7 +1111,7 @@ func TestSSHHostLevelAdmissionIsNeverSilent(t *testing.T) {
 		}
 		var found bool
 		for _, ev := range audit.events {
-			if ev.Action == "run.provider.ssh_host_level" {
+			if ev.Action == "run.provider.admit" {
 				found = true
 				if ev.Target != string(types.GitProviderGitHub) {
 					t.Errorf("audit target = %q, want the provider KIND", ev.Target)
@@ -1119,7 +1119,7 @@ func TestSSHHostLevelAdmissionIsNeverSilent(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("events = %#v, want a run.provider.ssh_host_level row", audit.events)
+			t.Errorf("events = %#v, want a run.provider.admit row", audit.events)
 		}
 	})
 
