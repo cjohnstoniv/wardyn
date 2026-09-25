@@ -1058,7 +1058,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   filesystem costs only the disk reading. The Sandbox widget's Disk row shows a used/cap bar and
   colors amber at 80% or more, and falls back to bytes written, labeled as such, when there is no
   used reading. A run's resolved ephemeral disk cap is now captured on the run row (`disk_mib`,
-  migration `0088_agent_runs_disk_mib`) at dispatch, the same way its resolved image is.
+  migration `0086_agent_runs_disk_mib`) at dispatch, the same way its resolved image is.
 - **The governance profile editor gets a Run limits section (#579).** The seven run-limit fields
   (#567) — longest and default end, allow no end, longest and default wait, whether people may
   change either, and pause-after-idle — are now editable on the profile editor, alongside the
