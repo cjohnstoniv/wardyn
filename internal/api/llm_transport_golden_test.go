@@ -322,14 +322,14 @@ func llmGoldenCases() []llmGoldenCase {
 			}},
 		},
 
-		// (j') W12-W12-C-1: a HARNESS LOGIN run (run.Task = harnessLoginTask —
+		// (j'): a harness login run (run.Task = harnessLoginTask —
 		// `claude setup-token` in the attach shell, no credential yet) with
 		// Bedrock fully configured must get NOTHING Bedrock-shaped: bedrock_ready
 		// and inject_bedrock_bearer both false, no ~/.aws mount, no bearer MITM.
 		// Same Bedrock config as (f) (bearer mode); the only difference is
-		// task=harnessLoginTask. Before the fix, resolveBedrockAuth ran
-		// unconditionally and this cell was byte-identical to (f) apart from
-		// sandbox_env — i.e. the login box still got a minted bearer grant.
+		// task=harnessLoginTask. If resolveBedrockAuth ran unconditionally,
+		// this cell would be byte-identical to (f) apart from sandbox_env —
+		// the login box would get a minted bearer grant.
 		{
 			name:  "claude-code/harness-login-bedrock-configured-gets-nothing",
 			agent: "claude-code",

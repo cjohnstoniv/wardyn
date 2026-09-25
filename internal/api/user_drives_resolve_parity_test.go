@@ -104,7 +104,7 @@ func TestDriveDoorsAnswerOverTheSameSentinels(t *testing.T) {
 			"tells the member a remedy the launch door will not corroborate.", name)
 	}
 
-	// BOTH KEEP A DEFAULT. The whole four-state argument rests on an
+	// Both keep a default. The whole four-state argument rests on an
 	// unrecognised error still being answerable ("unavailable" / 500) rather
 	// than falling through to the zero value, which reads as "you have no
 	// drive" for a member who has one.

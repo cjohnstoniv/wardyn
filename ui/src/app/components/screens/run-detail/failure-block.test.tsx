@@ -11,6 +11,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import type { AgentRun, AuditEvent, RunState, SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { RunFailureBlock } from "./failure-block";
 import { ModelAccessBanner } from "../../wardyn/model-access-banner";
@@ -24,7 +25,7 @@ import { baseStatus } from "../../../lib/test-fixtures";
 const CREATED = "2026-08-28T10:00:00Z";
 
 function run(state: RunState): AgentRun {
-  return {
+  return makeRun({
     id: "run_3b7f10c4-0000-0000-0000-000000000000",
     created_at: CREATED,
     updated_at: "2026-08-28T10:26:00Z",
@@ -35,7 +36,7 @@ function run(state: RunState): AgentRun {
     spiffe_id: "spiffe://wardyn/run/3b7f10c4",
     runner_target: "runner://local",
     confinement_class: "CC2",
-  } as AgentRun;
+  });
 }
 
 function ev(action: string, outcome: AuditEvent["outcome"], extra: Partial<AuditEvent> = {}): AuditEvent {

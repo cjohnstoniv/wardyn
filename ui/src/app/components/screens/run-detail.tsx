@@ -211,11 +211,13 @@ export function RunDetailScreen() {
           // on THIS tick's own fresh state (not a stale last-known ref), so
           // the exact tick a run turns terminal is the one that catches it.
           if (r.value && isTerminalRunState(r.value.state)) {
-            Promise.all([
+            // Best-effort like the allSettled above: a rejected listAudit
+            // leaves endingAudit at its last-good value, never unhandled.
+            void Promise.all([
               auditApi.listAudit(id, "run.complete"),
               auditApi.listAudit(id, "run.kill"),
               auditApi.listAudit(id, "run.autostop"),
-            ]).then((lists) => setEndingAudit(lists.flat()));
+            ]).then((lists) => setEndingAudit(lists.flat())).catch(() => {});
           }
           setStatus("ready");
         })
@@ -239,7 +241,7 @@ export function RunDetailScreen() {
     setRecording(null);
     setRecState("idle");
     setRecKey(id);
-    load(true);
+    void load(true);
   }, [id, load]);
 
   const terminal = run ? isTerminalRunState(run.state) : true;
@@ -288,7 +290,7 @@ export function RunDetailScreen() {
     // Only confirm success if the write actually resolves — writeText rejects
     // asynchronously (a sync try/catch misses it), and navigator.clipboard is
     // undefined in insecure contexts — so a bare success toast would lie.
-    copyAsync(url).then((ok) => {
+    void copyAsync(url).then((ok) => {
       if (ok) toast.success("Link copied");
       else toast.error("Couldn't copy the link — copy it from the address bar.");
     });
@@ -303,7 +305,7 @@ export function RunDetailScreen() {
         description: getErrorMessage(err),
       });
     } finally {
-      load(false);
+      void load(false);
     }
   };
 
@@ -317,7 +319,7 @@ export function RunDetailScreen() {
       toast.warning(CLONE_UNREADABLE);
       return;
     }
-    navigate("/runs/new", { state: { prefill } });
+    void navigate("/runs/new", { state: { prefill } });
   };
 
   const submitDecision = async (reason: string, scope: ApprovalScope, until?: string): Promise<boolean> => {
@@ -328,7 +330,7 @@ export function RunDetailScreen() {
       else await approvalsApi.deny(decide.id, reason, ...args);
       toast.success(decide.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       setDecide(null);
-      load(false);
+      void load(false);
       return true;
     } catch (err) {
       toast.error(decide.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
@@ -350,7 +352,7 @@ export function RunDetailScreen() {
       if (approve) await approvalsApi.approve(id, "approved", ...opts);
       else await approvalsApi.deny(id, "denied", ...opts);
       toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
-      load(false);
+      void load(false);
     } catch (err) {
       toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(err) });
     }
@@ -530,8 +532,7 @@ export function RunDetailScreen() {
 // terminal, it does not build it, because building it needs the attach /
 // recording / approvals graph that lives here.
 function Cockpit({
-  run, view,
-  terminal,
+  run, view, terminal,
   grants,
   egress,
   audit,
@@ -648,8 +649,7 @@ function Cockpit({
     run,
     finished: terminal,
     principal,
-    operator,
-    view, // ssh widget: owner-or-admin AND the user view (M-7).
+    operator, view, // ssh widget: owner-or-admin AND the user view (M-7).
     grants,
     egress,
     // B3 — the SAME derivation the command bar's "sandbox held" and the board's

@@ -207,7 +207,8 @@ describe("RunCanvas — saving", () => {
 // effect must stay guarded rather than setPreset(situational) on every flip,
 // or `dirty=false` + commit() would replace the in-progress arrangement on
 // screen (the server keeps the edit; only the screen would jump).
-describe("RunCanvas — F1-F5 a situational flip mid-edit does not clobber the in-progress arrangement", () => {
+describe("RunCanvas — a situational flip mid-edit does not clobber the in-progress arrangement", () => {
+  // ticket: F1-F5
   it("freezes the preset while editing, and re-syncs the moment editing ends", async () => {
     const user = userEvent.setup();
     const { rerender } = render(<RunCanvas ctx={ctx({ finished: false })} />);

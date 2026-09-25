@@ -12,6 +12,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
+import { makeApproval } from "../../../test/factories";
 import { OperatorProvider } from "./operator-context";
 import { ModelAccessProvider } from "./model-access-context";
 import { SECURITY_ONLY_REASON } from "./copy";
@@ -34,7 +35,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: (...a: unknown[]) =
 import { LiveApprovals, isHeld } from "./live-approvals";
 
 function reauthRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
-  return {
+  return makeApproval({
     id: "reauth-1",
     run_id: "r1",
     kind: "credential_reauth",
@@ -42,7 +43,7 @@ function reauthRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
     state: "PENDING",
     requested_at: new Date().toISOString(),
     ...over,
-  } as ApprovalRequest;
+  });
 }
 
 // The viewer, named: every row below is OWNED BY alice@corp, so the default

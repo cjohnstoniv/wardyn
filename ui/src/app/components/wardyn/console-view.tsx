@@ -45,9 +45,9 @@ export function viewAccess(me: { method: string; role: string; memberMode: boole
   if (me.method === "local") return "url";
   if (me.method === "sso") {
     if (me.memberMode) return "session-user";
-    return me.role === "member" ? "user-only" : "session-admin";
+    return me.role === "user" ? "user-only" : "session-admin";
   }
-  if (me.role === "member") return "user-only";
+  if (me.role === "user") return "user-only";
   return me.sso ? "admin-only" : "url";
 }
 
@@ -183,7 +183,7 @@ export function OpenInUserView({ runId, className }: { runId: string; className?
   const go = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (access === "url") {
-      navigate(target);
+      void navigate(target);
       return;
     }
     setBusy(true);

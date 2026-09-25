@@ -205,6 +205,15 @@ function SetupRoute({
   React.useEffect(() => {
     void import("./components/screens/onboarding/onboarding-screen");
   }, []);
+  // Being IN the funnel satisfies the gate's purpose for this load, so arriving
+  // here seals it (setup-gate.ts's gateFiredAt). A load can start directly on
+  // /setup (a reload while onboarding, the SSO callback's return), outside the
+  // gate's wrapper; unsealed, the funnel's own "Open Permissions" would bounce
+  // back to step one. Here, not in the lazy funnel, so sealing never waits on
+  // its chunk.
+  React.useEffect(() => {
+    markGateFired();
+  }, []);
   if (!roleResolved) return <RouteFallback />;
   return (
     <React.Suspense fallback={<RouteFallback />}>
@@ -252,7 +261,7 @@ export function FirstRunLanding({ status, admin = false }: { status: SetupStatus
   if (status === null || !roleResolved) return <RouteFallback />;
   const base = firstRunLanding(status, role);
   // A user's landing is theirs alone, whatever the view context says.
-  const to = admin ? `/admin${base}` : role === "member" ? base : viewLanding(base, access);
+  const to = admin ? `/admin${base}` : role === "user" ? base : viewLanding(base, access);
   return <Navigate to={to} replace />;
 }
 
@@ -270,9 +279,10 @@ export function FirstRunLanding({ status, admin = false }: { status: SetupStatus
 // the DAEMON names the rows that mean it (a dead runner, an unenforceable
 // confinement floor, SSO with no role mapping) — a grade alone never holds it,
 // and a row about the caller's own credential never can.
-function RequireSetup({ status }: { status: SetupStatus | null }) {
+export function RequireSetup({ status }: { status: SetupStatus | null }) {
   const role = useRole();
   const roleResolved = useRoleResolved();
+  const { key } = useLocation();
   // B1, same reasoning as FirstRunLanding above: setupGateActive() reads the
   // role, so a /me that never answered would bounce an unknown human into the
   // ADMIN funnel on the fail-open default. Decline to gate instead — the route
@@ -292,9 +302,10 @@ function RequireSetup({ status }: { status: SetupStatus | null }) {
   // OUT of the funnel afterwards is informed wandering, not a gate escape —
   // the failing checks stay visible on every surface, and the funnel's own
   // affordances (People's "Open Permissions" et al.) must be able to leave.
-  // See setup-gate.ts's gateFiredThisLoad for why this is module state.
-  if (!gateAlreadyFired() && setupGateActive(status, role)) {
-    markGateFired();
+  // See setup-gate.ts's gateFiredAt for why this is module state, and why it
+  // is keyed by location.
+  if (!gateAlreadyFired(key) && setupGateActive(status, role)) {
+    markGateFired(key);
     // Only an admin is ever gated, and the funnel is the Admin view's.
     return <Navigate to="/admin/setup" replace />;
   }
@@ -348,7 +359,7 @@ const OPERATOR_ONLY_PREFIXES = ["/admin/providers"];
 export function roleCanReach(path: string, role: string): boolean {
   const under = (prefixes: string[]) =>
     prefixes.some((p) => path === p || path.startsWith(`${p}/`));
-  if (role === "member") return under(MEMBER_REACHABLE_PREFIXES);
+  if (role === "user") return under(MEMBER_REACHABLE_PREFIXES);
   if (under(OPERATOR_ONLY_PREFIXES)) return role === "admin";
   return true;
 }
@@ -444,7 +455,8 @@ export default function App() {
   }, []);
 
   React.useEffect(() => {
-    if (auth === "authed") refreshBadges();
+    // never rejects (each half is pre-caught above) — fire-and-forget is safe.
+    if (auth === "authed") void refreshBadges();
   }, [auth, refreshBadges]);
 
   // Keep both nav badges live across the whole console, not just while the
@@ -489,7 +501,13 @@ export default function App() {
         // flight across a sign-out, and its late answer describes the person
         // who just left.
         if (authRef.current !== "authed") return;
-        setSetupStatus(status);
+        // An `unreachable` answer is READY_FALLBACK's made-up payload (no
+        // checks, has_runs:false), so it never replaces a real one: the gate,
+        // the landing and the model-access door keep deciding from the last
+        // status the daemon actually sent. Only the FIRST read may land it —
+        // with nothing better known, it is what keeps a daemon that can't
+        // answer from trapping anyone in the funnel.
+        setSetupStatus((prev) => (status.unreachable && prev && !prev.unreachable ? prev : status));
       })
       .catch(() => {
         /* leave the last-known status in place — never trap behind a failed probe */
@@ -605,7 +623,7 @@ export default function App() {
             const target = me && !roleCanReach(path, me.role) ? "/runs" : path;
             setAuthReason(undefined);
             setAuth("authed");
-            navigate(target, { replace: true });
+            void navigate(target, { replace: true });
           }}
         />
         <Toaster />

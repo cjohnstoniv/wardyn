@@ -203,7 +203,8 @@ reasoning is in [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md).
 ## The continuous lane
 
 Everything above is about **release** images — the five `vX.Y.Z`-tagged images
-`release.yml` publishes. A second lane publishes on every push to `main`:
+`release.yml` publishes. A second lane publishes each push to `main` once CI
+passes on it:
 `.github/workflows/publish-image.yml` builds `wardynd` alone and pushes
 `ghcr.io/cjohnstoniv/wardynd:latest` and `:sha-<short-sha>`.
 

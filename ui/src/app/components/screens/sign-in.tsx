@@ -28,6 +28,8 @@ import {
 } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
 import { SIGNIN } from "../../lib/sign-in-copy";
+import { SIGNIN_HELP_REFUSALS } from "../../lib/people-access-copy";
+import { SignInHelp } from "../wardyn/sign-in-help";
 import { usePoll } from "../../lib/use-poll";
 
 // How often the gate re-asks /healthz for `sso` (R4/F027). Slower than the
@@ -62,6 +64,10 @@ function authErrorMessage(code: string): string {
       return SIGNIN.NO_ROLE;
     case "role_check_unavailable":
       return SIGNIN.ROLE_CHECK_UNAVAILABLE;
+    case "user_type_ambiguous":
+      return SIGNIN.USER_TYPE_AMBIGUOUS;
+    case "user_type_unknown":
+      return SIGNIN.USER_TYPE_UNKNOWN;
     case "claims_overage":
       return SIGNIN.CLAIMS_OVERAGE;
     case "oidc_transient":
@@ -100,6 +106,11 @@ export function SignIn({
   // (today's behaviour: the form renders until the daemon says otherwise) —
   // an older daemon that omits the field must read exactly as it does today.
   const [tokenLogin, setTokenLogin] = React.useState(true);
+  // #484 — the admin-written help (public, from /healthz) and the auth_error
+  // code it is keyed on: shown only under the four refusals in
+  // SIGNIN_HELP_REFUSALS, beneath Wardyn's own sentence, never instead of it.
+  const [help, setHelp] = React.useState<{ text?: string; url?: string }>({});
+  const [refusalCode, setRefusalCode] = React.useState<string | null>(null);
   // #457: whether /healthz has EVER answered (as opposed to the {} R4/F027
   // already treats as "no answer" — see refreshSso below). Before the first
   // real answer neither door is known, so neither renders (Q457-1) — a
@@ -137,6 +148,7 @@ export function SignIn({
       // `false`: the form is that daemon's only path in, and dropping it on a
       // missing field would be a regression, not a safer default.
       setTokenLogin(h.token_login !== false);
+      setHelp({ text: h.sign_in_help_text, url: h.sign_in_help_url });
     });
   }, []);
   React.useEffect(refreshSso, [refreshSso]);
@@ -153,6 +165,7 @@ export function SignIn({
     const code = params.get("auth_error");
     if (!code) return;
     setError(authErrorMessage(code));
+    setRefusalCode(code);
     params.delete("auth_error");
     const qs = params.toString();
     window.history.replaceState(
@@ -173,6 +186,7 @@ export function SignIn({
     if (!token) return;
     setLoading("token");
     setError(null);
+    setRefusalCode(null);
     // Store the admin token (sessionStorage, or localStorage when "remember" is
     // checked), then verify it against a protected endpoint.
     setToken(token, remember);
@@ -342,6 +356,9 @@ export function SignIn({
               <AlertCircle className="mt-0.5 size-4 shrink-0" />
               <span>{error}</span>
             </div>
+          )}
+          {error && refusalCode && SIGNIN_HELP_REFUSALS.has(refusalCode) && (
+            <SignInHelp text={help.text} url={help.url} />
           )}
 
           {showDivider && (
