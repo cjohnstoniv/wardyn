@@ -99,7 +99,7 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 }
 
 // ownerProviderRows is the git provider rows repos resolve to, as the
-// run-create gate resolves them (denyMemberWorkspaceProviders). None when the
+// run-create gate resolves them (denyUserWorkspaceProviders). None when the
 // deployment configures no providers.
 func (s *Server) ownerProviderRows(ctx context.Context, repos []string) ([]types.GitProvider, error) {
 	if len(repos) == 0 || s.cfg.Store == nil {
