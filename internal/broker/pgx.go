@@ -52,7 +52,7 @@ func (s *PgxStore) BeginReadCommitted(ctx context.Context) (Tx, error) {
 // lease the burn is skipped on re-mints, so every auto-minted credential and
 // every 2nd..Nth leased jti would be invisible and get no credential.revoke row —
 // while THREAT-MODEL.md's kill cascade publishes step 4 as "every minted
-// credential for the run" (F096/F122). The audit half covers that: credential.mint
+// credential for the run". The audit half covers that: credential.mint
 // SUCCESS is written INSIDE the mint transaction (D29, insertAuditEventTx), so a
 // jti exists in audit_events for exactly the credentials that were actually
 // handed out.

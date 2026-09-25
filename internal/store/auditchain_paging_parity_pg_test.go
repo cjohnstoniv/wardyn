@@ -224,7 +224,7 @@ func TestPG_PagedSweepStillDetectsABreak(t *testing.T) {
 // boundary. "Legacy" versus "written with the chain trigger off" is decided by
 // WHERE the hashless row sits relative to the first chained row, so a paged walk
 // that lost its place would reclassify a break as a legacy row — the quietest
-// possible regression, since legacy rows are reported as normal.
+// possible failure, since legacy rows are reported as normal.
 func TestPG_PagedSweepStillSeesAHashlessRowInPlace(t *testing.T) {
 	restore := store.AuditChainPageSize
 	store.AuditChainPageSize = 5

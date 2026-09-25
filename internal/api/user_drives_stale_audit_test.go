@@ -9,20 +9,19 @@ import (
 	"testing"
 )
 
-// TestDriveStaleSnapshotRefusalIsAudited is F317.
+// TestDriveStaleSnapshotRefusalIsAudited pins that both deciding sites record
+// the refusal.
 //
-// groups_snapshot_stale has TWO deciding sites, not one. F227 audited the
-// governance resolver's; the drive resolver's mirror-image branch
-// (driveWithUnusableGroups) raised the identical member-reachable 403 and
-// recorded nothing — while docs/AUDIT-ACTIONS.md and docs/OPERATIONS.md both
-// once told operators the reason is emitted "at the ONE site that decides
-// it" (since corrected — docs/OPERATIONS.md's "Every denial that isn't a
-// 404" section now names both).
+// groups_snapshot_stale has two deciding sites, not one: the governance
+// resolver's, and the drive resolver's mirror-image branch
+// (driveWithUnusableGroups), which raises the identical member-reachable 403
+// and must record it too. docs/OPERATIONS.md's "Every denial that isn't a
+// 404" section names both.
 //
-// The shape that makes it total is a deployment with group-tier DRIVE grants and
-// NO group-tier governance assignment: the ceiling resolves fine, so the audited
-// site never fires, and the drives door refuses with an entirely empty denial
-// stream. Executed on the pre-fix tree: 0 authz.denied rows out of 0 events.
+// The shape that makes it total is a deployment with group-tier drive grants
+// and no group-tier governance assignment: the ceiling resolves fine, so the
+// governance site never fires, and without the drive site's own row the
+// drives door refuses with an entirely empty denial stream.
 func TestDriveStaleSnapshotRefusalIsAudited(t *testing.T) {
 	// hasGroupTier is HasGroupTierDriveGrants; hasGroupTierAssignments stays
 	// FALSE, which is the whole point — it is what keeps the governance twin
@@ -104,15 +103,14 @@ func TestDriveStaleSnapshotRefusalIsAudited(t *testing.T) {
 	})
 }
 
-// TestMePollsAreNotDenials is the other half of F317: the row must mean a
-// refusal happened, not that a console is open.
+// TestMePollsAreNotDenials is the other half: the row must mean a refusal
+// happened, not that a console is open.
 //
-// GET /me reaches BOTH groups_snapshot_stale deciding sites — the drive resolver
-// for user_drive, the governance resolver for user_drive_denied_by_profile — so
-// a member with an unanswerable group snapshot was writing denial rows on a
-// TIMER, for a request that refuses nobody. Executed on the RC before the fix:
-// three polls, three authz.denied/governance.ceiling rows; adding the drive
-// seam's own emit would have made it six.
+// GET /me reaches both groups_snapshot_stale deciding sites — the drive
+// resolver for user_drive, the governance resolver for
+// user_drive_denied_by_profile — so without this rule a member with an
+// unanswerable group snapshot would write denial rows on a timer (two per
+// poll), for a request that refuses nobody.
 //
 // This is the audit-row form of the rule resolveMeUserDrive already applies to
 // the refusal metric and the WARN, and it is the stronger case: a row is the
@@ -139,11 +137,11 @@ func TestMePollsAreNotDenials(t *testing.T) {
 			"for a run", n, driveDenialReasons(t, rec))
 	}
 
-	// AND THE ENFORCEMENT PATH IS UNTOUCHED, on the same server, the same store
+	// And the enforcement path is untouched, on the same server, the same store
 	// and the same member — which is what makes the suppression a SCOPING rather
 	// than a hole. The launch really is refused, so it really is recorded.
 	//
-	// ONE ROW PER REFUSED REQUEST, not two, and that is a property of the order
+	// One row per refused request, not two, and that is a property of the order
 	// rather than of the mark: handleCreateRun resolves the ceiling (resolveRunPolicy, in handleCreateRun)
 	// BEFORE it reaches the drive seam (seedRequestDrive, later in the same handler), so on a deployment where
 	// both group-tier reads are true the ceiling refuses first and the drive

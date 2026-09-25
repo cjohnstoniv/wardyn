@@ -384,13 +384,12 @@ func dataFieldsCell(t *testing.T, root, action string) []string {
 	return nil
 }
 
-// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit is the targeted
-// regression for X1c-F3: ui.open's Data-fields cell claimed `duration_sec`,
-// which is computed only at CLOSE (s.auditUI's caller at
-// internal/api/uigateway.go passes it in the ui.close call's map literal, not
-// ui.open's) — a doc cell that was never checked against what the emit call
-// actually passes, because TestAuditActionsDocCitationsAreLive only checks
-// citation PROXIMITY, never the Data-fields column's content.
+// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit pins the ui.open and
+// ui.close Data-fields cells to what the emit passes: `duration_sec` is
+// computed only at close (s.auditUI's caller at internal/api/uigateway.go
+// passes it in the ui.close call's map literal, not ui.open's), and
+// TestAuditActionsDocCitationsAreLive only checks citation proximity, never
+// the Data-fields column's content.
 //
 // Scoped to these two rows rather than a general derived parity check: the
 // data argument arrives as a map literal at 223 emit call sites across four
@@ -398,8 +397,8 @@ func dataFieldsCell(t *testing.T, root, action string) []string {
 // one built by a helper), several behind indirection the existing forward
 // guard's fixed-point wrapper resolution does not (and does not need to)
 // follow for the ACTION argument. A general version would have to re-derive
-// that whole shape for the DATA argument too; this pins the actual regression
-// with the same "read it back out of the source" method instead of hand
+// that whole shape for the data argument too; this pins the two rows with the
+// same "read it back out of the source" method instead of hand
 // re-typing a second copy of what the code passes.
 func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 	root := repoRoot(t)
@@ -449,21 +448,20 @@ func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
 }
 
 // TestAuditActionsForwardGuardCoversEveryEmitShape is the anchor under the
-// forward guard, and it exists because that guard passed for the wrong reason
-// twice: once when it did not exist at all, and once when it existed but could
-// not see two of the six packages docs/AUDIT-ACTIONS.md itself names.
+// forward guard: a guard that cannot see an emit helper, or one of the six
+// packages docs/AUDIT-ACTIONS.md itself names, passes for the wrong reason.
 //
 // A guard's FIELD OF VIEW is part of its correctness, and a gap in it is
 // invisible precisely because everything passes. So this asserts the view, not
 // the verdict:
 //
-//   - the emitter set is DERIVED and contains all three in-tree emit helpers, at
-//     the right parameter index. `auditEvent` used to be hardcoded; (*Provider)
-//     .audit and auditFor were the two the hardcoding missed, and adding a
-//     brand-new action through either left the whole suite green.
-//   - every action that was outside the old scan's reach is inside this one's.
-//     These seven are documented, so the forward guard says nothing about them
-//     either way — deleting their rows failed nothing before, and must fail now.
+//   - the emitter set is derived and contains all three in-tree emit helpers,
+//     at the right parameter index: `auditEvent`, (*Provider).audit and
+//     auditFor. A hardcoded set that misses one lets a brand-new action added
+//     through it leave the whole suite green.
+//   - every action outside a narrower scan's reach is inside this one's. These
+//     seven are documented, so the forward guard says nothing about them
+//     either way — deleting their rows must fail.
 func TestAuditActionsForwardGuardCoversEveryEmitShape(t *testing.T) {
 	root := repoRoot(t)
 	tr := parseAuditTree(t, root)

@@ -98,7 +98,7 @@ func memberBoundFixture(t *testing.T, memberSpec types.RunPolicySpec) (*Server, 
 // both, and they are one context in production).
 func boundMemberRequest(t *testing.T) (*http.Request, context.Context) {
 	t.Helper()
-	ctx := operatorCtx("sub-member", "member@corp.example", oidc.RoleMember)
+	ctx := operatorCtx("sub-member", "member@corp.example", oidc.RoleUser)
 	return httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx), ctx
 }
 
