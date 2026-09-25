@@ -628,7 +628,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "kind: NetworkPolicy" || { echo "chart rendered no NetworkPolicy (default-on L0 egress control)"; exit 1; }; \
 	echo "$$out" | grep -q "runAsNonRoot: true" || { echo "chart rendered no runAsNonRoot: true securityContext"; exit 1; }; \
 	echo "$$out" | grep -q "readOnlyRootFilesystem: true" || { echo "chart rendered no readOnlyRootFilesystem: true securityContext"; exit 1; }; \
-	echo "$$out" | grep -q "terminationGracePeriodSeconds: 60" || { echo "chart no longer renders terminationGracePeriodSeconds: 60 — the Kubernetes default of 30s SIGKILLs wardynd's orderly stop (HTTP 15s + detached work 35s + audit flush) mid-teardown"; exit 1; }; \
+	echo "$$out" | grep -q "terminationGracePeriodSeconds: 70$$" || { echo "chart no longer renders terminationGracePeriodSeconds: 70 — the Kubernetes default of 30s SIGKILLs wardynd's orderly stop (HTTP 15s + detached work 35s + audit flush 15s) mid-teardown"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" || { echo "chart rendered no WARDYN_ADMIN_TOKEN — the API would 401 every request"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_RECORDING_STORE" | grep -q 'value: "off"' || { echo "chart no longer pins WARDYN_RECORDING_STORE=off on a stock install — with wardynd's pg default it silently persists every PTY asciicast into Postgres, forever, while values.yaml/README say recording is off (and 0.7.0's fs + empty-dir spelling crash-looped the pod)"; exit 1; }; \
 	echo "$$out" | grep -q "name: WARDYN_RECORDING_DIR" && { echo "chart set WARDYN_RECORDING_DIR without persistence — an empty value keeps wardynd's default, which writes to the read-only root FS"; exit 1; }; \

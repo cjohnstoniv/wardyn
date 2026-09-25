@@ -18,6 +18,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// WebhookTimeout bounds every delivery attempt (including the final flush
+// Fanout.Close awaits on graceful shutdown), so callers sizing a shutdown
+// grace period around it don't have to hard-code a second copy of this
+// number (internal/api TestShutdownGraceCoversTheBudget).
+const WebhookTimeout = 15 * time.Second
+
 // WebhookConfig holds the configuration for a WebhookSink.
 type WebhookConfig struct {
 	// URL is the HTTP endpoint that receives JSON-lines batches (required).
@@ -118,7 +124,7 @@ func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 		interval:  interval,
 		baseDelay: base,
 		queue:     make(chan types.AuditEvent, cfg.BufferSize),
-		client:    &http.Client{Timeout: 15 * time.Second},
+		client:    &http.Client{Timeout: WebhookTimeout},
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 	}, nil
