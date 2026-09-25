@@ -8,10 +8,11 @@
 // it?", read by every surface that offers the sign-in (the shell strip, the New
 // Run rail, a credential-failed run's failure block, a held run's approval row).
 //
-// Not an extension of model-key-state.ts: that answers a CARD-shaped question
-// (done / revealAllowed / band) keyed on modelKeyProvider's roster-ORDER row,
-// which is the wrong row for this — model_access grades the claude-code row
-// alone (internal/api/modelaccess.go's modelAccessAgent).
+// Not a CARD-shaped question (done / revealAllowed / band) keyed on a
+// roster-ORDER row, the way the retired "Your model key" card's own state
+// table (#541) answered one — model_access grades the claude-code row alone
+// (internal/api/modelaccess.go's modelAccessAgent), which is the only row
+// that predicate ever needed.
 //
 // Pure, no React: the context above it (components/wardyn/model-access-context)
 // is what makes it reachable without prop-drilling through screens that are at
@@ -150,6 +151,15 @@ export function modelAccessDoor(
       (h) => h.id === MODEL_ACCESS_AGENT && h.enabled !== false && h.mechanism === "bedrock_sso",
     ),
   };
+}
+
+/** "Claude Code" / "Claude Code and Codex CLI" — the display names of the
+ *  given harness ids, off the roster's own names. Shared by the strip (B1,
+ *  B4, B5) and Your model connections' own "For …" line (§5.4): one join, not
+ *  two independently-typed copies. Falls back to the id when the roster
+ *  doesn't carry it (an older daemon, or an id gone stale). */
+export function harnessDisplayNames(status: SetupStatus | null | undefined, ids: string[]): string {
+  return ids.map((id) => status?.harnesses?.find((h) => h.id === id)?.display || id).join(" and ");
 }
 
 /** One provider the strip speaks for (design §5.5, packet MP-D). */

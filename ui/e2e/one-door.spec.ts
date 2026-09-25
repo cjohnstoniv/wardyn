@@ -8,14 +8,14 @@ import { test, expect, gotoConsole, mockMemberRole, navToRoute } from "./fixture
 import { attachModeFrame, stubAttachSocket, stubAttachTicket } from "./attach-stub";
 import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
 import { BANNER, CLAUDE_DOOR, KEY_DOOR } from "../src/app/components/wardyn/copy/door";
-import { MEMBER_GETTING_STARTED } from "../src/app/components/wardyn/copy";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 
 // ONE door (#544, packet MP-E §5.9; the strip that opens it, #540): Settings,
-// the Agents tab, Getting started and the strip keep their buttons, and every
-// one of them opens the single dialog the shell mounts — keyed by the provider
-// it is for. Nothing on a route mounts a sign-in pane of its own any more, so
-// leaving the route never takes the door (or its sign-in sandbox) with it.
+// the Agents tab, Your model connections (#541 — Getting Started's own
+// button, replaced) and the strip keep their buttons, and every one of them
+// opens the single dialog the shell mounts — keyed by the provider it is for.
+// Nothing on a route mounts a sign-in pane of its own any more, so leaving
+// the route never takes the door (or its sign-in sandbox) with it.
 //
 // Hermetic for signin-door-aws.spec.ts's reason: `-runner none` never starts a
 // login run, so the launch, the run's reads, its kill and the attach are
@@ -140,7 +140,12 @@ test.describe("one door — keyed by provider (User view)", () => {
     host: "bedrock-runtime.us-east-1.amazonaws.com",
   };
 
-  test("Getting started and the strip open the same provider door, across a route change", async ({ page }) => {
+  // #541: Your model connections (Your account) replaces Getting Started's own
+  // button as the page every person opens a provider door from — Getting
+  // Started keeps only the summary chip and a link there.
+  test("Your model connections and the strip open the same provider door, across a route change", async ({
+    page,
+  }) => {
     await mockMemberRole(page);
     await spliceStatus(page, (body) => {
       perUserRow(body);
@@ -151,8 +156,10 @@ test.describe("one door — keyed by provider (User view)", () => {
     const provider = await stubSignInSandbox(page, `**/api/v1/model-providers/${BEDROCK.id}/sign-in`);
 
     await gotoConsole(page);
-    await navToRoute(page, "/setup");
-    await page.getByRole("button", { name: MEMBER_GETTING_STARTED.SIGN_IN_AWS_ARIA_SUMMARY, exact: true }).click();
+    await navToRoute(page, "/account");
+    // The card claims the door, so the strip's own line for this same
+    // provider is suppressed — one "Sign in to AWS" on the page, not two.
+    await page.getByTestId("model-connections-card").getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true }).click();
     const door = page.getByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE });
     await expect(door).toContainText("For Bedrock (prod)");
     await expect(door).toContainText(MODEL_ACCESS_BANNER.DIALOG_CLEANUP_NOTE);

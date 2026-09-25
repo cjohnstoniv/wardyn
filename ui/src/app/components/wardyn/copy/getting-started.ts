@@ -15,9 +15,15 @@ export const MEMBER_GETTING_STARTED = {
   RETRY: "Retry",
   SETUP_SUMMARY_TITLE: "What's set up for you",
   SETUP_SUMMARY_HELPER: "Your admin configured the barrier, network and shared credentials. Your runs inherit them.",
+  // Restored (#541 fix review): SETUP_SUMMARY_HELPER's "shared credentials …
+  // your runs inherit them" is FALSE whenever the credential is per person —
+  // a legacy per_user AWS-SSO roster row, or any install with a provider
+  // block at all (every provider is a per-person credential by design, never
+  // shared — model-connections.ts's own doc). member-getting-started.tsx
+  // picks this one instead in both cases.
+  SETUP_SUMMARY_HELPER_PER_USER:
+    "Your admin configured the barrier, network and the model-access lane. Model access uses your own AWS sign-in; your runs inherit the rest.",
   BARRIER_CHIP: (label: string) => `Barrier · ${label}`,
-  MODEL_ACCESS_OWN_CHIP: "Model access · Your key",
-  MODEL_ACCESS_PROVIDED_CHIP: "Model access · Provided by your admin",
   SIGNIN_SSO_CHIP: "Sign-in · SSO",
   WORKSPACE_TITLE: "Add your workspace",
   WORKSPACE_BODY: "A repo or directory a run can attach. Runs can only attach what is listed here.",
@@ -38,20 +44,6 @@ export const MEMBER_GETTING_STARTED = {
   CONNECT_HINT_PREFIX: "Register a key once: ",
   CONNECT_COMMAND: "wardyn ssh-key ensure",
   CONNECT_ACTION: "Add SSH key",
-  // DRAFT (M2 canon pending) — Appendix A finding 2b. Under a per_user
-  // roster row the credential is specifically NOT shared and NOT inherited
-  // — that is the entire point of the lane, and the chip beside this
-  // sentence already says so.
-  SETUP_SUMMARY_HELPER_PER_USER:
-    "Your admin configured the barrier, network and the model-access lane. Model access uses your own AWS sign-in; your runs inherit the rest.",
-  // DRAFT (M2 canon pending) — U-13 (a11y). This page renders TWO buttons whose
-  // visible text is "Sign in to AWS" (this card's and "Your model key"'s) plus a
-  // plain-text action line saying the same words, so a screen reader's button
-  // list carried the same name twice with nothing to choose by. The visible text
-  // is unchanged; the accessible name adds the section. It STARTS with
-  // AGENTS.SIGN_IN_AWS so a lookup by the visible name still finds it (pinned in
-  // member-getting-started.test.tsx).
-  SIGN_IN_AWS_ARIA_SUMMARY: "Sign in to AWS — from What's set up for you",
   // M-6 (D5, admin-member-modes-design.md §4.8): demos are sandbox runs, a
   // user act, so they moved here from the admin funnel — same section labels
   // (SETUP.PHASE_DEMOS_*, modes-b.html), reused rather than retyped, since

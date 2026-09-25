@@ -47,6 +47,7 @@
 
 import { expect, test } from "@playwright/test";
 import { CONSOLE_VIEW } from "../../src/app/components/wardyn/copy/console-view";
+import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
 import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../../src/app/components/wardyn/copy";
 // 0.7.6 lanes ui-model-access-door and ui-new-run-model-access, handed over by
 // constant name in local/v076/canon/*-docs.md. Both modules are plain constant
@@ -185,10 +186,18 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
 
   // (5) THE ONE SUPPRESSION A MEMBER GETS, and the one they deliberately do
-  // NOT. Getting Started IS the door, so the strip is withheld there — the card
-  // below is what says it instead.
+  // NOT. Getting Started IS the door, so the strip is withheld there — the
+  // card below is what says it instead.
+  //
+  // #541 fix review: this install has no model-providers block (a pure
+  // per_user roster row), which keeps "Your model key" as Getting Started's
+  // own door until #548 converts every install to a provider block; the
+  // page's own connections-summary chip falls back to legacySummary
+  // (lib/model-connections.ts), reading the SAME not_configured state as the
+  // strip: Needs you.
   await page.goto("/setup");
   await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
   // …and on /account a MEMBER keeps it, deliberately: that card's AWS button
   // is admin-only, so hiding the strip there would strand exactly the person a
