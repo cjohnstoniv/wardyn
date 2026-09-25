@@ -167,6 +167,7 @@ type bootFlags struct {
 	openaiGatewayHeader    *string
 	openaiGatewayFormat    *string
 	ageKey                 *string
+	platformKeyFile        *string
 	proxyImage             *string
 
 	recordingDir       *string
@@ -280,6 +281,8 @@ type bootFlags struct {
 	migrateSecrets *bool
 	migrateTo      *string
 	reconcile      *bool
+	// rewrap is the local-key maintenance mode (rewrap.go); no env pair either.
+	rewrap *bool
 	// vault configures the Vault KV v2 external store, azure the Azure Key
 	// Vault one (secret_store.go).
 	vault vaultFlags
@@ -406,6 +409,7 @@ func parseBootFlags() *bootFlags {
 		openaiGatewayHeader:     flagEnv("openai-gateway-header", "WARDYN_OPENAI_GATEWAY_HEADER", "", "same as -anthropic-gateway-header, for OpenAI's gateway (default Authorization)"),
 		openaiGatewayFormat:     flagEnv("openai-gateway-format", "WARDYN_OPENAI_GATEWAY_FORMAT", "", `same as -anthropic-gateway-format, for OpenAI's gateway (default "Bearer %s")`),
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty"),
+		platformKeyFile:         flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path of a SECOND age identity file that alone protects wardynd's own signing, session and SSH host keys in local mode, apart from WARDYN_AGE_KEY. Empty (default) = the age key protects both. Setting it on an existing install needs `wardynd -rewrap` once. See docs/OPERATIONS.md"),
 		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 
 		recordingDir: flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); "fs" store only — empty disables replay there, but is ignored by the default "pg" store (set -recording-store=fs too)`),
@@ -526,6 +530,7 @@ func parseBootFlags() *bootFlags {
 		migrateSecrets: flag.Bool("migrate-secrets", false, "MAINTENANCE MODE, safe while a daemon serves: move every stored secret to the store -to names, one row at a time, then exit. Idempotent and resumable. See docs/OPERATIONS.md"),
 		migrateTo:      flag.String("to", "", `target of -migrate-secrets: "vaultkv", "azurekv" or "local"`),
 		reconcile:      flag.Bool("reconcile", false, "MAINTENANCE MODE: list the pointer rows and the external store side by side, report pointers without values and values without pointers, then exit (non-zero on any). Deletes nothing"),
+		rewrap:         flag.Bool("rewrap", false, "MAINTENANCE MODE: rewrap every stored secret's data key onto the local key its purpose uses today (after an upgrade, or after setting WARDYN_PLATFORM_KEY_FILE) in ONE transaction, then exit. The sealed values are never decrypted. See docs/OPERATIONS.md"),
 		vault:          registerVaultFlags(),
 		azure:          registerAzureFlags(),
 

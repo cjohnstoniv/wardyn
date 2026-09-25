@@ -114,7 +114,7 @@ func TestRekeyRoundTripsEveryRow(t *testing.T) {
 	}
 
 	before := rawRows(t, pool)
-	n, err := Rekey(ctx, pool, oldID, newID)
+	n, err := Rekey(ctx, pool, oldID, newID, nil)
 	if err != nil {
 		t.Fatalf("Rekey: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestRekeyAbortsWholeTransactionOnUndecryptableRow(t *testing.T) {
 		t.Fatalf("Put stray: %v", err)
 	}
 
-	n, err := Rekey(ctx, pool, oldID, newID)
+	n, err := Rekey(ctx, pool, oldID, newID, nil)
 	if err == nil {
 		t.Fatal("Rekey succeeded over a row the old key cannot decrypt; a partial rekey was committed")
 	}
@@ -221,7 +221,7 @@ func TestRekeyAbortsOnAV0Row(t *testing.T) {
 	ctx := context.Background()
 	oldID, newID := mustIdentity(t), mustIdentity(t)
 	seedV0(t, pool, oldID, "", "legacy", "v0-value")
-	n, err := Rekey(ctx, pool, oldID, newID)
+	n, err := Rekey(ctx, pool, oldID, newID, nil)
 	if err == nil || n != 0 {
 		t.Fatalf("Rekey over a v0 row = (%d, %v), want an abort", n, err)
 	}
@@ -234,7 +234,7 @@ func TestRekeyAbortsOnAV0Row(t *testing.T) {
 // rather than erroring, so a fresh deployment can still run the runbook.
 func TestRekeyOnEmptyStore(t *testing.T) {
 	pool := rekeyDatabase(t)
-	n, err := Rekey(context.Background(), pool, mustIdentity(t), mustIdentity(t))
+	n, err := Rekey(context.Background(), pool, mustIdentity(t), mustIdentity(t), nil)
 	if err != nil {
 		t.Fatalf("Rekey on an empty store: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestRekey_TwoNamespacesKeepDistinctPlaintexts(t *testing.T) {
 		t.Fatalf("Put alice row: %v", err)
 	}
 
-	n, err := Rekey(ctx, pool, oldID, newID)
+	n, err := Rekey(ctx, pool, oldID, newID, nil)
 	if err != nil {
 		t.Fatalf("Rekey: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestRekey_TwoNamespacesKeepDistinctPlaintexts(t *testing.T) {
 // cannot produce one must fail here rather than mid-transaction.
 func TestRekeyRejectsAnIdentityWithNoRecipient(t *testing.T) {
 	pool := rekeyDatabase(t)
-	_, err := Rekey(context.Background(), pool, scryptOnlyIdentity{}, mustIdentity(t))
+	_, err := Rekey(context.Background(), pool, scryptOnlyIdentity{}, mustIdentity(t), nil)
 	if err == nil {
 		t.Fatal("Rekey accepted an identity with no Recipient()")
 	}

@@ -504,6 +504,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
   be read, those lists come back empty rather than unfiltered. Admins still see every row.
   `GET /me/capabilities` gains `kinds_version`, which goes up whenever the set of capability kinds
   changes.
+- **Wardyn's own keys can be kept apart from people's credentials (#646).** In local mode each
+  stored row's data key is now wrapped under a key for its purpose — `local/platform:` for the
+  signing, session, UI-session and SSH host keys, `local/cred:` for everything else — and the new
+  optional `WARDYN_PLATFORM_KEY_FILE` names a second age key that alone protects the first kind.
+  With it set, a leak of `WARDYN_AGE_KEY` forges no run identity, console session or SSH host
+  key: a boot key wrapped under anything the age key derives is refused and boot stops. The new
+  `wardynd -rewrap` maintenance mode moves rows onto their purpose's key (rows written before
+  this change, and the boot keys once the file is set), data keys only, in one transaction, and
+  writes a `secret.rewrap` audit row; boot refuses by name until it has run. `-rotate-age-key`
+  leaves the boot keys under the platform key alone. Without the file, `/setup/status` shows the
+  amber `platform_shared` row. In Vault store mode, the new `WARDYN_VAULT_ROLE_PLATFORM`
+  (chart `secretStore.vault.rolePlatform`) logs wardynd in as a second role that alone reaches
+  `<prefix>/platform/`, so the credentials token reaches no platform key; OPERATIONS.md
+  recommends it. THREAT-MODEL residual #49 states what stays shared. Rows written by this
+  version name keys an earlier 0.8 build does not know, and it refuses them by name.
 - **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
   view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
   The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `user`,

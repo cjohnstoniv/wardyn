@@ -24,7 +24,7 @@ func TestNew_AcceptsX25519Identity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New rejected a valid X25519 identity: %v", err)
 	}
-	if !strings.HasPrefix(s.kek.ID(), "local:") {
+	if !strings.HasPrefix(s.kek.ID(), "local/cred:") {
 		t.Fatalf("kek_id %q is not a local KEK", s.kek.ID())
 	}
 	// Seal/open round trip exercises the derived KEK without a DB.

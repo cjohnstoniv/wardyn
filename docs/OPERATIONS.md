@@ -4804,9 +4804,11 @@ fills an empty value.
 
 Each stored secret is an envelope (`internal/secretstore/pg`, since 0.7.12): the
 value is sealed with AES-256-GCM under its own data key, bound to the row's owner
-and name, and that data key is wrapped by the `local` key-encryption key — derived
-from `WARDYN_AGE_KEY` with HKDF-SHA256 and recorded on each row as
-`kek_id` (`local:<fingerprint of the public recipient>`). So simply changing
+and name, and that data key is wrapped by a `local` key-encryption key — derived
+from `WARDYN_AGE_KEY` with HKDF-SHA256, one per purpose, and recorded on each row as
+`kek_id` (`local/cred:<fingerprint of the public recipient>` for credentials,
+`local/platform:<fingerprint>` for wardynd's own boot keys; rows written before
+0.8 say `local:<fingerprint>`, and `wardynd -rewrap` moves them). So simply changing
 `WARDYN_AGE_KEY` migrates nothing — every row still names the old key, and a read
 refuses a row whose `kek_id` is not the configured one. Startup decrypts the persisted signing
 key through `loadOrCreateSigningKey` / `loadOrCreateSecret` and fails closed on
@@ -4905,6 +4907,50 @@ is the **only** key that reads the store. Save it before doing anything else.
 Whatever you do, **back the key up off-host.** Rotation re-encrypts what is there;
 it cannot recover a key you have already lost.
 
+With `WARDYN_PLATFORM_KEY_FILE` set (below), the rotation moves only the rows
+under the age key; the boot keys under the platform key stay as they are.
+
+## Separating the platform keys
+
+By default one age key protects everything the `secrets` table holds: people's
+credentials, and wardynd's own signing, session, UI-session and SSH host keys. A
+leak of `WARDYN_AGE_KEY` together with the database then lets someone forge run
+identities, console sessions and the SSH host, not only read credentials
+(`threatmodel/THREAT-MODEL.md` residual #49). `/setup/status` says so as the amber
+`platform_shared` row.
+
+`WARDYN_PLATFORM_KEY_FILE` names a file holding a **second** age identity. The
+boot keys are then wrapped under a key derived from it alone, and no key
+`WARDYN_AGE_KEY` derives opens one: a boot key row wrapped under the age key is
+refused, naming `wardynd -rewrap`, and boot stops rather than mint over it. The
+file stays optional; nothing requires it.
+
+```sh
+# 1. Mint the second key where only wardynd can read it (0600, off-host backup).
+umask 077
+./bin/wardynd -gen-age-key > ~/.wardyn/platform.key
+# 2. Move the boot keys onto it: one transaction, data keys only, no value is
+#    decrypted. Safe beside a serving daemon with the same WARDYN_AGE_KEY.
+WARDYN_PG_DSN='postgres://…' WARDYN_AGE_KEY="$(cat ~/.wardyn/age.key)" \
+  WARDYN_PLATFORM_KEY_FILE=~/.wardyn/platform.key ./bin/wardynd -rewrap
+# INFO wardynd: stored secrets rewrapped … secrets=4 platform_key_separate=true
+# 3. Restart every replica with WARDYN_PLATFORM_KEY_FILE set.
+```
+
+`-rewrap` also moves the rows a pre-0.8 wardynd wrote (`local:`) onto the
+per-purpose keys, with or without the platform key. It writes one
+`secret.rewrap` audit row and takes the same lock as `-rotate-age-key`. The one
+moment the age key still vouches for the boot keys is this move: run it from a
+host you trust, not after a suspected leak of the age key (then replace the boot
+keys instead: delete their rows and restart, which mints new ones — console
+sessions end and SSH clients see a new host key).
+
+Keep the platform key as carefully as the age key, and apart from it: both are
+needed to read everything, and losing the platform key loses the boot keys
+(a restart then refuses; delete their rows to mint new ones). In store mode
+there is no local key at all and the file is refused; there the boot keys live
+under `platform/` in the organisation's store (two Vault roles, below).
+
 ## Store mode: credentials in Vault
 
 With `WARDYN_SECRET_STORE=vaultkv`, every stored credential's value lives in
@@ -4962,10 +5008,22 @@ template on: write the install's `WARDYN_VAULT_KV_PREFIX` literally, as
 `wardyn/data/<prefix>/*` and `wardyn/metadata/<prefix>/*`, and give each
 install its own policy.
 
-Until a second role for the boot keys lands (`WARDYN_VAULT_ROLE_PLATFORM`,
-CS-12b), one role writes both `platform/` and `people/`: whoever holds
-Wardyn's Vault token can create, update and delete the boot keys and every
-person's credentials alike.
+**Two Vault roles (recommended).** With one role, the policy above covers
+`platform/` and `people/` alike: the split is for your audit and filtering, and a
+leak of wardynd's Vault token reaches its signing and session keys too. Two
+Kubernetes-auth roles bound to the same service account separate the privilege:
+`wardyn-platform` with a policy over `<ns>/platform/*` only, and
+`wardyn-credentials` with a policy over `<ns>/operator/*` and `<ns>/people/*`
+(the `wardyn/config` stanza, and the two path stanzas above, each with that
+path in place of `*`, plus `list` on `metadata/<ns>/` for `-reconcile`; the
+boot check of the mount runs as this role, so the platform role needs no
+`wardyn/config`). Set `WARDYN_VAULT_ROLE=wardyn-credentials`
+and `WARDYN_VAULT_ROLE_PLATFORM=wardyn-platform` (chart:
+`secretStore.vault.role` and `secretStore.vault.rolePlatform`): wardynd logs in
+as both at boot, refuses to start if either login fails, and makes every
+`platform/` call as the platform role only. Revoking or rotating one role leaves
+the other untouched, and the platform policy can sit with fewer people. The
+second role needs Kubernetes auth.
 
 **Authentication.** There is no Vault token in an environment variable, by
 design.
@@ -5075,7 +5133,10 @@ Leave out `purge/action` to withhold purge (see "Removing a credential" below).
 `<prefix>` is `WARDYN_AZURE_KV_PREFIX` (the chart sets the release namespace).
 Each value is the base64 of the bytes (content type
 `application/octet-stream;base64`, at most 18 KiB) with tags `wardyn-owner`,
-`wardyn-name`, `wardyn-kind` and `wardyn-format`. A read derives the name from
+`wardyn-name`, `wardyn-kind` and `wardyn-format`. The kind (`platform` for
+wardynd's boot keys) is in the name and the tag, so your Key Vault logs can
+tell the two apart; Key Vault has no per-name policy, so unlike two Vault roles
+it does not separate the privilege. A read derives the name from
 the row's owner and name and refuses a row that points to any other name or
 vault, then refuses a value whose tags name another row. A replace is a new
 **version** of the same name, and every earlier version is **disabled**: Key

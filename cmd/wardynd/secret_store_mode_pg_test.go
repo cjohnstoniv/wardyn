@@ -68,7 +68,7 @@ func (m *memExternal) Walk(context.Context) ([]secretstore.ExternalEntry, error)
 func TestBuildSecretStore_StoreModeBootsWithNoAgeKey(t *testing.T) {
 	pool := envelopeDB(t)
 	ext := &memExternal{vals: map[string][]byte{}}
-	s, err := buildSecretStore(t.Context(), pool, "", vaultkv.Name, ext, 0, &capturingRecorder{})
+	s, err := buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, ext, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatalf("store-mode boot with no age key: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestBuildSecretStore_StoreModeBootsWithNoAgeKey(t *testing.T) {
 		t.Fatalf("the signing key did not land in the external store (%d values)", len(ext.vals))
 	}
 	rec := &capturingRecorder{}
-	s2, err := buildSecretStore(t.Context(), pool, "", vaultkv.Name, ext, 0, rec)
+	s2, err := buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, ext, 0, rec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,14 +102,14 @@ func TestBuildSecretStore_StoreModeBootsWithNoAgeKey(t *testing.T) {
 func TestBuildSecretStore_StoreModeRefusesWhileLocalRowsRemain(t *testing.T) {
 	pool := envelopeDB(t)
 	id, _ := age.GenerateX25519Identity()
-	local, err := buildSecretStore(t.Context(), pool, id.String(), "", nil, 0, &capturingRecorder{})
+	local, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := local.Put(t.Context(), "k", []byte("v")); err != nil {
 		t.Fatal(err)
 	}
-	_, err = buildSecretStore(t.Context(), pool, "", vaultkv.Name, &memExternal{vals: map[string][]byte{}}, 0, &capturingRecorder{})
+	_, err = buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, &memExternal{vals: map[string][]byte{}}, 0, &capturingRecorder{})
 	if err == nil || !strings.Contains(err.Error(), "-migrate-secrets") {
 		t.Fatalf("store-mode boot over a local row with no age key = %v; want a refusal naming -migrate-secrets", err)
 	}
@@ -119,7 +119,7 @@ func TestBuildSecretStore_StoreModeRefusesWhileLocalRowsRemain(t *testing.T) {
 func TestLoadOrCreateSecret_NeverMintsOverAGoneExternalValue(t *testing.T) {
 	pool := envelopeDB(t)
 	ext := &memExternal{vals: map[string][]byte{}}
-	s, err := buildSecretStore(t.Context(), pool, "", vaultkv.Name, ext, 0, &capturingRecorder{})
+	s, err := buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, ext, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestLoadOrCreateSecret_NeverMintsOverAValueNotInWardynsFormat(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := buildSecretStore(t.Context(), pool, "", vaultkv.Name, ext, 0, &capturingRecorder{})
+	s, err := buildSecretStore(t.Context(), pool, "", nil, vaultkv.Name, ext, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestMigrateMode_AuditsAnAbort(t *testing.T) {
 	pool := envelopeDB(t)
 	id, _ := age.GenerateX25519Identity()
 	ext := &failingExternal{memExternal{vals: map[string][]byte{}}}
-	s, err := newSecretStore(t.Context(), pool, id.String(), "", ext, 0, &capturingRecorder{})
+	s, err := newSecretStore(t.Context(), pool, id.String(), nil, "", ext, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestMigrateMode_AuditsEveryReadThenTheMove(t *testing.T) {
 	pool := envelopeDB(t)
 	id, _ := age.GenerateX25519Identity()
 	ext := &memExternal{vals: map[string][]byte{}}
-	s, err := newSecretStore(t.Context(), pool, id.String(), "", ext, 0, &capturingRecorder{})
+	s, err := newSecretStore(t.Context(), pool, id.String(), nil, "", ext, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestMigrateMode_AuditsEveryReadThenTheMove(t *testing.T) {
 func TestReconcileMode_Audits(t *testing.T) {
 	pool := envelopeDB(t)
 	ext := &memExternal{vals: map[string][]byte{}}
-	s, err := newSecretStore(t.Context(), pool, "", vaultkv.Name, ext, 0, &capturingRecorder{})
+	s, err := newSecretStore(t.Context(), pool, "", nil, vaultkv.Name, ext, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}

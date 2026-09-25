@@ -25,10 +25,14 @@ import (
 )
 
 // maintenanceMode runs the one-shot maintenance mode the flags select, if any
-// (-rotate-age-key, -migrate-secrets, -reconcile), and reports whether one ran.
+// (-rotate-age-key, -rewrap, -migrate-secrets, -reconcile), and reports whether
+// one ran.
 func maintenanceMode(f *bootFlags) (bool, error) {
 	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
 		return true, rotateAgeKeyMode(f, p)
+	}
+	if *f.rewrap {
+		return true, rewrapMode(f)
 	}
 	if *f.migrateSecrets || *f.reconcile {
 		return true, secretStoreMaintenance(f)
@@ -66,11 +70,15 @@ func secretStoreMaintenance(f *bootFlags) error {
 	// The store bare (newSecretStore), not audited: neither mode reads through
 	// Get. Migrate's reads are recorded one by one (migrateMode), and
 	// Reconcile reads store metadata only, never a value.
+	platform, err := readPlatformKey(*f.platformKeyFile, *f.ageKey)
+	if err != nil {
+		return err
+	}
 	ext, err := buildExternalStore(ctx, f.vault, f.azure, *f.trustedCAFile)
 	if err != nil {
 		return err
 	}
-	s, err := newSecretStore(ctx, pool, *f.ageKey, *f.secretStoreSel, ext, *f.vault.timeout, rec)
+	s, err := newSecretStore(ctx, pool, *f.ageKey, platform, *f.secretStoreSel, ext, *f.vault.timeout, rec)
 	if err != nil {
 		return err
 	}
