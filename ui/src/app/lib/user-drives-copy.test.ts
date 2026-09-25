@@ -633,7 +633,9 @@ describe("user-drives-prompt §7.3 — the allocations truncation note", () => {
 // managed backend refuses every non-hash template, not just email_local),
 // not just the share-side one. Pin both halves so a revert to
 // one-directional gating — in the doc OR the component — fails here instead
-// of drifting silently again.
+// of drifting silently again. Since #808 the editor routes through
+// homeTemplateDisabled (api/drives.ts), whose every direction drives.test.ts
+// pins per backend; here we pin only that the editor still delegates to it.
 describe("user-drives-prompt §2.4 — the home-template rule's mirror direction", () => {
   const doc224 = readFileSync(resolve(process.cwd(), "../docs/design/user-drives-prompt.md"), "utf8");
   const editorSrc = readFileSync(
@@ -646,7 +648,7 @@ describe("user-drives-prompt §2.4 — the home-template rule's mirror direction
     expect(doc224).toMatch(/A managed drive with any non-`hash` directory name.*mirror/);
   });
 
-  it("drive-editor.tsx's homeDisabled still gates both directions", () => {
-    expect(editorSrc).toMatch(/homeDisabled\s*=\s*\(t: HomeTemplate\)\s*=>\s*\(managed \? t !== "hash" : t === "hash"\)/);
+  it("drive-editor.tsx's homeDisabled still gates both directions, through the shared predicate", () => {
+    expect(editorSrc).toMatch(/homeDisabled\s*=\s*\(t: HomeTemplate\)\s*=>\s*homeTemplateDisabled\(backend, t\)/);
   });
 });

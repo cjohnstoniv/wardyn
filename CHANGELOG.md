@@ -64,6 +64,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   drifts from `deploy/images/novnc/Dockerfile`'s `WEBSOCKIFY_VERSION` pin or download URL.
   `docs/CI.md` and `ROADMAP.md` now say seven images (a release now publishes
   `agent-vscode` and `agent-novnc` too).
+- **The drive editor's home-template rule for `k8s_pvc_static` now matches the server (#808).**
+  The picker treated `k8s_pvc_static` as a plain share: it disabled `hash`, the server's default
+  and recommended template for a static PVC, and offered `email_local`, the one template the
+  server always refuses on this backend. `k8s_pvc_static` is a third case — an admin
+  pre-provisions the claim, but Wardyn still names it — so the editor now enables `hash` and `sub`
+  there and disables only `email_local`, mirroring `ManagedBackendRejectsTemplate` /
+  `ShareBackendRejectsTemplate` (`internal/types/user_drive.go`) through one shared predicate.
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
