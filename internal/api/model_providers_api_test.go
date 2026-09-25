@@ -235,7 +235,7 @@ func TestSetupStatusModelProviders(t *testing.T) {
 		SubjectType: types.CapabilitySubjectAll, Capability: capAgent, Value: "codex-cli", Effect: types.CapabilityDeny,
 	}}}
 	srv := modelProvidersStatusSrv(t, site, cs)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /setup/status = %d; body=%s", w.Code, w.Body.String())
@@ -281,7 +281,7 @@ func TestSetupStatusModelProviders(t *testing.T) {
 // either tier, and the member body keeps exactly the keys it had.
 func TestSetupStatusNilBlockIsToday(t *testing.T) {
 	srv := modelProvidersStatusSrv(t, types.SiteConfig{}, &capStore{})
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	for name, body := range map[string]string{
 		"admin":  do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, "").Body.String(),
 		"member": doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "").Body.String(),

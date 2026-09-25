@@ -27,7 +27,7 @@ const SEED_SECRET = "e2e-test-secret";
 // state) has finished its initial load. We key on the page heading + the seeded
 // secret name so we know the list query resolved.
 async function openSecrets(page: Page) {
-  await gotoConsole(page);
+  await gotoConsole(page, "admin");
   await navTo(page, "Secrets");
   await expect(page.getByRole("heading", { name: "Secrets", exact: true })).toBeVisible();
 }

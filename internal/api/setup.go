@@ -12,6 +12,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
@@ -411,7 +412,8 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 // The handler gathers state; every checklist row is a small pure function below
 // (one per item, in the order the wizard renders them).
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	// One capability snapshot for every per-person list below (capVisible).
+	ctx := withCapBatch(r.Context())
 
 	// auth: same derivation handleMe uses, plus the "disabled" edge (no auth
 	// configured at all — practically unreachable here since adminAuth would have
@@ -540,13 +542,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	checks = append(checks, ageKeyCheck(s.cfg.AgeKeyDurable),
-		hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
+	checks = append(checks, secretStoreRows(s.cfg.SecretStoreExternal, s.cfg.AgeKeyDurable, s.cfg.PlatformKeySeparate)...)
+	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
 	// conditional check gates on its own applicability).
 	oidcConfigured := s.cfg.OIDC != nil
-	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured)); ok {
+	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured), oidcConfigured && s.cfg.OIDC.HasOperatorEmails()); ok {
 		checks = append(checks, chk)
 	}
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
@@ -633,10 +635,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Harness:            harnessCreds,
 		// Integrations reuses the single integrationsWithCapabilitiesUsing call
 		// hoisted above (PLATFORM-API-7 optimization + HIGH-4 llm_ready reuse).
-		Integrations: integrations,
-		// The roster and the model providers it defaults to, side by side (one
-		// line: this function sits at its funlen ratchet).
-		Harnesses: setupHarnessTools(siteCfg, s.cfg.AgentImages), ModelProviders: s.setupModelProviders(ctx, siteCfg),
+		// Every list holds only what this caller may use (capVisible; model providers
+		// on the roster line, funlen ratchet); llmReady stays the deployment fact.
+		Integrations: capVisible(ctx, s, capIntegration, integrations, setupIntegrationID),
+		Harnesses:    capVisible(ctx, s, capAgent, setupHarnessTools(siteCfg, s.cfg.AgentImages), setupHarnessToolID), ModelProviders: s.setupModelProviders(ctx, siteCfg),
 		LLMReady:    llmReady,
 		ModelAccess: modelAccess,
 		SCMAccess:   s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
@@ -842,7 +844,7 @@ func claudeLoginSignal(providers []SetupProvider) (bool, string) {
 func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, scope awsSSOScope) ([]SetupHarness, string, SetupModelAccess) {
 	var out []SetupHarness
 	managedDetail := ""
-	if blob, ok, err := s.readManagedBlob(ctx, "anthropic"); err == nil && ok {
+	if blob, ok, err := s.readManagedBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), "anthropic"); err == nil && ok {
 		out = append(out, SetupHarness{
 			Provider: "anthropic", Captured: true,
 			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
@@ -854,7 +856,7 @@ func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, sco
 	// Scoped: under a per_user row this is the CALLER's own captured session, not
 	// the operator's — the whole point of per_user, and the reason the probe
 	// below can speak for this person rather than for the deployment.
-	blob, found, err := s.readAWSSSOBlob(ctx, scope)
+	blob, found, err := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), scope)
 	if err != nil {
 		// A wedged store is not a credential fact. readHarnessBlob propagates
 		// every non-ErrNotFound error precisely so a rotated age key or a PG blip

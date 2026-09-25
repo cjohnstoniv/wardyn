@@ -270,7 +270,7 @@ describe("DemoDetail — the single demo renderer", () => {
     renderDemo(APP_GATED, true, { githubAppReady: false, operator: true });
     const gate = await screen.findByTestId("demo-needs-github-app");
     expect(gate).not.toHaveTextContent(/ask an operator/i);
-    expect(within(gate).getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/settings");
+    expect(within(gate).getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/admin/settings");
   });
 
   // A refused run-create: sts-fail-closed's lesson IS the 422 — the mint is

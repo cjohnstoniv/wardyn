@@ -92,7 +92,7 @@ export function DeleteConfirmDialog({
           <AlertDialogAction
             onClick={(e) => {
               e.preventDefault();
-              confirmDelete();
+              void confirmDelete();
             }}
             disabled={!canConfirm}
             aria-describedby={canConfirm ? undefined : "delete-confirm-operator-reason"}

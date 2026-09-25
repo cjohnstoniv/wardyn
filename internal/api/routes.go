@@ -50,7 +50,9 @@ func (s *Server) routes() chi.Router {
 	// here: it is POST /api/v1/auth/logout below, inside humanOrAdminAuth.
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
-		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandler)
+		// A sign-in refused over its user type (ambiguous or unknown) is an
+		// auth.failed row; the oidc package stays audit-agnostic.
+		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.auditSignInDenied))
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -87,7 +89,8 @@ func (s *Server) routes() chi.Router {
 			//   direct registrations in this body   (both groups)
 			//   mountPermissionRoutes  (this file)  securityOps
 			//   mountAccountRoutes     (this file)  securityOps
-			//   adminRoutes            (this file)  one per group
+			//   adminRoutes            (this file)  one per group, plus
+			//       mountUserTypeRoutes (user_types.go) securityOps
 			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
@@ -496,12 +499,10 @@ func (s *Server) routes() chi.Router {
 			// (.golangci.yml, 150 non-comment lines): a new route family here has
 			// to free its line by extracting an existing block first.
 			s.mountSiteConfigProbeRoutes(securityOps)
-			// Workspace providers — see mountWorkspaceProviderRoutes, and
-			// the agent roster beside it (agent_providers.go). Both MOUNTS,
-			// attached with no blank line, for the ratchet reason just above.
-			s.mountWorkspaceProviderRoutes(operatorOnly)
-			s.mountAgentProviderRoutes(operatorOnly)
-			s.mountModelProviderRoutes(operatorOnly)
+			// Workspace providers, the agent roster and the model providers it
+			// defaults to — see mountProviderRoutes. One MOUNT, attached with no
+			// blank line, for the ratchet reason just above.
+			s.mountProviderRoutes(operatorOnly)
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /
@@ -630,6 +631,9 @@ func (s *Server) routes() chi.Router {
 			r.Post("/internal/decisions", s.handlePostDecision)
 			r.Post("/internal/approvals", s.handleInternalRequestApproval)
 			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
+			// wardyn-toolgate's own give-up signal (#811): closes the row it
+			// raised instead of leaving it PENDING for the sweep.
+			r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 			r.Post("/internal/credentials/mint", s.handleInternalMint)
 
 			// Token renew: POST /api/v1/internal/token/renew
@@ -779,6 +783,10 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	// User types (migration 0071_user_types): defining a type is the same
+	// security-tier duty as authoring a governance profile; deciding who IS a
+	// type stays on the operatorOnly /access routes.
+	s.mountUserTypeRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the

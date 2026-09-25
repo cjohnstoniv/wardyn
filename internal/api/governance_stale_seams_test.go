@@ -33,7 +33,7 @@ import (
 // auditing there would mean one emit per seam and a seam that hands the code
 // upward emitting nothing.
 //
-// THAT ARGUMENT IS ONLY TRUE WHILE THE DECIDING SITES ARE THE ONLY SOURCE. A
+// That argument is only true while the deciding sites are the only source. A
 // seam that raised errGroupsSnapshotStale itself — a new resolver, a copy of the
 // unusable-groups arm, a shortcut that skips effectiveCeiling — would refuse a
 // member with the documented sentence and record nothing, which is F227 again at
@@ -48,7 +48,7 @@ import (
 func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 	// The two sites the design names, each of which emits authz.denied for the
 	// refusal it decides. An addition here is a claim that a THIRD place may
-	// decide this refusal, and it has to bring its own recordAudit with it —
+	// decide this refusal, and it has to bring its own recordRefusal with it —
 	// which the second half of this test then checks.
 	want := map[string]bool{
 		"ceilingWithUnusableGroups": true, // governance.go — target governance.ceiling
@@ -72,7 +72,7 @@ func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 				"source; re-point it at the new shape rather than deleting it", name)
 		}
 		if !records[name] {
-			t.Errorf("%s decides the groups_snapshot_stale refusal and no longer calls recordAudit: the "+
+			t.Errorf("%s decides the groups_snapshot_stale refusal and no longer calls recordRefusal: the "+
 				"denial stream is the operator's only view of who cannot use the product, and this is the "+
 				"site F227 put the row at", name)
 		}
@@ -80,7 +80,7 @@ func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 }
 
 // staleSentinelSites reports which internal/api functions RETURN
-// errGroupsSnapshotStale, and which of those also call recordAudit. errors.Is
+// errGroupsSnapshotStale, and which of those also call recordRefusal. errors.Is
 // matches are deliberately not counted: matching the sentinel is what the write
 // helpers do, and they are not deciding anything.
 func staleSentinelSites(t *testing.T) (raisers, records map[string]bool) {
@@ -107,7 +107,7 @@ func staleSentinelSites(t *testing.T) (raisers, records map[string]bool) {
 			}
 			if staleSentinelReturned(fn) {
 				raisers[fn.Name.Name] = true
-				if callsNamed(fn, "recordAudit") {
+				if callsNamed(fn, "recordRefusal") {
 					records[fn.Name.Name] = true
 				}
 			}
@@ -157,21 +157,19 @@ func callsNamed(fn *ast.FuncDecl, name string) bool {
 	return found
 }
 
-// TestDrivePreviewWritesNoDenial is F227's residue.
+// TestDrivePreviewWritesNoDenial: the authz.denied emit lives at the deciding
+// sites, and both of them are reached by the admin drive preview:
+// drivePreviewDoorIsOpen resolves the previewed principal's ceiling,
+// previewResolveUserDrive resolves their drive. An admin asking "what would
+// carol get" must not write an authz.denied row — it would name the admin as the
+// refused principal, because the row is stamped from the request's own identity
+// (one preview of carol's drive would record `authz.denied
+// target=governance.ceiling actor="sub-admin-alice"`).
 //
-// The emit landed at the deciding sites, and BOTH of them are reached by the
-// admin drive preview: drivePreviewDoorIsOpen resolves the previewed principal's
-// ceiling, previewResolveUserDrive resolves their drive. So an admin asking
-// "what would carol get" wrote an authz.denied row — naming THE ADMIN as the
-// refused principal, because the row is stamped from the request's own identity.
-// Executed before the fix: one preview of carol's drive produced
-// `authz.denied target=governance.ceiling actor="sub-admin-alice"`.
-//
-// handlePreviewUserDrive's own doc has always said this endpoint is "STILL NOT
-// AUDITED … nothing is minted and nothing changes", so the tree stated the rule
-// and then broke it. A denial stream with the wrong person in it is worse than
-// the silence F227 set out to fix: the silence was at least honest about who had
-// been refused.
+// handlePreviewUserDrive's own doc says this endpoint is "still not audited …
+// nothing is minted and nothing changes". A denial stream with the wrong person
+// in it is worse than no denial at all: silence is at least honest about who was
+// refused.
 func TestDrivePreviewWritesNoDenial(t *testing.T) {
 	st := &driveStore{hasGroupTier: true, userTierOnly: true, hasGroupTierAssignments: true}
 	audit := &recRecorder{}
