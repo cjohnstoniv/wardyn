@@ -8,12 +8,23 @@
 // effective set. Mirrors internal/api/permissions.go; every route is under
 // /api/v1 via wfetch.
 import type {
+  AvailabilityView,
   CapabilityGrant,
   CapabilityGrantInput,
   MeCapabilities,
   PermissionsSnapshot,
 } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+
+// {kind}/{value} — the server takes the value as the REST of the path (an
+// image ref carries slashes, permissions_availability.go's availabilityTarget),
+// so each segment is encoded on its own rather than encodeURIComponent-ing the
+// whole value, which would turn a real "/" into "%2F" and 400 as a different
+// value than the one on screen.
+function availabilityPath(kind: string, value: string): string {
+  const encodedValue = value.split("/").map(encodeURIComponent).join("/");
+  return `/permissions/availability/${encodeURIComponent(kind)}/${encodedValue}`;
+}
 
 // What an upsert actually did. The server distinguishes a genuinely new row
 // (201) from a re-grant that flipped an existing row's effect in place (200) —
@@ -68,6 +79,24 @@ export const permissions = {
       body: JSON.stringify(enforcement),
     });
     return (await asJson<Record<string, boolean> | null>(res)) ?? {};
+  },
+
+  // GET /api/v1/permissions/availability/{kind}/{value} -> one resource's
+  // "Available to" state (the restricted bit + who is named). securityOps.
+  async getAvailability(kind: string, value: string): Promise<AvailabilityView> {
+    const res = await wfetch(availabilityPath(kind, value), { method: "GET" });
+    return asJson<AvailabilityView>(res);
+  },
+
+  // PUT /api/v1/permissions/availability/{kind}/{value} -> the same view, bit
+  // flipped. Turning "Only…" on with nobody already listed is refused (400);
+  // the server's message is surfaced verbatim by the caller, never reworded.
+  async putAvailability(kind: string, value: string, restricted: boolean): Promise<AvailabilityView> {
+    const res = await wfetch(availabilityPath(kind, value), {
+      method: "PUT",
+      body: JSON.stringify({ restricted }),
+    });
+    return asJson<AvailabilityView>(res);
   },
 
   // GET /api/v1/me/capabilities -> the caller's own grants + the enforcement

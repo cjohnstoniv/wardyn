@@ -44,6 +44,7 @@ import {
 } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import { AvailabilityControl } from "../../wardyn/availability-control";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { SavedElsewhereBanner } from "../../wardyn/saved-elsewhere-banner";
@@ -328,6 +329,13 @@ function Row({
             side-effect of that sentence's punctuation, so a reworded hint
             silently reworded (or emptied) the chip. */}
         <Chip tone="neutral">{enabled ? PROVIDERS.FIELD_ENABLED : AGENTS.AGENT_ROW_DISABLED_CHIP}</Chip>
+      </div>
+
+      {/* UT-7b: kind agent, value = harness.id — present whether the row is
+          on or off, the git-tab.tsx precedent (a disabled agent can still
+          carry a stale audience list). */}
+      <div className="border-b border-border p-3">
+        <AvailabilityControl kind="agent" value={harness.id} />
       </div>
 
       {!enabled ? (
