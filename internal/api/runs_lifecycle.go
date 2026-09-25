@@ -307,7 +307,7 @@ func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID
 // terminalCancelReason is the reason string stamped on a cancelled approval and
 // on its audit row: "run_killed", "run_completed", "run_failed", "run_stopped",
 // "run_ended" (the lease ran out: kept, or torn down at its end or after the
-// grace), or (for an archived row, or a state the read could not resolve)
+// grace), "run_lost" (its sandbox was lost to a reboot or an outage), or (for an archived row, or a state the read could not resolve)
 // "run_terminated" — never a guess that names the wrong transition.
 func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) string {
 	if s.cfg.Store == nil {
@@ -317,8 +317,11 @@ func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) stri
 	if err != nil {
 		return "run_terminated"
 	}
-	if run.LostReason == types.LostEnded && run.State != types.RunKilled {
-		return "run_ended"
+	if run.LostReason != "" && run.State != types.RunKilled {
+		if run.LostReason == types.LostEnded {
+			return "run_ended"
+		}
+		return "run_lost"
 	}
 	switch run.State {
 	case types.RunKilled:
@@ -537,7 +540,7 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		//
 		// The census of transitions that can strand an approval is four:
 		// finalizeRunTail's (the completion watcher, the boot reconciler, the
-		// probe reclaim and the lease's stopEndedRun all route through it),
+		// probe reclaim and the lease's stopKeptRun all route through it),
 		// handleKillRun's, lifecycleStopper.StopRun's RUNNING->STOPPED in
 		// cmd/wardynd (which reaches the cascade through
 		// CancelTerminalRunApprovals below — an idle-stopped run is typically idle
@@ -867,7 +870,7 @@ func (s *Server) handleSweepSandboxes(w http.ResponseWriter, r *http.Request) {
 	// would make docs/AUDIT-ACTIONS.md false. This row answers a different
 	// question — WHO asked for a sweep, and what did it find — and the
 	// primitive's own failure rows still fire underneath it.
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "sandbox.sweep_requested",
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "sandbox.sweep.request",
 		"", "success", mustJSON(map[string]any{"swept": swept})))
 	writeJSON(w, http.StatusOK, map[string]any{"swept": swept})
 }

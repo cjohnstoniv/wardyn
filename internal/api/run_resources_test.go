@@ -56,12 +56,12 @@ func kvExecSession(stdout string) *runner.ExecSession {
 
 // A run with no sandbox is a 409, and writes NO audit row.
 //
-// Handing an empty ref to ExecStream would error into the failure branch: a
-// 500 plus a run.resources failure row every 4 seconds per open tab, for a
-// PENDING/STARTING run that simply is not up yet — against a handler whose
-// own comment says failures are "the rare, interesting case". It would also
-// disagree with the Files widget beside it in the same rail, which returns a
-// crisp 409 for the identical fact.
+// It used to hand an empty ref straight to ExecStream, which errored into the
+// failure branch: a 500 plus a run.resources.fail failure row EVERY 4 SECONDS per
+// open tab, for a PENDING/STARTING run that simply is not up yet — against a
+// handler whose own comment says failures are "the rare, interesting case".
+// It also disagreed with the Files widget beside it in the same rail, which
+// returns a crisp 409 for the identical fact.
 func TestRunResources_NoSandboxIs409AndNeverAudits(t *testing.T) {
 	called := false
 	srv, ast, h := newResourcesHarness(t, func(runner.ExecSpec) (*runner.ExecSession, error) {
@@ -131,8 +131,8 @@ func TestRunResources_FullKeySet(t *testing.T) {
 	// Success is not audited — the console polls this endpoint; see the
 	// audit-on-failure-only test below for the contrast case.
 	for _, ev := range h.audit.events {
-		if ev.Action == "run.resources" {
-			t.Errorf("unexpected run.resources audit event on a SUCCESSFUL read: %+v", ev)
+		if ev.Action == "run.resources.fail" {
+			t.Errorf("unexpected run.resources.fail audit event on a SUCCESSFUL read: %+v", ev)
 		}
 	}
 }
@@ -225,9 +225,9 @@ func TestRunResources_ExecStreamUnsupported_Returns501(t *testing.T) {
 	}
 
 	// FAILURE is audited (unlike the success path above).
-	ev := lastAuditEvent(t, h.audit.events, "run.resources")
+	ev := lastAuditEvent(t, h.audit.events, "run.resources.fail")
 	if ev.Outcome != "failure" {
-		t.Errorf("run.resources audit outcome = %q, want failure", ev.Outcome)
+		t.Errorf("run.resources.fail audit outcome = %q, want failure", ev.Outcome)
 	}
 }
 

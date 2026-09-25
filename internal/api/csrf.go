@@ -44,7 +44,7 @@ const (
 	csrfRefusedBody = "cross-origin state-changing request rejected (CSRF guard)"
 )
 
-// csrfAuditReason is the `reason` both arms emit on the EXISTING auth.failed
+// csrfAuditReason is the `reason` both arms emit on the EXISTING auth.fail
 // action (docs/AUDIT-ACTIONS.md) — no new action, no new row shape, and the
 // same rate limiter and coalescer every other refusal in this middleware goes
 // through (auth_failed_coalesce.go keys on actor+reason+path+source IP, so a
@@ -52,7 +52,7 @@ const (
 // because a security control that refuses SILENTLY cannot answer either
 // question an operator has at 3am: "is someone attacking this?" and "why did
 // the console stop saving?". Not a closed enum member by accident — it joins
-// the enum the auth.failed row documents.
+// the enum the auth.fail row documents.
 const csrfAuditReason = "cross_origin_refused"
 
 // errCrossOriginRefused is the sentinel sameOriginOrRefuse returns. Its text IS

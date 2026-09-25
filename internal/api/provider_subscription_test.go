@@ -160,7 +160,7 @@ func TestProviderSubscriptionDispatch(t *testing.T) {
 			env["ANTHROPIC_MODEL"] != "claude-opus-4-1" || env["ANTHROPIC_API_KEY"] != "" {
 			t.Errorf("sandbox env = %v", env)
 		}
-		if !strings.Contains(strings.Join(auditReasons(t, h.srv, "run.injection.dropped"), ","), "model_credential_not_provider_authored") {
+		if !strings.Contains(strings.Join(auditReasons(t, h.srv, "run.injection.drop"), ","), "model_credential_not_provider_authored") {
 			t.Error("the unauthored sign-in injection was not dropped with an audit row")
 		}
 	})
@@ -291,6 +291,13 @@ func TestProviderSubscriptionSink(t *testing.T) {
 				if strings.Contains(body, leak) {
 					t.Fatalf("refusal carries a token: %s", body)
 				}
+			}
+			// secret.read's refusal reasons are snake_case (docs/AUDIT-ACTIONS.md, #205).
+			ev := lastAuditEvent(t, h.audit.events, "secret.read")
+			var d struct{ Reason string }
+			_ = json.Unmarshal(ev.Data, &d)
+			if ev.Outcome != "failure" || d.Reason == "" || strings.ContainsAny(d.Reason, "- ") {
+				t.Errorf("secret.read = %s %s, want a failure with a snake_case reason", ev.Outcome, ev.Data)
 			}
 		})
 	}

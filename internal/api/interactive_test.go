@@ -195,9 +195,9 @@ func TestCreateRun_Interactive_SkipsExec(t *testing.T) {
 	}
 
 	// The 201 answers before dispatch (runs_create_launch.go); RUNNING and the
-	// run.interactive row are the launch's, written after it.
+	// run.interactive.start row are the launch's, written after it.
 	waitForRunState(t, srv, run.ID, types.RunRunning)
-	waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), run.ID, "run.interactive", "success")
+	waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), run.ID, "run.interactive.start", "success")
 	if fr.createCalls != 1 {
 		t.Errorf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}

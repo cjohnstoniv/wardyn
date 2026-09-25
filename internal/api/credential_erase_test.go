@@ -204,12 +204,12 @@ func TestSweepExpiredCredentials_AuditsEachDeletion(t *testing.T) {
 	if n := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
 		t.Fatalf("swept %d, want 1", n)
 	}
-	ev := lastAuditEvent(t, h.audit.events, "credential.expired_deleted")
+	ev := lastAuditEvent(t, h.audit.events, "credential.expired.delete")
 	var data map[string]any
 	_ = json.Unmarshal(ev.Data, &data)
 	if ev.Target != "wardyn-harness-aws-oauth" || data["secret_owner"] != "bob" || data["reason"] != "expired" ||
 		data["expires_at"] != at.Format(time.RFC3339) || ev.ActorType != types.ActorSystem {
-		t.Fatalf("credential.expired_deleted row = %+v %s", ev, ev.Data)
+		t.Fatalf("credential.expired.delete row = %+v %s", ev, ev.Data)
 	}
 
 	h.srv.cfg.Secrets = &memSecrets{m: map[string][]byte{}}

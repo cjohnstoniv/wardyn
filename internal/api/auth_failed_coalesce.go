@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The two bounds on the auth.failed emit. authFailedLimiter caps the RATE (~1
+// The two bounds on the auth.fail emit. authFailedLimiter caps the RATE (~1
 // row/sec, burst 5); the streak below folds a slow, permanent DRIP — the
 // failure mode that actually emptied a deployment's audit window: one row a
 // minute from a single sidecar retrying a renew the control plane would never
@@ -22,7 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// authFailedRatePerSec and authFailedBurst bound the auth.failed audit emit
+// authFailedRatePerSec and authFailedBurst bound the auth.fail audit emit
 // (see authFailedLimiter.allow) — a steady 1/sec with a small burst so a
 // handful of genuine failures in the same second are not silently dropped,
 // while a scanner's rapid-fire 401s past the burst are.
@@ -31,7 +31,7 @@ const (
 	authFailedBurst      = 5.0
 )
 
-// authFailedLimiter is a process-local token bucket gating auth.failed
+// authFailedLimiter is a process-local token bucket gating auth.fail
 // audit emits. Zero value is ready to use (tokens fill to authFailedBurst on
 // first call).
 type authFailedLimiter struct {
@@ -59,7 +59,7 @@ func (l *authFailedLimiter) allow(now time.Time) bool {
 	return true
 }
 
-// authFailedKey is what makes two auth.failed rows "identical" for coalescing:
+// authFailedKey is what makes two auth.fail rows "identical" for coalescing:
 // the boundary that refused, its bounded reason, and the request path.
 //
 // The peer is deliberately NOT in the key. With it there, a caller that rotates
@@ -232,7 +232,7 @@ func (s *Server) FlushAuthFailedStreak() {
 // unbounded emit path is not a bound.
 //
 // A refused summary is DROPPED and counted in the same suppressed series every
-// other dropped auth.failed row is (the folded ones, the rate-limited ones): the
+// other dropped auth.fail row is (the folded ones, the rate-limited ones): the
 // count it carried is lost, the refusals themselves are not — each one either
 // opened its own recorded row or was already counted as suppressed.
 //
@@ -271,7 +271,7 @@ func (s *Server) closeAuthFailedStreakLocked() *types.AuditEvent {
 	}
 	// peer_ips carries the addresses themselves, so an operator can see who, not
 	// just how many; sorted, so the row is deterministic.
-	ev := s.auditEvent(nil, types.ActorSystem, open.key.actor, "auth.failed", open.key.target,
+	ev := s.auditEvent(nil, types.ActorSystem, open.key.actor, "auth.fail", open.key.target,
 		"failure", mustJSON(map[string]any{
 			"reason":          open.key.reason,
 			"count":           open.count,

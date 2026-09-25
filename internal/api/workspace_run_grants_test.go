@@ -224,9 +224,9 @@ func TestLaunchRecordRun_RequiredSecretIsAudited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launchRecordRun: %v", err)
 	}
-	rows := audit.find("run.workspace.requirement.secret")
+	rows := audit.find("run.requirement.grant")
 	if len(rows) != 1 {
-		t.Fatalf("record launch wrote %d run.workspace.requirement.secret rows; want 1", len(rows))
+		t.Fatalf("record launch wrote %d run.requirement.grant rows; want 1", len(rows))
 	}
 	if rows[0].Target != "acme-deploy-key" || rows[0].RunID == nil || *rows[0].RunID != run.ID {
 		t.Errorf("audit row target=%q run=%v; want acme-deploy-key bound to run %s", rows[0].Target, rows[0].RunID, run.ID)
