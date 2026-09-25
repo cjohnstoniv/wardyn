@@ -183,14 +183,15 @@ test.describe("member Getting Started (mocked /me role)", () => {
   // required to reproduce the cold-load window at all.
   //
   // GET /api/v1/site-config and GET /api/v1/workspace-providers are
-  // unambiguous — no member surface ever calls either. GET /api/v1/secrets is
-  // NOT: secrets.ts's listSecrets() (the admin orchestrator's operator-wide
-  // read) and listSecretsMine() (MemberGettingStarted's own "Your model key"
-  // read) hit the IDENTICAL URL — the server tells the two apart by caller
-  // identity, not the request. So instead of a zero-count on that path (which
-  // would false-fail on the member's OWN legitimate read), this pins the
-  // request COUNT at exactly one: the leaked admin-orchestrator read this fix
-  // removes would have shown up as a second, earlier GET before role resolved.
+  // unambiguous — no member surface ever calls either. GET /api/v1/secrets
+  // used to be the ambiguous one: secrets.ts's listSecrets() (the admin
+  // orchestrator's operator-wide read) and listSecretsMine() (the since-
+  // retired "Your model key" card's own read, #541) hit the IDENTICAL URL, so
+  // this pinned the request COUNT at exactly one rather than a zero-count that
+  // would false-fail on the member's own legitimate read. #541 removed that
+  // read outright — Getting Started's own connections chip reads
+  // model_providers/provider_access off the SAME /setup/status this test
+  // already awaits, not a second endpoint — so all three now pin zero.
   test("a direct cold page.goto(\"/setup\") fires no admin-only reads", async ({ page }) => {
     const requests: { method: string; url: string }[] = [];
     page.on("request", (req) => requests.push({ method: req.method(), url: req.url() }));
@@ -216,7 +217,7 @@ test.describe("member Getting Started (mocked /me role)", () => {
     };
     expect(requests.filter((r) => isGet(r, "/api/v1/site-config"))).toEqual([]);
     expect(requests.filter((r) => isGet(r, "/api/v1/workspace-providers"))).toEqual([]);
-    expect(requests.filter((r) => isGet(r, "/api/v1/secrets"))).toHaveLength(1);
+    expect(requests.filter((r) => isGet(r, "/api/v1/secrets"))).toEqual([]);
 
     // The admin welcome hero and the funnel's barrier-step heading — first
     // paint never shows either, whichever of the two an admin cold load would
