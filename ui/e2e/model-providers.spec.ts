@@ -33,7 +33,7 @@ async function gotoSettings(page: Page, path = "/admin/settings"): Promise<void>
 const list = (page: Page) => page.getByTestId("model-providers-list");
 
 test.describe("Settings — Model providers list", () => {
-  test("A1: nothing set up is the empty state, and Add model provider opens its page", async ({ page }) => {
+  test("A1: nothing set up is the empty state, and Add model provider opens the editor", async ({ page }) => {
     await stub(page, {});
     await gotoSettings(page);
     await expect(list(page).getByRole("heading", { name: M.TITLE, exact: true })).toBeVisible();
@@ -42,8 +42,7 @@ test.describe("Settings — Model providers list", () => {
     await expect(list(page).getByText(M.EMPTY_BODY)).toBeVisible();
 
     await list(page).getByRole("button", { name: M.ADD_CTA }).click();
-    await expect(page).toHaveURL(/\/admin\/settings\/model-providers\/new$/);
-    await expect(page.getByRole("heading", { name: M.ADD_CTA, level: 1 })).toBeVisible();
+    await expect(page.getByRole("dialog").getByRole("heading", { name: M.ADD_CTA })).toBeVisible();
   });
 
   test("rows carry kind, what each person provides, Used by, the default and the connected count", async ({ page }) => {

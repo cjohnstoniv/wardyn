@@ -19,17 +19,12 @@ const getAgentProvidersMock = vi.fn();
 vi.mock("../../../lib/api/agent-providers", () => ({
   agentProviders: { getAgentProviders: () => getAgentProvidersMock() },
 }));
-const navigateMock = vi.fn();
-vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
-  return { ...actual, useNavigate: () => navigateMock };
-});
 
 import type { ModelProvider } from "../../../lib/api/model-providers";
 import type { AgentProvider } from "../../../lib/api/agent-providers";
 import type { SetupHarnessTool } from "../../../lib/types";
 import { MODEL_LEDE, MODEL_PROVIDERS as M, PROVIDER_EDITOR } from "../../../lib/model-providers-copy";
-import { ADD_MODEL_PROVIDER_PATH, ModelProvidersList } from "./model-providers-list";
+import { ModelProvidersList } from "./model-providers-list";
 
 const CLAUDE: SetupHarnessTool = { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true };
 const CODEX: SetupHarnessTool = { id: "codex-cli", display: "Codex CLI", has_gateway: true, has_login: false, enabled: true };
@@ -68,7 +63,6 @@ const row = (id: string) => within(screen.getByTestId(`model-provider-${id}`));
 beforeEach(() => {
   getModelProvidersMock.mockReset();
   getAgentProvidersMock.mockReset();
-  navigateMock.mockReset();
 });
 
 describe("ModelProvidersList", () => {
@@ -83,11 +77,34 @@ describe("ModelProvidersList", () => {
     expect(screen.queryByText(M.HARNESS_UNSERVED("Codex CLI"))).toBeNull();
   });
 
-  it("Add model provider opens the editor's entry point", async () => {
+  it("Add model provider opens the editor (#537) at its kind step", async () => {
     given([]);
     renderList();
     await userEvent.click(await screen.findByRole("button", { name: M.ADD_CTA }));
-    expect(navigateMock).toHaveBeenCalledWith(ADD_MODEL_PROVIDER_PATH);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: M.ADD_CTA })).toBeInTheDocument();
+    expect(within(dialog).getByRole("group", { name: PROVIDER_EDITOR.KIND_TITLE })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["a Bedrock row", bedrock, "Bedrock (prod)"],
+    ["a Claude subscription row", sub, "Claude subscription"],
+  ])("%s does not open the editor (#538 builds those kinds)", async (_, provider, name) => {
+    given([provider]);
+    renderList();
+    const r = await screen.findByTestId(`model-provider-${provider.id}`);
+    expect(within(r).queryByRole("button")).toBeNull();
+    await userEvent.click(within(r).getByText(name));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a row opens the editor on that provider", async () => {
+    given([gateway]);
+    renderList();
+    await userEvent.click(await screen.findByRole("button", { name: /^Corp gateway/ }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: "Corp gateway" })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(PROVIDER_EDITOR.NAME)).toHaveValue("Corp gateway");
   });
 
   it("A2: one provider shows name, kind, what each person provides, Used by and its count, with no default chip", async () => {

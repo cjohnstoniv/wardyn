@@ -5,18 +5,58 @@
 
 import type { ModelProviderKind } from "./types/site";
 
-// #536 — Settings → Model providers (the admin list), byte-for-byte from
-// docs/design/model-providers-canon.md (approved mock packet MP-A). A pure-data
-// module so Playwright specs can import it; connection-cards.tsx cannot be
-// (it pulls in xterm's CSS).
+// #536 — Settings → Model providers (the admin list), and #537 — its provider
+// editor, byte-for-byte from docs/design/model-providers-canon.md (approved
+// mock packet MP-A, and the #537 packet of 2026-09-25). A pure-data module so
+// Playwright specs can import it; connection-cards.tsx cannot be (it pulls in
+// xterm's CSS). The editor's Codex/Claude "can't drive it" reasons are
+// lib/integrations.ts's INTEGRATIONS.X_* rows, reused verbatim.
 
 // Reused as the Model provider card's lede (connection-cards.tsx S.MODEL_LEDE).
 export const MODEL_LEDE = "Agent runs need one. Governed commands don't.";
 
-// PROVIDER_EDITOR.PROVIDES_CLAUDE is packet B's line; the list reuses it for a
-// Claude subscription row because §5.1 gives none (packet MP-A, A3).
+// The provider editor (#537). PROVIDES_CLAUDE is packet B's line; the list
+// reuses it for a Claude subscription row because §5.1 gives none (packet
+// MP-A, A3).
 export const PROVIDER_EDITOR = {
   PROVIDES_CLAUDE: "Each person signs in with their own Claude subscription.",
+  KIND_TITLE: "What kind of model provider?",
+  PROVIDES_KEY: "Each person adds their own key.",
+  PROVIDES_TOKEN: "Each person adds their own token. You set how it is sent.",
+  NAME: "Name",
+  NAME_HINT: "What people see when they choose it.",
+  ROUTE_THROUGH: "Route through a gateway (optional)",
+  ROUTE_THROUGH_HINT: (host: string) =>
+    `Send requests to your gateway instead of ${host}. Each person's key goes with them, and they are told where it goes.`,
+  BASE_URL: "Base URL",
+  BASE_URL_HINT: "https only. Wardyn sends this provider's requests here.",
+  AUTH_HEADER: "Auth header",
+  VALUE_FORMAT: "Value format",
+  USE_WITH: "Use with",
+  MODEL: "Model",
+  MODEL_HINT: "Leave empty for the agent's own default.",
+  PATH: "Path",
+  PATH_HINT_CLAUDE: "Where your endpoint serves the Anthropic Messages API for Claude Code, e.g. /anthropic.",
+  PATH_HINT_CODEX: "Where your endpoint serves the OpenAI Responses API for Codex CLI, e.g. /v1.",
+  CANCEL: "Cancel",
+  SAVE: "Save",
+  REMOVE: "Remove",
+  SAVED_TOAST: "Provider saved.",
+  DELETE_TITLE: (name: string) => `Remove ${name}?`,
+  DELETE_BODY: "Runs that chose it are refused until they choose another. Everyone's tokens for it are deleted.",
+  DELETE_BODY_KEY: "Runs that chose it are refused until they choose another. Everyone's keys for it are deleted.",
+  DELETE_BLOCKED: (name: string, harness: string) => `${name} is the default for ${harness} — choose another default first.`,
+  ADDRESS_TITLE: (name: string) => `Change where ${name} sends requests?`,
+  ADDRESS_BODY: (n: number) =>
+    `The tokens ${n} people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.`,
+  ADDRESS_BODY_ONE: "The token 1 person added was given for the old address, so it is deleted. They add it again.",
+  ADDRESS_BODY_KEY: (n: number) =>
+    `The keys ${n} people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.`,
+  ADDRESS_BODY_KEY_ONE: "The key 1 person added was given for the old address, so it is deleted. They add it again.",
+} as const;
+
+export const PROVIDERS = {
+  SAVE_REFUSED_TITLE_ONE: "This provider can't be saved as written",
 } as const;
 
 export const MODEL_PROVIDERS = {

@@ -9,9 +9,8 @@
 // shown here read-only) and how many people have connected, never who. The
 // admin's own connection lives in their own account, like everyone else's.
 import * as React from "react";
-import { useNavigate } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
-import { modelProviders, type ModelProvider } from "../../../lib/api/model-providers";
+import { modelProviders, type ModelProvider, type ModelProvidersList as Snapshot } from "../../../lib/api/model-providers";
 import { agentProviders, type AgentProvider } from "../../../lib/api/agent-providers";
 import type { SetupHarnessTool } from "../../../lib/types";
 import { MODEL_LEDE, MODEL_PROVIDERS as M, providesLine } from "../../../lib/model-providers-copy";
@@ -19,23 +18,28 @@ import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
-import { PageHeader } from "../../wardyn/page-header";
+import { ModelProviderEditor } from "./model-provider-editor";
+import { EDITOR_KINDS } from "./model-provider-draft";
 
-// Where "Add model provider" goes. The editor is #537; until it lands this
-// route mounts a stub.
-export const ADD_MODEL_PROVIDER_PATH = "/admin/settings/model-providers/new";
-
-type Loaded = { providers: ModelProvider[]; connected: Record<string, number>; roster: AgentProvider[] };
+// The GET snapshot is kept whole: the editor (#537) writes the whole document
+// back with its ETag.
+type Loaded = { list: Snapshot; providers: ModelProvider[]; connected: Record<string, number>; roster: AgentProvider[] };
 
 export function ModelProvidersList({ harnesses }: { harnesses?: SetupHarnessTool[] }) {
-  const navigate = useNavigate();
   const [data, setData] = React.useState<Loaded | "loading" | "error">("loading");
+  // "Add model provider" opens the editor at its kind step; a row opens it on that provider.
+  const [editing, setEditing] = React.useState<ModelProvider | "new" | null>(null);
 
   const load = React.useCallback(() => {
     setData("loading");
     Promise.all([modelProviders.getModelProviders(), agentProviders.getAgentProviders()])
       .then(([mp, ap]) =>
-        setData({ providers: mp.providers.providers ?? [], connected: mp.connected, roster: ap.providers.agents ?? [] }),
+        setData({
+          list: mp,
+          providers: mp.providers.providers ?? [],
+          connected: mp.connected,
+          roster: ap.providers.agents ?? [],
+        }),
       )
       .catch(() => setData("error"));
   }, []);
@@ -50,7 +54,7 @@ export function ModelProvidersList({ harnesses }: { harnesses?: SetupHarnessTool
           <h3 className="text-sm font-medium text-foreground">{M.TITLE}</h3>
           <p className="mt-0.5 text-body leading-snug text-muted-foreground">{MODEL_LEDE}</p>
         </div>
-        <Button size="sm" onClick={() => navigate(ADD_MODEL_PROVIDER_PATH)}>
+        <Button size="sm" disabled={typeof data === "string"} onClick={() => setEditing("new")}>
           {M.ADD_CTA}
         </Button>
       </div>
@@ -70,9 +74,24 @@ export function ModelProvidersList({ harnesses }: { harnesses?: SetupHarnessTool
             }
           />
         ) : (
-          <Rows data={data} label={label} harnesses={harnesses} />
+          <Rows data={data} label={label} harnesses={harnesses} onEdit={setEditing} />
         )}
       </div>
+      {editing && typeof data !== "string" && (
+        <ModelProviderEditor
+          list={data.list}
+          editing={editing === "new" ? null : editing}
+          harnesses={(harnesses ?? []).filter((h) => !h.no_managed_auth).map((h) => ({ id: h.id, display: h.display }))}
+          defaultFor={
+            editing === "new" ? [] : data.roster.filter((a) => a.default_provider === editing.id).map((a) => a.id)
+          }
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -81,10 +100,12 @@ function Rows({
   data: { providers, connected, roster },
   label,
   harnesses,
+  onEdit,
 }: {
   data: Loaded;
   label: (id: string) => string;
   harnesses?: SetupHarnessTool[];
+  onEdit: (p: ModelProvider) => void;
 }) {
   if (providers.length === 0) {
     return (
@@ -115,14 +136,25 @@ function Rows({
     else if (used.length === 0) usage = <span className="text-info">{M.UNUSED}</span>;
     else usage = M.USED_BY(used);
 
+    const facts = (
+      <>
+        <div className="text-body font-medium text-foreground">{name}</div>
+        {name !== kind && <div className="text-meta text-muted-foreground">{kind}</div>}
+        <div className="text-meta text-muted-foreground">{providesLine(p.kind)}</div>
+        <div className="text-meta text-muted-foreground">{usage}</div>
+      </>
+    );
     return (
       <li key={p.id} className="flex items-start justify-between gap-4 px-3 py-2.5" data-testid={`model-provider-${p.id}`}>
-        <div className="min-w-0">
-          <div className="text-body font-medium text-foreground">{name}</div>
-          {name !== kind && <div className="text-meta text-muted-foreground">{kind}</div>}
-          <div className="text-meta text-muted-foreground">{providesLine(p.kind)}</div>
-          <div className="text-meta text-muted-foreground">{usage}</div>
-        </div>
+        {/* Only the kinds the editor draws open it; Bedrock and Claude
+            subscription rows stay inert until #538 builds their editor. */}
+        {(EDITOR_KINDS as readonly string[]).includes(p.kind) ? (
+          <button type="button" className="min-w-0 text-left" onClick={() => onEdit(p)}>
+            {facts}
+          </button>
+        ) : (
+          <div className="min-w-0">{facts}</div>
+        )}
         <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
           {chipDefaults.length > 0 && <Chip>{M.CHIP_DEFAULT_FOR(chipDefaults)}</Chip>}
           <Chip>{p.disabled ? M.CHIP_OFF : M.CONNECTED(connected[p.id] ?? 0)}</Chip>
@@ -144,16 +176,6 @@ function Rows({
           {line}
         </p>
       ))}
-    </div>
-  );
-}
-
-// The "Add model provider" landing until #537's editor replaces it: the page
-// title and nothing else, since packet B's editor strings aren't built yet.
-export function AddModelProviderStub() {
-  return (
-    <div className="mx-auto w-full max-w-[900px] px-6 py-8">
-      <PageHeader title={M.ADD_CTA} />
     </div>
   );
 }

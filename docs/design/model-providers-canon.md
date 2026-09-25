@@ -1,4 +1,4 @@
-# Model providers list — frozen strings (#536)
+# Model providers list and editor — frozen strings (#536, #537)
 
 The approved copy from mock packet MP-A ("Model Providers List"), byte for byte. Code carries these
 strings (`ui/src/app/lib/model-providers-copy.ts`); this table is where a reviewer checks them, and
@@ -46,6 +46,47 @@ takes. The packet supersedes the design record's §5.1 chips: the admin's own co
 | `MODEL_PROVIDERS.OFF_STILL_DEFAULT(harness)` | A7 | Off — it's still the default for {harness}, so those runs are refused until you choose another default. |
 | `MODEL_PROVIDERS.UNUSED` | A8 | Not used by any agent — tick one under Use with. |
 | `MODEL_PROVIDERS.HARNESS_UNSERVED(harness)` | A9 | {harness} is turned on, but no model provider is set up for it. Its runs launch without model access. |
+
+## Frozen strings — the provider editor (#537)
+
+The #537 packet's rows: `docs/design/model-providers-mock/canon.html` Table 1 (branch
+`design/551-providers-mock-packet`, owner-approved 2026-09-25), under the same ids. Its
+`MODEL_PROVIDERS.ADD_CTA` and kind-label rows are the ones above. The two agent reasons it reuses,
+`INTEGRATIONS.X_KEY_CODEX` and `INTEGRATIONS.X_OPENAI_CLAUDE`, are `lib/integrations.ts`'s own.
+
+| Key | Renders at | Frozen string |
+|---|---|---|
+| `PROVIDER_EDITOR.KIND_TITLE` | kind step | What kind of model provider? |
+| `PROVIDER_EDITOR.PROVIDES_KEY` | E1, E5 | Each person adds their own key. |
+| `PROVIDER_EDITOR.PROVIDES_TOKEN` | E2, edit | Each person adds their own token. You set how it is sent. |
+| `PROVIDER_EDITOR.NAME` | every kind | Name |
+| `PROVIDER_EDITOR.NAME_HINT` | every kind | What people see when they choose it. |
+| `PROVIDER_EDITOR.ROUTE_THROUGH` | key kinds | Route through a gateway (optional) |
+| `PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host)` | key kinds; `api.anthropic.com` or `api.openai.com` | Send requests to your gateway instead of {host}. Each person's key goes with them, and they are told where it goes. |
+| `PROVIDER_EDITOR.BASE_URL` | endpoint kind | Base URL |
+| `PROVIDER_EDITOR.BASE_URL_HINT` | endpoint kind | https only. Wardyn sends this provider's requests here. |
+| `PROVIDER_EDITOR.AUTH_HEADER` | endpoint kind | Auth header |
+| `PROVIDER_EDITOR.VALUE_FORMAT` | endpoint kind | Value format |
+| `PROVIDER_EDITOR.USE_WITH` | every kind | Use with |
+| `PROVIDER_EDITOR.MODEL` | under a ticked agent | Model |
+| `PROVIDER_EDITOR.MODEL_HINT` | under a ticked agent | Leave empty for the agent's own default. |
+| `PROVIDER_EDITOR.PATH` | endpoint kind, under a ticked agent | Path |
+| `PROVIDER_EDITOR.PATH_HINT_CLAUDE` | E2 | Where your endpoint serves the Anthropic Messages API for Claude Code, e.g. /anthropic. |
+| `PROVIDER_EDITOR.PATH_HINT_CODEX` | E2 | Where your endpoint serves the OpenAI Responses API for Codex CLI, e.g. /v1. |
+| `PROVIDER_EDITOR.CANCEL` | every dialog | Cancel |
+| `PROVIDER_EDITOR.SAVE` | editor; E9 confirm | Save |
+| `PROVIDER_EDITOR.REMOVE` | edit footer; E7, E8 confirm | Remove |
+| `PROVIDER_EDITOR.SAVED_TOAST` | toast after Save | Provider saved. |
+| `PROVIDERS.SAVE_REFUSED_TITLE_ONE` | E6, over the server's 400 | This provider can't be saved as written |
+| `PROVIDER_EDITOR.DELETE_TITLE(name)` | E7, E8 | Remove {name}? |
+| `PROVIDER_EDITOR.DELETE_BODY` | E7, endpoint kind | Runs that chose it are refused until they choose another. Everyone's tokens for it are deleted. |
+| `PROVIDER_EDITOR.DELETE_BODY_KEY` | E7, key kinds | Runs that chose it are refused until they choose another. Everyone's keys for it are deleted. |
+| `PROVIDER_EDITOR.DELETE_BLOCKED(name, harness)` | E8 | {name} is the default for {harness} — choose another default first. |
+| `PROVIDER_EDITOR.ADDRESS_TITLE(name)` | E9 | Change where {name} sends requests? |
+| `PROVIDER_EDITOR.ADDRESS_BODY(n)` | E9, endpoint kind, two or more people | The tokens {n} people added were given for the old address, so they are deleted. Everyone who connected adds theirs again. |
+| `PROVIDER_EDITOR.ADDRESS_BODY_ONE` | E9, endpoint kind, one person | The token 1 person added was given for the old address, so it is deleted. They add it again. |
+| `PROVIDER_EDITOR.ADDRESS_BODY_KEY(n)` | E9, key kinds, two or more people | The keys {n} people added were given for the old address, so they are deleted. Everyone who connected adds theirs again. |
+| `PROVIDER_EDITOR.ADDRESS_BODY_KEY_ONE` | E9, key kinds, one person | The key 1 person added was given for the old address, so it is deleted. They add it again. |
 
 ## Implementation strings
 
