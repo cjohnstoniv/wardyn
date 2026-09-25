@@ -533,3 +533,78 @@ func TestProviderBedrockCreate(t *testing.T) {
 		})
 	}
 }
+
+// TestProviderChoiceModelCredential (#983): a chosen provider's kind settles
+// its credential facts, since its arm authors that one lane and nothing else.
+// Only bedrock_sso is resident; the key, endpoint, subscription and bearer
+// arms leave the sandbox a placeholder the proxy replaces.
+func TestProviderChoiceModelCredential(t *testing.T) {
+	if got := (runProviderChoice{governs: true}).modelCredential(); got != (modelCredentialFacts{}) {
+		t.Errorf("no provider chosen: facts = %+v, want zero", got)
+	}
+	openai := keyProvider("openai", "codex-cli")
+	openai.Kind = types.ModelProviderOpenAIAPIKey
+	for _, tc := range []struct {
+		p    types.ModelProvider
+		want modelCredentialResidency
+	}{
+		{keyProvider("anthropic", "claude-code"), residencyProxy},
+		{openai, residencyProxy},
+		{endpointProvider(), residencyProxy},
+		{subProvider("claude"), residencyProxy},
+		{brBearerProvider(), residencyProxy},
+		{brSSOProvider(), residencySandbox},
+	} {
+		got := runProviderChoice{provider: tc.p, chosen: true, governs: true}.modelCredential()
+		if got.Mechanism != string(tc.p.Kind) || got.Residency != tc.want ||
+			got.CredentialSource != string(types.CredentialSourcePerUser) || got.StagedPlaceholder {
+			t.Errorf("%s: facts = %+v, want mechanism %s, residency %s, per_user", tc.p.Kind, got, tc.p.Kind, tc.want)
+		}
+	}
+}
+
+// TestProviderRunCredentialFactsOnReview (#983 item 2): Review publishes a
+// chosen provider's model_credential, and both doors warn the same way about
+// an AWS sign-in delivered below CC3 — the advisory reads the same Mechanism.
+func TestProviderRunCredentialFactsOnReview(t *testing.T) {
+	const admin = "sub-admit-admin"
+	for _, tc := range []struct {
+		p        types.ModelProvider
+		want     modelCredentialResidency
+		advisory bool
+	}{
+		{brSSOProvider(), residencySandbox, true},
+		{brBearerProvider(), residencyProxy, false},
+	} {
+		t.Run(string(tc.p.Kind), func(t *testing.T) {
+			for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
+				srv := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(tc.p)}, &capStore{}, nil)
+				srv.cfg.Runner = &fakeRunner{capsClasses: []types.ConfinementClass{types.CC1}}
+				sec := srv.cfg.Secrets.(*memSecrets)
+				_ = sec.For(admin).Put(context.Background(), providerSecretName(tc.p.UID, providerKeyPart), []byte(brOwnerKey))
+				_ = sec.For(admin).Put(context.Background(), providerSecretName(tc.p.UID, providerSSOPart),
+					brBlob(brOwnerToken, "123456789012", "BedrockUser", time.Now().Add(time.Hour)))
+				w := doSSO(t, srv, http.MethodPost, path, admitAdminSession(t), `{"agent":"claude-code","task":"t"}`)
+				var got struct {
+					ModelCredential *modelCredentialFacts `json:"model_credential"`
+					Warnings        []string              `json:"warnings"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code >= 300 {
+					t.Fatalf("%s = %d %s", path, w.Code, w.Body.String())
+				}
+				warned := slices.Contains(got.Warnings, fmt.Sprintf(credentialConfinementAdvisorySentence, types.CC1))
+				if warned != tc.advisory {
+					t.Errorf("%s: confinement advisory = %v, want %v: %q", path, warned, tc.advisory, got.Warnings)
+				}
+				if path != "/api/v1/runs/preflight" {
+					continue
+				}
+				want := modelCredentialFacts{Mechanism: string(tc.p.Kind), Residency: tc.want,
+					CredentialSource: string(types.CredentialSourcePerUser)}
+				if got.ModelCredential == nil || *got.ModelCredential != want {
+					t.Errorf("preflight model_credential = %+v, want %+v", got.ModelCredential, want)
+				}
+			}
+		})
+	}
+}
