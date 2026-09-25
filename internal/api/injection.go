@@ -278,11 +278,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// bedrock-api-key is the ONE stored name whose namespace the ROSTER decides,
-	// so the owner-fallback read below never resolves it: it resolves from the
-	// namespace dispatch recorded on its own grant, or not at all — see
+	// A person's own model-provider key, and bedrock-api-key (the ONE stored
+	// name whose namespace the ROSTER decides), never take the owner-fallback
+	// read below: each resolves from the namespace dispatch recorded on its own
+	// grant, or not at all — see resolveProviderKeyInjection and
 	// resolveBedrockBearerInjection.
-	if s.resolveBedrockBearerInjection(w, r, claims, minted, grantID) {
+	if s.resolveProviderKeyInjection(w, r, claims, minted, grantID) ||
+		s.resolveBedrockBearerInjection(w, r, claims, minted, grantID) {
 		return
 	}
 

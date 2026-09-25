@@ -706,6 +706,11 @@ type dispatchLLMPlan struct {
 	// 404 renders when this run reaches that route with no credential behind it
 	// (see llmUnavailableDetail). Empty => the route's own generic detail.
 	llmUnavailableDetail string
+	// llmUpstreams is ProxyConfig.LLMUpstreams: the boot gateways on the legacy
+	// path, and on the provider path only the chosen provider's own address
+	// (nil when requests go to the vendor host) — a gateway reaches only the
+	// runs that chose it.
+	llmUpstreams map[string]string
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
 	// subscription/managed injection or intercept_tls inspection, never a CA
 	// minted purely for artifact tokens. Computed here because every input to it
@@ -738,33 +743,52 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig, siteCfgOK bool,
 	adoInject bool, bedrockGrade bedrockCredGrade,
 ) (dispatchLLMPlan, bool) {
-	// WHOSE credential, decided from a roster we could actually READ. A failed
-	// read yields a zero siteCfg — perUser=false, owner="" — which is the
-	// OPERATOR namespace, so a store blip credentialed a per_user member's run
-	// with the deployment-wide session.
-	if !s.enforceReadableRosterForCredential(ctx, run, p, policy, siteCfgOK) {
-		return dispatchLLMPlan{}, false
-	}
-	// WHOSE model credential this run may use, from the roster this phase was
-	// already handed. runIdentitySubject(run.CreatedBy) is the SUBJECT the run's
-	// identity was minted with — the same string every other credential-bearing
-	// path resolves a namespace against — and the request's context values
-	// survive dispatch's WithoutCancel, so a detached dispatch resolves the same
-	// namespace the create door did.
-	sso := awsSSOScopeFor(siteCfg, run.Agent, runIdentitySubject(ctx, run.CreatedBy))
-	llm := s.resolveLLMTransport(ctx, run, policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef, sso)
-	if p.ResolvedManaged != nil {
-		*p.ResolvedManaged = llm.injectManaged
-	}
+	// A model-provider block, once set, owns this run's model credential: the
+	// provider it chose, from its owner's own credential, or none — never the
+	// legacy lane chain below (resolveProviderLane). A block that could not be
+	// read may be set, so it refuses the model run there too. Every flag on its
+	// llm is false but modelRun, so the legacy authoring blocks below stay silent.
+	var llm llmTransport
+	var sso awsSSOScope
+	var prov *providerDispatch
+	if providerGovernsDispatch(run, p, siteCfg, siteCfgOK) {
+		var pd providerDispatch
+		var ok bool
+		if llm, injections, pd, ok = s.resolveProviderLane(ctx, run, policy, sandboxEnv, injections, proxyURL, siteCfg, siteCfgOK); !ok {
+			return dispatchLLMPlan{}, false
+		}
+		prov = &pd
+	} else {
+		// WHOSE credential, decided from a roster we could actually READ. A failed
+		// read yields a zero siteCfg — perUser=false, owner="" — which is the
+		// OPERATOR namespace, so a store blip credentialed a per_user member's run
+		// with the deployment-wide session.
+		if !s.enforceReadableRosterForCredential(ctx, run, p, policy, siteCfgOK) {
+			return dispatchLLMPlan{}, false
+		}
+		// WHOSE model credential this run may use, from the roster this phase was
+		// already handed. runIdentitySubject(run.CreatedBy) is the SUBJECT the run's
+		// identity was minted with — the same string every other credential-bearing
+		// path resolves a namespace against — and the request's context values
+		// survive dispatch's WithoutCancel, so a detached dispatch resolves the same
+		// namespace the create door did.
+		sso = awsSSOScopeFor(siteCfg, run.Agent, runIdentitySubject(ctx, run.CreatedBy))
+		llm = s.resolveLLMTransport(ctx, run, policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef, sso)
+		if p.ResolvedManaged != nil {
+			*p.ResolvedManaged = llm.injectManaged
+		}
 
-	// No cross-mechanism fallback: refuse before a single credential is authored
-	// when the org declared how this agent reaches its model and the transport
-	// just resolved is not that one. Placed here, ahead of the MITM CA and every
-	// grant author, so a refused run mints nothing — see
-	// enforceConfiguredLLMMechanism. A zero-value siteCfg (the read failed) is
-	// legacy open mode: nothing is refused.
-	if !s.enforceConfiguredLLMMechanism(ctx, run, siteCfg, llm, injections) {
-		return dispatchLLMPlan{}, false
+		// No cross-mechanism fallback: refuse before a single credential is authored
+		// when the org declared how this agent reaches its model and the transport
+		// just resolved is not that one. Placed here, ahead of the MITM CA and every
+		// grant author, so a refused run mints nothing — see
+		// enforceConfiguredLLMMechanism. A zero-value siteCfg (the read failed) is
+		// legacy open mode: nothing is refused.
+		if !s.enforceConfiguredLLMMechanism(ctx, run, siteCfg, llm, injections) {
+			return dispatchLLMPlan{}, false
+		}
+		// Only the provider arm names a provider credential.
+		injections = s.dropUnauthoredProviderInjections(ctx, run, injections)
 	}
 	// And none the autonomy gate graded this run without (bedrockCredGradeHolds),
 	// in the same place for the same reason.
@@ -849,11 +873,17 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		return dispatchLLMPlan{}, false
 	}
 
-	return dispatchLLMPlan{
+	plan := dispatchLLMPlan{
 		llm: llm, injections: injections,
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
-		bedrockMITMHosts:     bedrockMITMHosts,
-		llmUnavailableDetail: s.llmUnavailableDetail(ctx, run, llm, injections, sso),
-		mitmLLM:              llm.injectSub || llm.injectManaged || mitmForInspect,
-	}, true
+		bedrockMITMHosts: bedrockMITMHosts,
+		mitmLLM:          llm.injectSub || llm.injectManaged || mitmForInspect,
+	}
+	if prov != nil {
+		plan.llmUnavailableDetail, plan.llmUpstreams = prov.detail, prov.upstreams
+	} else {
+		plan.llmUnavailableDetail = s.llmUnavailableDetail(ctx, run, llm, injections, sso)
+		plan.llmUpstreams = s.cfg.LLMGateways
+	}
+	return plan, true
 }

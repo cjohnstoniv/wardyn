@@ -34,9 +34,13 @@ const (
 // providerKindDispatched is the kinds whose dispatch arm has landed. A chosen
 // provider of any other kind is refused at create rather than dispatched down
 // the legacy lane chain, which would serve it from a credential it did not
-// choose. ponytail: empty until MP-7 (keys, endpoint), MP-8 (subscription) and
-// MP-9 (Bedrock) add their arms; MP-9 deletes the map.
-var providerKindDispatched = map[types.ModelProviderKind]bool{}
+// choose. ponytail: MP-8 (subscription) and MP-9 (Bedrock) add their arms; MP-9
+// deletes the map.
+var providerKindDispatched = map[types.ModelProviderKind]bool{
+	types.ModelProviderAnthropicAPIKey: true,
+	types.ModelProviderOpenAIAPIKey:    true,
+	types.ModelProviderCustomEndpoint:  true,
+}
 
 // runProviderChoice is chooseModelProvider's answer. chosen=false with no
 // refusal is "no provider serves this harness": the run launches on today's
@@ -44,7 +48,11 @@ var providerKindDispatched = map[types.ModelProviderKind]bool{}
 type runProviderChoice struct {
 	provider types.ModelProvider
 	chosen   bool
-	refusal  string
+	// governs: a provider block is set and this is a model run, so the legacy
+	// lanes are bypassed — the run is credentialed by its provider or by
+	// nothing (resolveRunLLMAccess, dispatch's resolveProviderLane).
+	governs bool
+	refusal string
 	// notGranted marks a refusal the caller's capability decided — a 403
 	// authz.denied row, not an org-configuration 422.
 	notGranted bool
@@ -130,17 +138,19 @@ func providerRefusal(id, state string) runProviderChoice {
 // refuses rather than ignores. wsRefs[0] is the primary workspace, the one
 // whose pin a run inherits (foldRunIntegration reads the same one).
 //
-// Every provider this chooses is refused for now (providerKindDispatched), so
-// a run on a deployment that configured providers never reaches the legacy lane
-// chain with a choice it would not honour. Writes its own refusal and returns
+// A provider of a kind with no dispatch arm yet is refused
+// (providerKindDispatched), and so is one whose credential the caller has not
+// stored, so a run on a deployment that configured providers never reaches
+// dispatch with a choice it cannot honour. Writes its own refusal and returns
 // ok=false once it has.
 //
 // The returned runProviderChoice is launch's (runs.go) only source for
-// AgentRun.ModelProviderID and the run.create audit snapshot (#527) — Review
-// discards it, since no run row exists to freeze it onto. choice.chosen is
-// false, with the zero runProviderChoice, on every "today's path" return
-// (no provider block, or a block that serves no provider for this agent):
-// that is not a choice, and callers must not treat a zero provider.ID as one.
+// AgentRun.ModelProviderID and the run.create audit snapshot (#527); Review
+// uses it only for its model-access row. choice.chosen is false with no
+// provider block (the zero runProviderChoice, today's path) and under a block
+// that serves no provider for this agent (governs=true: no model credential
+// at all). Neither is a choice, and callers must not treat a zero
+// provider.ID as one.
 func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request, req createRunRequest, wsRefs []types.Workspace) (runProviderChoice, bool) {
 	ctx := r.Context()
 	if req.ModelProvider != "" && !modelProviderIDPattern.MatchString(req.ModelProvider) {
@@ -175,6 +185,12 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 		}
 		return runProviderChoice{}, true
 	}
+	// An AI integration no longer credentials a run here (foldRunIntegration
+	// folds none under a block), so naming one is refused, not ignored.
+	if req.IntegrationID != "" {
+		writeError(w, http.StatusUnprocessableEntity, mpRunNoIntegration)
+		return runProviderChoice{}, false
+	}
 	var pin string
 	if len(wsRefs) > 0 && wsRefs[0].LLMCred != nil {
 		pin = wsRefs[0].LLMCred.ProviderRef
@@ -195,6 +211,35 @@ func (s *Server) enforceRunModelProvider(w http.ResponseWriter, r *http.Request,
 	case choice.chosen && !providerKindDispatched[choice.provider.Kind]:
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf(mpRunNotYet, choice.provider.ID))
 		return runProviderChoice{}, false
+	case choice.chosen:
+		// Liveness, the check dispatch repeats: the caller's OWN credential for
+		// the provider, never anyone else's (runIdentitySubject is the namespace
+		// dispatch reads for this run).
+		msg, err := s.providerCredentialRefusal(ctx, runIdentitySubject(ctx, principalFromRequest(r)), choice.provider)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, fmt.Sprintf(mpRunCredUnreadable, choice.provider.ID))
+			return runProviderChoice{}, false
+		}
+		if msg != "" {
+			writeError(w, http.StatusUnprocessableEntity, msg)
+			return runProviderChoice{}, false
+		}
 	}
+	choice.governs = true
 	return choice, true
+}
+
+// DRAFT (M2 canon pending).
+const (
+	mpAccessProvisioned = "model access provisioned for agent %q: your own credential for model provider %s is injected proxy-side — it is never resident in the sandbox."
+	mpAccessNoProvider  = "no model access for agent %q: no model provider serves it on this deployment — an admin adds one under Settings → Model providers."
+)
+
+// providerLLMAccess is the model-access verdict under a provider block: the
+// chosen provider's (its credential was checked when it was chosen), or none.
+func providerLLMAccess(agent string, mp runProviderChoice) *composeLLMAccess {
+	if mp.chosen {
+		return &composeLLMAccess{Provisioned: true, Note: fmt.Sprintf(mpAccessProvisioned, agent, mp.provider.ID)}
+	}
+	return &composeLLMAccess{Note: fmt.Sprintf(mpAccessNoProvider, agent)}
 }

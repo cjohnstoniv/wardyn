@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,6 +122,13 @@ func providerRunFixture(t *testing.T, site types.SiteConfig, cs *capStore, ws *t
 func TestRunModelProviderDoors(t *testing.T) {
 	enforced := map[string]bool{capModelProvider: true}
 	twoKeys := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), keyProvider("corp", "claude-code"))}
+	// corp as a kind whose dispatch arm has not landed (MP-9's).
+	bearerCorp := keyProvider("corp", "claude-code")
+	bearerCorp.Kind = types.ModelProviderBedrockBearer
+	keyAndBearer := types.SiteConfig{ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), bearerCorp)}
+	withIntegration := twoKeys
+	withIntegration.Integrations = []types.Integration{{ID: "corp-anthropic", Kind: types.IntegrationKindAnthropicAPIKey,
+		Secrets: []types.IntegrationSecret{{Role: "api_key", SecretName: "corp-anthropic-key"}}}}
 	pinned := &types.Workspace{
 		ID: uuid.New(), Name: "hello", Status: types.WorkspaceScanned,
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: govWorkspaceRepo}},
@@ -160,11 +168,17 @@ func TestRunModelProviderDoors(t *testing.T) {
 			body: byID(pinned, ""), want: http.StatusForbidden, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunStateNotGranted, mpRunRemedy), denied: true},
 		{name: "workspace_id: two candidates and no choice", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
 			body: byID(plain, ""), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunChoose, "claude-code")},
-		{name: "workspace_id: a chosen provider whose kind has no dispatch arm yet", site: twoKeys, ws: plain, cs: &capStore{}, operator: true,
+		{name: "workspace_id: a chosen provider whose kind has no dispatch arm yet", site: keyAndBearer, ws: plain, cs: &capStore{}, operator: true,
 			body: byID(plain, `,"model_provider":"corp"`), want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp")},
-		{name: "a chosen provider whose kind has no dispatch arm yet", site: twoKeys, cs: &capStore{}, operator: true,
+		{name: "a chosen provider whose kind has no dispatch arm yet", site: keyAndBearer, cs: &capStore{}, operator: true,
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
 			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunNotYet, "corp")},
+		{name: "a chosen key provider the caller has not added their own key for", site: twoKeys, cs: &capStore{}, operator: true,
+			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`,
+			want: http.StatusUnprocessableEntity, wantBody: fmt.Sprintf(mpRunRefusal, "corp", mpRunNoKey, mpRunConnectRemedy)},
+		{name: "integration_id under a provider block", site: withIntegration, cs: &capStore{}, operator: true,
+			body: `{"agent":"claude-code","task":"t","integration_id":"corp-anthropic","model_provider":"corp"}`,
+			want: http.StatusUnprocessableEntity, wantBody: mpRunNoIntegration},
 		{name: "a disabled default with one other candidate", cs: &capStore{}, operator: true,
 			site: types.SiteConfig{
 				ModelProviders: providerBlock(keyProvider("anthropic", "claude-code"), func() types.ModelProvider {
@@ -224,25 +238,24 @@ func TestRunModelProviderDoors(t *testing.T) {
 	})
 }
 
-// TestRunModelProviderPersistsOnTheRow is #527: once a provider's kind has a
-// dispatch arm (MP-7/8/9 — simulated here since none has landed yet, exactly
-// the way each of THOSE PRs will exercise this same plumbing), the run's
-// chosen provider freezes onto AgentRun.ModelProviderID (the id alone) and
-// onto the run.create audit event's model_provider snapshot ({id, kind} —
-// the kind is NOT on the row; see the field's doc on types.AgentRun).
+// TestRunModelProviderPersistsOnTheRow is #527: the run's chosen provider
+// freezes onto AgentRun.ModelProviderID (the id alone) and onto the
+// run.create audit event's model_provider snapshot ({id, kind} — the kind is
+// NOT on the row; see the field's doc on types.AgentRun).
 func TestRunModelProviderPersistsOnTheRow(t *testing.T) {
 	// The single candidate: no AgentProviders row at all, so the legacy
 	// declared-mechanism gate (enforceCreateLLMMechanism, unrelated to #527)
 	// sees no row for this agent and stays out of the way — exactly what
 	// TestChooseModelProvider's "the single candidate" case exercises.
 	provider := keyProvider("corp", "claude-code")
+	provider.UID = "uid-corp"
 	site := types.SiteConfig{ModelProviders: providerBlock(provider)}
 	srv := providerRunFixture(t, site, &capStore{}, nil)
-
-	// providerKindDispatched is empty until MP-7 lands its first arm; a real PR
-	// flips this bit permanently, a test flips it for the span of one call.
-	providerKindDispatched[provider.Kind] = true
-	defer delete(providerKindDispatched, provider.Kind)
+	// The caller's own key, which the liveness check at create requires.
+	if err := srv.cfg.Secrets.For("sub-admit-admin").Put(context.Background(),
+		providerSecretName(provider.UID, providerKeyPart), []byte("sk-ant-admin-own-key")); err != nil {
+		t.Fatal(err)
+	}
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", admitAdminSession(t), `{"agent":"claude-code","task":"t"}`)
 	if w.Code != http.StatusCreated {
