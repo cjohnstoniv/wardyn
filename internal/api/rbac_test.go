@@ -106,6 +106,13 @@ func ssoSessionOfType(t *testing.T, sub, email, role, userType string) *http.Coo
 	if err != nil {
 		t.Fatalf("marshal session: %v", err)
 	}
+	return signedSessionCookie(payload)
+}
+
+// signedSessionCookie signs a raw session payload with the empty HMAC key of
+// the zero-value *oidc.Authenticator rbacServer wires — the one place the
+// cookie wire format is written in this package's tests.
+func signedSessionCookie(payload []byte) *http.Cookie {
 	mac := hmac.New(sha256.New, nil)
 	mac.Write(payload)
 	return &http.Cookie{
