@@ -123,7 +123,7 @@ func TestClassifyRedirectProbe(t *testing.T) {
 // ElapsedMS out of the six return sites bought: elapsed_ms is set on EVERY
 // verdict, not on the arms whoever added one remembered. Both consumers read
 // it unconditionally -- the console renders it beside the state, and
-// handleTestSiteConfigRedirect records it in the site_config.test_redirect
+// handleTestSiteConfigRedirect records it in the site_config.redirect.test
 // audit event -- so an arm that silently omitted it would read as "0 ms" in
 // both places with nothing red.
 func TestClassifyRedirectProbe_EveryStateCarriesElapsed(t *testing.T) {
@@ -620,9 +620,9 @@ func TestHandleTestSiteConfigProxy_Reached(t *testing.T) {
 		t.Errorf("qualifiers = via:%q custom:%v intercepted:%v, want a plain via-proxy reached", got.Via, got.Custom, got.Intercepted)
 	}
 
-	events := ps.actionEvents("site_config.test_proxy")
+	events := ps.actionEvents("site_config.proxy.test")
 	if len(events) != 1 {
-		t.Fatalf("expected exactly 1 site_config.test_proxy audit event, got %d", len(events))
+		t.Fatalf("expected exactly 1 site_config.proxy.test audit event, got %d", len(events))
 	}
 	if events[0].Outcome != "success" {
 		t.Errorf("audit outcome = %q, want success", events[0].Outcome)
@@ -1090,9 +1090,9 @@ func TestHandleTestSiteConfigRedirect_Reached(t *testing.T) {
 		t.Errorf("detail = %q, want both hosts named", got.Detail)
 	}
 
-	events := ps.actionEvents("site_config.test_redirect")
+	events := ps.actionEvents("site_config.redirect.test")
 	if len(events) != 1 {
-		t.Fatalf("expected exactly 1 site_config.test_redirect audit event, got %d", len(events))
+		t.Fatalf("expected exactly 1 site_config.redirect.test audit event, got %d", len(events))
 	}
 	var data map[string]any
 	_ = json.Unmarshal(events[0].Data, &data)

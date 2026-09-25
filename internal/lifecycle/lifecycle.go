@@ -309,11 +309,12 @@ func (r *Reaper) reap(ctx context.Context) {
 			continue
 		}
 		if !out.Applied {
-			// A concurrent kill/complete already moved the run terminal, OR the run
-			// was touched after the snapshot (active attach) so the idle-guarded
-			// transition was a no-op. Either way do NOT emit a spurious run.autostop
-			// (findings #1 / N3) — the run was not autostopped.
-			r.logger.DebugContext(ctx, "lifecycle: stop was a no-op (already terminal or touched after snapshot)",
+			// A concurrent kill/complete already moved the run terminal, the run
+			// was touched after the snapshot (active attach), or an open request is
+			// still inside its wait (store.openHoldSQL), so the idle-guarded
+			// transition was a no-op. In every case do NOT emit a spurious
+			// run.autostop (findings #1 / N3) — the run was not autostopped.
+			r.logger.DebugContext(ctx, "lifecycle: stop was a no-op (already terminal, touched after snapshot, or an open request is still inside its wait)",
 				"run_id", runID,
 			)
 			continue

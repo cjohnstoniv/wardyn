@@ -50,8 +50,9 @@ func sharedClaudeRow() types.SiteConfig {
 // harness name — the one credential every later Bedrock run inherits, with an
 // account_id and role_name the blob is free to name (repoFieldSafe only).
 //
-// Region, start_url and the scope are all bound to launch-time state and ride
-// the same carrier (this run's own harness.login.started row).
+// Region and start_url were already bound to launch-time state; the scope is
+// the third field, and it now rides the same carrier (this run's own
+// harness.login.start row).
 func TestUploadSSOToken_ScopeIsBoundToLaunchNotUploadTime(t *testing.T) {
 	// mintRunToken mints the identity with this subject; launchHarnessLoginRun
 	// stamps the same value as the launch-time owner.

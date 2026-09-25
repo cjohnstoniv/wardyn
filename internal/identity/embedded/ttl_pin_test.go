@@ -72,7 +72,7 @@ func TestTokenTTLStaysShortAndExpiredIsRefused(t *testing.T) {
 // rule: the sidecar backs off and stops hammering a refused renew, so the case
 // underneath — a HEALTHY run whose renews were refused through a control-plane
 // outage and which now holds a dead identity for the rest of its life — must be
-// visible somewhere, keyed to the run. internal/api's run.identity.expired row is
+// visible somewhere, keyed to the run. internal/api's run.identity.expire row is
 // where, and it can only exist because Verify reports EXPIRY as a typed error
 // carrying the run id.
 //
@@ -109,7 +109,7 @@ func TestExpiredVerifyCarriesTheRunID(t *testing.T) {
 	}
 	var exp *identity.ExpiredTokenError
 	if !errors.As(verr, &exp) {
-		t.Fatalf("expired Verify returned %T (%v); internal/api cannot key run.identity.expired to a run "+
+		t.Fatalf("expired Verify returned %T (%v); internal/api cannot key run.identity.expire to a run "+
 			"without the typed error", verr, verr)
 	}
 	if exp.RunID != runID {

@@ -545,7 +545,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		// already emits for a prompt-bearing subpath it cannot parse.
 		if scanSummary == nil && channel == contentscan.ChannelGeneric && p.scanner != nil &&
 			p.scanner.Mode() != contentscan.ModeOff && hasScannableBody(r) {
-			scanSummary = p.skipSummary("skipped", "uninspected_channel", channel)
+			scanSummary = p.skipSummary("skip", "uninspected_channel", channel)
 		}
 	}
 	if blocked {
@@ -586,7 +586,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 			// (security NIT-B): it is written only when the hold's own BUDGET
 			// expired, because that row is what the trail reads as "the owner
 			// had the whole window and did not sign in". A shut-down proxy, a
-			// killed run (which already leaves approval.cancelled), an answered
+			// killed run (which already leaves approval.cancel), an answered
 			// request or the per-run cap did not expire, and each gets the
 			// honest sentence instead of the expiry one.
 			//
