@@ -120,22 +120,59 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 	docLines := strings.Split(string(raw), "\n")
 	constHolders := constNamesFor(parseAuditTree(t, root))
 
-	srcCache := map[string]string{}             // cited path -> whole file
-	bodyCache := map[string]map[string]string{} // cited path -> symbol -> body
-	load := func(rel string) (string, map[string]string, error) {
-		if s, ok := srcCache[rel]; ok {
-			return s, bodyCache[rel], nil
+	// citedSource is one cited file's parse, cached by path: the whole text (for
+	// the plain-literal / anchor substring checks, which have no vacuous-prefix
+	// problem), the per-symbol body text, and the per-symbol / whole-file
+	// emitting-position string literals a wildcard row's prefix is checked
+	// against (see stringLiteralsExcludingReaders).
+	type citedSource struct {
+		text         string
+		bodies       map[string]string
+		literals     map[string][]string
+		fileLiterals []string
+	}
+	cache := map[string]citedSource{}
+	load := func(rel string) (citedSource, error) {
+		if s, ok := cache[rel]; ok {
+			return s, nil
 		}
 		b, rerr := os.ReadFile(filepath.Join(root, rel))
 		if rerr != nil {
-			return "", nil, rerr
+			return citedSource{}, rerr
 		}
-		bodies, perr := citedSymbolBodies(rel, b)
+		bodies, literals, fileLiterals, perr := citedSymbolBodies(rel, b)
 		if perr != nil {
-			return "", nil, fmt.Errorf("parse %s: %w", rel, perr)
+			return citedSource{}, fmt.Errorf("parse %s: %w", rel, perr)
 		}
-		srcCache[rel], bodyCache[rel] = string(b), bodies
-		return srcCache[rel], bodies, nil
+		s := citedSource{text: string(b), bodies: bodies, literals: literals, fileLiterals: fileLiterals}
+		cache[rel] = s
+		return s, nil
+	}
+	// hasEmittedPrefix reports whether any of vals — a symbol's or a file's
+	// emitting-position string literals — starts with prefix. The ONLY check a
+	// wildcard row's prefix gets: never a raw substring scan of the source text,
+	// which a quoted prefix sitting in a comment or a reader's comparison
+	// operand would also satisfy (see stringLiteralsExcludingReaders's doc).
+	hasEmittedPrefix := func(vals []string, prefix string) bool {
+		for _, v := range vals {
+			if strings.HasPrefix(v, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	// wildcardMatches is the one place a wildcard row's prefix gets checked. Go
+	// source: literals only (hasEmittedPrefix), never text. Markdown: markdown has
+	// no Go tokens to walk (citedSymbolBodies returns nil literals for a .md
+	// path), so a quoted prefix in the section's own prose is the only signal
+	// available — the same raw-substring check every OTHER citation kind still
+	// uses, and there is no false-positive risk symmetric to the Go case because
+	// there is no "emit" for a comment to be confused with in prose.
+	wildcardMatches := func(path string, text string, literals []string, prefix string) bool {
+		if strings.HasSuffix(path, ".md") {
+			return strings.Contains(text, `"`+prefix)
+		}
+		return hasEmittedPrefix(literals, prefix)
 	}
 
 	rowsChecked, citationsChecked := 0, 0
@@ -162,10 +199,21 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 		// A "kind.*" wildcard action (llm.scan.*, egress.*) is never the literal
 		// string on the wire — the real Action is "kind."+suffix — so match the
 		// prefix, not the asterisk.
-		searchTerm := strings.TrimSuffix(actionLiteral, "*")
+		prefix := strings.TrimSuffix(actionLiteral, "*")
+		// The bare prefix ("egress.") is also the Go package qualifier, and a raw
+		// substring scan of the source text is satisfied by a mere MENTION of the
+		// package — a comment saying "forging egress./..." passed with no emit
+		// anywhere nearby, and so did a plain != comparison reading the action
+		// rather than emitting it (the docs/AUDIT-ACTIONS.md `egress.*` row
+		// re-pointed, in a scratch copy, at Server.handleGroundtruthEvents and at
+		// Server.handleObservedEgress in turn — both passed vacuously). A wildcard
+		// row is therefore never checked with strings.Contains at all: only
+		// hasEmittedPrefix, against the cited symbol's actual emitting-position
+		// string literals.
+		wildcard := strings.HasSuffix(actionLiteral, "*")
 		// The names any constant holding this action goes by, so an emit that
 		// passes `ruleSourcePrivateIP` counts as spelling builtin:private-ip.
-		holders := constHolders[searchTerm]
+		holders := constHolders[prefix]
 
 		rowHasCitation := false
 		for _, cell := range cells {
@@ -213,13 +261,18 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 			for _, path := range cellBarePaths {
 				rowHasCitation = true
 				citationsChecked++
-				body, _, gerr := load(path)
+				src, gerr := load(path)
 				if gerr != nil {
 					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s, but %s could not be read: %v",
 						docLineNo, actionLiteral, path, path, gerr)
 					continue
 				}
-				if strings.Contains(body, searchTerm) {
+				body := src.text
+				matched := strings.Contains(body, prefix)
+				if wildcard {
+					matched = wildcardMatches(path, body, src.fileLiterals, prefix)
+				}
+				if matched {
 					continue
 				}
 				found := false
@@ -243,7 +296,7 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 
 			for _, c := range cellCitations {
 				path, spec := c[0], c[1]
-				_, bodies, gerr := load(path)
+				src, gerr := load(path)
 				if gerr != nil {
 					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s#%s, but %s could not be read: %v",
 						docLineNo, actionLiteral, path, spec, path, gerr)
@@ -251,7 +304,7 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 				}
 				for _, sym := range strings.Split(spec, ",") {
 					citationsChecked++
-					body, ok := bodies[sym]
+					body, ok := src.bodies[sym]
 					if !ok {
 						t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s#%s, but %s declares no such top-level "+
 							"symbol — a method is cited as Type.Method; re-point the citation at the symbol that "+
@@ -259,7 +312,11 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 							docLineNo, actionLiteral, path, sym, path)
 						continue
 					}
-					if strings.Contains(body, searchTerm) {
+					matched := strings.Contains(body, prefix)
+					if wildcard {
+						matched = wildcardMatches(path, body, src.literals[sym], prefix)
+					}
+					if matched {
 						continue
 					}
 					found := false

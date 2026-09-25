@@ -1039,7 +1039,7 @@ func TestHarnessLogin_SignInAnswersBeforeTheSupersededTeardown(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/setup/harness-login", strings.NewReader(`{"provider":"aws"}`))
 		r.AddCookie(sess)
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		resultCh <- postResult{code: w.Code, body: w.Body.String()}
 	}()
 

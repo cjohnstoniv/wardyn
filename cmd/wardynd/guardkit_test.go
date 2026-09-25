@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -65,7 +66,11 @@ func headingSlug(text string) string {
 }
 
 // citedSymbolBodies returns, for one cited file, the source text a citation into
-// it is allowed to look at, keyed by symbol.
+// it is allowed to look at, keyed by symbol; literals, the emitting-position
+// string constants found in that same symbol's body (see
+// stringLiteralsExcludingReaders); and fileLiterals, the same but unscoped —
+// every emitting-position string literal anywhere in the file, for a bare-path
+// citation (which names no symbol to scope to).
 //
 // For Go that is the symbol's OWN BODY and nothing else: the braces of a func or
 // method, or the spec of a package-level const/var/type. Deliberately not the
@@ -76,9 +81,9 @@ func headingSlug(text string) string {
 // For markdown the unit is the heading's SECTION: the heading line down to the
 // next heading of the same or a higher level. A doc has no symbols, and the
 // section is the smallest thing a reader can be sent to that still contains the
-// claim.
-func citedSymbolBodies(rel string, src []byte) (map[string]string, error) {
-	out := map[string]string{}
+// claim; markdown has no Go tokens, so literals and fileLiterals are both nil.
+func citedSymbolBodies(rel string, src []byte) (bodies map[string]string, literals map[string][]string, fileLiterals []string, err error) {
+	bodies = map[string]string{}
 	if strings.HasSuffix(rel, ".md") {
 		lines := strings.Split(string(src), "\n")
 		for i, line := range lines {
@@ -96,18 +101,18 @@ func citedSymbolBodies(rel string, src []byte) (map[string]string, error) {
 			}
 			slug := headingSlug(m[2])
 			if slug != "" {
-				if _, dup := out[slug]; !dup {
-					out[slug] = strings.Join(lines[i:end], "\n")
+				if _, dup := bodies[slug]; !dup {
+					bodies[slug] = strings.Join(lines[i:end], "\n")
 				}
 			}
 		}
-		return out, nil
+		return bodies, nil, nil, nil
 	}
 
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, rel, src, 0)
-	if err != nil {
-		return nil, err
+	f, ferr := parser.ParseFile(fset, rel, src, 0)
+	if ferr != nil {
+		return nil, nil, nil, ferr
 	}
 	span := func(from, to token.Pos) string {
 		a, b := fset.Position(from).Offset, fset.Position(to).Offset
@@ -116,6 +121,7 @@ func citedSymbolBodies(rel string, src []byte) (map[string]string, error) {
 		}
 		return string(src[a:b])
 	}
+	literals = map[string][]string{}
 	for _, d := range f.Decls {
 		switch v := d.(type) {
 		case *ast.FuncDecl:
@@ -124,24 +130,78 @@ func citedSymbolBodies(rel string, src []byte) (map[string]string, error) {
 				name = receiverTypeName(v.Recv.List[0].Type) + "." + name
 			}
 			if v.Body == nil {
-				out[name] = "" // declared without a body: resolvable, never evidence
+				bodies[name] = "" // declared without a body: resolvable, never evidence
 				continue
 			}
-			out[name] = span(v.Body.Lbrace, v.Body.Rbrace)
+			bodies[name] = span(v.Body.Lbrace, v.Body.Rbrace)
+			literals[name] = stringLiteralsExcludingReaders(v.Body)
 		case *ast.GenDecl:
 			for _, sp := range v.Specs {
 				switch s := sp.(type) {
 				case *ast.ValueSpec:
 					for _, n := range s.Names {
-						out[n.Name] = span(s.Pos(), s.End())
+						bodies[n.Name] = span(s.Pos(), s.End())
+						literals[n.Name] = stringLiteralsExcludingReaders(s)
 					}
 				case *ast.TypeSpec:
-					out[s.Name.Name] = span(s.Pos(), s.End())
+					bodies[s.Name.Name] = span(s.Pos(), s.End())
+					literals[s.Name.Name] = stringLiteralsExcludingReaders(s)
 				}
 			}
 		}
 	}
-	return out, nil
+	return bodies, literals, stringLiteralsExcludingReaders(f), nil
+}
+
+// stringLiteralsExcludingReaders walks node and returns the unquoted value of
+// every string BasicLit found — except one used merely to READ or DISPATCH ON
+// an action rather than emit it: the operand of a `==`/`!=` comparison
+// (`ev.Action != "egress.deny"`), or a switch's case expression. A doc comment
+// or a line comment is never visited at all, because a comment is not part of
+// the expression tree — which is what makes this immune to a wildcard prefix
+// quoted only in prose (`// e.g. "egress."`), the false positive a raw
+// substring scan of the source text could not tell apart from a real emit.
+//
+// This is deliberately NOT "is this the argument to an audit-emitting call":
+// that would need to know every such call by name, and go stale exactly like
+// the citations this guard exists to keep honest. "Not a comparison and not a
+// dispatch" is the cheap, call-agnostic half of "probably an emit" — sufficient
+// to fail on both false positives this guard was found vacuous against
+// (AuditFilter's doc-comment example and handleObservedEgress's read-only
+// filter), without hand-listing every real emit site.
+func stringLiteralsExcludingReaders(node ast.Node) []string {
+	var out []string
+	var ancestors []ast.Node
+	excluded := func(lit *ast.BasicLit) bool {
+		if len(ancestors) == 0 {
+			return false
+		}
+		switch p := ancestors[len(ancestors)-1].(type) {
+		case *ast.BinaryExpr:
+			return p.Op == token.EQL || p.Op == token.NEQ
+		case *ast.CaseClause:
+			for _, e := range p.List {
+				if e == ast.Expr(lit) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	ast.Inspect(node, func(n ast.Node) bool {
+		if n == nil {
+			ancestors = ancestors[:len(ancestors)-1]
+			return true
+		}
+		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING && !excluded(lit) {
+			if v, uerr := strconv.Unquote(lit.Value); uerr == nil {
+				out = append(out, v)
+			}
+		}
+		ancestors = append(ancestors, n)
+		return true
+	})
+	return out
 }
 
 // receiverTypeName is the bare type name a method hangs off — the `Server` in
@@ -182,7 +242,7 @@ func funcBody(t *testing.T, src, name string) string {
 		typ := strings.TrimPrefix(recv[len(recv)-1], "*")
 		sym = typ + "." + strings.TrimSpace(name[closeParen+1:])
 	}
-	bodies, err := citedSymbolBodies("src.go", []byte(src))
+	bodies, _, _, err := citedSymbolBodies("src.go", []byte(src))
 	if err != nil {
 		t.Fatalf("funcBody: parse: %v", err)
 	}
@@ -198,7 +258,7 @@ func funcBody(t *testing.T, src, name string) string {
 // pick either body, and an absence check could then pass on the wrong one.
 func methodBody(t *testing.T, src, name string) string {
 	t.Helper()
-	bodies, err := citedSymbolBodies("src.go", []byte(src))
+	bodies, _, _, err := citedSymbolBodies("src.go", []byte(src))
 	if err != nil {
 		t.Fatalf("methodBody: parse: %v", err)
 	}

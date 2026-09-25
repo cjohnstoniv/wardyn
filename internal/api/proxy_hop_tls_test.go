@@ -22,7 +22,7 @@ func TestHealthz_ProxyHopTLS(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 		r.RemoteAddr = "127.0.0.1:54321"
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		var body map[string]any
 		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 			t.Fatalf("healthz body: %v", err)

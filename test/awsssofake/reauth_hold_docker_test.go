@@ -77,21 +77,42 @@ func syntheticAWSHome(sessionName, startURL, region, accountID, roleName string,
 	}
 }
 
+// writeAWSHome materializes the synthetic ~/.aws layout under dir before it is
+// bind-mounted into the agent image at /home/agent. World-readable (0o755/
+// 0o644), not the 0o700/0o600 a real credentials directory would get: the
+// image's agent user is a FIXED uid (1000, deploy/images/claude-code/
+// Dockerfile), but the host uid writing these files is whatever runs `go
+// test` — a GitHub-hosted runner's default user is uid 1001, not 1000, so a
+// file mode that only the WRITER can read left the container's read of its
+// own bind-mounted home permission-denied on every nightly (#511/F6): not
+// just the direct read in (c), but the SDK's own read of the SSO token cache
+// in (a)/(b), which is why those hung for zero GetRoleCredentials calls
+// rather than reusing the cached token. This is a throwaway t.TempDir() this
+// one test process owns for its own lifetime, on a runner or laptop nobody
+// else's containers share, so there is no boundary a permissive mode weakens.
+func writeAWSHome(t *testing.T, dir string, home map[string]string) {
+	t.Helper()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod %s: %v", dir, err)
+	}
+	for rel, contents := range home {
+		dst := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(dst, []byte(contents), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+}
+
 // runClaudeAgainstFake starts `claude -p` in the agent image, pointed at the
 // fake for BOTH the SSO services and the Bedrock data plane, and returns the
 // running command plus a buffer collecting its output. The caller waits.
 func runClaudeAgainstFake(t *testing.T, s *Server, home map[string]string, timeout time.Duration) (*exec.Cmd, *bytes.Buffer, context.CancelFunc) {
 	t.Helper()
 	dir := t.TempDir()
-	for rel, contents := range home {
-		dst := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			t.Fatalf("mkdir %s: %v", rel, err)
-		}
-		if err := os.WriteFile(dst, []byte(contents), 0o600); err != nil {
-			t.Fatalf("write %s: %v", rel, err)
-		}
-	}
+	writeAWSHome(t, dir, home)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	cmd := exec.CommandContext(ctx, "docker", "run", "--rm",
 		"--network", "host",
@@ -265,15 +286,7 @@ func TestDocker_TheSandboxCacheHoldsOnlyThePlaceholder(t *testing.T) {
 		"111111111111", "AdministratorAccess", true, realToken)
 
 	dir := t.TempDir()
-	for rel, contents := range home {
-		dst := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(dst, []byte(contents), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	writeAWSHome(t, dir, home)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "docker", "run", "--rm",

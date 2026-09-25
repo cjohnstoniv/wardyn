@@ -249,7 +249,7 @@ func doPeer(t *testing.T, srv *Server, method, path, bearer, body, peer string) 
 	}
 	r.RemoteAddr = peer
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 

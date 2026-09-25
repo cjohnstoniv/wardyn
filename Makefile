@@ -1161,7 +1161,7 @@ npm-audit-dev: ## Non-blocking: full (dev+prod) advisory scan, to catch a pinned
 # green `make ci` != CI is green. This runs the merge-gating checks
 # that need NO Docker daemon and NO live service — it deliberately EXCLUDES
 # test-conformance-docker, every WARDYN_TEST_DOCKER e2e lane, the Postgres suite
-# (test-pg), the Playwright UI e2e (ui-e2e), and the push-only sbom stub. CI
+# (test-pg), and the Playwright UI e2e (ui-e2e). CI
 # remains the authority; use this locally to catch most failures before pushing.
 #
 # Each target runs in its own sub-make so its elapsed time can be printed, and
@@ -1188,8 +1188,8 @@ ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@echo ""
 	@echo "make ci PASSED (daemon-free merge gate). NOT covered here:"
 	@echo "  test-conformance-docker, the WARDYN_TEST_DOCKER e2e lanes, the"
-	@echo "  Postgres suite (test-pg), the Playwright UI e2e (ui-e2e), and the"
-	@echo "  push-only SBOM stub — confirm CI is green before merging."
+	@echo "  Postgres suite (test-pg), and the Playwright UI e2e (ui-e2e) —"
+	@echo "  confirm CI is green before merging."
 
 ui: ## Build the embedded web UI
 	@echo "Building embedded web UI..."
