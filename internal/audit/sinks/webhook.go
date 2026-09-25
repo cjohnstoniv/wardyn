@@ -44,8 +44,10 @@ type WebhookConfig struct {
 	// RetryBaseDelay is the initial backoff delay (default 200ms).
 	RetryBaseDelay string `json:"retry_base_delay,omitempty"`
 	// Timeout bounds the HTTP client's per-request wait, including a Close()
-	// drain against a wedged collector (default 15s). Parsed as a duration
-	// string; must be positive, since a zero http.Client timeout means none.
+	// drain against a wedged collector (default and maximum WebhookTimeout).
+	// Parsed as a duration string; must be positive, since a zero http.Client
+	// timeout means none, and at most WebhookTimeout, which wardynd's shutdown
+	// grace is sized on.
 	Timeout string `json:"timeout,omitempty"`
 }
 
@@ -67,7 +69,7 @@ func (c *WebhookConfig) withDefaults() WebhookConfig {
 		out.RetryBaseDelay = "200ms"
 	}
 	if out.Timeout == "" {
-		out.Timeout = "15s"
+		out.Timeout = WebhookTimeout.String()
 	}
 	return out
 }
@@ -132,6 +134,9 @@ func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 	}
 	if timeout <= 0 {
 		return nil, fmt.Errorf("sinks.webhook: timeout %q must be positive (zero would never time out a wedged collector)", cfg.Timeout)
+	}
+	if timeout > WebhookTimeout {
+		return nil, fmt.Errorf("sinks.webhook: timeout %q exceeds %s, the final flush wardynd's shutdown grace waits for", cfg.Timeout, WebhookTimeout)
 	}
 	return &WebhookSink{
 		cfg:       cfg,

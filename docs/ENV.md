@@ -215,7 +215,7 @@ stays the source of truth either way).
 Defaults for the fields not shown: `file` rotates at `max_bytes` 100 MiB keeping
 `keep` 5; `webhook` also takes `flush_interval` (`5s`), `buffer_size` (`4096`),
 `max_retries` (`3`), `retry_base_delay` (`200ms`) and `timeout` (`15s`, per HTTP request,
-must be positive) — see
+must be positive and at most `15s`, the flush the shutdown grace is sized on) — see
 `internal/audit/sinks/webhook.go`. The compose stack ships the `file` sink
 pointed at `/data/audit/audit.log`.
 

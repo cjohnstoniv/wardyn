@@ -154,6 +154,23 @@ func TestWebhookSink_RejectsNonPositiveTimeout(t *testing.T) {
 	}
 }
 
+// A timeout above WebhookTimeout is refused too: wardynd's shutdown grace is
+// sized on WebhookTimeout (internal/api TestShutdownGraceCoversTheBudget), so a
+// longer per-request wait would let the final flush outlast it. Shorter, and
+// exactly WebhookTimeout, are accepted.
+func TestWebhookSink_TimeoutIsCappedByTheShutdownBudget(t *testing.T) {
+	t.Parallel()
+	over := (sinks.WebhookTimeout + time.Second).String()
+	if _, err := sinks.NewWebhookSink(sinks.WebhookConfig{URL: "https://siem.internal/ingest", Timeout: over}); err == nil {
+		t.Errorf("NewWebhookSink(timeout %q) = nil error, want a refusal above %s", over, sinks.WebhookTimeout)
+	}
+	for _, v := range []string{"50ms", sinks.WebhookTimeout.String(), ""} {
+		if _, err := sinks.NewWebhookSink(sinks.WebhookConfig{URL: "https://siem.internal/ingest", Timeout: v}); err != nil {
+			t.Errorf("NewWebhookSink(timeout %q) = %v, want accepted", v, err)
+		}
+	}
+}
+
 func TestWebhookSink_RetryOnServerError(t *testing.T) {
 	t.Parallel()
 
