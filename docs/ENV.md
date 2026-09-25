@@ -483,9 +483,10 @@ that one instead, and the claude-specific screen assertions stand down while the
 host measurement still applies), `WARDYN_TEST_REQUIRE_CLASS` (the strongest-class
 gate `TestConformanceDocker` (`test/conformance/conformance_docker_test.go`) and
 `TestLive_TierMatrix` (`test/e2e/live/live_test.go`) both read: set to a
-confinement class such as `CC2`, either test fails closed when that class is not
-the strongest this daemon/stack advertises — where the live test used to accept
-the fail-closed 422 instead. Unset, both behave as before; see nightly's
+confinement class such as `CC2`, `TestConformanceDocker` fails unless that class
+is the strongest this daemon advertises, and `TestLive_TierMatrix` fails when the
+stack does not advertise it at all, where it used to accept the fail-closed 422
+instead. Unset, both behave as before; see nightly's
 `gvisor-cc2-live` job), `WARDYN_E2E_UI_ADDR` (the UI-sandbox
 gateway's second listener on the Playwright e2e backend, default `:8089`;
 `scripts/e2e-backend.sh` — it must differ from `WARDYN_E2E_ADDR`, which the
