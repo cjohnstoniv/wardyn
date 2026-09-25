@@ -388,8 +388,9 @@ func addMainContainerVolumes(pod *corev1.Pod, vols []corev1.Volume, mounts []cor
 //
 // onWaiting (nil-safe) gets that same reason WHILE the wait is happening rather
 // than only in the error at the end of it, once per CHANGE — see
-// runner.SandboxSpec.OnWaiting. The pod is already fetched every poll, so this
-// costs nothing but the comparison.
+// runner.SandboxSpec.OnWaiting. The pod is already fetched every poll; the one
+// extra read is the pod's Events, at most once a second and only while the
+// container is ContainerCreating, to tell a pull apart (pull_events.go).
 func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerName string, onWaiting func(string)) error {
 	// The last pod the poll actually observed. Captured rather than re-fetched
 	// after the fact: a re-fetch on a dead context returns nothing at all, which
@@ -398,13 +399,18 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 	// The last reason REPORTED, so the report fires on a change and not on a
 	// tick. No mutex: the poll body runs on this goroutine, one call at a time.
 	var lastReason string
+	var pulls pullWatch
 	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
 		if gerr != nil {
 			return false, gerr
 		}
 		lastPod = pod
-		if reason := waitingReason(pod); reason != lastReason {
+		reason := waitingReason(pod)
+		if pulling := d.pullingDetail(pollCtx, pod, containerName, &pulls); pulling != "" {
+			reason = pulling
+		}
+		if reason != lastReason {
 			lastReason = reason
 			if onWaiting != nil {
 				onWaiting(reason)

@@ -3883,7 +3883,7 @@ The line is the substrate's own words, in the shape `<component>: <Reason>[: <me
 | `agent: PodInitializing` | as above, init containers | yes |
 | `pod: Unschedulable: <scheduler's message>` | no node will take the pod (a taint, a full cluster, an unbound claim) — read the message | yes, if the cluster changes |
 | `pod: Pending` | the pod exists and nothing has claimed it yet | yes |
-| `image: Pulling: <ref>` | **Docker substrate only** — the host does not have this image and is downloading it now | yes |
+| `image: Pulling: <ref>` | the image is downloading now. Docker: the host does not have it. Kubernetes (since 0.8, #807): the kubelet's latest Event for the agent container is `Pulling` | yes |
 | `agent: ImagePullBackOff: <registry's message>` | the registry refused or the tag does not exist | **no** |
 | `agent: ErrImagePull: <registry's message>` | as above, first failure | **no** |
 | `agent: InvalidImageName: <message>` | the reference does not parse | **no** |
@@ -3923,21 +3923,28 @@ estate. A pull slower than them fails the run honestly — the run carries a `fa
 deadline and the pod's Pending state, and the pane shows that sentence rather than a guess.
 
 **A first pull after an upgrade does not fail a run.** Every image tag changes at a version bump, so
-the first start on each node after an upgrade re-pulls; that is a two-minute wait, not a fault. On
-Kubernetes the sentence stays conditional — the kubelet reports `ContainerCreating` for a pull and for
-everything else it does before a container runs, and Wardyn does not read the Events API (below) — so
-the console says a first start *can* take a couple of minutes while the image downloads. Only the
+the first start on each node after an upgrade re-pulls; that is a two-minute wait, not a fault. The
 Docker substrate asserts a download outright, because `ensureImage` has just checked and the host does
-not have the image.
+not have the image. Since 0.8 (#807) Kubernetes does too, while the kubelet's `Pulling` Event is the
+latest thing it has said about the agent container (below). Without that Event, or with the Events read
+refused, all Wardyn has is `ContainerCreating`, which the kubelet reports for a pull and for everything
+else it does before a container runs, so the console says a first start *can* take a couple of minutes
+while the image downloads.
 
-**No chart change, and why.** The reason comes from `pods: get`, which the chart already grants.
-There is no new RBAC verb in 0.7.6 and none is wanted. A `Pulling` reason on Kubernetes lives in an
-Event, and granting `events: get,list` would — under `k8s.allowRunsInReleaseNamespace=true` — let
-Wardyn read every co-tenant workload's event stream in that namespace (a `fieldSelector` is a client
-convenience, not something RBAC can enforce). `deploy/helm/wardyn/templates/rbac.yaml` states this in
-its own header paragraph: *"the kubelet's eviction verdict comes back through pods: get … never the
-Events API, so no 'events' verb belongs here."* Read that paragraph before "fixing" the conditional
-wording by granting the verb.
+**The one chart change, and why.** Every other reason comes from `pods: get`, which the chart already
+grants. `Pulling` does not: on Kubernetes it lives only in the pod's Events. 0.8 (#807) grants
+`events: list` in the namespaced k8s-runner Role: `list` only (no `get`, no `watch`), never in the
+ClusterRole, and `make helm-lint` fails a render that widens either. The runner lists at most once a
+second, only while the agent container is `ContainerCreating`, field-selected on the pod's kind, name
+and UID. Under `k8s.allowRunsInReleaseNamespace=true` that verb reads every co-tenant workload's Events
+in that namespace: a `fieldSelector` is a client convenience, not something RBAC can enforce. That is
+accepted as part of the same namespace blast radius the render-time fail in
+`deploy/helm/wardyn/templates/rbac.yaml` already names for that setting (exec into and delete any pod
+there, create or delete any Secret there). Nothing an Event says is surfaced: the image ref comes from
+the pod spec, and the Event only chooses between two sentences Wardyn wrote. If you write the Role
+yourself (`k8s.rbac.create=false`), add `events: list` on upgrade. Without it the read fails closed:
+it is switched off for the rest of that start, the create goes on, and a pull reads as
+`agent: ContainerCreating`, as before.
 
 **The fix for a slow registry is to pre-pull, not to wait longer.** Get the agent and `aws-sso`
 images onto every node at upgrade time — a DaemonSet that pulls the new tags, or the node cache of

@@ -12,7 +12,21 @@ canary,driver}.go. In particular:
   - ephemeral-storage: NO new verbs. A run's disk cap is a FIELD on the pod this
     substrate already creates (naming.go's resourceRequirements), and the
     kubelet's eviction verdict comes back through pods: get (lifecycle.go's
-    statusFromPod) — never the Events API, so no "events" verb belongs here.
+    statusFromPod), not through the Events API.
+  - events: list ONLY, namespaced (#807). The kubelet reports an image pull as
+    ContainerCreating; only the pod's Events say "Pulling", and that is what
+    lights the sign-in door's download step (pull_events.go). list, not get or
+    watch: the read is one field-selected list per second while a container is
+    being created. Nothing an Event says is shown to anyone — it only picks
+    between two sentences Wardyn wrote — and a Role without this verb (an
+    operator-written one under k8s.rbac.create=false) makes the read fail
+    closed: pulls read as ContainerCreating, as before. Never in the
+    ClusterRole: that would be every namespace's Events. Under
+    k8s.allowRunsInReleaseNamespace=true this verb reads every co-tenant
+    workload's Events in that namespace (a fieldSelector is not something RBAC
+    enforces); that is accepted as part of the same namespace blast radius the
+    render-time fail below already names (exec into and delete any pod, create
+    or delete any Secret there).
   - pods/exec: BOTH create and get. session.go's newExecutor builds a
     FallbackExecutor that tries the websocket transport FIRST (SPDY only on
     upgrade failure) — and the websocket leg issues an HTTP GET against the
@@ -88,7 +102,7 @@ all) would be told about namespace hygiene instead of about the thing that stops
 it working. Fix what breaks the install, then what widens its blast radius.
 */}}
 {{- if and .Values.serviceAccount.automount .Values.k8s.proxyImage (not .Values.k8s.runsNamespace) (not .Values.k8s.allowRunsInReleaseNamespace) -}}
-{{- fail "wardyn: k8s.enabled is set with an empty k8s.runsNamespace, so every run's pods land in the CONTROL-PLANE namespace and the k8s-runner Role is created there. Its verbs then apply to every OTHER workload sharing that namespace: wardynd can exec into any pod there, delete any pod there, and create or delete any Secret and NetworkPolicy there — not only the objects it created for a run. RBAC cannot narrow it: a run's object names are derived per-run from its UUID, so resourceNames cannot enumerate them, which makes the namespace itself the blast radius. Set k8s.runsNamespace to a dedicated, pre-existing namespace that holds nothing else and the chart moves the Role, the RoleBinding and the control-plane NetworkPolicy's callback peer there with it. Sharing the namespace deliberately (a laptop demo, or a cluster where wardynd is the only workload): set k8s.allowRunsInReleaseNamespace=true to render anyway and accept that." -}}
+{{- fail "wardyn: k8s.enabled is set with an empty k8s.runsNamespace, so every run's pods land in the CONTROL-PLANE namespace and the k8s-runner Role is created there. Its verbs then apply to every OTHER workload sharing that namespace: wardynd can exec into any pod there, delete any pod there, create or delete any Secret and NetworkPolicy there, and list every other workload's Events there (#807) — not only the objects it created for a run. RBAC cannot narrow it: a run's object names are derived per-run from its UUID, so resourceNames cannot enumerate them, which makes the namespace itself the blast radius. Set k8s.runsNamespace to a dedicated, pre-existing namespace that holds nothing else and the chart moves the Role, the RoleBinding and the control-plane NetworkPolicy's callback peer there with it. Sharing the namespace deliberately (a laptop demo, or a cluster where wardynd is the only workload): set k8s.allowRunsInReleaseNamespace=true to render anyway and accept that." -}}
 {{- end -}}
 {{/*
 k8s.rbac.create=false skips the four objects below — for a platform team
@@ -148,6 +162,9 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["create", "list", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
 {{- if $userDrives.enabled }}
   # User drives (drives.go's ensureDrivePVC), each verb justified:
   #   get    — a drive's claim is looked up BY NAME before anything else, and a

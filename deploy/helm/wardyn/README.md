@@ -560,7 +560,9 @@ networkpolicies create/list/delete/deletecollection — deliberately **no**
 body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
 `list` on `networkpolicies` alone is what the orphan sweep needs to reach a run
 whose pods are both gone, and it is asked for best-effort — a Role without it
-degrades the sweep rather than killing it); the cluster-scoped ClusterRole covers
+degrades the sweep rather than killing it; `events` list only, so an image
+pull reads as "Downloading the image" rather than ContainerCreating — a Role
+without it keeps the old wording and nothing else changes); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
 only ever resolves one by name). One rule is conditional:
 `persistentvolumeclaims` get+create, rendered only with `userDrives.enabled` —
