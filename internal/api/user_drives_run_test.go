@@ -740,6 +740,41 @@ func TestSeedRequestDriveProbeErrorFailsOpen(t *testing.T) {
 	}
 }
 
+// driveProbeSleepsRunner is a DriveProber whose ProbeDrive blocks until its
+// OWN ctx ends — modelling the Docker driver's real ContainerWait select,
+// which honours whatever context ProbeDrive is given. Used to prove F1: the
+// probe shares driveShareProbe's outer 5s budget with the "home:" closure's
+// os.Stat, so driveHomeReadableByAgent bounds the probe with its own INNER
+// (3s) timeout rather than letting it spend the whole outer one.
+type driveProbeSleepsRunner struct{ *fakeRunner }
+
+func (r driveProbeSleepsRunner) ProbeDrive(ctx context.Context, _ types.DriveMount) (runner.DriveProbe, error) {
+	<-ctx.Done()
+	return runner.DriveProbe{}, ctx.Err()
+}
+
+// TestSeedRequestDriveSlowProbeDoesNotRefuseAHealthyShare is F1's regression:
+// a probe that outlives its own inner bound must fail open — same as any
+// other probe error — and must do so well short of driveShareProbeTimeout,
+// proving the inner bound fired rather than the probe silently consuming the
+// whole outer budget. A slow probe must never refuse a healthy share.
+func TestSeedRequestDriveSlowProbeDoesNotRefuseAHealthyShare(t *testing.T) {
+	root, st, ctx := driveProbeShare(t)
+	srv := New(Config{Store: st, Audit: &recRecorder{}, RunnerTarget: "docker", UserDriveHostRoots: []string{root},
+		Runner: driveProbeSleepsRunner{fakeRunner: &fakeRunner{}}})
+
+	start := time.Now()
+	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+	elapsed := time.Since(start)
+	if !ok || mount == nil {
+		t.Fatalf("a slow-but-healthy probe was refused: %d %s", w.Code, w.Body.String())
+	}
+	if elapsed >= driveShareProbeTimeout {
+		t.Errorf("elapsed = %s, want well under driveShareProbeTimeout (%s) — the probe's own inner bound should have fired first",
+			elapsed, driveShareProbeTimeout)
+	}
+}
+
 // TestSeedRequestDriveNoProberIsUnchanged is the upgrade-day pin: a Runner
 // that does not implement DriveProber (every Runner before #165, and any
 // future one with no readability answer) must mount EXACTLY as it did before

@@ -658,7 +658,17 @@ func (s *Server) driveHomeReadableByAgent(ctx context.Context, resolved types.Re
 	if !ok {
 		return nil
 	}
-	probe, err := prober.ProbeDrive(ctx, types.DriveMount{
+	// The Docker probe spins up and waits on a whole container, which shares
+	// this call's slot inside driveShareProbe's outer 5s budget with the
+	// os.Stat that runs beside it (the "home:" closure, above) — an inner
+	// bound well short of that budget so a slow probe cannot spend the
+	// WHOLE thing and starve the stat of its own share. A probe that blows
+	// this bound returns context.DeadlineExceeded, which is just another
+	// probe error below: fail open, same as any transient docker/apiserver
+	// failure.
+	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	probe, err := prober.ProbeDrive(pctx, types.DriveMount{
 		Backend:    resolved.Drive.Backend,
 		ObjectName: resolved.ObjectName,
 		HostRoot:   resolved.Drive.HostRoot,

@@ -22,8 +22,12 @@ const imagePrewarmTimeout = 5 * time.Minute
 // host_path drive create/preflight paid a live registry pull inside
 // driveShareProbeTimeout's 5s budget, and driveHomeReadableByAgent reads any
 // probe error as "unknown" — fail open — so that first request's honest
-// answer was "pass", not "wait". A failed prewarm changes nothing: the same
-// pull is retried inline, synchronously, the next time each image is needed.
+// answer was "pass", not "wait". A failed prewarm of the PROXY image is
+// retried inline, synchronously, the next time it is needed (CreateSandbox
+// still calls ensureImage). The drive-probe image differs: ProbeDrive only
+// checks presence and errors if it is absent, so a failed prewarm of THAT
+// image leaves every probe failing open until a later prewarm, a daemon
+// restart, or an operator pull succeeds.
 func (d *Driver) PrewarmImages() {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), imagePrewarmTimeout)

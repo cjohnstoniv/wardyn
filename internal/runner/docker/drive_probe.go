@@ -41,11 +41,18 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 	}
 
 	image := d.driveProbeImage()
-	// ensureImage pulls the probe image on first use, exactly as CreateSandbox
-	// does for the agent/proxy images — a missing image is a genuine failure to
-	// run the probe (caller falls back to "cannot tell"), not a refusal.
-	if err := d.ensureImage(ctx, image, nil); err != nil {
+	// A presence check, never a pull: this runs on the request path inside
+	// driveShareProbe's bounded budget (internal/api/user_drives_run.go), and
+	// a cold registry pull there would burn that whole budget on the FIRST
+	// request rather than PrewarmImages' background one. An absent image is a
+	// genuine failure to run the probe (caller falls back to "cannot tell"),
+	// not a refusal.
+	present, err := d.imagePresent(ctx, image)
+	if err != nil {
 		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: %w", err)
+	}
+	if !present {
+		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: image %q not present locally (PrewarmImages pulls it in the background)", image)
 	}
 
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
