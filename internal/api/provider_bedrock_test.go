@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -578,8 +579,18 @@ func TestProviderBedrockSandboxSpecCarriesNoHostAWSCredential(t *testing.T) {
 					t.Errorf("%s[AWS_ACCESS_KEY_ID] = %q: SigV4 must not reach a Bedrock provider run", half, v)
 				}
 				for k, v := range m {
+					// The SSO arms ship files as encodeArtifactConfig records
+					// ("<path>\t<base64>" per line); scan their decoded bytes too.
+					text := v
+					for _, line := range strings.Split(v, "\n") {
+						if f := strings.Split(line, "\t"); len(f) == 2 {
+							if raw, err := base64.StdEncoding.DecodeString(f[1]); err == nil {
+								text += "\n" + string(raw)
+							}
+						}
+					}
 					for _, name := range sigV4 {
-						if strings.Contains(v, string(sec.m[name])) {
+						if strings.Contains(text, string(sec.m[name])) {
 							t.Errorf("%s[%s] carries the operator's %s: SigV4 must not reach a Bedrock provider run", half, k, name)
 						}
 					}
