@@ -597,6 +597,12 @@ func TestProviderRunCredentialFactsOnReview(t *testing.T) {
 					t.Errorf("%s: confinement advisory = %v, want %v: %q", path, warned, tc.advisory, got.Warnings)
 				}
 				if path != "/api/v1/runs/preflight" {
+					var run types.AgentRun
+					_ = json.Unmarshal(w.Body.Bytes(), &run)
+					ev := waitForRecAudit(t, srv.cfg.Audit.(*recRecorder), run.ID, "run.create", "success")
+					if below := strings.Contains(string(ev.Data), `"credential_confinement":"below_floor"`); below != tc.advisory {
+						t.Errorf("run.create credential_confinement below_floor = %v, want %v: %s", below, tc.advisory, ev.Data)
+					}
 					continue
 				}
 				want := modelCredentialFacts{Mechanism: string(tc.p.Kind), Residency: tc.want,
