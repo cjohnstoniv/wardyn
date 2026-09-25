@@ -18,34 +18,39 @@ strings; this table is where a reviewer checks them. It supersedes the `sso_rbac
 
 ## Frozen strings
 
-| Id | String | Where |
+Reordered 2026-09-25 (owner ruling, #726) so the frozen `String` is the LAST
+column — the shape `parseFrozenTables()` (the T-66 shared parser) expects.
+Purely structural: every `Id` and `String` cell is byte-identical to before,
+only `String` and `Where` traded places.
+
+| Id | Where | String |
 |---|---|---|
-| `sso_rbac.label` | Who is an admin | `/setup/status` row label (`ssoRBACCheck`) |
-| `sso_rbac.warn` | Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin. | setup row `detail`, warn |
-| `sso_rbac.fix` | Map people to admin or user on the People step, so only the people you name can change this deployment. | setup row `fix`, warn |
-| `sso_rbac.ok` | People are mapped to admin or user, so a person's role comes from their sign-in. | setup row `detail`, ok |
-| `ADMIN_ACCESS_BANNER.TITLE` | Everyone who signs in is an admin | shell banner (`access-posture-copy.ts`) |
-| `ADMIN_ACCESS_BANNER.BODY` | Nobody is mapped to a role and no admin list is set, so every person your identity provider lets in can change policies, read and write secrets, decide approvals, and open a shell in any running sandbox. | shell banner |
-| `ADMIN_ACCESS_BANNER.ACTION` | Set who is an admin | shell banner CTA → `/admin/setup?step=people` |
-| `SIGNIN_HELP.TITLE` | When someone can't sign in | People-step card (`access-posture-copy.ts`) |
-| `SIGNIN_HELP.LEAD` | Wardyn says what happened. You say what to do about it. | People-step card |
-| `SIGNIN_HELP.TEXT_LABEL` | What to tell them | card, text field |
-| `SIGNIN_HELP.TEXT_PLACEHOLDER` | Ask in #it-helpdesk to be added to Wardyn. | card, text field |
-| `SIGNIN_HELP.TEXT_HINT` | Up to 1,000 characters. Anyone who can reach the sign-in page can read it, signed in or not — so name your request process, not your internal systems. | card, text field |
-| `SIGNIN_HELP.COUNTER` | {n} / 1000 | card, shown once typing |
-| `SIGNIN_HELP.URL_LABEL` | Link | card, URL field |
-| `SIGNIN_HELP.URL_PLACEHOLDER` | https:// | card, URL field |
-| `SIGNIN_HELP.URL_HINT` | Optional. Must start with https://. It shows as "Request access" — the address itself is public. | card, URL field (#489 dropped "http:// or ") |
-| `SIGNIN_HELP.EMPTY_NOTE` | Nothing set. People see Wardyn's own sentence and are told to ask their Wardyn admin. | card, neither field set |
-| `SIGNIN_HELP.PREVIEW_HEADING` | What a signed-out person sees | card preview (the no-role sentence + text + link) |
-| `SIGNIN_HELP.APPLIES_NOTE` | Shown on the four refusals a person can't clear themselves: no role, an email domain that isn't allowed, too many groups to list, and a missing email claim. | card preview |
-| `SIGNIN_HELP_LINK_LABEL` | Request access | sign-in page and card preview (`people-access-copy.ts`; the card re-exports it as `SIGNIN_HELP.LINK_LABEL`) |
-| refusal: too long | sign_in_help_text: longer than 1,000 characters — it renders under a refusal on the sign-in page | `PUT /site-config` 400 (`validateSignInHelp`) |
-| refusal: bad URL | sign_in_help_url: must be an https:// address — it is shown to people who have not signed in | `PUT /site-config` 400, scheme failures only, a new http:// link included (#489 dropped "http:// or ") |
-| `sign_in_help_url.label` | When someone can't sign in | `/setup/status` row label (`signInHelpHTTPCheck`), the card's own title |
-| `sign_in_help_url.warn` | The sign-in help link uses http://. Change it to an https:// address so people who can't sign in aren't sent to an unencrypted page. | setup row `detail`, warn, never blocking (#489) |
-| SSH keys chip | Member access | SSH keys screen, a key whose `capped` is true (#584) |
-| SSH keys chip tooltip | Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH. | the chip's `title` (#584) |
+| `sso_rbac.label` | `/setup/status` row label (`ssoRBACCheck`) | Who is an admin |
+| `sso_rbac.warn` | setup row `detail`, warn | Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin. |
+| `sso_rbac.fix` | setup row `fix`, warn | Map people to admin or user on the People step, so only the people you name can change this deployment. |
+| `sso_rbac.ok` | setup row `detail`, ok | People are mapped to admin or user, so a person's role comes from their sign-in. |
+| `ADMIN_ACCESS_BANNER.TITLE` | shell banner (`access-posture-copy.ts`) | Everyone who signs in is an admin |
+| `ADMIN_ACCESS_BANNER.BODY` | shell banner | Nobody is mapped to a role and no admin list is set, so every person your identity provider lets in can change policies, read and write secrets, decide approvals, and open a shell in any running sandbox. |
+| `ADMIN_ACCESS_BANNER.ACTION` | shell banner CTA → `/admin/setup?step=people` | Set who is an admin |
+| `SIGNIN_HELP.TITLE` | People-step card (`access-posture-copy.ts`) | When someone can't sign in |
+| `SIGNIN_HELP.LEAD` | People-step card | Wardyn says what happened. You say what to do about it. |
+| `SIGNIN_HELP.TEXT_LABEL` | card, text field | What to tell them |
+| `SIGNIN_HELP.TEXT_PLACEHOLDER` | card, text field | Ask in #it-helpdesk to be added to Wardyn. |
+| `SIGNIN_HELP.TEXT_HINT` | card, text field | Up to 1,000 characters. Anyone who can reach the sign-in page can read it, signed in or not — so name your request process, not your internal systems. |
+| `SIGNIN_HELP.COUNTER` | card, shown once typing | {n} / 1000 |
+| `SIGNIN_HELP.URL_LABEL` | card, URL field | Link |
+| `SIGNIN_HELP.URL_PLACEHOLDER` | card, URL field | https:// |
+| `SIGNIN_HELP.URL_HINT` | card, URL field (#489 dropped "http:// or ") | Optional. Must start with https://. It shows as "Request access" — the address itself is public. |
+| `SIGNIN_HELP.EMPTY_NOTE` | card, neither field set | Nothing set. People see Wardyn's own sentence and are told to ask their Wardyn admin. |
+| `SIGNIN_HELP.PREVIEW_HEADING` | card preview (the no-role sentence + text + link) | What a signed-out person sees |
+| `SIGNIN_HELP.APPLIES_NOTE` | card preview | Shown on the four refusals a person can't clear themselves: no role, an email domain that isn't allowed, too many groups to list, and a missing email claim. |
+| `SIGNIN_HELP_LINK_LABEL` | sign-in page and card preview (`people-access-copy.ts`; the card re-exports it as `SIGNIN_HELP.LINK_LABEL`) | Request access |
+| refusal: too long | `PUT /site-config` 400 (`validateSignInHelp`) | sign_in_help_text: longer than 1,000 characters — it renders under a refusal on the sign-in page |
+| refusal: bad URL | `PUT /site-config` 400, scheme failures only, a new http:// link included (#489 dropped "http:// or ") | sign_in_help_url: must be an https:// address — it is shown to people who have not signed in |
+| `sign_in_help_url.label` | `/setup/status` row label (`signInHelpHTTPCheck`), the card's own title | When someone can't sign in |
+| `sign_in_help_url.warn` | setup row `detail`, warn, never blocking (#489) | The sign-in help link uses http://. Change it to an https:// address so people who can't sign in aren't sent to an unencrypted page. |
+| SSH keys chip | SSH keys screen, a key whose `capped` is true (#584) | Member access |
+| SSH keys chip tooltip | the chip's `title` (#584) | Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH. |
 
 ## Implementation strings (not in the mock)
 

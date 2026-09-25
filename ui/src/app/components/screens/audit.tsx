@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { AuditEvent, ActorType, AgentRun } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
+import { AUDIT } from "./audit-copy";
 import { audit as api } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { health as healthApi } from "../../lib/api/health";
@@ -526,7 +527,7 @@ export function AuditScreen() {
             // events, they're just not reachable from this unfiltered view.
             <EmptyState
               icon={ScrollText}
-              title="The full audit feed is admin-only."
+              title={AUDIT.MEMBER_FEED_TITLE}
               description="You can still see a run's own trail: open the run and use its Audit tab — its “open full Audit” link brings that run's events here."
               action={
                 <Button variant="outline" onClick={() => navigate("/runs")}>

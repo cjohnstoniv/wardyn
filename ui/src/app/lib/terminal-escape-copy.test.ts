@@ -34,17 +34,13 @@ const stripNote = (s: string): string => s.replace(/ \([^)]*\)$/, "");
 const rawDoc = parseFrozenTables(DOC, /^## Strings/);
 const doc = new Map([...rawDoc].filter(([key]) => key !== "Constant").map(([key, value]) => [key, stripNote(value)]));
 
-// KNOWN CANON DRIFT, reported rather than silently reconciled (T-66's own
-// rule: a pin does not get to choose a side). The doc's RECONNECTING_HINT
-// still reads "Keystrokes are held until the terminal is back." (marked
-// "unchanged" by #133), but terminal.ts's own RECONNECTING_HINT was changed
-// by #510-F2 to "Keystrokes typed now are not sent." — #510-F2 found there is
-// no input buffer (attach-terminal.tsx's send() drops anything typed while
-// the socket isn't OPEN), so the doc's older promise of held keystrokes is
-// false. Neither side is edited here; excluded from the byte-exact check
-// below until the owner rules on canon.
-const KNOWN_DRIFT = ["RECONNECTING_HINT"];
-
+// Owner ruling 2026-09-25 (#726): canon follows the app. RECONNECTING_HINT
+// used to diverge — the doc still promised "Keystrokes are held until the
+// terminal is back." after #510-F2 found there is no input buffer
+// (attach-terminal.tsx's send() drops anything typed while the socket isn't
+// OPEN) and changed terminal.ts's own string to "Keystrokes typed now are
+// not sent." The doc has been updated to match; all four rows now pin
+// byte-exact.
 const render = (docKey: string) => renderFromNamespaces(docKey, [TERMINAL]);
 
 describe("terminal-escape-copy — terminal-escape-canon.md, #486", () => {
@@ -58,7 +54,7 @@ describe("terminal-escape-copy — terminal-escape-canon.md, #486", () => {
     for (const name of docNames) expect(TERMINAL).toHaveProperty(name);
   });
 
-  it.each([...doc.keys()].filter((k) => !KNOWN_DRIFT.includes(k)))("%s is byte-exact", (key) => {
+  it.each([...doc.keys()])("%s is byte-exact", (key) => {
     expect(render(key)).toBe(doc.get(key));
   });
 });
