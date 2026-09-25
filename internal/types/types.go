@@ -116,9 +116,19 @@ var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWa
 // LostReason says why a kept run lost its sandbox (AgentRun.LostReason).
 type LostReason string
 
-// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
-// and kept for the ended-run grace.
-const LostEnded LostReason = "ended"
+const (
+	// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
+	// and kept for the ended-run grace.
+	LostEnded LostReason = "ended"
+	// LostReboot is an interactive run whose agent container exited under it
+	// (a host reboot, a Docker Desktop restart, a long suspend) but still
+	// exists: kept with its files and its proxy stopped.
+	LostReboot LostReason = "reboot"
+	// LostOutage is an interactive run whose run token lapsed because the
+	// control plane was unreachable past the token's life: its proxy is stopped
+	// so it has no egress, and its agent is left running.
+	LostOutage LostReason = "outage"
+)
 
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
@@ -268,10 +278,10 @@ type AgentRun struct {
 	RunLimits           RunLimits  `json:"run_limits"`
 	GovernanceProfileID *uuid.UUID `json:"governance_profile_id,omitempty"`
 	// LostAt / LostReason mark a run that lost its sandbox but is KEPT: its
-	// agent is stopped and its proxy gone, so it has no network, while its
-	// files stay. The run keeps its RunState (RUNNING, so it still holds a quota
-	// slot); only a kill or the ended-run grace makes it terminal. Nil / "" is a
-	// live run. Migration 0073.
+	// proxy is gone, so it has no network, while its files stay (its agent is
+	// stopped too, except for LostOutage). The run keeps its RunState
+	// (RUNNING, so it still holds a quota slot); only a kill or the ended-run
+	// grace makes it terminal. Nil / "" is a live run. Migration 0073.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
 	// ModelProviderID freezes the id of the model provider chooseModelProvider
@@ -515,7 +525,7 @@ const (
 	// this kind and the console renders a door instead of an Approve/Deny pair.
 	// The row still moves to APPROVED — so every existing list, count and
 	// terminal-cascade reader works unchanged — but through ResolveReauth and
-	// its own credential.reauth.resolved audit action, never approval.decide.
+	// its own credential.reauth.resolve audit action, never approval.decide.
 	ApprovalCredentialReauth ApprovalKind = "credential_reauth"
 	// ApprovalPushContent: a brokered git push touched a path the run's
 	// push_rules.require_review_paths names, and the proxy is HOLDING it while
@@ -726,8 +736,8 @@ type ApprovalDecision struct {
 //	                  kernel.process.exec    — observed execve
 //	                  kernel.network.connect — observed outbound TCP connect
 //	                  kernel.file.write      — observed write to a sensitive path
-//	                  kernel.sensor.heartbeat— sensor liveness (run_id NULL)
-//	                  kernel.sensor.blind    — host eBPF blind to a run (CC3/Kata)
+//	                  kernel.sensor.ping     — sensor liveness (run_id NULL)
+//	                  kernel.sensor.bypass   — host eBPF blind to a run (CC3/Kata)
 //
 // Data shape for the kernel.* (ebpf) stream. audit_events.data is JSONB, so
 // this requires NO schema change — it is a documented convention over the

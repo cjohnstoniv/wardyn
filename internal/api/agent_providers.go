@@ -499,7 +499,7 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 // The account/role PIN is here, and the difference is deliberate: an AWS account
 // id and an IAM role name are the identity this deployment signs with, not the
 // directory it authenticates against — and a review of a refused capture
-// (harness.credential.refused) has no other way to learn what the pin was.
+// (harness.credential.refuse) has no other way to learn what the pin was.
 func agentProviderAuditData(block types.AgentProviders) map[string]any {
 	ids, mechanisms, sources, disabled, pins := []string{}, []string{}, []string{}, []string{}, []string{}
 	var defaults []string

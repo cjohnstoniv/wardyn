@@ -28,7 +28,7 @@ import (
 // the provider as it read at launch, and answers only that provider's holds.
 
 // signInStore is integStore plus the one read the capture paths make: the
-// login run's own harness.login.started stamp, served from the audit sink. Its
+// login run's own harness.login.start stamp, served from the audit sink. Its
 // site config can change under a live sign-in (setSite) and blip.
 type signInStore struct {
 	*integStore
@@ -56,7 +56,7 @@ func (s *signInStore) setSite(sc types.SiteConfig) {
 
 func (s *signInStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {
 	var out []types.AuditEvent
-	for _, ev := range s.audit.find("harness.login.started") {
+	for _, ev := range s.audit.find("harness.login.start") {
 		if ev.RunID != nil && *ev.RunID == runID {
 			out = append(out, ev)
 		}
@@ -109,12 +109,12 @@ func signInRunID(t *testing.T, body string) uuid.UUID {
 	return id
 }
 
-// loginStamp is the one harness.login.started row, decoded.
+// loginStamp is the one harness.login.start row, decoded.
 func loginStamp(t *testing.T, audit *memAudit) loginRunStamp {
 	t.Helper()
-	rows := audit.find("harness.login.started")
+	rows := audit.find("harness.login.start")
 	if len(rows) != 1 {
-		t.Fatalf("harness.login.started rows = %d, want 1", len(rows))
+		t.Fatalf("harness.login.start rows = %d, want 1", len(rows))
 	}
 	var st loginRunStamp
 	if err := json.Unmarshal(rows[0].Data, &st); err != nil {
@@ -133,7 +133,7 @@ func TestProviderSignInDoorsNeverBothAnswer(t *testing.T) {
 		if w.Code != http.StatusConflict || eb.Error != mpsLegacyDoor {
 			t.Fatalf("legacy door = %d %s, want 409 %q", w.Code, w.Body.String(), mpsLegacyDoor)
 		}
-		if n := len(audit.find("harness.login.started")); n != 0 {
+		if n := len(audit.find("harness.login.start")); n != 0 {
 			t.Fatalf("the legacy door launched %d sign-ins beside a provider block", n)
 		}
 	})
@@ -146,7 +146,7 @@ func TestProviderSignInDoorsNeverBothAnswer(t *testing.T) {
 		if w.Code != http.StatusServiceUnavailable {
 			t.Fatalf("legacy door on a blip = %d %s, want 503", w.Code, w.Body.String())
 		}
-		if n := len(audit.find("harness.login.started")); n != 0 {
+		if n := len(audit.find("harness.login.start")); n != 0 {
 			t.Fatalf("the legacy door launched %d sign-ins beside a provider block", n)
 		}
 	})
@@ -221,7 +221,7 @@ func TestProviderSignInAWSModel(t *testing.T) {
 			if code != http.StatusOK {
 				var eb errorBody
 				_ = json.Unmarshal([]byte(body), &eb)
-				if n := len(audit.find("harness.login.started")); n != 0 || eb.Error != fmt.Sprintf(mpsAccounts, tc.p.ID) {
+				if n := len(audit.find("harness.login.start")); n != 0 || eb.Error != fmt.Sprintf(mpsAccounts, tc.p.ID) {
 					t.Fatalf("refusal %s launched %d sandboxes, want %q and none", body, n, fmt.Sprintf(mpsAccounts, tc.p.ID))
 				}
 				return
@@ -271,7 +271,7 @@ func TestProviderSignInRefusals(t *testing.T) {
 			if code != tc.code || eb.Error != tc.want {
 				t.Fatalf("sign-in = %d %s\nwant %d %q", code, body, tc.code, tc.want)
 			}
-			if n := len(audit.find("harness.login.started")); n != 0 {
+			if n := len(audit.find("harness.login.start")); n != 0 {
 				t.Fatalf("a refused sign-in launched %d sandboxes", n)
 			}
 		})
@@ -287,7 +287,7 @@ func TestProviderSignInRefusals(t *testing.T) {
 				t.Fatalf("%s as the admin token = %d %s, want 422", m, w.Code, w.Body.String())
 			}
 		}
-		if n := len(audit.find("harness.login.started")); n != 0 {
+		if n := len(audit.find("harness.login.start")); n != 0 {
 			t.Fatal("the admin token launched a sign-in")
 		}
 	})
@@ -300,7 +300,7 @@ func providerSSOUpload(t *testing.T, p types.ModelProvider, site types.SiteConfi
 	runID := uuid.New()
 	events := []types.AuditEvent{{
 		ID: uuid.New(), RunID: &runID, ActorType: types.ActorSystem, Actor: "wardynd",
-		Action: "harness.login.started", Target: runID.String(), Outcome: "success",
+		Action: "harness.login.start", Target: runID.String(), Outcome: "success",
 		Data: mustJSON(map[string]any{
 			"provider": awsSSOProvider, "sso_start_url": p.Bedrock.SSOStartURL,
 			"credential_source": string(types.CredentialSourcePerUser), "owner": owner,

@@ -276,7 +276,7 @@ func TestLLMScanBatchesMarkedUninspected(t *testing.T) {
 		t.Fatalf("batches in alert mode must forward, status=%d reached=%v", rec.Code, cu.reached)
 	}
 	d := lastDecision(t, buf)
-	if d.Scan == nil || d.Scan.Action != "skipped" || d.Scan.SkipReason != "uninspected_channel" {
+	if d.Scan == nil || d.Scan.Action != "skip" || d.Scan.SkipReason != "uninspected_channel" {
 		t.Fatalf("batches must be honestly marked uninspected, got %+v", d.Scan)
 	}
 }
@@ -437,7 +437,7 @@ func TestLLMScanBlindOnOpaqueConnect(t *testing.T) {
 	// (E3: the allow is now emitted only AFTER a successful tunnel dial), so
 	// locate it by rule_source rather than assuming it is the last decision.
 	d := findDecision(t, buf, ruleSourceLLMBlind)
-	if d.Scan == nil || d.Scan.Action != "blind" || d.Scan.Scanned || d.Scan.Coverage != coverageOpaque {
+	if d.Scan == nil || d.Scan.Action != "bypass" || d.Scan.Scanned || d.Scan.Coverage != coverageOpaque {
 		t.Fatalf("blind scan summary = %+v", d.Scan)
 	}
 

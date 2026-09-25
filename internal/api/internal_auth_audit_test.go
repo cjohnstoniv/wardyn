@@ -12,13 +12,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// authFailedRows returns the auth.failed rows recorded so far, with their
+// authFailedRows returns the auth.fail rows recorded so far, with their
 // principal and reason decoded.
 func authFailedRows(t *testing.T, h *harness) []struct{ Actor, Reason, Target string } {
 	t.Helper()
 	var out []struct{ Actor, Reason, Target string }
 	for _, ev := range h.audit.events {
-		if ev.Action != "auth.failed" {
+		if ev.Action != "auth.fail" {
 			continue
 		}
 		var d struct {
@@ -40,10 +40,10 @@ func authFailedRows(t *testing.T, h *harness) []struct{ Actor, Reason, Target st
 // recorded NOTHING: no audit row, no log line, no metric. A process inside a
 // sandbox brute-forcing run tokens against /api/v1/internal/*, or a compromised
 // sidecar probing for the credential-approval path, left no trace anywhere,
-// while the public lane has audited every one of its 401s as auth.failed since
+// while the public lane has audited every one of its 401s as auth.fail since
 // #19a.
 //
-// Each refusal now emits the SAME rate-bound auth.failed row the public lane
+// Each refusal now emits the SAME rate-bound auth.fail row the public lane
 // does, with a principal that says WHICH boundary refused (the internal lane and
 // the public lane are different incidents with different runbooks) and a
 // bounded reason.
@@ -103,21 +103,21 @@ func TestInternalLaneRefusalsAreAudited(t *testing.T) {
 			}
 			rows := authFailedRows(t, h)
 			if len(rows) == 0 {
-				t.Fatalf("the internal lane refused this request (%d) and recorded NO auth.failed row — "+
+				t.Fatalf("the internal lane refused this request (%d) and recorded NO auth.fail row — "+
 					"a sandbox process brute-forcing run tokens, or a sidecar probing for the credential-approval "+
 					"path, leaves no trace anywhere", rr.Code)
 			}
 			last := rows[len(rows)-1]
 			if last.Actor != tc.wantActor {
-				t.Errorf("auth.failed actor = %q, want %q — the row must say WHICH boundary refused: "+
+				t.Errorf("auth.fail actor = %q, want %q — the row must say WHICH boundary refused: "+
 					"credential stuffing on the public lane and a probing sidecar on the internal one are "+
 					"different incidents", last.Actor, tc.wantActor)
 			}
 			if last.Reason != tc.wantReason {
-				t.Errorf("auth.failed reason = %q, want %q", last.Reason, tc.wantReason)
+				t.Errorf("auth.fail reason = %q, want %q", last.Reason, tc.wantReason)
 			}
 			if last.Target != tc.path {
-				t.Errorf("auth.failed target = %q, want the request path %q", last.Target, tc.path)
+				t.Errorf("auth.fail target = %q, want the request path %q", last.Target, tc.path)
 			}
 		})
 	}
@@ -136,10 +136,10 @@ func TestInternalLaneRefusalsShareTheLimiterAndCounter(t *testing.T) {
 	}
 	rows := authFailedRows(t, h)
 	if len(rows) == 0 {
-		t.Fatalf("a 50-request run-token brute force produced no auth.failed rows at all")
+		t.Fatalf("a 50-request run-token brute force produced no auth.fail rows at all")
 	}
 	if len(rows) >= requests {
-		t.Errorf("auth.failed rows = %d for %d refusals; the internal lane must share the public lane's "+
+		t.Errorf("auth.fail rows = %d for %d refusals; the internal lane must share the public lane's "+
 			"~1/sec limiter, or a sandbox can flood the append-only audit log", len(rows), requests)
 	}
 	body := do(t, h.srv, http.MethodGet, "/metrics", adminToken, "").Body.String()
