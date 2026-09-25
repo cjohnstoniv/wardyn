@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Task runs start on a proxy one version behind (#676, #889).** Dispatch set the sidecar's
+  `unattended` key on every non-interactive run, and a v0.7.12 proxy refuses a key it does not
+  know, so every task run failed at sidecar start on an operator who pinned that image. The key
+  changes only what happens to a push matching `require_review_paths`, so dispatch now sets it
+  only when the policy has review paths.
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
@@ -116,7 +121,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
   The key is now `ado_grant` (one grant). The older `ado_grants` list still loads when it holds
   one entry; a list with more than one, or one set beside `ado_grant`, fails the sidecar's
-  startup (#452).
+  startup (#452). The other direction is a clean break: a control plane at this version refuses
+  to configure a v0.7.12 proxy for Azure DevOps runs (the grant config is now `ado_grant`), so
+  upgrade the proxy image with the control plane.
 - **The ephemeral-age-key boot refusal names the rows no key can recover (#755).** With
   `WARDYN_AGE_KEY` unset over age-sealed rows, wardynd told the operator to set the key the rows
   were written with — but rows written under an earlier ephemeral key have no such key. The
