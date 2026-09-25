@@ -2140,6 +2140,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   required-check failure, and the re-point-at-rebase step for those two documents is retired. The
   tree-wide ban on `file.go:NNN` (`TestCommentsCiteSymbolsNotLineNumbers`) now covers both documents
   too.
+- **Two clean breaks, no alias window (owner ruling 2026-09-22): `workspace get --json` now
+  defaults to `false`, and `support-bundle`'s output flag is spelled `--output`/`-o` (#200).**
+  `workspace get` was the CLI's only command defaulting `--json` to `true` — every other command
+  defaults it `false`. `support-bundle --out` was the CLI's only flag spelled `--out` instead of
+  `--output`/`-o` (`run recording`'s download flag already used that spelling). Both now match the
+  rest of the CLI. Neither old spelling is accepted.
 
 ### Security
 
@@ -2211,19 +2217,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   ticking that box in the console counts as consent to the CLI's prompt is still an open owner
   decision.
 
-### Changed
-
-- **Two clean breaks, no alias window (owner ruling 2026-09-22): `workspace get --json` now
-  defaults to `false`, and `support-bundle`'s output flag is spelled `--output`/`-o` (#200).**
-  `workspace get` was the CLI's only command defaulting `--json` to `true` — every other command
-  defaults it `false`. `support-bundle --out` was the CLI's only flag spelled `--out` instead of
-  `--output`/`-o` (`run recording`'s download flag already used that spelling). Both now match the
-  rest of the CLI. Neither old spelling is accepted.
-
 ### Upgrading
 
-- `wardyn workspace get` now prints the one-line table by default; a script that parsed its default
-  JSON must pass `--json`.
+- **`wardyn workspace get` now prints the one-line table by default (#200).** A script that parsed
+  its default JSON must pass `--json`.
 - **`wardyn support-bundle --out` is gone; use `--output` or `-o` (#200).** There is no alias — a
   script or cron job passing `--out` now fails at the flag parser instead of silently continuing.
 - **61 audit action names changed (#205), clean break, no alias period.** Wardyn has no users yet
