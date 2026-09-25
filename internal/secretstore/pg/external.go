@@ -232,8 +232,8 @@ type MigrateResult struct {
 // first row it cannot move, naming it, with every earlier row committed.
 func (s *Store) Migrate(ctx context.Context, target string, onRead func(owner, name string)) (MigrateResult, error) {
 	var res MigrateResult
-	if target == MigrateLocal && s.kek == nil {
-		return res, fmt.Errorf("pg secretstore: migrating to local needs WARDYN_AGE_KEY")
+	if target == MigrateLocal && s.kek == nil && !s.serviceWrites {
+		return res, fmt.Errorf("pg secretstore: migrating to local needs WARDYN_AGE_KEY or WARDYN_KEK=transit")
 	}
 	if target != MigrateLocal && !s.reachable(target) {
 		return res, fmt.Errorf("pg secretstore: migration target %q is not configured", target)

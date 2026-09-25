@@ -485,33 +485,37 @@ func ageKeyCheck(durable bool) SetupCheck {
 	}
 }
 
-// secretStoreCheck is store_external in store mode (design §3,
-// SETUP_CHECK.STORE_EXTERNAL): the credentials live in the organisation's
-// store, and there is no local key to be durable. Otherwise the age-key row.
-func secretStoreCheck(external string, durable bool) SetupCheck {
-	if external == "" {
-		return ageKeyCheck(durable)
+// secretStoreChecks are the credential-storage rows (design §3, canon SETUP_CHECK.*): store_external in store
+// mode; kek_service (KEK_SERVICE; keyService is "Vault Transit at {host}") when a key service wraps every data
+// key; else the age-key row, kek_local on a multi-user install (whoever holds the database and the local key
+// reads every credential), and platform_shared while no WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of
+// the age key then also forges run identities and sessions).
+func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate bool) []SetupCheck {
+	if external != "" {
+		return []SetupCheck{{ID: "store_external", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there."}}
 	}
-	return SetupCheck{
-		ID: "store_external", Label: "Credential storage", Status: "ok",
-		Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there.",
+	if keyService != "" {
+		return []SetupCheck{{ID: "kek_service", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in " + keyService +
+				" and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log."}}
 	}
-}
-
-// secretStoreRows is secretStoreCheck's row, then platform_shared in local
-// mode while no WARDYN_PLATFORM_KEY_FILE is set (design §3, §2.13 c): the age
-// key then protects wardynd's own signing and session keys and people's
-// credentials alike, so one leak of it forges run identities and sessions.
-func secretStoreRows(external string, durable, platformSeparate bool) []SetupCheck {
-	rows := []SetupCheck{secretStoreCheck(external, durable)}
-	if external == "" && !platformSeparate {
-		rows = append(rows, SetupCheck{
+	checks := []SetupCheck{ageKeyCheck(durable)}
+	if durable && multiUser {
+		checks = append(checks, SetupCheck{
+			ID: "kek_local", Label: "Credential key", Status: "warn",
+			Detail: "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart.",
+			Fix:    "Set WARDYN_KEK=transit with a Vault Transit key (docs/OPERATIONS.md), then run `wardynd -rewrap`.",
+		})
+	}
+	if !platformSeparate {
+		checks = append(checks, SetupCheck{
 			ID: "platform_shared", Label: "Platform key separation", Status: "warn",
 			Detail: "Wardyn's own signing and session keys are protected by the same key as people's credentials.",
 			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap` once, then restart wardynd with it set.",
 		})
 	}
-	return rows
+	return checks
 }
 
 // siteConfigCheck reports whether an operator-wide corporate baseline (upstream

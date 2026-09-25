@@ -593,6 +593,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `<prefix>/platform/`, so the credentials token reaches no platform key; OPERATIONS.md
   recommends it. THREAT-MODEL residual #49 states what stays shared. Rows written by this
   version name keys an earlier 0.8 build does not know, and it refuses them by name.
+- **Vault Transit as the key that wraps stored credentials (#586).** With `WARDYN_KEK=transit`
+  and `WARDYN_VAULT_TRANSIT_KEY`, each credential sealed in Postgres has its data key wrapped by
+  your Vault's (or OpenBao's) Transit key instead of a key derived from `WARDYN_AGE_KEY`, over the
+  same Vault client, auth and TLS as store mode; the key never leaves Vault and every unwrap is in
+  its audit log. Each wrap is bound to its row with `associated_data`, and wardynd refuses to boot
+  on a key that does not enforce it (proved live on Vault 1.20 and OpenBao 2.6) or that it cannot
+  reach. Reads follow each row's `kek_id`, so an install moves while it serves: `wardynd -rewrap`
+  (the one command that moves data keys, #646) now also moves every row onto the Transit key at
+  its latest version, and back to the local key, client-side (never Transit's server-side
+  `rewrap`), in one transaction; its `secret.rewrap` row names the key service, and it says when
+  `min_decryption_version` can retire the old versions. Once no row is under the age key, it can be
+  unset; the boot keys are wrapped by Transit too. `-rotate-age-key` now leaves Transit rows alone. The chart gains `kek.provider` and
+  `kek.transit.*`, compose `docker-compose.transit.yaml`, and `/setup/status` a `kek_service` row,
+  plus an amber `kek_local` row on a multi-user install still on the local key.
 - **SSH keys added in the user view stay capped (#564).** An admin whose session is in the user
   view (member mode) can now register an SSH key; `POST /me/ssh-keys` used to answer `409` there.
   The key is stored with a `capped` bit (migration `0070_ssh_key_view_capped`) and role `user`,

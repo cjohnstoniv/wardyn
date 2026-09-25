@@ -231,6 +231,22 @@ func TestRekeyAbortsOnAV0Row(t *testing.T) {
 	}
 }
 
+// TestRekeyAbortsOnAnUnknownKey: a v1 row whose kek_id names no key this
+// wardynd knows (not local, not a key service's) aborts the rotation naming
+// the row, rather than passing unrotated. Only Transit's rows are left alone.
+func TestRekeyAbortsOnAnUnknownKey(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext)
+		VALUES ('', 'stranger', 1, 'awskms:arn:x', '\x00', '\x00')`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := Rekey(ctx, pool, mustIdentity(t), mustIdentity(t), nil)
+	if err == nil || n != 0 || !strings.Contains(err.Error(), rowRef("", "stranger")) || !strings.Contains(err.Error(), "awskms:arn:x") {
+		t.Fatalf("Rekey over a row under an unknown key = (%d, %v), want an abort naming the row and its key", n, err)
+	}
+}
+
 // TestRekeyOnEmptyStore: a store with no secrets rotates cleanly to zero rows
 // rather than erroring, so a fresh deployment can still run the runbook.
 func TestRekeyOnEmptyStore(t *testing.T) {

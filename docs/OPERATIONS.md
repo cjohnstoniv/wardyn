@@ -4976,7 +4976,9 @@ Whatever you do, **back the key up off-host.** Rotation re-encrypts what is ther
 it cannot recover a key you have already lost.
 
 With `WARDYN_PLATFORM_KEY_FILE` set (below), the rotation moves only the rows
-under the age key; the boot keys under the platform key stay as they are.
+under the age key; the boot keys under the platform key stay as they are. Rows
+sealed under Vault Transit (below) hold nothing under the age key either, and a
+rotation leaves them alone.
 
 ## Separating the platform keys
 
@@ -4997,27 +4999,155 @@ file stays optional; nothing requires it.
 # 1. Mint the second key where only wardynd can read it (0600, off-host backup).
 umask 077
 ./bin/wardynd -gen-age-key > ~/.wardyn/platform.key
-# 2. Move the boot keys onto it: one transaction, data keys only, no value is
-#    decrypted. Safe beside a serving daemon with the same WARDYN_AGE_KEY.
+# 2. Move the boot keys onto it with -rewrap (see "Moving data keys" below).
 WARDYN_PG_DSN='postgres://…' WARDYN_AGE_KEY="$(cat ~/.wardyn/age.key)" \
   WARDYN_PLATFORM_KEY_FILE=~/.wardyn/platform.key ./bin/wardynd -rewrap
 # INFO wardynd: stored secrets rewrapped … secrets=4 platform_key_separate=true
 # 3. Restart every replica with WARDYN_PLATFORM_KEY_FILE set.
 ```
 
-`-rewrap` also moves the rows a pre-0.8 wardynd wrote (`local:`) onto the
-per-purpose keys, with or without the platform key. It writes one
-`secret.rewrap` audit row and takes the same lock as `-rotate-age-key`. The one
-moment the age key still vouches for the boot keys is this move: run it from a
-host you trust, not after a suspected leak of the age key (then replace the boot
-keys instead: delete their rows and restart, which mints new ones — console
-sessions end and SSH clients see a new host key).
+The one moment the age key still vouches for the boot keys is this move: run it
+from a host you trust, not after a suspected leak of the age key (then replace
+the boot keys instead: delete their rows and restart, which mints new ones —
+console sessions end and SSH clients see a new host key).
 
 Keep the platform key as carefully as the age key, and apart from it: both are
 needed to read everything, and losing the platform key loses the boot keys
 (a restart then refuses; delete their rows to mint new ones). In store mode
 there is no local key at all and the file is refused; there the boot keys live
-under `platform/` in the organisation's store (two Vault roles, below).
+under `platform/` in the organisation's store (two Vault roles, below). With
+`WARDYN_KEK=transit` (next section) the boot keys are wrapped by Transit like
+every other row, and the file only reads the rows still under it.
+
+## Key service: Vault Transit
+
+With `WARDYN_KEK=transit`, each stored credential is still sealed in Postgres
+(AES-256-GCM under its own data key, as above), but the data key is wrapped by
+your Vault's Transit engine instead of a key derived from `WARDYN_AGE_KEY`. The
+key-encryption key never leaves Vault, and every unwrap is one Transit `decrypt`
+in your Vault audit device. The database alone decrypts nothing; neither does
+the database plus anything on the Wardyn host, once no row is sealed under the
+age key and `WARDYN_AGE_KEY` is unset. Wardyn's boot keys are wrapped the same
+way, under the same Transit key, so **do not restart wardynd during a Vault
+outage**: it will wait for Vault rather than boot. (If your organisation wants
+Vault to hold the values themselves, not a key, that is store mode, below.)
+
+Transit uses the same client as the Vault store: `WARDYN_VAULT_ADDR`,
+`WARDYN_VAULT_NAMESPACE`, Kubernetes or token-file authentication as
+`WARDYN_VAULT_ROLE`, and the TLS settings described under "Store mode:
+credentials in Vault". The key:
+
+```sh
+vault secrets enable transit
+vault write -f transit/keys/wardyn type=aes256-gcm96
+```
+
+Keep the key at `exportable=false`, `allow_plaintext_backup=false` and
+`deletion_allowed=false` (Vault's defaults; `vault read transit/keys/wardyn`
+shows them). The first two cannot be turned back off once set, and either lets
+the key leave Vault; the third keeps one command from destroying every stored
+credential. One Transit key and one Vault role wrap Wardyn's boot keys and the
+credentials alike; a separate key and role for the boot keys is a 0.8.x
+follow-up (`threatmodel/THREAT-MODEL.md` residual #49).
+
+**Policy.** Two paths, `update` only. Wardyn never calls `rewrap/` (Vault does
+not document `associated_data` on it, so `wardynd -rewrap` rewraps client-side)
+and never reads `keys/`:
+
+```hcl
+path "transit/encrypt/wardyn" { capabilities = ["update"] }
+path "transit/decrypt/wardyn" { capabilities = ["update"] }
+```
+
+**Binding.** Every wrap carries the row's owner and name as Transit
+`associated_data`, so a wrapped data key moved to another row does not unwrap.
+Only key types that bind it can do that; at boot wardynd wraps a probe data key,
+unwraps it, and tries to unwrap it under another row's `associated_data`. If
+that works, or the probe does not round-trip, **wardynd refuses to start**.
+
+**Moving an install to Transit, and back.** Reads follow each row's `kek_id`,
+so a daemon configured with both keys reads every row while `-rewrap` moves
+them:
+
+```sh
+# 0. Boot this version once with your WARDYN_AGE_KEY (it converts any
+#    pre-envelope rows), and take the Postgres dump (see Backup).
+# 1. Set WARDYN_KEK=transit and WARDYN_VAULT_TRANSIT_KEY=wardyn with the
+#    WARDYN_VAULT_* client settings, keep WARDYN_AGE_KEY, and restart: new
+#    rows are wrapped by Transit, and old ones still read.
+# 2. Rewrap the rest, with the same settings:
+wardynd -rewrap
+#    every sealed secret is wrapped under transit:transit/wardyn version 1; …
+# 3. Unset WARDYN_AGE_KEY and restart. wardynd refuses to start until you do
+#    (and, the other way, refuses without it, naming -rewrap, while any row is
+#    still sealed under it).
+```
+
+Back: set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep
+`WARDYN_VAULT_TRANSIT_KEY` so Transit still reads its rows, restart, and run
+`wardynd -rewrap` again.
+
+**Rotating the Transit key.** Rotate in Vault, rewrap, then retire the old
+versions:
+
+```sh
+vault write -f transit/keys/wardyn/rotate
+wardynd -rewrap
+#    every sealed secret is wrapped under transit:transit/wardyn version 2;
+#    raising the Transit key's min_decryption_version to 2 now retires the older versions
+vault write transit/keys/wardyn/config min_decryption_version=2
+```
+
+A row still wrapped under a retired version is refused, naming the row, until
+`min_decryption_version` is lowered again; `-rewrap` first, then raise it.
+
+**When Vault is unavailable.** As for the Vault store: a sealed, throttled or
+unreachable Vault is *transient* (the sink answers 503, "Wardyn couldn't reach
+the service that holds this run's credential"), while a 403, a wrap that does
+not unwrap for its row, or a retired version is *definitive*.
+
+## Moving data keys: `wardynd -rewrap`
+
+`wardynd -rewrap` is the one command that moves stored secrets' data keys from
+one key-encryption key to another. It is a **maintenance mode**: it rewraps,
+writes one `secret.rewrap` audit row, and exits. Each row's data key moves onto
+the key a write uses under the settings it runs with:
+
+- **The local key of the row's purpose** (`local/cred:` or `local/platform:`):
+  rows a pre-0.8 wardynd wrote (`local:`), and, once `WARDYN_PLATFORM_KEY_FILE`
+  is set, the boot keys still under the age key ("Separating the platform
+  keys" above).
+- **The key service**, with `WARDYN_KEK=transit`, at the Transit key's latest
+  version: every local row, and every Transit row wrapped under an older
+  version ("Key service: Vault Transit" above). It then prints the
+  `min_decryption_version` that retires the older versions.
+- **Back to the local key**, with `WARDYN_KEK=local` and
+  `WARDYN_VAULT_TRANSIT_KEY` still set: every row under Transit.
+
+Run it with the same `WARDYN_AGE_KEY`, `WARDYN_PLATFORM_KEY_FILE`, `WARDYN_KEK`
+and `WARDYN_VAULT_*` settings the daemon uses (`WARDYN_AGE_KEY` may be unset
+only with `WARDYN_KEK=transit`, once no row is under it). Properties:
+
+- **Data keys only.** Each data key is unwrapped under its row's own key and
+  wrapped again under the target, both bound to the row. Only the wrapped data
+  key and `kek_id` change: no sealed value is decrypted or rewritten.
+  Transit's server-side `rewrap` is never called.
+- **All-or-nothing.** The whole run is ONE transaction. A row it cannot move —
+  under a key these settings do not reach, a pre-envelope row, a Transit
+  outage — aborts everything with an error naming that row and how far it got
+  (`rewrap ABORTED after 3 of 9 rows …`), and nothing is committed. Re-running
+  it is safe: a row already under its target is left alone.
+- **Safe beside a serving daemon with the same settings**, which reads a row
+  under both its old and its new key. While it runs, a write to an existing
+  secret waits for its commit. It takes the same Postgres advisory lock as
+  `-rotate-age-key`, so the two never run at once.
+- **Pointer rows** (store mode) hold no data key and are never touched.
+
+Restart every replica with the settings it ran with afterwards. After a move
+onto Transit, the last step is: **unset `WARDYN_AGE_KEY`; wardynd refuses to
+start until you do.** With `WARDYN_KEK=transit` and no stored row left under the
+age key, the key could only let whoever also holds the database forge a row
+wardynd still reads under it, its own boot keys among them.
 
 ## Store mode: credentials in Vault
 

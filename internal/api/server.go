@@ -540,15 +540,14 @@ type Config struct {
 	// and the recommended production default, for honest /healthz visibility. Nil
 	// => the components object is omitted.
 	Components map[string]ComponentInfo
-	// AgeKeyDurable reports whether the secret store's age key was SUPPLIED
-	// (WARDYN_AGE_KEY/-age-key non-empty) vs ephemerally generated at boot. When
-	// false, stored secrets are unreadable after a restart — surfaced by
-	// /setup/status as a durability warning. Computed at boot in cmd/wardynd;
-	// true in store mode, where no local key holds anything.
+	// AgeKeyDurable: the age key was SUPPLIED (WARDYN_AGE_KEY), not generated at boot, or no local key holds anything (store
+	// mode, a key service). False, stored secrets are unreadable after a restart: /setup/status warns. Computed in cmd/wardynd.
 	AgeKeyDurable bool
 	// SecretStoreExternal names the store every credential is written to in store mode ("Vault at
 	// vault.example:8200"), "" in local mode; set, /setup/status shows store_external, not the age-key row.
 	SecretStoreExternal string
+	// SecretKeyService: the key service wrapping every stored data key ("Vault Transit at host"), or "" for the local key; set, /setup/status shows kek_service.
+	SecretKeyService string
 	// PlatformKeySeparate: WARDYN_PLATFORM_KEY_FILE gives the boot keys their own local key; false in local mode, /setup/status shows platform_shared (§2.13 c).
 	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.

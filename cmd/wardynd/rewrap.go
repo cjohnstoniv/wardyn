@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -24,36 +26,49 @@ import (
 // rewrapActor is the audit `actor` of the -rewrap maintenance mode.
 const rewrapActor = "wardyn/rewrap"
 
-// rewrapMode is wardynd's `-rewrap` MAINTENANCE MODE (design §2.13 c): rewrap
-// every local row's data key onto the KEK its purpose uses under this
-// configuration — the rows written before the purpose split, and, once
-// WARDYN_PLATFORM_KEY_FILE is set, the boot keys still under the age key —
-// in one transaction, and exit. No value is decrypted. It takes the rekey
-// lock, so it never runs beside a -rotate-age-key.
+// rewrapMode is wardynd's `-rewrap` MAINTENANCE MODE: rewrap every stored
+// secret's data key onto the KEK a write uses under this configuration, in
+// one transaction, and exit (secretstorepg.RewrapKeys). That is the local key
+// of the row's purpose (design §2.13 c) — the rows written before the purpose
+// split, and, once WARDYN_PLATFORM_KEY_FILE is set, the boot keys still under
+// the age key — or, with WARDYN_KEK=transit, the Vault Transit key at its
+// latest version (design §2.3); with WARDYN_KEK=local and the Transit key
+// still named, the rows under it move back to the local key. No value is
+// decrypted. It takes the rekey lock, so it never runs beside a
+// -rotate-age-key.
 //
-// Safe beside a serving daemon with the same WARDYN_AGE_KEY: it reads both
-// the old and the new KEK of a credential row, and reads the boot keys only
-// at boot. Every replica then restarts with the platform key file set.
+// Safe beside a serving daemon configured the same way: it reads a row under
+// both the old and the new KEK, and reads the boot keys only at boot. While
+// it runs, a write to an existing secret waits for its commit.
 func rewrapMode(f *bootFlags) error {
 	if strings.TrimSpace(*f.dsn) == "" {
 		return fmt.Errorf("refusing to rewrap: -rewrap needs the secret store's database; set WARDYN_PG_DSN")
 	}
 	ageKey := strings.TrimSpace(*f.ageKey)
-	if ageKey == "" {
-		return fmt.Errorf("refusing to rewrap: WARDYN_AGE_KEY (-age-key) is empty, so there is no local key to rewrap from")
-	}
-	id, err := age.ParseX25519Identity(ageKey)
-	if err != nil {
-		return fmt.Errorf("parse the age identity (WARDYN_AGE_KEY): %w", err)
+	var id *age.X25519Identity
+	switch {
+	case ageKey != "":
+		var err error
+		if id, err = age.ParseX25519Identity(ageKey); err != nil {
+			return fmt.Errorf("parse the age identity (WARDYN_AGE_KEY): %w", err)
+		}
+	case strings.TrimSpace(*f.vault.kek) != kekTransit:
+		return fmt.Errorf("refusing to rewrap: WARDYN_AGE_KEY (-age-key) is empty, so there is no local key to rewrap from, and WARDYN_KEK is not %q", kekTransit)
 	}
 	platform, err := readPlatformKey(*f.platformKeyFile, ageKey)
 	if err != nil {
 		return err
 	}
 
-	ctx := context.Background()
-	connCtx, cancel := context.WithTimeout(ctx, rekeyConnectTimeout)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// The key service (buildKEK) keeps its Vault token alive until ctx ends.
+	svc, writes, err := buildKEK(ctx, f.vault, *f.trustedCAFile)
+	if err != nil {
+		return err
+	}
+	connCtx, cancelConn := context.WithTimeout(ctx, rekeyConnectTimeout)
+	defer cancelConn()
 	pool, err := db.Connect(connCtx, *f.dsn)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -77,13 +92,25 @@ func rewrapMode(f *bootFlags) error {
 		defer func() { _ = fan.Close() }()
 	}
 
-	n, err := secretstorepg.Rewrap(ctx, pool, id, optionalIdentity(platform))
+	return rewrapKeys(ctx, rec, secretstore.Deps{
+		Pool: pool, AgeIdentity: optionalIdentity(id), PlatformIdentity: optionalIdentity(platform), KEK: svc, KEKWrites: writes,
+	})
+}
+
+// rewrapKeys is -rewrap's work once its inputs are checked and its lock held:
+// the rewrap under d's keys, its secret.rewrap event, and what to do next.
+func rewrapKeys(ctx context.Context, rec audit.Recorder, d secretstore.Deps) error {
+	res, err := secretstorepg.RewrapKeys(ctx, d)
 	if err != nil {
 		return err
 	}
-	emitRewrapAudit(ctx, rec, n, platform != nil)
-	slog.Info("wardynd: stored secrets rewrapped onto this configuration's keys; restart every replica with the same WARDYN_AGE_KEY and WARDYN_PLATFORM_KEY_FILE",
-		slog.Int("secrets", n), slog.Bool("platform_key_separate", platform != nil))
+	separate := d.PlatformIdentity != nil
+	emitRewrapAudit(ctx, rec, res, separate)
+	slog.Info("wardynd: stored secrets rewrapped onto this configuration's keys; restart every replica with the same WARDYN_AGE_KEY, WARDYN_PLATFORM_KEY_FILE and WARDYN_KEK",
+		slog.Int("secrets", res.Rewrapped), slog.Bool("platform_key_separate", separate), slog.String("key_service", res.KeyService))
+	if res.KeyVersion > 0 {
+		fmt.Fprintf(os.Stdout, "every sealed secret is wrapped under %s version %d; raising the Transit key's min_decryption_version to %d now retires the older versions\n", res.KeyService, res.KeyVersion, res.KeyVersion)
+	}
 	return nil
 }
 
@@ -96,11 +123,19 @@ func optionalIdentity(id *age.X25519Identity) age.Identity {
 	return id
 }
 
-// emitRewrapAudit writes the secret.rewrap event: the row count and whether
-// the boot keys now sit under a separate platform key. Like secret.rekey it
-// names no secret.
-func emitRewrapAudit(ctx context.Context, rec audit.Recorder, count int, separate bool) {
-	data, _ := json.Marshal(map[string]any{"secrets": count, "platform_key_separate": separate})
+// emitRewrapAudit writes the secret.rewrap event: the row count, whether the
+// boot keys now sit under a separate platform key, and, when a key service
+// wraps every write, its kek_id and the key version every row is now under.
+// Like secret.rekey it names no secret.
+func emitRewrapAudit(ctx context.Context, rec audit.Recorder, res secretstorepg.RewrapResult, separate bool) {
+	fields := map[string]any{"secrets": res.Rewrapped, "platform_key_separate": separate}
+	if res.KeyService != "" {
+		fields["key_service"] = res.KeyService
+	}
+	if res.KeyVersion > 0 {
+		fields["key_version"] = res.KeyVersion
+	}
+	data, _ := json.Marshal(fields)
 	ev := types.AuditEvent{
 		ID:        uuid.New(),
 		Time:      time.Now().UTC(),

@@ -295,6 +295,20 @@ spec:
             - name: WARDYN_VAULT_KV_MAX_VERSIONS
               value: {{ .vault.maxVersions | quote }}
             {{- end }}
+            {{- with $.Values.kek }}
+            {{- if eq .provider "transit" }}
+            # Data keys wrapped by Vault Transit (docs/OPERATIONS.md "Key
+            # service: Vault Transit").
+            - name: WARDYN_KEK
+              value: "transit"
+            {{- end }}
+            {{- if and .transit .transit.key }}
+            - name: WARDYN_VAULT_TRANSIT_MOUNT
+              value: {{ .transit.mount | quote }}
+            - name: WARDYN_VAULT_TRANSIT_KEY
+              value: {{ .transit.key | quote }}
+            {{- end }}
+            {{- end }}
             {{- if and .azure .azure.vaultUrl }}
             # Store mode's Key Vault client (docs/OPERATIONS.md "Store mode:
             # credentials in Azure Key Vault"). With workload identity the

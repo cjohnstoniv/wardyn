@@ -49,6 +49,7 @@ type fakeVault struct {
 	loginAt      time.Time // the last login
 	firstRenew   time.Time // the first renew-self
 	nextToken    int
+	transit      fakeTransit
 }
 
 type kvEntry struct {
@@ -141,6 +142,8 @@ func (f *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, f.mount+"/destroy/"), strings.HasPrefix(path, f.mount+"/undelete/"):
 		f.t.Errorf("wardynd called %s %s: the documented policy has no destroy/ or undelete/ stanza", r.Method, path)
 		fail(w, http.StatusForbidden, "permission denied")
+	case strings.HasPrefix(path, "transit/"):
+		f.transitRoute(w, strings.TrimPrefix(path, "transit/"), body)
 	case f.revoked && (strings.HasPrefix(path, f.mount+"/data/") || strings.HasPrefix(path, f.mount+"/metadata/")):
 		fail(w, http.StatusForbidden, "permission denied")
 	case f.platformRole != "" && (strings.HasPrefix(path, f.mount+"/data/") || strings.HasPrefix(path, f.mount+"/metadata/")) &&

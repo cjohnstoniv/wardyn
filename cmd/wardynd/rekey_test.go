@@ -30,6 +30,8 @@ func rekeyFlags(dsn, storeSel, ageKey string) *bootFlags {
 		auditSinks:      new(string),
 		auditSpool:      new(string),
 		auditSource:     new(string),
+		trustedCAFile:   new(string),
+		vault:           vaultFlags{kek: new(string), transitKey: new(string)},
 	}
 }
 

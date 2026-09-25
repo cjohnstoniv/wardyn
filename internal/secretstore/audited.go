@@ -177,6 +177,16 @@ func (a *audited) DeleteExpired(ctx context.Context) ([]Expired, error) {
 	return nil, ErrNoExpirySweep
 }
 
+// KeyService forwards the wrapped store's description of the key service that
+// wraps its writes (the pg store under WARDYN_KEK=transit), or "": metadata
+// for the setup row, never a value.
+func (a *audited) KeyService() string {
+	if d, ok := a.inner.(interface{ KeyService() string }); ok {
+		return d.KeyService()
+	}
+	return ""
+}
+
 func (a *audited) For(owner string) Store {
 	return &audited{inner: a.inner.For(owner), rec: a.rec, owner: owner}
 }

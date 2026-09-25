@@ -8,9 +8,10 @@
 // A KEK never sees a credential value: it wraps and unwraps a 32-byte DEK,
 // bound to the row's owner and name. Each provider is one implementation of
 // KEK; the row records the provider's ID as kek_id, and a read picks the KEK by
-// that id. Only `local` exists today, one key per purpose (NewLocalPurpose);
-// Vault/OpenBao Transit and Azure Key Vault are the next two, each a
-// Wrap/Unwrap over its own service's API.
+// that id. `local` lives here, one key per purpose (NewLocalPurpose); Vault
+// Transit (package vaultkv, which holds the Vault client) wraps through the
+// service's own encrypt and decrypt. WARDYN_KEK selects the one every write
+// uses.
 package kek
 
 import (
@@ -36,6 +37,17 @@ type KEK interface {
 	ID() string
 	Wrap(ctx context.Context, dek []byte, bind map[string]string) ([]byte, error)
 	Unwrap(ctx context.Context, wrapped []byte, bind map[string]string) ([]byte, error)
+}
+
+// Versioned is a KEK whose key has versions (Vault Transit): each wrap names
+// the version it was made under, and `wardynd -rewrap` moves every row still
+// wrapped under an older one to the latest, so the old versions can be retired.
+type Versioned interface {
+	KEK
+	// WrapVersion is the key version wrapped was made under.
+	WrapVersion(wrapped []byte) (int, error)
+	// LatestVersion is the version a wrap made now would name.
+	LatestVersion(ctx context.Context) (int, error)
 }
 
 // The bind keys: the KMS encryption context / Transit associated data a
@@ -198,15 +210,24 @@ func (l *Local) Unwrap(_ context.Context, wrapped []byte, bind map[string]string
 	return dek, nil
 }
 
-// aad is AAD_kek = Encode("wardyn/kek/v1", owner, name, kek_id): the kek_id
+func (l *Local) aad(bind map[string]string) ([]byte, error) {
+	aad, err := WrapAAD(bind, l.id)
+	if err != nil {
+		return nil, fmt.Errorf("local KEK: %w", err)
+	}
+	return aad, nil
+}
+
+// WrapAAD is AAD_kek = Encode("wardyn/kek/v1", owner, name, kek_id): what every
+// provider binds a wrap to, as associated data (local, Transit). The kek_id
 // carries the purpose, so the label stays one for every local KEK. A bind
 // missing either key is refused rather than defaulted: a zero value here would
 // seal a DEK to the wrong row.
-func (l *Local) aad(bind map[string]string) ([]byte, error) {
+func WrapAAD(bind map[string]string, kekID string) ([]byte, error) {
 	owner, okO := bind[BindOwner]
 	name, okN := bind[BindName]
 	if !okO || !okN {
-		return nil, errors.New("local KEK: bind must carry both " + BindOwner + " and " + BindName)
+		return nil, errors.New("bind must carry both " + BindOwner + " and " + BindName)
 	}
-	return Encode(localInfo, owner, name, l.id), nil
+	return Encode(localInfo, owner, name, kekID), nil
 }

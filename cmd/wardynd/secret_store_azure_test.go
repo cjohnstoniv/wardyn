@@ -14,7 +14,7 @@ func strp(s string) *string { return &s }
 func testExternalFlags(vaultAddr, kvURL string) (vaultFlags, azureFlags) {
 	timeout, versions, maxV := 5*time.Second, 1, 100
 	v := vaultFlags{
-		addr: strp(vaultAddr), namespace: strp(""), auth: strp("token-file"), authMount: strp("kubernetes"), role: strp(""),
+		addr: strp(vaultAddr), namespace: strp(""), auth: strp("token-file"), authMount: strp("kubernetes"), role: strp(""), rolePlatform: strp(""),
 		k8sTokenFile: strp(""), tokenFile: strp("/nonexistent"), caCertFile: strp(""), kvMount: strp("wardyn"), kvPrefix: strp("wardyn"),
 		maxVersions: &versions, timeout: &timeout,
 	}

@@ -11,6 +11,10 @@
 //   - azurekv: store mode in the organisation's Azure Key Vault (package
 //     azurekv; design §2.3a.3).
 //
+// In pg, the key that wraps each row's data key is its own seam (package kek,
+// selected by WARDYN_KEK): the local key derived from WARDYN_AGE_KEY, or Vault
+// Transit (package vaultkv, design §2.3).
+//
 // Secrets are late-bound: they are resolved at use time by the broker or
 // injected proxy-side, so as a RULE no value lands in a sandbox's environment
 // or disk. It is a rule with named, bounded exceptions, not an invariant — a
@@ -77,7 +81,7 @@ type Store interface {
 	//     operator's. A caller that wants "everything a principal may see"
 	//     composes it itself: For("").List() ∪ For(owner).List().
 	// This is a real backend implementation, not policy: a plugged-in
-	// alternate (OpenBao, KMS) implements the same fallback/isolation
+	// alternate (a store-mode backend, a KEK) keeps the same fallback/isolation
 	// contract, held to it by the shared conformance suite.
 	For(owner string) Store
 }

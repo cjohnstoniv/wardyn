@@ -464,6 +464,7 @@ func run() error {
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
 		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),
 		SecretStoreExternal:   storesExternally(secrets),
+		SecretKeyService:      keyService(secrets),
 		PlatformKeySeparate:   strings.TrimSpace(*f.platformKeyFile) != "",
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,
