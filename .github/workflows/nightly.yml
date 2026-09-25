@@ -676,7 +676,7 @@ jobs:
         run: ./scripts/nightly-migration-merge-check.sh
 
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, fuzz]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, fuzz, gvisor-cc2-live]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -697,7 +697,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk or fuzz." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk, fuzz or gvisor-cc2-live." \
               "" \
               "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
               "" \
