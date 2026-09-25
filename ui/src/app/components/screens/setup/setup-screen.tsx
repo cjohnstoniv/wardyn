@@ -462,13 +462,13 @@ export function SetupScreen({
     // and every manual Re-check pull it — a failure leaves the last-known
     // config (or the initial null) in place, never clobbers it. This is the
     // ORCHESTRATOR'S sole GET path.
-    reloadSiteConfig();
+    void reloadSiteConfig();
     // Secret names feed the SAME Integrations badge (deriveIntegrations) —
     // without this, adding/deleting a secret-backed integration inside the
     // embedded step never reaches the rail, which keeps reading the
     // mount-time snapshot until a full page reload.
-    loadSecrets();
-    loadProviderCount();
+    void loadSecrets();
+    void loadProviderCount();
     return setupApi
       .getSetupStatus({ recheck: opts?.force })
       .then((s) => {
@@ -509,6 +509,13 @@ export function SetupScreen({
         // single-user deployment never needs this fetch at all.
         if (deploymentMode(s) === "multi-user") void loadAccess();
       })
+      // getSetupStatus only ever rejects on a 401 (see its own doc comment) —
+      // wfetch has already routed that to the module-level onUnauthorized
+      // handler (core.ts) before this rejection reaches here, so there is
+      // nothing left for a caller to do with it. Caught here, once, so none of
+      // recheck()'s five call sites (mount, the Re-check button, three
+      // onRecheck props) leaves an unhandled rejection.
+      .catch(() => {})
       .finally(() => setRechecking(false));
   }, [reloadSiteConfig, loadSecrets, loadProviderCount, loadAccess]);
 
@@ -522,7 +529,7 @@ export function SetupScreen({
   const forceRecheck = React.useCallback(() => recheck({ force: true }), [recheck]);
 
   React.useEffect(() => {
-    recheck(); // also performs the initial SiteConfig + secrets GET (see recheck)
+    void recheck(); // also performs the initial SiteConfig + secrets GET (see recheck)
     loadWorkspaces();
     // run once on mount — recheck/loadWorkspaces are no longer identity-stable
     // ([adminReads] now rides through recheck's own dep chain), but adminReads
@@ -531,7 +538,7 @@ export function SetupScreen({
     // (app-shell.tsx's OperatorProvider/RoleProvider both flip from the same
     // settled /me read), so there is no later tick where a fresh recheck()
     // would need to fire on adminReads' account.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once; adminReads is invariant for this mount's life (see comment above)
   }, []);
 
   // A `?step=` deep link is read once at mount (the initializer
@@ -551,7 +558,7 @@ export function SetupScreen({
     if (initialDeepLinkCheckedRef.current || !status) return;
     initialDeepLinkCheckedRef.current = true;
     if (refuseSelect(stepId, "environment")) setStepId("corp_network");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the ref latch fires this once, off status becoming known, not off stepId changing (see comment above)
   }, [status]);
 
   // Once per PAGE LOAD (clearStaleVisitFlagsOnce's own module latch —
@@ -569,7 +576,6 @@ export function SetupScreen({
       setSkippedIntegrations(false);
       setVisitedSteps(new Set());
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
   // …and the OTHER correction, deliberately its own effect and deliberately

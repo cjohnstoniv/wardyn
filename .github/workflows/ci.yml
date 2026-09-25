@@ -124,7 +124,8 @@ jobs:
         include:
           # `make lint` = go vet (all three tag sets) + the golangci-lint
           # function-size/complexity gate (.golangci.yml) + the file-size gate
-          # and the other static gates — single-sourced in the Makefile.
+          # and the other static gates + the console's ESLint — single-sourced
+          # in the Makefile.
           # tidy-check: go.mod/go.sum must stay tidy (go mod tidy -diff).
           - suite: lint
             target: build tidy-check lint
@@ -172,9 +173,25 @@ jobs:
           restore-keys: |
             go-${{ matrix.suite }}-${{ hashFiles('go.sum', 'Makefile') }}-
             go-${{ matrix.suite }}-
+      # The lint leg's `make lint` also runs the console's ESLint
+      # (ui/eslint.config.js), so that leg sets up pnpm and node.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: matrix.suite == 'lint'
+        with:
+          version: 9
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        if: matrix.suite == 'lint'
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      # ESLint needs no browser; PUPPETEER_SKIP_DOWNLOAD skips the mermaid-cli
+      # chromium download.
       - name: make ${{ matrix.target }}
         if: matrix.suite == 'lint' || needs.changes.outputs.code != 'false'
         run: make ${{ matrix.target }}
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
       # files built under its tag (their packages run with -tags; the rest ran in

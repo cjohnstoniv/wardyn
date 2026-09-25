@@ -403,7 +403,7 @@ export function RunRail({
     door.openDoor(launchRef.current, () => onLaunchRef.current());
     // The strip and the line above catch up with what the server just said.
     void door.refresh();
-  }, [launch.credentialRefused, door.open, door.bedrockSSO, door.perUser, door.operator, door.openDoor, door.refresh]);
+  }, [launch.credentialRefused, door]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise

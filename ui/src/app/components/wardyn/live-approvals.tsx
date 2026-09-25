@@ -616,7 +616,7 @@ export function LiveApprovals({
               disabled={busy === denyTarget?.request.id}
               onClick={(e) => {
                 e.preventDefault();
-                confirmDeny();
+                void confirmDeny();
               }}
               className="bg-danger text-danger-foreground hover:bg-danger/90"
             >

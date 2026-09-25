@@ -419,7 +419,7 @@ export function PermissionsScreen() {
               className="bg-danger text-danger-foreground hover:bg-danger/90"
               onClick={(e) => {
                 e.preventDefault();
-                if (toRemove) removeGrant(toRemove);
+                if (toRemove) void removeGrant(toRemove);
               }}
             >
               {busy ? <Loader2 className="size-4 animate-spin" /> : null}

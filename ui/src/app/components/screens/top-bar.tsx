@@ -70,7 +70,7 @@ export function TopBar({
 }) {
   // What the header calls "you": the IdP's display name, else the session
   // email, else the principal itself (an admin token or local mode has
-  // neither). Display only — PrincipalContext below keeps meta.principal.
+  // neither). Display only — usePrincipal() still reads meta.principal.
   const display = meta.name || meta.email || meta.principal;
   const { theme, toggle } = useTheme();
   // #460 review — every plain <Link> in this header can navigate away from a

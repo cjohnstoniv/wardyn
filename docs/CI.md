@@ -356,6 +356,9 @@ its longest job, so 19 minutes is the floor while `build` is the critical path.
 `make build-docker` as separate steps (`cover-check` already compiles and races those tag sets).
 Re-measure `cover-check`'s new time once green runs accumulate on this workflow; it should land
 below the old 537+395=932 s combined, not above it.
+`make lint` has since gained the console's ESLint (`ui/eslint.config.js`), so
+the `go (lint)` leg also sets up pnpm and node; that install and lint pass are not in the
+120 s above.
 
 **Why `ui-e2e` is one job.** In the same run its Playwright step took 492 s:
 Playwright itself 418 s, the backend and UI build plus the first seed 32 s, and

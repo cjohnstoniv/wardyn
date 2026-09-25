@@ -171,7 +171,7 @@ test.describe("Run cockpit terminal", () => {
     // used to poll the SCREEN for were removed from the product by that PR,
     // three hours before this spec was even written — a stale assertion, not
     // a product regression.
-    latestWs!.close({ code: 1006, reason: "abnormal" });
+    await latestWs!.close({ code: 1006, reason: "abnormal" });
 
     await expect(pane.getByText(TERMINAL.RECONNECTING_LINE(1, 4))).toBeVisible();
     await expect

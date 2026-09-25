@@ -114,7 +114,7 @@ const sharedBedrockHarness: SetupHarnessTool[] = [
 ];
 
 // The page reads its drive off the shell's ONE GET /me (operator-context's
-// UserDriveContext), not a fetch of its own — so a case states its /me body
+// MeIdentity.userDrive), not a fetch of its own — so a case states its /me body
 // here, exactly as app-shell hands it down.
 function renderPage(me: Me = baseMe()) {
   return render(

@@ -493,7 +493,7 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
 	go mod tidy -diff
 
-lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + actionlint gates
+lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + actionlint gates + console ESLint
 	@echo "Running go vet (default + docker + k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
@@ -517,6 +517,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	# only run it `if command -v shellcheck`), and actionlint's own YAML/
 	# expression checks are what this gate is actually for.
 	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION) -shellcheck=
+	@echo "Running console ESLint (react-hooks + no-floating-promises, ui/eslint.config.js)..."
+	cd ui && pnpm install --frozen-lockfile && pnpm lint
 
 # The shell half of the test suite: each of these pins a fixed regression in
 # scripts/ that no Go test can see (up.sh's reset warnings, the compose
