@@ -312,6 +312,10 @@ type bootFlags struct {
 	uiOriginTemplate *string
 	// uiSessionTTL bounds the relay session cookie — see api.Config.UISessionTTL.
 	uiSessionTTL *time.Duration
+
+	// allowUnknownMigrations is the break-glass past db.Migrate's downgrade
+	// refusal (a database a newer wardynd migrated) — see connectAndMigrate.
+	allowUnknownMigrations *bool
 }
 
 // deprecatedEnvAliases is UT-5's six WARDYN_MEMBER_* → WARDYN_USER_* renames
@@ -537,8 +541,9 @@ func parseBootFlags() *bootFlags {
 		uiSessionTTL:     flagDuration("ui-sandbox-session-ttl", "WARDYN_UI_SANDBOX_SESSION_TTL", 8*time.Hour, "how long a UI-sandbox relay session cookie stays usable (duration)"),
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
 
-		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn ssh" refuses`),
-		sshRoleTTL:   flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
+		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn ssh" refuses`),
+		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
+		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),
 	}
 	flag.Parse()
 

@@ -5622,7 +5622,17 @@ is still correct until its own PR lands:
 Migrations are **forward-only**. `internal/db` records each applied filename in
 `schema_migrations` and applies anything new on boot, under an advisory lock so
 concurrent starts do not race. There are no `down` migrations and no downgrade
-path — a rollback to an older wardynd against a migrated database is unsupported.
+path — a rollback to an older wardynd against a migrated database is unsupported,
+and wardynd itself refuses it: a boot that finds a `schema_migrations` row it does
+not ship stops before writing anything, naming the newest unknown file. That covers
+`helm rollback` and a pinned older image, not only `install.sh`. Restore the dump.
+`WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` is the break-glass past the refusal; it does
+not make the older binary understand the newer schema. One name is a known
+exception, not a downgrade: 0.7.12 databases record `0065_secret_envelope_v1.sql`
+(this tree ships the byte-identical file as `0069_secret_envelope_v1.sql`, freeing
+0065-0068 for migrations added after the 0.7 branch point), and `internal/db`'s
+`retiredMigrations` table accepts that row — the supported 0.7.12 -> 0.8 upgrade
+boots normally.
 
 **Upgrading from 0.7.11 or earlier converts every stored secret, once, and it
 cannot be undone without the backup.** `0069_secret_envelope_v1` adds the envelope columns, and

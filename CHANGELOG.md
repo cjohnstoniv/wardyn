@@ -1073,6 +1073,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   shared subscription sentinels are refused before the operator's token is touched; the boot
   gateway (`WARDYN_ANTHROPIC_BASE_URL`) no longer widens where a subscription token may go under a
   block.
+- **An older wardynd now refuses a database a newer one migrated (#675).** Boot used to skip the
+  migrations it knew and never look at the ones it did not, so `helm rollback` or a pinned older
+  image booted over a schema whose one-way conversions it could not read. Boot now stops before
+  writing anything, naming the newest `schema_migrations` file this binary does not ship; restore
+  the pre-upgrade dump. `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` is the break-glass. Saving the site
+  config or a governance profile also keeps top-level keys this binary does not know, so a key a
+  newer wardynd wrote — a governance limit, where absent means no limit — is no longer dropped.
 - **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
   that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
   sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the

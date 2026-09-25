@@ -54,7 +54,14 @@ import (
 // not the 30s-bounded one — WithTimeout takes the EARLIEST of parent and its own
 // deadline, so deriving migrateCtx from an already-30s-bounded parent would have
 // silently kept the old cap.
-func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectTimeout, migrateTimeout time.Duration) (*pgxpool.Pool, error) {
+//
+// allowUnknownMigrations is the WARDYN_ALLOW_UNKNOWN_MIGRATIONS break-glass: it
+// turns db.Migrate's refusal of a database a newer wardynd migrated into a WARN.
+func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectTimeout, migrateTimeout time.Duration, allowUnknownMigrations bool) (*pgxpool.Pool, error) {
+	migrate := db.Migrate
+	if allowUnknownMigrations {
+		migrate = db.MigrateAllowingUnknown
+	}
 	connectCtx, cancelConnect := context.WithTimeout(rootCtx, connectTimeout)
 	defer cancelConnect()
 	pool, err := db.Connect(connectCtx, dsn)
@@ -69,7 +76,7 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 			pool.Close()
 			return nil, fmt.Errorf("connect migrate db: %w", merr)
 		}
-		merr = db.Migrate(migrateCtx, mpool)
+		merr = migrate(migrateCtx, mpool)
 		mpool.Close()
 		if merr != nil {
 			pool.Close()
@@ -115,7 +122,7 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		}
 		return pool, nil
 	}
-	if err := db.Migrate(migrateCtx, pool); err != nil {
+	if err := migrate(migrateCtx, pool); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
