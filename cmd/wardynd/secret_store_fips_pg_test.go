@@ -45,7 +45,7 @@ func TestBuildSecretStore_StoreModeBootsUnderFIPSOnly(t *testing.T) {
 
 	boot := func() [][]byte {
 		t.Helper()
-		s, err := buildSecretStore(ctx, pool, "", nil, vaultkv.Name, ext, 0, &capturingRecorder{})
+		s, err := buildSecretStore(ctx, pool, "", nil, vaultkv.Name, storeClients{ext: ext}, &capturingRecorder{})
 		if err != nil {
 			t.Fatalf("store-mode boot under fips140=only: %v", err)
 		}
@@ -84,7 +84,7 @@ func TestBuildSecretStore_StoreModeBootsUnderFIPSOnly(t *testing.T) {
 		}
 	}
 
-	if _, err := buildSecretStore(ctx, pool, "", nil, "", nil, 0, &capturingRecorder{}); err == nil || !strings.Contains(err.Error(), "fips140=only") {
+	if _, err := buildSecretStore(ctx, pool, "", nil, "", storeClients{}, &capturingRecorder{}); err == nil || !strings.Contains(err.Error(), "fips140=only") {
 		t.Fatalf("a local-mode boot (ephemeral age key) under fips140=only = %v; want the refusal naming fips140=only", err)
 	}
 }
