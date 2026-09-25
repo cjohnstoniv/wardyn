@@ -2212,6 +2212,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   snake_case (`host-not-organisation` → `host_not_organisation`, `sso-host-not-portal` →
   `sso_host_not_portal`, and six more the appendix lists); a consumer matching an old spelling needs
   the same update.
+- **`docs/MEMBERS.md` is renamed `docs/USERS.md` (#620).** `member` is the built-in `standard`
+  user type — see #608's entry above — and every doc citation is re-pointed to the new path. The
+  chart alias (`WARDYN_OIDC_ROLE_MAP`/`WARDYN_OIDC_DEFAULT_ROLE` still accepting `member`,
+  `WARDYN_MEMBER_MODE` and its sibling `WARDYN_MEMBER_*` variables) keeps working and warns at
+  boot through 0.8.x; it is removed in 0.9.
 
 ## [0.7.12] — 2026-09-23
 

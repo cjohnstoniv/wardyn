@@ -493,7 +493,7 @@ Documentation lands as an extension of what exists rather than a third document.
 [docs/DESKTOP.md](../DESKTOP.md) gains the hybrid topology beside `a′` and `m′` and
 the offline rows from §5.3; [docs/OPERATIONS.md](../OPERATIONS.md) gains the
 placement ceiling in its governance section and the two-substrate capability rule
-from §6.3; [docs/MEMBERS.md](../MEMBERS.md) gains one short section, because
+from §6.3; [docs/USERS.md](../USERS.md) gains one short section, because
 placement is the first thing in Wardyn a member will ask for by name. A fourth
 document describing "hybrid" as a separate product would be the documentation
 version of the mistake D2 rejects.
