@@ -528,7 +528,7 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 		if derr != nil {
 			return fmt.Errorf("eligible_grants[%d]: env_secret scope invalid: %w", i, derr)
 		}
-		if sinkReservedSecret(secretName) {
+		if nameSinkReservedSecret(secretName) {
 			return fmt.Errorf("eligible_grants[%d]: env_secret references reserved secret name %q", i, secretName)
 		}
 		if g.RequiresApproval {
@@ -713,7 +713,7 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 	// an operator authoring a reserved name gets a 400 instead of a run whose
 	// scanner silently covers one fewer value than they asked for.
 	for i, name := range li.WorkspaceSecretNames {
-		if sinkReservedSecret(name) {
+		if nameSinkReservedSecret(name) {
 			return fmt.Errorf("llm_inspection.workspace_secret_names[%d]: %q is a reserved platform-internal secret name", i, name)
 		}
 		if name == bedrockAPIKeySecret {

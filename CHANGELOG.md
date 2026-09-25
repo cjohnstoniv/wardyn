@@ -1012,6 +1012,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **`env_secret` and `llm_inspection` can no longer read a model-provider credential (#1035).**
+  Both resolve an authored secret name through the run owner's namespace, falling back to the
+  operator's, and only the `-oauth` and `-sso` provider names were reserved, so an `env_secret`
+  grant naming `wardyn-provider-<uid>-key` put a model key, the operator's included, into the
+  sandbox env. Every `wardyn-provider-*` name, whatever its suffix, is now refused by the policy
+  validators (stored policies, and inline policy at launch and in Review) and skipped, with an
+  audit event, at dispatch.
 - **"Available to" now also hides the resource from people it leaves out, and blocks storing a key for it (#612, #923).**
   `GET /policies` leaves out a stored policy the caller isn't listed for. It filters before the
   page window, so neither the page nor `X-Wardyn-Truncated` counts a hidden policy, and a
