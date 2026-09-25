@@ -81,7 +81,7 @@ func (a *Authenticator) SetMemberMode(w http.ResponseWriter, r *http.Request, on
 	if err != nil {
 		return "", err
 	}
-	if on && sess.Role == RoleMember {
+	if on && sess.Role == RoleUser {
 		return sess.Role, nil
 	}
 	sess.MemberMode = on

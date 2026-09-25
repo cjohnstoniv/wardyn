@@ -31,7 +31,7 @@
 //     (/api/v1/me/ssh-keys). The rest of /api/v1/me is NOT wrapped: see below.
 //   - health (/healthz):                 Healthz
 //   - sessions (/api/v1/sessions):       RevokeSessions
-//   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDevices, RevokeDevice
+//   - devices (/api/v1/admin/devices):   MintDeviceEnrolmentToken, ListDeviceEnrolmentTokens, RevokeDeviceEnrolmentToken, ListDevices, RevokeDevice
 //
 // NOT covered — drive these with the CLI or raw HTTP. This half is a CENSUS of
 // every registered route family the SDK does not wrap, not a list of
@@ -186,42 +186,6 @@ type Client struct {
 // New returns a Client configured with baseURL and token.
 func New(baseURL, token string) *Client {
 	return &Client{BaseURL: baseURL, Token: token}
-}
-
-// APIError is returned when the server responds with a non-2xx status code.
-// Status is the HTTP status code; Body is the raw response body (trimmed to
-// 2 KiB) for diagnostic display. Callers may use errors.As to extract it.
-type APIError struct {
-	// Status is the HTTP status code, e.g. 404.
-	Status int
-	// Body is the raw server response body (capped at 2048 bytes).
-	Body string
-}
-
-func (e *APIError) Error() string {
-	if msg := e.envelopeMessage(); msg != "" {
-		return fmt.Sprintf("API error %d: %s", e.Status, msg)
-	}
-	return fmt.Sprintf("API error %d: %s", e.Status, e.Body)
-}
-
-// envelopeMessage extracts the human-readable message from the server's
-// standard {"error":...} (or {"message":...}) JSON envelope, returning "" when
-// Body is not such an envelope so Error() falls back to the raw body. Without
-// it a failed call surfaces raw JSON to the caller (e.g. the CLI) instead of
-// the message — the regression the CLI's old transport avoided by unwrapping.
-func (e *APIError) envelopeMessage() string {
-	var env struct {
-		Error   string `json:"error"`
-		Message string `json:"message"`
-	}
-	if json.Unmarshal([]byte(e.Body), &env) != nil {
-		return ""
-	}
-	if env.Error != "" {
-		return env.Error
-	}
-	return env.Message
 }
 
 // CreateRunRequest is the body for POST /api/v1/runs.
@@ -406,8 +370,8 @@ type CreateRunResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// CreateRun submits a new agent run to the control plane.
-// Returns the created run (state PENDING or RUNNING) plus any advisory warnings.
+// CreateRun submits a new agent run and answers once the run row exists (state
+// PENDING, never RUNNING) plus any advisory warnings; build and dispatch continue server-side.
 // Status 201 on success; 400 on validation failure; 422 on policy/confinement
 // mismatch; 503 when the runner is unavailable.
 func (c *Client) CreateRun(ctx context.Context, req CreateRunRequest) (CreateRunResult, error) {
@@ -942,7 +906,7 @@ func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID, session ...s
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return nil, &APIError{Status: resp.StatusCode, Body: string(raw)}
+		return nil, newAPIError(resp.StatusCode, raw)
 	}
 	return resp.Body, nil
 }
@@ -984,7 +948,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any, hea
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
-		return &APIError{Status: resp.StatusCode, Body: string(raw)}
+		return newAPIError(resp.StatusCode, raw)
 	}
 
 	// Success path: decode the FULL body (no 2 KiB cap). Streaming via

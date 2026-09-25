@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os/exec"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -203,6 +204,23 @@ func TestAgentIdleScript_ExitsOnSIGTERM(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("idle script did not exit within 2s of SIGTERM")
+	}
+}
+
+// TestBuildProxyConfig_Unattended: the flag reaches the sidecar's "unattended"
+// key, and a false one is omitted so an attended run's config is unchanged.
+func TestBuildProxyConfig_Unattended(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		b, err := BuildProxyConfig(uuid.New(), ProxyConfig{Unattended: want}, ProxyListenPort)
+		if err != nil {
+			t.Fatalf("BuildProxyConfig: %v", err)
+		}
+		if got := strings.Contains(string(b), `"unattended":true`); got != want {
+			t.Errorf("Unattended=%v marshals to %s", want, b)
+		}
+		if !want && strings.Contains(string(b), "unattended") {
+			t.Errorf("an attended run's config names the key: %s", b)
+		}
 	}
 }
 

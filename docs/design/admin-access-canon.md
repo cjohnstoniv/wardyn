@@ -20,8 +20,8 @@ strings; this table is where a reviewer checks them. It supersedes the `sso_rbac
 |---|---|---|
 | `sso_rbac.label` | Who is an admin | `/setup/status` row label (`ssoRBACCheck`) |
 | `sso_rbac.warn` | Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin. | setup row `detail`, warn |
-| `sso_rbac.fix` | Map people to admin or member on the People step, so only the people you name can change this deployment. | setup row `fix`, warn |
-| `sso_rbac.ok` | People are mapped to admin or member, so a person's role comes from their sign-in. | setup row `detail`, ok |
+| `sso_rbac.fix` | Map people to admin or user on the People step, so only the people you name can change this deployment. | setup row `fix`, warn |
+| `sso_rbac.ok` | People are mapped to admin or user, so a person's role comes from their sign-in. | setup row `detail`, ok |
 | `ADMIN_ACCESS_BANNER.TITLE` | Everyone who signs in is an admin | shell banner (`access-posture-copy.ts`) |
 | `ADMIN_ACCESS_BANNER.BODY` | Nobody is mapped to a role and no admin list is set, so every person your identity provider lets in can change policies, read and write secrets, decide approvals, and open a shell in any running sandbox. | shell banner |
 | `ADMIN_ACCESS_BANNER.ACTION` | Set who is an admin | shell banner CTA → `/setup?step=people` |

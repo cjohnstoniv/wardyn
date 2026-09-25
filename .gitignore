@@ -95,6 +95,10 @@ ds-bundle/
 /.design-sync/.cache/
 /.design-sync/project.local.json
 
+# golangci-lint cache (make lint), per worktree so a sibling worktree's
+# deleted paths never replay as findings here
+/.golangci-cache/
+
 # Claude Code local config (contributors bring their own)
 .claude/*
 # Skills ship with the repo (Claude Code picks them up per-project).
@@ -143,6 +147,9 @@ ds-bundle/
 # 0.8/ ships for the same reason: the 0.8 issues and ROADMAP.md's v0.8 row both
 # link to the design document, so it has to be in the repo they link from.
 !/docs/design/0.8/
+# unsaved-guard-canon.md is the same shape as hybrid-0.8.md: a published canon
+# doc for a shipped feature (#460), not a mock round with its own mock/ dir.
+!/docs/design/unsaved-guard-canon.md
 !/docs/design/first-contact-prototype/
 # signin-first-contact-canon.md is #457's frozen-strings table, cited by
 # CHANGELOG.md and sign-in-copy.ts's header comment — ships for the same
@@ -152,6 +159,10 @@ ds-bundle/
 # twins (episodes.ts) — a permanent doc, not a mock round, same shape as
 # CONSOLE-RULES.md above.
 !/docs/design/demo-video-source-canon.md
+# console-residue-0.8 is #157's mock round for the residue batch: the frozen
+# tables and the mock that draws them.
+!/docs/design/console-residue-0.8-prompt.md
+!/docs/design/console-residue-0.8-mock/
 # terminal-escape-canon.md is a permanent doc (#133), not a mock round or a
 # proposal draft — it ships for the same reason CONSOLE-RULES.md does.
 !/docs/design/terminal-escape-canon.md

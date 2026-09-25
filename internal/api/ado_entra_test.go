@@ -19,7 +19,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/test/entrafake"
 )
 
@@ -841,4 +843,60 @@ func TestADOSignIn_RefusesAnUnconfiguredDeployment(t *testing.T) {
 	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), adoSignInUnconfiguredRefusal) {
 		t.Fatalf("status %d body %q; want the not-configured refusal", w.Code, w.Body.String())
 	}
+}
+
+// wedgedOwnerSecrets fails every per-owner Put with text shaped like a driver
+// error, so a row that embedded it would show.
+type wedgedOwnerSecrets struct{ *memSecrets }
+
+const wedgedSecretStoreText = "pgx: host=secrets.internal SQLSTATE 53300 too many connections"
+
+func (s wedgedOwnerSecrets) For(owner string) secretstore.Store {
+	return wedgedPut{s.memSecrets.For(owner)}
+}
+
+type wedgedPut struct{ secretstore.Store }
+
+func (wedgedPut) Put(context.Context, string, []byte) error { return errors.New(wedgedSecretStoreText) }
+
+// A store failure on either capture path audits a FIXED reason and nothing
+// else: the row is what an incident reader and the SIEM export carry, and
+// every other store-failure row in the tree carries a reason only (#505 F9).
+func TestADOCapture_StoreErrorRowCarriesNoErrorText(t *testing.T) {
+	check := func(t *testing.T, f *adoFixture) {
+		t.Helper()
+		rows := f.audit.find(adoSignInCapturedAction)
+		if len(rows) != 1 || rows[0].Outcome != "failure" {
+			t.Fatalf("audit rows = %+v; want one failure row", rows)
+		}
+		var data map[string]any
+		if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+			t.Fatalf("decode row data: %v", err)
+		}
+		if data["reason"] != "store_error" {
+			t.Errorf("reason = %v, want store_error", data["reason"])
+		}
+		if _, has := data["error"]; has || strings.Contains(string(rows[0].Data), "SQLSTATE") {
+			t.Errorf("the store_error row carries the store's error text: %s", rows[0].Data)
+		}
+	}
+
+	t.Run("the dedicated callback", func(t *testing.T) {
+		f := newADOFixture(t)
+		f.srv.cfg.Secrets = wedgedOwnerSecrets{&memSecrets{m: map[string][]byte{}}}
+		if w := f.capture(t, f.fake.Subject()); w.Code != http.StatusInternalServerError {
+			t.Fatalf("capture: status %d body %q; want 500", w.Code, w.Body.String())
+		}
+		check(t, f)
+	})
+
+	t.Run("the console login", func(t *testing.T) {
+		f := newADOFixture(t)
+		f.srv.cfg.Secrets = wedgedOwnerSecrets{&memSecrets{m: map[string][]byte{}}}
+		granted := strings.Join(append([]string{"openid", entraOfflineAccessScope}, f.cfg.Scopes...), " ")
+		f.srv.CaptureLoginGrant(context.Background(), "a-person", oidc.LoginGrant{
+			RefreshToken: "rt", Scope: granted, Expiry: adoTestNow.Add(time.Hour),
+		})
+		check(t, f)
+	})
 }

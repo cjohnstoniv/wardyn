@@ -241,13 +241,14 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		MITMLLM:              pc.MITMLLM,
 		GitGrants:            pc.GitGrants,
 		PATGrants:            pc.PATGrants,
-		ADOGrants:            pc.ADOGrants,
+		ADOGrant:             pc.ADOGrant,
 		UpstreamProxyURL:     pc.UpstreamProxyURL,
 		TrustedCAPEM:         pc.TrustedCAPEM,
 		InternalHosts:        pc.InternalHosts,
 		UpstreamProxyNoProxy: pc.UpstreamProxyNoProxy,
 		LLMUpstreams:         pc.LLMUpstreams,
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
+		Unattended:           pc.Unattended,
 	}
 	return json.Marshal(cfg)
 }

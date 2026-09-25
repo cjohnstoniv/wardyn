@@ -259,8 +259,8 @@ func TestMapProcessExec_CgroupIDQuotedString(t *testing.T) {
 // process_tracepoint / process_uprobe / process_lsm / ...). A connect is
 // observed via a process_kprobe on a connect kprobe (tcp_connect /
 // security_socket_connect / __sys_connect) whose socket argument is a sock_arg
-// (KprobeSock) with daddr/dport. Keying off a fictional kind meant live
-// escape/connect detection never fired (the finding this regression locks down).
+// (KprobeSock) with daddr/dport. Keying off a fictional kind would mean live
+// escape/connect detection never fires.
 func TestMapNetworkConnect(t *testing.T) {
 	m := NewMapper(mappedCorrelator())
 

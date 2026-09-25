@@ -99,7 +99,7 @@ func assertNotRefused(t *testing.T, w *httptest.ResponseRecorder, why string) {
 	}
 }
 
-// ─── the doors ────────────────────────────────────────────────────────────────
+// the doors
 
 // providerDoor is one way a repository reaches a clone. fire drives ONE request
 // through it under the given capability rows and site config, as the given
@@ -136,7 +136,7 @@ func providerWorkspaceDoor(name string, fire func(t *testing.T, srv *Server, st 
 		name: name,
 		sub:  ownerMemberSub,
 		member: func(t *testing.T) *http.Cookie {
-			return ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+			return ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 		},
 		operator: func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
@@ -231,7 +231,7 @@ func TestCapabilityWorkspaceProviderAtEveryDoor(t *testing.T) {
 				assertNotRefused(t, w, "a member holding the row's id may bring work from it")
 			})
 
-			// THE UPGRADE PIN: no provider rows is legacy open mode, and must be
+			// The upgrade pin: no provider rows is legacy open mode, and must be
 			// byte-identical to 0.7.1.
 			t.Run("no provider rows: not refused", func(t *testing.T) {
 				_, w := door.fire(t, &capStore{enf: capProviderEnforced()}, types.SiteConfig{}, door.member(t))
@@ -312,7 +312,7 @@ func TestCapabilityWorkspaceProviderUnclaimedHostIsANoOp(t *testing.T) {
 // half-onboards a workspace, or leaves a re-pointed source behind, is worse than
 // no gate at all.
 func TestCapabilityWorkspaceProviderRefusalCostsNoState(t *testing.T) {
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	const wsBody = `{"name":"app","sources":[{"type":"repo","source":"` + capProviderRepo + `"}]}`
 
 	t.Run("POST /workspaces writes nothing", func(t *testing.T) {
