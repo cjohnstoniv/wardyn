@@ -258,6 +258,10 @@ type bootFlags struct {
 	uiOriginTemplate *string
 	// uiSessionTTL bounds the relay session cookie — see api.Config.UISessionTTL.
 	uiSessionTTL *time.Duration
+
+	// allowUnknownMigrations is the break-glass past db.Migrate's downgrade
+	// refusal (a database a newer wardynd migrated) — see connectAndMigrate.
+	allowUnknownMigrations *bool
 }
 
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
@@ -430,6 +434,8 @@ func parseBootFlags() *bootFlags {
 
 		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail "Connect via SSH" pane's ssh command; purely advisory copy (the gateway itself binds -ssh-listen, not this). Empty publishes NO address at all: /healthz reports an empty advertise_addr, the console pane has no host to show and "wardyn ssh" refuses with that message — so set this whenever the gateway is enabled`),
 		sshRoleTTL:   flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, `how stale a registered SSH key's admin-override stamp (role_checked_at, migration 0046) may be before the gateway refuses the override; refreshed on every OIDC login for that key's owning principal (bounded-stale, never live — see docs/SSH.md Bounds)`),
+
+		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),
 	}
 	flag.Parse()
 

@@ -246,7 +246,21 @@ func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 // Migrate applies all migrations in internal/db/migrations/*.sql in lexical
 // order. Each migration runs inside its own transaction; already-applied
 // filenames (tracked in schema_migrations) are skipped. Idempotent.
+//
+// It REFUSES a database that records an applied migration this binary does not
+// ship: see unknownAppliedMigrations.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
+	return migrate(ctx, pool, false)
+}
+
+// MigrateAllowingUnknown is Migrate with the unknown-migration refusal turned
+// into a WARN — the break-glass behind WARDYN_ALLOW_UNKNOWN_MIGRATIONS, for an
+// operator who has decided to run an older wardynd against a newer schema anyway.
+func MigrateAllowingUnknown(ctx context.Context, pool *pgxpool.Pool) error {
+	return migrate(ctx, pool, true)
+}
+
+func migrate(ctx context.Context, pool *pgxpool.Pool, allowUnknown bool) error {
 	// N5: serialize concurrent boots. Take a session-level advisory lock on a
 	// SINGLE dedicated pooled connection (lock + unlock must hit the same
 	// session) so a second wardynd blocks here until the first finishes the loop.
@@ -267,12 +281,12 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	// Every statement below runs on `conn` (NOT `pool`) so the migration needs
 	// exactly ONE connection — a pool_max_conns=1 DSN must not self-deadlock
 	// against the lock-holding conn.
-	return migrateOn(ctx, conn)
+	return migrateOn(ctx, conn, allowUnknown)
 }
 
 // migrateOn applies pending migrations using a single executor (the advisory-
 // lock-holding connection). Separated so both the lock path and tests share it.
-func migrateOn(ctx context.Context, db migrationExecutor) error {
+func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) error {
 	// Ensure the tracking table exists first (outside any migration tx).
 	if _, err := db.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -280,6 +294,37 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`); err != nil {
 		return fmt.Errorf("db: ensure schema_migrations: %w", err)
+	}
+
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return fmt.Errorf("db: read migrations dir: %w", err)
+	}
+
+	// Sort lexically (0001_init.sql < 0002_... etc.).
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+
+	// Before anything is written: a newer wardynd migrated this database.
+	unknown, err := unknownAppliedMigrations(ctx, db, names)
+	if err != nil {
+		return err
+	}
+	if len(unknown) > 0 {
+		newest := unknown[len(unknown)-1]
+		if !allowUnknown {
+			return fmt.Errorf("db: this database records %d migration(s) this wardynd does not ship, newest %q — "+
+				"a newer wardynd migrated it and a downgrade is unsupported; restore the pre-upgrade dump or run "+
+				"the newer release (break-glass: WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true)", len(unknown), newest)
+		}
+		slog.WarnContext(ctx, "db: WARDYN_ALLOW_UNKNOWN_MIGRATIONS is set — booting an older wardynd against a schema a newer one migrated; "+
+			"its conversions are one-way and this binary does not know what they mean",
+			slog.String("newest_unknown", newest), slog.Any("unknown_migrations", unknown))
 	}
 
 	// Read the operator's ENABLE ALWAYS hardening BEFORE anything runs. Every
@@ -327,20 +372,6 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 		defer cancel()
 		restoreAlwaysTriggers(rctx, db, hardened)
 	}()
-
-	entries, err := migrationFS.ReadDir("migrations")
-	if err != nil {
-		return fmt.Errorf("db: read migrations dir: %w", err)
-	}
-
-	// Sort lexically (0001_init.sql < 0002_... etc.).
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Strings(names)
 
 	for _, name := range names {
 		applied, err := isMigrationApplied(ctx, db, name)
@@ -884,6 +915,26 @@ func triggerMigrationFiles(trigger string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// unknownAppliedMigrations returns, oldest first, the filenames schema_migrations
+// records that are not in shipped — the migrations a NEWER wardynd applied.
+//
+// This is the binary-side downgrade refusal. Without it an older wardynd skips
+// every file it knows is applied, never looks at the ones it does not know, and
+// boots over a schema whose one-way conversions it cannot read (a CHECK it will
+// violate, a re-encoded secret it cannot decrypt, a document key it will drop on
+// its next write). install.sh refused a downgrade; helm rollback and a pinned
+// image tag did not. COLLATE "C" so "newest" is Go's byte order, not the
+// database's locale.
+func unknownAppliedMigrations(ctx context.Context, db migrationExecutor, shipped []string) ([]string, error) {
+	var unknown []string
+	if err := db.QueryRow(ctx, `
+		SELECT COALESCE(array_agg(filename ORDER BY filename COLLATE "C"), ARRAY[]::text[])
+		FROM schema_migrations WHERE NOT (filename = ANY($1::text[]))`, shipped).Scan(&unknown); err != nil {
+		return nil, fmt.Errorf("db: list applied migrations: %w", err)
+	}
+	return unknown, nil
 }
 
 func isMigrationApplied(ctx context.Context, db migrationExecutor, filename string) (bool, error) {
