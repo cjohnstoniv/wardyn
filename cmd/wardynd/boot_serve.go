@@ -278,8 +278,14 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	if internalSrv != nil {
 		_ = internalSrv.Shutdown(shutCtx)
 	}
-	if err := httpSrv.Shutdown(shutCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+	// A timed-out HTTP drain (shutErr != nil) must not skip what follows: an
+	// early return here would answer the "shutdown is done" question honestly
+	// for HTTP, but still drop the run.kill row and both revocations the same
+	// way a SIGKILL would (see WaitBackground below), on precisely the slow
+	// shutdown where they matter most.
+	shutErr := httpSrv.Shutdown(shutCtx)
+	if shutErr != nil {
+		slog.Warn("wardynd: HTTP drain hit its budget", slog.Any("err", shutErr))
 	}
 
 	// httpSrv.Shutdown only waits for in-flight HANDLERS to return — it knows
@@ -302,5 +308,8 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 
 	// fan.Close() is the deferred drain above — reached from here and from the
 	// serve-error return alike.
+	if shutErr != nil {
+		return fmt.Errorf("shutdown: %w", shutErr)
+	}
 	return nil
 }
