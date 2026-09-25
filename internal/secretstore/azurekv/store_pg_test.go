@@ -321,6 +321,114 @@ func TestStoreMode_DeleteReportsWhatTheVaultKept(t *testing.T) {
 	}
 }
 
+// DeleteEverywhere removes every owner's value from the store, not only the
+// rows, and a store failure keeps every row.
+func TestStoreMode_DeleteEverywhereRemovesEveryOwnersValue(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeKV(t)
+	s := storeMode(t, pool, newFakeStore(t, f), nil)
+	ctx := t.Context()
+	for _, owner := range []string{"", "alice", "bob"} {
+		if err := s.For(owner).Put(ctx, "k", []byte("v-"+owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.mu.Lock()
+	f.force = []int{403}
+	f.mu.Unlock()
+	if _, err := s.DeleteEverywhere(ctx, []string{"k"}); err == nil {
+		t.Fatal("DeleteEverywhere succeeded with Key Vault refusing")
+	}
+	if v, err := s.For("bob").Get(ctx, "k"); err != nil || string(v) != "v-bob" {
+		t.Fatalf("after a failed DeleteEverywhere, Get = (%q, %v); want the value intact", v, err)
+	}
+	f.mu.Lock()
+	f.force = nil
+	f.mu.Unlock()
+	if n, err := s.DeleteEverywhere(ctx, []string{"k"}); err != nil || n != 3 {
+		t.Fatalf("DeleteEverywhere = (%d, %v), want 3 rows removed", n, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.secrets) != 0 {
+		t.Fatalf("DeleteEverywhere left %d secrets in Key Vault", len(f.secrets))
+	}
+}
+
+// The half-way shape: one owner's external delete goes through before a
+// second owner's is refused. The call still errors and every row survives —
+// including the first owner's, now a dangling pointer — that dangling
+// pointer reads as a definitive refusal, never ErrNotFound (rule 17), and a
+// retry once the fault clears finishes the job.
+func TestStoreMode_DeleteEverywhereHalfway(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeKV(t)
+	ext := newFakeStore(t, f)
+	s := storeMode(t, pool, ext, nil)
+	ctx := t.Context()
+	for _, owner := range []string{"alice", "bob"} {
+		if err := s.For(owner).Put(ctx, "k", []byte("v-"+owner)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Key Vault refuses every call naming bob's secret; alice's own delete is
+	// unaffected, so it goes through before bob's is reached.
+	f.mu.Lock()
+	f.denyPath = ext.stem("bob", "k")
+	f.mu.Unlock()
+
+	if _, err := s.DeleteEverywhere(ctx, []string{"k"}); err == nil {
+		t.Fatal("DeleteEverywhere succeeded with bob's delete refused")
+	}
+	snAlice, _, _, _ := ext.parse("alice", "k", strings.TrimPrefix(kekID(t, pool, "alice", "k"), "azurekv:"))
+	snBob, _, _, _ := ext.parse("bob", "k", strings.TrimPrefix(kekID(t, pool, "bob", "k"), "azurekv:"))
+	f.mu.Lock()
+	_, aliceLive := f.secrets[snAlice]
+	_, bobLive := f.secrets[snBob]
+	f.mu.Unlock()
+	if aliceLive {
+		t.Fatal("alice's value is still in Key Vault; want it gone (her delete went through before bob's was refused)")
+	}
+	if !bobLive {
+		t.Fatal("bob's value is gone from Key Vault; want it kept (his delete was refused)")
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM secrets WHERE name='k'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("%d rows survive the failed DeleteEverywhere, want 2", n)
+	}
+
+	// The fault only ever named bob's delete; clear it before reading back, so
+	// the Gets below check the row/value state, not the fault itself.
+	f.mu.Lock()
+	f.denyPath = ""
+	f.mu.Unlock()
+
+	// alice's row is now a dangling pointer: a definitive refusal, never
+	// ErrNotFound, so loadOrCreateSecret can never mint a boot key over it.
+	if _, err := s.For("alice").Get(ctx, "k"); err == nil || errors.Is(err, secretstore.ErrNotFound) {
+		t.Fatalf("Get on alice's dangling pointer = %v; want a refusal that is NOT ErrNotFound", err)
+	}
+	// bob's value is untouched.
+	if v, err := s.For("bob").Get(ctx, "k"); err != nil || string(v) != "v-bob" {
+		t.Fatalf("Get on bob = (%q, %v); want the value intact", v, err)
+	}
+
+	// A retry with the fault cleared completes and leaves no rows.
+	if n, err := s.DeleteEverywhere(ctx, []string{"k"}); err != nil || n != 2 {
+		t.Fatalf("retried DeleteEverywhere = (%d, %v), want (2, nil)", n, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.secrets) != 0 {
+		t.Fatalf("DeleteEverywhere left %d secrets in Key Vault", len(f.secrets))
+	}
+}
+
 // Rule 22: migrate both ways, idempotent, nothing left behind (not even a
 // soft-deleted secret).
 func TestMigrate_BothWaysLeavesNothingBehind(t *testing.T) {
