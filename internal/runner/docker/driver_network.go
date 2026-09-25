@@ -100,9 +100,21 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// the control-plane-facing network is joined after create. It carries the
 	// run token + control-plane URL as non-secret env (the token is verifiable
 	// but not usable outside the platform, per runner.ProxyConfig).
-	proxyID, err := d.startProxy(ctx, spec.RunID, wardynLabels(spec.RunID, componentProxy, spec.Labels),
-		proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort), netip.Addr{})
+	proxyEnvSlice, err := proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
 	if err != nil {
+		return fail(fmt.Errorf("docker: build proxy config: %w", err))
+	}
+	proxyID, err := d.startProxy(ctx, spec.RunID, wardynLabels(spec.RunID, componentProxy, spec.Labels),
+		proxyEnvSlice, netip.Addr{})
+	if err != nil {
+		// startProxy's own exit-watch failure (F2, driver_proxy_revive.go)
+		// deliberately leaves the container behind — on ReplaceProxy's revive
+		// path it is the only copy left of the run's config; here, on CREATE,
+		// there is no earlier proxy to preserve, so THIS caller removes it
+		// before rolling back the rest (the per-run network, via fail).
+		if proxyID != "" {
+			_, _ = d.cli.ContainerRemove(context.Background(), proxyID, client.ContainerRemoveOptions{Force: true})
+		}
 		return fail(err)
 	}
 	rollback = append(rollback, func() {
