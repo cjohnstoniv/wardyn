@@ -115,7 +115,7 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 	ctx := r.Context()
 	rows, err := s.runApprovals(ctx, claims.RunID, "")
 	if err != nil {
-		return fail(http.StatusServiceUnavailable, "approvals_unreadable", adoCapApprovalsUnreadable, nil)
+		return fail(http.StatusServiceUnavailable, reasonApprovalsUnreadable, adoCapApprovalsUnreadable, nil)
 	}
 	workflows := 0
 	var terminal *types.ApprovalRequest
@@ -140,11 +140,11 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 		}
 	}
 	if terminal != nil {
-		return fail(http.StatusForbidden, "signin_closed", fmt.Sprintf(adoSignInClosedRefusal, terminal.State),
+		return fail(http.StatusForbidden, reasonSigninClosed, fmt.Sprintf(adoSignInClosedRefusal, terminal.State),
 			map[string]any{"owner": sn.OwnerSubject, "approval_id": terminal.ID})
 	}
 	if workflows >= maxReauthHolds {
-		return fail(http.StatusForbidden, "signin_holds_exhausted", adoSignInTooManyRefusal,
+		return fail(http.StatusForbidden, reasonSigninHoldsExhausted, adoSignInTooManyRefusal,
 			map[string]any{"owner": sn.OwnerSubject})
 	}
 	raw, _ := json.Marshal(adoSignInScopeBody{
@@ -159,7 +159,7 @@ func (s *Server) holdForADOSignIn(w http.ResponseWriter, r *http.Request, claims
 		// Routed through fail (#204): every other refusal in this lane leaves a
 		// secret.read failure row; this raise and the capability and consent
 		// raises (injection_ado_capability.go) used to be the exceptions.
-		return fail(http.StatusServiceUnavailable, "raise_failed", adoSignInRaiseFailedBody,
+		return fail(http.StatusServiceUnavailable, reasonRaiseFailed, adoSignInRaiseFailedBody,
 			map[string]any{"owner": sn.OwnerSubject})
 	}
 	if created.ID == raisedID {

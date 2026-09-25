@@ -183,7 +183,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		// reason reaches the wire now (#204): the same machine class already
 		// recorded on the audit row, so the proxy can branch on it instead of
 		// string-matching the human sentence in body.
-		writeJSON(w, status, errorBody{Error: body, Reason: reason})
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 
@@ -191,24 +191,24 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		// A grant naming this sentinel with no snapshot was hand-authored (a
 		// policy, an inline grant). The snapshot IS the authorization.
-		return fail(http.StatusForbidden, "missing_scope_snapshot", adoResolveScopeChangedRefusal, nil)
+		return fail(http.StatusForbidden, reasonMissingScopeSnapshot, adoResolveScopeChangedRefusal, nil)
 	}
 	if snapshot.OwnerSubject != claims.Sub {
-		return fail(http.StatusForbidden, "owner_not_caller", adoResolveScopeChangedRefusal,
+		return fail(http.StatusForbidden, reasonOwnerNotCaller, adoResolveScopeChangedRefusal,
 			map[string]any{"owner": snapshot.OwnerSubject})
 	}
 	siteCfg, scErr := s.cfg.Store.GetSiteConfig(ctx)
 	if scErr != nil {
 		// Never resolve against a read that failed: the zero SiteConfig is "no
 		// rows", and a decision made from it is a decision about nothing.
-		return fail(http.StatusServiceUnavailable, "roster_unreadable", adoResolveRosterUnreadable, nil)
+		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, adoResolveRosterUnreadable, nil)
 	}
 	if drift := snapshot.driftFrom(siteCfg); drift != "" {
-		return fail(http.StatusForbidden, "scope_changed", adoResolveScopeChangedRefusal,
+		return fail(http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
 	if !slices.ContainsFunc(adoEntraHosts(snapshot.Organisation), func(h string) bool { return hostEqual(h, minted.Injection.Host) }) {
-		return fail(http.StatusForbidden, "host_not_organisation", adoResolveHostPinRefusal,
+		return fail(http.StatusForbidden, reasonHostNotOrganisation, adoResolveHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
 	}
 	cfg, status, reason, body := s.adoEntraConfigFor(ctx, snapshot)
@@ -216,7 +216,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(status, reason, body, nil)
 	}
 	if _, serr := adoscope.ScopesFor(snapshot.Capabilities); serr != nil {
-		return fail(http.StatusForbidden, "capability_not_grantable", adoResolveScopeChangedRefusal, nil)
+		return fail(http.StatusForbidden, reasonCapabilityNotGrantable, adoResolveScopeChangedRefusal, nil)
 	}
 
 	// THE CAPABILITY ARM (injection_ado_capability.go): the proxy asking for
@@ -338,20 +338,20 @@ func adoResolveFailureAnswer(class ADOEntraFailure) (int, string) {
 // strings are the refusal.
 func (s *Server) adoEntraConfigFor(ctx context.Context, sn adoEntraScopeSnapshot) (ADOEntraConfig, int, string, string) {
 	if types.ADOTokenMode(sn.TokenMode) != types.ADOTokenModeBearer {
-		return ADOEntraConfig{}, http.StatusForbidden, "token_mode", adoResolveTokenModeRefusal
+		return ADOEntraConfig{}, http.StatusForbidden, reasonTokenMode, adoResolveTokenModeRefusal
 	}
 	if s.cfg.ADOEntra == nil {
-		return ADOEntraConfig{}, http.StatusForbidden, "signin_unconfigured", adoResolveUnconfigured
+		return ADOEntraConfig{}, http.StatusForbidden, reasonSigninUnconfigured, adoResolveUnconfigured
 	}
 	cfg, found, err := s.cfg.ADOEntra(ctx)
 	switch {
 	case err != nil:
-		return ADOEntraConfig{}, http.StatusServiceUnavailable, "signin_unreadable", adoResolveRosterUnreadable
+		return ADOEntraConfig{}, http.StatusServiceUnavailable, reasonSigninUnreadable, adoResolveRosterUnreadable
 	case !found:
-		return ADOEntraConfig{}, http.StatusForbidden, "signin_unconfigured", adoResolveUnconfigured
+		return ADOEntraConfig{}, http.StatusForbidden, reasonSigninUnconfigured, adoResolveUnconfigured
 	case cfg.RowID != sn.ProviderRowID || !strings.EqualFold(cfg.TenantID, sn.TenantID) ||
 		!strings.EqualFold(cfg.ClientID, sn.ClientID):
-		return ADOEntraConfig{}, http.StatusForbidden, "scope_changed", adoResolveScopeChangedRefusal
+		return ADOEntraConfig{}, http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal
 	}
 	return cfg, 0, "", ""
 }
@@ -399,6 +399,10 @@ func (sn adoEntraScopeSnapshot) driftFrom(sc types.SiteConfig) string {
 	case row.Entra.ClientID != sn.ClientID:
 		return "client_id"
 	case string(cmpTokenMode(row.Entra.TokenMode)) != sn.TokenMode:
+		// A field-drift label for the audit row's "drift" key, not the wire
+		// reason enum — reasonTokenMode is a different concept that happens
+		// to share this exact spelling; driftFrom names WHICH field drifted,
+		// never why the resolve was refused.
 		return "token_mode"
 	case !rowServesOrganisation(row, sn.Organisation):
 		return "organisation"

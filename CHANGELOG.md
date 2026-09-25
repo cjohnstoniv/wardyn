@@ -162,6 +162,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   bypassed its own audited refusal path (a capability, consent or sign-in hold that could not even
   raise its approval request) now leave the same `secret.read` failure row every sibling refusal
   does (#204).
+- **The AWS SSO and Bedrock bearer credential-injection lanes carry the same machine `reason` on
+  the wire the Azure DevOps lane's refusals do** — both lanes already computed a reason for the
+  audit row; the resolve refusal, and the AWS SSO re-auth hold's terminal/exhausted/raise-failed
+  refusals, now send it in the body too. The reason vocabulary is now one closed set
+  (`internal/api/reasons.go`) shared across all three lanes, so the same reason means the same
+  thing regardless of which lane sent it (#656, continuing #204's sweep). The AWS SSO host-pin
+  refusal's reason, written to the audit row as `sso-host-not-portal` until now, is spelled
+  `sso_host_not_portal` on the audit row and the wire alike, matching the rest of the set.
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.

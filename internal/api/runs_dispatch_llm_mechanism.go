@@ -574,7 +574,7 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 // second vocabulary; it never names WHICH lane — the console reads the current
 // roster row for that, exactly as the failure block does.
 func writeLLMRefusal(w http.ResponseWriter, msg string) {
-	writeJSON(w, http.StatusUnprocessableEntity, errorBody{Error: msg, Reason: llmRefusalAuditReason})
+	writeErrorReason(w, http.StatusUnprocessableEntity, llmRefusalAuditReason, msg)
 }
 
 // llmUnavailableDetail is what the proxy's brokered-LLM 404 says when this run

@@ -165,7 +165,7 @@ func (s *Server) answerADOCapability(w http.ResponseWriter, r *http.Request, cla
 	q := r.URL.Query()
 	c := adoscope.Capability(q.Get("capability"))
 	if !c.Grantable() {
-		return adoCapabilityGrant{}, !fail(http.StatusForbidden, "capability_not_grantable", adoCapNotGrantableRefusal,
+		return adoCapabilityGrant{}, !fail(http.StatusForbidden, reasonCapabilityNotGrantable, adoCapNotGrantableRefusal,
 			map[string]any{"capability": c})
 	}
 	// driftFrom has proved the row exists, is live and carries Entra.
@@ -173,7 +173,7 @@ func (s *Server) answerADOCapability(w http.ResponseWriter, r *http.Request, cla
 	ceiling := row.Entra.CapabilityCeiling
 	rows, err := s.runApprovals(r.Context(), claims.RunID, "")
 	if err != nil {
-		return adoCapabilityGrant{}, !fail(http.StatusServiceUnavailable, "approvals_unreadable", adoCapApprovalsUnreadable, nil)
+		return adoCapabilityGrant{}, !fail(http.StatusServiceUnavailable, reasonApprovalsUnreadable, adoCapApprovalsUnreadable, nil)
 	}
 	g := adoCapabilityGrant{capability: c, standing: adoStanding(sn, ceiling, rows)}
 	if slices.Contains(g.standing, c) {
@@ -182,13 +182,13 @@ func (s *Server) answerADOCapability(w http.ResponseWriter, r *http.Request, cla
 	// NEVER ABOVE THE CEILING, whoever approved what: checked against the live
 	// row on every ask, before any approval is honoured or raised.
 	if !slices.Contains(ceiling, c) {
-		return adoCapabilityGrant{}, !fail(http.StatusForbidden, "capability_above_ceiling",
+		return adoCapabilityGrant{}, !fail(http.StatusForbidden, reasonCapabilityAboveCeiling,
 			fmt.Sprintf(adoCapAboveCeilingRefusal, adoscope.Label(c)), map[string]any{"capability": c})
 	}
 	if raw := q.Get("approval"); raw != "" {
 		ap, ok := adoNamedApproval(rows, raw, grantID, c)
 		if !ok {
-			return adoCapabilityGrant{}, !fail(http.StatusForbidden, "approval_mismatch", adoCapMismatchRefusal,
+			return adoCapabilityGrant{}, !fail(http.StatusForbidden, reasonApprovalMismatch, adoCapMismatchRefusal,
 				map[string]any{"capability": c})
 		}
 		switch ap.State {
@@ -196,7 +196,7 @@ func (s *Server) answerADOCapability(w http.ResponseWriter, r *http.Request, cla
 			writeJSON(w, http.StatusLocked, reauthPendingResponse{State: adoCapabilityPendingState, ApprovalID: ap.ID})
 			return adoCapabilityGrant{}, false
 		case types.ApprovalDenied:
-			return adoCapabilityGrant{}, !fail(http.StatusForbidden, "capability_denied", adoCapDeniedRefusal,
+			return adoCapabilityGrant{}, !fail(http.StatusForbidden, reasonCapabilityDenied, adoCapDeniedRefusal,
 				map[string]any{"capability": c, "approval_id": ap.ID})
 		case types.ApprovalApproved:
 			if ap.DecisionScope == types.ScopeOnce && ap.MintedJTI == "" {
@@ -205,7 +205,7 @@ func (s *Server) answerADOCapability(w http.ResponseWriter, r *http.Request, cla
 			}
 			// Spent: this is a new attempt, and it asks again below.
 		default:
-			return adoCapabilityGrant{}, !fail(http.StatusForbidden, "capability_closed", adoCapClosedRefusal,
+			return adoCapabilityGrant{}, !fail(http.StatusForbidden, reasonCapabilityClosed, adoCapClosedRefusal,
 				map[string]any{"capability": c, "approval_id": ap.ID})
 		}
 	}
@@ -214,7 +214,7 @@ func (s *Server) answerADOCapability(w http.ResponseWriter, r *http.Request, cla
 	want := adoScopeFor(sn, grantID, c, q)
 	for _, ap := range rows {
 		if got, ok := adoEscalationScope(ap); ok && got == want && ap.State == types.ApprovalDenied {
-			return adoCapabilityGrant{}, !fail(http.StatusForbidden, "capability_denied",
+			return adoCapabilityGrant{}, !fail(http.StatusForbidden, reasonCapabilityDenied,
 				fmt.Sprintf(adoCapDeniedForRunRefusal, ap.ID), map[string]any{"capability": c, "approval_id": ap.ID})
 		}
 	}
@@ -309,12 +309,12 @@ func (s *Server) raiseADOCapability(w http.ResponseWriter, r *http.Request, clai
 	// route). Missing or unknown is always_deny.
 	mode := types.FirstUseMode(q.Get("first_use")).Normalize()
 	if mode == types.FirstUseAlwaysDeny {
-		fail(http.StatusForbidden, "capability_always_deny", fmt.Sprintf(adoCapAlwaysDenyRefusal, adoscope.Label(c)),
+		fail(http.StatusForbidden, reasonCapabilityAlwaysDeny, fmt.Sprintf(adoCapAlwaysDenyRefusal, adoscope.Label(c)),
 			map[string]any{"capability": c})
 		return
 	}
 	if adoRequestCount(rows) >= maxADOCapabilityHoldsPerRun {
-		fail(http.StatusForbidden, "capability_holds_exhausted", adoCapTooManyRefusal, map[string]any{"capability": c})
+		fail(http.StatusForbidden, reasonCapabilityHoldsExhausted, adoCapTooManyRefusal, map[string]any{"capability": c})
 		return
 	}
 	scope := adoScopeFor(sn, grantID, c, q)
@@ -324,7 +324,7 @@ func (s *Server) raiseADOCapability(w http.ResponseWriter, r *http.Request, clai
 		ID: raisedID, RunID: claims.RunID, GrantID: &grantID, Kind: types.ApprovalToolCall, RequestedScope: raw,
 	})
 	if err != nil {
-		fail(http.StatusServiceUnavailable, "raise_failed", adoCapRaiseFailedBody, map[string]any{"capability": c})
+		fail(http.StatusServiceUnavailable, reasonRaiseFailed, adoCapRaiseFailedBody, map[string]any{"capability": c})
 		return
 	}
 	if created.ID == raisedID {
@@ -345,7 +345,7 @@ func (s *Server) raiseADOCapability(w http.ResponseWriter, r *http.Request, clai
 		writeJSON(w, http.StatusLocked, reauthPendingResponse{State: adoCapabilityPendingState, ApprovalID: created.ID})
 		return
 	}
-	fail(http.StatusForbidden, "capability_review", fmt.Sprintf(adoCapReviewRefusal, adoscope.Label(c), created.ID),
+	fail(http.StatusForbidden, reasonCapabilityReview, fmt.Sprintf(adoCapReviewRefusal, adoscope.Label(c), created.ID),
 		map[string]any{"capability": c, "approval_id": created.ID})
 }
 
@@ -383,10 +383,10 @@ func (s *Server) raiseADOConsent(w http.ResponseWriter, r *http.Request, claims 
 	ctx := r.Context()
 	rows, err := s.runApprovals(ctx, claims.RunID, "")
 	if err != nil {
-		return fail(http.StatusServiceUnavailable, "approvals_unreadable", adoCapApprovalsUnreadable, nil)
+		return fail(http.StatusServiceUnavailable, reasonApprovalsUnreadable, adoCapApprovalsUnreadable, nil)
 	}
 	if adoRequestCount(rows) >= maxADOCapabilityHoldsPerRun {
-		return fail(http.StatusForbidden, "capability_holds_exhausted", adoCapTooManyRefusal, nil)
+		return fail(http.StatusForbidden, reasonCapabilityHoldsExhausted, adoCapTooManyRefusal, nil)
 	}
 	raw, _ := json.Marshal(adoConsentScopeBody{
 		Lane: adoApprovalLane, Mechanism: adoConsentMechanism, Owner: sn.OwnerSubject,
@@ -397,7 +397,7 @@ func (s *Server) raiseADOConsent(w http.ResponseWriter, r *http.Request, claims 
 		ID: raisedID, RunID: claims.RunID, Kind: types.ApprovalCredentialReauth, RequestedScope: raw,
 	})
 	if err != nil {
-		return fail(http.StatusServiceUnavailable, "raise_failed", adoCapRaiseFailedBody, nil)
+		return fail(http.StatusServiceUnavailable, reasonRaiseFailed, adoCapRaiseFailedBody, nil)
 	}
 	if created.ID == raisedID {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
@@ -561,11 +561,11 @@ func (s *Server) settleADOCapability(w http.ResponseWriter, r *http.Request, cla
 	}
 	spender, ok := s.cfg.Store.(approvalOnceSpender)
 	if !ok {
-		return fail(http.StatusServiceUnavailable, "once_unspendable", adoCapUnspendableBody, nil)
+		return fail(http.StatusServiceUnavailable, reasonOnceUnspendable, adoCapUnspendableBody, nil)
 	}
 	spent, serr := spender.SpendApprovalOnce(ctx, capAsk.once.ID, jti)
 	if serr != nil {
-		return fail(http.StatusServiceUnavailable, "once_unspendable", adoCapUnspendableBody, nil)
+		return fail(http.StatusServiceUnavailable, reasonOnceUnspendable, adoCapUnspendableBody, nil)
 	}
 	if spent {
 		return false
@@ -573,7 +573,7 @@ func (s *Server) settleADOCapability(w http.ResponseWriter, r *http.Request, cla
 	// Another request spent it first: this one is a new attempt.
 	rows, rerr := s.runApprovals(ctx, claims.RunID, "")
 	if rerr != nil {
-		return fail(http.StatusServiceUnavailable, "approvals_unreadable", adoCapApprovalsUnreadable, nil)
+		return fail(http.StatusServiceUnavailable, reasonApprovalsUnreadable, adoCapApprovalsUnreadable, nil)
 	}
 	s.raiseADOCapability(w, r, claims, snapshot, grantID, capAsk.capability, rows, fail)
 	return true
