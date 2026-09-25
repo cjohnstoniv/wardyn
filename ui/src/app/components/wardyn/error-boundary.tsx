@@ -86,7 +86,6 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     // Surface to the console for debugging; intentionally not swallowed.
-    // eslint-disable-next-line no-console
     console.error(
       `[wardyn] render error${this.props.region ? ` in ${this.props.region}` : ""}:`,
       error,

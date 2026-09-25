@@ -4,17 +4,11 @@
 // groundtruth_capture.go — what a REVIEWER is told about how much of a
 // capture the kernel actually corroborated.
 //
-// Two different facts get separate caveats, not one shared sentence: the
-// eBPF sensor is host-wide and its heartbeat is global, so folding it into a
-// per-run caveat mislabels the run. A capture recorded while the sensor was
-// down, reviewed after it recovered, would carry no caveat at all — and a
-// well-corroborated capture reviewed during an idle patch would be told it
-// had "no kernel-level corroboration". The host's state would stand in for
-// the run's.
-//
-// They are separated here. The capture's own claim comes from the capture's
-// own evidence — the exec/connect/file-write lines the sensor bound to THIS
-// run — and the host's state is reported as what it is: review-time state.
+// Two facts get separate caveats: the eBPF sensor is host-wide and its
+// heartbeat is global, so folding it into a per-run caveat lets the host's
+// review-time state stand in for the run's. The capture's own claim comes from
+// the exec/connect/file-write lines the sensor bound to THIS run; the host's
+// state is reported as what it is: review-time state.
 package api
 
 import (
@@ -97,22 +91,14 @@ func (s *Server) hostSensorCaveat(ctx context.Context) string {
 // kernelWindow reports what the sensor said about itself WHILE run was being
 // captured — the one input Capture cannot derive from the run's own events.
 //
-// The window is [run.CreatedAt, run.UpdatedAt] — the run's own row, which for
-// the production caller (reconcileRecordRun, at the terminal transition) is the
-// capture. `now` stands in for the end only when UpdatedAt is unusable: before
-// CreatedAt, or in the future. A still-recording run reviewed mid-flight
-// therefore gets the NARROWER window ending at its last row update, which fails
-// silent rather than false.
-//
-// Only the LATEST heartbeat is consulted, because that is the only one the
-// store can answer without a new query shape. So this is a conservative
-// detector: it fires when the newest beat happens to fall inside the window,
-// and stays silent otherwise — it never invents an anomaly out of a beat that
-// says nothing about this run.
-//
-// Newest-beat-in-window, not a per-window counter delta. A delta needs a
-// heartbeats-between-two-times query; add one if a real deployment shows this
-// missing drops it should have caught.
+// The window is [run.CreatedAt, run.UpdatedAt] (for reconcileRecordRun, at the
+// terminal transition, that is the capture); `now` stands in for the end only
+// when UpdatedAt is before CreatedAt or in the future, so a mid-flight review
+// gets the NARROWER window, which fails silent rather than false.
+// Only the LATEST heartbeat is consulted (no new query shape), so this is a
+// conservative detector: it fires when the newest beat falls inside the window
+// and never invents an anomaly. A per-window counter delta needs a
+// heartbeats-between-two-times query; add one if real drops go missed.
 func (s *Server) kernelWindow(ctx context.Context, run types.AgentRun) recordmode.KernelWindow {
 	if s.cfg.Store == nil {
 		return recordmode.KernelWindow{}

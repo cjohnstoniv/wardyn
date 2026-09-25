@@ -188,7 +188,7 @@ func TestAppendNetworkRedirectDenials(t *testing.T) {
 	}
 }
 
-// TestRedirectPort is the W13-S1-5 producer-side unit test: planArtifactRedirect
+// TestRedirectPort is the producer-side unit test: planArtifactRedirect
 // must carry a redirect's REAL port into plan.mitmHosts (net.JoinHostPort(host,
 // redirectPort(r.To))) rather than always assuming 443, so the proxy's MITM
 // dial (mitm.go) lands on the mirror the operator actually configured.
