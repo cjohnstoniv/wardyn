@@ -96,7 +96,7 @@ func TestProviderAccess_KeyKinds_OwnNamespaceOnly(t *testing.T) {
 // SetupHarness.Aging already uses) for a per-person Claude sign-in.
 func TestProviderAccess_AnthropicSubscription(t *testing.T) {
 	h, sec := newSecretsHarness(t)
-	now := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	h.srv.cfg.Now = func() time.Time { return now }
 	p := paKeyProvider("claude-sub", types.ModelProviderAnthropicSubscription)
 
