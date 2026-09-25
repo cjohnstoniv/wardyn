@@ -16,18 +16,18 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.2** | Open-source pilot bar (Docker-only): secret-output masking, eBPF/Tetragon ground-truth audit stream, pinned seccomp + AppArmor, interactive attach sessions, policy CRUD, run-completion state, control-plane TLS, real conformance gate + supply-chain CI | **Shipped (pre-alpha)** |
 | **v0.3** | CI mode (BYOA): headless pipeline launches with no pre-running control plane — `wardyn run --wait` (outcome exit codes), `--image` (bring-your-own container, wrapped + governed), `task_mode: exec` (plain commands, no agent/LLM), one-shot `scripts/ci-run.sh`, GitHub Actions / Azure DevOps examples ([docs/CI.md](docs/CI.md)) | **Shipped (pre-alpha)** |
 | **v0.3.1** | Repo-scoped git egress via the proxy-side git-broker (`/wardyn/gh/<org>/<repo>`; `github.com` leaves the allowlist), Getting Started demos, container login for a Claude subscription (`claude setup-token` captured in a sandbox), paginated list endpoints (`limit`/`offset` + `X-Wardyn-Truncated`), SDK route-family coverage, mobile console navigation, [docs/ENV.md](docs/ENV.md) | **Shipped (pre-alpha)** |
-| **v0.4** | Containerized setup as the default, credential CLI, YAML policies, container workspaces with their own model credentials, Bedrock SSO, and the corporate-network build/egress lanes (below) | **Shipped (pre-alpha)** |
-| **v0.5** | Kubernetes runner substrate + the Helm chart's first sandbox-capable deploy, conformance green on a real cluster, native SSH access into a run, real admin/member RBAC with owner scoping, signed+published release images (below) | **Shipped (pre-alpha)** — tagged `v0.5.0`, 2026-08-18 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.6** | **The enterprise-POC base: cloud deployment + real permissioning.** Capability grants (four kinds, per-kind enforcement switches, IdP groups), Kubernetes as the base deployment story (one-command kind quickstart, day-2 ops, `/readyz`), terminals beyond the browser (`wardyn ssh`, a kind-proven SSH lane, an admin override), governed UI sandboxes (a ticket-gated loopback relay + a code-server image), and the ground-truth counter fix (below) | **Shipped (pre-alpha)** — `v0.6.0` (see [CHANGELOG.md](CHANGELOG.md)); the release supersets `prep/v0.6` with the demo-video series. The daemon-free merge gate (`make ci`) is green at the release tip minus DCO sign-offs; `make test-e2e` carries 10 failures that reproduce on a pre-merge baseline on the same host — a pre-existing lane defect, not a 0.6 regression |
-| **v0.7.0** | **Governance an org can delegate, on hardware it owns.** Assignable governance profiles (a named ceiling bound to a person, a group, or everyone) and a `security_admin` tier that can be handed the verdict without being handed the deployment, the rest of enterprise desktop deployment (systemd installer, MDM-distributable packages, the member-mode envelope, a reachable SSH gateway, digest-pinned upgrades), per-tool policy, never-resident git PATs for non-GitHub forges, and the corporate-network last miles — TLS-inspection root, internal model gateway, PrivateLink Bedrock (below) | **Shipped (pre-alpha)** — `v0.7.0`, 2026-09-09 (see [CHANGELOG.md](CHANGELOG.md)). The macOS `.pkg`, the MDM vendor example and the real-Mac smoke run stay **operator-gated** and are not in it |
+| **v0.4** | Containerized setup as the default, credential CLI, YAML policies, container workspaces with their own model credentials, Bedrock SSO, and the corporate-network build/egress lanes | **Shipped (pre-alpha)** — see [CHANGELOG.md](CHANGELOG.md)'s `[0.4.0]` through `[0.4.5]` entries |
+| **v0.5** | Kubernetes runner substrate + the Helm chart's first sandbox-capable deploy, conformance green on a real cluster, native SSH access into a run, real admin/member RBAC with owner scoping, signed+published release images | **Shipped (pre-alpha)** — tagged `v0.5.0`, 2026-08-18 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.6** | **The enterprise-POC base: cloud deployment + real permissioning.** Capability grants (four kinds, per-kind enforcement switches, IdP groups), Kubernetes as the base deployment story (one-command kind quickstart, day-2 ops, `/readyz`), terminals beyond the browser (`wardyn ssh`, a kind-proven SSH lane, an admin override), governed UI sandboxes (a ticket-gated loopback relay + a code-server image), and the ground-truth counter fix | **Shipped (pre-alpha)** — `v0.6.0` (see [CHANGELOG.md](CHANGELOG.md)); the release supersets `prep/v0.6` with the demo-video series. The daemon-free merge gate (`make ci`) is green at the release tip minus DCO sign-offs; `make test-e2e` carries 10 failures that reproduce on a pre-merge baseline on the same host — a pre-existing lane defect, not a 0.6 regression |
+| **v0.7.0** | **Governance an org can delegate, on hardware it owns.** Assignable governance profiles (a named ceiling bound to a person, a group, or everyone) and a `security_admin` tier that can be handed the verdict without being handed the deployment, the rest of enterprise desktop deployment (systemd installer, MDM-distributable packages, the member-mode envelope, a reachable SSH gateway, digest-pinned upgrades), per-tool policy, never-resident git PATs for non-GitHub forges, and the corporate-network last miles — TLS-inspection root, internal model gateway, PrivateLink Bedrock | **Shipped (pre-alpha)** — `v0.7.0`, 2026-09-09 (see [CHANGELOG.md](CHANGELOG.md)). The macOS `.pkg`, the MDM vendor example and the real-Mac smoke run stay **operator-gated** and are not in it |
 | **v0.7.1** | Patch: the console header read the raw OIDC `sub` instead of the IdP's `name` claim for an SSO user; a stock `helm install` (persistence off) crash-looped on an empty recording dir hitting a read-only root filesystem | **Shipped (pre-alpha)** — `v0.7.1`, 2026-09-11 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.2** | **Workspace Providers** — one admin object for which git/model providers are enabled, for whom, inside what bounds — an agent roster with per-person model credentials, ephemeral disk enforcement on Kubernetes, and seven field-report fixes from a private-endpoint Kubernetes estate (below) | **Shipped (pre-alpha)** — `v0.7.2`, 2026-09-12 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.3** | A second field report from the same estate: the per-user AWS SSO lane can no longer sign with the wrong identity (account/role pinned, enforced at three doors), the Bedrock check texts and admin sign-in door stopped conflating a deployment-wide fact with a per-person credential gap, and the CSRF Origin guard now applies in every mode (below) | **Shipped (pre-alpha)** — `v0.7.3`, 2026-09-15 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.4** | **Governance hardening over the whole surface a member or an operator's identity touches.** Per-run credential residency and revocation, the five findings of the 0.7.3 field report plus the owner's two testability asks, a kind-provable AWS SSO test path, an admin's own "view as member", and a repo-wide review campaign's fixes across the runner substrate, the egress proxy and the console (below) | **Shipped (pre-alpha)** — `v0.7.4`, 2026-09-16 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.5** | A third field report from the same private-endpoint Kubernetes estate (Entra SSO, one enabled roster row: `claude-code` / `bedrock_sso` / `per_user`): the console stops asserting things that are false on that deployment shape (the New Run rail's credential-residency and Recording claims, the member's "Your model key" card, and Getting Started's lede), an admin can preview the not-signed-in member state, the AWS sign-in sandbox now runs the sign-in itself with every attach path joining it, a slow sign-in start no longer reads as unreadable and a new sign-in supersedes an orphaned one, a rebuilt Claude Code image boots without parking approvals on the CLI's own bootstrap, and on Kubernetes an autonomous run's `/tmp` and `/home/agent/work` are now inside `disk_mib` (narrowed, not closed) (below) | **Shipped (pre-alpha)** — `v0.7.5`, 2026-09-17 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.6** | "The facts exist; connect them to the person" — a fourth field report from the same estate: an actionable model-access state now rides a banner on every screen instead of only Getting Started, a run refused for a dead model credential offers the sign-in instead of directions to it, a slow start says what it is waiting on instead of a poll-tick guess, the AWS sign-in tab opens and closes itself, a spent refresh token stops grading `live` for days, and wardynd's own outbound calls (OIDC, AWS SSO renewal, Entra sync) gain a scoped corporate-proxy knob that does not share `HTTPS_PROXY`'s process-wide blast radius; a mid-run credential lapse holding the run instead of killing it ships behind a kill switch (below) | **Shipped (pre-alpha)** — `v0.7.6` (see [CHANGELOG.md](CHANGELOG.md); tag `v0.7.6`, 2026-09-18) |
-| **v0.7.7** | A fifth field report from the same estate: with an expired AWS SSO session, Launch bounced the console to Getting Started. The setup gate stops grading the two per-person model-provider rows, a create-time refusal carries the machine-readable reason `model_credential`, the console opens the sign-in from that refusal and relaunches the same run, and the launch redeems an expired session at the click instead of admitting a spent one (below) | **Shipped (pre-alpha)** — `v0.7.7`, 2026-09-18 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.7.8** | Three field reports and the terminal: the setup gate's blocking decision moved server-side (`SetupCheck.Blocking`), the shipped confinement floor is CC1 with the strongest installed class as the default, a dial refusal names its own cause and hop, AWS-lane refusals answer in SDK-readable JSON, `wardyn attach` rides a single-use ticket, and the terminal's holder and focus defects are fixed (below) | **Shipped (pre-alpha)** — `v0.7.8`, 2026-09-19 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.2** | **Workspace Providers** — one admin object for which git/model providers are enabled, for whom, inside what bounds — an agent roster with per-person model credentials, ephemeral disk enforcement on Kubernetes, and seven field-report fixes from a private-endpoint Kubernetes estate | **Shipped (pre-alpha)** — `v0.7.2`, 2026-09-12 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.3** | A second field report from the same estate: the per-user AWS SSO lane can no longer sign with the wrong identity (account/role pinned, enforced at three doors), the Bedrock check texts and admin sign-in door stopped conflating a deployment-wide fact with a per-person credential gap, and the CSRF Origin guard now applies in every mode | **Shipped (pre-alpha)** — `v0.7.3`, 2026-09-15 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.4** | **Governance hardening over the whole surface a member or an operator's identity touches.** Per-run credential residency and revocation, the five findings of the 0.7.3 field report plus the owner's two testability asks, a kind-provable AWS SSO test path, an admin's own "view as member", and a repo-wide review campaign's fixes across the runner substrate, the egress proxy and the console | **Shipped (pre-alpha)** — `v0.7.4`, 2026-09-16 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.5** | A third field report from the same private-endpoint Kubernetes estate (Entra SSO, one enabled roster row: `claude-code` / `bedrock_sso` / `per_user`): the console stops asserting things that are false on that deployment shape (the New Run rail's credential-residency and Recording claims, the member's "Your model key" card, and Getting Started's lede), an admin can preview the not-signed-in member state, the AWS sign-in sandbox now runs the sign-in itself with every attach path joining it, a slow sign-in start no longer reads as unreadable and a new sign-in supersedes an orphaned one, a rebuilt Claude Code image boots without parking approvals on the CLI's own bootstrap, and on Kubernetes an autonomous run's `/tmp` and `/home/agent/work` are now inside `disk_mib` (narrowed, not closed) | **Shipped (pre-alpha)** — `v0.7.5`, 2026-09-17 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.6** | "The facts exist; connect them to the person" — a fourth field report from the same estate: an actionable model-access state now rides a banner on every screen instead of only Getting Started, a run refused for a dead model credential offers the sign-in instead of directions to it, a slow start says what it is waiting on instead of a poll-tick guess, the AWS sign-in tab opens and closes itself, a spent refresh token stops grading `live` for days, and wardynd's own outbound calls (OIDC, AWS SSO renewal, Entra sync) gain a scoped corporate-proxy knob that does not share `HTTPS_PROXY`'s process-wide blast radius; a mid-run credential lapse holding the run instead of killing it ships behind a kill switch | **Shipped (pre-alpha)** — `v0.7.6` (see [CHANGELOG.md](CHANGELOG.md); tag `v0.7.6`, 2026-09-18) |
+| **v0.7.7** | A fifth field report from the same estate: with an expired AWS SSO session, Launch bounced the console to Getting Started. The setup gate stops grading the two per-person model-provider rows, a create-time refusal carries the machine-readable reason `model_credential`, the console opens the sign-in from that refusal and relaunches the same run, and the launch redeems an expired session at the click instead of admitting a spent one | **Shipped (pre-alpha)** — `v0.7.7`, 2026-09-18 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.8** | Three field reports and the terminal: the setup gate's blocking decision moved server-side (`SetupCheck.Blocking`), the shipped confinement floor is CC1 with the strongest installed class as the default, a dial refusal names its own cause and hop, AWS-lane refusals answer in SDK-readable JSON, `wardyn attach` rides a single-use ticket, and the terminal's holder and focus defects are fixed | **Shipped (pre-alpha)** — `v0.7.8`, 2026-09-19 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.9** | Patch: the egress proxy shared one TLS config with the sidecar's control-plane client, so on a corporate-CA install it offered HTTP/2 it could not speak and every re-originated request to a peer that accepted the offer failed; the proxy now speaks HTTP/2, handles a peer that speaks it unasked, and files a protocol mismatch as its own refusal instead of a dial failure | **Shipped (pre-alpha)** — `v0.7.9`, 2026-09-21 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.10** | **Per-person Azure DevOps access on Entra ID**: a run reaches Azure DevOps as the person who started it, with their own sign-in captured at console login and never placed in the sandbox; every REST call and git push is checked against a plain-language capability the run was granted, and a request beyond it is held for approval once or for the run. Also: an SSO-only console posture, Bedrock policy-deny and throttle refusals named on the failed run | **Shipped (pre-alpha)** — `v0.7.10`, 2026-09-22 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.11** | Patch: Azure DevOps projects and repositories whose names carry spaces or other permitted characters (`Payments Platform`, `Card Auth (v2).Service`) import, launch, clone, fetch and push; every door stores one spelling of the address, and approvals name the repository the same way on the REST and git paths | **Shipped (pre-alpha)** — `v0.7.11`, 2026-09-22 (see [CHANGELOG.md](CHANGELOG.md)) |
@@ -132,13 +132,13 @@ shipped behavior; none is scheduled.
   [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Multi-user: who can change what",
   and [docs/MEMBERS.md](docs/MEMBERS.md) for what a member themself can do).
   Admin/member roles and owner scoping are real and shipped (v0.5), and v0.6
-  added capability grants over a user, an IdP group, or everyone (see "What
-  v0.6 shipped") — which is authorization detail on top of those two roles, not
-  a tenancy model, and 0.6 added per-user `wdn_` API tokens (personal,
-  independently revocable — see "What v0.6 shipped"). What's still speculative,
-  no design in the tree: SAML/SCIM provisioning, an organization/tenant
-  structure, and
-  CUSTOM roles beyond admin/member. The admin token and local mode remain the
+  added capability grants over a user, an IdP group, or everyone (see
+  CHANGELOG.md's `[0.6.0]` entry) — which is authorization detail on top of
+  those two roles, not a tenancy model, and 0.6 added per-user `wdn_` API
+  tokens (personal, independently revocable — same entry). What's still
+  speculative, no design in the tree: SAML/SCIM provisioning, an
+  organization/tenant structure, and CUSTOM roles beyond admin/member. The
+  admin token and local mode remain the
   same shared credential they always were: always-admin, no per-human identity,
   no separation of duty from a real admin user (v1.0's row, above).
 - **The SSH gateway's admin override is a bounded-stale stamp, weaker than
@@ -223,25 +223,19 @@ shipped behavior; none is scheduled.
   which reaches a model via **Bedrock** — daemon-level MDM-set configuration
   rather than a per-member credential, routing around this gate entirely
   (`docs/DESKTOP.md` "Model access on m′").
-- **A shell banner and a substrate-honest `ConfinementChip` reading the k8s
-  NetworkPolicy canary posture.** The Go field (`/healthz.network_policy`) and
-  the boot-time audit event ship in 0.7; nothing in the console or the CLI
-  reads either yet.
-- **An air-gapped video mirror, and a config-driven CSP to match it.** The demo
-  episodes stream from a fixed GitHub release host; a cluster with no outbound
-  internet has no way to serve or allow them.
-- **Member-BYO-Bedrock.** Per-principal secrets (0.7) cover the api-key
-  provider-convention lane; the four Bedrock/SigV4 credential names stay
-  admin-only for member writes.
-- **A gateway needing its own request-header shape.** The internal model
-  gateway (0.7) forwards the sandbox's existing provider headers unchanged;
-  a gateway that expects a different header or auth scheme has no seam yet.
-- **Subscription and Wardyn-managed runs through the internal model gateway.**
-  0.7 scopes the gateway to the api-key lane only; those lanes need
-  `deploy/images/claude-code/agent-run` to honour an explicit operator-set
-  base URL, which needs an image rebuild — 0.8.
-- **The Network step rendering "N trusted CA certs."** `/setup/status`
-  carries the count (0.7); no console reader exists yet.
+- **Drives beyond one per person.** Team-shared drives (one object, many
+  principals — breaks the `UNIQUE(subject_type, subject)` + LIMIT-1 resolver
+  invariant and needs its own design round) · multiple drives per principal ·
+  cloud-drive providers (rclone/OneDrive) · csi `subDir` templating · wardynd
+  performing NFS/SMB mounts itself · run-row drive persistence (D3). No
+  0.8/0.8.1 issue tracks any of these. Self-service reset, per-user
+  uid/Kerberos/cifs `multiuser`, and a same-drive concurrent-run collision
+  warning are current, documented non-goals, not gaps —
+  [docs/MEMBERS.md](docs/MEMBERS.md) ("there is no self-service reset: a drive
+  you have poisoned is reclaimed by your admin with a documented command, so
+  ask") and [docs/design/user-drives-prompt.md](docs/design/user-drives-prompt.md)'s
+  "Do not design" list ("No Reset", "No share credentials, no per-user uid, no
+  Kerberos", "No collision warning").
 - **Identity and authz residuals accepted without a build.** `known_principals`
   (other people's subjects on records) · PF-48 (resident credential lanes above
   a re-asserted ceiling, architectural) · **TM #39** (an IdP-FILTERED group
@@ -252,38 +246,39 @@ shipped behavior; none is scheduled.
   403 BEFORE the upgrade by deliberate invariant, so a `4403` needs its own
   decision to open a socket for an unauthorized caller) · a DB-clock cookie
   `iat` (the shipped comparison-time fix is recorded as safe to leave
-  standing). The per-user API-token group-snapshot refresh (**TM #38**) and
-  the per-user Bedrock-bearer widening this ledger used to carry alongside
-  them are tracked by #83.
-- **Workstream C's dispatch credential-refresh mechanism.** Per-user
-  BEARER/API-key credentials (`per_user` is `bedrock_sso`-only in 0.7.2) · an
-  explicit opt-in cross-mechanism fallback (needs a policy field, a ceiling
-  term and an audit story) · the rest of Phase B (the LEGACY no-block path
-  still ships refresh fields in the sandbox cache; a mid-run renewal channel
-  for runs longer than one access token) · a background renewer, if
-  dispatch-time refresh proves insufficient.
-- **Review-round residue with a written shape, deliberately not pulled.**
-  B3-F073 (`llm_inspection` scan-budget policy fields and their POLICIES rows)
-  · F074-hardening (re-deriving the docker/k8s hardening-cap rationale) · the
-  console copy/state items F141-panes, F143-control, F132-followup,
-  F004-followup, F027-a, F069-a, F051-a/F092-a, F142-copy, F112-nit, F070 and
-  F093 — one owner mock batch, which **F049-mock** (the drives-mock State 3b)
-  joins · the `setup_items` preflight field (fetched on every Review with no
-  consumer; deleting it also needs `deriveSetupItems`'s existing coverage
-  moved onto it directly) · the Recordings screen's own pagination control
-  (the recording-metadata projection it reads already shipped). The second
+  standing). The per-user API-token group-snapshot refresh and the per-user
+  Bedrock-bearer widening this residual used to carry alongside them are both
+  shipped (#152, #153).
+- **The AWS SSO dispatch credential-refresh mechanism's remaining half.**
+  Per-user BEARER/API-key credentials (`per_user` is `bedrock_sso`-only in
+  0.7.2) · an explicit opt-in cross-mechanism fallback (needs a policy field,
+  a ceiling term and an audit story) · the rest of the mid-run renewal design
+  (the legacy no-block path still ships refresh fields in the sandbox cache; a
+  renewal channel for runs longer than one access token) · a background
+  renewer, if dispatch-time refresh proves insufficient.
+- **Review-round findings with a written shape, deliberately not pulled.** An
+  `llm_inspection` scan-budget policy (fields and their POLICIES rows) and a
+  re-derivation of the docker/k8s hardening-cap rationale have no 0.8/0.8.1
+  issue. The console copy/state residue this bullet used to also carry is
+  tracked by #157 (part of #84): five of its twelve findings are recoverable
+  and covered there, the rest are struck rather than carried as unexplained
+  ids (`docs/design/0.8/PLAN.md`'s Risks section). The `setup_items` preflight
+  field and the Recordings screen's own pagination this bullet also used to
+  carry are both already resolved, not gaps: `setup_items` has a real
+  consumer (`wardyn run --dry-run`; #172, closed — the premise that it had
+  none was wrong) and Recordings pagination shipped (#159). The second
   terminal-escape chord this residue used to carry alongside them shipped as
   `Ctrl+Shift+Backspace` (#133).
-- **Verification debt from the private review rounds.** R5's 137 and R6's 70
-  claimed-fixed findings still unverified · R3/R4 round 2 · R7 round 2 · R1's
-  62 fixed-but-unverified · the Low/Info residue · the `TEST-GAPS` chronic
-  backlog. The two 0.7.2 browser rows this debt used to also carry ("a member
-  signs in to AWS SSO and launches", "an expired shared credential refuses the
-  run with the named sentence") are resolved differently, not carried forward:
-  both need a real OIDC session no Playwright harness holds, so they are
-  pinned in Go against the mechanism itself
-  (`runs_dispatch_llm_mechanism_test.go`, `awssso_refresh_test.go`) and walked
-  in a live browser against a real tenant before each tag.
+- **Verification debt from private review rounds.** A backlog of claimed-fixed
+  findings from prior review rounds that were never re-verified, plus a
+  Low/Info-severity residue and the `TEST-GAPS` chronic backlog, has no
+  0.8/0.8.1 issue. The two 0.7.2 browser rows this debt used to also carry ("a
+  member signs in to AWS SSO and launches", "an expired shared credential
+  refuses the run with the named sentence") are resolved differently, not
+  carried forward: both need a real OIDC session no Playwright harness holds,
+  so they are pinned in Go against the mechanism itself
+  (`runs_dispatch_llm_mechanism_test.go`, `awssso_refresh_test.go`) and were
+  walked in a live browser against a real tenant before the tag.
 - **Dev-box tooling** (a decision, not a product gap — none of it reaches a
   deployment). The `.wslconfig processors=24` bump for the build host · the
   verification harness's own two: the ledger's `init --resume-from` gap, and
@@ -291,7 +286,7 @@ shipped behavior; none is scheduled.
   re-discovered as findings in 0.8's rounds.
 - **Demo and video track** (not release-gated, owner-timed; the seventeen
   unrecorded episode stubs are tracked above, this section's first bullet).
-  The episode 00 script gate · the dialog rewrite set · the F101 mock round ·
+  The episode 00 script gate · the dialog rewrite set and its owner mock round ·
   the 03c act-3 rewrite (a PAT is brokered by default now) · the five held
   videos' re-take · the 04c re-take · the re-record impact tool, caption lint
   and quota probe.
@@ -312,3 +307,12 @@ shipped behavior; none is scheduled.
   (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known
   gaps"); a new feature still owes both targets, or an honest, explicit skip.
 - **A paid or open-core edition.** Apache-2.0 everything.
+- **Interactive tool-approval routing through the toolgate FSM.** Spiked and
+  refused, not deferred: `wardyn-toolgate` routes only a non-interactive run's
+  tool calls to the approval FSM, upstream pins `claude`'s
+  `--permission-prompt-tool` to non-interactive use, and the only alternative
+  — a hook — fails *open* on a timeout, the wrong default for an approval
+  gate. Self-service value collapses anyway: the human deciding the prompt can
+  already attach to the run and answer it directly. What shipped instead: an
+  interactive run's `tool_approvals=hold` is refused with a 400 naming the
+  field, rather than silently accepted and discarded.
