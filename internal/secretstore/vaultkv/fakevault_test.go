@@ -43,13 +43,17 @@ type fakeVault struct {
 	revoked      bool // the policy is gone: every data/ and metadata/ call is denied
 	kv           map[string]*kvEntry
 	force        []int // statuses to answer with, one per request, before anything else
-	calls        []string
-	logins       int
-	renews       int
-	loginAt      time.Time // the last login
-	firstRenew   time.Time // the first renew-self
-	nextToken    int
-	transit      fakeTransit
+	// denyPath, when non-empty, refuses (403) every call whose path contains
+	// it — persistent, unlike force's one-shot queue, so it can target one
+	// owner's calls across a login/retry without also catching another's.
+	denyPath   string
+	calls      []string
+	logins     int
+	renews     int
+	loginAt    time.Time // the last login
+	firstRenew time.Time // the first renew-self
+	nextToken  int
+	transit    fakeTransit
 }
 
 type kvEntry struct {
@@ -109,6 +113,10 @@ func (f *fakeVault) serve(w http.ResponseWriter, r *http.Request) {
 		code := f.force[0]
 		f.force = f.force[1:]
 		fail(w, code, "forced")
+		return
+	}
+	if f.denyPath != "" && strings.Contains(path, f.denyPath) {
+		fail(w, http.StatusForbidden, "forced")
 		return
 	}
 	if r.Header.Get("X-Vault-Namespace") != f.namespace {

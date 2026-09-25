@@ -84,8 +84,8 @@ prevent an edit in between, and re-asserting a file cannot un-run a run.
 If your threat model *does* include the developer, this tier is the wrong one —
 the agent has to execute somewhere the developer does not administer, which is
 [the Kubernetes shape](../deploy/helm/wardyn/README.md), where the runner talks
-to an API server under scoped RBAC and the human gets a member role rather than
-admin.
+to an API server under scoped RBAC and the human signs in as a user rather than
+an admin.
 
 See also [the threat model](../threatmodel/THREAT-MODEL.md) for what Wardyn as
 a whole does not defend against.
@@ -195,7 +195,7 @@ It works today on a **developer checkout** (`make agent-images` then
 
 ## The member-mode profile (topology m′)
 
-> The developer's own page for this profile is MEMBERS.md; this section
+> The developer's own page for this profile is USERS.md; this section
 > is the operator's.
 
 Everything above describes **topology a′: the developer is the operator**. It is
@@ -482,7 +482,7 @@ member writes their OWN `PUT /secrets/<name>` row (no admin action), and an
 inline `api_key` grant naming a model-provider host (the anthropic.com/
 openai.com convention, or a configured internal gateway) that pairs with a
 secret the member OWNS is admitted with no operator eligible-grant pairing
-at all — see [MEMBERS.md § Your model key](MEMBERS.md#your-model-key). The
+at all — see [USERS.md § Your model key](USERS.md#your-model-key). The
 secret-exfil guard `filterUserGrants` exists for is unaffected: the arm
 requires PROVABLE ownership (a names-only `Store.For(<member>).List`, never a
 value read, never another member's row) and a model-provider host the run's
@@ -550,7 +550,7 @@ the file:
 ```sh
 # MDM-scheduled, e.g. daily. The admin token is MDM-held; the developer never
 # reads it, and on m′ they could not use it anyway.
-wardyn support-bundle --out "/var/log/wardyn/support-$(date +%F).tar.gz"
+wardyn support-bundle --output "/var/log/wardyn/support-$(date +%F).tar.gz"
 ```
 
 **Leaked sandboxes.** A run row that is terminal but still carries a sandbox ref

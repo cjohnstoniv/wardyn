@@ -5,10 +5,8 @@ package main
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -28,32 +26,6 @@ func r3bTruncatedListServer(t *testing.T, body any) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
-}
-
-// r3bCaptureStdout runs fn with os.Stdout redirected to a pipe and returns what
-// it wrote. emitJSON encodes to os.Stdout directly, NOT cmd.OutOrStdout(), so
-// cobra's own out buffer never sees the --json payload — capturing the real fd
-// is the only way to assert the shape a script actually parses.
-func r3bCaptureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	saved := os.Stdout
-	os.Stdout = w
-	done := make(chan string, 1)
-	go func() {
-		var b strings.Builder
-		_, _ = io.Copy(&b, r)
-		done <- b.String()
-	}()
-	fn()
-	os.Stdout = saved
-	_ = w.Close()
-	out := <-done
-	_ = r.Close()
-	return out
 }
 
 // TestListCmdsWarnOnTruncation is the CLI half of list truncation: a list
@@ -90,14 +62,14 @@ func TestListCmdsWarnOnTruncation(t *testing.T) {
 			srv := r3bTruncatedListServer(t, tc.body)
 			root := rootCmd()
 			errBuf := &strings.Builder{}
+			outBuf := &strings.Builder{}
 			root.SetArgs(append(append([]string{}, tc.args...), "--limit", "1", "--offset", "1", "--json", "--url", srv.URL, "--token", "tok"))
-			root.SetOut(&strings.Builder{})
+			root.SetOut(outBuf)
 			root.SetErr(errBuf)
-			var execErr error
-			stdout := r3bCaptureStdout(t, func() { execErr = root.Execute() })
-			if execErr != nil {
+			if execErr := root.Execute(); execErr != nil {
 				t.Fatalf("%s returned error: %v", tc.name, execErr)
 			}
+			stdout := outBuf.String()
 			if !strings.Contains(errBuf.String(), "truncated") {
 				t.Errorf("%s: stderr = %q, want a truncation warning — a silently incomplete list at exit 0 "+
 					"is the whole finding", tc.name, errBuf.String())

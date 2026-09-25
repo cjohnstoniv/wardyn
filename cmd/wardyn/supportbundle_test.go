@@ -400,7 +400,7 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 	outPath := filepath.Join(dir, "bundle.tar.gz")
 	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
 		root.SetArgs([]string{"support-bundle", "--url", srv.URL, "--token", "tok",
-			"--out", outPath, "--compose-file", composePath})
+			"--output", outPath, "--compose-file", composePath})
 	})
 	if err != nil {
 		t.Fatalf("support-bundle returned error: %v; output=%s", err, out)
@@ -461,6 +461,32 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 		if !strings.Contains(files["proxy-config.json"], want) {
 			t.Errorf("proxy-config.json = %s, want it to contain %q", files["proxy-config.json"], want)
 		}
+	}
+}
+
+// TestSupportBundleCmd_OutputFlagRenamed pins #200's clean break: the flag is
+// spelled --output/-o, matching the rest of the CLI, and the old --out
+// spelling is gone with no alias (owner ruling 2026-09-22).
+func TestSupportBundleCmd_OutputFlagRenamed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "bundle.tar.gz")
+	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"support-bundle", "--url", srv.URL, "--token", "tok", "-o", outPath})
+	})
+	if err != nil {
+		t.Fatalf("support-bundle -o returned error: %v; output=%s", err, out)
+	}
+	if _, err := os.Stat(outPath); err != nil {
+		t.Errorf("support-bundle -o did not write %s: %v", outPath, err)
+	}
+
+	if err := execCmd(t, "support-bundle", "--url", srv.URL, "--token", "tok", "--out", outPath); err == nil {
+		t.Error("support-bundle --out succeeded, want an unknown-flag error (the old spelling has no alias)")
 	}
 }
 

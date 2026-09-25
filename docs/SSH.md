@@ -97,10 +97,11 @@ Alongside the [session and API-token revocation procedure](OPERATIONS.md#per-use
 - Inspect the person's registered keys. `wardyn ssh-key list --json` lists
   only the caller's keys; the owner can remove them in **Account → SSH keys**
   or with `DELETE /api/v1/me/ssh-keys/{fingerprint}`. Percent-encode the
-  fingerprint as one path segment. There is no `ssh-key delete` command and
-  no admin API for another person's keys; an operator with database access
-  must identify that principal's keys and remove their registrations directly,
-  as in [the fingerprint-removal example](#reclaiming-a-squatted-fingerprint).
+  fingerprint as one path segment. `wardyn ssh-key delete <fingerprint>` does
+  the same from the CLI. There is no admin API for another person's keys; an
+  operator with database access must identify that principal's keys and
+  remove their registrations directly, as in
+  [the fingerprint-removal example](#reclaiming-a-squatted-fingerprint).
 - End access to affected sandboxes with `wardyn run kill <run-id>` and verify
   teardown succeeded. Deleting a key prevents subsequent authentications;
   it does not disconnect an already-authenticated SSH connection or stop it

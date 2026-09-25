@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -264,7 +265,7 @@ func TestGitHubMinter_SlowGitHubStillMints(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id": 42}`))
 		case strings.HasSuffix(r.URL.Path, "/access_tokens"):
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"token":"ghs_slow_ok","expires_at":"2099-01-01T00:00:00Z"}`))
+			_, _ = w.Write([]byte(`{"token":"ghs_slow_ok","expires_at":"` + testutil.FutureRFC3339(24) + `"}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

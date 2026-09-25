@@ -147,7 +147,7 @@ func TestValidateModelProviders(t *testing.T) {
 		}), want: "valid HTTP header"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateModelProviders(normalizeModelProviders(tc.block))
+			err := validateModelProviders(normalizeModelProviders(tc.block), false)
 			switch {
 			case tc.want == "" && err != nil:
 				t.Fatalf("refused a valid block: %v", err)
