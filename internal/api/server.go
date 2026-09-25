@@ -68,13 +68,16 @@ type ApprovalService interface {
 	Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error)
 	// CancelForRun moves every still-PENDING approval of a run that has just
-	// reached a terminal state to CANCELLED, returning how many it moved. It is
+	// reached a terminal state to CANCELLED, returning how many moved per kind. It is
 	// part of the terminal cascade, beside identity/broker revocation: an
 	// approval whose run has ended is a control that cannot function, and a row
 	// left PENDING renders live Approve/Deny buttons in the console. reason names
 	// the transition ("run_killed", "run_completed", ...). Idempotent by
 	// construction — a second call finds nothing PENDING and emits nothing.
-	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error)
+	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error)
+	// ExpireOne moves one still-PENDING approval to EXPIRED (a no-op once decided):
+	// wardyn-toolgate's give-up signal (#811). actor is the withdrawing agent.
+	ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error
 	// CountForRun returns how many approvals a run has raised, in ANY state —
 	// the per-run cap handleInternalRequestApproval enforces. A sandbox chooses
 	// the hosts it asks about, so without that cap the number of rows one run can
@@ -140,6 +143,12 @@ type Config struct {
 	Identity identity.Provider
 	// Approvals is the approval FSM service.
 	Approvals ApprovalService
+	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's
+	// ceiling on how long any request waits for a decision. A run's captured
+	// wait (captureRunLimits) never exceeds it. 0 means unknown here. Dispatch
+	// also mirrors it onto a hold-mode run's sandbox (approval_expiry.go, RL-1).
+	ApprovalExpiryAfter time.Duration
+	RunLeaseConfig      // the run lease's settings (run_lease_server.go)
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
 	// GitHubRulesets, when set, lets the setup checklist ask GitHub whether the
@@ -185,7 +194,7 @@ type Config struct {
 	// LocalOperator is the principal stamped on runs/approvals/audit in
 	// LocalMode (e.g. "local:<os-user>"). Ignored unless LocalMode is true.
 	LocalOperator string
-	// MemberMode mirrors WARDYN_MEMBER_MODE (cmd/wardynd's validateMemberModePosture
+	// MemberMode mirrors WARDYN_USER_DESKTOP (cmd/wardynd's validateMemberModePosture
 	// already enforces its precondition at boot). internal/api did not carry this
 	// bit before #378/#379: it exists here so handleHealthz can compute
 	// token_login — a member-mode desktop's admin token is a PROCESS credential
@@ -331,7 +340,7 @@ type Config struct {
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
 	// MemberMounts is the operator/MDM-set posture for MEMBER-authored local_dir
-	// binds (WARDYN_MEMBER_WORKSPACE_ROOTS + _MAP + WARDYN_MEMBER_WRITABLE_ROOTS
+	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseMemberMountPolicy). The ZERO VALUE
 	// — the default — means a member may not onboard a host directory at all
 	// (repos and operator-owned workspaces are unaffected), which is the
@@ -534,8 +543,14 @@ type Config struct {
 	// AgeKeyDurable reports whether the secret store's age key was SUPPLIED
 	// (WARDYN_AGE_KEY/-age-key non-empty) vs ephemerally generated at boot. When
 	// false, stored secrets are unreadable after a restart — surfaced by
-	// /setup/status as a durability warning. Computed at boot in cmd/wardynd.
+	// /setup/status as a durability warning. Computed at boot in cmd/wardynd;
+	// true in store mode, where no local key holds anything.
 	AgeKeyDurable bool
+	// SecretStoreExternal names the store every credential is written to in store mode ("Vault at
+	// vault.example:8200"), "" in local mode; set, /setup/status shows store_external, not the age-key row.
+	SecretStoreExternal string
+	// PlatformKeySeparate: WARDYN_PLATFORM_KEY_FILE gives the boot keys their own local key; false in local mode, /setup/status shows platform_shared (§2.13 c).
+	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
 	// posture. Computed at boot in cmd/wardynd (listenIsLoopback).
@@ -838,6 +853,7 @@ type Server struct {
 	// handleDeviceAuditIngest's one-push-per-device cap. Process-local like
 	// the limiters above; an entry lives only as long as its request.
 	ingestInFlight sync.Map
+	runLeaseState  // the run lease sweep's process state (run_lease_server.go)
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
@@ -881,8 +897,8 @@ type Server struct {
 	// same shape as keepaliveEvery/pingEvery above: a test proving WaitBackground
 	// actually gives up at its bound needs to do so in milliseconds, not the
 	// real ~35s budget. Zero (the default) means "use backgroundShutdownBudget".
-	// See background.go for goBackground/WaitBackground themselves.
-	bgWaitBudget time.Duration
+	// See background.go; signInCaptureKillGrace is ssotoken.go's (tests set 0).
+	bgWaitBudget, signInCaptureKillGrace time.Duration
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -902,7 +918,7 @@ func New(cfg Config) *Server {
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()
 	}
-	s := &Server{cfg: cfg,
+	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
 		enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
 		ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
 	}

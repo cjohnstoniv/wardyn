@@ -287,7 +287,7 @@ their own inline policy.
   host and by URL prefix, so `https://dev.azure.com/acme` and
   `https://dev.azure.com/acme-labs` are two different answers. On an Azure DevOps organisation
   backed by Entra ID you may be asked to sign in with your own identity instead of an admin's shared
-  token — see [azure-devops-entra.md](adoption/azure-devops-entra.md) for what that looks like. If
+  token — see [AZURE-DEVOPS.md](AZURE-DEVOPS.md) for what that looks like. If
   instead the refusal says your work may not come from that provider, ask for a
   `workspace_provider` capability grant naming it.
 - **A custom sandbox image** — an `image` capability grant.

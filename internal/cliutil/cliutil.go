@@ -42,18 +42,42 @@ func EnvOr(key, def string) string {
 	return def
 }
 
+// EnvAlias lets a deprecated env var name go on working for one deprecation
+// window while a new name takes over (UT-5, user-types-design.md rev 4 §6: six
+// WARDYN_MEMBER_* names replaced by WARDYN_USER_* through 0.8.x, removed in
+// 0.9). Empty counts as unset for both names, as it does for FlagEnv/FlagBool —
+// a compose `${VAR:-}` passthrough forwards every name, set or not.
+//
+// When newEnv is unset and oldEnv is set, it copies oldEnv's value into newEnv —
+// so every downstream FlagEnv/FlagBool/os.Getenv(newEnv) read needs no change of
+// its own — and reports aliased. When both are set, newEnv wins; if the values
+// differ it reports ignored, because a dropped old value can be a longer deny
+// list the operator still believes is in force. EnvAlias never logs: the caller
+// names the removal release in its own WARN. Callers must run it before ANY flag
+// is parsed or either name is otherwise read.
+func EnvAlias(newEnv, oldEnv string) (aliased, ignored bool) {
+	oldV := os.Getenv(oldEnv)
+	if oldV == "" {
+		return false, false
+	}
+	if newV := os.Getenv(newEnv); newV != "" {
+		return false, newV != oldV
+	}
+	os.Setenv(newEnv, oldV) //nolint:errcheck // this process's own env; Setenv cannot fail here
+	return true, false
+}
+
 // FlagEnv defines a string flag whose default is overridden by an env var.
 // Unset — or set to the empty string, which is what `docker run -e VAR` and a
 // compose `VAR=` passthrough produce for a var the operator never set — means
 // "use the default", exactly like FlagBool/FlagDuration/FlagIntEnv/EnvOr. It
-// used to honour an explicit empty as an intentional blank, which silently
-// erased thirteen non-empty compiled defaults (WARDYN_LISTEN ":8080",
-// WARDYN_RUNNER "none", WARDYN_DEFAULT_POLICY, WARDYN_GIT_PAT_BROKER "on", ...)
-// for anyone whose orchestrator passes every known variable through. The
-// escape hatch for a genuinely-intended blank is `-name=`, which states it.
+// never treats an explicit empty as an intentional blank — doing so would
+// erase a compiled default for anyone whose orchestrator passes every known
+// variable through. The escape hatch for a genuinely-intended blank is
+// `-name=`, which states it.
 //
 // The env value is applied to the flag's VARIABLE, never to its registered
-// DEFAULT (F157). flag.String captures whatever default it is handed as
+// DEFAULT. flag.String captures whatever default it is handed as
 // Flag.DefValue, and PrintDefaults renders a non-empty string default as
 // `(default "…")` — printed not only for -help but for EVERY parse error, since
 // flag.CommandLine is ExitOnError. Seeding the default from the env therefore
