@@ -389,9 +389,45 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 	if err != nil {
 		return fmt.Errorf("marshal aws sso credential blob: %w", err)
 	}
+	if at := blob.lastUsable(); !at.IsZero() {
+		ctx = secretstore.WithExpiry(ctx, at)
+	}
 	err = st.Put(ctx, harnessCredSecretName(awsSSOProvider), raw)
 	s.auditRowNotWritten(ctx, err, types.ActorSystem, "wardynd", owner, harnessCredSecretName(awsSSOProvider))
 	return err
+}
+
+// lastUsable is the latest time this sign-in can still be used or renewed,
+// the row's expires_at: the access token's expiry without a refresh token, the
+// registration's with one. Zero when that is unknown (a refresh token and no
+// registration expiry), so the row is never swept on a guess.
+func (b awsSSOBlob) lastUsable() time.Time {
+	if b.RefreshToken == "" {
+		return b.ExpiresAt
+	}
+	if b.RegistrationExpiresAt.IsZero() {
+		return time.Time{}
+	}
+	if b.ExpiresAt.After(b.RegistrationExpiresAt) {
+		return b.ExpiresAt
+	}
+	return b.RegistrationExpiresAt
+}
+
+// deleteSpentAWSSSOBlob deletes the stored AWS SSO sign-in in scope's
+// namespace once AWS has refused its refresh token (deleteDeadCredential).
+func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
+	st, owner := s.cfg.Secrets, ""
+	if st == nil {
+		return
+	}
+	if scope.perUser {
+		if !scope.namespaced() {
+			return
+		}
+		st, owner = st.For(scope.owner), scope.owner
+	}
+	s.deleteDeadCredential(ctx, st, owner, harnessCredSecretName(awsSSOProvider), awsSSOProvider)
 }
 
 // Login run launch

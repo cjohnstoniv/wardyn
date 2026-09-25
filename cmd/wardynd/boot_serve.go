@@ -49,6 +49,8 @@ import (
 //     via the recordingSweepable interface in adapters.go; a future
 //     object-storage backend would use its own bucket lifecycle rules
 //     instead).
+//   - Credential expiry sweeper: delete stored sign-ins past their expires_at,
+//     daily (api.Server.SweepExpiredCredentials).
 //   - Boot-time reconciliation (C3): re-derive the state of any run left
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
@@ -113,6 +115,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// holding credentials for every run it ever dispatched. Unconditional — a
 	// no-op without a mask registry, and there is nothing to configure.
 	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval) })
+	go goSafe("credential.sweeper", func() { runCredentialSweeper(rootCtx, srv, credentialSweepInterval) })
 
 	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot
 	// is independent of s.cfg.Runner (its own doc comment, internal/api/reconcile.go)

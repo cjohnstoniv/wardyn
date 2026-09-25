@@ -104,6 +104,8 @@ func (s *Server) routes() chi.Router {
 			//       (agent_providers.go)
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
+			//   mountSecretRoutes (routes.go) split: the /secrets
+			//       self-service routes on r, the credential erase securityOps
 			operatorOnly := r.With(s.requireOperator)
 			// securityOps is the second admin tier: admin OR security_admin, via
 			// requireSecurityOperator / isSecurityOperator (http.go). What the tier
@@ -432,24 +434,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/workspaces/{id}/env-as-code", s.handleGetEnvAsCode)
 			operatorOnly.Post("/workspaces/{id}/env-as-code/write", s.handleWriteEnvAsCode)
 
-			// Secret management: write/delete/list only. Values are NEVER
-			// readable through the API (read paths are the broker and the
-			// internal injection-resolve endpoint, both audited).
-			//
-			// WRITE/DELETE are self-service (migration `0050`), not
-			// admin-only: any signed-in human manages their OWN row
-			// (handlePutSecret/handleDeleteSecret scope by
-			// secretOwnerFromRequest) — an operator's own row is the ""
-			// namespace, exactly today's behavior. A member can never reach
-			// another member's row (Store.For(owner) never resolves it) or
-			// the four Bedrock/SigV4 names (still operator-only). Admin
-			// cross-principal reads/deletes go through ?owner=. The LIST
-			// stays viewer-readable — it returns names only, never values.
-			if s.cfg.Secrets != nil {
-				r.Put("/secrets/{name}", s.handlePutSecret)
-				r.Delete("/secrets/{name}", s.handleDeleteSecret)
-				r.Get("/secrets", s.handleListSecrets)
-			}
+			s.mountSecretRoutes(r, securityOps)
 
 			// Site config: the operator-wide, admin-authored baseline every run
 			// inherits (upstream proxy secret ref, per-ecosystem artifact-registry
@@ -739,6 +724,29 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// inside. The no-per-human-role lane (admin token, local mode, no IdP) is
 	// refused inside the handler — a 400, not a tier.
 	r.Post("/me/member-mode", s.handleSetMemberMode)
+}
+
+// mountSecretRoutes mounts secret management: write/delete/list only. Values
+// are NEVER readable through the API (read paths are the broker and the
+// internal injection-resolve endpoint, both audited).
+//
+// WRITE/DELETE are self-service (migration `0050`), not admin-only: any
+// signed-in human manages their OWN row (handlePutSecret/handleDeleteSecret
+// scope by secretOwnerFromRequest) — an operator's own row is the ""
+// namespace, exactly today's behavior. A member can never reach another
+// member's row (Store.For(owner) never resolves it) or the four Bedrock/SigV4
+// names (still operator-only). Admin cross-principal reads/deletes go through
+// ?owner=; a PUT refuses it (K7-A). The LIST stays viewer-readable — names
+// only, never values. Erasing a person's credentials is on the security tier:
+// it only removes reach, and returns no credential material.
+func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
+	if s.cfg.Secrets == nil {
+		return
+	}
+	r.Put("/secrets/{name}", s.handlePutSecret)
+	r.Delete("/secrets/{name}", s.handleDeleteSecret)
+	r.Get("/secrets", s.handleListSecrets)
+	securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
 }
 
 // mountPermissionRoutes registers the capability-grant family: which of the

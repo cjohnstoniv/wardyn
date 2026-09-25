@@ -160,6 +160,23 @@ func (a *audited) StoresExternally() string {
 	return ""
 }
 
+// ErrNoExpirySweep is DeleteExpired's answer from a wrapper whose store cannot
+// sweep: least retention is off, and the caller must say so rather than read
+// it as nothing to delete.
+var ErrNoExpirySweep = errors.New("secretstore: this store has no expiry sweep")
+
+// DeleteExpired forwards the wrapped store's expiry sweep (pg Store.DeleteExpired),
+// or answers ErrNoExpirySweep when it has none. Without it the daily sweep never
+// reaches the store wardynd serves with, which is always wrapped.
+func (a *audited) DeleteExpired(ctx context.Context) ([]Expired, error) {
+	if sw, ok := a.inner.(interface {
+		DeleteExpired(context.Context) ([]Expired, error)
+	}); ok {
+		return sw.DeleteExpired(ctx)
+	}
+	return nil, ErrNoExpirySweep
+}
+
 func (a *audited) For(owner string) Store {
 	return &audited{inner: a.inner.For(owner), rec: a.rec, owner: owner}
 }

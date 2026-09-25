@@ -30,7 +30,9 @@ package secretstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 )
 
 // ErrNotFound is the typed sentinel a Store.Get returns (wrapped) when no secret
@@ -187,4 +189,84 @@ type ExternalEntry struct {
 	// (Key Vault's soft delete), for RecoverableDays more days (0: unknown).
 	SoftDeleted     bool
 	RecoverableDays int
+}
+
+type expiryKey struct{}
+
+// WithExpiry returns a context under which a Put records at as the latest time
+// the value can still be used or renewed (the row's expires_at): the daily
+// sweep deletes it after that. A Put without it records no expiry, so a
+// replace always describes the value it wrote.
+func WithExpiry(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, expiryKey{}, at)
+}
+
+// ExpiryFrom is the expiry WithExpiry put on ctx, if any.
+func ExpiryFrom(ctx context.Context) (time.Time, bool) {
+	at, ok := ctx.Value(expiryKey{}).(time.Time)
+	return at, ok && !at.IsZero()
+}
+
+// Expired names one row a sweep deleted because its expiry had passed.
+type Expired struct {
+	Owner, Name string
+	ExpiresAt   time.Time
+}
+
+// EraseReport is what EraseOwner removed.
+type EraseReport struct {
+	// Count is how many credentials were deleted.
+	Count int
+	// Store, Purged and RecoverableDays aggregate the external store's
+	// DeleteReports: Store is "" when nothing reported, Purged is false when
+	// any value was left recoverable, RecoverableDays is the longest window.
+	Store           string
+	Purged          bool
+	RecoverableDays int
+}
+
+// ErrOperatorNamespace refuses an erase of the operator namespace (""): it
+// holds the platform keys and the deployment's shared credentials, not one
+// person's.
+var ErrOperatorNamespace = errors.New("secretstore: the operator namespace is not a person's and cannot be erased")
+
+// EraseOwner deletes every credential in owner's own namespace (design §2.5,
+// CS-5 offboarding). Each Delete removes the external value before the row, so
+// a failure keeps the row and a retry resumes. It never reports success with a
+// row left behind: every failure is returned, and a namespace that is not empty
+// afterwards (a write racing the erase) is an error naming how many remain.
+func EraseOwner(ctx context.Context, st Store, owner string) (EraseReport, error) {
+	rep := EraseReport{Purged: true}
+	if owner == "" {
+		return rep, ErrOperatorNamespace
+	}
+	view := st.For(owner)
+	names, err := view.List(ctx)
+	if err != nil {
+		return rep, fmt.Errorf("list %q: %w", owner, err)
+	}
+	var errs []error
+	for _, n := range names {
+		dctx, dr := WithDeleteReport(ctx)
+		if err := view.Delete(dctx, n); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		rep.Count++
+		if dr.Store != "" {
+			rep.Store = dr.Store
+			rep.Purged = rep.Purged && dr.Purged
+			rep.RecoverableDays = max(rep.RecoverableDays, dr.RecoverableDays)
+		}
+	}
+	if len(errs) == 0 {
+		left, err := view.List(ctx)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("re-list %q: %w", owner, err))
+		case len(left) > 0:
+			errs = append(errs, fmt.Errorf("%d credentials of %q were written while the erase ran; erase again", len(left), owner))
+		}
+	}
+	return rep, errors.Join(errs...)
 }

@@ -205,14 +205,23 @@ func (s *Store) Put(ctx context.Context, name string, value []byte) error {
 		return fmt.Errorf("pg secretstore: seal %s: %w", rowRef(s.owner, name), err)
 	}
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (owned_by, name) DO UPDATE
-			SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, updated_at=now()`,
-		s.owner, name, encVersion, k.ID(), wrapped, ct,
+			SET enc_version=$3, kek_id=$4, wrapped_dek=$5, ciphertext=$6, expires_at=$7, updated_at=now()`,
+		s.owner, name, encVersion, k.ID(), wrapped, ct, expiresAt(ctx),
 	)
 	if err != nil {
 		return fmt.Errorf("pg secretstore: put %s: %w", rowRef(s.owner, name), err)
+	}
+	return nil
+}
+
+// expiresAt is the row's expires_at for a Put under ctx: the time
+// secretstore.WithExpiry named, or NULL.
+func expiresAt(ctx context.Context) *time.Time {
+	if at, ok := secretstore.ExpiryFrom(ctx); ok {
+		return &at
 	}
 	return nil
 }

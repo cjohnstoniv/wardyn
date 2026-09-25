@@ -231,14 +231,14 @@ func TestADOSignIn_AnotherOwnersRowIsNotThisHold(t *testing.T) {
 func TestADOSignIn_AnotherPersonsCaptureResolvesNothing(t *testing.T) {
 	f := newADOSignInFixture(t)
 	ctx := context.Background()
+	blob, _ := f.stored(t, f.subject)
 	f.fake.SetInvalidGrant(true)
 	f.at(time.Now().Add(time.Minute))
 	id := pendingID(t, f.resolveQ(t, ""), reauthPendingState)
 
 	// Post-raise, usable sign-ins for A and for B, written without the eager
 	// resolve a capture door would run.
-	blob, _ := f.stored(t, f.subject)
-	blob.CapturedAt, blob.DeadAt = time.Now().Add(time.Hour), time.Time{}
+	blob.CapturedAt = time.Now().Add(time.Hour)
 	const other = "someone-else"
 	for _, owner := range []string{f.subject, other} {
 		if err := f.srv.storeADOEntraBlob(ctx, owner, f.cfg.RowID, blob); err != nil {
@@ -256,9 +256,10 @@ func TestADOSignIn_AnotherPersonsCaptureResolvesNothing(t *testing.T) {
 }
 
 // At the sidecar's boot there is no request to hold: the run fails with a hint
-// that says to sign in again, and the stored sign-in is recorded as ended — so
-// /me/scm-access and the launch gate say expired_signin before the next launch.
-func TestADOSignIn_BootFailsWithAHintAndRecordsTheEnd(t *testing.T) {
+// that says to sign in again, and the dead sign-in is deleted (CS-5) — so
+// /me/scm-access and the launch gate say it is not connected before the next
+// launch.
+func TestADOSignIn_BootFailsWithAHintAndDeletesTheSignIn(t *testing.T) {
 	f := newADOSignInFixture(t)
 	f.st.site = adoSite(f.row0())
 	f.fake.SetInvalidGrant(true)
@@ -272,19 +273,21 @@ func TestADOSignIn_BootFailsWithAHintAndRecordsTheEnd(t *testing.T) {
 	if n := len(f.approvals.byID); n != 0 {
 		t.Fatalf("the boot resolve raised %d requests, want none", n)
 	}
-	blob, _ := f.stored(t, f.subject)
-	if !blob.signInEnded() || blob.DeadReason != ADOEntraFailureDeadCredential {
-		t.Fatalf("stored sign-in = %+v, want its end recorded", blob)
+	if _, found := f.stored(t, f.subject); found {
+		t.Fatal("the dead sign-in is still stored, want it deleted")
+	}
+	if del := f.audit.find("credential.expired_deleted"); len(del) != 1 || del[0].Outcome != "success" {
+		t.Fatalf("credential.expired_deleted rows = %+v, want one success row", del)
 	}
 
 	access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject)
-	if len(access) != 1 || access[0].State != modelAccessExpiredSignin || access[0].Cause != scmAccessCauseEnded {
-		t.Fatalf("scm-access = %+v, want expired_signin / ended", access)
+	if len(access) != 1 || access[0].State != modelAccessNotConfigured {
+		t.Fatalf("scm-access = %+v, want not connected", access)
 	}
 	var gc *gitCredentialRefusalError
 	if err := f.srv.gitCredentialRefusalForLauncher(context.Background(), f.subject, adoTestRepo); !errors.As(err, &gc) ||
-		gc.Sentence != gitCredentialEndedRefusal {
-		t.Fatalf("launch gate = %v, want the connection-ended refusal", err)
+		gc.Sentence != gitCredentialNotConnectedRefusal {
+		t.Fatalf("launch gate = %v, want the not-connected refusal", err)
 	}
 
 	// A fresh sign-in, consented for the row's ceiling, clears it.
@@ -360,7 +363,7 @@ func TestADOSignIn_WidenedCeiling(t *testing.T) {
 // answers nothing.
 func TestADOSignIn_AnEndedCaptureResolvesNothing(t *testing.T) {
 	f := newADOSignInFixture(t)
-	f.fake.SetInvalidGrant(true)
+	f.fake.SetInteractionRequired(true)
 	f.at(time.Now().Add(time.Minute))
 	id := pendingID(t, f.resolveQ(t, ""), reauthPendingState)
 	blob, _ := f.stored(t, f.subject)

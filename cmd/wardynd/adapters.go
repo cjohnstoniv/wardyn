@@ -832,6 +832,31 @@ func runSecretSweeper(ctx context.Context, srv *api.Server, interval time.Durati
 	}
 }
 
+// credentialSweepInterval is how often expired stored credentials are deleted
+// (credential-storage design §2.7): daily, so a lapsed sign-in outlives its
+// expiry by at most a day.
+const credentialSweepInterval = 24 * time.Hour
+
+// runCredentialSweeper deletes expired stored credentials once at start and
+// then every interval, until ctx is cancelled. Unlike the sweepers above the
+// first sweep does not wait a tick: a daemon restarted daily would otherwise
+// never sweep. Several replicas may sweep at once; each row is deleted, and
+// audited, by the one that wins its lock.
+func runCredentialSweeper(ctx context.Context, srv *api.Server, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if n := srv.SweepExpiredCredentials(ctx); n > 0 {
+			slog.InfoContext(ctx, "wardynd: deleted expired stored credentials", slog.Int("deleted", n))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 // recordingSweepable is satisfied structurally by BOTH recording.FSStore and
 // recording.PGStore. Sweep is deliberately NOT on recording.Store itself (see
 // the package doc on internal/recording/store.go): retention is a
