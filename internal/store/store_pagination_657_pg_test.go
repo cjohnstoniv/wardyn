@@ -106,7 +106,7 @@ func TestPG_ListSSHKeysByPrincipalPage_LimitOffset(t *testing.T) {
 			Principal:   principal,
 			Name:        "key",
 			PublicKey:   "ssh-ed25519 AAAAtest " + uuid.NewString(),
-			Role:        "member",
+			Role:        "user",
 		}
 		if _, err := pg.AddSSHKey(ctx, k); err != nil {
 			t.Fatalf("add ssh key %d: %v", i, err)
@@ -153,7 +153,7 @@ func TestPG_ListAPITokensByPrincipalPage_LimitOffset(t *testing.T) {
 	var ids []uuid.UUID
 	for i := 0; i < n; i++ {
 		tok := types.APIToken{
-			ID: uuid.New(), Principal: principal, Role: "member", Name: "ci",
+			ID: uuid.New(), Principal: principal, Role: "user", Name: "ci",
 		}
 		created, err := pg.CreateAPIToken(ctx, tok, "wdn_"+uuid.NewString())
 		if err != nil {
