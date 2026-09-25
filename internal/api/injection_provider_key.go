@@ -5,6 +5,7 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -24,8 +25,9 @@ const (
 	providerKeyNotOwn = "a model provider's key is injected only from the run owner's own namespace; this grant names another"
 	providerKeyAbsent = "your own key or token for this run's model provider is not stored — add it again from Getting " +
 		"started in the console; no other person's credential stands in for it"
-	providerKeyUnreadable = "Wardyn couldn't read your model provider credential just now"
-	providerKeyChanged    = "this run's model provider was removed, turned off, re-pointed or changed after the run " +
+	providerKeyRefused = "Wardyn's store refused your model provider credential (it is gone, bound to another row, or " +
+		"Wardyn's access to it was revoked). Nothing was substituted; save it again or ask an admin."
+	providerKeyChanged = "this run's model provider was removed, turned off, re-pointed or changed after the run " +
 		"started, so its key is no longer injected"
 	providerKeyRecordUnreadable = "Wardyn couldn't read this run's model provider just now, so its key is not injected"
 )
@@ -50,6 +52,21 @@ func providerKeyDestination(p types.ModelProvider, agent string) (host, header, 
 	}
 	lane, ok := providerKeyLaneFor(p, agent)
 	return lane.host, lane.header, lane.format, ok
+}
+
+// providerStoreReadRefusal is storeReadRefusal's split — 503 only when the
+// store did not answer, so the proxy drops the header at once on a refusal —
+// in the words of a person's own model provider credential.
+func providerStoreReadRefusal(name string, err error) (status int, reason, body string) {
+	status, _, _ = storeReadRefusal(name, err)
+	switch {
+	case status == http.StatusServiceUnavailable:
+		return status, "store_unavailable", sinkStoreUnreachable
+	case errors.Is(err, secretstore.ErrNotFound):
+		return status, "own_key_absent", providerKeyAbsent
+	default:
+		return status, "store_refused", providerKeyRefused
+	}
 }
 
 // resolveProviderKeyInjection is the wardyn-provider-<uid>-key arm of
@@ -113,7 +130,7 @@ func (s *Server) resolveProviderKeyInjection(w http.ResponseWriter, r *http.Requ
 	secret, found, err := s.ownSecret(rctx, rec.OwnerSubject, name)
 	switch {
 	case err != nil:
-		return fail(http.StatusServiceUnavailable, "store_unreadable", providerKeyUnreadable)
+		return fail(providerStoreReadRefusal(name, err))
 	case !found || len(bytes.TrimSpace(secret)) == 0:
 		return fail(http.StatusFailedDependency, "own_key_absent", providerKeyAbsent)
 	}

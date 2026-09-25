@@ -17,6 +17,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -232,7 +234,10 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 		return fail(http.StatusForbidden, "oauth_host_not_provider", mpSubSinkHost)
 	}
 	tok, err := s.ownerSubscriptionToken(claims.Sub, uid).Current(ctx)
-	if err != nil {
+	switch {
+	case errors.Is(err, secretstore.ErrUnavailable):
+		return fail(http.StatusServiceUnavailable, "store_unavailable", sinkStoreUnreachable)
+	case err != nil:
 		return fail(http.StatusFailedDependency, "resolve_failed", fmt.Sprintf(mpRunRefusal, p.ID, mpSubNotSignedIn, mpRunRemedySignIn))
 	}
 	// One correct wire shape, whatever the grant says (see the legacy arm).
@@ -249,6 +254,7 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 		})))
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: "Authorization", Value: formatted, JTI: minted.JTI,
+		ExpiresAt: s.subscriptionLease(minted, tok),
 	})
 	return true
 }

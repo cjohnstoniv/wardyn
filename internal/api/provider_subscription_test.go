@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -300,6 +302,82 @@ func TestProviderSubscriptionSink(t *testing.T) {
 				t.Errorf("secret.read = %s %s, want a failure with a snake_case reason", ev.Outcome, ev.Data)
 			}
 		})
+	}
+}
+
+// Found by the 0.8 release review (F02): the per-person sign-in carried no
+// expiry, so the proxy injected it for the run's life after it was deleted.
+func TestProviderSubscriptionSink_HasABoundedLease(t *testing.T) {
+	p := subProvider("claude")
+	h, st, sec := subHarness(t, p)
+	if _, ok := dispatchSub(h, st, &types.RunPolicySpec{}, map[string]string{}, nil); !ok {
+		t.Fatal("dispatch failed")
+	}
+	code, body := resolveSub(t, h, st, "api.anthropic.com")
+	var response injectionResponse
+	if code != http.StatusOK || json.Unmarshal([]byte(body), &response) != nil {
+		t.Fatal("initial resolve failed")
+	}
+	if err := sec.For(subOwner).Delete(context.Background(), providerSecretName(p.UID, providerOAuthPart)); err != nil {
+		t.Fatal(err)
+	}
+	code, _ = resolveSub(t, h, st, "api.anthropic.com")
+	if code != http.StatusFailedDependency {
+		t.Fatalf("deleted sign-in fresh resolve status=%d", code)
+	}
+	if response.ExpiresAt == 0 {
+		t.Fatal("initial subscription response has expires_at=0: proxy caches deleted sign-in for run lifetime")
+	}
+}
+
+// The per-person sign-in is a stored credential: its store failures split
+// like a stored key's (storeReadFailures), and not-signed-in keeps its text.
+func TestProviderSubscriptionSink_StoreReadFailures(t *testing.T) {
+	for _, tc := range storeReadFailures {
+		t.Run(tc.name, func(t *testing.T) {
+			h, st, _ := subHarness(t, subProvider("claude"))
+			if _, ok := dispatchSub(h, st, &types.RunPolicySpec{}, map[string]string{}, nil); !ok {
+				t.Fatal("dispatch failed")
+			}
+			h.srv.cfg.Secrets = storeReadFails{h.srv.cfg.Secrets, tc.err}
+			code, body := resolveSub(t, h, st, "api.anthropic.com")
+			if want := wantStoreReadStatus(tc.err); code != want {
+				t.Fatalf("status = %d %s, want %d", code, body, want)
+			}
+			if code == http.StatusFailedDependency && !strings.Contains(body, mpSubNotSignedIn) {
+				t.Fatalf("refusal = %s, want the not-signed-in text", body)
+			}
+			var d struct{ Reason string }
+			_ = json.Unmarshal(lastAuditEvent(t, h.audit.events, "secret.read").Data, &d)
+			if d.Reason != tc.subReason {
+				t.Fatalf("secret.read reason = %q, want %q", d.Reason, tc.subReason)
+			}
+		})
+	}
+}
+
+// A sign-in's own expiry bounds the lease when it is sooner; it never
+// stretches it past the stored-key lease.
+func TestProviderSubscriptionLease(t *testing.T) {
+	now := time.Now()
+	s := &Server{cfg: Config{Now: func() time.Time { return now }}}
+	lease := now.Add(storedKeyTTL).UnixMilli()
+	for _, tc := range []struct {
+		name     string
+		approval uuid.UUID
+		expires  time.Time
+		want     int64
+	}{
+		{"no expiry of its own: the stored-key lease", uuid.Nil, time.Time{}, lease},
+		{"an earlier expiry wins", uuid.Nil, now.Add(time.Minute), now.Add(time.Minute).UnixMilli()},
+		{"a later expiry does not stretch the lease", uuid.Nil, now.Add(time.Hour), lease},
+		{"approval-gated with no expiry stays static", uuid.New(), time.Time{}, 0},
+		{"approval-gated keeps its own expiry", uuid.New(), now.Add(time.Hour), now.Add(time.Hour).UnixMilli()},
+	} {
+		got := s.subscriptionLease(broker.Minted{ApprovalID: tc.approval}, subscription.Token{Value: "t", ExpiresAt: tc.expires})
+		if got != tc.want {
+			t.Errorf("%s: lease = %d, want %d", tc.name, got, tc.want)
+		}
 	}
 }
 
