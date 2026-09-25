@@ -9,7 +9,8 @@ only.
   `-tags live`. The browser suites have their own Playwright config, which no
   other config or script picks up.
 - Every suite skips unless its own gate variable is `1`. The skip message
-  names the variables it needs and never prints a value.
+  names the variables it needs and never prints a value. Once the gate is
+  `1`, the Go suites (LL2, LL3) fail, not skip, on a missing variable.
 - Only code is committed. There are no recorded responses, fixtures, tenant
   names, organisation names, account ids or addresses in the repository.
 
@@ -23,6 +24,16 @@ only.
 | LL4 AWS SSO through Entra | The per-user AWS SSO device sign-in URL, taken through the console's own extractor, lands on an Entra sign-in page | Playwright | `WARDYN_LIVE_AWS_SSO=1` |
 
 Every variable is listed in [ENV.md](ENV.md#live-local-harness-opt-in-never-in-ci).
+
+**The kind-cluster walks are a separate, heavier opt-in surface** — not
+LL1-4, and not gated by a `WARDYN_LIVE_*` variable. `scripts/kind-sso-walk.sh`
+(default profile, `WARDYN_TEST_K8S=1`) runs nightly in CI
+(`.github/workflows/nightly.yml`, the `kind-sso-walk` job). Its Azure DevOps
+profile, `WARDYN_KIND_SSO_PROFILE=ado scripts/kind-sso-walk.sh` (recipe in
+[deploy/kind/sso/README.md](../deploy/kind/sso/README.md)), spins up a second
+kind cluster on its own port range and is **manual-only**: it has no
+scheduled nightly leg. Run it by hand before a release that touches the
+Azure DevOps sign-in path.
 
 ## Rules
 
@@ -170,7 +181,7 @@ test identity's permission set on the capped member account.
    sign-in goes through Entra.
 2. Point `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` at the cache file that login wrote
    under `~/.aws/sso/cache/`. It is the one whose `startUrl` is your start
-   URL. When it expires, LL3 skips and tells you to sign in again.
+   URL. When it expires, LL3 fails and tells you to sign in again.
 
 ## Running
 

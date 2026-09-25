@@ -25,7 +25,10 @@ func TestLiveBedrock(t *testing.T) {
 	}
 	token, err := LoadSSOToken(time.Now())
 	if errors.Is(err, ErrTokenExpired) {
-		Skipf(t, "live: %v. Sign in again with `aws sso login` on the member-account profile, then re-run (docs/LIVE-TESTS.md, LL3)", err)
+		// A stale credential is a broken invocation once WARDYN_LIVE_BEDROCK=1
+		// has been opted into, not an absence of intent (#463): Fatalf, not
+		// Skipf, so this can never print `ok` on a run asked to prove something.
+		Fatalf(t, "live: %v. Sign in again with `aws sso login` on the member-account profile, then re-run (docs/LIVE-TESTS.md, LL3)", err)
 	}
 	if err != nil {
 		Fatalf(t, "%v", err)

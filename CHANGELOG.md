@@ -10,6 +10,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **An opt-in live test lane could no longer print `ok` and exit 0 while proving nothing.**
+  `internal/testlive`'s `Require` used to skip on a missing credential or an expired AWS SSO
+  token even after its own gate variable was set to `1`; it now fails loudly (`Fatalf`) once
+  the operator has opted in, and only an unset gate still skips. The 9 opt-in lane scripts
+  (`kind-sso-walk.sh`, `compose-sso-roles.sh`, the `run-e2e-*` family, `test/e2e/e2e.sh`) now
+  exit 77 on a self-skip via `scripts/lib/common.sh`'s new `skip_lane`, never 0, and nightly's
+  kind-SSO-walk job asserts on that exit code instead of grepping the skip sentence. The
+  install.sh compose-fetch integrity test no longer skips permanently behind an unset,
+  ticket-named variable — it now pins today's accepted-risk state by default and flips to
+  enforcing the fix once `WARDYN_EXPECT_COMPOSE_DIGEST=1` says a digest exists (#463).
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console

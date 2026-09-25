@@ -583,7 +583,7 @@ repository.
 | `WARDYN_LIVE_ADO_PAT_PROBE_SCOPE` | string | `499b84ac-1321-427f-aa17-267ca6975798/vso.pats` | Scope LL2c signs in for; `…/user_impersonation` is the other one worth measuring |
 | `WARDYN_LIVE_AWS_SSO_START_URL` | URL | (none) | IAM Identity Center start URL (LL4) |
 | `WARDYN_LIVE_AWS_SSO_REGION` | string | (none) | IAM Identity Center region (LL3, LL4) |
-| `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` | path | (none) | The AWS CLI `sso login` cache file for the member-account profile (LL3). An expired sign-in is a skip |
+| `WARDYN_LIVE_AWS_SSO_TOKEN_FILE` | path | (none) | The AWS CLI `sso login` cache file for the member-account profile (LL3). An expired sign-in fails the suite once `WARDYN_LIVE_BEDROCK=1` |
 | `WARDYN_LIVE_BEDROCK_ACCOUNT_ID` | string | (none) | The capped member account. LL3 refuses unless STS places its credentials in exactly this account |
 | `WARDYN_LIVE_BEDROCK_ROLE_NAME` | string | (none) | Identity Center permission set whose role credentials LL3 uses |
 | `WARDYN_LIVE_BEDROCK_REGION` | string | (none) | Bedrock and STS region |

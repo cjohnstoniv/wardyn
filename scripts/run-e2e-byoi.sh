@@ -32,14 +32,13 @@
 # are staged). This script does NOT start one — see the healthz die below.
 set -uo pipefail
 
-if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
-  echo "run-e2e-byoi: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent BYOI e2e (skipping)."
-  exit 0
-fi
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 source "${ROOT}/scripts/lib/common.sh"
+
+if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
+  skip_lane "run-e2e-byoi: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent BYOI e2e (skipping)."
+fi
 BASE="${WARDYN_E2E_BASE_URL:-http://localhost:8080}"
 export WARDYN_ADMIN_TOKEN="${WARDYN_ADMIN_TOKEN:-demo-admin-token}"
 

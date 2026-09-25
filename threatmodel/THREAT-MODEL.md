@@ -1430,8 +1430,9 @@ hiding them would repeat the failure mode we are designed to avoid.
     against it afterwards. The fix is a `SHA256SUMS` row for the compose file
     plus a signature check the installer performs itself;
     `TestInstallSh_ComposeFetchIsVerified` and T6 of
-    `scripts/test-install-sh-trust.sh` are written and enforce the first of
-    those the moment `F10_EXPECT_COMPOSE_INTEGRITY=1` is set.
+    `scripts/test-install-sh-trust.sh` pin this accepted-risk state today and
+    flip to enforcing the fix the moment `WARDYN_EXPECT_COMPOSE_DIGEST=1` is
+    set (#463).
 
 33. **A `host_path` user drive extends trust to whoever administers the host and
     the share; Wardyn bounds the PATH, not the tree.** Wardyn never performs the

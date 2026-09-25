@@ -48,22 +48,27 @@ const (
 	EnvBedrockMaxCalls = "WARDYN_LIVE_BEDROCK_MAX_CALLS"
 )
 
-// Require skips t unless gate is "1" and every name is set. The message names
-// the variables and never prints a value.
+// Require skips t unless gate is "1"; that is the only condition a skip may
+// mean "prove nothing, on purpose". Once the operator has opted in by setting
+// gate, a missing name is a broken invocation, not an absence of intent, so it
+// is Fatalf, not Skipf — a skip and a pass must never share an exit code on a
+// run the operator explicitly asked to prove something (#463). The message
+// names the variables and never prints a value.
 func Require(t testing.TB, gate string, names ...string) {
 	t.Helper()
-	var unset []string
 	if os.Getenv(gate) != "1" {
-		unset = append(unset, gate)
+		t.Skipf("live: needs %s=1 (docs/LIVE-TESTS.md)", gate)
+		return
 	}
+	var unset []string
 	for _, n := range names {
 		if os.Getenv(n) == "" {
 			unset = append(unset, n)
 		}
 	}
 	if len(unset) > 0 {
-		t.Skipf("live: needs %s=1 and %s; unset: %s (docs/LIVE-TESTS.md)",
-			gate, strings.Join(names, ", "), strings.Join(unset, ", "))
+		t.Fatalf("live: %s=1 but unset: %s (docs/LIVE-TESTS.md)",
+			gate, strings.Join(unset, ", "))
 	}
 }
 

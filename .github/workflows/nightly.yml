@@ -433,12 +433,11 @@ jobs:
   # untouched by this job.
   #
   # WARDYN_TEST_K8S is set on THIS STEP, not the job: an unset one makes
-  # kind-sso-walk.sh print "skipping" and exit 0 before it ever creates its
-  # evidence directory — a permanently green job that proves nothing, which is
-  # worse than no job at all because it reads as coverage. The step after this
-  # one asserts the walk actually reached its own PASS line and reported at
-  # least one executed spec file, rather than trusting kind-sso-walk.sh's exit
-  # code alone.
+  # kind-sso-walk.sh print "skipping" and exit 77 (common.sh's skip_lane,
+  # never 0 — #463) before it ever creates its evidence directory. The step
+  # after this one asserts on that exit code directly, plus that the walk
+  # actually reached its own PASS line and reported at least one executed
+  # spec file — belt and suspenders, neither one a grep of the skip message.
   kind-sso-walk:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -486,19 +485,25 @@ jobs:
           WARDYN_KIND_SSO_EVIDENCE: ${{ github.workspace }}/test/reports/e2e/kind-sso
         shell: bash
         run: |
+          set +e   # capture the real exit code below instead of failing the step on it
           mkdir -p test/reports/e2e
           ./scripts/kind-sso-walk.sh 2>&1 | tee test/reports/e2e/kind-sso-walk.log
-      # THE LOAD-BEARING CHECK. kind-sso-walk.sh exits 0 in two shapes that
-      # look identical to `if: always()` below: a genuine PASS, and an unset
-      # WARDYN_TEST_K8S self-skip. Fail the job unless the log shows the walk
-      # actually ran specs and reached its own closing PASS line.
+          echo "WALK_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
+      # THE LOAD-BEARING CHECK. Asserts on the walk's own exit code — 77 is
+      # common.sh's skip_lane, reserved for "opted out, proved nothing", never
+      # reused for a pass or a real failure (#463) — plus that the log shows
+      # the walk actually ran specs and reached its own closing PASS line.
       - name: Assert the walk actually executed specs (not a self-skip)
         shell: bash
         run: |
           set -euo pipefail
           log=test/reports/e2e/kind-sso-walk.log
-          if grep -q 'set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)' "$log"; then
-            echo "::error::kind-sso-walk.sh self-skipped — WARDYN_TEST_K8S did not reach the walk step"
+          if [ "${WALK_EXIT:-}" = "77" ]; then
+            echo "::error::kind-sso-walk.sh self-skipped (exit 77) — WARDYN_TEST_K8S did not reach the walk step"
+            exit 1
+          fi
+          if [ "${WALK_EXIT:-1}" != "0" ]; then
+            echo "::error::kind-sso-walk.sh exited ${WALK_EXIT:-<unset>} — see the uploaded log"
             exit 1
           fi
           if ! grep -qE 'UI e2e summary: [1-9][0-9]* spec file\(s\) passed' "$log"; then
