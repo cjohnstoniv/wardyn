@@ -443,9 +443,10 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.I
 	if err := to.setLocalKeys(newID, platform); err != nil {
 		return 0, fmt.Errorf("pg secretstore: rekey new identity: %w", err)
 	}
-	// A row under a key service holds nothing under the age key: left alone.
+	// A row under Transit holds nothing under the age key: left alone. A row
+	// under any key no provider claims aborts, naming it (from.reader).
 	target := func(e envelope) kek.KEK {
-		if e.version == encVersion && !isLocal(e.kekID) {
+		if e.version == encVersion && strings.HasPrefix(e.kekID, "transit:") {
 			return nil
 		}
 		return to.writer(e.ownedBy, e.name)
