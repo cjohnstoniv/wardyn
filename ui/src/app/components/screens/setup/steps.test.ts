@@ -23,6 +23,7 @@ import {
 } from "./steps";
 import { DEMOS } from "../demos/demo-catalog";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
+import { aheadByHours } from "../../../lib/test-clock";
 
 // This suite's own pin is CC1-only compatibility (no CC2/CC3), trimmed to only
 // what these pure functions read.
@@ -40,8 +41,8 @@ function ws(id: string, status: WorkspaceStatus): Workspace {
     kind: "local_dir",
     source: `/tmp/${id}`,
     status,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
   };
 }
 

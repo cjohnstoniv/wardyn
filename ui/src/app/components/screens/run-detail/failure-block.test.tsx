@@ -21,13 +21,23 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 
-const CREATED = "2026-08-28T10:00:00Z";
+// The "killed: names how far into the run..." test below asserts an exact
+// "26m 0s" elapsed (ending.time or run.updated_at, minus run.created_at —
+// failure-block.tsx:185-186). aheadByHours calls Date.now() fresh on every
+// call, and CREATED (a module-level constant) vs. the ev()/run() defaults
+// (evaluated per-test, much later) could drift by however long the suite
+// takes to reach this file's tests — enough to round the seconds differently.
+// A single frozen anchor keeps the two exactly 26 minutes apart regardless of
+// when the test actually runs.
+const NOW_MS = Date.now();
+const CREATED = new Date(NOW_MS - 26 * 60 * 1000).toISOString();
+const EVENT_TIME = new Date(NOW_MS).toISOString();
 
 function run(state: RunState): AgentRun {
   return makeRun({
     id: "run_3b7f10c4-0000-0000-0000-000000000000",
     created_at: CREATED,
-    updated_at: "2026-08-28T10:26:00Z",
+    updated_at: EVENT_TIME,
     created_by: "alice",
     agent: "claude",
     repo: "acme/payments-api",
@@ -41,7 +51,7 @@ function run(state: RunState): AgentRun {
 function ev(action: string, outcome: AuditEvent["outcome"], extra: Partial<AuditEvent> = {}): AuditEvent {
   return {
     id: `ev-${action}-${outcome}`,
-    time: "2026-08-28T10:26:00Z",
+    time: EVENT_TIME,
     actor_type: "system",
     actor: "wardynd",
     action,

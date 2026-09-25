@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { canDecideApproval, decisionArgs, isHeld, type ApprovalKind, type ApprovalRequest } from "./approvals";
+import { aheadByHours } from "../test-clock";
 
 const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
   id: "a1",
@@ -49,9 +50,8 @@ describe("decisionArgs", () => {
   it("every non-default scope produces exactly one options object", () => {
     expect(decisionArgs("once")).toEqual([{ scope: "once", until: undefined }]);
     expect(decisionArgs("always")).toEqual([{ scope: "always", until: undefined }]);
-    expect(decisionArgs("until", "2030-01-01T00:00:00.000Z")).toEqual([
-      { scope: "until", until: "2030-01-01T00:00:00.000Z" },
-    ]);
+    const until = aheadByHours(24);
+    expect(decisionArgs("until", until)).toEqual([{ scope: "until", until }]);
   });
 });
 

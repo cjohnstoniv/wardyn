@@ -72,6 +72,7 @@ import { deriveReadiness } from "../../../lib/readiness";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import type { Workspace } from "../../../lib/types";
+import { aheadByHours } from "../../../lib/test-clock";
 
 // This suite's own pin is its `checks` array (gvisor/loopback/kvm/platform_wsl).
 function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
@@ -99,8 +100,8 @@ function ws(overrides: Partial<Workspace> = {}): Workspace {
     kind: "local_dir",
     source: "/home/dev/demo-workspace",
     status: "scanned",
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
+    created_at: aheadByHours(-1),
+    updated_at: aheadByHours(-1),
     ...overrides,
   };
 }

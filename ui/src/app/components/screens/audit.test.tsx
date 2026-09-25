@@ -8,6 +8,7 @@ import { act, render, screen, waitFor, fireEvent } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, AuditEvent } from "../../lib/types";
+import { aheadByHours } from "../../lib/test-clock";
 
 // MEDIUM fixes pinned here:
 //  - run_id filter must query the SERVER with run_id (api.listAudit(runId)),
@@ -40,7 +41,7 @@ import { AuditScreen } from "./audit";
 
 function ev(partial: Partial<AuditEvent> & { id: string }): AuditEvent {
   return {
-    time: "2026-06-28T00:00:00.000Z",
+    time: aheadByHours(-1),
     actor_type: "agent",
     actor: "spiffe://wardyn/agent",
     action: "tool.call",
@@ -170,8 +171,8 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     // Server returns seq order e1 then e2, but e2 has an EARLIER timestamp.
     // A buggy client re-sort by time would flip them; we must keep e1 first.
     listAuditMock.mockResolvedValue([
-      ev({ id: "e1", action: "first.action", time: "2026-06-28T00:00:02.000Z" }),
-      ev({ id: "e2", action: "second.action", time: "2026-06-28T00:00:01.000Z" }),
+      ev({ id: "e1", action: "first.action", time: aheadByHours(-1) }),
+      ev({ id: "e2", action: "second.action", time: aheadByHours(-2) }),
     ]);
     renderScreen();
 

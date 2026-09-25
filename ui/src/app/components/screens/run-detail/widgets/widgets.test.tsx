@@ -23,6 +23,7 @@ import { FilesChangedWidget } from "./files-changed";
 import { SandboxWidget } from "./sandbox";
 import { CredentialsWidget } from "./credentials";
 import { IdentityWidget } from "./identity";
+import { aheadByHours } from "../../../../lib/test-clock";
 
 beforeEach(() => {
   getFilesMock.mockReset();
@@ -110,7 +111,7 @@ describe("CredentialsWidget", () => {
     const audit: AuditEvent[] = [
       {
         id: "e1",
-        time: "2026-08-16T12:00:00Z",
+        time: aheadByHours(-1),
         actor_type: "system",
         actor: "broker",
         action: "credential.mint",
@@ -129,7 +130,7 @@ describe("CredentialsWidget", () => {
     const audit: AuditEvent[] = [
       {
         id: "e2",
-        time: "2026-08-16T12:00:00Z",
+        time: aheadByHours(-1),
         actor_type: "system",
         actor: "broker",
         action: "credential.mint",

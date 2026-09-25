@@ -57,8 +57,6 @@ import { RecordingScreen } from "./recording";
 function run(id: string, overrides: Partial<AgentRun> = {}): AgentRun {
   return makeRun({
     id,
-    created_at: "2026-06-01T00:00:00.000Z",
-    updated_at: "2026-06-01T00:00:00.000Z",
     created_by: "op",
     agent: "claude-code",
     repo: "acme/widgets",

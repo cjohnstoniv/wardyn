@@ -26,6 +26,7 @@ vi.mock("../../lib/api/ssh-keys", () => ({
 }));
 
 import { SSHKeysScreen } from "./ssh-keys";
+import { aheadByHours } from "../../lib/test-clock";
 
 function renderScreen() {
   return render(
@@ -55,7 +56,7 @@ describe("SSHKeysScreen — empty state", () => {
 describe("SSHKeysScreen — list + remove", () => {
   beforeEach(() => {
     listKeysMock.mockResolvedValue([
-      { fingerprint: "SHA256:abc/def", principal: "alice@example.com", name: "laptop", public_key: "", created_at: "2026-01-01T00:00:00Z" },
+      { fingerprint: "SHA256:abc/def", principal: "alice@example.com", name: "laptop", public_key: "", created_at: aheadByHours(-1) },
     ]);
   });
 
@@ -120,7 +121,7 @@ describe("SSHKeysScreen — add key", () => {
       principal: "alice@example.com",
       name: "new key",
       public_key: "ssh-ed25519 AAAA",
-      created_at: "2026-01-01T00:00:00Z",
+      created_at: aheadByHours(-2),
     });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
@@ -131,7 +132,7 @@ describe("SSHKeysScreen — add key", () => {
     await user.type(screen.getByLabelText(/public key/i), "ssh-ed25519 AAAA");
 
     listKeysMock.mockResolvedValue([
-      { fingerprint: "SHA256:new", principal: "alice@example.com", name: "new key", public_key: "", created_at: "2026-01-01T00:00:00Z" },
+      { fingerprint: "SHA256:new", principal: "alice@example.com", name: "new key", public_key: "", created_at: aheadByHours(-1) },
     ]);
     await user.click(screen.getByRole("button", { name: /^add key$/i }));
 
@@ -189,7 +190,7 @@ describe("SSHKeysScreen — admin-override badge", () => {
         name: "laptop",
         public_key: "",
         role: "user",
-        created_at: "2026-01-01T00:00:00Z",
+        created_at: aheadByHours(-2),
       },
       {
         fingerprint: "SHA256:bbb",
@@ -197,7 +198,7 @@ describe("SSHKeysScreen — admin-override badge", () => {
         name: "workstation",
         public_key: "",
         role: "admin",
-        created_at: "2026-01-02T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
     ]);
     renderScreen();

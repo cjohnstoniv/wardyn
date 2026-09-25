@@ -42,6 +42,7 @@ import { AccessCollisionError, AccessPostureFlipRequiredError } from "../../../l
 import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import type { AccessResponse } from "../../../lib/types";
 import { AccessPanel } from "./access-panel";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const orgTypes = [
   { id: "standard", name: "Standard user", description: "", priority: 0, built_in: true },
@@ -60,7 +61,7 @@ function baseAccess(over: Partial<AccessResponse> = {}): AccessResponse {
         source: "console",
         shadowed: false,
         shadow_cause: "",
-        created_at: "2026-08-28T00:00:00Z",
+        created_at: aheadByHours(-1),
         created_by: "admin",
       },
     ],
@@ -145,7 +146,7 @@ describe("AccessPanel — merged table (Variant A)", () => {
             source: "console",
             shadowed: true,
             shadow_cause: "chart",
-            created_at: "2026-08-30T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -165,7 +166,7 @@ describe("AccessPanel — merged table (Variant A)", () => {
             source: "console",
             shadowed: true,
             shadow_cause: "operator_allowlist",
-            created_at: "2026-08-30T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -180,7 +181,7 @@ describe("AccessPanel — merged table (Variant A)", () => {
     source: "console" as const,
     shadowed: false,
     shadow_cause: "" as const,
-    created_at: "2026-08-30T00:00:00Z",
+    created_at: aheadByHours(-1),
   };
 
   it("an email-shaped console row gets NO unverified-claim badge when allow_email_mappings is false", () => {
@@ -272,7 +273,7 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
             source: "console",
             shadowed: false,
             shadow_cause: "",
-            created_at: "2026-09-01T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
         // Unset so the Defaults block renders DEFAULT_ROLE_UNSET rather than
@@ -543,7 +544,7 @@ describe("AccessPanel — delete mapping", () => {
             source: "console",
             shadowed: false,
             shadow_cause: "",
-            created_at: "2026-08-28T00:00:00Z",
+            created_at: aheadByHours(-1),
           },
         ],
       }),
@@ -613,7 +614,7 @@ function chartPlusTwoConsole(): AccessResponse {
         source: "console",
         shadowed: false,
         shadow_cause: "",
-        created_at: "2026-08-28T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
       {
         id: "c2",
@@ -622,7 +623,7 @@ function chartPlusTwoConsole(): AccessResponse {
         source: "console",
         shadowed: false,
         shadow_cause: "",
-        created_at: "2026-08-29T00:00:00Z",
+        created_at: aheadByHours(-1),
       },
     ],
   });

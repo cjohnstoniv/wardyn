@@ -36,6 +36,7 @@ import { FocusMode } from "./focus-mode";
 import { RUN_COCKPIT } from "../../wardyn/copy";
 import { MOD, chordLabel } from "../../wardyn/kbd";
 import type { WidgetContext } from "./widget-registry";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const RUN = {
   id: "run-1a2b3c4d5e",
@@ -207,10 +208,10 @@ describe("Focus mode — the edge dock", () => {
 
 describe("Focus mode — the bottom strip states the facts", () => {
   const egress = [
-    { id: "e1", time: "2026-01-01T00:00:00Z", domain: "api.anthropic.com", decision: "allow" },
-    { id: "e2", time: "2026-01-01T00:01:00Z", domain: "proxy.golang.org", decision: "allow" },
-    { id: "e3", time: "2026-01-01T00:02:00Z", domain: "api.github.com", decision: "pending" },
-    { id: "e4", time: "2026-01-01T00:03:00Z", domain: "telemetry.vendor.io", decision: "deny" },
+    { id: "e1", time: aheadByHours(-4), domain: "api.anthropic.com", decision: "allow" },
+    { id: "e2", time: aheadByHours(-3), domain: "proxy.golang.org", decision: "allow" },
+    { id: "e3", time: aheadByHours(-2), domain: "api.github.com", decision: "pending" },
+    { id: "e4", time: aheadByHours(-1), domain: "telemetry.vendor.io", decision: "deny" },
   ] as unknown as WidgetContext["egress"];
 
   // Scoped to the strip on purpose: the dock's Egress widget states "1 held"
@@ -232,7 +233,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
           audit: [
             {
               id: "a1",
-              time: "2026-01-01T00:04:00Z",
+              time: aheadByHours(-0.5),
               actor_type: "agent",
               actor: "agent",
               action: "credential.mint",
@@ -279,7 +280,7 @@ describe("Focus mode — the bottom strip states the facts", () => {
           audit: [
             {
               id: "a1",
-              time: "2026-01-01T00:04:00Z",
+              time: aheadByHours(-0.5),
               actor_type: "agent",
               actor: "agent",
               // The broker audits DENIED mint attempts under this same action;

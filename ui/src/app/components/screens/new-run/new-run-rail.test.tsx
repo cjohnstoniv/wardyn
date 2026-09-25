@@ -506,6 +506,8 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
   // needsAttention/actionable, so the rail still CLAIMS the door — without
   // the fallback below that leaves zero sign-in controls on /runs/new.
   it("expiring with no deadline on the wire falls back to the server's own action, not silence", () => {
+    // passthrough, never compared to the clock — an older daemon's opaque
+    // action sentence, rendered verbatim with no deadline field to parse.
     const action = "Sign in again before 2026-09-19T14:03:22Z";
     renderRail({
       agentRow: modelAccessRow(),
