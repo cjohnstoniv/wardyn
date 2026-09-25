@@ -32,6 +32,10 @@ const (
 	// refusal is never an existence oracle.
 	EffectHidden        Effect = "hidden"
 	EffectUnprocessable Effect = "unprocessable"
+	// EffectConflict is a refusal answered 409: the request is well-formed and
+	// the caller could otherwise make it, but their own session state (a
+	// deleted user-view type) conflicts with it.
+	EffectConflict Effect = "conflict"
 )
 
 // Status is the HTTP status a refusal with this effect answers with.
@@ -43,6 +47,8 @@ func (e Effect) Status() int {
 		return 404
 	case EffectUnprocessable:
 		return 422
+	case EffectConflict:
+		return 409
 	default:
 		return 403 // an unknown effect refuses
 	}
