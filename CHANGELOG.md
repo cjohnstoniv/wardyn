@@ -852,6 +852,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   off for every other one. Turning "Only…" on with no allow row naming the value is refused (`400`).
   The launch fields, the six git-provider doors and the per-person model sign-in refuse a restricted
   value; an inline policy's workspace repo is dropped with a warning, as an ungranted one already is.
+- **"Available to" on the console: the git provider row, the agent roster row and an org workspace
+  (#619).** Each editor gets one Everyone/Only control, backed by
+  `GET`/`PUT /permissions/availability/{kind}/{value}` and posting its "Only…" list through
+  `POST`/`DELETE /permissions/grants` — a type, group or person typed by id, added or removed the
+  moment it changes, independent of the editor's own Save. Turning "Only…" on with nobody listed is
+  refused, and the server's own sentence renders verbatim; while "Only…" is on, the last person on the
+  list can't be removed until Everyone is chosen. The control is shown to security admins and super
+  admins only. Not yet wired: the stored policy, model provider, integration and base image editors
+  (#923); the person-facing side (#922).
 - **The user view looks through a chosen user type (#615).** `POST /me/view` with
   `{"view": "user", "user_type": "<id>"}` puts an admin in the user view as that type: its grants,
   governance profile, drives and run limits bind exactly as for a person of that type, and the tier
