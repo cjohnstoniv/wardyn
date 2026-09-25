@@ -5669,7 +5669,7 @@ too: it renames the stored `member` tier to `user`, re-adding the role CHECK on
 `api_tokens` (`0045`'s table), moving the role default there and on
 `ssh_public_keys` (`0033`'s, whose `0070` cap it re-creates), and altering
 `role_mappings` (`0051`'s). So does `0075`, which re-adds the `approvals.kind`
-CHECK (`0001`'s table) with `push_content`.
+CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.model_provider_id`.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does
