@@ -5,19 +5,28 @@
 
 // The member's own Getting Started — replaces MemberSetupNotice's one-line
 // bounce. A single scrolling page of SectionCards (no rail, no stepper): what
-// an admin already set up for you, then four things a member can actually DO
-// (add a workspace, bring your own key, launch a run, connect a terminal),
-// plus one purely informational note about approvals.
+// an admin already set up for you, then the things a member can actually DO
+// (add a workspace, bring your own key on a LEGACY install, launch a run,
+// connect a terminal), plus two purely informational notes (approvals, and —
+// since #541 — model connections).
 //
 // Colour budget (CONSOLE-RULES): exactly one `default` (teal) action at a
 // time — the first not-done actionable section's — everything else outline;
 // zero teal once every actionable section is done. "What's set up for you"
 // and "Approvals you can decide" are informational (no done state) and never
-// enter that computation. `mine` (the member's own secret names) is fetched
-// ONCE here and passed to YourModelKey — it also drives this page's own
-// "Model access" summary chip, so there is one round trip and one source of
-// truth; a Save/Remove inside YourModelKey calls back to re-fetch it, so both
-// readings flip together instead of drifting after a write.
+// enter that computation.
+//
+// #541 (fix review) — "Your model key" (your-model-key.tsx, model-key-state.ts)
+// is NOT retired: a real provider block makes every provider a person may use
+// a row on a SEPARATE page (Your account, packet MP-D's own drawing), and
+// this page then keeps only the glance-level summary chip
+// (connectionsSummary, lib/model-connections.ts) with no in-page action. But
+// #548 has not yet converted every install to a provider block, so a legacy
+// install (no `model_providers` at all — every shared or per_user roster
+// install main still carries) keeps "Your model key" as the ONLY door it ever
+// had, and the summary chip falls back to legacySummary, the retired-in-name-
+// only card's own model_access/llm_ready reading. `providerMode` decides
+// which world a given load is in.
 import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
@@ -36,12 +45,9 @@ import {
   SectionLabel,
 } from "../../wardyn/primitives";
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
-import {
-  AGENTS,
-  MODEL_ACCESS_ACTIONABLE,
-  MODEL_ACCESS_CHIP_LABEL,
-  modelAccessActionLine,
-} from "../../../lib/workspace-providers-copy";
+import { connectionRows, connectionsSummary, legacySummary } from "../../../lib/model-connections";
+import { MODEL_ACCESS_AGENT, isPerUserSsoRow } from "../../../lib/model-access";
+import { CONNECTIONS } from "../../wardyn/copy/door";
 import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
@@ -63,7 +69,7 @@ import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
 import { EPISODES } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
 import { YourModelKey, modelKeyProvider } from "./your-model-key";
-import { modelKeyState, ownKeyApplies } from "./model-key-state";
+import { modelKeyState } from "./model-key-state";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 import { DEMOS, type Demo } from "../demos/demo-catalog";
 import { ceilingNarrows, walkableDemos } from "../setup/steps";
@@ -83,26 +89,6 @@ type Variant = "default" | "outline";
 // to MODEL_ACCESS_NOT_CONFIGURED for anything else — one root cause, one table.
 // A MISS is "no chip", never a default label (see its doc comment).
 
-// U-1 (W6 blind lens) — WHOSE credential the state describes, which the label
-// table alone cannot say. Under a row that is NOT per_user the server still
-// projects `live`/`expiring` (userModelAccess, internal/api/modelaccess.go):
-// that is the ADMIN's shared credential, graded for this member. Rendering
-// MODEL_ACCESS_LIVE ("Your AWS sign-in") there claimed a sign-in the member does
-// not have, directly above a card reading "Provided by your admin" and a New Run
-// rail reading "Admin's credential". Every other state keeps the table's label:
-// shared_expired already names the admin, and the per-person states are only
-// ever emitted for a per_user row. A miss is still NO chip, never a default.
-function modelAccessChip(
-  state: string,
-  perUser: boolean,
-): { label: string; tone: "success" | "warning" } | null {
-  if (!perUser && (state === "live" || state === "expiring")) {
-    return { label: T.MODEL_ACCESS_PROVIDED_CHIP, tone: "success" };
-  }
-  const label = MODEL_ACCESS_CHIP_LABEL[state];
-  return label ? { label, tone: state === "live" ? "success" : "warning" } : null;
-}
-
 export function MemberGettingStarted() {
   const [searchParams] = useSearchParams();
   // M-6 (D5): "url" is D1, the single-operator install — the same admin
@@ -114,9 +100,11 @@ export function MemberGettingStarted() {
   const ceilingApplies = useViewAccess() !== "url";
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [retryTick, setRetryTick] = React.useState(0);
-  // The member's own AWS sign-in (C4.3) opens the shell's one door (#544 —
-  // this page mounted its own pane before). This page keeps its own status
-  // read, so a completed sign-in re-reads it.
+  // The legacy (no model-providers block) member's own AWS sign-in (C4.3)
+  // opens the shell's one door (#544 — this page mounted its own pane
+  // before). Restored (fix review on #541): "Your model key" is the ONLY
+  // legacy install's door until #548 converts every install to a provider
+  // block, and the door is what its own Sign-in button opens.
   const door = useModelAccessDoor();
   const openAwsDoor = () => door.openDoor({ for: { login: "aws" }, onSignedIn: () => setRetryTick((n) => n + 1) });
 
@@ -144,6 +132,9 @@ export function MemberGettingStarted() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; reload is stable (useCallback([]))
   }, []);
 
+  // The member's own secret names, for the restored "Your model key" card
+  // (legacy path only) — fetched once here so a Save/Remove inside it calls
+  // back to re-fetch, one source of truth.
   const [mine, setMine] = React.useState<string[] | null>(null);
   const loadSecrets = React.useCallback(() => {
     secretsApi
@@ -221,28 +212,31 @@ export function MemberGettingStarted() {
 
   const unreachable = status?.unreachable === true;
   const llmReady = !unreachable && status?.llm_ready === true;
+
+  // Restored (fix review on #541): a real provider block makes Your account's
+  // Your model connections the ONLY door (MP-D's own drawing) — every legacy
+  // install (no provider block, since the admin funnel writes none until
+  // #548 lands) keeps "Your model key" as the door it always had. Computed
+  // before `actionable` and `connectionsChip` below since both branch on it.
+  //
+  // `!= null` (not `!!`): the server sends model_providers with no
+  // `omitempty` now (#541 fix review), so a real block granting this caller
+  // nothing reads `[]` — still provider mode, just the "No providers" state
+  // — never the same wire shape as no block at all (`null`/absent).
+  const providerMode = status?.model_providers != null;
+  // legacyMode additionally requires `status` itself to have loaded: while it
+  // is null (the pre-fetch window), providerMode already reads false, and
+  // rendering "Your model key" then would flash it for every install,
+  // including a real-provider one, until the read resolves.
+  const legacyMode = !!status && !providerMode;
+
   // X3-F3: the summary chip and the pane must agree on WHICH key — the name
-  // follows the org's agent roster, not a hardcoded provider.
+  // follows the org's agent roster, not a hardcoded provider. Unused (and the
+  // card unrendered) under a real provider block.
   const modelKeyProviderRow = modelKeyProvider(status?.harnesses);
   const hasOwnKey = mine?.includes(modelKeyProviderRow.secretName) ?? false;
-  const isPerUserModelAccess = modelKeyProviderRow.credentialSource === "per_user";
-  // FIX PASS 1 (REVIEW-1.md H1) — hasOwnKey alone is not enough: a member's
-  // own API key can never satisfy a per_user OR a shared-Bedrock row
-  // (mechanismSatisfied refuses it on provider mismatch either way), so the
-  // chip row's success chip, action line and Sign-in button must all ignore
-  // a leftover `mine` write the same way the card already does.
-  const ownKeyCounts =
-    hasOwnKey &&
-    ownKeyApplies({ credential_source: modelKeyProviderRow.credentialSource, mechanism: modelKeyProviderRow.mechanism });
-
-  const workspaceDone = !unreachable && !wsLoading && workspaces.length > 0;
-  // Appendix A finding 2 — ONE predicate for both the checklist and the
-  // card (your-model-key.tsx): a per_user roster row is graded on THIS
-  // caller's own model_access, never on the deployment-wide llm_ready.
-  // U-9 (W6 blind lens): `mechanism` was the one input the card passed and this
-  // call did not, so "ONE predicate" was two — under a SHARED Bedrock row with a
-  // leftover own key the page graded "own" (done) while the card graded the
-  // credential expired. Both readings now take the same row.
+  // Appendix A finding 2 — a per_user roster row is graded on THIS caller's
+  // own model_access, never the deployment-wide llmReady.
   const modelKeyDone =
     !unreachable &&
     modelKeyState({
@@ -252,15 +246,20 @@ export function MemberGettingStarted() {
       credentialSource: modelKeyProviderRow.credentialSource,
       mechanism: modelKeyProviderRow.mechanism,
     }).done;
+
+  const workspaceDone = !unreachable && !wsLoading && workspaces.length > 0;
   const firstRunDone = !unreachable && (ownRuns?.length ?? 0) > 0;
   const connectDone = !unreachable && (sshKeyCount ?? 0) > 0;
 
-  // Colour budget over the four ACTIONABLE sections, in page order. The other
-  // two (setup summary, approvals) are informational and never win the one
-  // `default` slot.
+  // Colour budget over the ACTIONABLE sections, in page order. "model-key"
+  // enters the rotation only while its own card is actually on screen (the
+  // legacy path) — under a provider block it has no card to hand the one
+  // `default` slot to. The others (setup summary, approvals, and — since
+  // #541 — model connections, which sends the person to a SEPARATE page
+  // rather than an in-page action) are informational and never win it.
   const actionable: { key: string; done: boolean }[] = [
     { key: "workspace", done: workspaceDone },
-    { key: "model-key", done: modelKeyDone },
+    ...(legacyMode ? [{ key: "model-key", done: modelKeyDone }] : []),
     { key: "first-run", done: firstRunDone },
     { key: "connect-tools", done: connectDone },
   ];
@@ -272,11 +271,21 @@ export function MemberGettingStarted() {
     ? strongestAvailable(status.runner.confinement_classes)
     : undefined;
 
-  // U-1: the chip row's own model-access chip, or null for a state outside the
-  // five (unknown ≠ not configured — the absent-row doctrine).
-  const accessChip = status?.model_access
-    ? modelAccessChip(status.model_access.state, isPerUserModelAccess)
-    : null;
+  // #541 (§5.4, packet MP-D): the SAME predicate the Your account page's own
+  // header chip reads (model-connections-card.tsx) — one Ready/Needs
+  // you/Not-set-up answer, never two independently-computed copies, WHEN
+  // there is a provider block to read. Fix review: an install with none
+  // falls back to legacySummary, the "Your model key" card's own
+  // model_access/llm_ready reading — connectionsSummary's rows are always
+  // empty there, and "Not set up by your admin" over a working shared
+  // credential was the regression this fixes. null while `status` itself
+  // hasn't loaded yet: no claim before there is an answer to make one from.
+  const connectionsChip = status ? (providerMode ? connectionsSummary(connectionRows(status)) : legacySummary(status)) : null;
+  // The per_user roster row (the pre-provider per-person AWS-SSO lane) — the
+  // ONLY legacy shape SETUP_SUMMARY_HELPER's "shared credentials" claim is
+  // false for; a real provider block gets its OWN canon lede (CONNECTIONS.LEDE,
+  // copy/door.ts) below rather than reusing this one; add no new string.
+  const isPerUserModelAccess = !!status?.harnesses?.some((h) => h.id === MODEL_ACCESS_AGENT && isPerUserSsoRow(h));
 
   // #386: the Azure DevOps chip + its fallback connect control — the same
   // popup-driven flow the New Run rail's launch door uses.
@@ -363,55 +372,11 @@ export function MemberGettingStarted() {
                     {T.BARRIER_CHIP(CC_META[strongest].label)}
                   </Chip>
                 )}
-                {ownKeyCounts ? (
-                  <Chip tone="success">{T.MODEL_ACCESS_OWN_CHIP}</Chip>
-                ) : status?.model_access && status.model_access.state !== "not_applicable" ? (
-                  // C4.5/C3: the chip stops reading llm_ready (a DEPLOYMENT
-                  // fact) and reads THIS caller's own model-access state —
-                  // success ONLY for live; the action rides its own line
-                  // below, never inside the chip.
-                  //
-                  // A state outside the five renders NO CHIP: the old `??`
-                  // fallback claimed "Not signed in" over, say, an
-                  // `expired_renewable` credential that dispatch renews — a
-                  // false claim with no CTA to act on it. Unknown ≠ not
-                  // configured, and the server's own action line (below) is the
-                  // one thing still worth rendering.
-                  //
-                  // not_applicable (finding 5) is excluded from this branch
-                  // entirely, not merely from the label lookup: it is the
-                  // admin-token principal's own answer ("this is a shared
-                  // token, not a person"), so a TRUTHY model_access object
-                  // must still fall through to the llm_ready arm below —
-                  // otherwise the deployment-wide "Provided by your admin"
-                  // chip that arm exists to show is lost under exactly the
-                  // caller (automation, the shared token) most likely to hit it.
-                  // #158 gives it its own chip instead (below, beside this
-                  // fall-through) rather than folding it back into this branch.
-                  //
-                  // U-1: WHICH label is modelAccessChip's call, not the table's
-                  // — a shared row's `live` is the admin's credential.
-                  accessChip ? (
-                    <Chip tone={accessChip.tone}>{accessChip.label}</Chip>
-                  ) : null
-                ) : llmReady && !isPerUserModelAccess ? (
-                  // model_access absent (older daemon, or the fetch failed),
-                  // or not_applicable — today's rendering, unchanged, EXCEPT
-                  // (FIX PASS 1, REVIEW-1.md H1b) under a per_user row: that
-                  // chip would contradict the card's per_user body/lede
-                  // directly beside it. A shared row (Bedrock or otherwise)
-                  // still gets it — llmReady is the correct deployment-wide
-                  // answer there.
-                  <Chip tone="success">{T.MODEL_ACCESS_PROVIDED_CHIP}</Chip>
-                ) : null}
-                {/* #158: not_applicable's own chip, beside whatever the
-                    fall-through above rendered (or didn't) — the old code
-                    rendered NOTHING here when llmReady was false, which read
-                    as unknown rather than as this caller's real, deliberate
-                    answer ("a mechanism, not a person"). */}
-                {status?.model_access?.state === "not_applicable" && (
-                  <Chip tone="neutral">{AGENTS.MODEL_ACCESS_NOT_APPLICABLE}</Chip>
-                )}
+                {/* #541 (§5.4): Ready / Needs you / Not set up by your admin
+                    — the same chip Your account's own header carries. null
+                    (status not loaded yet) claims nothing, same as every
+                    other chip on this row. */}
+                {connectionsChip && <Chip tone={connectionsChip.tone}>{connectionsChip.label}</Chip>}
                 {/* #386: one more chip from the six states, a second subject
                     (§6.2 — "In the common case that is the whole of it: no
                     action line, no button"). */}
@@ -431,38 +396,6 @@ export function MemberGettingStarted() {
                     allocated — no chip, no placeholder. */}
                 {userDrive && <Chip tone="neutral">{driveChipLabel(userDrive)}</Chip>}
               </div>
-              {/* The server's own words, verbatim, as the chip row's own line
-                  — never reworded client-side (C4.5). */}
-              {!ownKeyCounts && status?.model_access?.action && (
-                <p className="mt-2 text-sm text-warning">{modelAccessActionLine(status.model_access)}</p>
-              )}
-              {/* not_configured / expired_signin / expiring are the per_user
-                  states — the member's OWN sign-in. shared_expired (an
-                  admin's dead credential) and live get no button: there is
-                  either nothing to do, or nothing this member can do about it. */}
-              {!ownKeyCounts &&
-                status?.model_access &&
-                MODEL_ACCESS_ACTIONABLE.has(status.model_access.state) && (
-                  // outline: this card is informational (file header) and
-                  // never enters the page's one-teal-at-a-time computation.
-                  //
-                  // U-13 (a11y): this page carries TWO buttons whose visible
-                  // text is "Sign in to AWS" (this one and the card's), plus a
-                  // plain-text action line saying the same words — a screen
-                  // reader listing the buttons got the same name twice with
-                  // nothing to choose by. The aria-label keeps the visible text
-                  // and names the section it is in; it starts with the visible
-                  // text so a by-name lookup still finds it.
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="mt-3"
-                    aria-label={T.SIGN_IN_AWS_ARIA_SUMMARY}
-                    onClick={openAwsDoor}
-                  >
-                    {AGENTS.SIGN_IN_AWS}
-                  </Button>
-                )}
               {/* #386: `not_configured`'s cause line + CONNECT_ADO — the fallback
                   states only (§2.2/§7.5); `live` (every source) and
                   `shared_expired` render neither line nor button here, the
@@ -501,7 +434,11 @@ export function MemberGettingStarted() {
                 <p className="mt-2 text-sm text-warning">{ADO.ACCESS_SHARED_EXPIRED_ACTION}</p>
               )}
               <p className="mt-3 text-sm text-muted-foreground">
-                {isPerUserModelAccess ? T.SETUP_SUMMARY_HELPER_PER_USER : T.SETUP_SUMMARY_HELPER}
+                {providerMode
+                  ? CONNECTIONS.LEDE
+                  : isPerUserModelAccess
+                    ? T.SETUP_SUMMARY_HELPER_PER_USER
+                    : T.SETUP_SUMMARY_HELPER}
               </p>
               {/* The chip names the profile; this says what having one means.
                   Both render only when there IS one. */}
@@ -553,19 +490,27 @@ export function MemberGettingStarted() {
           )}
         </SectionCard>
 
-        <YourModelKey
-          llmReady={llmReady}
-          mine={mine}
-          harnesses={status?.harnesses}
-          modelAccess={status?.model_access}
-          onSignInAws={openAwsDoor}
-          /* U-13: while the door is open the card's own button is a second,
-             live-looking way into the same one door. */
-          signInOpen={door.open}
-          known={!unreachable}
-          variant={variantFor("model-key")}
-          onChanged={loadSecrets}
-        />
+        {/* Restored (fix review on #541): the legacy install's own door — a
+            real provider block makes Your account's Your model connections
+            the only one (MP-D's own drawing), so this never renders beside
+            it. `legacyMode` (not `!providerMode`) also waits for `status`
+            itself to load, so the card never flashes on before the read
+            resolves. */}
+        {legacyMode && (
+          <YourModelKey
+            llmReady={llmReady}
+            mine={mine}
+            harnesses={status?.harnesses}
+            modelAccess={status?.model_access}
+            onSignInAws={openAwsDoor}
+            /* U-13: while the door is open the card's own button is a second,
+               live-looking way into the same one door. */
+            signInOpen={door.open}
+            known={!unreachable}
+            variant={variantFor("model-key")}
+            onChanged={loadSecrets}
+          />
+        )}
 
         <SectionCard
           title={T.FIRST_RUN_TITLE}

@@ -139,9 +139,17 @@ type SetupStatus struct {
 	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
 	// ModelProviders is the model providers THIS PRINCIPAL may use, in the
 	// member-safe shape (SetupModelProvider) — the same for every tier, so the
-	// member redaction has nothing to strip. Absent with no provider block,
-	// which is today.
-	ModelProviders []SetupModelProvider `json:"model_providers,omitempty"`
+	// member redaction has nothing to strip. No `omitempty`, deliberately
+	// (#541 fix review): a provider BLOCK that exists but grants this caller
+	// nothing must serialize as `[]`, never collapse into the SAME wire shape
+	// as "no block at all" — the two are different facts (an admin who set up
+	// providers for other people vs. one who has not started), and the
+	// console's own providerMode read (`!= null`) depends on telling them
+	// apart. `null` (Go's zero value for a nil slice) is "no provider block" —
+	// setupModelProviders returns nil ONLY then, an empty-but-non-nil slice
+	// otherwise, so a nil check here is a nil check on this field the whole
+	// way down to sc.ModelProviders itself.
+	ModelProviders []SetupModelProvider `json:"model_providers"`
 	// ProviderAccess is THIS PRINCIPAL's connection state for every provider in
 	// ModelProviders (MP-12) — one row per provider, generalising the single
 	// AWS-SSO-only answer ModelAccess gives. Getting started and the setup
