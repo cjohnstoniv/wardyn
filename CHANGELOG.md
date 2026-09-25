@@ -491,6 +491,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   identity and Sign out. "View as member" and its amber band are retired in favour of the
   switch; the no-credential preview is now **Preview as a new user** on the Permissions header,
   and its band's way out reads **Exit preview**.
+- **Banners by view: the model-access strip and the confinement-posture band now follow the
+  Console view (#635).** A deployment where each person signs in for themselves is a User-view
+  concern, so the Admin view no longer shows the model-access strip for one — only for a
+  shared-credential deployment, until each admin gets their own connection screen. The
+  confinement-posture band (unenforced/acknowledged/unconfirmed network policy) is now Admin-view
+  only; the User view carries the same posture on `ConfinementChip` instead of a second band.
 - **Console view routing: the Admin view lives under `/admin/*` (#632).** Every admin screen is
   also mounted at `/admin/…`, and `/account` opens today's Settings. A user who opens an
   Admin-view page gets a refusal page instead of the screen; an SSO admin in the User view is

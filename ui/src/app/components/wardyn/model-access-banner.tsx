@@ -39,7 +39,7 @@ import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useModelAccessDoor } from "./model-access-context";
 import { usePrincipal } from "./operator-context";
-import { screenPath } from "./console-view";
+import { screenPath, type ConsoleView } from "./console-view";
 
 // Lazy, and that is a gate rather than a nicety: this strip is mounted by
 // app-shell.tsx, which is in the entry chunk, and the login pane drags xterm +
@@ -306,8 +306,16 @@ function ModelAccessSignInDialog({
  *
  * Renders nothing (but keeps its live region mounted) when there is nothing to
  * say, so the shell needs no conditional of its own.
+ *
+ * `view` (admin-member-modes-design.md §4.2, M-3) — the Admin view shows only
+ * the pre-MP shared-credential branch, until MP-4b gives it its own per-person
+ * screen: a per-user deployment's strip is each person's own credential, which
+ * belongs to the User view. Defaults to "user" (the permissive, unrestricted
+ * reading) so every caller that mounts this strip directly — outside
+ * app-shell.tsx, which always passes its resolved view — behaves exactly as it
+ * did before the split.
  */
-export function ModelAccessBanner() {
+export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}) {
   const door = useModelAccessDoor();
   // The door's own resolved answer, never a second useOperator(): that hook's
   // default is fail-open, and a suppression computed from it would withhold the
@@ -339,7 +347,12 @@ export function ModelAccessBanner() {
   // role."), so hiding the strip there would strand exactly the person the
   // refusal sentence sends there.
   const suppressed = under("/setup") || (operator && (under("/settings") || under("/providers") || under("/account")));
-  const show = door.needsAttention && !suppressed && !(copy.dismissible && dismissed);
+  // §4.2: a per-user deployment's states ("your own credentials") are a User-
+  // view concern; the Admin view keeps only what a shared-credential
+  // deployment would show (door.perUser is the deployment's own shape, not
+  // this viewer's — see model-access.ts).
+  const adminViewSuppressed = view === "admin" && door.perUser;
+  const show = door.needsAttention && !suppressed && !adminViewSuppressed && !(copy.dismissible && dismissed);
 
   return (
     // No live region of its own: app-shell.tsx mounts the `role="status"`

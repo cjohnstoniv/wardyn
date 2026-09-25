@@ -59,6 +59,7 @@ function renderStrip({
   operator = false,
   principal = "member@corp.example",
   path = "/runs",
+  view,
   onRefresh = vi.fn(),
   claimed = false,
 }: {
@@ -67,6 +68,7 @@ function renderStrip({
   operator?: boolean;
   principal?: string;
   path?: string;
+  view?: "admin" | "user";
   onRefresh?: () => void;
   claimed?: boolean;
 }) {
@@ -79,7 +81,7 @@ function renderStrip({
               EAGERLY around this lazy chunk, and the skip-to-main target focus
               lands on when the strip that opened the door is gone. */}
           <div role="status">
-            <ModelAccessBanner />
+            <ModelAccessBanner view={view} />
           </div>
           <main id="main-content" tabIndex={-1}>
             screen
@@ -380,6 +382,32 @@ describe("where the strip is withheld", () => {
 
   it("but a user keeps it on /account — the card's AWS button is admin-only there", () => {
     renderStrip({ access: { state: "not_configured" }, path: "/account" });
+    expect(screen.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
+  });
+});
+
+// §4.2 (M-3) — a per-user deployment's states are each person's own credential,
+// which belongs to the User view; the Admin view keeps only what a
+// shared-credential deployment would show, until MP-4b gives it its own
+// per-person screen.
+describe("the Admin view keeps only the shared-credential branch (§4.2, M-3)", () => {
+  it("withholds a per-user deployment's strip in the Admin view", () => {
+    renderStrip({ access: { state: "not_configured" }, row: PER_USER_ROW, view: "admin", operator: true });
+    expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
+  });
+
+  it("keeps a shared-credential deployment's strip in the Admin view", () => {
+    renderStrip({
+      access: { state: "shared_expired", action: SHARED_EXPIRED_ACTION },
+      row: SHARED_ROW,
+      view: "admin",
+      operator: true,
+    });
+    expect(screen.getByText(MODEL_ACCESS_BANNER.SHARED_ADMIN_EXPIRED)).toBeInTheDocument();
+  });
+
+  it("keeps a per-user deployment's strip in the User view (the default)", () => {
+    renderStrip({ access: { state: "not_configured" }, row: PER_USER_ROW });
     expect(screen.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
 });

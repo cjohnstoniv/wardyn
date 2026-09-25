@@ -683,8 +683,13 @@ export function AppShell({
           that arrives WITH its first sentence (as a lazy chunk does) announces
           nothing. The wrapper is here from the first paint; the chunk fills it. */}
             <div role="status">
+              {/* §4.2 (M-3): each band is passed the session's resolved view
+              (useShellView, not the raw URL) so a clamped admin who types an
+              /admin/* path while still in the User view — the interstitial
+              case — reads the view they are actually in, not the one in the
+              address bar. */}
               <React.Suspense fallback={null}>
-                <ModelAccessBanner />
+                <ModelAccessBanner view={view} />
               </React.Suspense>
               {/* #484 — admins only: after the per-person credential block,
               before the cluster-wide confinement note. */}
@@ -696,7 +701,7 @@ export function AppShell({
               looking at, or block the very thing a run needs to start, and
               this one has no per-person urgency. */}
               <React.Suspense fallback={null}>
-                <ConfinementPostureBanner />
+                <ConfinementPostureBanner view={view} />
               </React.Suspense>
             </div>
             <div className="flex min-h-0 flex-1">
