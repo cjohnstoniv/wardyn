@@ -538,7 +538,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	// the same reason the capture path masks globally: one credential is reused
 	// across every run that selects this lane. The access token is let go one
 	// grace after its expiry even if no later refresh replaces it (#151).
-	s.cfg.MaskRegistry.AddGlobalUntil(scope.rowOwner(), harnessCredSecretName(awsSSOProvider), s.cfg.Now(), next.ExpiresAt,
+	s.cfg.MaskRegistry.AddGlobalUntil(scope.rowOwner(), scope.ssoSecret(), s.cfg.Now(), next.ExpiresAt,
 		[]byte(next.AccessToken), []byte(next.RefreshToken), []byte(next.ClientSecret))
 
 	data := map[string]any{
