@@ -23,7 +23,8 @@ import { SIGNIN_PROGRESS } from "./login-pane-copy";
 import { LOGIN_SANDBOX_READ_RETRYING, LOGIN_SANDBOX_SLOW_START } from "./login-start-wait";
 import { CAPTURE_POST_RUN_GRACE_MS } from "./capture-confirm";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
-import type { AgentRun, SetupStatus } from "../../../lib/types";
+import type { SetupStatus } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
@@ -114,7 +115,7 @@ describe("HarnessLoginPane — the consent gate", () => {
     // starting/failed shapes drive this mock themselves.
     vi.mocked(runsApiMocked.getRun)
       .mockReset()
-      .mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+      .mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
     getSetupStatusMock.mockReset();
     listAuditMock.mockReset().mockResolvedValue([]);
   });
@@ -316,7 +317,7 @@ describe("HarnessLoginPane — the consent gate", () => {
     }
     // The watch's own bound: terminal, then the upload grace elapses.
     async function watchGivesUp() {
-      vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "COMPLETED" } as AgentRun);
+      vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "COMPLETED" }));
       await advanceUnderFakeTimers(CAPTURE_POST_RUN_GRACE_MS + 60_000);
     }
 
@@ -656,7 +657,7 @@ describe("HarnessLoginPane — the starting phase", () => {
   }
 
   it("keeps the run id so Cancel kills a sandbox that is still coming up", async () => {
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "PENDING" } as AgentRun);
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "PENDING" }));
     await startAws();
 
     // The waiting copy, not a terminal: attaching to a PENDING run is a 409 the
@@ -670,8 +671,8 @@ describe("HarnessLoginPane — the starting phase", () => {
 
   it("polls the run to RUNNING, then mounts the terminal without auto-typing into a self-running sandbox", async () => {
     vi.mocked(runsApiMocked.getRun)
-      .mockResolvedValueOnce({ id: "run-123", state: "PENDING" } as AgentRun)
-      .mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+      .mockResolvedValueOnce(makeRun({ id: "run-123", state: "PENDING" }))
+      .mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
     await startAws();
 
     // The second read is a poll tick away (RUN_POLL_MS), not a microtask.
@@ -748,7 +749,7 @@ describe("HarnessLoginPane — the starting phase", () => {
   // replaced would have sat at zero forever while the copy claimed the start was
   // ordinary.
   it("a healthy STARTING read past 60s shows the slow-start sentence and never an alert", async () => {
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "PENDING" } as AgentRun);
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "PENDING" }));
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     try {
@@ -788,7 +789,7 @@ describe("HarnessLoginPane — the starting phase", () => {
     vi.mocked(runsApiMocked.getRun).mockImplementation(async () => {
       if (!up) throw new Error("control plane unreachable");
       up = false; // exactly ONE answer, then dark again
-      return { id: "run-123", state: "PENDING" } as AgentRun;
+      return makeRun({ id: "run-123", state: "PENDING" });
     });
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
@@ -829,7 +830,7 @@ describe("HarnessLoginPane — the starting phase", () => {
   // moment it attaches, so timers installed afterwards can never fire it and
   // every "did not type" assertion below would be true for the wrong reason.
   async function attachedOnFakeTimers(): Promise<void> {
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({ id: "run-123", state: "RUNNING" }));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: /start login/i }));
@@ -890,11 +891,11 @@ describe("HarnessLoginPane — the starting phase", () => {
   });
 
   it("a FAILED run shows the run's own failure_hint instead of waiting forever", async () => {
-    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue(makeRun({
       id: "run-123",
       state: "FAILED",
       failure_hint: "the sandbox image could not be pulled",
-    } as AgentRun);
+    }));
     await startAws();
 
     const alertBox = await screen.findByRole("alert");

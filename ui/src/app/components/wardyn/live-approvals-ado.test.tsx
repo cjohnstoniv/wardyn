@@ -14,6 +14,7 @@ import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
+import { makeApproval } from "../../../test/factories";
 import { OperatorProvider } from "./operator-context";
 import { ModelAccessProvider } from "./model-access-context";
 import type { AdoCardRun } from "./ado-capability-card";
@@ -37,7 +38,7 @@ import { LiveApprovals } from "./live-approvals";
 const OWNER: AdoCardRun = { created_by: "dana@acme.example", state: "RUNNING" };
 
 function escalationRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
-  return {
+  return makeApproval({
     id: "esc-1",
     run_id: "r1",
     grant_id: "grant_1",
@@ -56,11 +57,11 @@ function escalationRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
     state: "PENDING",
     requested_at: new Date().toISOString(),
     ...over,
-  } as ApprovalRequest;
+  });
 }
 
 function consentRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
-  return {
+  return makeApproval({
     id: "consent-1",
     run_id: "r1",
     kind: "credential_reauth",
@@ -74,7 +75,7 @@ function consentRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
     state: "PENDING",
     requested_at: new Date().toISOString(),
     ...over,
-  } as ApprovalRequest;
+  });
 }
 
 function mount(opts: { operator?: boolean; securityOperator?: boolean; principal?: string; run?: AdoCardRun | null } = {}) {
@@ -155,7 +156,7 @@ describe("LiveApprovals — the Azure DevOps capability card, in the run cockpit
 
   it("an ordinary tool_call row (no Azure DevOps lane) still renders the strip's plain one-liner", async () => {
     listApprovalsMock.mockResolvedValue([
-      { id: "t1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "bash", cmd: "rm -rf build/" }, state: "PENDING", requested_at: new Date().toISOString() } as ApprovalRequest,
+      makeApproval({ id: "t1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "bash", cmd: "rm -rf build/" }, state: "PENDING", requested_at: new Date().toISOString() }),
     ]);
     mount({ principal: "dana@acme.example" });
     await screen.findByTestId("live-approval-row");
