@@ -147,7 +147,10 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr := s.reviveEligible(run, startAgent); rerr != nil {
 		return reviveResult{}, rerr
 	}
-	rebooted := s.reviveNeedsAgentStart(ctx, run)
+	rebooted, rerr := s.reviveNeedsAgentStart(ctx, run)
+	if rerr != nil {
+		return reviveResult{}, rerr
+	}
 	starter, canStart := s.cfg.Runner.(runner.SandboxStarter)
 	if rebooted && !canStart {
 		return reviveResult{}, reviveRefused(http.StatusConflict, runner.ErrReviveUnsupported.Error())
@@ -315,15 +318,24 @@ func (s *Server) reviveEligible(run types.AgentRun, startAgent bool) *reviveErro
 // already set it. Trusting the agent's OWN status instead of the label is
 // smaller and safer: a probe is read-only and can never drift, where a
 // relabel CAS could land wrong and stay wrong.
-func (s *Server) reviveNeedsAgentStart(ctx context.Context, run types.AgentRun) bool {
+//
+// A probe error refuses (503) rather than silently answering false (Minor,
+// Fable review): treating "could not observe" the same as "confirmed
+// running" would let a proxy-only revive of an outage run whose agent is
+// actually stopped report success while the agent stays dead behind a proxy
+// that now claims it is live.
+func (s *Server) reviveNeedsAgentStart(ctx context.Context, run types.AgentRun) (bool, *reviveError) {
 	if run.LostReason == types.LostReboot {
-		return true
+		return true, nil
 	}
 	if run.LostReason != types.LostOutage {
-		return false
+		return false, nil
 	}
 	st, err := s.cfg.Runner.Status(ctx, run.SandboxRef)
-	return err == nil && st.State != types.RunRunning
+	if err != nil {
+		return false, reviveRefused(http.StatusServiceUnavailable, "check the run's agent status: "+err.Error())
+	}
+	return st.State != types.RunRunning, nil
 }
 
 // revokeRetiringToken retires the OLD run token's own jti once its proxy is

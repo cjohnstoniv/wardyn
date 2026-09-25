@@ -77,6 +77,9 @@ type reviveRunner struct {
 	// whose end passed has its agent stopped too (run_lost.go), which revive
 	// detects by probing this, never by trusting lost_reason alone.
 	status types.RunState
+	// statusErr makes Status fail, as a wedged daemon would (Minor, Fable
+	// review): the probe could not observe the agent at all.
+	statusErr error
 }
 
 func (r *reviveRunner) ProxyConfig(context.Context, string) ([]byte, error) {
@@ -90,6 +93,9 @@ func (r *reviveRunner) EnsureProxyImage(context.Context) error { return nil }
 func (r *reviveRunner) Status(context.Context, string) (runner.Status, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.statusErr != nil {
+		return runner.Status{}, r.statusErr
+	}
 	if r.status == "" {
 		return runner.Status{State: types.RunRunning}, nil
 	}
@@ -511,5 +517,24 @@ func TestReviveRun_AFailedUntouchedRestartKeepsTheOldTokenLive(t *testing.T) {
 	}
 	if _, verr := f.srv.cfg.Identity.Verify(ctx, old.Token, internalAudience); verr != nil {
 		t.Errorf("the retiring token no longer verifies (%v); want it left alone — the old proxy it belongs to is still running", verr)
+	}
+}
+
+// TestReviveRun_AgentStatusProbeErrorRefuses is the Minor fix (Fable
+// review): reviveNeedsAgentStart must not read "the probe failed" as "the
+// agent is running". An outage run whose Status cannot be observed (a wedged
+// daemon) is refused with 503, never proxy-only-revived and reported success
+// while its agent might really be stopped.
+func TestReviveRun_AgentStatusProbeErrorRefuses(t *testing.T) {
+	f := newReviveFixture(t) // lost to an outage
+	f.rr.statusErr = errors.New("docker: inspect: context deadline exceeded")
+	if code := f.revive(t); code != http.StatusServiceUnavailable {
+		t.Fatalf("revive: code %d, want 503 (the agent's status could not be observed)", code)
+	}
+	if len(f.rr.replaced) != 0 {
+		t.Error("a refused revive replaced the proxy")
+	}
+	if lostAt, _ := f.st.lost(); lostAt == nil {
+		t.Error("a refused revive cleared the lost mark")
 	}
 }
