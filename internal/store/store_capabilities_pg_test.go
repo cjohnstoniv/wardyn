@@ -234,17 +234,16 @@ func TestPG_CapabilityGrants_SubjectTypeCheck(t *testing.T) {
 	}
 }
 
-// TestPG_ListGroupDenyGrants_PredicateMatchesAGoSideScan pins the SQL predicate
-// that replaced internal/api's whole-table scan on the unresolvable-group-deny
-// FAIL-CLOSED path. The api-side equivalence test drives a Go double, so it
-// cannot see this query at all — and this query is the newly written half, so
-// it is where a narrowing mistake would actually live.
+// TestPG_ListGroupDenyGrants_PredicateMatchesAGoSideScan pins the SQL
+// predicate on the unresolvable-group-deny fail-closed path. The api-side
+// equivalence test drives a Go double, so it cannot see this query at all —
+// and a narrowing mistake would live here.
 //
-// The oracle is a Go filter applying the predicate the old code applied in
-// Go (subject_type='group' AND effect='deny' AND capability=$1). Postgres must
-// return exactly that set. A dropped clause here means either a deny that stops
-// firing (a breach) or one that fires on rows the old path ignored (every
-// pre-0.7 token refused on every deployment).
+// The oracle is a Go filter applying the predicate (subject_type='group' AND
+// effect='deny' AND capability=$1). Postgres must return exactly that set. A
+// dropped clause here means either a deny that stops firing (a breach) or one
+// that fires on rows the predicate excludes (every pre-0.7 token refused on
+// every deployment).
 func TestPG_ListGroupDenyGrants_PredicateMatchesAGoSideScan(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -271,7 +270,7 @@ func TestPG_ListGroupDenyGrants_PredicateMatchesAGoSideScan(t *testing.T) {
 		}
 	}
 
-	// The oracle: the predicate the pre-fix Go loop applied.
+	// The oracle: the predicate, applied in Go.
 	wantSet := map[string]bool{}
 	for _, g := range seed {
 		if g.SubjectType == types.CapabilitySubjectGroup && g.Effect == types.CapabilityDeny && g.Capability == kind {

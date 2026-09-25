@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"sync/atomic"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -102,9 +103,8 @@ func (s *Server) callerSubjects(ctx context.Context) (callerSubjects, error) {
 	_, err := s.cfg.Store.GetUserType(ctx, c.userType)
 	if errors.Is(err, store.ErrNotFound) {
 		if s.cfg.Audit != nil && !isDisplayRead(ctx) && firstUserTypeRefusal(ctx) {
-			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
-				"authz.denied", "user_type", "denied",
-				mustJSON(map[string]any{"reason": "user_type_unknown", "user_type": c.userType})))
+			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonUserTypeUnknown, "user_type", userTypeUnknownMsg).
+				With("user_type", c.userType))
 		}
 		return callerSubjects{}, errUserTypeUnknown
 	}

@@ -170,7 +170,7 @@ func TestDeriveRoleDefaultRoleFallthroughUnchanged(t *testing.T) {
 	}
 }
 
-// TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03 pins the exact hazard the
+// TestDeriveRoleComposeDefaultDeniesUnlistedLogin pins the exact hazard the
 // blind review (R-03) caught before it shipped: giving WARDYN_OIDC_ROLE_MAP a
 // RUNTIME `:-` default on the compose stack — demo@wardyn.local=admin,
 // member@wardyn.local=member — would have applied to every EXISTING deployment
@@ -185,18 +185,19 @@ func TestDeriveRoleDefaultRoleFallthroughUnchanged(t *testing.T) {
 // than as a docker-compose.yaml runtime default; this test pins the underlying
 // deriveRole behavior directly against the literal string, so the hazard stays
 // provable even if the shape of the fix changes later.
-func TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03(t *testing.T) {
+func TestDeriveRoleComposeDefaultDeniesUnlistedLogin(t *testing.T) {
+	// ticket: R03
 	const composeDefault = "demo@wardyn.local=admin,member@wardyn.local=user"
 	roleMap, err := oidc.ParseRoleMap(composeDefault)
 	if err != nil {
 		t.Fatalf("ParseRoleMap(%q): %v", composeDefault, err)
 	}
 
-	// (a) An allowlist-only deployment: today bob@corp.com is a MEMBER with a
+	// (a) An allowlist-only deployment: bob@corp.com is a member with a
 	// working login via arm 1's legacy-allowlist branch (alice is admin,
 	// everyone else who signs in is a member). Under the compose default, bob
 	// matches neither the chart map nor the allowlist, and no DefaultRole is
-	// set — the login that used to succeed is now denied.
+	// set — so the same login is denied.
 	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "bob@corp.com", roleMap, []string{"alice@corp.com"}, ""); ok {
 		t.Fatalf("bob@corp.com resolved to %q under the compose default role map — want deny (ok=false); this is the allowlist-only lockout R-03 exists to prevent", role)
 	}

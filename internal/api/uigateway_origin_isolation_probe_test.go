@@ -19,7 +19,7 @@
 //   nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'F12Probe' -race -count=1 -v
 //   # (no WARDYN_TEST_PG DSN needed: this surface's tests run against the fake store)
 //
-// WHAT IT PINS (the traced invariant, both halves):
+// What it pins (the traced invariant, both halves):
 //   1. Origin isolation across runs: a VALID relay cookie minted for run A is
 //      REFUSED (403) on run B's live relay path — even though run B exists, is
 //      RUNNING, and declares the same app. This is the server-side backstop for
@@ -49,14 +49,15 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestF12Probe_CookieForRunAIsRefusedOnRunBPath is the origin-isolation pin.
+// TestCookieForRunAIsRefusedOnRunBPath is the origin-isolation pin.
 // The existing TestUIGateway_RelayRequiresAValidSessionForThisRun covers a
 // cookie for a RANDOM (non-existent) run used on the real run's path; this is
 // the complementary, higher-value case the campaign should not miss: run B is a
 // REAL, RUNNING run that declares the very same app, so the ONLY thing standing
 // between run A's cookie and run B's sandbox is the run-id match — exactly the
 // invariant.
-func TestF12Probe_CookieForRunAIsRefusedOnRunBPath(t *testing.T) {
+func TestCookieForRunAIsRefusedOnRunBPath(t *testing.T) {
+	// ticket: F12
 	h := newUIHarness(t, okBackend())
 	runA := h.run.ID
 
@@ -100,12 +101,13 @@ func TestF12Probe_CookieForRunAIsRefusedOnRunBPath(t *testing.T) {
 	}
 }
 
-// TestF12Probe_SandboxWardynSetCookieIsStrippedOutbound is the cookie-tossing
+// TestSandboxWardynSetCookieIsStrippedOutbound is the cookie-tossing
 // pin. A sandbox app that sets Set-Cookie: wardyn_ui_sess=... is trying to
 // pin/overwrite the relay session cookie in the operator's browser — an
 // authentication attack. It must never reach the browser; the app's own
 // Set-Cookie must survive.
-func TestF12Probe_SandboxWardynSetCookieIsStrippedOutbound(t *testing.T) {
+func TestSandboxWardynSetCookieIsStrippedOutbound(t *testing.T) {
+	// ticket: F12
 	h := newUIHarness(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Add("Set-Cookie", "wardyn_ui_sess=attacker-chosen; Path=/")
 		w.Header().Add("Set-Cookie", "app_theme=dark; Path=/")

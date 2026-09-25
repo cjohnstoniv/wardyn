@@ -186,3 +186,19 @@ export const ACCESS_STATE = {
     "Something went wrong reaching the server. Your chart's mappings still apply even though this list can't confirm them right now.",
   FETCH_FAILED_RETRY: "Retry",
 } as const;
+
+// #484 — the two pieces of the admin-written request-access help the SIGN-IN
+// page needs (the People-step card's own strings live in access-posture-copy.ts:
+// this module is in the entry chunk through sign-in.tsx, and the card is not).
+// The link's one fixed label (Q457-7), frozen in docs/design/admin-access-canon.md.
+export const SIGNIN_HELP_LINK_LABEL = "Request access";
+
+// Q457-6: the four auth_error codes (internal/auth/oidc's authError* consts)
+// that carry the admin's help — the refusals a person cannot clear alone.
+// Every other refusal (a timeout, a config error, the generic arm) gets none.
+export const SIGNIN_HELP_REFUSALS: ReadonlySet<string> = new Set([
+  "no_role",
+  "email_domain",
+  "claims_overage",
+  "email_verified_absent",
+]);

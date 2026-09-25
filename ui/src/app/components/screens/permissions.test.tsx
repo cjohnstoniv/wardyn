@@ -199,7 +199,8 @@ describe("PermissionsScreen — enforcement confirms", () => {
   });
 });
 
-describe("PermissionsScreen — a snapshot that never arrived (R4/F015)", () => {
+describe("PermissionsScreen — a snapshot that never arrived", () => {
+  // ticket: R4/F015
   // The enforcement block states what the daemon is refusing RIGHT NOW. Its
   // "Not enforced" chip and the member-powers prose beneath it are claims, so
   // they may only come from a snapshot that actually arrived — the seed object
@@ -235,7 +236,8 @@ describe("PermissionsScreen — a snapshot that never arrived (R4/F015)", () => 
   });
 });
 
-describe("PermissionsScreen — an affected-member count that could not be read (R4/F133)", () => {
+describe("PermissionsScreen — an affected-member count that could not be read", () => {
+  // ticket: R4/F133
   it("says members are bounded WITHOUT a number when GET /runs is refused — never '0 members'", async () => {
     getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
     listRunsMock.mockRejectedValue(new Error("403"));
@@ -362,7 +364,8 @@ describe("PermissionsScreen — add a grant", () => {
   // 0.7.2: the seventh kind renders off the same CAPABILITY_KINDS/KIND data
   // every other kind does — a provider row id is the grant's value, and the
   // hint says so (KindCopy, wired here with no screen code of its own).
-  it("workspace_provider renders with A2's KindCopy", async () => {
+  it("workspace_provider renders with its own KindCopy", async () => {
+    // ticket: A2
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();
 

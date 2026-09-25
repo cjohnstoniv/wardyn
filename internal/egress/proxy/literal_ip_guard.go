@@ -4,8 +4,7 @@
 package proxy
 
 // The unconditional literal-IP guard evaluate applies at step 0 — INCLUDING
-// the non-canonical spellings a resolver accepts and net.ParseIP does not
-// (F105).
+// the non-canonical spellings a resolver accepts and net.ParseIP does not.
 //
 // Split out of proxy.go at the 1000-line gate, and a real seam rather than a
 // size dodge: the rule, its one deliberate exception, and the spelling

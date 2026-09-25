@@ -34,13 +34,13 @@ func decodeSetupSSO(t *testing.T, srv *Server, cookie *http.Cookie) (int, SetupS
 	return w.Code, st
 }
 
-// TestSetupStatus_MemberRedactionPreservesLLMReady is the HIGH-4 review fix:
+// TestSetupStatus_MemberRedactionPreservesLLMReady: a
 // a member's response drops checks/providers/secret-names/runner-detail (item
 // 2's redaction) but LLMReady survives it — computed BEFORE redaction from
 // the SAME signal llmProvenance already folds (here, a stored anthropic-api-key
 // secret), matching exactly what an admin sees for the identical server state.
 // Without this a member's console has no way to answer "is there any LLM
-// access at all" once the detail that used to imply it is gone.
+// access at all" once the redacted detail is gone.
 func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
 	srv := New(Config{
 		Runner:     &fakeRunner{},
@@ -76,7 +76,7 @@ func TestSetupStatus_MemberRedactionPreservesLLMReady(t *testing.T) {
 	}
 	// NOT redacted: ConfinementClasses feeds barrierReady (deriveReadiness),
 	// which gates a member's own demo Start button — zeroing it disabled
-	// demos for every member (W3-S1-2).
+	// demos for every member.
 	if len(memberSt.Runner.ConfinementClasses) == 0 {
 		t.Errorf("member: runner.confinement_classes = %v, want the real classes (drives demo barrierReady)", memberSt.Runner.ConfinementClasses)
 	}
@@ -136,8 +136,8 @@ func TestSetupStatus_AdminTokenReadsNotApplicableEndToEnd(t *testing.T) {
 	}
 }
 
-// TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring is the 0.7.6 Finding 5
-// regression, named for it: after a dispatch marks a captured session's
+// TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring: after a dispatch
+// marks a captured session's
 // refresh token spent (an earlier renewal saw invalid_grant, say), the NEXT
 // /setup/status read for that principal must flip live -> expiring WITHOUT
 // the access token itself having expired — not stay `live` until the client
@@ -726,11 +726,10 @@ func TestAgentImageCheck(t *testing.T) {
 		t.Errorf("operator override image: status=%q, want info (not a red)", chk.Status)
 	}
 	// The info row names BOTH the claude-code harness image and the distinct
-	// `base` image the setup connectivity probe actually dispatches — the row
-	// used to say "Configured claude-code agent image" with no mention of the
-	// probe, which compounded the probe's own agent-label bug (0.6.6): an
-	// operator reading this row had no way to know the probe used a different
-	// image than the one named here.
+	// `base` image the setup connectivity probe actually dispatches — naming
+	// only "Configured claude-code agent image" would leave an operator
+	// reading this row no way to know the probe uses a different image than
+	// the one named here.
 	if chk := agentImageCheck(map[string]string{"claude-code": "wardyn/agent-full:local"}); !strings.Contains(chk.Detail, "harness image") ||
 		!strings.Contains(chk.Detail, "connectivity probe runs the `base` image") {
 		t.Errorf("info detail = %q, want it to name the claude-code harness image AND the distinct base image the probe runs", chk.Detail)

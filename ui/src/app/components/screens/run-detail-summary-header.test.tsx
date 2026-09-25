@@ -49,7 +49,8 @@ const runningInteractive: AgentRun = {
   interactive: true,
 };
 
-describe("SummaryHeader — attachable chip predicate (W25-1)", () => {
+describe("SummaryHeader — attachable chip predicate", () => {
+  // ticket: W25-1
   it("shows the plain 'Interactive' chip (no attachable claim) for a member", () => {
     renderHeader(
       <OperatorProvider operator={false}>
@@ -153,7 +154,8 @@ describe("SummaryHeader — failure_hint chip actually ellipsizes (review R-02)"
 // "Start a run like this one" on the header, for every terminal
 // run (a strict superset of the failure block's 3 endings). Tab order clone
 // -> kill: outline, never the bar's one danger slot.
-describe("SummaryHeader — clone door (0.7.3 F7)", () => {
+describe("SummaryHeader — clone door", () => {
+  // ticket: 0.7.3 F7
   // The component itself gates on the `terminal` PROP, never on
   // `run.state` directly (run-detail-summary-header.tsx:233) — this loop pins
   // the CALLER's contract (every one of the 5 states in TERMINAL_RUN_STATES

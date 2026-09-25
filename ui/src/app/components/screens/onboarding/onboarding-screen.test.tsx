@@ -159,7 +159,8 @@ describe("OnboardingScreen (welcome hero)", () => {
 // (member-getting-started.tsx) rather than the old one-line notice —
 // member-getting-started.test.tsx covers that screen's own sections in full;
 // this suite only proves the routing swap.
-describe("GettingStarted (member direct navigation — B4 HIGH-4)", () => {
+describe("GettingStarted (member direct navigation)", () => {
+  // ticket: B4 HIGH-4
   beforeEach(() => {
     localStorage.clear();
     getSetupStatusMock.mockReset().mockResolvedValue(status());
@@ -206,7 +207,8 @@ describe("GettingStarted (member direct navigation — B4 HIGH-4)", () => {
 
   // X3-F11: "Getting started" lives in the account menu (app-shell.tsx), not
   // the sidebar — NAV_ITEMS has nine entries, none of them this.
-  it('X3-F11: the "revisit anytime" note names the account menu, not the sidebar', () => {
+  it('the "revisit anytime" note names the account menu, not the sidebar', () => {
+    // ticket: X3-F11
     render(<GettingStarted onDone={() => {}} status={status()} />);
     expect(screen.getByText(/Barrier:/)).toBeInTheDocument();
     expect(screen.getByText(/in the account menu/i)).toBeInTheDocument();
