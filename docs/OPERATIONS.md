@@ -2955,6 +2955,27 @@ applies to an integration that delivers no credential header (a data store on
 
 ### Model access resolves — it does not default to none
 
+**With a model-provider block set (0.8), none of this section applies.** A model
+run is credentialed by the provider it chose (`enforceRunModelProvider`,
+`internal/api/run_model_provider.go`) from its owner's own key, token or sign-in, or by
+nothing: no integration folds, no managed or host-mounted subscription and no
+operator key serves it, and dispatch drops every other model credential its
+policy carries (`resolveProviderLane`, `internal/api/runs_dispatch_provider.go`).
+Nor may an `env_secret` grant: one that would set a variable a model credential
+rides in or a provider arm sets (`modelEnvNames`, `internal/api/provider_env.go`:
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`,
+`CLAUDE_CODE_OAUTH_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID`,
+`ANTHROPIC_CUSTOM_HEADERS`, the Foundry, Vertex and Anthropic-on-AWS variables
+(`ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`,
+`ANTHROPIC_FOUNDRY_BASE_URL`, `ANTHROPIC_FOUNDRY_RESOURCE`,
+`CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_BASE_URL`,
+`ANTHROPIC_VERTEX_PROJECT_ID`, `ANTHROPIC_AWS_API_KEY`, `ANTHROPIC_AWS_BASE_URL`,
+`ANTHROPIC_PROFILE`), and each arm's base-URL, model, region and config variables) is
+refused with a 422 at create and Review, naming the grant and the variable, and
+dispatch refuses the run again if one arrives another way. Every other
+`env_secret` grant is placed as before, and with no block nothing changes.
+The tiers below are the path of a deployment with no block.
+
 A Claude run's model access is not configured per run. It resolves, in order
 (`resolveRunIntegration`, `internal/api/llmcred.go`):
 

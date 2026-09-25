@@ -100,7 +100,7 @@ func (s *Server) resolveBedrockBearerInjection(w http.ResponseWriter, r *http.Re
 	}
 	if run.ModelProviderID != "" {
 		// A run that chose a model provider is credentialed by its arm alone
-		// (resolveProviderBedrockKeyInjection), never the roster's key.
+		// (resolveProviderKeyInjection), never the roster's key.
 		return fail(http.StatusForbidden, "provider_run", bedrockBearerNotRecorded)
 	}
 	siteCfg, scErr := s.cfg.Store.GetSiteConfig(ctx)

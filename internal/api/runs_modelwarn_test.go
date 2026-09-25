@@ -48,7 +48,7 @@ func TestResolveRunLLMAccess_ManagedSubDoesNotCoverCodex(t *testing.T) {
 	}}
 	req := createRunRequest{Agent: "codex-cli"}
 	spec := types.RunPolicySpec{AllowAllEgress: true} // egress open, but no OpenAI key/grant
-	la := s.resolveRunLLMAccess(context.Background(), req, spec, map[string]bool{}, nil, "")
+	la := s.resolveRunLLMAccess(context.Background(), req, spec, map[string]bool{}, nil, "", runProviderChoice{})
 	if la == nil || la.Provisioned {
 		t.Fatalf("codex-cli with only a managed Claude sub: got %+v, want non-nil !Provisioned", la)
 	}
@@ -65,7 +65,7 @@ func TestResolveRunLLMAccess_OpenAIKeyProvisionsCodex(t *testing.T) {
 		AllowedDomains: []string{"api.openai.com"},
 		EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: scope}},
 	}
-	la := s.resolveRunLLMAccess(context.Background(), req, spec, map[string]bool{"openai-api-key": true}, nil, "")
+	la := s.resolveRunLLMAccess(context.Background(), req, spec, map[string]bool{"openai-api-key": true}, nil, "", runProviderChoice{})
 	if la == nil || !la.Provisioned {
 		t.Fatalf("codex-cli with a stored OpenAI key + grant + egress: got %+v, want Provisioned", la)
 	}

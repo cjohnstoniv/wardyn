@@ -306,14 +306,15 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// sits ahead of it — in launch's order.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
 	// The model-provider choice, where launch makes it (runs.go). Review has no
-	// run row to freeze the choice onto, so it discards it — Review's job is
-	// only to answer the refusal launch would.
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, wsRefs)
+	// run row to freeze the choice onto; it keeps it only for the model-access
+	// row below, which under a provider block is the provider's verdict, and
+	// for the model credential the autonomy gate grades with.
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
 	if !ok {
 		return
 	}
 	modelCred := mpChoice.modelCredential()
-	if !mpChoice.chosen && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
+	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
 		return
 	}
 
@@ -377,7 +378,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// a false "missing model access" blocker on every CI exec job's --dry-run.
 	var llmAccess *composeLLMAccess
 	if req.TaskMode != "exec" {
-		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef, ssoSubject)
+		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef, ssoSubject, mpChoice)
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)

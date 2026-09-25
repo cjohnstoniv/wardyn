@@ -511,10 +511,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// nil on a GetSiteConfig error — fail safe, no lift).
 			InternalHosts:        siteCfg.InternalHosts,
 			UpstreamProxyNoProxy: siteCfg.UpstreamProxyNoProxy,
-			// Operator-configured internal model gateway(s) — WARDYN_ANTHROPIC_
-			// BASE_URL/WARDYN_OPENAI_BASE_URL, validated at boot. Empty => every
-			// brokered LLM route dials the vendor host, byte-identical to today.
-			LLMUpstreams: s.cfg.LLMGateways,
+			// Where this run's brokered LLM routes dial: the boot gateway(s) on the
+			// legacy path, the chosen model provider's own address on the provider
+			// path (see dispatchLLMPlan.llmUpstreams). Empty => the vendor host.
+			LLMUpstreams: plan.llmUpstreams,
 			// What the brokered-LLM 404 says when this run reaches that route
 			// with nothing behind it — compiled at dispatch because the sidecar
 			// knows only that no injection matched (see llmUnavailableDetail).

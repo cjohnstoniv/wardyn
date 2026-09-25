@@ -31,6 +31,8 @@ func sentinelInjection(name string) *egress.InjectionRule {
 func TestInternalInjection_RefusesSharedSubscriptionOffPosture(t *testing.T) {
 	for _, name := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
 		h, _ := newSecretsHarness(t)
+		h.srv.cfg.Store = &bearerGuardStore{} // no provider block
+		h.srv.router = h.srv.routes()
 		h.srv.cfg.SubscriptionPostureOK = false
 		h.srv.cfg.SubscriptionPostureReason = "OIDC/SSO is configured"
 		runID := uuid.New()
@@ -62,6 +64,8 @@ func TestInternalInjection_RefusesSharedSubscriptionOffPosture(t *testing.T) {
 // and the injector refreshes near the margin) against a now-multi-user daemon.
 func TestInternalInjection_RefusesGrantAuthoredUnderAnotherPosture(t *testing.T) {
 	h, _ := newSecretsHarness(t)
+	h.srv.cfg.Store = &bearerGuardStore{} // no provider block
+	h.srv.router = h.srv.routes()
 	h.srv.cfg.SubscriptionPostureOK = true // authored here
 	runID := uuid.New()
 	token := h.mintRunToken(t, runID)

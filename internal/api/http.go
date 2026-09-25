@@ -204,6 +204,12 @@ func withHumanIdentity(ctx context.Context, sub, email, role, userType string, g
 type errorBody struct {
 	Error  string `json:"error"`
 	Reason string `json:"reason,omitempty"` // machine-readable refusal class; the SDK exposes it as APIError.Reason; coverage phased in under #204
+	// Provider and Kind (#532) name the model provider a run.create/Review 422
+	// is ABOUT, so the console can open the door of that provider instead of
+	// guessing from the roster. Present only on a model-provider refusal whose
+	// provider is known — never on an unrelated 4xx.
+	Provider string `json:"provider,omitempty"`
+	Kind     string `json:"kind,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

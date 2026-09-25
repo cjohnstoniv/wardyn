@@ -180,6 +180,21 @@
     "sentence": "harnessLoginNotPerUserRefusal"
   },
   {
+    "reason": "model_provider (credential: d.credential)",
+    "target": "choice.provider.ID",
+    "sentence": "d.msg"
+  },
+  {
+    "reason": "model_provider (credential: false)",
+    "target": "choice.provider.ID",
+    "sentence": "fmt.Sprintf(mpRunModelEnvSecret, secretName, name)"
+  },
+  {
+    "reason": "model_provider (credential: false)",
+    "target": "choice.providerID",
+    "sentence": "choice.refusal"
+  },
+  {
     "reason": "not_owner",
     "target": "id.String()",
     "sentence": "(audit only)"

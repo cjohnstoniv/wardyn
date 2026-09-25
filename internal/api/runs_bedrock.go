@@ -541,10 +541,10 @@ func awsSSOCacheFileContents(b awsSSOBlob, proxyInjected bool) string {
 // names one (the boot config's, or a model provider's Bedrock.BaseURL).
 func bedrockBaseEnv(region, model, baseURL string) map[string]string {
 	env := map[string]string{
-		"CLAUDE_CODE_USE_BEDROCK": "1",
-		"AWS_REGION":              region,
-		"AWS_DEFAULT_REGION":      region,
-		"ANTHROPIC_MODEL":         model,
+		envClaudeUseBedrock: "1",
+		envAWSRegion:        region,
+		envAWSDefaultRegion: region,
+		envAnthropicModel:   model,
 	}
 	// PrivateLink data-plane override, set ONLY when the operator configured
 	// one (absent = byte-identical to today). TWO variables because the four
@@ -562,8 +562,8 @@ func bedrockBaseEnv(region, model, baseURL string) map[string]string {
 	// hatch, refused unless WARDYN_ALLOW_TEST_ENDPOINTS=true. Two knobs, two
 	// services, and only one of them is a supported production posture.
 	if baseURL != "" {
-		env["ANTHROPIC_BEDROCK_BASE_URL"] = baseURL
-		env["AWS_ENDPOINT_URL_BEDROCK_RUNTIME"] = baseURL
+		env[envBedrockBaseURL] = baseURL
+		env[envBedrockRuntimeURL] = baseURL
 	}
 	return env
 }
@@ -574,12 +574,12 @@ func bedrockBaseEnv(region, model, baseURL string) map[string]string {
 // shared Bedrock env (bedrockBaseEnv) and hosts the Bedrock egress hosts; both
 // are extended. sso is the scope the blob was read in. The caller stamps readiness.
 func (s *Server) bedrockSSOAuth(blob awsSSOBlob, sso awsSSOScope, env map[string]string, hosts []string) bedrockAuth {
-	env["AWS_CONFIG_FILE"] = sandboxAWSDir + "/config"
+	env[envAWSConfigFile] = sandboxAWSDir + "/config"
 	// Deliberately not materialized: a missing shared-credentials file is
 	// normal ("no static creds") and every AWS SDK treats it that way, which
 	// is exactly right here — the only credential source is the SSO cache.
-	env["AWS_SHARED_CREDENTIALS_FILE"] = sandboxAWSDir + "/credentials"
-	env["AWS_PROFILE"] = awsSSOProfileName
+	env[envAWSSharedCredsFile] = sandboxAWSDir + "/credentials"
+	env[envAWSProfile] = awsSSOProfileName
 	// Phase B: with WARDYN_AWS_SSO_PROXY_INJECT on, the cache file
 	// carries an inert placeholder and the real access token is injected
 	// on the wire at portal.sso by the proxy. The switch is read ONCE,
@@ -783,7 +783,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		env := base()
 		// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
 		// overwrites the Authorization header with the real token on the wire.
-		env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
+		env[envBedrockBearer] = "wardyn-proxy-injected"
 		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true, bearerNamespace: sso})
 	}
 
@@ -875,7 +875,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			// Point the SDK at the mount explicitly (robust even if HOME isn't
 			// /home/agent for some exec path); no AWS_ACCESS_KEY_ID — the SDK
 			// resolves from the mounted config + SSO cache.
-			env["AWS_CONFIG_FILE"] = sandboxAWSDir + "/config"
+			env[envAWSConfigFile] = sandboxAWSDir + "/config"
 			env["AWS_SHARED_CREDENTIALS_FILE"] = sandboxAWSDir + "/credentials"
 			if profile != "" {
 				env["AWS_PROFILE"] = profile

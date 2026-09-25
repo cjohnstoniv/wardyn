@@ -329,12 +329,12 @@ func TestResolveRunLLMAccess_AdminsOwnPerUserCaptureResolvesAtCreate(t *testing.
 	s := New(cfg)
 
 	req := createRunRequest{Agent: "claude-code", Task: "ship it"}
-	la := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, admin)
+	la := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, admin, runProviderChoice{})
 	if la == nil || !la.Provisioned {
 		t.Fatalf("the admin's OWN per_user capture must resolve at create, got %+v", la)
 	}
 	// …and the same call for somebody with no capture must not borrow it.
-	if other := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, "member@corp.example"); other != nil && other.Provisioned {
+	if other := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, "member@corp.example", runProviderChoice{}); other != nil && other.Provisioned {
 		t.Errorf("a member with no capture resolved provisioned: %+v", other)
 	}
 }

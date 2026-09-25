@@ -63,7 +63,7 @@ type llmTransport struct {
 	// in (see internal/api/injection_awssso.go).
 	injectBedrockSSO bool
 	// provider is the model provider this run chose and whose owner's own
-	// credential its arm authors (resolveProviderTransport); nil on the legacy
+	// credential its arm authors (resolveProviderLane, every kind); nil on the legacy
 	// lane chain, where every other field here decides instead. A Bedrock
 	// provider's arm also fills the bedrock* fields above, so every consumer of
 	// those (mounts, the ceiling, the grant authors) reads it unchanged.
@@ -605,7 +605,7 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 	secret, snapshot := bedrockAPIKeySecret, any(bedrockBearerSnapshotOf(t.bedrock.bearerNamespace))
 	if c := t.provider; c != nil {
 		// A chosen provider's key: its owner's own, under the provider's UID,
-		// resolved by resolveProviderBedrockKeyInjection.
+		// resolved by resolveProviderKeyInjection.
 		secret = providerSecretName(c.provider.UID, providerKeyPart)
 		snapshot = providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner}
 	}
@@ -734,6 +734,11 @@ type dispatchLLMPlan struct {
 	// 404 renders when this run reaches that route with no credential behind it
 	// (see llmUnavailableDetail). Empty => the route's own generic detail.
 	llmUnavailableDetail string
+	// llmUpstreams is ProxyConfig.LLMUpstreams: the boot gateways on the legacy
+	// path, and on the provider path only the chosen provider's own address
+	// (nil when requests go to the vendor host) — a gateway reaches only the
+	// runs that chose it.
+	llmUpstreams map[string]string
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
 	// subscription/managed injection or intercept_tls inspection, never a CA
 	// minted purely for artifact tokens. Computed here because every input to it
@@ -766,17 +771,23 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig, siteCfgOK bool,
 	adoInject bool, bedrockGrade bedrockCredGrade,
 ) (dispatchLLMPlan, bool) {
+	// A model-provider block, once set, owns this run's model credential: the
+	// provider it chose, from its owner's own credential, or none — never the
+	// legacy lane chain below, the roster's declared-mechanism gate or the
+	// managed fallback (resolveProviderLane, every kind). A block that could not
+	// be read may be set, so it refuses the model run there too.
 	var llm llmTransport
 	var sso awsSSOScope
-	if run.ModelProviderID != "" {
-		// The run chose a model provider: its kind's arm alone credentials it,
-		// so the lane chain, the roster's declared-mechanism gate and the
-		// managed fallback below never see it.
+	var prov *providerDispatch
+	if providerGovernsDispatch(run, p, siteCfg, siteCfgOK) {
+		var pd providerDispatch
 		var ok bool
-		if llm, ok = s.resolveProviderTransport(ctx, run, p, policy, sandboxEnv, siteCfg, siteCfgOK); !ok {
+		if llm, injections, pd, ok = s.resolveProviderLane(ctx, run, p, policy, sandboxEnv, injections, proxyURL, siteCfg, siteCfgOK); !ok {
 			return dispatchLLMPlan{}, false
 		}
-		// A Bedrock provider's session grant records this scope.
+		prov = &pd
+		// A Bedrock provider's session grant, and its reauth hold, record this
+		// scope; zero on every other kind.
 		sso = llm.providerAWSScope()
 	} else {
 		// WHOSE credential, decided from a roster we could actually READ. A failed
@@ -807,6 +818,8 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		if !s.enforceConfiguredLLMMechanism(ctx, run, siteCfg, llm, injections) {
 			return dispatchLLMPlan{}, false
 		}
+		// Only the provider arm names a provider credential.
+		injections = s.dropUnauthoredProviderInjections(ctx, run, injections)
 	}
 	// And none the autonomy gate graded this run without (bedrockCredGradeHolds),
 	// in the same place for the same reason.
@@ -850,9 +863,8 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		}
 	}
 
-	// A per-person provider credential is injected only through the grant the
-	// run's own provider arm authors next, which records whose it is.
-	injections = s.dropForeignModelInjections(ctx, run, llm, s.dropUnauthoredProviderInjections(ctx, run, injections))
+	// The subscription arm's grant: its owner's own sign-in, recording whose it
+	// is. After resolveProviderLane's strip, like every arm's grant.
 	if llm.providerSubscription() {
 		var ok bool
 		if injections, bedrockMITMHosts, ok = s.authorProviderSubscriptionInjection(ctx, run, llm, policy, injections); !ok {
@@ -910,15 +922,17 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// was never handed (#518).
 	s.recordBedrockTransport(ctx, run, llm)
 
-	var unavailable string
-	if llm.provider == nil {
-		unavailable = s.llmUnavailableDetail(ctx, run, llm, injections, sso)
-	}
-	return dispatchLLMPlan{
+	plan := dispatchLLMPlan{
 		llm: llm, injections: injections,
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
-		bedrockMITMHosts:     bedrockMITMHosts,
-		llmUnavailableDetail: unavailable,
-		mitmLLM:              llm.injectSub || llm.injectManaged || llm.providerSubscription() || mitmForInspect,
-	}, true
+		bedrockMITMHosts: bedrockMITMHosts,
+		mitmLLM:          llm.injectSub || llm.injectManaged || llm.providerSubscription() || mitmForInspect,
+	}
+	if prov != nil {
+		plan.llmUnavailableDetail, plan.llmUpstreams = prov.detail, prov.upstreams
+	} else {
+		plan.llmUnavailableDetail = s.llmUnavailableDetail(ctx, run, llm, injections, sso)
+		plan.llmUpstreams = s.cfg.LLMGateways
+	}
+	return plan, true
 }

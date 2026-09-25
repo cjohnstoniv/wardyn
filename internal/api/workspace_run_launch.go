@@ -546,6 +546,13 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if rerr := s.recordLaunchRefusals(ctx, ws, stepRunAgent); rerr != nil {
 		return types.AgentRun{}, false, rerr
 	}
+	// A record session is a model run, so under a provider block it chooses a
+	// provider like any other — refused bare and pre-claim, for the reasons
+	// above.
+	mp, merr := s.recordProviderChoice(ctx, actor, ws)
+	if merr != nil {
+		return types.AgentRun{}, false, merr
+	}
 	caps, cerr := s.cfg.Runner.Capabilities(ctx)
 	if cerr != nil {
 		return types.AgentRun{}, false, fmt.Errorf("runner capabilities unavailable: %w", cerr)
@@ -585,6 +592,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	}
 	now := run.CreatedAt
 	run.Interactive = true
+	run.ModelProviderID = mp.provider.ID
 	// The session's policy, built one function over (recordSessionPolicy).
 	policy := s.recordSessionPolicy(ws, cc, confined)
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
@@ -623,7 +631,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// applyLLMCredMount refuse the subscription mount (anthropicReachable=false) and
 	// silently fall back to a broken api-key path. Union the ceiling's model-provider
 	// egress in first so subscription/api-key wiring below attaches in both modes.
-	unionAllowedDomains(&policy, s.modelProviderEgress(s.cfg.DefaultPolicy))
+	// Under a provider block only the chosen provider's host joins, at dispatch.
+	if !mp.governs {
+		unionAllowedDomains(&policy, s.modelProviderEgress(s.cfg.DefaultPolicy))
+	}
 
 	// Model access for the session comes from the WORKSPACE's OWN binding
 	// — the same resolveRunIntegration precedence (explicit → workspace pin →
@@ -661,53 +672,11 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		return types.AgentRun{}, false, abort(fmt.Errorf("create requirement grant: %w", ierr))
 	}
 	injections = append(injections, minted...)
-	// llmGrantsBefore fences the fallback mint below to ONLY what IT adds: the
-	// fold above already minted and audited the requirement grants — reusing
-	// the full policy.EligibleGrants slice there would remint and re-inject
-	// every one of them a second time.
-	llmGrantsBefore := len(policy.EligibleGrants)
-
-	// Unconditional, same as launch/preflight for a real run:
-	// foldRunIntegration already resolves the workspace's OWN binding first and only
-	// falls through to the operator's site-wide DefaultFor:agent_runs integration when
-	// the workspace names nothing — it returns kind=="" when neither resolves, so the
-	// ceiling/convention fallback below stays the last resort exactly as before. Gating
-	// this call on the workspace carrying its own binding skipped tier 3 (the operator's
-	// site-wide default) for every unbound workspace's record/replay session, silently
-	// diverging from "Model access resolves" (docs/OPERATIONS.md).
-	_, integKind, bedrockRef := s.foldRunIntegration(ctx, "", &policy, createRunRequest{Agent: "claude-code"}, []types.Workspace{ws})
-	subMounted := specHasMountTarget(&policy, claudeCredTarget)
-	if integKind == "" && !subMounted {
-		// No workspace/operator integration bound: fall back to the operator
-		// ceiling's convention subscription mount, else a brokered api-key grant
-		// (today's behavior for an unbound workspace).
-		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true, s.anthropicGatewayHostPort()); m {
-			subMounted = true
-		} else {
-			s.ensureLLMGrant(&policy, "claude-code", s.presentSecretNames(ctx), false)
-		}
+	llmMode, bedrockRef, llmInjections, lerr := s.recordSessionModelAccess(ctx, runID, now, &policy, ws, mp, len(injections) > 0)
+	if lerr != nil {
+		return types.AgentRun{}, false, abort(lerr)
 	}
-	llmMode := "none"
-	switch {
-	case subMounted, integKind == "anthropic_subscription":
-		llmMode = "subscription" // managed subscription is injected proxy-side by dispatch
-	case integKind == "bedrock" || bedrockRef != nil:
-		llmMode = "bedrock" // dispatch's resolveBedrockAuth wires it from bedrockRef below
-	}
-	if !subMounted {
-		// Build the injection from whatever api_key grant the FALLBACK just added
-		// (llmGrantsBefore: the fold's own grants above are already minted) —
-		// mirrors handleCreateRun's api_key branch (a subscription/bedrock fold
-		// adds none: managed is injected proxy-side, Bedrock via resolveBedrockAuth).
-		minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[llmGrantsBefore:])
-		if ierr != nil {
-			return types.AgentRun{}, false, abort(fmt.Errorf("create llm grant: %w", ierr))
-		}
-		injections = append(injections, minted...)
-		if len(injections) > 0 && llmMode == "none" {
-			llmMode = "api-key"
-		}
-	}
+	injections = append(injections, llmInjections...)
 
 	// Save the resolved auth mode + model onto the session entry so it's visible and a
 	// later confined replay reflects the SAME provider the operator configured (not a

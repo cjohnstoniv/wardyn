@@ -157,6 +157,9 @@ const envAllowMemberEnvSecret = "WARDYN_ALLOW_USER_ENV_SECRET"
 // all of it, not just the part written so far. Non-empty, not merely present:
 // an empty value carries no configuration to protect, and treating it as
 // occupied would make a placeholder key unfillable for no gain.
+// Under a governing model-provider block it never sees a grant that would set
+// a model-credential variable (modelEnvNames): resolveProviderLane refuses that
+// run before anything is authored, so no key rides beside the provider's.
 // It REPORTS the variable names it actually filled, because those values are
 // credential material and must not ride a substrate's readable object model:
 // splitSecretEnv moves them onto SandboxSpec.SecretEnv, which the k8s driver

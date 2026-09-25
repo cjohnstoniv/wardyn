@@ -379,6 +379,9 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 // code's own predicate (bedrockLaneSelectable, runs_bedrock.go): a deployment
 // with no Bedrock region/model, a non-model run, a login box, a subscription
 // run and every non-claude-code agent dispatch exactly as before, blip or no.
+// A model run of an agent Wardyn credentials never gets here on an unreadable
+// roster: providerGovernsDispatch cannot rule out a model-provider block, so
+// the provider arm refuses it first.
 func (s *Server) enforceReadableRosterForCredential(ctx context.Context, run types.AgentRun,
 	p dispatchParams, policy *types.RunPolicySpec, siteCfgOK bool,
 ) bool {
@@ -521,6 +524,11 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 		// (#518). A 500 here blames the actual cause instead.
 		writeError(w, http.StatusInternalServerError, loggedMsg(ctx, "get site config", err))
 		return false
+	}
+	// Under a model-provider block the run's provider decides its lane, and
+	// enforceRunModelProvider already judged it (and its credential).
+	if sc.ModelProviders != nil {
+		return true
 	}
 	row, declared := agentProviderFor(sc, req.Agent)
 	if !declared && out == nil {
