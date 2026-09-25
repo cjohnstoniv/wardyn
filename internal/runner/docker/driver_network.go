@@ -365,6 +365,34 @@ func (d *Driver) StopSandbox(ctx context.Context, ref string) error {
 	return d.teardown(ctx, ref)
 }
 
+// EndSandbox is the lease end (runner.SandboxEnder): stop the agent as
+// StopSandbox does but leave the container in place, so its writable layer
+// (the checkout, the harness transcript) survives, then remove the proxy
+// sidecar. Agent first, as StopSandbox orders it, so a recorder flushing on
+// SIGTERM still delivers through the proxy. The per-run network stays for
+// teardown to remove with the agent. Fails closed: a run id it cannot resolve
+// is an error, never a success that left the proxy up.
+func (d *Driver) EndSandbox(ctx context.Context, ref string) error {
+	timeout := int(stopTimeout.Seconds())
+	if _, err := d.cli.ContainerStop(ctx, ref, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
+		return fmt.Errorf("docker: stop agent: %w", err)
+	}
+	id, err := runIDFromAgentName(ref)
+	if err != nil {
+		res, ierr := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
+		if ierr != nil || res.Container.Config == nil {
+			return fmt.Errorf("docker: end of agent %s: %w", ref, errTeardownUnresolved)
+		}
+		if id, err = parseRunID(res.Container.Config.Labels[labelRun]); err != nil {
+			return fmt.Errorf("docker: end of agent %s: %w", ref, errTeardownUnresolved)
+		}
+	}
+	if _, err := d.cli.ContainerRemove(ctx, proxyContainerName(id), client.ContainerRemoveOptions{Force: true}); err != nil && !isNotFound(err) {
+		return fmt.Errorf("docker: remove proxy: %w", err)
+	}
+	return nil
+}
+
 // KillSandbox is the kill-switch path: immediate SIGKILL + force remove. The
 // control plane cascades identity/credential revocation around this call.
 func (d *Driver) KillSandbox(ctx context.Context, ref string) error {

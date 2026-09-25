@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -49,7 +50,7 @@ func (s *Server) liveCapEnv(ctx context.Context, present map[string]bool, provid
 		BedrockRegionSet: s.cfg.BedrockRegion != "",
 		BedrockModelSet:  s.cfg.BedrockModel != "",
 		ManagedBlobPresent: func(provider string) bool {
-			_, ok, err := s.readManagedBlob(ctx, provider)
+			_, ok, err := s.readManagedBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), provider)
 			return err == nil && ok
 		},
 		ResidentSubscriptionLive: residentLive,
@@ -273,6 +274,14 @@ func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 	return out
 }
 
+// setupIntegrationID is the capIntegration value a row is offered under — the
+// id a run names in req.IntegrationID.
+func setupIntegrationID(in SetupIntegration) string { return in.ID }
+
+// setupHarnessToolID is the capAgent value a harness is offered under — the
+// run's --agent string.
+func setupHarnessToolID(t SetupHarnessTool) string { return t.ID }
+
 // handleListIntegrations returns the effective integration set (stored ∪
 // legacy-derived) with each row's live capabilities, paginated by
 // ?limit=&offset= (see parseListPage). Read-only, humanOrAdmin.
@@ -301,7 +310,7 @@ func (s *Server) handleListIntegrations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	present := s.presentSecretNamesFor(r.Context(), s.secretOwnerFromRequest(r))
-	rows := s.integrationsWithCapabilities(r.Context(), present)
+	rows := capVisible(r.Context(), s, capIntegration, s.integrationsWithCapabilities(r.Context(), present), setupIntegrationID)
 	if !s.isOperator(r.Context()) {
 		rows = memberSafeIntegrations(rows)
 	}

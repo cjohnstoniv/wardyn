@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
@@ -29,7 +30,7 @@ import (
 
 const adminToken = "test-admin-token"
 
-// ─── fakes ─────────────────────────────────────────────────────────────────
+// fakes
 
 // recRecorder's mutex exists for the detached create-run launch: it records
 // audit rows after the 201, while the test is already reading.
@@ -78,6 +79,8 @@ type fakeApprovals struct {
 	listErr    error
 	cancelErr  error
 	cancelled  []cancelCall
+	expireErr  error
+	expired    []uuid.UUID
 	countErr   error
 	// countForRun, when > 0, is what CountForRun answers regardless of the map —
 	// the per-run cap is 4096 rows and seeding them all would prove nothing the
@@ -106,17 +109,17 @@ func (f *fakeApprovals) Request(_ context.Context, req types.ApprovalRequest) (t
 	if req.RequestedAt.IsZero() {
 		req.RequestedAt = time.Now().UTC()
 	}
-	// THE PARTIAL UNIQUE INDEX, MODELLED (migration 0022
-	// approvals_pending_noncred_uniq: one PENDING row per
-	// (run_id, kind, requested_scope) for every kind but `credential`, which 0064
-	// notes now covers credential_reauth too).
+	// The partial unique index, modelled (migration 0022
+	// approvals_pending_noncred_uniq: one PENDING row per (run_id, kind,
+	// requested_scope) for every kind but `credential`, which 0064 notes now
+	// covers credential_reauth too).
 	//
-	// Without it this double let N concurrent raises for ONE run each insert a
-	// row, because approval.RequestApproval's dedup is a LIST-then-INSERT with a
-	// real race window between the two — which the database closes and this map
-	// did not. Every api-level concurrency assertion of the form "N callers, one
-	// question" was therefore decided by goroutine scheduling: it passed most
-	// runs and failed some, proving nothing either way (patch-review batch E).
+	// Without it this double would let N concurrent raises for one run each
+	// insert a row, because approval.RequestApproval's dedup is a
+	// list-then-insert with a real race window between the two — which the
+	// database closes. Every api-level concurrency assertion of the form "N
+	// callers, one question" would then be decided by goroutine scheduling:
+	// passing most runs and failing some, proving nothing either way.
 	//
 	// Returning the WINNER rather than an error is also what the store+FSM pair
 	// does end to end: store.PG.CreateApproval maps the 23505 to
@@ -179,13 +182,14 @@ func (f *fakeApprovals) List(_ context.Context, _ types.ApprovalState) ([]types.
 // CancelForRun mirrors approval.CancelForRun over the map: only PENDING rows of
 // THIS run move, and cancelled records what the handler passed so a test can
 // assert the reason the terminal transition supplied.
-func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (int, error) {
+func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.cancelErr != nil {
-		return 0, f.cancelErr
+		return nil, f.cancelErr
 	}
 	n := 0
+	byKind := map[string]int{}
 	for id, ap := range f.byID {
 		if ap.RunID != runID || ap.State != types.ApprovalPending {
 			continue
@@ -194,11 +198,39 @@ func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason 
 		ap.DecidedBy, ap.Reason = "system", reason
 		f.byID[id] = ap
 		n++
+		byKind[approval.TallyKey(ap)]++
 	}
 	if n > 0 {
 		f.cancelled = append(f.cancelled, cancelCall{RunID: runID, Reason: reason, Count: n})
 	}
-	return n, nil
+	return byKind, nil
+}
+
+// ExpireOne mirrors approval.ExpireOne over the map: PENDING moves to EXPIRED
+// and is recorded; anything else (already decided, or absent) is a silent
+// no-op, matching the real FSM's idempotent treatment of the race.
+func (f *fakeApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.expireErr != nil {
+		return f.expireErr
+	}
+	ap, ok := f.byID[id]
+	if !ok || ap.State != types.ApprovalPending {
+		return nil
+	}
+	ap.State = types.ApprovalExpired
+	ap.DecidedBy = "system"
+	f.byID[id] = ap
+	f.expired = append(f.expired, id)
+	return nil
+}
+
+// expiredCalls returns a snapshot of what ExpireOne moved, under the lock.
+func (f *fakeApprovals) expiredCalls() []uuid.UUID {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]uuid.UUID(nil), f.expired...)
 }
 
 // CountForRun counts this run's rows in any state (R3-F071's cap reads it).
@@ -260,7 +292,7 @@ func (b *fakeBroker) RevokeRun(_ context.Context, runID uuid.UUID) error {
 	return nil
 }
 
-// ─── test harness ────────────────────────────────────────────────────────────
+// test harness
 
 type harness struct {
 	srv       *Server
@@ -268,6 +300,10 @@ type harness struct {
 	approvals *fakeApprovals
 	broker    *fakeBroker
 	audit     *recRecorder
+	// baseCtx is every harness server's BaseCtx, cancelled when the test ends,
+	// so detached work waiting on it (a stored capture's post-grace sign-in
+	// kill, ssotoken.go) stops with its test instead of firing into the next.
+	baseCtx context.Context
 }
 
 func newHarness(t *testing.T) *harness {
@@ -279,7 +315,10 @@ func newHarness(t *testing.T) *harness {
 	}
 	approvals := newFakeApprovals()
 	brk := &fakeBroker{}
+	baseCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	srv := New(Config{
+		BaseCtx:     baseCtx,
 		Identity:    idp,
 		Approvals:   approvals,
 		Broker:      brk,
@@ -292,7 +331,7 @@ func newHarness(t *testing.T) *harness {
 		},
 		ControlPlaneURL: "http://wardynd:8080",
 	})
-	return &harness{srv: srv, idp: idp, approvals: approvals, broker: brk, audit: audit}
+	return &harness{srv: srv, idp: idp, approvals: approvals, broker: brk, audit: audit, baseCtx: baseCtx}
 }
 
 // baseTestConfig returns the Config preamble shared by most handler tests
@@ -309,6 +348,7 @@ func baseTestConfig(h *harness, st store.Store) Config {
 		TrustDomain:     "wardyn.local",
 		ControlPlaneURL: "http://wardynd:8080",
 		Store:           st,
+		BaseCtx:         h.baseCtx,
 	}
 }
 
@@ -445,7 +485,7 @@ func lastAuditEvent(t *testing.T, events []types.AuditEvent, action string) type
 	return types.AuditEvent{}
 }
 
-// ─── tests ─────────────────────────────────────────────────────────────────
+// tests
 
 func TestHealthz(t *testing.T) {
 	h := newHarness(t)
@@ -876,13 +916,13 @@ func TestInternalMintScopeMismatchFailsClosed(t *testing.T) {
 	}
 }
 
-// TestInternalMintAlreadyMintedCarriesDiscriminatingCode is W19-W19a-2: three
-// distinct fail-closed conditions used to share the bare 409 status with no
-// discriminator — the "already minted" (single-use) case decoded in
-// cmd/wardyn-git-helper's callMint as an approval-pending 409 with no
-// approval_id, surfacing "mint returned 409 without approval_id" for the
-// second git operation of an approval-gated run instead of naming single-use
-// as the real cause. A "code" field now distinguishes it.
+// TestInternalMintAlreadyMintedCarriesDiscriminatingCode: three distinct
+// fail-closed conditions share the 409 status, so a "code" field
+// distinguishes them. Without it the "already minted" (single-use) case
+// decodes in cmd/wardyn-git-helper's callMint as an approval-pending 409
+// with no approval_id, surfacing "mint returned 409 without approval_id" for
+// the second git operation of an approval-gated run instead of naming
+// single-use as the real cause.
 func TestInternalMintAlreadyMintedCarriesDiscriminatingCode(t *testing.T) {
 	h := newHarness(t)
 	tok := h.mintRunToken(t, uuid.New())

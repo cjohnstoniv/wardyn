@@ -234,11 +234,10 @@ func TestListApprovals_StateFilter(t *testing.T) {
 	}
 }
 
-// ListApprovals's runID param is the fix for the server's ?run_id= filter
-// being otherwise unreachable from the SDK (W19-S1-4 / W20-hold-fsm-7): a
-// non-nil runID must reach the wire, and uuid.Nil must not add the param at
-// all (an empty ?run_id= would 400 on the server, which parses it with
-// uuid.Parse).
+// ListApprovals's runID param makes the server's ?run_id= filter reachable
+// from the SDK: a non-nil runID must reach the wire, and uuid.Nil must not
+// add the param at all (an empty ?run_id= would 400 on the server, which
+// parses it with uuid.Parse).
 func TestListApprovals_RunIDFilter(t *testing.T) {
 	runID := uuid.New()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -417,11 +416,10 @@ func TestAuditEvents_Success(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// AuditEventsPage (W16-S1-2: truncation was previously undetectable — the
-// per-run trail caps at 1000 events server-side and neither the CLI nor the
-// SDK could tell "this is everything" from "this is page 1 of more", so a
-// long run's newest events, including run.complete, could silently vanish
-// from a caller's view.)
+// AuditEventsPage: the per-run trail caps at 1000 events server-side, so the
+// CLI and SDK must be able to tell "this is everything" from "this is page 1
+// of more", or a long run's newest events, including run.complete, silently
+// vanish from a caller's view.
 // --------------------------------------------------------------------------
 
 func TestAuditEventsPage_SurfacesTruncationHeader(t *testing.T) {
@@ -588,8 +586,8 @@ func TestAPIError_ErrorString(t *testing.T) {
 		t.Errorf("error string does not contain status: %s", err.Error())
 	}
 	// The SDK is a public library and must NOT hardcode the consuming CLI's
-	// name: only cmd/wardyn owns the "wardyn:" prefix. Leaking it here is what
-	// produced the doubled "wardyn: wardyn:" prefix regression.
+	// name: only cmd/wardyn owns the "wardyn:" prefix, and leaking it here
+	// doubles it ("wardyn: wardyn:").
 	if strings.Contains(err.Error(), "wardyn:") {
 		t.Errorf("SDK error must not carry a 'wardyn:' prefix: %s", err.Error())
 	}
@@ -795,11 +793,10 @@ func TestCreateRun_NoInlinePolicyOmitted(t *testing.T) {
 // Large success body (HIGH: 2 KiB cap must NOT truncate success responses)
 // --------------------------------------------------------------------------
 
-// TestSuccessBody_LargerThan2KiB_DecodesFully is a regression test for the
-// finding that do() applied a 2048-byte LimitReader to ALL bodies and then
-// json.Unmarshal'd that capped buffer on the 2xx path — so any success
-// response larger than 2 KiB failed to decode. The 2 KiB cap must apply ONLY
-// to error (non-2xx) bodies; success bodies must decode in full.
+// TestSuccessBody_LargerThan2KiB_DecodesFully: the 2 KiB LimitReader must
+// apply only to error (non-2xx) bodies. Capping all bodies and
+// json.Unmarshal'ing that capped buffer on the 2xx path would fail every
+// success response larger than 2 KiB; success bodies must decode in full.
 func TestSuccessBody_LargerThan2KiB_DecodesFully(t *testing.T) {
 	// Build a run whose JSON serialization comfortably exceeds 2048 bytes by
 	// stuffing the Task field with a long string. uuid + fixed fields plus a

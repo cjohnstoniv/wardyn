@@ -13,7 +13,7 @@ package db
 //
 //	DROP TRIGGER audit_events_chain ON audit_events;
 //	CREATE TRIGGER audit_events_chain BEFORE INSERT ON audit_events
-//	    FOR EACH ROW EXECUTE FUNCTION somebody_elses_function();
+//	    For each row execute function somebody_elses_function();
 //
 // auditTriggerNames sees the name and reports the trigger present; the foreign
 // check excludes it by that same name; nothing compares it against what the

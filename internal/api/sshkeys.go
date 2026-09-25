@@ -130,7 +130,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// without the cap this key would come back admin at the next sign-in and
 	// outlive the view that made it.
 	capped := oidc.MemberModeFromContext(r.Context())
-	role := oidc.RoleMember
+	role := oidc.RoleUser
 	if s.isOperator(r.Context()) && !capped {
 		role = oidc.RoleAdmin
 	}

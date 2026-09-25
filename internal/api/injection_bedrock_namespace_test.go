@@ -135,7 +135,7 @@ func dispatchBearerGrant(t *testing.T, h *harness, st *bearerGuardStore, injecti
 	defer func() { h.srv.cfg.Store = st }()
 	policy := types.RunPolicySpec{}
 	plan, ok := h.srv.resolveLLMInjections(context.Background(), st.run, dispatchParams{},
-		&policy, map[string]string{}, injections, "", artifactRedirectPlan{}, false, st.site, true, false)
+		&policy, map[string]string{}, injections, "", artifactRedirectPlan{}, false, st.site, true, false, bedrockCredUngraded())
 	if !ok || !plan.llm.injectBedrockBearer || len(captured.grants) != 1 {
 		t.Fatalf("dispatch: ok=%v injectBedrockBearer=%v grants=%d, want a bearer run with exactly one grant",
 			ok, plan.llm.injectBedrockBearer, len(captured.grants))

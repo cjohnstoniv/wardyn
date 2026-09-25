@@ -13,12 +13,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestResolveLLMInspectionSecrets_ReservedNamesRefused is the F126 regression.
+// TestResolveLLMInspectionSecrets_ReservedNamesRefused pins the reserved-name
+// guard every credential sink takes.
+//
 // resolveLLMInspectionSecrets resolves each workspace_secret_name to PLAINTEXT
 // on the policy copy dispatch hands the proxy sidecar, which makes it a
 // credential SINK — and sinkReservedSecret is the guard every sink takes
-// ("reject it at every sink", secrets.go), which its direct sibling in the same
-// file (resolveEnvSecretGrants) already carried and this lane did not. Without
+// ("reject it at every sink", secrets.go), as its direct sibling in the same
+// file (resolveEnvSecretGrants) does. Without
 // it, a stored policy, an inline policy or WARDYN_DEFAULT_POLICY could ship
 // wardyn-signing-key / wardyn-session-key / the harness OAuth blob / the
 // resident AWS SigV4 secrets out of the store in cleartext.
