@@ -605,7 +605,11 @@ func TestOrphanedBuildSweeper_RunsOnCadence(t *testing.T) {
 	srv := &Server{cfg: Config{ImageBuilder: sweeper}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go srv.orphanedBuildSweeper(ctx, time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		srv.orphanedBuildSweeper(ctx, time.Millisecond)
+		close(done)
+	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for sweeper.count() < 3 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -616,7 +620,11 @@ func TestOrphanedBuildSweeper_RunsOnCadence(t *testing.T) {
 	cancel()
 	// Cancellation must actually stop it — this goroutine lives for the life of
 	// the daemon, so a ctx it ignores would outlive every test that starts one.
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sweeper ignored ctx cancel")
+	}
 	stopped := sweeper.count()
 	time.Sleep(20 * time.Millisecond)
 	if after := sweeper.count(); after != stopped {
