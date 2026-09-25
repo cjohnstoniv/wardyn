@@ -134,6 +134,14 @@ func TestProbeDrive_RealDocker(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	// Since F1, ProbeDrive itself only CHECKS presence of the pinned probe
+	// image and never pulls it (that is PrewarmImages' job) — so on a fresh
+	// daemon this test must pre-pull it, the same way it already pre-pulls
+	// "busybox:latest" below for makeRootOwnedHostDir's own unchecked
+	// ContainerCreate.
+	if err := d.ensureImage(ctx, defaultDriveProbeImage, nil); err != nil {
+		t.Fatalf("pull probe image: %v", err)
+	}
 	if err := d.ensureImage(ctx, "busybox:latest", nil); err != nil {
 		t.Fatalf("pull busybox: %v", err)
 	}
