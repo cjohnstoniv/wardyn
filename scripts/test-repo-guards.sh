@@ -36,6 +36,10 @@
 #      valid input).
 #  11. no Go name OPERATIONS.md's "Renamed in 0.8" table retires is still cited
 #      outside that table, CHANGELOG.md or docs/design/ (#617).
+#  12. every job whose name starts `notify-` in .github/workflows/*.yml calls
+#      gh with GH_REPO set — none of them check out the repo, so without it
+#      `gh` fails with "failed to run git: fatal: not a git repository" (#511,
+#      #1069).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -329,6 +333,21 @@ for name in $retired; do
 $hits"; }
 done
 if [ -n "$retired" ] && [ "$stale" = 0 ]; then ok "no retired 0.8 Go name is cited outside the rename table, CHANGELOG.md or docs/design/"; fi
+
+# ── 12. every notify-* job carries GH_REPO ───────────────────────────────────
+notify_gh_repo_fail=0
+for wf in .github/workflows/*.yml; do
+    for job in $(awk '/^jobs:/{j=1;next} j && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$wf"); do
+        case "$job" in
+            notify-*) ;;
+            *) continue ;;
+        esac
+        job_block="$(awk -v j="  $job:" '$0==j{f=1;next} f&&/^  [a-z0-9-]+:$/{exit} f{print}' "$wf")"
+        printf '%s' "$job_block" | grep -qF 'GH_REPO: ${{ github.repository }}' \
+            || { bad "$wf: $job calls gh without GH_REPO (no checkout)"; notify_gh_repo_fail=1; }
+    done
+done
+if [ "$notify_gh_repo_fail" = 0 ]; then ok "every notify-* job carries GH_REPO"; fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"
