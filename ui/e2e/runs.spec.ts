@@ -1208,14 +1208,17 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
       await expect(waitRow.getByText(RUNS_WAIT.NONE)).toHaveCount(0);
 
       releaseApprovals();
-      await page.unroute("**/api/v1/approvals**");
+      // unrouteAll (not the narrower unroute) so an in-flight handler's
+      // rejection after the route is torn down is swallowed, not surfaced as
+      // an unhandled rejection — the same polled-route fix as line ~758.
+      await page.unrouteAll({ behavior: "ignoreErrors" });
 
       // Resolved, and clean — Checking… is gone and the group settles on the
       // one thing it was already allowed to say.
       await expect(waitRow.getByText(RUNS_WAIT.CHECKING)).toHaveCount(0);
       await expect(waitRow.getByText(RUNS_WAIT.STARTING(1))).toBeVisible();
     } finally {
-      await page.unroute("**/api/v1/approvals**").catch(() => {});
+      await page.unrouteAll({ behavior: "ignoreErrors" });
       sql(`DELETE FROM agent_runs WHERE id IN ('${starting}','${clean}')`);
     }
   });
@@ -1335,7 +1338,10 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
       await expect(card.getByText(RUN_WAIT.waitingHeld(1))).toHaveCount(0);
       await expect(card.getByRole("button", { name: "Review" })).toHaveCount(0);
     } finally {
-      await page.unroute("**/api/v1/approvals*");
+      // unrouteAll (not the narrower unroute) so an in-flight handler's
+      // rejection after the route is torn down is swallowed, not surfaced as
+      // an unhandled rejection — the same polled-route fix as line ~758.
+      await page.unrouteAll({ behavior: "ignoreErrors" });
       sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
     }
   });
