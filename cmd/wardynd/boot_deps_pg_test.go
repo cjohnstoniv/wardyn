@@ -34,7 +34,7 @@ func TestConnectAndMigrate_SeparateBudgets(t *testing.T) {
 	// already-expired (0) — if the two shared one deadline (the pre-fix
 	// behavior), connect itself would fail too; they don't, so it must fail
 	// specifically inside Migrate.
-	_, err := connectAndMigrate(t.Context(), dsn, "", 30*time.Second, 0)
+	_, err := connectAndMigrate(t.Context(), dsn, "", 30*time.Second, 0, false)
 	if err == nil {
 		t.Fatal("connectAndMigrate with migrateTimeout=0: want an error, got nil")
 	}
