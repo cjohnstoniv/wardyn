@@ -16,7 +16,7 @@
  * "Open Azure DevOps sign-in". Neither had a browser anywhere near a real
  * backend to prove it against. This file is that browser: a real Chromium,
  * signed in through the SAME fake Entra tenant the curl walk uses, driving
- * the SAME /settings connect button the curl walk never touches.
+ * the SAME /account connect button the curl walk never touches.
  *
  * What only a live cluster proves that ui/e2e/ado-getting-started.spec.ts's
  * mocked popup case cannot: that the daemon's real redirect
@@ -134,7 +134,7 @@ test.describe("the ADO kind walk's browser leg (#751)", () => {
   test("connect never leaves an about:blank tab for the person to sit on", async ({ page, context }) => {
     await entraSignIn(page, MEMBER_EMAIL);
     await mockScmAccess(page, NOT_CONNECTED);
-    await page.goto("/settings#azure-devops");
+    await page.goto("/account#azure-devops");
     const cta = page.getByRole("button", { name: ADO.CONNECT_ADO });
     await expect(cta).toBeVisible();
 
@@ -170,7 +170,7 @@ test.describe("the ADO kind walk's browser leg (#751)", () => {
       window.open = () => null;
     });
     await mockScmAccess(page, NOT_CONNECTED);
-    await page.goto("/settings#azure-devops");
+    await page.goto("/account#azure-devops");
     const cta = page.getByRole("button", { name: ADO.CONNECT_ADO });
     await expect(cta).toBeVisible();
 
