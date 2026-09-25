@@ -36,7 +36,7 @@ import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor, useShellSetupStatus } from "./model-access-context";
 import { resolveDoor } from "../../lib/model-access";
-import { viewOfPath } from "./console-view";
+import { OpenInUserView, viewOfPath } from "./console-view";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
@@ -170,6 +170,12 @@ export function LiveApprovals({
   // finished once, and every test mount is exactly that "never resolves"
   // shape if it defaulted to undefined instead.
   run = null,
+  // M-7 (admin-member-modes-design.md §4.6): the admin monitor's own mount
+  // (run-detail.tsx) passes true. The demo runner is a user act (D5). Record
+  // (record-pane.tsx) is an Admin-view sandbox (QM-10) and still passes
+  // nothing: its door moves with its dependency line and switch link in M-6
+  // (#637).
+  adminView = false,
 }: {
   runId: string;
   reasonApprove?: string;
@@ -177,6 +183,7 @@ export function LiveApprovals({
   idleHint?: string;
   hasWorkspace?: boolean;
   run?: AdoCardRun | null;
+  adminView?: boolean;
 }) {
   // Decides here go straight to the API with no ReasonDialog stop, so this is
   // the one gate for all FOUR mount sites (run detail, demo screen, and
@@ -487,7 +494,7 @@ export function LiveApprovals({
         const scoped = a.kind === "egress_domain";
         const telemetry = scoped && isKnownTelemetryHost(label);
         if (a.kind === "credential_reauth") {
-          return <ReauthRow key={a.id} request={a} />;
+          return <ReauthRow key={a.id} request={a} adminView={adminView} runId={runId} />;
         }
         return (
           <div key={a.id} className="flex items-center gap-2" data-testid="live-approval-row">
@@ -814,8 +821,28 @@ function ScopeMenu({
  * non-owner (the admin reading a member's held run) the sentence that names
  * whose sign-in is awaited — and no button the server would refuse (Codex #7
  * risk (d); round-2 general S5).
+ *
+ * M-7 (admin-member-modes-design.md §4.6, §6) — `adminView` narrows `canAct`
+ * further, for the per_user lane only: the admin monitor carries no personal
+ * door, even on the admin's OWN run, where `reauthAudience` would otherwise
+ * grade this viewer able to act. The shared lane is untouched — a
+ * shared-credential re-sign stays an admin-mode control until MP-4b — and on
+ * the admin's own row the sentence gets a switch link back to the door
+ * instead (packet M-B, QM-7).
  */
-function ReauthRow({ request }: { request: ApprovalRequest }) {
+function ReauthRow({
+  request,
+  runId,
+  adminView = false,
+}: {
+  request: ApprovalRequest;
+  /** This strip's own run — the switch link's target on the admin's own row
+   *  (§below) needs no `useLocation()`: it is always this exact run's user
+   *  twin, `/runs/{id}`, whatever admin subpath this strip happens to be
+   *  mounted under. */
+  runId: string;
+  adminView?: boolean;
+}) {
   const door = useModelAccessDoor();
   // door.operator / door.principal, never useOperator() / usePrincipal():
   // those answer the FAIL-OPEN default while /me is in flight, which is exactly
@@ -832,7 +859,10 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
   // alone, never a button that opens nothing (#543).
   const { status } = useShellSetupStatus();
   const canAct =
-    audience.canAct && (!audience.provider || !!resolveDoor(status, { provider: audience.provider }, "user"));
+    !(adminView && !audience.shared) &&
+    audience.canAct &&
+    (!audience.provider || !!resolveDoor(status, { provider: audience.provider }, "user"));
+  const ownRow = adminView && !audience.shared && audience.mine;
   // Nobody should claim the door for a control they are not rendering.
   useClaimModelAccessDoor(canAct);
   return (
@@ -843,7 +873,7 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
           {REAUTH_ROW.label}
         </Mono>
         <span className="text-meta font-normal normal-case text-muted-foreground">
-          {reauthRowHint(audience)}
+          {reauthRowHint(canAct === audience.canAct ? audience : { ...audience, canAct })}
         </span>
       </div>
       {canAct && (
@@ -859,6 +889,7 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
           {REAUTH_ROW.action}
         </Button>
       )}
+      {ownRow && <OpenInUserView runId={runId} className="h-7 shrink-0" />}
     </div>
   );
 }

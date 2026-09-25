@@ -24,7 +24,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { MODEL_ACCESS_BANNER, REAUTH_ROW, REAUTH_TITLE } from "../wardyn/model-access-copy";
-import { CONSOLE_VIEW } from "../wardyn/copy/console-view";
+import { CONSOLE_VIEW, OPEN_IN_USER_VIEW } from "../wardyn/copy/console-view";
 import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
 import { WithDoor } from "../../../test/door-harness";
 
@@ -82,11 +82,11 @@ import { OperatorProvider } from "../wardyn/operator-context";
 const PER_USER = { mechanism: "bedrock_sso", credential_source: "per_user", owner: "alice@corp" };
 const SHARED = { mechanism: "bedrock_sso", credential_source: "shared", owner: "" };
 
-async function mount(scope: Record<string, unknown>, operator: boolean, principal: string) {
+async function mount(scope: Record<string, unknown>, operator: boolean, principal: string, path = "/approvals") {
   mockScope = scope;
   render(
     <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[path]}>
         <ModelAccessProvider status={null} onRefresh={() => {}}>
           <ApprovalsScreen />
         </ModelAccessProvider>
@@ -206,5 +206,34 @@ describe("/approvals — a provider run's hold (#543)", () => {
 
   it("the title names the need, not a pause (#146 defect 3)", () => {
     expect(REAUTH_TITLE).toBe("AWS sign-in needed for this run");
+  });
+});
+
+// M-7 (admin-member-modes-design.md §4.6, §6) — /admin/approvals carries no
+// personal reauth door, even on the admin's own row: the same not-yours
+// sentence a member's row gets, plus a switch link back to the door there.
+// The shared lane is untouched.
+describe("/admin/approvals — the reauth door in the admin view (M-7)", () => {
+  const OWN = { mechanism: "bedrock_sso", credential_source: "per_user", owner: "admin@corp" };
+  const switchLink = () => screen.queryByRole("button", { name: OPEN_IN_USER_VIEW });
+
+  it("gives the admin's OWN row the not-yours sentence, no door, and the switch link", async () => {
+    await mount(OWN, true, "admin@corp", "/admin/approvals");
+    expect(door()).not.toBeInTheDocument();
+    expect(screen.getByText(REAUTH_ROW.notYoursHint("admin@corp"))).toBeInTheDocument();
+    expect(switchLink()).toBeInTheDocument();
+  });
+
+  it("gives a member's row no door and no switch link — it is not the admin's own", async () => {
+    await mount(PER_USER, true, "admin@corp", "/admin/approvals");
+    expect(door()).not.toBeInTheDocument();
+    expect(screen.getByText(REAUTH_ROW.notYoursHint("alice@corp"))).toBeInTheDocument();
+    expect(switchLink()).not.toBeInTheDocument();
+  });
+
+  it("leaves the shared lane's door alone — it stays an admin-mode control", async () => {
+    await mount(SHARED, true, "admin@corp", "/admin/approvals");
+    expect(door()).toBeInTheDocument();
+    expect(switchLink()).not.toBeInTheDocument();
   });
 });

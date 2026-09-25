@@ -31,6 +31,7 @@ import type {
   RunDetail,
 } from "../../../lib/types";
 import type { RunLayoutPreset, RunLayoutWidget } from "../../../lib/api/run-layout";
+import type { ConsoleView } from "../../wardyn/console-view";
 import { createRequestFromAudit } from "../../../lib/api/audit";
 import { ConnectSSHCard } from "../run-detail-ssh";
 import {
@@ -78,6 +79,10 @@ export type WidgetContext = {
    *  (attach_ticket.go's isOperator, uigateway.go's ta.role check,
    *  sshgateway.go's admin arm), and ConnectSSHCard renders on both. */
   operator: boolean;
+  /** M-7 (admin-member-modes-design.md §4.6): the ssh widget's gate adds
+   *  "AND the user view" to owner-or-admin — the admin monitor carries no
+   *  Connect-via-SSH door, even on the admin's own run. */
+  view: ConsoleView;
   grants: CredentialGrant[];
   egress: EgressDecision[];
   /** How many of this run's approvals are HELD right now — isHeld over the
@@ -229,7 +234,11 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     // widgets it is a visible gap on every run you did not start.
     presets: { live: { x: 8, y: 20, w: 4, h: 5 } },
     // run-detail-ssh.tsx:50 verbatim, plus the RUNNING check: owner OR admin.
+    // M-7: AND the user view — the admin monitor carries no Connect-via-SSH
+    // door at all, even on the admin's own run (admin-member-modes-design.md
+    // §4.6, §6).
     available: (ctx) =>
+      ctx.view === "user" &&
       ctx.run.state === "RUNNING" &&
       ((!!ctx.principal && ctx.run.created_by === ctx.principal) || ctx.operator),
   },

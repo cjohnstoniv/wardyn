@@ -4250,7 +4250,10 @@ refused run's declared lane must still be the deployment's Claude Code lane, the
 `model_access` must be actionable, and the reader must be the person who created the run — an admin
 reading somebody else's failed run is shown the sentence alone, because their sign-in repairs nothing
 for that run. A refusal whose renewal merely did not complete ("launch again in a moment") grades
-`live` and gets no button either, correctly: nothing is wrong with that credential.
+`live` and gets no button either, correctly: nothing is wrong with that credential. In the Admin view
+(`/admin/runs/:id`) the button never renders, even on the admin's own run; the admin's own per-user
+run carries **Open in user view** in its place, since the Admin monitor carries no credential door of
+its own (M-7).
 
 Signing in from there does not restart anything. The run stays FAILED; relaunch is the run header's
 "Start a run like this one".

@@ -182,12 +182,19 @@ export function RunFailureBlock({
   run,
   audit,
   onGoAudit,
+  adminView = false,
 }: {
   run: AgentRun;
   /** The trail the run page already fetched. */
   audit: AuditEvent[];
   /** Switch to the Audit tab. */
   onGoAudit: () => void;
+  /** M-7 (admin-member-modes-design.md §4.6): the admin monitor carries no
+   *  credential door, even on the admin's own run — this block's failure
+   *  sentence stays, but its sign-in button never renders there; on the
+   *  admin's own per-user lane the switch link back to it does instead
+   *  (QM-7). Defaults false: the user cockpit. */
+  adminView?: boolean;
 }) {
   const ending = runEndingFromAudit(run.state, audit);
   const door = useModelAccessDoor();
@@ -211,14 +218,13 @@ export function RunFailureBlock({
   //    equally empty created_by.
   //  - a provider run's refusal names its provider (#532): ProviderDoor below
   //    answers it instead, keyed by that provider alone (#543).
-  const showDoor =
-    credential &&
-    !ending.provider &&
-    ending.mechanism === "bedrock_sso" &&
-    door.bedrockSSO &&
-    door.actionable &&
-    !!principal &&
-    run.created_by === principal;
+  const ownSignIn =
+    credential && !ending.provider && ending.mechanism === "bedrock_sso" && !!principal && run.created_by === principal;
+  const showDoor = !adminView && ownSignIn && door.bedrockSSO && door.actionable;
+  // The admin view's stand-in on the admin's own run: the switch link, on the
+  // per-user lane only (the shared lane's sign-in is the admin's own control,
+  // and never a User-view door).
+  const showSwitch = adminView && ownSignIn && door.perUser;
   // One primary recovery action per state per screen: while this block carries
   // the button the shell strip keeps its sentence and drops its own.
   useClaimModelAccessDoor(showDoor);
@@ -308,6 +314,12 @@ export function RunFailureBlock({
         </div>
       )}
       {credential && ending.provider && <ProviderDoor run={run} provider={ending.provider} />}
+
+      {showSwitch && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <OpenInUserView runId={run.id} />
+        </div>
+      )}
 
       <div className="mt-3 flex items-center gap-3">
         <Button variant="outline" size="sm" onClick={onGoAudit}>

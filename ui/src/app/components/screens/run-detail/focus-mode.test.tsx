@@ -61,6 +61,7 @@ function ctx(overrides: Partial<WidgetContext> = {}): WidgetContext {
     // suite never has to stand up the health / ssh-key fetches.
     principal: null,
     operator: false,
+    view: "user",
     grants: [],
     egress: [],
     heldCount: 0,

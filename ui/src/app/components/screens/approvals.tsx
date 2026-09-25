@@ -50,6 +50,7 @@ import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from
 import { OpenInUserView, useConsoleMode } from "../wardyn/console-view";
 import { resolveDoor } from "../../lib/model-access";
 import { useOperator, usePrincipal, useRole, useSecurityOperator } from "../wardyn/operator-context";
+import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
 import { ADO } from "../../lib/ado-entra-copy";
 import { APPROVALS } from "../../lib/approvals-copy";
 import {
@@ -602,11 +603,17 @@ function PendingCard({
   const reauthProvider = reauth.provider
     ? (status?.model_providers?.find((p) => p.id === reauth.provider)?.name || reauth.provider)
     : "";
+  // M-7 (admin-member-modes-design.md §4.6, §6): the admin queue carries no
+  // personal reauth door either, even on the admin's own row — same rule as
+  // the cockpit's ReauthRow, with a switch link back to it there instead. The
+  // shared lane (an admin-mode control until MP-4b) is unaffected.
+  const reauthCanAct = view === "admin" && !reauth.shared ? false : reauth.canAct;
+  const reauthOwnRow = view === "admin" && !reauth.shared && reauth.mine;
   // A hold whose provider this person has no door for any more (removed, or no
   // agent of theirs uses it) gets its hint alone, never a button that opens
   // nothing — the failure block's rule (ProviderDoor).
-  const reauthDoor = reauth.canAct && (!reauth.provider || !!resolveDoor(status, { provider: reauth.provider }, "user"));
-  const banner = deriveBanner(item.kind, scope, reauth);
+  const reauthDoor = reauthCanAct && (!reauth.provider || !!resolveDoor(status, { provider: reauth.provider }, "user"));
+  const banner = deriveBanner(item.kind, scope, reauthCanAct === reauth.canAct ? reauth : { ...reauth, canAct: reauthCanAct });
   // Deciding an egress_domain approval on an owned run is a MEMBER act (B3,
   // decide() in approvals.go); credential and tool_call stay admin-only
   // regardless of ownership — see canDecideApproval's doc for why. This list
@@ -769,9 +776,8 @@ function PendingCard({
              control opens the same dialog every other sign-in surface opens. */
           reauthDoor ? (
             <ReauthAction provider={reauth.provider} />
-          ) : !reauth.canAct && reauth.mine && reauth.provider ? (
-            // The admin's own hold, in the Admin view: its door is in the User view.
-            <OpenInUserView />
+          ) : reauthOwnRow ? (
+            <OpenInUserView runId={item.run_id} />
           ) : null
         ) : (
           <>
@@ -821,13 +827,14 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
   // 0 §6) — undefined for EXPIRED (ExpireStale deliberately writes no scope:
   // an expiry is a sweep nobody decided) and for every other kind.
   const scopeBadge = approvalScopeBadge(item);
+  const view = useConsoleMode();
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-border px-4 py-3 first:border-t-0">
       <ApprovalKindChip kind={item.kind} />
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{deriveTitle(item.kind, scope)}</span>
       <Link
-        to={`/runs/${encodeURIComponent(item.run_id)}`}
+        to={runPath(view, item.run_id)}
         className="font-mono text-xs text-muted-foreground hover:text-foreground"
         title={`Open run ${item.run_id}`}
       >

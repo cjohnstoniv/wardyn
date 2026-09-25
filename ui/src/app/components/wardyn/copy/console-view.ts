@@ -65,3 +65,13 @@ export const VIEW_ADMIN_TOKEN = {
   BODY: "Runs and connections belong to a person. Sign in with SSO to use them.",
   CTA: "Back to the admin view",
 } as const;
+
+// M-7 (packet M-B, approved 2026-09-23; frozen verbatim from modes-b.html) —
+// the switch link a "not yours" sentence carries on the admin's own row: the
+// admin view has no personal doors, even there (admin-member-modes-design.md
+// §4.6), so this is the one way back to the door instead.
+export const OPEN_IN_USER_VIEW = "Open in user view";
+
+// M-7 (modes-b.html §1, verbatim): the admin's own row on /admin/runs names its
+// owner "ann@acme.example (you)".
+export const ownerLabel = (owner: string, own: boolean) => (own ? `${owner} (you)` : owner);

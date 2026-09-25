@@ -684,3 +684,46 @@ describe("ApprovalsScreen — an egress approval says it is host-wide", () => {
     expect(screen.queryByText(APPROVAL.HOST_WIDE_NOTE)).toBeNull();
   });
 });
+
+// #638 — a run opened FROM /admin/approvals stays in the Admin view: the plain
+// /runs/:id path is the User view's (the owner cockpit on a "url"-access
+// install, a refusal for an admin-only token). Both run links on the screen —
+// the pending card's "Open run" and the decided row's run id — go through
+// runPath; the User-view mount keeps /runs/:id.
+describe("ApprovalsScreen — run links stay in the view they are opened from (#638)", () => {
+  it("/admin/approvals: the pending card's Open run goes to /admin/runs/:id", async () => {
+    render(
+      <MemoryRouter initialEntries={["/admin/approvals"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const open = await screen.findByRole("link", { name: /open run/i });
+    expect(open).toHaveAttribute("href", "/admin/runs/run_1");
+  });
+
+  it("/admin/approvals: the decided row's run link goes to /admin/runs/:id", async () => {
+    mockCancelledRow = true;
+    render(
+      <MemoryRouter initialEntries={["/admin/approvals?tab=decided"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const link = await screen.findByRole("link", { name: "run_1" });
+    expect(link).toHaveAttribute("href", "/admin/runs/run_1");
+  });
+
+  it("negative control: /approvals keeps both links on /runs/:id", async () => {
+    mockCancelledRow = true;
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/approvals"]}>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const open = await screen.findByRole("link", { name: /open run/i });
+    expect(open).toHaveAttribute("href", "/runs/run_1");
+    await user.click(screen.getByRole("tab", { name: /decided/i }));
+    const link = await screen.findByRole("link", { name: "run_1" });
+    expect(link).toHaveAttribute("href", "/runs/run_1");
+  });
+});

@@ -18,6 +18,7 @@ import { ModelAccessBanner } from "../../wardyn/model-access-banner";
 import { ModelAccessProvider } from "../../wardyn/model-access-context";
 import { MODEL_ACCESS_RUN_DOOR } from "../../wardyn/model-access-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { OPEN_IN_USER_VIEW } from "../../wardyn/copy/console-view";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 
@@ -302,6 +303,7 @@ function renderCredentialBlock({
   operator = false,
   onRefresh = vi.fn(),
   withStrip = false,
+  adminView = false,
 }: {
   access?: SetupModelAccess;
   row?: SetupHarnessTool;
@@ -310,6 +312,7 @@ function renderCredentialBlock({
   operator?: boolean;
   onRefresh?: () => void;
   withStrip?: boolean;
+  adminView?: boolean;
 } = {}) {
   render(
     <MemoryRouter initialEntries={["/runs/3b7f10c4"]}>
@@ -327,6 +330,7 @@ function renderCredentialBlock({
             run={{ ...run("FAILED"), failure_hint: REFUSAL }}
             audit={trail}
             onGoAudit={vi.fn()}
+            adminView={adminView}
           />
         </OperatorProvider>
       </ModelAccessProvider>
@@ -336,6 +340,7 @@ function renderCredentialBlock({
 }
 
 const doorButton = () => screen.queryByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA });
+const switchLink = () => screen.queryByRole("button", { name: OPEN_IN_USER_VIEW });
 
 describe("the credential ending's door — only where a sign-in repairs THIS run", () => {
   it("renders the SERVER's sentence and the sign-in, and the sentence exactly once", () => {
@@ -346,6 +351,29 @@ describe("the credential ending's door — only where a sign-in repairs THIS run
     expect(screen.getByText(MODEL_ACCESS_RUN_DOOR.NOTE)).toBeInTheDocument();
     // No invented "What to do" — the server's sentence IS the reason.
     expect(screen.queryByText("What to do")).not.toBeInTheDocument();
+  });
+
+  // M-7 (admin-member-modes-design.md §4.6, §6) — the admin monitor carries
+  // no credential door, even on the admin's own failed run (principal ===
+  // created_by === "alice" here, same as the default sign-in case above).
+  it("the admin view gets no button, even on the admin's own run — the switch link back to it instead", () => {
+    renderCredentialBlock({ adminView: true });
+    expect(doorButton()).not.toBeInTheDocument();
+    expect(screen.queryByText(MODEL_ACCESS_RUN_DOOR.NOTE)).not.toBeInTheDocument();
+    expect(switchLink()).toBeInTheDocument();
+  });
+
+  it("the admin view gives no switch link on a run that is not the admin's own, nor on the shared lane", () => {
+    renderCredentialBlock({ adminView: true, principal: "bob", operator: true });
+    expect(switchLink()).toBeNull();
+    cleanup();
+    renderCredentialBlock({ adminView: true, row: { ...PER_USER_ROW, credential_source: "shared" } });
+    expect(switchLink()).toBeNull();
+  });
+
+  it("the user view never shows the switch link", () => {
+    renderCredentialBlock();
+    expect(switchLink()).toBeNull();
   });
 
   it("refreshes the door once on mount — the context can be five minutes stale", () => {

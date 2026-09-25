@@ -15,7 +15,7 @@
 // "New run" lives in the app shell top bar.
 import * as React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { FilterX, LayoutGrid, RotateCw, Rows3, Search } from "lucide-react";
+import { FilterX, Hexagon, LayoutGrid, RotateCw, Rows3, Search } from "lucide-react";
 import { toast } from "sonner";
 import type { AgentRun, ApprovalRequest, SetupStatus } from "../../lib/types";
 import { isTerminalRunState } from "../../lib/types";
@@ -36,7 +36,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
-import { useRole } from "../wardyn/operator-context";
+import { usePrincipal, useRole } from "../wardyn/operator-context";
+import { OpenInUserView, runPath, useConsoleMode } from "../wardyn/console-view";
+import { ownerLabel } from "../wardyn/copy/console-view";
 import { cn } from "../ui/utils";
 import { BoardSkeleton, CardGrid, RunActions, RunCard, SectionHeading } from "./runs/run-card";
 import { TitleGroup } from "./runs/title-group";
@@ -296,7 +298,16 @@ export function RunsScreen() {
     lane.length > 0 ? visible.filter((r) => !needsYou(r, signals)) : visible,
   );
 
-  const openRun = (id: string) => navigate(`/runs/${encodeURIComponent(id)}`);
+  // The description is keyed on the VIEW (M-7, admin-member-modes-design.md
+  // §6, RUNS.DESCRIPTION_ADMIN/USER), not the viewer's role: an admin reading
+  // /runs in the user view sees the same "Your runs" line a member does — the
+  // list itself is already scoped server-side either way (handleListRuns's
+  // creator-pager branch), so this is copy only.
+  const view = useConsoleMode();
+  // Every row/card click opens the SAME view's own run path (runPath) — the
+  // Admin board must never double as an unannounced switch into the User
+  // view's owner cockpit (ViewGate's TWIN rule; see runPath's comment).
+  const openRun = (id: string) => navigate(runPath(view, id));
 
   const clearFilters = () => {
     setQuery("");
@@ -305,13 +316,9 @@ export function RunsScreen() {
     setRepoFacet("all");
   };
 
-  // Member console (B3, prompt-v2 point 2): the list itself is already scoped
-  // server-side (handleListRuns's creator-pager branch) — this is copy only,
-  // saying plainly what's already true rather than re-deriving/re-filtering
-  // anything client-side.
   const role = useRole();
   const description =
-    role === "user" ? `Your runs · ${runs.length}` : "Every run, live — each confined behind its own barrier.";
+    view === "admin" ? "Every run, live — each confined behind its own barrier." : `Your runs · ${runs.length}`;
 
   return (
     <div className="mx-auto max-w-[1400px] px-6 py-6">
@@ -423,7 +430,7 @@ export function RunsScreen() {
         // Table mode doesn't flash the wrong shape.
         mode === "table" ? (
           <div className="overflow-hidden rounded-xl border border-border bg-card">
-            <TableSkeleton rows={8} cols={7} />
+            <TableSkeleton rows={8} cols={view === "admin" ? 8 : 7} />
           </div>
         ) : (
           <BoardSkeleton />
@@ -438,6 +445,12 @@ export function RunsScreen() {
             }
           />
         </div>
+      ) : trueEmpty && view === "admin" ? (
+        // M-7 (modes-b §1): the admin monitor has no New run, and every door
+        // the first-run funnel offers starts a run, which is a User-view act.
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <EmptyState icon={Hexagon} title="No runs yet" />
+        </div>
       ) : trueEmpty && role !== "admin" ? (
         /* X3-F4: RunsFirstRun is the OPERATOR's funnel — a host-barrier readout
            a member's redacted status renders blank, over steps their role cannot
@@ -450,8 +463,9 @@ export function RunsScreen() {
            for the same stated reason — GettingStarted's own guard also folds
            in the view (a security admin at /admin/setup must still be denied
            the funnel even though the view there reads "admin"). The count line
-           above stays `=== "user"`: handleListRuns scopes by creator on
-           isSecurityOperator, so a security admin really does see every run. */
+           above stays keyed on the console VIEW (M-7), not this role check:
+           handleListRuns scopes by creator on isSecurityOperator, so a
+           security admin really does see every run. */
         <RunsMemberEmpty />
       ) : trueEmpty ? (
         <RunsFirstRun
@@ -593,6 +607,13 @@ function RunsTable({
     shown.push(row);
   }
   if (shown.length > 0 && "header" in shown[shown.length - 1]) shown.pop();
+  // M-7: the admin monitor's own descriptor — "every run, with the owner
+  // shown" (admin-member-modes-design.md §6) — an extra column rather than a
+  // cell folded into an existing one, so it sorts and truncates like every
+  // other fact here instead of overloading Run ID's row.
+  const view = useConsoleMode();
+  const cols = view === "admin" ? 8 : 7;
+  const principal = usePrincipal();
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
       <Table className="min-w-[960px]">
@@ -602,6 +623,7 @@ function RunsTable({
             <TableHead className="w-[180px]">State</TableHead>
             <TableHead className="w-[130px]">Barrier</TableHead>
             <TableHead className="w-[180px]">Workspace</TableHead>
+            {view === "admin" && <TableHead className="w-[180px]">Owner</TableHead>}
             <TableHead className="w-[220px]">Run ID</TableHead>
             <TableHead className="w-[110px]">Created</TableHead>
             <TableHead className="w-[44px]" />
@@ -612,7 +634,7 @@ function RunsTable({
             if ("header" in row) {
               return (
                 <TableRow key={`h:${row.header}`} className="hover:bg-transparent">
-                  <TableCell colSpan={7} className="bg-surface-2/40 py-1.5">
+                  <TableCell colSpan={cols} className="bg-surface-2/40 py-1.5">
                     <span className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">
                       {row.header}
                     </span>
@@ -623,6 +645,7 @@ function RunsTable({
             const run = row;
             const terminal = isTerminalRunState(run.state);
             const attachable = !!run.interactive && run.state === "RUNNING";
+            const own = !!principal && run.created_by === principal;
             return (
               // Same nested-interactive-widget issue as the board's RunCard
               // (role="button" wrapping the real per-row action buttons) —
@@ -642,7 +665,7 @@ function RunsTable({
                         anywhere else in the row; stopPropagation here just
                         keeps the click from firing twice. */}
                     <Link
-                      to={`/runs/${encodeURIComponent(run.id)}`}
+                      to={runPath(view, run.id)}
                       onClick={(e) => e.stopPropagation()}
                       className="block max-w-[320px] truncate text-sm font-medium text-foreground hover:underline"
                     >
@@ -670,6 +693,17 @@ function RunsTable({
                 <TableCell>
                   <span className="whitespace-nowrap font-mono text-xs text-muted-foreground">{run.repo}</span>
                 </TableCell>
+                {view === "admin" && (
+                  <TableCell>
+                    {/* The admin's own row: "(you)", and the switch link (QM-7). */}
+                    <div className="flex items-center gap-2">
+                      <span className="block max-w-[170px] truncate text-xs text-muted-foreground" title={run.created_by}>
+                        {ownerLabel(run.created_by, own)}
+                      </span>
+                      {own && <OpenInUserView runId={run.id} className="h-7 shrink-0" />}
+                    </div>
+                  </TableCell>
+                )}
                 <TableCell>
                   {/* Run ID never truncates — it stays fully readable and the table
                       scrolls horizontally instead. */}
