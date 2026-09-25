@@ -20,12 +20,14 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
 // envelopeDB is a fresh, migrated database on the WARDYN_TEST_PG server,
@@ -254,5 +256,33 @@ func TestPG_TamperedBootKeyFailsClosed(t *testing.T) {
 	_, w, ct := envelopeColumns(t, pool, secretSigningKey)
 	if !bytes.Equal(w, tamperedW) || !bytes.Equal(ct, tamperedCT) {
 		t.Fatal("loadOrCreateSecret wrote over the tampered row; a refusal must never be treated as not-found")
+	}
+}
+
+// TestPG_ServedStoreSweepsExpiredCredentials: the store buildSecretStore hands
+// the server is wrapped for auditing, and the daily sweep
+// (api.Server.SweepExpiredCredentials) must still reach its DeleteExpired —
+// a wrapper that hides it turns least retention off without a word.
+func TestPG_ServedStoreSweepsExpiredCredentials(t *testing.T) {
+	pool := envelopeDB(t)
+	ctx := t.Context()
+	id, _ := age.GenerateX25519Identity()
+	secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
+	if err != nil {
+		t.Fatalf("buildSecretStore: %v", err)
+	}
+	sw, ok := secrets.(interface {
+		DeleteExpired(context.Context) ([]secretstore.Expired, error)
+	})
+	if !ok {
+		t.Fatalf("buildSecretStore returned %T, which has no DeleteExpired: the expiry sweep never runs", secrets)
+	}
+	past := secretstore.WithExpiry(ctx, time.Now().Add(-time.Hour))
+	if err := secrets.For("bob").Put(past, "wardyn-harness-aws-oauth", []byte(`{"refresh_token":"x"}`)); err != nil {
+		t.Fatalf("put an expired sign-in: %v", err)
+	}
+	gone, err := sw.DeleteExpired(ctx)
+	if err != nil || len(gone) != 1 || gone[0].Owner != "bob" || gone[0].Name != "wardyn-harness-aws-oauth" {
+		t.Fatalf("DeleteExpired = %+v, %v; want bob's expired sign-in", gone, err)
 	}
 }

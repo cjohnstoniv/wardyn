@@ -1090,10 +1090,12 @@ migration `0050`)** are the second and third owned nouns after runs.
   recover them for that long unless its vault operators purge them. It never
   answers success with a credential left behind (`500`, audited
   `credential.erase` `failure` with the count it did delete; run it again), and
-  it never erases the operator namespace. Their runs stop using a deleted
-  credential when the proxy next resolves it. **Wardyn cannot revoke anything
-  upstream**: revoke the person's AWS, Anthropic and Azure DevOps sessions, and any
-  gateway token, where they were issued, and disable them in the identity provider.
+  it never erases the operator namespace. A run already going keeps a static key
+  (an `api_key` injection is fetched once and cached for the run) until it ends,
+  so also stop their runs (`POST /runs/{id}/kill`, the run kill switch).
+  **Wardyn cannot revoke anything upstream**: revoke the person's AWS, Anthropic
+  and Azure DevOps sessions, and any gateway token, where they were issued, and
+  disable them in the identity provider.
 - **Dead sign-ins are not kept.** A captured AWS or Azure DevOps sign-in whose
   refresh token the provider refuses for good (`invalid_grant`) is deleted at
   that renewal, and a stored AWS sign-in is deleted by a daily sweep once it can

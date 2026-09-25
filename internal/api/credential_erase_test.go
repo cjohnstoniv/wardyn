@@ -154,6 +154,18 @@ type sweepSecrets struct {
 
 func (s *sweepSecrets) DeleteExpired(context.Context) ([]secretstore.Expired, error) { return s.gone, s.err }
 
+// wardynd serves with the store wrapped in secretstore.Audited; the sweep must
+// still reach the wrapped store's DeleteExpired through it.
+func TestSweepExpiredCredentials_ReachesThroughTheAuditedWrapper(t *testing.T) {
+	h := newHarness(t)
+	inner := &sweepSecrets{memSecrets: &memSecrets{m: map[string][]byte{}},
+		gone: []secretstore.Expired{{Owner: "bob", Name: "wardyn-harness-aws-oauth", ExpiresAt: time.Now().Add(-time.Hour)}}}
+	h.srv.cfg.Secrets = secretstore.Audited(inner, nil)
+	if n := h.srv.SweepExpiredCredentials(context.Background()); n != 1 {
+		t.Fatalf("swept %d through the audited wrapper, want 1", n)
+	}
+}
+
 // The daily sweep audits every credential it deleted, even when it also left
 // some behind, and a store without the sweep is a no-op.
 func TestSweepExpiredCredentials_AuditsEachDeletion(t *testing.T) {

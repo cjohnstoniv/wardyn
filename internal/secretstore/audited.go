@@ -160,6 +160,18 @@ func (a *audited) StoresExternally() string {
 	return ""
 }
 
+// DeleteExpired forwards the wrapped store's expiry sweep (pg Store.DeleteExpired),
+// or deletes nothing when it has none. Without it the daily sweep never reaches
+// the store wardynd serves with, which is always wrapped.
+func (a *audited) DeleteExpired(ctx context.Context) ([]Expired, error) {
+	if sw, ok := a.inner.(interface {
+		DeleteExpired(context.Context) ([]Expired, error)
+	}); ok {
+		return sw.DeleteExpired(ctx)
+	}
+	return nil, nil
+}
+
 func (a *audited) For(owner string) Store {
 	return &audited{inner: a.inner.For(owner), rec: a.rec, owner: owner}
 }

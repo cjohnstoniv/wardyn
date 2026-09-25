@@ -12,11 +12,13 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -78,6 +80,10 @@ type expiredSweeper interface {
 	DeleteExpired(ctx context.Context) ([]secretstore.Expired, error)
 }
 
+// noSweepOnce logs, once per process, that the configured store cannot sweep:
+// least retention must never be off without a word.
+var noSweepOnce sync.Once
+
 // SweepExpiredCredentials deletes every stored credential whose expiry has
 // passed, audits each as credential.expired_deleted, and returns how many it
 // deleted. cmd/wardynd calls it daily. A row it could not delete is kept, and
@@ -85,6 +91,10 @@ type expiredSweeper interface {
 func (s *Server) SweepExpiredCredentials(ctx context.Context) int {
 	sw, ok := s.cfg.Secrets.(expiredSweeper)
 	if !ok {
+		noSweepOnce.Do(func() {
+			slog.ErrorContext(ctx, "wardynd: the secret store has no expiry sweep; expired stored credentials are NOT being deleted",
+				slog.String("store", fmt.Sprintf("%T", s.cfg.Secrets)))
+		})
 		return 0
 	}
 	gone, err := sw.DeleteExpired(ctx)
