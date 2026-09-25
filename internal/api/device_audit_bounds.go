@@ -1,10 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The bounds on the failure rows the device routes write — auth.failed's pair
+// The bounds on the failure rows the device routes write — auth.fail's pair
 // (authFailedLimiter: how fast; auth_failed_coalesce.go: how many of the same
 // thing) applied per stream. The anonymous enrolment route is ONE stream,
-// charged to the process-wide bucket auth.failed pays. Each enrolled device's
+// charged to the process-wide bucket auth.fail pays. Each enrolled device's
 // ingest refusals are a stream of their own, charged to a per-device bucket,
 // so one member's laptop spends only its own budget.
 package api
@@ -30,7 +30,7 @@ const (
 
 // failureStreams folds identical consecutive failure rows within a stream into
 // the stream's first row plus one summary row carrying the count — the streak
-// auth_failed_coalesce.go keeps for auth.failed, once per stream. A different
+// auth_failed_coalesce.go keeps for auth.fail, once per stream. A different
 // key, maxAuthFailedStreak refusals, or AuditCoalesceWindow of quiet closes a
 // streak; a streak of one needs no summary, its own row is the record.
 type failureStreams struct {
@@ -134,7 +134,7 @@ func (f *failureStreams) flush(s *Server, ctx context.Context) {
 // emitEnrolFailure writes one device.enrol failure row (an opening row or a
 // streak's summary) if the shared auth-failure bucket has a token — the route
 // is anonymous, so an unmetered row would be an unauthenticated write into
-// the append-only log. A drop is counted with auth.failed's.
+// the append-only log. A drop is counted with auth.fail's.
 func (s *Server) emitEnrolFailure(ctx context.Context, ev *types.AuditEvent) {
 	if ev == nil {
 		return

@@ -105,9 +105,9 @@ func TestADOSignIn_MidRunHoldIsResolvedByACapture(t *testing.T) {
 			if again := pendingID(t, f.resolveQ(t, ""), reauthPendingState); again != id {
 				t.Fatalf("a second resolve for the same lapse raised %s, want the same request %s", again, id)
 			}
-			if req := f.audit.find("credential.reauth.requested"); len(req) != 1 ||
+			if req := f.audit.find("credential.reauth.request"); len(req) != 1 ||
 				!strings.Contains(string(req[0].Data), `"reason":"`+string(name)+`"`) {
-				t.Fatalf("credential.reauth.requested rows = %+v, want exactly one with reason %s", req, name)
+				t.Fatalf("credential.reauth.request rows = %+v, want exactly one with reason %s", req, name)
 			}
 			if got := f.srv.reconcileADOReauthOnRead(context.Background(), f.row(id)); got.State != types.ApprovalPending {
 				t.Fatalf("resolved before any sign-in: %s", got.State)
@@ -276,8 +276,8 @@ func TestADOSignIn_BootFailsWithAHintAndDeletesTheSignIn(t *testing.T) {
 	if _, found := f.stored(t, f.subject); found {
 		t.Fatal("the dead sign-in is still stored, want it deleted")
 	}
-	if del := f.audit.find("credential.expired_deleted"); len(del) != 1 || del[0].Outcome != "success" {
-		t.Fatalf("credential.expired_deleted rows = %+v, want one success row", del)
+	if del := f.audit.find("credential.expired.delete"); len(del) != 1 || del[0].Outcome != "success" {
+		t.Fatalf("credential.expired.delete rows = %+v, want one success row", del)
 	}
 
 	access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject)

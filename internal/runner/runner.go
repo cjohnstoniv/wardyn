@@ -89,6 +89,17 @@ type Capabilities struct {
 	// setting a disk number can see whether anything will hold it. NOT on the
 	// anonymous /healthz.
 	EphemeralDiskEnforcement types.StorageEnforcement `json:"ephemeral_disk_enforcement,omitempty"`
+	// Freeze reports, PER CONFINEMENT CLASS, whether this driver can pause and
+	// resume the agent container in place without losing its state (long-holds
+	// design rev 4 §3.1: runner Freeze/Thaw). A class present and true is
+	// verified — Docker/runc (CC1) is the only one today. A class absent, or
+	// present and false, declares no freeze support for it: runsc/Kata pause is
+	// UNVERIFIED (the RL-0 spike), so it is never claimed here, the same
+	// never-claim-an-unproven-control rule ConfinementClasses follows one field
+	// up. A caller (the idle/wait pause reaper, RL-7) MUST check this per the
+	// run's own confinement class before attempting a freeze rather than assume
+	// every class a driver enforces can also be paused.
+	Freeze map[types.ConfinementClass]bool `json:"freeze,omitempty"`
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.
@@ -632,7 +643,7 @@ type Runner interface {
 
 // SandboxEnder is an OPTIONAL Runner capability: stop a sandbox and KEEP it
 // (the lease end, long-holds design rev 4). EndSandbox stops the agent without
-// removing it, so its files survive, and removes the proxy sidecar, so nothing
+// removing it, so its files survive, and stops the proxy sidecar, so nothing
 // the agent could restart has a network path. StopSandbox/KillSandbox still
 // tear the kept sandbox down later. Idempotent on a missing sandbox.
 //
@@ -643,9 +654,105 @@ type SandboxEnder interface {
 	EndSandbox(ctx context.Context, ref string) error
 }
 
-// ErrEndUnsupported is EndSandbox's answer from a router whose substrate for
-// ref cannot keep a stopped sandbox.
+// ErrEndUnsupported is EndSandbox's (and StopProxy's) answer from a router
+// whose substrate for ref cannot keep a stopped (or lost) sandbox.
 var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
+
+// ProxyStopper is an OPTIONAL Runner capability: stop a sandbox's proxy
+// sidecar and leave its agent running (a run lost to a control-plane outage,
+// long-holds design rev 4 §4 row 2). The agent keeps its processes and files
+// but has no network path, because the proxy was its only one. The stopped
+// proxy is kept, not removed: its rendered config is what ProxyReviver reads
+// back, and teardown removes it with the rest of the sandbox. Idempotent on
+// a missing or already-stopped proxy; an unresolvable ref is an error, never a
+// success that left the proxy up. A router in front of a substrate without it
+// returns ErrEndUnsupported.
+type ProxyStopper interface {
+	StopProxy(ctx context.Context, ref string) error
+}
+
+// ProxyReviver is an OPTIONAL Runner capability: replace a sandbox's proxy
+// sidecar, running or stopped, with a new one while the agent keeps running
+// (proxy-only revive and restart with current limits, long-holds design rev 4
+// §4.1). The control plane reads the old config back, rewrites only its token
+// and its denies, and hands it to ReplaceProxy; the per-run MITM CA inside it
+// is carried over, never copied anywhere else.
+//
+// ReplaceProxy removes the old proxy first, then starts the new one on the
+// run's network at the address the agent's hosts entry pins. An error wrapping
+// ErrProxyReplaceFailed means the old proxy is, or may be, gone and no new one
+// runs: the sandbox has no egress, and the caller must treat the run as lost.
+// Any other error came before the old proxy was touched and left it as it
+// was. A router in front of a substrate without it (Kubernetes: the agent pins
+// the proxy pod's IP) returns ErrReviveUnsupported.
+type ProxyReviver interface {
+	ProxyConfig(ctx context.Context, ref string) ([]byte, error)
+	ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error
+	// EnsureProxyImage pulls the proxy sidecar image if it is not already
+	// present locally. The control plane calls this BEFORE the revive claim
+	// (long-holds design rev 4 §4.1; F2, Fable review): a slow first pull then
+	// happens while the run is still marked lost, so the window the claim
+	// opens — during which a watcher sweep must leave the run alone rather
+	// than lose it again — covers only a fast remove+create+start, never an
+	// image pull.
+	EnsureProxyImage(ctx context.Context) error
+}
+
+// ErrReviveUnsupported is ProxyReviver's answer from a router whose substrate
+// for ref cannot replace a proxy in place.
+var ErrReviveUnsupported = errors.New("runner: this substrate cannot replace a sandbox's proxy")
+
+// ErrProxyReplaceFailed marks a ReplaceProxy that removed, or may have
+// removed, the old proxy and did not start the new one.
+var ErrProxyReplaceFailed = errors.New("runner: the old proxy may be gone and the new one did not start")
+
+// SandboxStarter is an OPTIONAL Runner capability: start a kept sandbox's
+// stopped agent again (revive after a reboot, long-holds design rev 4 §4 row
+// 3). The agent comes back with its writable layer, so its files and the
+// harness transcript survive; its main process is re-run from the start, so
+// nothing that was running does. It never starts the proxy sidecar: the
+// caller replaces that first (ProxyReviver), and StartSandbox refuses unless
+// it is running, so the agent never runs behind the old proxy or without the
+// address its hosts entry pins. Idempotent on an agent already running. A
+// router in front of a substrate without it (Kubernetes: a stopped pod is
+// gone) returns ErrReviveUnsupported.
+type SandboxStarter interface {
+	StartSandbox(ctx context.Context, ref string) error
+}
+
+// Freezer is an OPTIONAL Runner capability: pause and resume the AGENT
+// container in place, without stopping it (runner Freeze/Thaw, long-holds
+// design rev 4 §3). FreezeSandbox pauses the agent process — its memory,
+// disk and any already-established TCP connection keep their state, and the
+// daemon refuses a new exec against it until thawed. ThawSandbox resumes it.
+// Both are idempotent: a missing sandbox, or a redundant call (freezing an
+// already-frozen one, thawing a running one), returns nil, the same
+// tolerant-of-a-retried-signal contract Stop/Kill hold for a gone sandbox.
+//
+// The PROXY SIDECAR IS NEVER FROZEN — only the ref this is called with (the
+// agent). The proxy keeps renewing its run token and answering egress
+// decisions while the agent is paused; a caller wanting the proxy left alone
+// gets that for free by calling this with only the agent's ref.
+//
+// A substrate with no pause primitive at all (Kubernetes: stopping a pod is
+// the only lever) does not implement this, and a router in front of one
+// returns ErrFreezeUnsupported; the caller then leaves the run running
+// rather than silently no-op a pause nobody can prove happened.
+//
+// Implementing this interface is NOT itself proof the pause is safe for
+// every runtime the substrate carries: runsc/Kata run inside the Docker
+// substrate, which does implement Freezer, but their pause is UNVERIFIED
+// (Capabilities.Freeze[class] is false for them). The caller MUST check
+// Capabilities.Freeze for the sandbox's confinement class before calling —
+// the interface assertion alone does not gate this.
+type Freezer interface {
+	FreezeSandbox(ctx context.Context, ref string) error
+	ThawSandbox(ctx context.Context, ref string) error
+}
+
+// ErrFreezeUnsupported is Freezer's answer from a router whose substrate for
+// ref cannot pause it.
+var ErrFreezeUnsupported = errors.New("runner: this substrate cannot freeze a sandbox")
 
 // ImageChecker is an OPTIONAL Runner capability: a
 // substrate whose local image cache can go stale out from under a workspace's

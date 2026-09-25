@@ -65,7 +65,7 @@ type walledDispatch struct {
 	injections []runner.InjectionGrant
 }
 
-// runWalledDispatch dispatches one run and returns the run.policy.effective
+// runWalledDispatch dispatches one run and returns the run.policy.resolve
 // envelope (the defined post-widening truth), the SandboxSpec the runner
 // actually received (where injections and broker lanes live — the policy
 // envelope cannot see them), and the audit trail.
@@ -104,9 +104,9 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 		Injections: d.injections,
 	})
 
-	ev := findAudit(audit.events, run.ID, "run.policy.effective", "success")
+	ev := findAudit(audit.events, run.ID, "run.policy.resolve", "success")
 	if ev == nil {
-		t.Fatalf("dispatch recorded no run.policy.effective envelope; events=%s", auditDump(audit.events, run.ID))
+		t.Fatalf("dispatch recorded no run.policy.resolve envelope; events=%s", auditDump(audit.events, run.ID))
 	}
 	var spec types.RunPolicySpec
 	if err := json.Unmarshal(ev.Data, &spec); err != nil {

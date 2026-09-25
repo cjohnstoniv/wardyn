@@ -130,7 +130,7 @@ var _ RunsByCreatorPager = PG{}
 // upload's own KILLED guard is the belt.
 //
 // task and agent, not "provider": a run row carries no provider column (the
-// provider lives in the harness.login.started audit datum), and task+agent is
+// provider lives in the harness.login.start audit datum), and task+agent is
 // what actually separates one lane's login box from another's.
 type ActiveRunsByCreatorReader interface {
 	ActiveRunsByCreator(ctx context.Context, createdBy, task, agent string) ([]types.AgentRun, error)

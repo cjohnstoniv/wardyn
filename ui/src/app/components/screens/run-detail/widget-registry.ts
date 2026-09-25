@@ -90,7 +90,7 @@ export type WidgetContext = {
    *  and shared by every surface that states the number.
    *
    *  B3: `egress` above is a projection of AUDIT rows, and the trail is
-   *  append-only — an `egress.pending` row is a historical EVENT, so counting
+   *  append-only — an `egress.hold` row is a historical EVENT, so counting
    *  it counted every hold the run ever had, forever. The alarm chip said
    *  "3 held" on a run holding nothing. The audit rows stay as history; the
    *  COUNT comes from the live derivation every other surface already uses. */

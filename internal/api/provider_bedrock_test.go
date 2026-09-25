@@ -147,7 +147,7 @@ func TestProviderBedrockDispatch(t *testing.T) {
 		if len(policy.WorkspaceMounts) != 0 {
 			t.Errorf("the operator's ~/.claude mount survived: %+v", policy.WorkspaceMounts)
 		}
-		reasons := strings.Join(auditReasons(t, h.srv, "run.injection.dropped"), ",")
+		reasons := strings.Join(auditReasons(t, h.srv, "run.injection.drop"), ",")
 		for _, r := range []string{"model_credential_not_provider_authored"} {
 			if !strings.Contains(reasons, r) {
 				t.Errorf("dropped reasons %q lack %s", reasons, r)
@@ -285,7 +285,7 @@ func brAuthored(t *testing.T, p types.ModelProvider) (*harness, *subStore, *memS
 	return h, st, sec
 }
 
-// #518 records run.llm.bedrock past dispatch's last gate, from the row
+// #518 records run.bedrock.configure past dispatch's last gate, from the row
 // applyBedrockTransport computes; the provider arm has to hand its row over the
 // same way, and the row still names the provider the run chose (#530).
 func TestProviderBedrockDispatchAuditsItsTransport(t *testing.T) {
@@ -300,7 +300,7 @@ func TestProviderBedrockDispatchAuditsItsTransport(t *testing.T) {
 			}
 			var rows []map[string]any
 			for _, ev := range h.srv.cfg.Audit.(*recRecorder).snapshot() {
-				if ev.Action != "run.llm.bedrock" {
+				if ev.Action != "run.bedrock.configure" {
 					continue
 				}
 				var d map[string]any
@@ -310,12 +310,12 @@ func TestProviderBedrockDispatchAuditsItsTransport(t *testing.T) {
 				rows = append(rows, d)
 			}
 			if len(rows) != 1 {
-				t.Fatalf("run.llm.bedrock rows = %d, want 1", len(rows))
+				t.Fatalf("run.bedrock.configure rows = %d, want 1", len(rows))
 			}
 			d := rows[0]
 			if d["provider"] != tc.p.ID || d["region"] != "us-west-2" || d["model"] != brModel ||
 				d["endpoint"] != providerBedrockRuntimeHost(tc.p) || d["mode"] != tc.mode {
-				t.Errorf("run.llm.bedrock = %v, want provider %s, us-west-2, %s at %s, mode %s",
+				t.Errorf("run.bedrock.configure = %v, want provider %s, us-west-2, %s at %s, mode %s",
 					d, tc.p.ID, brModel, providerBedrockRuntimeHost(tc.p), tc.mode)
 			}
 		})

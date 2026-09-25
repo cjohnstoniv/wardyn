@@ -67,7 +67,7 @@ func TestAuditFanoutSurvivesRootCtxCancellation(t *testing.T) {
 	// buffer nobody is reading.
 	ev := types.AuditEvent{
 		ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem,
-		Actor: "wardyn/test", Action: "auth.failed", Target: "/api/v1/runs", Outcome: "failure",
+		Actor: "wardyn/test", Action: "auth.fail", Target: "/api/v1/runs", Outcome: "failure",
 		Data: json.RawMessage(`{"reason":"in_flight_at_shutdown"}`),
 	}
 	if eerr := fan.Emit(context.Background(), ev); eerr != nil {
@@ -128,7 +128,7 @@ func TestAuditFanoutCloseIsBoundedAgainstAWedgedCollector(t *testing.T) {
 	}
 	cancel()
 	_ = fan.Emit(context.Background(), types.AuditEvent{
-		ID: uuid.New(), Time: time.Now().UTC(), Action: "auth.failed", Outcome: "failure",
+		ID: uuid.New(), Time: time.Now().UTC(), Action: "auth.fail", Outcome: "failure",
 	})
 
 	done := make(chan error, 1)
@@ -243,7 +243,7 @@ func TestServeAndShutdownDrainsSinksOnAServeError(t *testing.T) {
 
 	ev := types.AuditEvent{
 		ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem,
-		Actor: "wardyn/test", Action: "auth.failed", Target: "/api/v1/runs", Outcome: "failure",
+		Actor: "wardyn/test", Action: "auth.fail", Target: "/api/v1/runs", Outcome: "failure",
 	}
 	if eerr := fan.Emit(context.Background(), ev); eerr != nil {
 		t.Fatalf("emit: %v", eerr)

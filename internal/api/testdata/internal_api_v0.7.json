@@ -1,0 +1,27 @@
+{
+  "_comment": "The internal API as the wardyn-proxy of the previous minor (v0.7.12, release/0.7) calls it: every route it dials, the bodies it sends and the response keys it reads. Taken from that release's internal/egress/proxy (renew.go, decisions.go, approvals.go, credhold.go, git_broker.go, inject.go, local_routes.go). Frozen: wardynd N must keep serving it while runs started under N-1 are alive. Replace it with the N-1 release's shapes when the minor moves on, never edit it to match a change.",
+  "release": "0.7.12",
+  "routes": [
+    {"method": "POST", "path": "/api/v1/internal/token/renew"},
+    {"method": "POST", "path": "/api/v1/internal/decisions"},
+    {"method": "POST", "path": "/api/v1/internal/approvals"},
+    {"method": "GET", "path": "/api/v1/internal/approvals/{id}"},
+    {"method": "POST", "path": "/api/v1/internal/credentials/mint"},
+    {"method": "GET", "path": "/api/v1/internal/injection/{id}"},
+    {"method": "PUT", "path": "/api/v1/internal/recordings/{run}"},
+    {"method": "PUT", "path": "/api/v1/internal/scan-results/{run}"},
+    {"method": "PUT", "path": "/api/v1/internal/sso-token/{run}"}
+  ],
+  "renew_response_keys": ["token", "expires_at"],
+  "decision": {
+    "request": {"RunID": "00000000-0000-0000-0000-000000000000", "Host": "registry.npmjs.org", "Port": 443, "Method": "CONNECT", "Path": "", "Time": "2026-09-01T12:00:00Z"},
+    "decision": "allow",
+    "rule_source": "policy"
+  },
+  "approval_raises": [
+    {"kind": "egress_domain", "requested_scope": {"host": "files.example.org", "mode": "run"}},
+    {"kind": "tool_call", "requested_scope": {"tool": "Bash", "cmd": "make deploy"}}
+  ],
+  "approval_response_keys": ["id", "state", "decision_scope", "decision_expires_at"],
+  "mint_body": {"grant_id": "5b1f3c1e-2f7a-4f0e-9d39-0c1d2e3f4a5b"}
+}

@@ -144,7 +144,7 @@ func TestBedrockBearerSink_StoreOutageIsTransientRefusalDefinitive(t *testing.T)
 		wantStatus int
 		wantReason string
 	}{
-		{errStoreDown, http.StatusServiceUnavailable, "store-unavailable"},
+		{errStoreDown, http.StatusServiceUnavailable, "store_unavailable"},
 		{errStoreRefused, http.StatusFailedDependency, "refused"},
 	} {
 		st := &bearerGuardStore{run: types.AgentRun{ID: uuid.New(), Agent: "claude-code"},
@@ -171,7 +171,7 @@ func TestResolveAWSSSOInjection_StoreOutageIsTransientRefusalDefinitive(t *testi
 		wantStatus int
 		wantReason string
 	}{
-		{errStoreDown, http.StatusServiceUnavailable, "store-unavailable"},
+		{errStoreDown, http.StatusServiceUnavailable, "store_unavailable"},
 		{errStoreRefused, http.StatusForbidden, "store_error"},
 	} {
 		f := newReauthFixture(t, nil)

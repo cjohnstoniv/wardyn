@@ -328,16 +328,16 @@ func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST on = %d: %s", w.Code, w.Body.String())
 	}
-	ev := lastAuditEvent(t, h.audit.events, "auth.user_view")
+	ev := lastAuditEvent(t, h.audit.events, "auth.user_view.set")
 	if ev.Actor != memberModeAdminSub {
-		t.Errorf("auth.user_view actor = %q, want %q", ev.Actor, memberModeAdminSub)
+		t.Errorf("auth.user_view.set actor = %q, want %q", ev.Actor, memberModeAdminSub)
 	}
 	if ev.Outcome != "success" {
-		t.Errorf("auth.user_view outcome = %q, want success", ev.Outcome)
+		t.Errorf("auth.user_view.set outcome = %q, want success", ev.Outcome)
 	}
 	var data map[string]any
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
-		t.Fatalf("decode auth.user_view data: %v", err)
+		t.Fatalf("decode auth.user_view.set data: %v", err)
 	}
 	if data["enabled"] != true {
 		t.Errorf("data.enabled = %v, want true", data["enabled"])
@@ -651,7 +651,7 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 
 	// The audit row is still written — the request WAS made and answered, and
 	// real_role records the tier it was made from.
-	ev := lastAuditEvent(t, h.audit.events, "auth.user_view")
+	ev := lastAuditEvent(t, h.audit.events, "auth.user_view.set")
 	if data := auditData(t, ev); data["real_role"] != oidc.RoleUser {
 		t.Errorf("real_role = %v, want %q", data["real_role"], oidc.RoleUser)
 	}
@@ -722,7 +722,7 @@ func countAuditEvents(events []types.AuditEvent, action string) int {
 }
 
 // TestUserView_DualEmitsTheLegacyAuditAction (#617, OD-18) pins the one-minor
-// compat window: every toggle writes BOTH auth.user_view (the 0.8 name) and
+// compat window: every toggle writes BOTH auth.user_view.set (the 0.8 name) and
 // auth.member_mode (the pre-0.8 name it replaces), with byte-identical Data —
 // checked as raw bytes, not a couple of hand-picked fields, so a compat row
 // that silently lost a key (e.g. no_credential) fails this test — and each
@@ -736,13 +736,13 @@ func countAuditEvents(events []types.AuditEvent, action string) int {
 func TestUserView_DualEmitsTheLegacyAuditAction(t *testing.T) {
 	assertDualEmit := func(t *testing.T, events []types.AuditEvent, wantNoCredential bool) {
 		t.Helper()
-		if got := countAuditEvents(events, "auth.user_view"); got != 1 {
-			t.Errorf("auth.user_view count = %d, want exactly 1", got)
+		if got := countAuditEvents(events, "auth.user_view.set"); got != 1 {
+			t.Errorf("auth.user_view.set count = %d, want exactly 1", got)
 		}
 		if got := countAuditEvents(events, "auth.member_mode"); got != 1 {
 			t.Errorf("auth.member_mode count = %d, want exactly 1", got)
 		}
-		newRow := lastAuditEvent(t, events, "auth.user_view")
+		newRow := lastAuditEvent(t, events, "auth.user_view.set")
 		oldRow := lastAuditEvent(t, events, "auth.member_mode")
 		if newRow.Actor != memberModeAdminSub || oldRow.Actor != memberModeAdminSub {
 			t.Errorf("actor = %q / %q, want %q on both", newRow.Actor, oldRow.Actor, memberModeAdminSub)

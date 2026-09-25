@@ -53,7 +53,7 @@ func TestDispatchModeEnvCarriesTheAutonomyLevel(t *testing.T) {
 	}
 }
 
-// agentPolicyDatum is the run.agent_policy payload.
+// agentPolicyDatum is the run.agent_policy.write payload.
 type agentPolicyDatum struct {
 	Agent     string `json:"agent"`
 	Level     string `json:"level"`
@@ -66,7 +66,7 @@ type agentPolicyDatum struct {
 }
 
 // agentPolicyDispatch dispatches one run at the given agent + level through
-// fr and returns the spec the runner received and the run.agent_policy row
+// fr and returns the spec the runner received and the run.agent_policy.write row
 // dispatch recorded (nil when there is none).
 //
 // Driven through the REAL dispatchRun rather than by calling the helpers
@@ -97,13 +97,13 @@ func agentPolicyDispatchParams(t *testing.T, fr *fakeRunner, agent string, level
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Interactive: p.Interactive, ToolApprovals: p.ToolApprovals, TaskMode: p.TaskMode,
 	})
-	ev := findAudit(audit.snapshot(), run.ID, "run.agent_policy", "success")
+	ev := findAudit(audit.snapshot(), run.ID, "run.agent_policy.write", "success")
 	if ev == nil {
 		return fr.lastSpec, nil, st
 	}
 	var data agentPolicyDatum
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
-		t.Fatalf("decode run.agent_policy data %s: %v", ev.Data, err)
+		t.Fatalf("decode run.agent_policy.write data %s: %v", ev.Data, err)
 	}
 	return fr.lastSpec, &data, st
 }
@@ -131,7 +131,7 @@ func TestAgentPolicyDispatchDeliversTheGatedRunsFile(t *testing.T) {
 		t.Errorf("the spec's managed files fail the runner contract: %v", err)
 	}
 	if data == nil {
-		t.Fatal("an L1 claude-code dispatch recorded no run.agent_policy row")
+		t.Fatal("an L1 claude-code dispatch recorded no run.agent_policy.write row")
 	}
 	if data.Agent != "claude-code" || data.Level != "L1" || data.Path != agentpolicy.ClaudeCodeManagedSettingsPath {
 		t.Errorf("row = %+v, want claude-code/L1 at %s", *data, agentpolicy.ClaudeCodeManagedSettingsPath)
@@ -161,7 +161,7 @@ func TestAgentPolicyDispatchWithoutTheCapabilityRunsUndelivered(t *testing.T) {
 		t.Errorf("spec carried %d managed files to a runner that does not deliver them", len(spec.ManagedFiles))
 	}
 	if data == nil {
-		t.Fatal("no run.agent_policy row for a gated run whose file was withheld")
+		t.Fatal("no run.agent_policy.write row for a gated run whose file was withheld")
 	}
 	if data.Delivered {
 		t.Error("row says delivered=true, but the runner cannot deliver managed files")
@@ -189,7 +189,7 @@ func TestAgentPolicyDispatchImageRefusalFailsTheRunWithAHint(t *testing.T) {
 		t.Errorf("failure hint = %q, want it to carry the driver's refusal %q", st.failureHint, refusal)
 	}
 	if data != nil {
-		t.Errorf("run.agent_policy %+v recorded for a sandbox that was never created", *data)
+		t.Errorf("run.agent_policy.write %+v recorded for a sandbox that was never created", *data)
 	}
 }
 
@@ -213,7 +213,7 @@ func TestAgentPolicyDispatchCarriesNothingWhereThereIsNoLayer(t *testing.T) {
 				t.Errorf("spec carried %d managed files for a run with no agent-side layer", len(spec.ManagedFiles))
 			}
 			if data != nil {
-				t.Errorf("dispatch recorded run.agent_policy %+v for a run with no agent-side layer", *data)
+				t.Errorf("dispatch recorded run.agent_policy.write %+v for a run with no agent-side layer", *data)
 			}
 		})
 	}
@@ -243,7 +243,7 @@ func TestAgentPolicyDispatchFailsTheRunWhenCapabilitiesAreUnknown(t *testing.T) 
 		t.Errorf("failure hint = %q, must not carry the driver's own error text", st.failureHint)
 	}
 	if data != nil {
-		t.Errorf("run.agent_policy %+v recorded for a run that never launched", *data)
+		t.Errorf("run.agent_policy.write %+v recorded for a run that never launched", *data)
 	}
 
 	// A run with no agent-side layer never asks, so the same error does not
@@ -274,7 +274,7 @@ func TestAgentPolicyDispatchExecLessRowWaitsForTheAgent(t *testing.T) {
 			t.Fatalf("Exec calls = %d, want 1", fr.execCount())
 		}
 		if data == nil {
-			t.Fatal("no run.agent_policy row once the agent's Exec succeeded")
+			t.Fatal("no run.agent_policy.write row once the agent's Exec succeeded")
 		}
 		if data.Delivered || data.Reason != "unverified on this runtime: libkrun may run the guest as root" {
 			t.Errorf("row delivered=%v reason=%q, want delivered=false with the krun ruling's reason", data.Delivered, data.Reason)
@@ -286,7 +286,7 @@ func TestAgentPolicyDispatchExecLessRowWaitsForTheAgent(t *testing.T) {
 		fr := &fakeRunner{capsResolved: krun, execErr: errors.New(refusal)}
 		_, data, st := agentPolicyDispatchTask(t, fr, "claude-code", types.AutonomyL1, "do the thing")
 		if data != nil {
-			t.Errorf("run.agent_policy %+v recorded, but the driver refused the file at Exec and no agent ever ran", *data)
+			t.Errorf("run.agent_policy.write %+v recorded, but the driver refused the file at Exec and no agent ever ran", *data)
 		}
 		if st.state != types.RunFailed || !strings.Contains(st.failureHint, refusal) {
 			t.Errorf("run state %s hint %q, want FAILED carrying the driver's refusal", st.state, st.failureHint)

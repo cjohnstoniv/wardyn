@@ -159,7 +159,7 @@ func (s *govEscapeStore) GetAPITokenByRaw(_ context.Context, raw string) (types.
 func (s *govEscapeStore) TouchAPIToken(context.Context, uuid.UUID, time.Time) error { return nil }
 
 // govEscapeFixture wires a Server that really creates AND dispatches a run, so
-// the assertions below can read the run.policy.effective envelope — dispatch's
+// the assertions below can read the run.policy.resolve envelope — dispatch's
 // post-widening authorization snapshot, and the only durable record of what a
 // run was actually allowed to do (agent_runs carries no spec, run_policies.spec
 // is overwritten in place, and an inline/default policy has no row at all).
@@ -204,7 +204,7 @@ func govSession(t *testing.T, sub string, groups []string, truncated bool) *http
 }
 
 // govCreateAndDispatch POSTs a run as the given member and returns the decoded
-// run.policy.effective envelope. It fails the test unless the create really
+// run.policy.resolve envelope. It fails the test unless the create really
 // reached dispatch — an escape row that 500s early would otherwise "pass" by
 // never producing an envelope to contradict it.
 func govCreateAndDispatch(t *testing.T, srv *Server, st *govEscapeStore, audit *recRecorder, cookie *http.Cookie, body string) types.RunPolicySpec {
@@ -220,7 +220,7 @@ func govCreateAndDispatch(t *testing.T, srv *Server, st *govEscapeStore, audit *
 	}
 	st.mu.Unlock()
 	// Dispatch runs after the 201 (runs_create_launch.go): wait for its envelope.
-	ev := waitForRecAudit(t, audit, runID, "run.policy.effective", "success")
+	ev := waitForRecAudit(t, audit, runID, "run.policy.resolve", "success")
 	var spec types.RunPolicySpec
 	if err := json.Unmarshal(ev.Data, &spec); err != nil {
 		t.Fatalf("envelope is not a RunPolicySpec: %v (%s)", err, ev.Data)
@@ -238,7 +238,7 @@ const (
 // the escape table
 
 // TestGovernanceProfileNonEscape is the escape table's create-time half (rows
-// 1-10) plus row 16, asserted on the decoded run.policy.effective envelope —
+// 1-10) plus row 16, asserted on the decoded run.policy.resolve envelope —
 // the DEFINED post-widening truth, not the spec the handler happened to hold at
 // some intermediate step. Asserting anywhere earlier would prove nothing: the
 // artifact-redirect phase inside dispatch adds hosts and injections AFTER

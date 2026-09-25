@@ -221,7 +221,7 @@ func (s *Server) auditBrokeredGrantDrop(ctx context.Context, runID uuid.UUID, ki
 	slog.WarnContext(ctx, "wardynd: brokered run — withholding "+kind+" grant(s) for the brokered forge; a brokered forge is single-lane, push through the git broker",
 		slog.String("run_id", runID.String()), slog.Any("hosts", hosts))
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
-		runID.String(), "failure", mustJSON(map[string]any{"dropped_hosts": hosts, "note": note})))
+		runID.String(), "failure", mustJSON(map[string]any{"reason": "brokered_forge", "dropped_hosts": hosts, "note": note})))
 }
 
 // dropBrokeredGrants withholds the {host: grant_id} entries whose host belongs

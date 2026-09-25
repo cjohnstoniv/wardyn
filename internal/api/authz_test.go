@@ -298,7 +298,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// security tier can stop a foreign run, on purpose — ownsRunOrAdmin is
 	// isSecurityOperator, so kill admits it on any run. See
 	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
-	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
+	"POST /api/v1/admin/sandboxes/sweep":  {class: classAdmin},
+	"GET /api/v1/admin/runs/proxy-window": {class: classAdmin},
+	"POST /api/v1/admin/runs/restart":     {class: classAdmin},
 	// Minting a device enrolment token creates a credential, so it is SUPER;
 	// the inventory and the revoke are the inventory-then-revoke pair /tokens
 	// already puts on the security tier (classSecurity below).
@@ -551,10 +553,15 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/workspaces/{id}/build":      {class: classOwner, entity: entityWorkspace, ownerTier: tierSuper},
 	"GET /api/v1/runs/{id}":                   {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// Moving a run's end keeps a sandbox and its credentials alive: a write,
+	// so not the security tier's inspect-or-stop.
+	"PATCH /api/v1/runs/{id}":                 {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/kill":             {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
-	"POST /api/v1/runs/{id}/profile":          {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// Revive gives a run egress again: a write, like PATCH above.
+	"POST /api/v1/runs/{id}/revive":  {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"POST /api/v1/runs/{id}/profile": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// The run cockpit's live evidence reads. classOwner, same gate as GET
 	// /runs/{id} above: each names a run in its path and each exposes something
 	// about a LIVE sandbox — the workspace's diff, its resource usage, and who
@@ -1172,9 +1179,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// catches a route that silently leaves classOwner.
 		// 17 since F287 moved GET /workspaces/{id}/env-as-code here from
 		// classMember (its emitted files are the operator's authored
-		// environment, and its write twin was already operatorOnly).
-		if probed != 17 {
-			t.Errorf("probed %d classOwner routes, want 17 — a route that left classOwner takes its tier "+
+		// environment, and its write twin was already operatorOnly); 18 since
+		// #569 added PATCH /runs/{id}; 19 since #575 added POST
+		// /runs/{id}/revive.
+		if probed != 19 {
+			t.Errorf("probed %d classOwner routes, want 19 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
@@ -1246,12 +1255,14 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// revoke (= 32 SEC), CS-5 added the credential erase, which only
 	// subtracts (= 33 SEC), and #612 the GET/PUT /permissions/availability pair
 	// beside the grant rows (= 35 SEC). 0.8's model providers add GET/PUT
-	// /model-providers, SUPER for the agent roster's reason (= 41). A route
-	// silently reclassified in the table above would still pass every probe — it
-	// would just be enforcing the WRONG tier, exactly the drift the per-route
-	// loop cannot see.
-	if sec != 35 || super != 41 {
-		t.Errorf("tier split = %d security / %d admin, want 35 / 41 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the 2 /permissions/availability routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	// /model-providers, SUPER for the agent roster's reason (= 41). #575 then
+	// added the standing-runs pair (GET /admin/runs/proxy-window, POST
+	// /admin/runs/restart), born SUPER because a restart replaces proxies on runs
+	// the caller does not own (= 43 SUPER). A route silently reclassified in the
+	// table above would still pass every probe — it would just be enforcing the
+	// WRONG tier, exactly the drift the per-route loop cannot see.
+	if sec != 35 || super != 43 {
+		t.Errorf("tier split = %d security / %d admin, want 35 / 43 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the 2 /permissions/availability routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 

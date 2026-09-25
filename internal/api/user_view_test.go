@@ -250,9 +250,9 @@ func TestUserViewSwitchValidatesAndRemembersTheType(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"user_type":"`+utPM+`"`) {
 		t.Fatalf("choose %q = %d %s", utPM, w.Code, w.Body.String())
 	}
-	ev := lastAuditEvent(t, h.audit.events, "auth.user_view")
+	ev := lastAuditEvent(t, h.audit.events, "auth.user_view.set")
 	if !strings.Contains(string(ev.Data), `"user_type":"`+utPM+`"`) || ev.Actor != uvAdminSub {
-		t.Fatalf("auth.user_view = %s by %q", ev.Data, ev.Actor)
+		t.Fatalf("auth.user_view.set = %s by %q", ev.Data, ev.Actor)
 	}
 
 	// Another session of the same principal preselects the choice.

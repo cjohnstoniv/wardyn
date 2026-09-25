@@ -52,7 +52,7 @@ const (
 // Every drop is AUDITED, not merely warned: a warning alone left an operator
 // unable to tell that a member had tried to pair one of their secrets with a
 // host of the member's own choosing (the gap ROADMAP names). dryRun suppresses
-// that write for the same reason it suppresses policy.inline (see below).
+// that write for the same reason it suppresses policy.inline.apply (see below).
 //
 // It is ONE function because the inline branch and the stored branch must bound
 // identically: "member-selected content is bounded by the member's ceiling
@@ -111,7 +111,7 @@ func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *ht
 //     AND validateInlineSecretRefs (so any inline api_key grant references a
 //     real, non-reserved secret); on success the (possibly clamped) inline
 //     spec attaches with a NIL policy id (it is not a stored row) and a
-//     policy.inline audit event is emitted — which therefore already
+//     policy.inline.apply audit event is emitted — which therefore already
 //     reflects the clamped spec, not the raw member-submitted one.
 //   - else (policy_id set, or neither)      => the existing resolvePolicy path
 //     (stored row, else the caller's own CEILING),
@@ -130,9 +130,9 @@ func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *ht
 // it IS Config.DefaultPolicy, so every path below is byte-for-byte today for
 // them; for an assigned member it is the profile an admin bound to them.
 //
-// dryRun suppresses the policy.inline audit write: a preflight preview is not an
+// dryRun suppresses the policy.inline.apply audit write: a preflight preview is not an
 // inline-policy USE, and the audit feed is the system of record — orphan
-// policy.inline rows with no following run.create would be indistinguishable
+// policy.inline.apply rows with no following run.create would be indistinguishable
 // from real authorizations.
 //
 // The 4th return is L6's clamp-warning list (composer.Clamp's own "what did I
@@ -240,7 +240,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// preflight dry-run (see the doc comment).
 		if !dryRun {
 			s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"policy.inline", "", "success", mustJSON(map[string]any{
+				"policy.inline.apply", "", "success", mustJSON(map[string]any{
 					"min_confinement_class": spec.MinConfinementClass,
 					"workspace_mounts":      len(spec.WorkspaceMounts),
 					"eligible_grants":       len(spec.EligibleGrants),

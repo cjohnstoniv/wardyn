@@ -221,8 +221,8 @@ func TestInternalInjection_RejectsSplittingHeaderName(t *testing.T) {
 				t.Errorf("header %q: secret was read despite the refusal", bad)
 			}
 		}
-		if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "invalid-header-name") {
-			t.Errorf("header %q: audit data = %s, want the invalid-header-name reason", bad, ev.Data)
+		if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "invalid_header_name") {
+			t.Errorf("header %q: audit data = %s, want the invalid_header_name reason", bad, ev.Data)
 		}
 	}
 }
@@ -249,8 +249,8 @@ func TestInternalInjection_FailsClosed(t *testing.T) {
 	if rr.Code != http.StatusFailedDependency || !strings.Contains(rr.Body.String(), "wardyn secret set") {
 		t.Fatalf("missing secret: status = %d body=%s", rr.Code, rr.Body.String())
 	}
-	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"not-found"`) {
-		t.Fatalf("missing secret: audit data = %s, want the not-found reason", ev.Data)
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"not_found"`) {
+		t.Fatalf("missing secret: audit data = %s, want the not_found reason", ev.Data)
 	}
 
 	// No auth => 401.
@@ -294,10 +294,10 @@ func TestInternalInjection_StoreUnavailableIsDistinctFromMissing(t *testing.T) {
 	if err := json.Unmarshal(ev.Data, &d); err != nil {
 		t.Fatal(err)
 	}
-	if ev.Outcome != "failure" || d["reason"] != "store-unavailable" || d["purpose"] != "proxy-injection" ||
+	if ev.Outcome != "failure" || d["reason"] != "store_unavailable" || d["purpose"] != "proxy-injection" ||
 		d["owner"] != "alice@example.com" || d["store"] != "vaultkv" || d["row_owner"] != "" ||
 		d["ref"] != "vaultkv:ns1/operator/anthropic-api-key" {
-		t.Fatalf("store unavailable: audit %s %s, want a failure with reason store-unavailable, purpose proxy-injection, owner alice@example.com and the vaultkv row", ev.Outcome, ev.Data)
+		t.Fatalf("store unavailable: audit %s %s, want a failure with reason store_unavailable, purpose proxy-injection, owner alice@example.com and the vaultkv row", ev.Outcome, ev.Data)
 	}
 }
 
@@ -630,8 +630,8 @@ func TestInternalInjection_RefusesSentinelForNonAnthropicHost(t *testing.T) {
 					t.Fatalf("%s -> host %q: a successful secret.read was recorded for a refused injection", sentinel, host)
 				}
 			}
-			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "oauth-host-not-anthropic") {
-				t.Fatalf("%s -> host %q: audit data = %s, want the oauth-host-not-anthropic reason", sentinel, host, ev.Data)
+			if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), "oauth_host_not_anthropic") {
+				t.Fatalf("%s -> host %q: audit data = %s, want the oauth_host_not_anthropic reason", sentinel, host, ev.Data)
 			}
 			// The token must not have been resolved (provider.Current rotates the
 			// operator's own resident credentials) nor registered for masking.

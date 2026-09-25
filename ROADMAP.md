@@ -162,7 +162,7 @@ shipped behavior; none is scheduled.
   never reads the human's role LIVE at connect time, unlike the web
   terminal's `requireOperator` gate — SSH carries no session for that gate to
   read — so a demotion can still ride an unexpired stamp for up to one TTL
-  window. Overrides are audited distinctly (`ssh.auth` carries
+  window. Overrides are audited distinctly (`ssh.authenticate` carries
   `override:true`), and the ceiling is documented, not silently assumed away,
   in `docs/SSH.md`'s Bounds section and `threatmodel/THREAT-MODEL.md`
   residual #15.

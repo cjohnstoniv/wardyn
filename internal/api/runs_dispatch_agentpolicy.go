@@ -14,7 +14,7 @@ import (
 )
 
 // runAgentPolicy is the agent-side half of one run's autonomy level: the
-// managed file dispatch hands the runner, and what run.agent_policy records
+// managed file dispatch hands the runner, and what run.agent_policy.write records
 // about it. The zero value is "this run has no agent-side layer".
 type runAgentPolicy struct {
 	path  string
@@ -139,7 +139,7 @@ func managedFilesGap(caps runner.Capabilities, class types.ConfinementClass) (re
 }
 
 // managedSettingsUndeliveredWarning is the 201's half of delivered:false: the
-// same fact the run.agent_policy row records, said where the person launching
+// same fact the run.agent_policy.write row records, said where the person launching
 // the run reads it. None when the run generates no file or the row will say
 // delivered, and none for an exec run, which has no agent process to say it
 // about. A Capabilities error says nothing here: dispatch fails that run with
@@ -166,7 +166,7 @@ func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, req *cre
 		autonomyAgentLabel(req.Agent), agentPolicyBasis(level, hold), reason)}
 }
 
-// auditAgentPolicy records run.agent_policy once the agent's container exists,
+// auditAgentPolicy records run.agent_policy.write once the agent's container exists,
 // so `delivered` is the driver's answer rather than dispatch's intent: the
 // driver refuses the run outright when it cannot place the file root-owned
 // (the Docker driver's image USER and /etc checks), so a container that exists
@@ -210,6 +210,6 @@ func (s *Server) auditAgentPolicy(ctx context.Context, run types.AgentRun, p run
 		}
 		data["reason"] = reason
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.agent_policy",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.agent_policy.write",
 		run.ID.String(), "success", mustJSON(data)))
 }

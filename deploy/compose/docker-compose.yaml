@@ -773,7 +773,7 @@ services:
       WARDYN_GROUNDTRUTH_TOKEN: "${WARDYN_GROUNDTRUTH_TOKEN:-}"
       WARDYN_GROUNDTRUTH_HEARTBEAT: "30s"
       # Comma-separated run ids the host sensor is blind to (CC3/Kata); a
-      # kernel.sensor.blind event is emitted once per id at boot.
+      # kernel.sensor.bypass event is emitted once per id at boot.
       WARDYN_GROUNDTRUTH_BLIND_RUNS: "${WARDYN_GROUNDTRUTH_BLIND_RUNS:-}"
     volumes:
       # Read the Tetragon JSON export.

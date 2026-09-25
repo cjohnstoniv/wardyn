@@ -54,7 +54,7 @@ import type { Page } from "@playwright/test";
 //      walls are asserted at the API level instead (the resolver, the stored
 //      ceiling, the two write refusals), and the run-level enforcement is
 //      proven in Go — TestGovernanceProfileNonEscape's 16-row escape table on
-//      the decoded run.policy.effective envelope, and
+//      the decoded run.policy.resolve envelope, and
 //      governance_ceiling_test.go's governance_profile_name pin.
 //
 //   2. THE MEMBER'S TWO DISPLAY MOMENTS. Same cause: the field the rail and

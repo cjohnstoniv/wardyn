@@ -62,7 +62,7 @@ type loginTarget struct {
 	model    string // signInModel's, on the provider door
 }
 
-// stampProvider adds the provider half of harness.login.started (the stamp an
+// stampProvider adds the provider half of harness.login.start (the stamp an
 // upload binds to): nothing on the legacy door.
 func (t loginTarget) stampProvider(stamp map[string]any) {
 	if t.provider == nil {
@@ -263,7 +263,7 @@ type providerSignInCapture struct {
 //	PUT /api/v1/model-providers/{id}/sign-in  {"run_id": "...", "token": "..."}
 //
 // Bound to that sign-in: run_id must be a Claude login run this caller
-// launched through this door for this provider (its harness.login.started
+// launched through this door for this provider (its harness.login.start
 // stamp names both), and not one a newer sign-in replaced. Stored under
 // wardyn-provider-<uid>-oauth in the caller's own namespace only; write-only.
 func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Request) {
@@ -321,7 +321,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 	// the sink masks the token for every run it is injected into.
 	s.cfg.MaskRegistry.Add(runID, []byte(token))
 	s.recordAudit(r.Context(), s.auditEvent(&runID, actorTypeFromRequest(r), principalFromRequest(r),
-		"harness.credential.captured", name, "success", mustJSON(map[string]any{
+		"harness.credential.capture", name, "success", mustJSON(map[string]any{
 			"provider": hl.provider, "source": "paste", "owner": owner,
 			"credential_source": string(types.CredentialSourcePerUser), "model_provider": p.ID,
 		})))
@@ -332,7 +332,7 @@ func (s *Server) handleProviderSignInCapture(w http.ResponseWriter, r *http.Requ
 // caller launched through the provider door for p, while p still has the
 // address it had then (rule 8: a sign-in given for one address must not land
 // after the purge). Everything it compares is server-written at launch (the
-// run row and its harness.login.started stamp). ok=false: the refusal is
+// run row and its harness.login.start stamp). ok=false: the refusal is
 // written.
 func (s *Server) ownProviderSignInRun(w http.ResponseWriter, r *http.Request, runID uuid.UUID, hl harnessLogin, p types.ModelProvider, owner string) bool {
 	run, err := s.cfg.Store.GetRun(r.Context(), runID)

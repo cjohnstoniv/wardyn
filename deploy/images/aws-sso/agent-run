@@ -101,6 +101,12 @@ fi
 # Warn and continue without tmux: an interactive run must still come up
 # attachable, and the attach hint then tells the human what to run by hand.
 if [[ "${1:-}" == "--idle" ]]; then
+    # A revive after a reboot (booted_before, agent-run-lib.sh): the sign-in
+    # pane below waits on prep-done, which the last boot left behind, so clear
+    # it or the pane signs in before this boot's CA and ~/.aws/config exist.
+    if booted_before; then
+        revive_markers
+    fi
     if command -v tmux >/dev/null 2>&1; then
         # start_wardyn_session (agent-run-lib.sh) is the ONE copy of the
         # create-or-take-over bootstrap, shared with claude-code and codex-cli:

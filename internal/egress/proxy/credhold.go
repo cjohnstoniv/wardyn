@@ -169,7 +169,7 @@ var errReauthTimedOutAgain = fmt.Errorf("%w (already recorded)", errReauthTimedO
 // failed. The sandbox still gets the 401 — there is no credential either way —
 // but no credential:reauth-timeout row and no outcome=timeout count, because
 // none of these is an expiry (security NIT-B). The reason travels for the log
-// line; the run-kill path already leaves its own approval.cancelled row.
+// line; the run-kill path already leaves its own approval.cancel row.
 type errReauthEnded struct{ reason string }
 
 func (e errReauthEnded) Error() string { return "credential re-auth hold ended: " + e.reason }

@@ -698,7 +698,7 @@ func TestDevices_IngestContract(t *testing.T) {
 		if got := ackedSeq(t, post(string(mustJSON(chainRows(10, 2, ""))))); got != 11 {
 			t.Fatalf("acked_seq = %d, want 11", got)
 		}
-		resets := auditRows(rec, "device.audit.chain_reset", "success")
+		resets := auditRows(rec, "device.chain.reset", "success")
 		if len(resets) != 1 || resets[0].Target != id.String() {
 			t.Fatalf("chain_reset rows = %+v, want one naming the device", resets)
 		}

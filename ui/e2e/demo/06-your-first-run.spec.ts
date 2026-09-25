@@ -592,7 +592,7 @@ test("V06 beat 4 — the receipts", async () => {
   await beat(page, PACE.read);
   await caption(page, "Wardyn is honest about what its sensors can see.");
   await beat(page, PACE.read);
-  // VERIFY at rehearsal: kernel.sensor.blind must actually read true for the
+  // VERIFY at rehearsal: kernel.sensor.bypass must actually read true for the
   // barrier this take's run used — reword or drop the line if it doesn't
   // (series ruling S4: don't outrun what the screen shows). NOTE: first-policy
   // floors at CC2/Wall, so this run enforces AT LEAST Wall (higher than the

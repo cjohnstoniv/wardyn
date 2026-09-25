@@ -437,7 +437,7 @@ func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
 // the interactive OAuth. Modeled on launchRecordRun, minus workspace/claim.
 //
 // It stops at the audit stamp. Everything up to and including CreateRun +
-// harness.login.started is what the CALLER must have before it answers — the
+// harness.login.start is what the CALLER must have before it answers — the
 // run id, and the launch-time scope/pin the capture upload binds to. The rest
 // of the launch (the dispatch ceiling, dispatchRun's blocking CreateSandbox) is
 // finishHarnessLoginLaunch's, on a detached context, in harnesscred_launch.go.
@@ -450,7 +450,7 @@ func (s *Server) deleteSpentAWSSSOBlob(ctx context.Context, scope awsSSOScope) {
 // newSessionRecorder (attach.go) drops the recorder entirely for a run where
 // runIsUnrecordable(run) is true (run.Task == harnessLoginTask), so no replayable
 // asciicast is ever persisted. The gate lives at that single call site so a future
-// second attach path cannot miss it. (harness.login.started and session.attach
+// second attach path cannot miss it. (harness.login.start and session.attach
 // still record who attached, when, and why — no provenance is lost.)
 // t.startURL (AWS only, "" for every other provider) is the IAM Identity
 // Center access-portal URL. It is seeded into the sandbox as a pre-login
@@ -581,7 +581,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 		"sso_role_name":  t.pin.RoleName,
 	}
 	t.stampProvider(stamp)
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.started",
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.start",
 		runID.String(), "success", mustJSON(stamp)))
 
 	image := agentImage(hl.agent, s.cfg.AgentImages)
@@ -596,7 +596,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	}, nil
 }
 
-// maxLoginStartAuditScan bounds the read-back below. harness.login.started is
+// maxLoginStartAuditScan bounds the read-back below. harness.login.start is
 // written by launchHarnessLoginRun immediately after CreateRun, so it is among
 // the FIRST events a login run ever has and QueryAuditEvents returns a run's
 // events chronologically (store.QueryAuditEventsPage) — a small window always
@@ -604,7 +604,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 const maxLoginStartAuditScan = 100
 
 // loginRunStamp is the launch-time state launchHarnessLoginRun wrote onto THIS
-// login run's harness.login.started audit row (ActorSystem/"wardynd" —
+// login run's harness.login.start audit row (ActorSystem/"wardynd" —
 // server-set at launch, never sandbox input): the operator-declared AWS
 // access-portal URL, the credential scope this run may capture under, and the
 // account/role pin. The audit log is the system of record (Invariant 6), and
@@ -651,7 +651,7 @@ func (s *Server) loginRunStamp(ctx context.Context, runID uuid.UUID) (loginRunSt
 		return out, fmt.Errorf("read login run audit trail: %w", err)
 	}
 	for _, ev := range events {
-		if ev.Action != "harness.login.started" || ev.Outcome != "success" {
+		if ev.Action != "harness.login.start" || ev.Outcome != "success" {
 			continue
 		}
 		var data loginRunStamp
@@ -859,7 +859,7 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	s.evictManagedToken()
 
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"harness.credential.captured", hl.secretName, "success",
+		"harness.credential.capture", hl.secretName, "success",
 		mustJSON(map[string]any{"provider": hl.provider, "source": "paste"})))
 	writeJSON(w, http.StatusOK, map[string]any{"provider": hl.provider, "captured": true})
 }
@@ -916,7 +916,7 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 	}
 	s.forgetCredential(owner, hl.secretName)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"harness.credential.disconnected", hl.secretName, "success",
+		"harness.credential.disconnect", hl.secretName, "success",
 		mustJSON(map[string]any{"provider": hl.provider})))
 	writeJSON(w, http.StatusOK, map[string]any{"provider": hl.provider, "captured": false})
 }

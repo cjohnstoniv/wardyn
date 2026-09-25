@@ -184,7 +184,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 
 // finishHarnessLoginLaunch is the part of the launch that can block: resolve the
 // dispatch ceiling, then dispatchRun (CreateSandbox, the STARTING->RUNNING CAS,
-// run.interactive). It runs detached, after the caller already holds a 200 and
+// run.interactive.start). It runs detached, after the caller already holds a 200 and
 // a run id.
 //
 // The ceiling error is the missed door. resolveDispatchCeiling errors AFTER the

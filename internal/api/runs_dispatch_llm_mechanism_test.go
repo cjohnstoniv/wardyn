@@ -737,7 +737,7 @@ func TestResolveLLMInjections_RefusesBeforeResolvingAnySSOScope(t *testing.T) {
 }
 
 // TestResolveLLMInjections_AuditsBedrockOnlyOnceBothGatesHold (#518): the
-// run.llm.bedrock "success" row is recorded after enforceConfiguredLLMMechanism
+// run.bedrock.configure "success" row is recorded after enforceConfiguredLLMMechanism
 // and bedrockCredGradeHolds, so a run either gate refuses shows no injection
 // row for a credential it was never handed.
 func TestResolveLLMInjections_AuditsBedrockOnlyOnceBothGatesHold(t *testing.T) {
@@ -781,12 +781,12 @@ func TestResolveLLMInjections_AuditsBedrockOnlyOnceBothGatesHold(t *testing.T) {
 			}
 			rows := 0
 			for _, ev := range h.audit.events {
-				if ev.Action == "run.llm.bedrock" {
+				if ev.Action == "run.bedrock.configure" {
 					rows++
 				}
 			}
 			if rows != tc.wantRows {
-				t.Errorf("run.llm.bedrock rows = %d, want %d", rows, tc.wantRows)
+				t.Errorf("run.bedrock.configure rows = %d, want %d", rows, tc.wantRows)
 			}
 		})
 	}

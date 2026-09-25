@@ -229,11 +229,11 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 		return fail(http.StatusForbidden, "provider_changed", mpSubSinkChanged)
 	}
 	if !hostEqual(minted.Injection.Host, gatewayHost(providerSubscriptionBase(p))) {
-		return fail(http.StatusForbidden, "oauth-host-not-provider", mpSubSinkHost)
+		return fail(http.StatusForbidden, "oauth_host_not_provider", mpSubSinkHost)
 	}
 	tok, err := s.ownerSubscriptionToken(claims.Sub, uid).Current(ctx)
 	if err != nil {
-		return fail(http.StatusFailedDependency, "resolve-failed", fmt.Sprintf(mpRunRefusal, p.ID, mpSubNotSignedIn, mpRunRemedySignIn))
+		return fail(http.StatusFailedDependency, "resolve_failed", fmt.Sprintf(mpRunRefusal, p.ID, mpSubNotSignedIn, mpRunRemedySignIn))
 	}
 	// One correct wire shape, whatever the grant says (see the legacy arm).
 	formatted := formatInjectionValue("Bearer %s", []byte(tok.Value))
@@ -302,7 +302,7 @@ func (s *Server) authorOAuthSentinelGrant(ctx context.Context, run types.AgentRu
 	if g.provider != "" {
 		data["provider"] = g.provider
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.subscription_inject",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.subscription.inject",
 		run.ID.String(), "success", mustJSON(data)))
 	return injections, true
 }

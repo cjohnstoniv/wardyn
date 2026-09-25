@@ -16,7 +16,7 @@ import (
 
 // TestBlindCapSuppressionIsAccountedNotSilent pins F066: emitLLMBlindOnce
 // bounds its per-run dedup set at maxBlindHosts, and past that cap the
-// llm.scan.blind coverage row — the ONLY honest report that an
+// llm.scan.bypass coverage row — the ONLY honest report that an
 // inspection-enabled run reached a model host over a tunnel nothing could look
 // into (internal/api/healthz.go delegates coverage reporting to this stream) —
 // is not emitted. Silence there reads as "no uninspected model tunnel
@@ -27,7 +27,7 @@ import (
 // enumerate hostnames), so the fix is accounting, not removal: a blind row we
 // refuse to emit is an unrecorded decision and lands on the SAME counter the
 // sink already keeps for records it could not deliver — the one that feeds the
-// periodic `egress.decisions.dropped:<n>` summary and close()'s "closed with N
+// periodic `egress:dropped-decisions-<n>` summary and close()'s "closed with N
 // dropped records". No new counter, no new audit string.
 func TestBlindCapSuppressionIsAccountedNotSilent(t *testing.T) {
 	const over = 3

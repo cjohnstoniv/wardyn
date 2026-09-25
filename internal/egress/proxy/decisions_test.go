@@ -122,7 +122,7 @@ func TestDecisionSinkDropsOnBackpressure(t *testing.T) {
 }
 
 // TestDecisionSinkReportsDroppedSummary locks down FIX #18: when decisions are
-// dropped on backpressure, a synthetic egress.decisions.dropped audit event must
+// dropped on backpressure, a synthetic egress.deny (rule_source egress:dropped-decisions-<n>) must
 // reach the control plane BEFORE shutdown (piggybacked on the next flush) — not
 // only surface as a shutdown-time counter.
 func TestDecisionSinkReportsDroppedSummary(t *testing.T) {
@@ -133,7 +133,7 @@ func TestDecisionSinkReportsDroppedSummary(t *testing.T) {
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var d egress.DecisionLog
 		_ = json.NewDecoder(r.Body).Decode(&d)
-		if strings.HasPrefix(d.RuleSource, "egress.decisions.dropped:") {
+		if strings.HasPrefix(d.RuleSource, "egress:dropped-decisions-") {
 			summaries.Add(1)
 			lastSource.Store(d.RuleSource)
 			w.WriteHeader(http.StatusAccepted)
@@ -171,10 +171,10 @@ func TestDecisionSinkReportsDroppedSummary(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if summaries.Load() == 0 {
-		t.Fatal("no egress.decisions.dropped summary posted before shutdown")
+		t.Fatal("no egress:dropped-decisions-<n> summary posted before shutdown")
 	}
-	if src, _ := lastSource.Load().(string); !strings.HasPrefix(src, "egress.decisions.dropped:") {
-		t.Fatalf("summary rule_source = %q, want egress.decisions.dropped:<n>", src)
+	if src, _ := lastSource.Load().(string); !strings.HasPrefix(src, "egress:dropped-decisions-") {
+		t.Fatalf("summary rule_source = %q, want egress:dropped-decisions-<n>", src)
 	}
 	_ = s.close(context.Background())
 }

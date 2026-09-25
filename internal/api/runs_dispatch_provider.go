@@ -420,7 +420,7 @@ func (s *Server) auditDroppedInjection(ctx context.Context, run types.AgentRun, 
 	if run.ModelProviderID != "" {
 		data["provider"] = run.ModelProviderID
 	}
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.dropped",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.drop",
 		ig.GrantID.String(), "denied", mustJSON(data)))
 }
 

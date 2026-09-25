@@ -226,9 +226,9 @@ func TestMemberPreview_SharedRosterDowngradesToThePlainMode(t *testing.T) {
 	if me["user_view"] != true || me["user_view_no_credential"] != false {
 		t.Errorf("/me = user_view:%v no_credential:%v, want true/false", me["user_view"], me["user_view_no_credential"])
 	}
-	rows := audit.find("auth.user_view")
+	rows := audit.find("auth.user_view.set")
 	if len(rows) != 1 {
-		t.Fatalf("auth.user_view rows = %d, want 1", len(rows))
+		t.Fatalf("auth.user_view.set rows = %d, want 1", len(rows))
 	}
 	datum := map[string]any{}
 	if err := json.Unmarshal(rows[0].Data, &datum); err != nil {
@@ -277,9 +277,9 @@ func TestMemberPreview_RealMemberIsNeverGrantedThePosture(t *testing.T) {
 	if body["user_view_no_credential"] != false {
 		t.Errorf("a real member's request echoed user_view_no_credential:%v, want false — no cookie was written", body["user_view_no_credential"])
 	}
-	rows := audit.find("auth.user_view")
+	rows := audit.find("auth.user_view.set")
 	if len(rows) != 1 {
-		t.Fatalf("auth.user_view rows = %d, want 1", len(rows))
+		t.Fatalf("auth.user_view.set rows = %d, want 1", len(rows))
 	}
 	datum := map[string]any{}
 	if err := json.Unmarshal(rows[0].Data, &datum); err != nil {
@@ -340,8 +340,8 @@ func TestMemberPreview_HarnessLoginRefused409(t *testing.T) {
 	if !strings.Contains(w.Body.String(), userViewPreviewSignInRefusal) {
 		t.Errorf("body = %q, want %q", w.Body.String(), userViewPreviewSignInRefusal)
 	}
-	if rows := audit.find("harness.login.started"); len(rows) != 0 {
-		t.Errorf("a refused sign-in stamped %d harness.login.started row(s)", len(rows))
+	if rows := audit.find("harness.login.start"); len(rows) != 0 {
+		t.Errorf("a refused sign-in stamped %d harness.login.start row(s)", len(rows))
 	}
 	st.mu.Lock()
 	runs := len(st.runs)
@@ -394,9 +394,9 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 		t.Errorf("/me = user_view:%v no_credential:%v, want true/true", me["user_view"], me["user_view_no_credential"])
 	}
 
-	rows := audit.find("auth.user_view")
+	rows := audit.find("auth.user_view.set")
 	if len(rows) != 1 {
-		t.Fatalf("auth.user_view rows = %d, want 1", len(rows))
+		t.Fatalf("auth.user_view.set rows = %d, want 1", len(rows))
 	}
 	enter := map[string]any{}
 	if err := json.Unmarshal(rows[0].Data, &enter); err != nil {
@@ -421,9 +421,9 @@ func TestMemberPreview_ToggleAuditsAndReportsTheVariant(t *testing.T) {
 		t.Errorf("/me after the exit = user_view:%v no_credential:%v, want false/false",
 			me["user_view"], me["user_view_no_credential"])
 	}
-	rows = audit.find("auth.user_view")
+	rows = audit.find("auth.user_view.set")
 	if len(rows) != 2 {
-		t.Fatalf("auth.user_view rows = %d after the exit, want 2", len(rows))
+		t.Fatalf("auth.user_view.set rows = %d after the exit, want 2", len(rows))
 	}
 	exit := map[string]any{}
 	if err := json.Unmarshal(rows[1].Data, &exit); err != nil {

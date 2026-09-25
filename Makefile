@@ -435,7 +435,7 @@ test-e2e-byoi: ## Live BYOI e2e: wrap stock/harness/hostile bases + selftest gat
 	WARDYN_TEST_DOCKER=1 ./scripts/run-e2e-byoi.sh
 
 # Live SSH gateway e2e: exec exit-code propagation, sftp put/get byte-compare,
-# a -L forward against an in-sandbox loopback listener, the ssh.exec/ssh.sftp/
+# a -L forward against an in-sandbox loopback listener, the ssh.exec/ssh.sftp.transfer/
 # ssh.forward audit rows, a saved ssh-<session> recording, a foreign-key
 # denial, and the concurrency case (sftp transfer + a second exec, same run).
 # Brings up its OWN dedicated compose stack (project "wardynv05e2e", ports

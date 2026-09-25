@@ -146,7 +146,7 @@ type dispatchParams struct {
 // reassertCeilingDenies then runs after it (it only adds denies and only
 // removes credentials, so it cannot un-confine anything, and it has to sit
 // below every WIDENING phase — see its own ordering argument). The ProxyConfig
-// snapshot then captures that final policy, and the run.policy.effective audit
+// snapshot then captures that final policy, and the run.policy.resolve audit
 // event discloses it. Keep new phases inside this sequence, in the right place
 // — a phase hoisted into a caller silently loses the ordering guarantee.
 //
@@ -204,13 +204,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// CC3 host-eBPF blindness, surfaced AUTOMATICALLY. The host Tetragon sensor
 	// cannot see inside a Kata microVM guest, so a CC3 run is blind to the
 	// ground-truth stream. wardynd knows the resolved confinement class here, so
-	// it records the one-time kernel.sensor.blind audit event itself — making the
+	// it records the one-time kernel.sensor.bypass audit event itself — making the
 	// gap VISIBLE regardless of whether the operator set the sidecar env var
 	// WARDYN_GROUNDTRUTH_BLIND_RUNS (that path is kept too). Matches the data
 	// shape the sidecar emits (reason="cc3-kata-host-ebpf-blind", run_id) so the
 	// downstream audit/correlation is identical.
 	if run.ConfinementClass == types.CC3 {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "kernel.sensor.blind",
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "kernel.sensor.bypass",
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"reason": "cc3-kata-host-ebpf-blind", "run_id": run.ID.String(),
 			})))
@@ -261,12 +261,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	patKept, droppedPAT := dropBrokeredGrants(p.GitPATGrants, p.GitGrants, brokeredForgeHost)
 	p.GitPATGrants = patKept
 	droppedSSH, _ := applyDispatchModeEnv(sandboxEnv, run, p)
-	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.brokered_forge", droppedSSH,
+	s.auditBrokeredGrantDrop(ctx, run.ID, "ssh_key", "run.ssh.drop", droppedSSH,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge and its SSH endpoint). Withholding the key is load-bearing, not "+
 			"belt-and-braces: those denies are name-keyed, so under allow_all_egress a resident key could still have "+
 			"reached the forge by raw IP. Drop the github_token grant to push with your own key instead")
-	s.auditBrokeredGrantDrop(ctx, run.ID, "git_pat", "run.git_pat.brokered_forge", droppedPAT,
+	s.auditBrokeredGrantDrop(ctx, run.ID, "git_pat", "run.git_pat.drop", droppedPAT,
 		"this run is brokered for a repo on this forge, so the git-broker route is its only route to it BY NAME "+
 			"(confineGitBrokerEgress denies the forge's HTTPS hosts). Withholding the PAT is load-bearing, not "+
 			"belt-and-braces: wardyn-git-helper's refusal only binds a caller that goes through git, and those denies "+
@@ -378,7 +378,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Brokered git: make the broker route the only route to the managed host names.
 	// Last of the policy
 	// phases so nothing above can re-add a managed host. See
-	// confineGitBrokerEgress; the run.policy.effective audit below records the
+	// confineGitBrokerEgress; the run.policy.resolve audit below records the
 	// narrowed envelope, so the removal is disclosed, not silent.
 	if confined := confineGitBrokerEgress(&policy, p.GitGrants); len(confined) > 0 {
 		slog.InfoContext(ctx, "wardynd: git-broker run — broker-managed hosts confined to the /wardyn/gh/ route",
@@ -555,7 +555,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// field's own doc comment says NEVER logged, so the audited copy is a
 	// Clone with the values replaced by a count; the live `policy` the ProxyConfig
 	// snapshot below references still carries the real values.
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.effective",
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
 		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
 			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskFilled,
 		})))
@@ -718,7 +718,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 		if byoi {
 			s.byoiSelftest(ctx, run, ref, false /* warn-only */)
 		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive",
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.interactive.start",
 			run.ID.String(), "success", mustJSON(map[string]any{
 				"sandbox_ref": ref,
 				"note":        "interactive run: no agent task exec'd; awaiting attach",

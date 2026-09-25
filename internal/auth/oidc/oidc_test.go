@@ -1102,7 +1102,7 @@ func TestMiddlewareFallsThrough(t *testing.T) {
 		}
 		// No cookie was presented at all — the ordinary non-browser-client
 		// case — so this must NOT be flagged as a rejected session (that
-		// would make auth.failed fire on every plain bearer-token request).
+		// would make auth.fail fire on every plain bearer-token request).
 		if reason := writoidc.SessionRejectedFromContext(r.Context()); reason != "" {
 			t.Errorf("SessionRejectedFromContext = %q, want \"\" (no cookie presented)", reason)
 		}

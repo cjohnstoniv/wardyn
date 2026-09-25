@@ -88,7 +88,7 @@ demo.json):
    broker-managed, so a brokered run has no route to the GitHub API. No PR is
    opened from inside the sandbox; open it yourself from the pushed branch.
 6. docker exec <sandbox> env | grep -i token is still empty (token was never in env).
-7. The run's effective policy (audit event `run.policy.effective`) lists NO
+7. The run's effective policy (audit event `run.policy.resolve`) lists NO
    broker-managed github host under allowed_domains, and lists the four HTTPS
    hosts PLUS `ssh.github.com` under denied_domains — the brokered route is
    the only route to those names. (Those are exact-name denies — see

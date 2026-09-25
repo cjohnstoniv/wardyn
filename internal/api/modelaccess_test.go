@@ -680,7 +680,7 @@ func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "shared credential") {
 		t.Errorf("body = %s, want the mechanism-principal refusal sentence", w.Body.String())
 	}
-	if len(audit.find("harness.login.started")) != 0 {
+	if len(audit.find("harness.login.start")) != 0 {
 		t.Error("a refused sign-in launched a sandbox anyway")
 	}
 	rows := audit.find("authz.denied")
@@ -849,9 +849,9 @@ func perUserLoginSrvUnder(t *testing.T, cs *capStore, rnr runner.Runner, rows ..
 
 func loginStartURL(t *testing.T, audit *memAudit) string {
 	t.Helper()
-	rows := audit.find("harness.login.started")
+	rows := audit.find("harness.login.start")
 	if len(rows) != 1 {
-		t.Fatalf("harness.login.started rows = %d, want 1", len(rows))
+		t.Fatalf("harness.login.start rows = %d, want 1", len(rows))
 	}
 	var data struct {
 		SSOStartURL string `json:"sso_start_url"`
@@ -909,7 +909,7 @@ func TestHandleHarnessLogin_MemberRefusedWithoutPerUserRow(t *testing.T) {
 			if len(audit.find("authz.denied")) != 1 {
 				t.Error("a refused sign-in must leave an authz.denied row")
 			}
-			if len(audit.find("harness.login.started")) != 0 {
+			if len(audit.find("harness.login.start")) != 0 {
 				t.Error("a refused sign-in launched a sandbox anyway")
 			}
 			// The admin still reaches it — this is the SHARED credential's own
@@ -969,7 +969,7 @@ func TestUploadSSOToken_PerUserCaptureIsOwnerScopedAndOnceOnly(t *testing.T) {
 	runID := uuid.New()
 	// mintRunToken mints the run identity with subject "alice@example.com" — the
 	// SUBJECT, not the attribution, and the namespace selector. It is also what
-	// launchHarnessLoginRun stamps onto harness.login.started as the launch-time
+	// launchHarnessLoginRun stamps onto harness.login.start as the launch-time
 	// owner, which is the value handleUploadSSOToken now reads back.
 	const subject = "alice@example.com"
 	st := ssoLoginRunStore{
@@ -1010,9 +1010,9 @@ func TestUploadSSOToken_PerUserCaptureIsOwnerScopedAndOnceOnly(t *testing.T) {
 	}
 
 	// The capture row says WHOSE it is.
-	rows := audit.find("harness.credential.captured")
+	rows := audit.find("harness.credential.capture")
 	if len(rows) != 1 {
-		t.Fatalf("harness.credential.captured rows = %d, want 1", len(rows))
+		t.Fatalf("harness.credential.capture rows = %d, want 1", len(rows))
 	}
 	var data struct {
 		Owner            string `json:"owner"`
@@ -1145,7 +1145,7 @@ func TestPerUserLoginRow_IsKeyedByAgentNotOnlyMechanism(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("member status = %d, want 403; body=%s", w.Code, w.Body.String())
 	}
-	if len(audit.find("harness.login.started")) != 0 {
+	if len(audit.find("harness.login.start")) != 0 {
 		t.Error("a refused sign-in launched a sandbox anyway")
 	}
 }

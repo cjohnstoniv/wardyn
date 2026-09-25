@@ -309,6 +309,9 @@ provision_git_helper_secret() {
         return 0
     fi
     # Write 0400, agent-owned. umask guards the create window; chmod is explicit.
+    # A revive (booted_before) finds the last boot's 0400 file, which even its
+    # owner cannot open for writing: remove it first, or prep dies here.
+    rm -f "$secret_file"
     ( umask 077; printf '%s' "$secret" > "$secret_file" )
     chmod 0400 "$secret_file"
     export WARDYN_GIT_HELPER_SECRET="$secret"
@@ -604,6 +607,35 @@ start_wardyn_session() {
         return 0
     fi
     return 1
+}
+
+# ── revive: a container started again after a reboot ─────────────────────────
+# booted_before — true when this container's `agent-run --idle` has run before:
+# the control plane revived a run lost to a reboot (long-holds design rev 4, §4
+# row 3), `docker start` re-ran the container's main process, and the writable
+# layer still holds the marker the first boot wrote. The first boot writes it
+# and answers false. Images call it at the top of --idle and, on true, take
+# their --revive branch instead: the same prep over the kept files, but the
+# run's seed is NEVER started again (it already ran; a revive continues or
+# starts fresh, it does not replay the operator's first prompt or startup
+# command). An image built before this function re-runs --idle as it was and
+# re-seeds; that is the documented ceiling for pre-revive images.
+booted_before() {
+    local m="${HOME:-/home/agent}/.wardyn/booted"
+    [[ -e "$m" ]] && return 0
+    mkdir -p "${m%/*}" 2>/dev/null || true
+    : > "$m" 2>/dev/null || true
+    return 1
+}
+
+# revive_markers — reset what the last boot left that would lie to this one:
+# prep-done, so attach-bashrc.sh and a revive pane wait for THIS boot's prep
+# (the clone skips a repo already there, but the CA, the git-helper secret and
+# the broker rewrites are redone), and agent-started, so a harness the image
+# does not continue is started fresh by attach-bashrc.sh on the first attach.
+# An image that does continue its harness writes agent-started back itself.
+revive_markers() {
+    rm -f "${HOME:-/home/agent}/.wardyn/prep-done" "${HOME:-/home/agent}/.wardyn/agent-started"
 }
 
 # DRAFT (M2 canon pending) — the only two lines a human reads in a boot pane

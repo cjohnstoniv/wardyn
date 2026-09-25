@@ -114,7 +114,7 @@ func TestProviderDispatch_KeyLaneServesTheOwnersKeyOnly(t *testing.T) {
 		got[0] != unrelated.GrantID || got[1] != grants[0].ID {
 		t.Errorf("injections = %+v, want only the unrelated one and the authored grant", plan.injections)
 	}
-	if n := strings.Count(auditDatums(h, "run.injection.dropped"), "model_credential_not_provider_authored"); n != len(legacy) {
+	if n := strings.Count(auditDatums(h, "run.injection.drop"), "model_credential_not_provider_authored"); n != len(legacy) {
 		t.Errorf("drops audited = %d, want %d", n, len(legacy))
 	}
 	if !slices.Contains(policy.AllowedDomains, "api.anthropic.com") || len(policy.WorkspaceMounts) != 0 {
@@ -368,7 +368,7 @@ func TestLegacyDispatch_DropsUnauthoredProviderKeyInjection(t *testing.T) {
 	if !ok || slices.ContainsFunc(plan.injections, func(ig runner.InjectionGrant) bool { return ig.GrantID == stale.GrantID }) {
 		t.Fatalf("ok=%v injections=%v, want the unauthored provider key dropped", ok, plan.injections)
 	}
-	if !strings.Contains(auditDatums(h, "run.injection.dropped"), "model_provider_not_dispatch_authored") {
+	if !strings.Contains(auditDatums(h, "run.injection.drop"), "model_provider_not_dispatch_authored") {
 		t.Error("the drop was not audited")
 	}
 }

@@ -16,7 +16,7 @@
 #     for git over HTTPS).
 #
 # (2) Egress deny              docker exec curl to an unlisted domain via the
-#     proxy yields 403; the audit API shows the egress.deny or egress.pending
+#     proxy yields 403; the audit API shows the egress.deny or egress.hold
 #     event for that host.
 #
 # (3) Metadata block           docker exec curl 169.254.169.254 through the
@@ -353,7 +353,7 @@ if run_section 2; then
     # Show the audit event for this run.
     sleep 2
     S2_DENY_CNT="$(audit_count "${S2_RUN_ID}" \
-      'e.get("action") in ("egress.deny","egress.pending") and "evil" in json.dumps(e)')"
+      'e.get("action") in ("egress.deny","egress.hold") and "evil" in json.dumps(e)')"
     if [[ "${S2_DENY_CNT}" -ge 1 ]]; then
       ok "section 2: egress.deny/pending audit event visible for evil.example.com"
     else

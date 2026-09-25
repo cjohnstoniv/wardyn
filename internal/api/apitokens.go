@@ -93,7 +93,7 @@ func apiTokenIDFromContext(ctx context.Context) uuid.UUID {
 // into an admin-token compare the caller never asked for. It fails closed with a
 // 500 that says the lookup failed, not that the credential did.
 //
-// This branch deliberately does NOT emit an auth.failed audit event; that
+// This branch deliberately does NOT emit an auth.fail audit event; that
 // vocabulary belongs to a separate lane.
 func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

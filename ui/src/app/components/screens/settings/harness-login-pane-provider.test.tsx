@@ -111,7 +111,7 @@ describe("serverConfirmsProviderCapture — this run's audit row, and the provid
       confirmed: true,
       unreachable: false,
     });
-    expect(auditApi.listAudit).toHaveBeenCalledWith(RUN, "harness.credential.captured");
+    expect(auditApi.listAudit).toHaveBeenCalledWith(RUN, "harness.credential.capture");
   });
 
   it("a forged marker — no audit row — is not confirmed", async () => {

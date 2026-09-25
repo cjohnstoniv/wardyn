@@ -85,7 +85,7 @@ type expiredSweeper interface {
 var noSweepOnce sync.Once
 
 // SweepExpiredCredentials deletes every stored credential whose expiry has
-// passed, audits each as credential.expired_deleted, and returns how many it
+// passed, audits each as credential.expired.delete, and returns how many it
 // deleted. cmd/wardynd calls it daily. A row it could not delete is kept, and
 // the next sweep tries it again. A store that cannot sweep — no DeleteExpired,
 // or a wrapper answering secretstore.ErrNoExpirySweep — is logged at Error once.
@@ -112,7 +112,7 @@ func (s *Server) SweepExpiredCredentials(ctx context.Context) int {
 		slog.ErrorContext(ctx, "wardynd: deleting expired credentials left some behind; the next sweep retries them", slog.Any("err", err))
 	}
 	for _, e := range gone {
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired_deleted", e.Name, "success",
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", e.Name, "success",
 			withSecretOwner(map[string]any{"reason": "expired", "expires_at": e.ExpiresAt.UTC().Format(time.RFC3339)}, e.Owner, true)))
 	}
 	return len(gone)
@@ -130,6 +130,6 @@ func (s *Server) deleteDeadCredential(ctx context.Context, st secretstore.Store,
 		slog.WarnContext(ctx, "wardynd: deleting a sign-in the authority refused failed", slog.String("provider", provider), slog.Any("err", err))
 		outcome, data["error"] = "failure", err.Error()
 	}
-	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired_deleted", name, outcome,
+	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", name, outcome,
 		withSecretOwner(data, owner, true)))
 }

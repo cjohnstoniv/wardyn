@@ -145,9 +145,9 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 			}
 			// The effective number is DISCLOSED to every caller through the
 			// envelope — the audit is why the clamp can be silent at the API.
-			ev := findAudit(events, runID, "run.policy.effective", "success")
+			ev := findAudit(events, runID, "run.policy.resolve", "success")
 			if ev == nil {
-				t.Fatalf("no run.policy.effective envelope; events=%s", auditDump(events, runID))
+				t.Fatalf("no run.policy.resolve envelope; events=%s", auditDump(events, runID))
 			}
 			var spec types.RunPolicySpec
 			if err := json.Unmarshal(ev.Data, &spec); err != nil {
@@ -158,7 +158,7 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 				got = spec.Resources.DiskMiB
 			}
 			if got != tc.want {
-				t.Errorf("run.policy.effective disk_mib = %d, want %d — the envelope is the only disclosure a member gets", got, tc.want)
+				t.Errorf("run.policy.resolve disk_mib = %d, want %d — the envelope is the only disclosure a member gets", got, tc.want)
 			}
 			// PROVENANCE rides the same envelope, so a reader can tell a size the
 			// org filled in (degrades to uncapped on a host that cannot keep it)
@@ -170,7 +170,7 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 			}
 			filled, present := datum["disk_mib_filled"]
 			if tc.wantFilled != (present && filled == true) {
-				t.Errorf("run.policy.effective disk_mib_filled = %v (present=%v), want filled=%v", filled, present, tc.wantFilled)
+				t.Errorf("run.policy.resolve disk_mib_filled = %v (present=%v), want filled=%v", filled, present, tc.wantFilled)
 			}
 		})
 	}
@@ -193,7 +193,7 @@ func TestDispatchEphemeralDisk_NeverWritesThroughTheCallersResources(t *testing.
 	}
 }
 
-// TestDispatchEphemeralDisk_CeilingReassertCarriesTheClamp: run.policy.effective
+// TestDispatchEphemeralDisk_CeilingReassertCarriesTheClamp: run.policy.resolve
 // records a policy, not whose ceiling shaped it. When a profile applies, its
 // re-assertion row is where the SIZE half becomes attributable — and it stays
 // absent for a profile that sets no size, so a pre-0.7.2 profile's row is

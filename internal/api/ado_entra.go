@@ -62,7 +62,7 @@ import (
 // adoSignInCapturedAction is the one audit action the sign-in owns. Both outcomes
 // ride it: `success` once the blob is stored, `failure` with a `reason` for
 // every refusal, so a review reads one action rather than correlating two.
-const adoSignInCapturedAction = "scm.ado.signin.captured"
+const adoSignInCapturedAction = "ado.signin.capture"
 
 // entraDefaultAuthority is the public Entra authority. Every endpoint this lane
 // dials is derived from it plus the tenant, exactly as Microsoft's own client

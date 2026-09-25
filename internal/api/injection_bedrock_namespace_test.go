@@ -219,7 +219,7 @@ func TestDispatch_BedrockBearerGrantIsTheOnlyOneNamingTheKey(t *testing.T) {
 		t.Fatalf("injections naming %s = %v, want only dispatch's own grant %s", bedrockAPIKeySecret, named, grant.ID)
 	}
 	// The drop is audited, naming the dropped grant and why.
-	ev := lastAuditEvent(t, h.audit.events, "run.injection.dropped")
+	ev := lastAuditEvent(t, h.audit.events, "run.injection.drop")
 	if ev.Target != stale.GrantID.String() || ev.Outcome != "denied" ||
 		!strings.Contains(string(ev.Data), "bedrock_bearer_not_dispatch_authored") {
 		t.Fatalf("drop audit = target %s outcome %s data %s, want the stale grant %s denied with its reason",
