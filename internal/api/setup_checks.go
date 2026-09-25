@@ -486,27 +486,19 @@ func ageKeyCheck(durable bool) SetupCheck {
 }
 
 // secretStoreChecks are the credential-storage rows (design §3): store_external
-// in store mode (SETUP_CHECK.STORE_EXTERNAL), where the credentials live in
-// the organisation's store; kek_service when a key service wraps every data
-// key; otherwise the age-key row, plus kek_local (SETUP_CHECK.KEK_LOCAL) on a
-// multi-user install, where whoever holds both the database and the local key
-// reads every person's credentials, and platform_shared
-// (SETUP_CHECK.PLATFORM_SHARED) while no WARDYN_PLATFORM_KEY_FILE is set
-// (§2.13 c): the age key then protects wardynd's own signing and session keys
-// and people's credentials alike, so one leak of it forges run identities and
-// sessions.
+// in store mode; kek_service when a key service wraps every data key; else the
+// age-key row, kek_local on a multi-user install (whoever holds the database
+// and the local key reads every credential), and platform_shared while no
+// WARDYN_PLATFORM_KEY_FILE is set (§2.13 c: one leak of the age key then also
+// forges run identities and sessions).
 func secretStoreChecks(external, keyService string, durable, multiUser, platformSeparate bool) []SetupCheck {
-	switch {
-	case external != "":
-		return []SetupCheck{{
-			ID: "store_external", Label: "Credential storage", Status: "ok",
-			Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there.",
-		}}
-	case keyService != "":
-		return []SetupCheck{{
-			ID: "kek_service", Label: "Credential storage", Status: "ok",
-			Detail: "Credentials are encrypted with a key held in " + keyService + ". Wardyn holds no copy of it; every unlock is logged there.",
-		}}
+	if external != "" {
+		return []SetupCheck{{ID: "store_external", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there."}}
+	}
+	if keyService != "" {
+		return []SetupCheck{{ID: "kek_service", Label: "Credential storage", Status: "ok",
+			Detail: "Credentials are encrypted with a key held in " + keyService + ". Wardyn holds no copy of it; every unlock is logged there."}}
 	}
 	checks := []SetupCheck{ageKeyCheck(durable)}
 	if durable && multiUser {
