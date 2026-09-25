@@ -264,7 +264,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// May this person mint a token at all (capFeature).
-	if s.denyMemberCapability(w, r, capFeature, featureAPIToken, "me.tokens", apiTokenFeatureRefusal) {
+	if s.denyUserCapability(w, r, capFeature, featureAPIToken, "me.tokens", apiTokenFeatureRefusal) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)

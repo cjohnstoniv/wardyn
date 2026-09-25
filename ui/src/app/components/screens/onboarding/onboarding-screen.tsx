@@ -56,7 +56,7 @@ export function markOnboardingSeen(): void {
 // B4 HIGH-4 / Phase 5: this also still answers a direct /setup navigation (an
 // old bookmark, a shared link) honestly — MemberGettingStarted, never the
 // operator funnel (built from a SetupStatus redacted for anyone not the
-// operator, internal/api/setup.go's redactSetupStatusForMember) — replacing
+// operator, internal/api/setup.go's redactSetupStatusForUser) — replacing
 // the former one-line MemberSetupNotice bounce.
 export function GettingStarted({
   onDone,

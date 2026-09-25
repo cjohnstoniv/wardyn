@@ -652,7 +652,7 @@ func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 // pin: a provider_ref alone is as much an operator binding as an
 // integration_ref, and a member's create carrying one is refused, not stored.
 func TestMemberWorkspaceProviderRefRefused(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
 		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser),
 		`{"name":"mine","llm_cred":{"provider_ref":"corp-gateway"}}`)

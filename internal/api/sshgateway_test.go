@@ -121,7 +121,7 @@ func (s *sshMemStore) DeleteSSHKey(_ context.Context, fingerprint, principal str
 }
 
 // GetCapabilityEnforcement and ListCapabilityGrantsFor are the two reads
-// handleAddSSHKey's capFeature gate makes (denyMemberCapability ->
+// handleAddSSHKey's capFeature gate makes (denyUserCapability ->
 // capSeamAllowed). No enforcement row and no grants: capFeature is a
 // narrowing kind, so this test's door stays open exactly as before the gate
 // was added.

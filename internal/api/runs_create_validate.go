@@ -464,7 +464,7 @@ func (s *Server) denyUserRequest(w http.ResponseWriter, r *http.Request, req cre
 	}
 	// The stored policy the caller SELECTED, and only that: a run naming no
 	// policy runs under its own ceiling, which is nothing to bound.
-	if req.PolicyID != nil && s.denyMemberCapability(w, r, capPolicy, req.PolicyID.String(), "runs.policy",
+	if req.PolicyID != nil && s.denyUserCapability(w, r, capPolicy, req.PolicyID.String(), "runs.policy",
 		"Stored policy "+req.PolicyID.String()+" isn't available to you. Ask your admin, or launch without policy_id.") {
 		return governanceCeiling{}, true
 	}

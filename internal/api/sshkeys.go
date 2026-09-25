@@ -77,7 +77,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 	// so a refused caller learns nothing about their key's validity. Member
 	// mode is not refused here — it CLAMPS the stored role below, same as any
 	// other caller who clears this gate.
-	if s.denyMemberCapability(w, r, capFeature, featureSSHKey, "me.ssh_keys", sshKeyFeatureRefusal) {
+	if s.denyUserCapability(w, r, capFeature, featureSSHKey, "me.ssh_keys", sshKeyFeatureRefusal) {
 		return
 	}
 	var req addSSHKeyRequest
