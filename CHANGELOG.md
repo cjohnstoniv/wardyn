@@ -522,6 +522,30 @@ and does not yet follow semantic versioning (interfaces are not stable).
   as roster runs are: the hold's `requested_scope` names the provider (`provider`, `provider_uid`),
   and only its owner's sign-in for that provider answers it. `harness.login.started`,
   `harness.credential.captured` and `credential.reauth.*` gain `model_provider`.
+- **Every model-provider kind dispatches through one gate and one lane (#551).** The key and
+  endpoint kinds (#528, #532) and the subscription and Bedrock kinds (#529, #530) were built on
+  two lines and are now one path. A provider block that is set, or cannot be read, governs every
+  model run, whatever its provider's kind: a run no provider serves gets no model credential,
+  where a build carrying only the subscription and Bedrock kinds fell through to the operator's
+  lanes. Every door — create, Review, a record session and dispatch — checks the run owner's own
+  credential by the provider's kind, and dispatch drops every other model credential before the
+  kind's arm authors its own (`run.injection.dropped`, reason
+  `model_credential_not_provider_authored`, which on a provider run now also carries `provider`;
+  it replaces `not_the_chosen_provider`, `provider_signin_not_dispatch_authored` and
+  `provider_key_not_dispatch_authored`). Subscription and Bedrock refusals now follow #532: the
+  create and Review 422 carries `provider` and `kind`, and `reason: "model_credential"` when the
+  person's own sign-in or key repairs it — not signed in to Claude or to AWS, no Bedrock key, or an
+  AWS sign-in for another pinned account and role or another access portal — as does dispatch's
+  `run.create` row, beside `mechanism`. An install that cannot serve the kind, the admin token, a
+  Bedrock provider with no region or model, and an AWS renewal AWS did not answer carry no reason.
+  A credential that cannot be read answers 503 with the sentence alone at create and Review, not
+  a bare 500. The "not yet available on this build" refusal is gone: every kind has an arm. A
+  person's key for an Anthropic, OpenAI, custom-endpoint or Bedrock key provider resolves through
+  one injection sink (the Bedrock key's own sink used to claim that name first and refuse every
+  key and endpoint run at proxy startup); a Bedrock key is now re-checked against its provider
+  about every 10 minutes too. Review's model-access row no longer says an AWS sign-in never
+  reaches the sandbox, and a record session on a subscription or Bedrock provider says so rather
+  than `api-key`.
 
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0076_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to

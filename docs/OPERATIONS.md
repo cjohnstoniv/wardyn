@@ -2796,7 +2796,7 @@ applies to an integration that delivers no credential header (a data store on
 
 **With a model-provider block set (0.8), none of this section applies.** A model
 run is credentialed by the provider it chose (`enforceRunModelProvider`,
-`internal/api/run_model_provider.go`) from its owner's own key or token, or by
+`internal/api/run_model_provider.go`) from its owner's own key, token or sign-in, or by
 nothing: no integration folds, no managed or host-mounted subscription and no
 operator key serves it, and dispatch drops every other model credential its
 policy carries (`resolveProviderLane`, `internal/api/runs_dispatch_provider.go`).
