@@ -330,7 +330,7 @@ type monotoneStore struct {
 	enf    map[string]bool
 }
 
-func (s *monotoneStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+func (s *monotoneStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string, _ string) ([]types.CapabilityGrant, error) {
 	var out []types.CapabilityGrant
 	for _, g := range s.grants {
 		if (g.SubjectType == types.CapabilitySubjectUser && slices.Contains(users, g.Subject)) ||
@@ -353,6 +353,10 @@ func (s *monotoneStore) ListGroupDenyGrants(_ context.Context, kind string) ([]t
 
 func (s *monotoneStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return s.enf, nil
+}
+
+func (s *monotoneStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 
 // ─── G7: the console's kind mirror cannot drift from the Go table (D10) ──────

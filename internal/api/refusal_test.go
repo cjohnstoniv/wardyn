@@ -123,6 +123,8 @@ var adHocReasonLiterals = map[string]string{
 	"internal.go:run_not_found":                    "identity.renew's own reason, not an authz.denied row",
 	"user_drives_resolve.go:governance_profile":    "a drive's bound_by value on /me",
 	"user_drives_resolve.go:groups_snapshot_stale": "a drive's unavailable reason on /me",
+	"user_drives_resolve.go:user_type_unknown":     "a drive's unavailable reason on /me",
+	"user_view.go:admin_view":                      "the answered detail on the user_view_type_deleted row, not a second authz.denied row",
 }
 
 // roleComparisons counts the == / != comparisons against a stamped admin role

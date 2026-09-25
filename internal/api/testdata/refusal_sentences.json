@@ -20,6 +20,11 @@
     "sentence": "\"requires admin role\" (registry)"
   },
   {
+    "reason": "admin_view",
+    "target": "r.URL.Path",
+    "sentence": "userViewLaunchRefusal(typeID)"
+  },
+  {
     "reason": "attach_ticket_foreign_run",
     "target": "run.ID.String()",
     "sentence": "\"run not found\""
@@ -203,5 +208,15 @@
     "reason": "security_admin_surface",
     "target": "r.URL.Path",
     "sentence": "\"requires admin role\" (registry)"
+  },
+  {
+    "reason": "user_type_unknown",
+    "target": "\"user_type\"",
+    "sentence": "userTypeUnknownMsg"
+  },
+  {
+    "reason": "user_view_type_deleted",
+    "target": "r.URL.Path",
+    "sentence": "userViewTypeDeleted(typeID)"
   }
 ]

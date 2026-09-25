@@ -214,6 +214,8 @@ export const PERM = {
   EFFECT_DENY: "Deny",
   SUBJECT_USER: "User",
   SUBJECT_GROUP: "Group",
+  // 0.8 (user-types design, UT-7a): the chip on a row naming a user type.
+  SUBJECT_USER_TYPE: "User type",
   SUBJECT_ALL: "Everyone signed in",
   PRECEDENCE:
     "A deny always wins — over an allow on the same person, over a group they're in, and over this capability being unenforced.",

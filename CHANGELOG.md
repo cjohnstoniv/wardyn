@@ -80,6 +80,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   groups under the "Your deployment — single-user" heading (the readiness chips above it already
   say "Checking…"). It corrects itself once the status resolves — after a failed read, on the
   next five-minute status poll.
+- **A deleted user type's orphaned subject row could silently rebind to a same-id type created
+  later.** `userTypeSubjectExists`' existence check races a concurrent `DeleteUserType`: a
+  capability grant, governance assignment or drive grant can finish writing just after the type it
+  names was deleted (migration `0076` carries no FK, by design), leaving a row nothing owns.
+  `CreateUserType` now refuses (`409`) an id any of those three tables still names, so the id stays
+  dead until an operator clears the orphan rows themselves, rather than quietly inheriting whatever
+  a later type of the same id is given to (#610).
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
@@ -734,6 +741,39 @@ and does not yet follow semantic versioning (interfaces are not stable).
   inside is windowed. The Go SDK gains `ListGrantsPage`, `ListSSHKeysPage` and
   `ListSecretsPage`, each surfacing the truncation signal the same way `ListRunsPage` does;
   `ListGrants`, `ListSSHKeys` and `ListSecrets` now also accept a `ListOpts` to page.
+- **"Available to": one resource can be limited to the people listed for it (#612).** Migration
+  `0078_capability_restrictions` adds a restricted bit per value of the `workspace`, `image`, `agent`,
+  `integration` and `workspace_provider` kinds, set with `PUT /permissions/availability/{kind}/{value}`
+  (`{"restricted": true}` for "Only…", `false` for Everyone) and read with `GET` on the same path,
+  which also lists the allow rows naming the value. Both are admin or `security_admin`, and each
+  write records a `capability.availability.write` audit row. A restricted value counts as enforced
+  whatever its kind's switch says, and only an allow row naming that value lets a caller in: a `*`
+  allow no longer does, a deny still wins, and security admins are bound like anyone else. On an
+  image, the restriction also switches that one image on for the people listed while `image` stays
+  off for every other one. Turning "Only…" on with no allow row naming the value is refused (`400`).
+  The launch fields, the six git-provider doors and the per-person model sign-in refuse a restricted
+  value; an inline policy's workspace repo is dropped with a warning, as an ungranted one already is.
+- **The user view looks through a chosen user type (#615).** `POST /me/view` with
+  `{"view": "user", "user_type": "<id>"}` puts an admin in the user view as that type: its grants,
+  governance profile, drives and run limits bind exactly as for a person of that type, and the tier
+  stays clamped to `user`. With no type given, the view uses the admin's previous choice (migration
+  `0077_user_view_type` adds `principal_prefs`, so the choice follows them across devices), then
+  their own type, then the built-in one; an unknown type is refused `400`. If the viewed type is
+  deleted, the next request is refused `403` `user_view_type_deleted` (a launch `409` `admin_view`)
+  rather than answered as the admin, and the view turns off; `GET /me` answers the real tier with
+  `user_view_dropped`. A run records the type it was launched as (`agent_runs.user_type`, and
+  `user_type` / `user_view` on `run.create`); the switch is audited as `auth.user_view`.
+- **A user type is a subject (#610).** Migration `0076_user_type_subject` lets a capability
+  grant, a governance assignment and a drive grant name `subject_type: "user_type"` with a type's
+  id. A grant on a type is one more subject beside user and group: an allow lets that type's
+  people in, and a deny is a wall no user or group allow lifts (a `security_admin` of that type
+  included). For the governance ceiling and drives the type is a tier: user > group > user type >
+  all. Writing a row against a type that doesn't exist is refused (`400`). A session whose type
+  was deleted after sign-in is refused `403` wherever a control names a type, with an
+  `authz.denied` row (reason `user_type_unknown`), one per request. API tokens carry no type
+  until #611 stamps them, so until then a token answers as Standard user whatever its holder's
+  type. The governance and drive previews take an optional `user_type`, and the console's
+  Permissions, Governance and Drives tables show a type's rows as "User type".
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away

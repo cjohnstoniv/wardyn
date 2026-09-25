@@ -36,7 +36,7 @@ type countingCapStore struct {
 // unresolvable-group-deny fallback exists. A double that returned every grant
 // regardless would surface the group deny through the ordinary loop and the
 // stale arm below would pass without ever reaching the code it names.
-func (c *countingCapStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+func (c *countingCapStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
 	c.forCalls.Add(1)
 	var out []types.CapabilityGrant
 	for _, g := range c.grants {
@@ -49,6 +49,10 @@ func (c *countingCapStore) ListCapabilityGrantsFor(_ context.Context, users, gro
 			}
 		case types.CapabilitySubjectGroup:
 			if slices.Contains(groups, g.Subject) {
+				out = append(out, g)
+			}
+		case types.CapabilitySubjectUserType:
+			if userType != "" && g.Subject == userType {
 				out = append(out, g)
 			}
 		}
@@ -82,6 +86,10 @@ func (c *countingCapStore) ListGroupDenyGrants(_ context.Context, capability str
 func (c *countingCapStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	c.enfCalls.Add(1)
 	return c.enf, nil
+}
+
+func (c *countingCapStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 func (c *countingCapStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 	return c.workspaces, nil

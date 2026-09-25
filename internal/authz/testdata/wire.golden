@@ -5,6 +5,7 @@ effect allow
 effect deny
 effect hidden
 effect unprocessable
+effect conflict
 obligationkind drop
 reason admin_surface
 reason security_admin_surface
@@ -27,3 +28,6 @@ reason run_terminal
 reason second_human_required
 reason run_quota
 reason capability_model_provider
+reason user_type_unknown
+reason user_view_type_deleted
+reason admin_view

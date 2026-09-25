@@ -25,11 +25,18 @@ package oidc
 //     the design's whole claim — a member-mode admin is still, provably,
 //     themselves.
 
-import "net/http"
+import (
+	"context"
+	"net/http"
+)
 
-// SetMemberMode flips this request's session into or out of "view as member"
-// mode, writes the re-encoded cookie to w, and returns the session's STAMPED
-// role — what the mode pauses.
+// SetUserView flips this request's session into or out of the user view
+// ("view as member" until 0.8), writes the re-encoded cookie to w, and returns
+// the session's STAMPED role — what the view pauses.
+//
+// typeID is the user type the view looks through (Session.UserViewType); the
+// caller has already checked that it exists. It is stored only while the view
+// is on, and any switch clears the deleted-type notice (UserViewDropped).
 //
 // The stamped role is returned rather than left for the caller to re-derive
 // because the caller CANNOT: RoleFromContext is already clamped to member while
@@ -76,7 +83,7 @@ import "net/http"
 // for the same reason the mode bit does — a real member has no credential of
 // their own to hide from themselves, and the doors that key on the preview
 // would refuse them their own sign-in.
-func (a *Authenticator) SetMemberMode(w http.ResponseWriter, r *http.Request, on, noCredential bool) (stampedRole string, err error) {
+func (a *Authenticator) SetUserView(w http.ResponseWriter, r *http.Request, on bool, typeID string, noCredential bool) (stampedRole string, err error) {
 	sess, err := a.decodeSession(r)
 	if err != nil {
 		return "", err
@@ -86,10 +93,45 @@ func (a *Authenticator) SetMemberMode(w http.ResponseWriter, r *http.Request, on
 	}
 	sess.MemberMode = on
 	sess.MemberModeNoCredential = on && noCredential
+	sess.UserViewType = ""
+	if on {
+		sess.UserViewType = typeID
+	}
+	sess.UserViewDropped = ""
 	cookie, err := a.encodeSession(sess)
 	if err != nil {
 		return "", err
 	}
 	http.SetCookie(w, cookie)
 	return sess.Role, nil
+}
+
+// DropUserView turns the user view off because the type it looked through no
+// longer exists: the cookie is re-signed with the view bits cleared and the
+// type recorded in UserViewDropped, so GET /me can say why until the next
+// switch. It returns the request context re-published from the re-signed
+// session, carrying the admin's real tier.
+//
+// Only GET /me may serve its own request from that context. Every other
+// request that meets a deleted type is refused, not re-evaluated: its tier
+// was read once, and switching it to admin halfway would hand a request
+// admitted as a user the operator exemption.
+func (a *Authenticator) DropUserView(w http.ResponseWriter, r *http.Request) (context.Context, error) {
+	sess, err := a.decodeSession(r)
+	if err != nil {
+		return nil, err
+	}
+	if !sess.MemberMode {
+		return r.Context(), nil
+	}
+	sess.UserViewDropped = viewedUserType(sess)
+	sess.MemberMode = false
+	sess.MemberModeNoCredential = false
+	sess.UserViewType = ""
+	cookie, err := a.encodeSession(sess)
+	if err != nil {
+		return nil, err
+	}
+	http.SetCookie(w, cookie)
+	return contextWithPrincipal(r.Context(), sess), nil
 }

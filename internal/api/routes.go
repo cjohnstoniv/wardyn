@@ -725,6 +725,8 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// inside. The no-per-human-role lane (admin token, local mode, no IdP) is
 	// refused inside the handler — a 400, not a tier.
 	r.Post("/me/member-mode", s.handleSetMemberMode)
+	// The user view with a chosen type (user_view.go), on r for the same reason.
+	r.Post("/me/view", s.handleSetUserView)
 }
 
 // mountSecretRoutes mounts secret management: write/delete/list only. Values
@@ -772,6 +774,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Post("/permissions/grants", s.handleUpsertCapabilityGrant)
 	securityOps.Delete("/permissions/grants/{id}", s.handleDeleteCapabilityGrant)
 	securityOps.Put("/permissions/enforcement", s.handlePutCapabilityEnforcement)
+	// The value is the rest of the path: an image ref carries slashes.
+	securityOps.Get("/permissions/availability/{kind}/*", s.handleGetAvailability)
+	securityOps.Put("/permissions/availability/{kind}/*", s.handlePutAvailability)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,

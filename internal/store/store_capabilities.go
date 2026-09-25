@@ -105,7 +105,9 @@ func (s PG) ListGroupDenyGrants(ctx context.Context, capability string) ([]types
 // ListCapabilityGrantsFor returns every grant that could apply to one caller:
 // the `all` rows, plus `user` rows naming any of users (the caller's lowercased
 // sub AND email — a grant on either hits), plus `group` rows naming any of
-// groups (the login-time claim snapshot).
+// groups (the login-time claim snapshot), plus `user_type` rows naming the
+// caller's one type. An empty userType matches no row: the write boundary
+// refuses an empty subject.
 //
 // Deliberately NOT filtered by capability: the resolver needs one kind and
 // GET /me/capabilities needs all four, and a deployment's grant list is small
@@ -117,7 +119,7 @@ func (s PG) ListGroupDenyGrants(ctx context.Context, capability string) ([]types
 // index; a process-local cache is the HA blocker OPERATIONS already names for
 // other state, and a stale permission cache is a security bug, not a slow page.
 // Add one only behind a shared invalidation channel.
-func (s PG) ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+func (s PG) ListCapabilityGrantsFor(ctx context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
 	// A nil Go slice binds as SQL NULL, and `x = ANY(NULL)` is NULL, not false —
 	// harmless here (it fails closed) but it makes the query's behavior depend on
 	// a driver detail. Normalize so the predicate is always a real empty array.
@@ -131,9 +133,10 @@ func (s PG) ListCapabilityGrantsFor(ctx context.Context, users, groups []string)
 		WHERE subject_type = 'all'
 		   OR (subject_type = 'user'  AND subject = ANY($1::text[]))
 		   OR (subject_type = 'group' AND subject = ANY($2::text[]))
+		   OR (subject_type = 'user_type' AND subject = $3)
 		ORDER BY capability, subject_type, subject, value`
 	return collect(ctx, s.Pool, "list", "capability grants for subject", q,
-		[]any{users, groups}, scanCapabilityGrant)
+		[]any{users, groups, userType}, scanCapabilityGrant)
 }
 
 // GetCapabilityEnforcement returns the per-kind switch map. An ABSENT row means
@@ -188,6 +191,48 @@ func (s PG) PutCapabilityEnforcement(ctx context.Context, enabled map[string]boo
 		return nil, fmt.Errorf("store: put capability enforcement: %w", err)
 	}
 	return s.GetCapabilityEnforcement(ctx)
+}
+
+// ListCapabilityRestrictions returns every restricted value, kind -> set. The
+// table holds one row per restricted admin-configured resource, so one read
+// per resolution answers every value it asks about. Never nil.
+func (s PG) ListCapabilityRestrictions(ctx context.Context) (map[string]map[string]bool, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT capability, value FROM capability_restrictions`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list capability restrictions: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]bool{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, fmt.Errorf("store: scan capability restriction: %w", err)
+		}
+		if out[k] == nil {
+			out[k] = map[string]bool{}
+		}
+		out[k][v] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: list capability restrictions: %w", err)
+	}
+	return out, nil
+}
+
+// SetCapabilityRestriction restricts one value (inserts its row, keeping the
+// first writer's provenance) or lifts the restriction (deletes it).
+func (s PG) SetCapabilityRestriction(ctx context.Context, capability, value string, restricted bool, by string) error {
+	q := `DELETE FROM capability_restrictions WHERE capability = $1 AND value = $2`
+	args := []any{capability, value}
+	if restricted {
+		q = `INSERT INTO capability_restrictions (capability, value, created_by) VALUES ($1, $2, $3)
+			ON CONFLICT (capability, value) DO NOTHING`
+		args = append(args, by)
+	}
+	if _, err := s.Pool.Exec(ctx, q, args...); err != nil {
+		return fmt.Errorf("store: set capability restriction: %w", err)
+	}
+	return nil
 }
 
 func scanCapabilityGrant(row pgx.Row) (types.CapabilityGrant, error) {

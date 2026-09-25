@@ -71,6 +71,6 @@ func (s *Server) recordRefusal(ctx context.Context, r *http.Request, d authz.Dec
 
 // refusalEvent builds d's authz.denied row for subject.
 func (s *Server) refusalEvent(ctx context.Context, actor types.ActorType, subject, method string, d authz.Decision) types.AuditEvent {
-	p := authz.Principal{Subject: subject, MemberView: oidc.MemberModeFromContext(ctx)}
+	p := authz.Principal{Subject: subject, MemberView: oidc.MemberModeFromContext(ctx), UserType: oidc.UserTypeFromContext(ctx)}
 	return s.auditEvent(d.RunID, actor, subject, authz.AuditAction, d.Target, "denied", mustJSON(authz.Datum(d, p, method)))
 }

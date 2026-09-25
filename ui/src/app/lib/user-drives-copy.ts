@@ -294,11 +294,12 @@ export const DRIVES = {
   PREVIEW_LEAD: "Paste the roles, groups, or email a person's token would carry, and see which drive and directory they would mount.",
   PREVIEW_CTA: "Preview",
   PREVIEW_NONE: "No drive is allocated to these claims.",
-  // {tier} is one of the three PREVIEW_TIER_* words, frozen in the table
+  // {tier} is one of the four PREVIEW_TIER_* words, frozen in the table
   // rather than in prose (the governance round's MATCHED_* lesson).
   PREVIEW_RESULT: (drive: string, tier: string) => `"${drive}" via the ${tier} allocation`,
   PREVIEW_TIER_USER: "user",
   PREVIEW_TIER_GROUP: "group",
+  PREVIEW_TIER_USER_TYPE: "user type",
   PREVIEW_TIER_ALL: "everyone",
   PREVIEW_OBJECT_LABEL: "Storage object",
   PREVIEW_OBJECT_HINT: "What the reclaim command names — copy it when someone leaves.",

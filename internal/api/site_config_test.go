@@ -280,6 +280,10 @@ type fakeSiteConfigStore struct {
 	putSeen *types.SiteConfig
 }
 
+func (s *fakeSiteConfigStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 func (s *fakeSiteConfigStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	if s.getErr != nil {
 		return types.SiteConfig{}, s.getErr
@@ -298,7 +302,7 @@ func (s *fakeSiteConfigStore) PutSiteConfig(_ context.Context, cfg types.SiteCon
 
 // The grant reads a member's per-person lists make (capVisible): no rows, so
 // every row is offered, as on a deployment that adopted no grants.
-func (s *fakeSiteConfigStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (s *fakeSiteConfigStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 

@@ -14,7 +14,7 @@ import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-pa
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
-// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 145
+// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 146
 // keys. A swapped hyphen, a dropped ellipsis, a reworded clause, a new doc
 // row or a deleted one all fail here rather than shipping.
 //
@@ -65,7 +65,7 @@ const SIZE_HELPERS = ["SIZE_MIB(n)", "SIZE_GIB(n)"];
 const NAMESPACES: Record<string, unknown>[] = [DRIVES, DRIVE_MEMBER, DRIVE_RUN];
 
 // ONE lookup across the three namespaces is safe because none of their keys
-// collide (121 / 22 / 2); the completeness test below is what keeps that true.
+// collide (122 / 22 / 2); the completeness test below is what keeps that true.
 const render = (docKey: string) => renderFromNamespaces(docKey, NAMESPACES);
 
 // The six keys that cannot go through the placeholder path get their own tests
@@ -74,8 +74,8 @@ const EXCLUDED = [...PLURALISED, ...SIZE_HELPERS];
 const RENDERABLE = [...doc.keys()].filter((k) => !EXCLUDED.includes(k));
 
 describe("user-drives-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 145 frozen keys in the doc", () => {
-    expect(doc.size).toBe(145);
+  it("finds all 146 frozen keys in the doc", () => {
+    expect(doc.size).toBe(146);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {

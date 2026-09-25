@@ -238,7 +238,7 @@ type capKind struct {
 	hostSet bool
 	// restrictable: an "Available to" list may restrict one value of this kind
 	// (user-types design 2.6: the admin-configured resources a person is
-	// offered). Read by UT-10's step 3; nothing reads it yet.
+	// offered). Read by capBatch.decide's step 3 and the availability write.
 	restrictable bool
 	// gatesAdminPins: the kind also bounds a value an ADMIN pinned, not only the
 	// member's own choice. False for the first seven — "a capability bounds what
@@ -450,8 +450,10 @@ type capBatch struct {
 	operator bool
 	noStore  bool
 
-	users, groups []string
-	stale         bool
+	// subj is the caller's subjects (callerSubjects), read with the grants —
+	// never before, so a question no grant can settle performs no read and an
+	// unknown user type fails exactly the questions that consult the rows.
+	subj callerSubjects
 
 	// byKind indexes the caller's grants by capability, built ONCE — so a spec
 	// asking about N egress hosts does not pay O(N x every grant the caller
@@ -462,6 +464,11 @@ type capBatch struct {
 	enfLoaded bool
 	enf       map[string]bool
 
+	// restricted is capability_restrictions (kind -> restricted values), read
+	// at most once, and only when a restrictable kind's answer depends on it.
+	restrictLoaded bool
+	restricted     map[string]map[string]bool
+
 	// groupDeny memoizes ListGroupDenyGrants PER KIND — the narrow read, not the
 	// full table. A map because the store call is keyed by capability and a
 	// resolution can ask about more than one (egress_host, then secret).
@@ -469,11 +476,9 @@ type capBatch struct {
 }
 
 // newCapBatch snapshots the store-free inputs decide needs before it ever
-// reads: the operator bit, the nil-Store bit and the caller's subjects.
+// reads: the operator bit and the nil-Store bit.
 func (s *Server) newCapBatch(ctx context.Context) *capBatch {
-	b := &capBatch{s: s, noStore: s.cfg.Store == nil, operator: s.isOperator(ctx)}
-	b.users, b.groups, b.stale = capabilitySubjects(ctx)
-	return b
+	return &capBatch{s: s, noStore: s.cfg.Store == nil, operator: s.isOperator(ctx)}
 }
 
 // capBatchKey carries one resolution's batch: the ownedSecretMemo pattern, a
@@ -522,7 +527,9 @@ func (b *capBatch) allowed(ctx context.Context, kind, value string) (bool, error
 //  1. Admin, admin token and local mode are EXEMPT: a capability bounds a
 //     member; the admin tier is the one writing the grants.
 //  2. An overlapping DENY ⇒ Deny.
-//  3. (Reserved, UT-10: a restricted value makes the kind count as enforced.)
+//  3. A RESTRICTED value ("Available to: Only...") makes the kind count as
+//     enforced for that value, and only an allow naming the value itself
+//     lets a caller in — a wildcard allow does not list anyone.
 //  4. Widening && !enforced ⇒ Deny.
 //  5. A matching ALLOW ⇒ Allow.
 //  6. Narrowing && !enforced ⇒ Allow. An absent enforcement row is a
@@ -571,8 +578,9 @@ func (r *capRead) steps(ctx context.Context, widening bool) bool {
 	if !(widening && !r.enforced(ctx)) && r.denied(ctx) {
 		return false
 	}
-	// 3. Reserved for UT-10 (#612): a restricted value makes the kind count as
-	// enforced. It lands once, in capRead.enforced, so steps 2, 4 and 6 all see it.
+	// 3. A restricted value makes the kind count as enforced. It lives in
+	// capRead.enforced, so steps 2, 4 and 6 all see it, and step 5 asks
+	// capRead.granted for an allow naming the value itself.
 
 	// 4. Widening && !enforced.
 	if widening && !r.enforced(ctx) {
@@ -590,19 +598,39 @@ func (r *capRead) steps(ctx context.Context, widening bool) bool {
 	return false
 }
 
-// enforced reports whether the kind's switch is on. An absent row is off.
+// enforced reports whether the kind's switch is on, or (step 3) the value is
+// restricted. An absent row is off; the restriction is read only when the
+// switch alone does not already answer.
 func (r *capRead) enforced(ctx context.Context) bool {
 	if r.err != nil {
 		return false
 	}
 	var on bool
 	on, r.err = r.b.enforced(ctx, r.kind)
-	// UT-10 (step 3): `on = on || <value is restricted>` goes here.
-	return on
+	if r.err == nil && !on {
+		on, r.err = r.b.isRestricted(ctx, r.kind, r.value)
+	}
+	return on && r.err == nil
 }
 
-func (r *capRead) denied(ctx context.Context) bool  { r.scan(ctx); return r.deny }
-func (r *capRead) granted(ctx context.Context) bool { r.scan(ctx); return r.allow }
+func (r *capRead) denied(ctx context.Context) bool { r.scan(ctx); return r.deny }
+
+// granted is step 5. On a restricted value only an allow naming the value
+// counts: "Only..." lists who gets it, and a wildcard allow written for the
+// whole kind lists nobody in particular. The restriction is read only when
+// the allow that matched is a wildcard.
+func (r *capRead) granted(ctx context.Context) bool {
+	r.scan(ctx)
+	if !r.allow || r.err != nil || r.b.namedAllow(r.kind, r.value) {
+		return r.allow && r.err == nil
+	}
+	restricted, err := r.b.isRestricted(ctx, r.kind, r.value)
+	if err != nil {
+		r.err = err
+		return false
+	}
+	return !restricted
+}
 
 func (r *capRead) scan(ctx context.Context) {
 	if r.scanned || r.err != nil {
@@ -624,6 +652,34 @@ func (b *capBatch) enforced(ctx context.Context, kind string) (bool, error) {
 	return b.enf[kind], nil
 }
 
+// isRestricted reads capability_restrictions once per batch and reports
+// whether value is restricted. A kind that cannot be restricted never reads.
+func (b *capBatch) isRestricted(ctx context.Context, kind, value string) (bool, error) {
+	if !capKinds[kind].restrictable {
+		return false, nil
+	}
+	if !b.restrictLoaded {
+		rs, err := b.s.cfg.Store.ListCapabilityRestrictions(ctx)
+		if err != nil {
+			return false, fmt.Errorf("api: read capability restrictions: %w", err)
+		}
+		b.restricted, b.restrictLoaded = rs, true
+	}
+	return b.restricted[kind][strings.TrimSpace(value)], nil
+}
+
+// namedAllow reports whether the caller holds an allow naming value itself,
+// not a wildcard. Asked only after scan loaded the grants; restrictable kinds
+// are exact ids, so the compare is capValueMatches' exact arm.
+func (b *capBatch) namedAllow(kind, value string) bool {
+	for _, g := range b.byKind[kind] {
+		if g.Effect == types.CapabilityAllow && strings.TrimSpace(g.Value) == strings.TrimSpace(value) {
+			return true
+		}
+	}
+	return false
+}
+
 // scan walks the caller's own grants of one kind and reports whether a DENY
 // overlaps value and/or an ALLOW covers it — the single place a stored row is
 // compared against a request.
@@ -639,10 +695,17 @@ func (b *capBatch) enforced(ctx context.Context, kind string) (bool, error) {
 // deny nobody could evaluate.
 func (b *capBatch) scan(ctx context.Context, kind, value string) (deny, allow bool, err error) {
 	if b.byKind == nil {
-		grants, err := b.s.cfg.Store.ListCapabilityGrantsFor(ctx, b.users, b.groups)
+		// An unknown user type fails the read, never resolving it without the
+		// type (callerSubjects).
+		subj, err := b.s.callerSubjects(ctx)
+		if err != nil {
+			return false, false, err
+		}
+		grants, err := b.s.cfg.Store.ListCapabilityGrantsFor(ctx, subj.users, subj.groups, subj.userType)
 		if err != nil {
 			return false, false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
 		}
+		b.subj = subj
 		b.byKind = make(map[string][]types.CapabilityGrant, len(capabilityKinds))
 		for _, g := range grants {
 			b.byKind[g.Capability] = append(b.byKind[g.Capability], g)
@@ -661,7 +724,7 @@ func (b *capBatch) scan(ctx context.Context, kind, value string) (deny, allow bo
 			allow = true
 		}
 	}
-	if b.stale {
+	if b.subj.stale {
 		unresolved, err := b.unresolvableGroupDeny(ctx, kind, value)
 		if err != nil {
 			return false, false, err

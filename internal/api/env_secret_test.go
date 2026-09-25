@@ -154,7 +154,7 @@ type envSecretCeilingStore struct {
 	policy  types.RunPolicy
 }
 
-func (s *envSecretCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *envSecretCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if s.profile == nil {
 		return nil, types.CapabilitySubjectUser, store.ErrNotFound
 	}
@@ -178,11 +178,15 @@ func (s *envSecretCeilingStore) ListCapabilityGrants(context.Context) ([]types.C
 func (s *envSecretCeilingStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
-func (s *envSecretCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (s *envSecretCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (s *envSecretCeilingStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, nil
+}
+
+func (s *envSecretCeilingStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 
 // TestEnvSecretPosture_BindsWithoutAGovernanceAssignment is the pin for the

@@ -345,6 +345,12 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 		}
 		a.Subject = subject
+	} else if a.SubjectType == types.CapabilitySubjectUserType {
+		// Verbatim, as validateCapabilityGrant keeps it: a type id is never
+		// folded, and existence is the handler's check.
+		if !oidc.UserTypeIDWellFormed(a.Subject) {
+			return fmt.Errorf("subject: %q is not a user type id", a.Subject)
+		}
 	} else {
 		// The USER half is canonicalUserSubject for the same guard-before-fold
 		// reason (capabilities.go): a bare ToLower folds U+212A onto ASCII 'k'
@@ -379,6 +385,9 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 	}
 	if err := validateGovernanceAssignment(&a); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid assignment: "+err.Error())
+		return
+	}
+	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
 		return
 	}
 	a.ID = uuid.New()
@@ -463,6 +472,8 @@ const maxGovernancePreviewClaims = 256
 type governancePreviewRequest struct {
 	UserSubjects []string `json:"user_subjects,omitempty"`
 	Groups       []string `json:"groups,omitempty"`
+	// UserType is the previewed person's type id; "" previews no type tier.
+	UserType string `json:"user_type,omitempty"`
 }
 
 // governancePreviewResponse names the profile that would bind a principal
@@ -520,7 +531,7 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups)
+	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups, strings.TrimSpace(req.UserType))
 	if errors.Is(err, store.ErrNotFound) || (err == nil && p == nil) {
 		writeJSON(w, http.StatusOK, governancePreviewResponse{})
 		return
@@ -648,7 +659,8 @@ const groupsSnapshotStaleMsg = "groups_snapshot_stale: your group membership sna
 	"and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved"
 
 // writeCeilingError answers an effectiveCeiling failure at an HTTP site: 403
-// for the stale/truncated snapshot, 500 for everything else.
+// for the stale/truncated snapshot or an unknown user type, 500 for everything
+// else.
 //
 // 500 is the point for the everything-else arm. A store failure means the
 // ceiling is unknown, and the adjacent GetSiteConfig idiom — log it, carry on
@@ -694,7 +706,7 @@ func writeCeilingErrorPrefixed(w http.ResponseWriter, r *http.Request, prefix st
 // One mapping, so a resolver failure cannot answer 403 at one site and 500 at
 // the next for the same cause.
 func ceilingErrorStatus(err error) int {
-	if errors.Is(err, errGroupsSnapshotStale) {
+	if errors.Is(err, errGroupsSnapshotStale) || errors.Is(err, errUserTypeUnknown) {
 		return http.StatusForbidden
 	}
 	return http.StatusInternalServerError
@@ -780,30 +792,37 @@ func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling
 		return deployment, nil
 	}
 
-	users, groups, stale := capabilitySubjects(ctx)
+	subj, err := s.callerSubjects(ctx)
+	if err != nil {
+		return governanceCeiling{}, err
+	}
 	// Truncated counts as stale. sessionGroups sorts the snapshot and
 	// drops its alphabetically-last entries at the cookie byte cap, so a member
 	// in enough groups holds a snapshot that is present, non-nil and INCOMPLETE
 	// — and the group whose assignment walls them is exactly as likely to be
 	// missing as any other. Without this the tier evaporates in silence: no
 	// refusal, no audit, just the deployment ceiling.
-	if stale || oidcGroupsTruncatedFromContext(ctx) {
+	if subj.stale || oidcGroupsTruncatedFromContext(ctx) {
 		// The unusable half must not be MATCHED against. Passing a truncated
 		// list would still let a surviving group's row win, which is not wrong
 		// on its own — but it makes the refusal below depend on which groups
 		// happened to fit, so the same human with the same claims could be
 		// refused or served depending on alphabetical luck. Resolve on the
 		// answerable identity only, and let the refusal cover the rest.
-		return s.ceilingWithUnusableGroups(ctx, users, deployment)
+		return s.ceilingWithUnusableGroups(ctx, subj.users, subj.userType, deployment)
 	}
 
-	p, _, err := s.cfg.Store.ResolveGovernanceProfile(ctx, users, groups)
+	p, _, err := s.cfg.Store.ResolveGovernanceProfile(ctx, subj.users, subj.groups, subj.userType)
 	return s.ceilingFromProfile(p, err, deployment)
 }
 
 // ceilingWithUnusableGroups is effectiveCeiling's step 4: the caller's group
 // identity cannot be evaluated, so resolve on their user subjects alone and
 // decide whether that answer is trustworthy anyway.
+//
+// The user type is answerable (it is stamped, not a snapshot), so it is matched;
+// but its tier sits BELOW group, so a type-tier winner is untrustworthy for the
+// same reason an all-tier one is — a group row could have outranked it.
 //
 // It is trustworthy in exactly two shapes, and the scoping is the whole point
 // (a blanket 403 here would lock out every pre-0.6 cookie on every deployment,
@@ -823,8 +842,8 @@ func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling
 // HasGroupTierAssignments stays a SEPARATE read, deliberately: the case that
 // most needs it is the one where the resolver matched NOTHING, and a zero-row
 // result carries no columns to have piggybacked the answer on.
-func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, deployment governanceCeiling) (governanceCeiling, error) {
-	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(ctx, users, nil)
+func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, userType string, deployment governanceCeiling) (governanceCeiling, error) {
+	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(ctx, users, nil, userType)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return governanceCeiling{}, fmt.Errorf("api: resolve governance profile: %w", err)
 	}

@@ -325,6 +325,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// below instead (AgentRun.ModelProviderID's own doc explains why).
 		// mpChoice.provider.ID is "" when mpChoice.chosen is false.
 		ModelProviderID: mpChoice.provider.ID,
+		UserType:        runCreatorUserType(ctx),
 	}
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)
@@ -404,7 +405,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Mechanism)
 
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice))))
+		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)))))
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
 	if !mpChoice.chosen {

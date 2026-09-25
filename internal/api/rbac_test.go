@@ -88,13 +88,19 @@ func rbacServer(t *testing.T, operatorEmails ...string) *Server {
 // /me and audit attribution.
 func ssoSession(t *testing.T, sub, email, role string) *http.Cookie {
 	t.Helper()
+	return ssoSessionOfType(t, sub, email, role, types.UserTypeStandard)
+}
+
+// ssoSessionOfType is ssoSession stamped with a chosen user type.
+func ssoSessionOfType(t *testing.T, sub, email, role, userType string) *http.Cookie {
+	t.Helper()
 	// V is stamped explicitly because this helper hand-rolls the payload rather
 	// than going through oidc's own encodeSession: decodeSession refuses any
 	// other version outright (the PF-26 codec bump), so an unstamped cookie here
 	// would look like a pre-0.7 one and every SSO test would silently fall
 	// through to the admin-token path.
 	payload, err := json.Marshal(oidc.Session{
-		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role, UserType: "standard",
+		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role, UserType: userType,
 		Expiry: time.Now().UTC().Add(time.Hour),
 	})
 	if err != nil {

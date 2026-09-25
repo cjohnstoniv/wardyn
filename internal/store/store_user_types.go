@@ -27,6 +27,17 @@ const userTypeRowRefs = `(
 	(SELECT count(*) FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) +
 	(SELECT count(*) FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1))`
 
+// userTypeRowRefsExist is userTypeRowRefs' boolean twin, read by CreateUserType
+// alone: a subject row can outlive the type it names (userTypeSubjectExists'
+// own check-then-insert race against a concurrent DeleteUserType), and that
+// orphan would silently rebind to a later type created with the same id. This
+// refuses to recreate an id any subject row still names, so the id stays dead
+// until an operator clears the orphan rows themselves.
+const userTypeRowRefsExist = `(
+	EXISTS (SELECT 1 FROM capability_grants      WHERE subject_type = 'user_type' AND subject = $1) OR
+	EXISTS (SELECT 1 FROM governance_assignments WHERE subject_type = 'user_type' AND subject = $1) OR
+	EXISTS (SELECT 1 FROM user_drive_grants      WHERE subject_type = 'user_type' AND subject = $1))`
+
 // ListUserTypes returns every type: the built-in first, then by priority
 // (highest first) and name.
 func (s PG) ListUserTypes(ctx context.Context) ([]types.UserType, error) {
@@ -41,13 +52,21 @@ func (s PG) GetUserType(ctx context.Context, id string) (types.UserType, error) 
 }
 
 // CreateUserType inserts a custom type. ErrConflict when the id or the name is
-// taken. built_in is never written: the only built-in row is the seeded one.
+// taken, or the id is still named by an orphaned subject row (see
+// userTypeRowRefsExist). built_in is never written: the only built-in row is
+// the seeded one.
 func (s PG) CreateUserType(ctx context.Context, t types.UserType) (types.UserType, error) {
 	const q = `
 		INSERT INTO user_types (id, name, description, priority, created_by)
-		VALUES ($1,$2,$3,$4,$5)
+		SELECT $1, $2, $3, $4, $5
+		WHERE NOT ` + userTypeRowRefsExist + `
 		RETURNING ` + userTypeCols
-	out, err := scanUserType(s.Pool.QueryRow(ctx, q, t.ID, t.Name, t.Description, t.Priority, t.CreatedBy))
+	var out types.UserType
+	err := s.Pool.QueryRow(ctx, q, t.ID, t.Name, t.Description, t.Priority, t.CreatedBy).Scan(
+		&out.ID, &out.Name, &out.Description, &out.Priority, &out.BuiltIn, &out.CreatedAt, &out.UpdatedAt, &out.CreatedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return types.UserType{}, ErrConflict
+	}
 	return out, uniqueConflict(err)
 }
 

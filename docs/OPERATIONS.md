@@ -1791,7 +1791,21 @@ the grants (or the targeted denies) first, then flip the switch.
 a grant shouldn't have to guess which the IdP made authoritative; a deny on either
 identity hits), `group` (the login-time union of the ID token's `roles` and
 `groups` claims, lowercased and deduped — so Entra App Roles are grantable for
-free), or `all` (every signed-in human).
+free), `user_type` (everyone of one user type, named by the type's id — 0.8), or
+`all` (every signed-in human).
+
+A person holds exactly one user type, stamped at sign-in, so a `user_type` row is
+one more subject in the union above: a type **allow** is one more way in, and a
+type **deny** is a wall no user or group allow lifts for anyone of that type. A
+security admin of that type is bound by it like anyone else; only a super admin
+is exempt. The type must exist when the row is written (`400` otherwise), and a
+type cannot be deleted while any grant, governance assignment or drive grant
+names it. For the governance ceiling and user drives the type is a **tier**,
+not a union: `user > group > user_type > all`, so a group assignment overrides
+the type's profile and the type's profile overrides `all`. An API token carries
+no type yet and answers as the built-in `standard` type. A session whose type
+was deleted after sign-in is refused (`403`, `user_type_unknown`) wherever a
+control names a type, never resolved without it.
 
 A `group` subject must be **printable ASCII**, and the write is refused with that
 reason when it is not — the same rule a console role mapping already gets. The
@@ -1935,7 +1949,7 @@ does not have. If the grant tables cannot be read, those lists come back empty
 rather than unfiltered. Admins are exempt, as at every door; a `security_admin`
 is bounded like a member.
 
-**Managing them** (the four `/permissions` rows are `securityOps` — admin or
+**Managing them** (the six `/permissions` rows are `securityOps` — admin or
 `security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities`
 is member-safe):
 
@@ -1945,6 +1959,8 @@ is member-safe):
 | `POST /permissions/grants` | upsert one grant on its natural key (`201` new, `200` updated) |
 | `DELETE /permissions/grants/{id}` | remove one grant |
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
+| `GET /permissions/availability/{kind}/{value}` | one resource's "Available to": `restricted`, and `allowed_by`, the allow rows naming it |
+| `PUT /permissions/availability/{kind}/{value}` | `{"restricted": true}` turns on "Only…" for one resource, `false` turns it back to Everyone |
 | `GET /access` | the merged role-mapping table (chart + console rows, with collision/shadow provenance) plus the same before/after/changes posture the write guards below evaluate |
 | `POST /access/mappings` | upsert one console role mapping on its natural key (`value`) — `201` new, `200` updated; refused on a chart/operator-allowlist collision, an unmatched-outcome flip without `acknowledge_access_change`, or a write that would remove the caller's own admin access |
 | `DELETE /access/mappings/{id}` | remove one console role mapping — same flip/lockout guards as the write above |
@@ -1959,8 +1975,23 @@ enforcement map alone, not the grant table) can be sent back as this `PUT`'s
 `If-Match`: a document that changed underneath a stale tab is refused `412`.
 `If-Match` is optional, and the write is audited either way.
 
-Writes are audited as `capability.grant.created` / `.updated` / `.deleted` and
-`capability.enforcement.write`. Enforcement lives in its own table rather than in
+**"Available to" (0.8).** `workspace`, `image`, `agent`, `integration` and
+`workspace_provider` values can each be restricted one at a time (migration
+`0078_capability_restrictions`). A restricted value counts as enforced whatever
+its kind's switch says, and only a caller holding an allow row that names the
+value itself gets it: a `*` allow lists nobody, and a deny still wins. So the
+"Only…" list is the allow rows for that value, written through
+`POST /permissions/grants` for a person, a group or a user type. Security admins
+are bound like anyone; only the admin tier is exempt. On `image`, the one
+widening kind, the restriction also switches that one image on for the people
+listed while the kind stays off for every other image. Turning "Only…" on with
+no allow row naming the value is refused `400`, since the resource would then be
+available to nobody. `egress_host` and `secret` values can't be restricted
+(`400`). The value is the rest of the path, so an image ref's slashes need no
+escaping.
+
+Writes are audited as `capability.grant.created` / `.updated` / `.deleted`,
+`capability.enforcement.write` and `capability.availability.write`. Enforcement lives in its own table rather than in
 SiteConfig because `PUT /site-config` is a full replace: a stale client
 round-tripping an older document could otherwise silently disable an authorization
 control. There is **no cache** — resolution is two indexed reads per check, so a
@@ -2174,7 +2205,7 @@ member can change is what the profile leaves open; what they can ask for is an
 escalation on the Approvals page.
 
 **Governance profiles.** One profile per subject; when several match, the most
-specific wins (user beats group beats everyone; priority breaks group ties) — the
+specific wins (user beats group beats user type beats everyone; priority breaks group ties) — the
 Governance page shows the resolved answer, and `GET /policies/default` returns the
 ceiling that actually binds the caller. A profile replaces the deployment ceiling
 for its subjects; deleting one requires unassigning it first (never a silent
@@ -2280,6 +2311,7 @@ admin walking the member path, not an incident.
 | `reason` | Raised when | Shape |
 |---|---|---|
 | `admin_surface` | a member requested an admin-only route (`requireOperator`) | ⛔ `403` |
+| `admin_view` | an admin in the user view launched a run (`POST /runs` or `POST /runs/preflight`) after the type the view looks through was deleted. Not audited on its own — the cause row is `user_view_type_deleted`, which the launch response answered; see that row for the shape and the marker | ⛔ `409` |
 | `security_admin_surface` | a member requested a route on the SECURITY tier (`requireSecurityOperator` — admin or `security_admin`), and also raised in-handler by `resolveAlwaysTarget` for `decision_scope=always` on a route that lives on the member group — the same predicate on a route a member may legally reach. The `403` body is byte-identical to `admin_surface`'s on purpose, so a refusal never maps which tier a route sits on; only this reason distinguishes them, which is what lets a rule tell "a member hit an admin route" from "a member hit a security-tier route" | ⛔ `403` |
 | `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | ⛔ `404` (byte-identical to missing) |
 | `attach_ticket_foreign_run` | a caller who is not the super admin — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
@@ -2299,6 +2331,8 @@ admin walking the member path, not an incident.
 | `harness_login_not_per_user` | 0.7.2: `POST /setup/harness-login` by a member when the agent's model credential is NOT a `per_user` row (`authorizeHarnessLogin`, `internal/api/harnesscred.go`) — the deployment's credential is one an admin connects for everyone, so there is no personal sign-in to capture. Target `setup.harness_login`. Emitted since 0.7.2 and missing from this table until 0.8 | ⛔ `403` |
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
+| `user_type_unknown` | 0.8: the user type stamped on the caller's session no longer exists (it was deleted after they signed in). Every control that names a type refuses rather than resolving without it — the capability resolvers, the governance ceiling and the drive resolver — at target `user_type`, with the missing id as the `user_type` datum. Written once per request, however many of those controls refuse it, and not for a display read (`GET /me`). The body is the sentence `Your user type no longer exists…`, whose remedy is an admin's (give the person another type) and then the person's (sign in again) | ⛔ `403` |
+| `user_view_type_deleted` | 0.8: an admin in the user view made a request after the user type the view looks through was deleted. The request is refused — never answered as the admin, because its tier was already read as `user` — and the session's view is turned off on the cookie, so the next request is in the Admin view. The body is `The <type> user type was removed, so you're back in the Admin view…`; `POST /runs` and `POST /runs/preflight` answer `409` with `reason` `admin_view` instead. The row carries `member_mode: true` and the deleted `user_type`. `GET /me` is never refused: it drops back and says so (`user_view_dropped`) | ⛔ `403` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
 whose whole allowlist is ungranted gets a run with no member-authored egress, not
@@ -2401,6 +2435,21 @@ mode, or the admin token with no identity provider) it only changes the URL:
 that is one shared credential with no per-person role to pause, so nothing is
 clamped or POSTed, and `POST /me/member-mode` answers those callers `400` if
 called directly.
+
+**Viewing as a user type (0.8).** `POST /me/view` with `{"view": "user",
+"user_type": "<id>"}` enters the user view looking through that type: its
+grants, governance profile, drives and run limits bind you exactly as they bind
+a person of that type, beside your own user and group rows, while the tier stays
+clamped to `user` so no admin route opens whatever the type. With no
+`user_type`, the view uses your previous choice (remembered per person, so it
+follows you across devices), then your own mapped type, then the built-in one.
+`{"view": "admin"}` exits. `POST /me/member-mode` still works and uses the same
+default type. A run launched in the view records the type (`user_type` on the
+run and on its `run.create` row, with `user_view: true`). If the type is deleted
+while you are viewing as it, your next request is refused (`403`
+`user_view_type_deleted`, or `409` `admin_view` on a launch) and the view turns
+off; `GET /me` instead answers as your real tier with `user_view_dropped`
+naming the type.
 
 **The no-credential preview — "Preview as a new user".** The Permissions page
 header offers **Preview as a new user**. It is the User view plus one thing: your OWN captured AWS SSO session reads as

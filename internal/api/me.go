@@ -105,6 +105,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			s.memberPreviewApplies(r.Context(), r),
 	}
 	body["user_type"] = s.meUserType(r)
+	// The type whose deletion turned the user view off, until the next
+	// switch: the console says why it is back in the Admin view.
+	body["user_view_dropped"] = meUserViewDropped(r.Context())
 	// The AddWorkspaceDialog root-constraint hint (member-role-desktop.md
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for
 	// an operator (the dialog never renders the hint for one) and for a member
@@ -192,9 +195,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// that could not answer. userDriveDeniedByProfile now returns that
 		// reason instead of a bool, so the token survives from whichever
 		// resolver actually met it.
-		if unavailable == driveUnavailableGroups || doorReason == driveUnavailableGroups {
+		// The unknown user type survives the same way, for the same reason: its
+		// remedy (another type, then sign in again) is not "wait for an operator".
+		switch {
+		case unavailable == driveUnavailableGroups || doorReason == driveUnavailableGroups:
 			unavailable = driveUnavailableGroups
-		} else {
+		case unavailable == driveUnavailableUserType || doorReason == driveUnavailableUserType:
+			unavailable = driveUnavailableUserType
+		default:
 			unavailable = driveUnavailableGovernance
 		}
 	}

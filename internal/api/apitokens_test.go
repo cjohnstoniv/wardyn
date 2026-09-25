@@ -222,7 +222,7 @@ func TestAPITokenAuth_ContextParityWithSession(t *testing.T) {
 		t.Fatal("token auth never reached the next handler")
 	}
 
-	want := withHumanIdentity(context.Background(), row.Principal, row.Email, row.Role, row.Groups, false)
+	want := withHumanIdentity(context.Background(), row.Principal, row.Email, row.Role, "", row.Groups, false)
 	if a, b := oidcHumanFromContext(got), oidcHumanFromContext(want); a != b {
 		t.Errorf("sub = %q, want %q", a, b)
 	}

@@ -105,7 +105,8 @@ export interface Me {
   // again), "unmountable" (an allocation exists and an admin must fix its
   // directory name), "unavailable" (the allocation could not be read), and
   // "governance_unavailable" (the ceiling could not be read, so whether the
-  // door is open is unknown — the allocation is withheld with it).
+  // door is open is unknown — the allocation is withheld with it), and
+  // "user_type_unknown" (the caller's user type was deleted after sign-in).
   //
   // Non-empty means the drive affordance must NOT be offered: the server has
   // not said the mount would work. Rendering the remedy in its place is a copy
