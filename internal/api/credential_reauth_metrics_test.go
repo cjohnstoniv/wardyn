@@ -127,6 +127,48 @@ func TestCredentialReauthMetrics_TimeoutCountedAtTheDecisionIngest(t *testing.T)
 	}
 }
 
+// The proxy writes the SAME credential:reauth-timeout rule source for an Azure
+// DevOps sign-in hold that ran out (ado_hold.go's adoCredentialRefusalFor), on
+// the Azure DevOps host itself. wardyn_credential_reauth_total's HELP promises
+// the AWS SSO re-auth population alone (#971), so that decision must not move
+// the series — only a non-Azure-DevOps host (the AWS/model-provider lane) does.
+func TestCredentialReauthMetrics_TimeoutCountsOnlyTheAWSLane(t *testing.T) {
+	h := newHarness(t)
+	srv := h.srv
+	runID := uuid.New()
+	tok := h.mintRunToken(t, runID)
+
+	post := func(host string) {
+		t.Helper()
+		body, err := json.Marshal(egress.DecisionLog{
+			Request:    egress.Request{Host: host, Port: 443, Method: http.MethodGet},
+			Decision:   egress.Deny,
+			RuleSource: ruleSourceCredentialReauthTimeout,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, string(body)); w.Code >= 300 {
+			t.Fatalf("post decision for host %s: code = %d; body=%s", host, w.Code, w.Body.String())
+		}
+	}
+
+	for _, host := range []string{"dev.azure.com", "myorg.visualstudio.com"} {
+		before := reauthCount(t, srv, "timeout")
+		post(host)
+		if after := reauthCount(t, srv, "timeout"); after != before {
+			t.Errorf("an Azure DevOps sign-in timeout (host=%s) moved the timeout label (%s -> %s) — "+
+				"the series is the AWS SSO re-auth population alone", host, before, after)
+		}
+	}
+
+	before := reauthCount(t, srv, "timeout")
+	post("portal.sso.eu-west-2.amazonaws.com")
+	if after := reauthCount(t, srv, "timeout"); after == before {
+		t.Errorf("an AWS SSO timeout did not move the timeout label (%s -> %s)", before, after)
+	}
+}
+
 // metricValue reads a single unlabelled counter out of the scrape.
 func metricValue(t *testing.T, s *Server, name string) string {
 	t.Helper()
@@ -264,8 +306,8 @@ func TestApprovalTallyKeyAgreesWithTheLanes(t *testing.T) {
 		t.Fatal("fixture: the consent row is not one adoConsentScope accepts")
 	}
 	// The AWS raise's own scope shape (holdOrRefuseCredentialReauth).
-	aws := mk(types.ApprovalCredentialReauth, map[string]string{
-		"mechanism": string(types.AgentMechanismBedrockSSO), "credential_source": string(types.CredentialSourcePerUser), "owner": "alice",
+	aws := mk(types.ApprovalCredentialReauth, awsSSOReauthScopeBody{
+		Mechanism: string(types.AgentMechanismBedrockSSO), CredentialSource: string(types.CredentialSourcePerUser), Owner: "alice",
 	}, nil)
 	if !reauthResolvableBy(types.ApprovalRequest{Kind: aws.Kind, State: types.ApprovalPending, RequestedScope: aws.RequestedScope},
 		awsSSOScope{perUser: true, owner: "alice"}, types.AgentRun{CreatedAt: time.Now().Add(time.Hour)}) {

@@ -116,7 +116,17 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// control plane learns of it: the expiry happens in the sidecar, and the
 	// approval row deliberately stays PENDING (the sign-in is still wanted), so
 	// this decision row is the only signal that reaches here.
-	if dl.Decision == egress.Deny && dl.RuleSource == ruleSourceCredentialReauthTimeout {
+	//
+	// The proxy writes this SAME rule source for an Azure DevOps sign-in hold
+	// that ran out (ado_hold.go's adoCredentialRefusalFor), on the Azure DevOps
+	// host itself — never an ApprovalID (decisionLog never sets one for this
+	// source, on either lane), so the host is the only signal the ingest has to
+	// tell the two apart. wardyn_credential_reauth_total's HELP promises the
+	// AWS SSO re-auth population alone (#971), so an Azure DevOps host is
+	// excluded here the same way its `requested`/`resolved` raises never call
+	// this recorder at all.
+	if dl.Decision == egress.Deny && dl.RuleSource == ruleSourceCredentialReauthTimeout &&
+		adoEgressDomains(dl.Request.Host) == nil {
 		s.metrics.credentialReauthRecorded(credentialReauthOutcomeTimeout)
 	}
 

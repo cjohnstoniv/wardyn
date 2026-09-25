@@ -797,9 +797,13 @@ func runApprovalSweeper(ctx context.Context, st approval.Store, interval, after 
 			// At the transition: this is where a credential re-auth request
 			// actually becomes EXPIRED, and the only place that can count it
 			// honestly — the sidecar holding for it has long since given up, so
-			// no later resolve will ever meet the row.
-			if m != nil && byKind[types.ApprovalCredentialReauth] > 0 {
-				m.RecordCredentialReauthExpired(byKind[types.ApprovalCredentialReauth])
+			// no later resolve will ever meet the row. AWS SSO re-auth rows
+			// only (approval.TallyReauthAWSSSO), the series' HELP: an Azure
+			// DevOps sign-in or consent row is credential_reauth too, and is
+			// not — the same split CancelForRun's own tally already makes for
+			// outcome="cancelled".
+			if m != nil && byKind[approval.TallyReauthAWSSSO] > 0 {
+				m.RecordCredentialReauthExpired(byKind[approval.TallyReauthAWSSSO])
 			}
 			if n > 0 {
 				slog.InfoContext(ctx, "wardynd: approval sweep expired stale PENDING approvals",

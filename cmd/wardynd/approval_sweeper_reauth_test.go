@@ -110,10 +110,24 @@ func (c *countingExpiry) total() int {
 
 func TestRunApprovalSweeper_CountsCredentialReauthExpiriesAtTheTransition(t *testing.T) {
 	stale := time.Now().UTC().Add(-48 * time.Hour)
+	// An AWS SSO re-auth's own raise shape (injection_awssso.go): mechanism +
+	// credential_source + owner, no lane. This is the ONE shape the metric's
+	// HELP promises, so it is the only row the counter should see.
 	reauth := types.ApprovalRequest{
 		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalCredentialReauth,
 		State: types.ApprovalPending, RequestedAt: stale,
-		RequestedScope: json.RawMessage(`{"owner":"alice@corp.example"}`),
+		RequestedScope: json.RawMessage(
+			`{"mechanism":"bedrock_sso","credential_source":"per_user","owner":"alice@corp.example"}`),
+	}
+	// An Azure DevOps sign-in's own raise shape (injection_ado_signin.go):
+	// lane + mechanism, no credential_source. Also credential_reauth, and also
+	// stale, so the sweep must still expire it — but it is NOT the metric's
+	// population, and must not move the counter (#971).
+	adoSignIn := types.ApprovalRequest{
+		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalCredentialReauth,
+		State: types.ApprovalPending, RequestedAt: stale,
+		RequestedScope: json.RawMessage(
+			`{"lane":"azure_devops","mechanism":"entra_signin","owner":"eve@corp.example","provider_id":"p"}`),
 	}
 	egressRow := types.ApprovalRequest{
 		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalEgressDomain,
@@ -123,9 +137,10 @@ func TestRunApprovalSweeper_CountsCredentialReauthExpiriesAtTheTransition(t *tes
 	fresh := types.ApprovalRequest{
 		ID: uuid.New(), RunID: uuid.New(), Kind: types.ApprovalCredentialReauth,
 		State: types.ApprovalPending, RequestedAt: time.Now().UTC(),
-		RequestedScope: json.RawMessage(`{"owner":"bob@corp.example"}`),
+		RequestedScope: json.RawMessage(
+			`{"mechanism":"bedrock_sso","credential_source":"per_user","owner":"bob@corp.example"}`),
 	}
-	st := &sweepStore{rows: []types.ApprovalRequest{reauth, egressRow, fresh}}
+	st := &sweepStore{rows: []types.ApprovalRequest{reauth, adoSignIn, egressRow, fresh}}
 	counter := &countingExpiry{}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -135,26 +150,34 @@ func TestRunApprovalSweeper_CountsCredentialReauthExpiriesAtTheTransition(t *tes
 		runApprovalSweeper(ctx, st, 5*time.Millisecond, time.Hour, counter)
 	}()
 	deadline := time.Now().Add(5 * time.Second)
-	for st.stateOf(reauth.ID) != types.ApprovalExpired {
+	for st.stateOf(reauth.ID) != types.ApprovalExpired || st.stateOf(adoSignIn.ID) != types.ApprovalExpired {
 		if time.Now().After(deadline) {
 			cancel()
 			<-done
-			t.Fatalf("the sweep never expired the stale credential_reauth row (state=%q)", st.stateOf(reauth.ID))
+			t.Fatalf("the sweep never expired the stale rows (aws=%q, ado=%q)",
+				st.stateOf(reauth.ID), st.stateOf(adoSignIn.ID))
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
 	cancel()
 	<-done
 
-	// The ROW moved — the transition really happened.
+	// Both ROWS moved — the state machine expires every stale credential_reauth
+	// row regardless of lane; only the METRIC is AWS-SSO-only.
 	if got := st.stateOf(reauth.ID); got != types.ApprovalExpired {
-		t.Fatalf("the stale re-auth row is %s, want EXPIRED", got)
+		t.Fatalf("the stale AWS SSO re-auth row is %s, want EXPIRED", got)
 	}
-	// …and the counter saw exactly it: one, not the egress row beside it, and
-	// not the fresh one the cutoff protects.
+	if got := st.stateOf(adoSignIn.ID); got != types.ApprovalExpired {
+		t.Fatalf("the stale Azure DevOps sign-in row is %s, want EXPIRED", got)
+	}
+	// …and the counter saw exactly the AWS SSO row: one, not the Azure DevOps
+	// sign-in beside it (also credential_reauth, but not this metric's
+	// population), not the egress row, and not the fresh one the cutoff
+	// protects.
 	if got := counter.total(); got != 1 {
 		t.Errorf("the sweep reported %d credential_reauth expiries, want exactly 1 "+
-			"(the stale re-auth row only — not the egress row it swept alongside, not the fresh one)", got)
+			"(the stale AWS SSO row only — not the Azure DevOps sign-in it swept alongside, "+
+			"not the egress row, not the fresh one)", got)
 	}
 	if got := st.stateOf(fresh.ID); got != types.ApprovalPending {
 		t.Errorf("a request newer than the cutoff was expired: %s", got)
