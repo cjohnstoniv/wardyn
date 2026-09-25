@@ -951,6 +951,9 @@ jobs:
           load: true
           cache-from: type=gha,scope=agent-claude-code
           cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=agent-claude-code' || '' }}
+      - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
+        if: needs.changes.outputs.backend != 'false'
+        run: make build-conformance-agent-image
       - name: Run conformance tests (docker)
         if: needs.changes.outputs.backend != 'false'
         env:
