@@ -52,6 +52,10 @@ var envDocAllow = map[string]bool{
 	// never walks test/, but the REVERSE one reads every ENV.md row, so without
 	// this entry a documented var reads as a stale row.
 	"WARDYN_TEST_AGENT_IMAGE": true,
+	// Same situation again: the strongest-confinement-class gate
+	// test/conformance/conformance_docker_test.go and test/e2e/live/live_test.go
+	// both read (#702's nightly gvisor-cc2-live leg).
+	"WARDYN_TEST_REQUIRE_CLASS": true,
 	// The Playwright e2e backend's two listen addresses (scripts/e2e-backend.sh):
 	// the console's and the UI-sandbox gateway's, which must differ. Shell-only,
 	// so — unlike the pair above — TestEnvDoc_E2EShellVarsAreDocumented DOES
