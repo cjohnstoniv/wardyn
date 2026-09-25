@@ -1277,6 +1277,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`make release-check` now propagates a Postgres-suite failure (#1068).** The Postgres-gated
+  `if` chained `test-report-pg` and `test-race-pg` with plain `;` in one shell, so the `if`'s
+  exit status was whichever submake ran last — a `test-report-pg` failure was silently swallowed
+  whenever `test-race-pg` then passed, and release-check printed "release-check PASSED" anyway.
+  The two submakes now chain on `&&`, so a Postgres failure stops the run there and its status
+  survives.
 - **Review states where a chosen model provider's credential lives (#983).** A run that chose a
   model provider got no `model_credential` from `POST /runs/preflight`, so the New Run rail said
   "Resolved at launch." even after Preflight, and the CC3 confinement advisory never fired for an
