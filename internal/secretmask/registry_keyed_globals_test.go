@@ -21,10 +21,10 @@ func TestAddGlobal_ReplacedAndDeletedValuesAreRetiredThenSwept(t *testing.T) {
 	const owner, name = "alice", "wardyn-harness-aws-oauth"
 	oldAccess, newAccess, refresh := "access-token-before-refresh", "access-token-after-refresh", "the-refresh-token-kept"
 	bobs := "bobs-token-under-the-same-name"
-	r.AddGlobal("bob", name, []byte(bobs))
+	r.AddGlobal("bob", name, time.Now(), []byte(bobs))
 
-	r.AddGlobal(owner, name, []byte(oldAccess), []byte(refresh))
-	r.AddGlobal(owner, name, []byte(newAccess), []byte(refresh))
+	r.AddGlobal(owner, name, time.Now(), []byte(oldAccess), []byte(refresh))
+	r.AddGlobal(owner, name, time.Now(), []byte(newAccess), []byte(refresh))
 	masked := func(v string) bool {
 		return !bytes.Contains(r.Masker(uuid.New()).Mask([]byte("x "+v+" y")), []byte(v))
 	}
@@ -49,7 +49,7 @@ func TestAddGlobal_ReplacedAndDeletedValuesAreRetiredThenSwept(t *testing.T) {
 		}
 	}
 
-	r.EvictGlobal(owner, name)
+	r.EvictGlobal(owner, name, time.Now())
 	if !masked(newAccess) || !masked(refresh) {
 		t.Fatal("a deleted credential stopped being masked at once; it must stay masked until swept")
 	}
@@ -68,9 +68,9 @@ func TestAddGlobal_ReplacedAndDeletedValuesAreRetiredThenSwept(t *testing.T) {
 // drop it.
 func TestAddGlobal_AValueThatComesBackIsNotSwept(t *testing.T) {
 	r := NewRegistry()
-	r.AddGlobal("", "wardyn-harness-anthropic-oauth", []byte("setup-token-one"))
-	r.AddGlobal("", "wardyn-harness-anthropic-oauth", []byte("setup-token-two"))
-	r.AddGlobal("", "wardyn-harness-anthropic-oauth", []byte("setup-token-one"))
+	r.AddGlobal("", "wardyn-harness-anthropic-oauth", time.Now(), []byte("setup-token-one"))
+	r.AddGlobal("", "wardyn-harness-anthropic-oauth", time.Now(), []byte("setup-token-two"))
+	r.AddGlobal("", "wardyn-harness-anthropic-oauth", time.Now(), []byte("setup-token-one"))
 	if n := r.SweepGlobals(time.Now().Add(time.Second)); n != 1 {
 		t.Errorf("the sweep dropped %d values, want 1 (only setup-token-two is retired)", n)
 	}
@@ -87,8 +87,8 @@ func TestMergeGlobal_AStaleReadDoesNotRetireTheRefreshedValues(t *testing.T) {
 	const owner, name = "alice", "wardyn-harness-aws-oauth"
 	oldAccess, oldRefresh := "access-token-before-refresh", "refresh-token-before-refresh"
 	newAccess, newRefresh := "access-token-after-refresh", "refresh-token-after-refresh"
-	r.AddGlobal(owner, name, []byte(oldAccess), []byte(oldRefresh))
-	r.AddGlobal(owner, name, []byte(newAccess), []byte(newRefresh)) // the refresh
+	r.AddGlobal(owner, name, time.Now(), []byte(oldAccess), []byte(oldRefresh))
+	r.AddGlobal(owner, name, time.Now(), []byte(newAccess), []byte(newRefresh)) // the refresh
 	r.MergeGlobal(owner, name, []byte(oldAccess), []byte(oldRefresh))
 
 	if n := r.SweepGlobals(time.Now().Add(time.Second)); n != 0 {
@@ -101,7 +101,7 @@ func TestMergeGlobal_AStaleReadDoesNotRetireTheRefreshedValues(t *testing.T) {
 		}
 	}
 
-	r.AddGlobal(owner, name, []byte("access-token-third"), []byte(newRefresh))
+	r.AddGlobal(owner, name, time.Now(), []byte("access-token-third"), []byte(newRefresh))
 	if n := r.SweepGlobals(time.Now().Add(time.Second)); n != 3 {
 		t.Errorf("the sweep after the next refresh dropped %d values, want 3", n)
 	}
@@ -114,8 +114,8 @@ func TestMergeGlobal_AStaleReadDoesNotRetireTheRefreshedValues(t *testing.T) {
 func TestAddGlobal_NoUsableValueRetiresNothing(t *testing.T) {
 	r := NewRegistry()
 	const held = "the-refresh-token-still-in-use"
-	r.AddGlobal("alice", "ado", []byte(held))
-	r.AddGlobal("alice", "ado", []byte(""), []byte("short"))
+	r.AddGlobal("alice", "ado", time.Now(), []byte(held))
+	r.AddGlobal("alice", "ado", time.Now(), []byte(""), []byte("short"))
 	if n := r.SweepGlobals(time.Now().Add(time.Second)); n != 0 {
 		t.Fatalf("an AddGlobal with no usable value retired %d values, want 0", n)
 	}
@@ -131,7 +131,7 @@ func TestAddGlobalUntil_TheExpiringValueIsSweptAfterItsExpiry(t *testing.T) {
 	r := NewRegistry()
 	expiry := time.Now().Add(time.Hour)
 	const access, refresh = "access-token-with-an-expiry", "refresh-token-without-one"
-	r.AddGlobalUntil("alice", "ado", expiry, []byte(access), []byte(refresh))
+	r.AddGlobalUntil("alice", "ado", time.Now(), expiry, []byte(access), []byte(refresh))
 	masked := func(v string) bool { return !bytes.Contains(r.Masker(uuid.Nil).Mask([]byte(v)), []byte(v)) }
 
 	if n := r.SweepGlobals(expiry); n != 0 {
@@ -149,8 +149,8 @@ func TestAddGlobalUntil_TheExpiringValueIsSweptAfterItsExpiry(t *testing.T) {
 
 	// A refresh the sweep never saw coming: the value is current again, bounded
 	// by its new expiry, and a plain AddGlobal of the same value lifts the bound.
-	r.AddGlobalUntil("alice", "ado", expiry.Add(time.Hour), []byte(access), []byte(refresh))
-	r.AddGlobal("alice", "ado", []byte(access), []byte(refresh))
+	r.AddGlobalUntil("alice", "ado", time.Now(), expiry.Add(time.Hour), []byte(access), []byte(refresh))
+	r.AddGlobal("alice", "ado", time.Now(), []byte(access), []byte(refresh))
 	if n := r.SweepGlobals(expiry.Add(2 * time.Hour)); n != 0 {
 		t.Errorf("a value re-registered with no expiry was swept (%d dropped)", n)
 	}
@@ -162,7 +162,7 @@ func TestMergeGlobalUntil_KeepsTheLaterExpiry(t *testing.T) {
 	r := NewRegistry()
 	t0 := time.Now().Add(time.Hour)
 	const access, refresh = "access-token-with-an-expiry", "refresh-token-without-one"
-	r.AddGlobalUntil("alice", "aws", t0.Add(time.Hour), []byte(access), []byte(refresh))
+	r.AddGlobalUntil("alice", "aws", time.Now(), t0.Add(time.Hour), []byte(access), []byte(refresh))
 	r.MergeGlobalUntil("alice", "aws", t0, []byte(access), []byte(refresh))
 	if n := r.SweepGlobals(t0.Add(time.Minute)); n != 0 {
 		t.Fatalf("a stale merge shortened the access token's expiry: the sweep dropped %d values", n)
@@ -170,5 +170,34 @@ func TestMergeGlobalUntil_KeepsTheLaterExpiry(t *testing.T) {
 	r.MergeGlobalUntil("alice", "aws", t0, []byte(refresh))
 	if n := r.SweepGlobals(t0.Add(2 * time.Hour)); n != 1 {
 		t.Errorf("the sweep past the access token's expiry dropped %d values, want 1 (a merge must not bound the refresh token)", n)
+	}
+}
+
+// Replacing an access token does not end it: a cached copy may still be served
+// until its own expiry. So a replaced value with an expiry is retired at that
+// expiry, not at the replacement, and stays masked for expiry plus grace.
+func TestAddGlobalUntil_AReplacedTokenStaysMaskedUntilItsOwnExpiry(t *testing.T) {
+	r := NewRegistry()
+	now := time.Now()
+	expiry := now.Add(2 * time.Hour)
+	r.AddGlobalUntil("alice", "ado", now, expiry, []byte("access-token-one-still-cached"), []byte("the-refresh-token"))
+	r.AddGlobalUntil("alice", "ado", now, expiry, []byte("access-token-two-just-redeemed"), []byte("the-refresh-token"))
+	if n := r.SweepGlobals(now.Add(time.Minute)); n != 0 {
+		t.Fatalf("a sweep one grace after the replacement dropped %d values; the replaced token has not expired yet", n)
+	}
+	if n := r.SweepGlobals(expiry.Add(time.Second)); n != 2 {
+		t.Errorf("the sweep past both tokens' expiry dropped %d values, want 2", n)
+	}
+}
+
+// Retiring reads the caller's clock, the one its expiries and the sweep's cutoff
+// are on, never the wall clock.
+func TestAddGlobal_RetiresOnTheCallersClock(t *testing.T) {
+	r := NewRegistry()
+	then := time.Now().Add(-3 * time.Hour)
+	r.AddGlobal("", "wardyn-harness-anthropic-oauth", then, []byte("setup-token-one"))
+	r.AddGlobal("", "wardyn-harness-anthropic-oauth", then, []byte("setup-token-two"))
+	if n := r.SweepGlobals(then.Add(time.Minute)); n != 1 {
+		t.Errorf("a sweep past the retire time on the caller's clock dropped %d values, want 1", n)
 	}
 }

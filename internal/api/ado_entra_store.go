@@ -436,8 +436,9 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	if resp.RefreshToken != "" {
 		keep = resp.RefreshToken
 	}
-	accessExpiry := s.cfg.Now().Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
-	s.cfg.MaskRegistry.AddGlobalUntil(owner, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(keep))
+	now := s.cfg.Now()
+	accessExpiry := now.Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
+	s.cfg.MaskRegistry.AddGlobalUntil(owner, adoEntraSecretName(cfg.RowID), now, accessExpiry, []byte(resp.AccessToken), []byte(keep))
 
 	granted := strings.Fields(resp.Scope)
 	if len(granted) == 0 {

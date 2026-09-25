@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -22,7 +23,7 @@ func TestSweepRunSecrets_EvictsCacheOnlyRuns(t *testing.T) {
 	live := agedRun(types.RunRunning, 2*RunSecretGrace)
 
 	reg := secretmask.NewRegistry()
-	reg.AddGlobal("", "test-credential", []byte("a-process-global-secret"))
+	reg.AddGlobal("", "test-credential", time.Now(), []byte("a-process-global-secret"))
 	// Neither run ever registered a per-run secret. Asking for a Masker is all
 	// it takes to cache one.
 	_ = reg.Masker(cold.ID)

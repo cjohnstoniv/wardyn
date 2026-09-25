@@ -88,10 +88,59 @@ func TestADOMintSites_LetTheAccessTokenGoAfterItsExpiry(t *testing.T) {
 			t.Fatalf("redeem: %v", err)
 		}
 		blob, _ := f.stored(t, subject)
-		// The capture's access token was retired by the redemption, on the wall
-		// clock, so this fixed-clock sweep leaves it; only the redeemed one goes.
-		check(t, f, access.ExpiresAt, blob.RefreshToken)
+		// Checked by value: the redemption also retired the capture's access
+		// token (at its expiry) and the refresh token it rotated away (at once).
+		reg := f.srv.cfg.MaskRegistry
+		reg.SweepGlobals(access.ExpiresAt.Add(-time.Second))
+		if !masksValue(reg, access.AccessToken) {
+			t.Fatal("a sweep before the redeemed access token's expiry let go of it")
+		}
+		reg.SweepGlobals(access.ExpiresAt.Add(time.Second))
+		if masksValue(reg, access.AccessToken) {
+			t.Fatal("the redeemed access token is still held after a sweep past its expiry")
+		}
+		if !masksValue(reg, blob.RefreshToken) {
+			t.Fatal("the refresh token was let go with the access token")
+		}
 	})
+}
+
+// A re-redemption retires the access token the injection cache may still be
+// serving (adoEntraAccessCache, until shortly before its expiry). That token
+// stays masked for its own expiry plus grace, not one grace after the
+// re-redemption. One clock, the server's, drives the redemptions and the sweep.
+func TestADORedeem_AReplacedAccessTokenStaysMaskedUntilItsExpiryPlusGrace(t *testing.T) {
+	f := newADOFixture(t)
+	base := time.Now()
+	clock := base
+	f.srv.cfg.Now = func() time.Time { return clock }
+	subject := f.fake.Subject()
+	if w := f.capture(t, subject); w.Code != http.StatusFound {
+		t.Fatalf("capture: status %d body %q", w.Code, w.Body.String())
+	}
+	first, err := f.srv.RedeemADOEntraAccess(context.Background(), f.cfg, subject, f.cfg.Scopes)
+	if err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+	clock = base.Add(5 * time.Minute)
+	second, err := f.srv.RedeemADOEntraAccess(context.Background(), f.cfg, subject, f.cfg.Scopes)
+	if err != nil {
+		t.Fatalf("re-redeem: %v", err)
+	}
+	if second.AccessToken == first.AccessToken {
+		t.Fatal("the re-redemption returned the same access token; nothing was replaced")
+	}
+
+	clock = base.Add(5*time.Minute + RunSecretGrace + time.Minute)
+	f.srv.SweepRunSecrets(context.Background())
+	if !masksValue(f.srv.cfg.MaskRegistry, first.AccessToken) {
+		t.Fatal("the replaced access token was let go one grace after the re-redemption, before its own expiry plus grace")
+	}
+	clock = first.ExpiresAt.Add(RunSecretGrace + time.Minute)
+	f.srv.SweepRunSecrets(context.Background())
+	if masksValue(f.srv.cfg.MaskRegistry, first.AccessToken) {
+		t.Error("the replaced access token is still held after its expiry plus grace")
+	}
 }
 
 func TestAWSSSOMintSites_LetTheAccessTokenGoAfterItsExpiry(t *testing.T) {

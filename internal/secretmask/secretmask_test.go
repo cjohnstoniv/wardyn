@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -38,7 +39,7 @@ func TestRegistry_AddGlobal_AppearsInAllSnapshots(t *testing.T) {
 	runA, runB := uuid.New(), uuid.New()
 	global := []byte("global-secret-val")
 
-	r.AddGlobal("", "test-credential", global)
+	r.AddGlobal("", "test-credential", time.Now(), global)
 	r.Add(runA, []byte("per-run-secret-a"))
 
 	snapA := r.Snapshot(runA)
@@ -62,9 +63,9 @@ func TestRegistry_AddGlobal_Idempotent(t *testing.T) {
 	global := []byte("global-secret-val")
 
 	// Per-run call sites re-add the same blob on every dispatch/preflight.
-	r.AddGlobal("", "test-credential", global)
-	r.AddGlobal("", "test-credential", bytes.Clone(global))
-	r.AddGlobal("", "test-credential", global)
+	r.AddGlobal("", "test-credential", time.Now(), global)
+	r.AddGlobal("", "test-credential", time.Now(), bytes.Clone(global))
+	r.AddGlobal("", "test-credential", time.Now(), global)
 
 	if snap := r.Snapshot(uuid.New()); len(snap) != 1 {
 		t.Fatalf("Snapshot len = %d, want 1 (duplicate globals collapsed)", len(snap))
@@ -75,9 +76,9 @@ func TestRegistry_MinLen_Floor(t *testing.T) {
 	r := secretmask.NewRegistry()
 	runID := uuid.New()
 
-	r.Add(runID, []byte("short"))                      // 5 bytes < MinLen(8) — should be ignored
-	r.AddGlobal("", "test-credential", []byte("tiny")) // 4 bytes < MinLen(8) — should be ignored
-	r.Add(runID, []byte("exactlen"))                   // exactly 8 bytes — should be kept
+	r.Add(runID, []byte("short"))                                  // 5 bytes < MinLen(8) — should be ignored
+	r.AddGlobal("", "test-credential", time.Now(), []byte("tiny")) // 4 bytes < MinLen(8) — should be ignored
+	r.Add(runID, []byte("exactlen"))                               // exactly 8 bytes — should be kept
 
 	snap := r.Snapshot(runID)
 	if len(snap) != 1 {
@@ -107,7 +108,7 @@ func TestRegistry_NilSafe(t *testing.T) {
 
 	// None of these should panic.
 	r.Add(runID, []byte("someverylongsecret"))
-	r.AddGlobal("", "test-credential", []byte("globalverylongsecret"))
+	r.AddGlobal("", "test-credential", time.Now(), []byte("globalverylongsecret"))
 	snap := r.Snapshot(runID)
 	if snap != nil {
 		t.Fatalf("nil Registry Snapshot should return nil, got %v", snap)

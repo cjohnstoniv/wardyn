@@ -150,8 +150,11 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) {
 // value the credential currently holds in one call: a value left out is retired.
 // A call with no usable value (every one empty or below MinLen) changes
 // nothing; EvictGlobal is the one way to retire a credential's whole set.
-func (r *Registry) AddGlobal(owner, name string, values ...[]byte) {
-	r.setGlobal(owner, name, false, time.Time{}, nil, values)
+//
+// now is the caller's clock, the one its expiries and SweepGlobals' cutoff are
+// read on: a value is retired at now.
+func (r *Registry) AddGlobal(owner, name string, now time.Time, values ...[]byte) {
+	r.setGlobal(owner, name, now, false, time.Time{}, nil, values)
 }
 
 // AddGlobalUntil is AddGlobal for a credential whose expiring value (a
@@ -161,8 +164,8 @@ func (r *Registry) AddGlobal(owner, name string, values ...[]byte) {
 // floor a recording uploaded after the token's last use needs. The lasting
 // values (a refresh token, a client secret) carry no expiry of their own and
 // stay until they are replaced or evicted.
-func (r *Registry) AddGlobalUntil(owner, name string, until time.Time, expiring []byte, lasting ...[]byte) {
-	r.setGlobal(owner, name, false, until, expiring, lasting)
+func (r *Registry) AddGlobalUntil(owner, name string, now, until time.Time, expiring []byte, lasting ...[]byte) {
+	r.setGlobal(owner, name, now, false, until, expiring, lasting)
 }
 
 // MergeGlobal is AddGlobal that retires nothing: values join the credential's
@@ -172,16 +175,17 @@ func (r *Registry) AddGlobalUntil(owner, name string, until time.Time, expiring 
 // paths that know the credential's full new set (capture, refresh) use
 // AddGlobal.
 func (r *Registry) MergeGlobal(owner, name string, values ...[]byte) {
-	r.setGlobal(owner, name, true, time.Time{}, nil, values)
+	r.setGlobal(owner, name, time.Time{}, true, time.Time{}, nil, values)
 }
 
 // MergeGlobalUntil is MergeGlobal with AddGlobalUntil's expiring value. An
 // expiring value already current keeps the later of its two expiries.
 func (r *Registry) MergeGlobalUntil(owner, name string, until time.Time, expiring []byte, lasting ...[]byte) {
-	r.setGlobal(owner, name, true, until, expiring, lasting)
+	r.setGlobal(owner, name, time.Time{}, true, until, expiring, lasting)
 }
 
-func (r *Registry) setGlobal(owner, name string, merge bool, until time.Time, expiring []byte, lasting [][]byte) {
+// setGlobal's now is unused on a merge, which retires nothing.
+func (r *Registry) setGlobal(owner, name string, now time.Time, merge bool, until time.Time, expiring []byte, lasting [][]byte) {
 	if r == nil {
 		return
 	}
@@ -213,7 +217,9 @@ func (r *Registry) setGlobal(owner, name string, merge bool, until time.Time, ex
 	if len(keep) == 0 {
 		return
 	}
-	r.retireLocked(k, keep)
+	if !merge {
+		r.retireLocked(k, keep, now)
+	}
 	r.current[k] = keep
 	// A value that comes back is current again, not waiting to be swept.
 	r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return containsValue(keep, rv.value) })
@@ -237,14 +243,14 @@ func containsValue(set []globalValue, v []byte) bool {
 
 // EvictGlobal retires every current value of the credential (owner, name): the
 // credential was deleted. The values stay masked until SweepGlobals drops them.
-// Idempotent.
-func (r *Registry) EvictGlobal(owner, name string) {
+// Idempotent. now is read as on AddGlobal.
+func (r *Registry) EvictGlobal(owner, name string, now time.Time) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.retireLocked(globalKey{owner, name}, nil)
+	r.retireLocked(globalKey{owner, name}, nil, now)
 	r.reflattenLocked()
 }
 
@@ -276,12 +282,17 @@ func (r *Registry) SweepGlobals(cutoff time.Time) int {
 }
 
 // retireLocked moves k's current values that are not in keep to retired and
-// forgets k. The caller holds r.mu.
-func (r *Registry) retireLocked(k globalKey, keep []globalValue) {
-	now := time.Now()
+// forgets k. A value with an expiry is retired at the later of now and that
+// expiry: replacing an access token does not end it, and a cached copy may
+// still be served until it expires. The caller holds r.mu.
+func (r *Registry) retireLocked(k globalKey, keep []globalValue, now time.Time) {
 	for _, gv := range r.current[k] {
 		if !containsValue(keep, gv.value) {
-			r.retired = append(r.retired, retiredValue{value: gv.value, at: now})
+			at := now
+			if gv.until.After(at) {
+				at = gv.until
+			}
+			r.retired = append(r.retired, retiredValue{value: gv.value, at: at})
 		}
 	}
 	delete(r.current, k)

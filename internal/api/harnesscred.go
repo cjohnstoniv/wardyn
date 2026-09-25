@@ -802,7 +802,7 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 	// OWN asciicast has already buffered the `claude setup-token` output verbatim
 	// by the time this handler runs, so this does not redact that cast — see
 	// launchHarnessLoginRun for why the login terminal must not be recorded at all.
-	s.cfg.MaskRegistry.AddGlobal("", hl.secretName, []byte(token)) // nil-safe
+	s.cfg.MaskRegistry.AddGlobal("", hl.secretName, s.cfg.Now(), []byte(token)) // nil-safe
 	s.evictManagedToken()
 
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

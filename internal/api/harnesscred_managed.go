@@ -129,6 +129,6 @@ func (s *Server) evictManagedToken() {
 // retired and then swept (secretmask.Registry.EvictGlobal), and the managed
 // token cache.
 func (s *Server) forgetCredential(owner, name string) {
-	s.cfg.MaskRegistry.EvictGlobal(owner, name)
+	s.cfg.MaskRegistry.EvictGlobal(owner, name, s.cfg.Now())
 	s.evictManagedToken()
 }

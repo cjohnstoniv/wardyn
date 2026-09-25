@@ -457,8 +457,8 @@ func TestSweepRunSecrets_DropsRetiredGlobalMaskCopies(t *testing.T) {
 	const old = "sk-ant-oat01-retired-managed-token"
 	reg := secretmask.NewRegistry()
 	s := &Server{cfg: Config{MaskRegistry: reg, Now: time.Now}}
-	reg.AddGlobal("", "wardyn-harness-anthropic-oauth", []byte(old))
-	reg.EvictGlobal("", "wardyn-harness-anthropic-oauth")
+	reg.AddGlobal("", "wardyn-harness-anthropic-oauth", time.Now(), []byte(old))
+	reg.EvictGlobal("", "wardyn-harness-anthropic-oauth", time.Now())
 	held := func() bool { return !bytes.Contains(reg.Masker(uuid.Nil).Mask([]byte(old)), []byte(old)) }
 
 	s.SweepRunSecrets(context.Background())
