@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/ipguard"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -30,8 +31,14 @@ import (
 type Config struct {
 	// RunID is the governed run this sidecar serves.
 	RunID uuid.UUID `json:"run_id"`
-	// ControlPlaneURL is the base URL of wardynd (e.g. "http://wardynd:8080").
+	// ControlPlaneURL is the base URL of wardynd's internal TLS listener (e.g.
+	// "https://wardynd:8443"). http:// is refused unless the host is loopback
+	// (hoptls.CheckURL).
 	ControlPlaneURL string `json:"control_plane_url"`
+	// ControlPlaneCAPEM is wardynd's internal CA (internal/hoptls), the ONLY
+	// root this sidecar trusts for control-plane calls. Required with an
+	// https ControlPlaneURL.
+	ControlPlaneCAPEM string `json:"control_plane_ca_pem,omitempty"`
 	// RunToken authenticates internal calls (Authorization: Bearer <token>).
 	RunToken string `json:"run_token"`
 	// Policy is the compiled egress allowlist / method rules / first-use flag.
@@ -86,9 +93,13 @@ type Config struct {
 	// with and Wardyn cannot narrow it — so a per-repo key here would imply a
 	// confinement the credential does not have. Empty => the route always 403s.
 	PATGrants map[string]PATGrant `json:"pat_grants,omitempty"`
-	// ADOGrants is the run's per-person Azure DevOps grant, which drives the
-	// REST gate (ado_gate.go, ado_grants.go). Empty == the gate is off.
-	ADOGrants []ADOGrantConfig `json:"ado_grants,omitempty"`
+	// ADOGrant is the run's per-person Azure DevOps grant, which drives the
+	// REST gate (ado_gate.go, ado_grants.go). Nil == the gate is off. ONE grant
+	// per sidecar: the gate is keyed by host, and every organisation shares
+	// dev.azure.com, so a second grant could only overwrite the first one's
+	// organisation pin. LoadConfigBytes still reads the older ado_grants list,
+	// and refuses one with more than one entry.
+	ADOGrant *ADOGrantConfig `json:"ado_grant,omitempty"`
 	// MITMLLM reports whether TLS-MITM of the BUILT-IN LLM hosts (Anthropic/OpenAI)
 	// is actually intended for this run — i.e. subscription credential injection OR
 	// intercept_tls content inspection. Dispatch also mints the per-run CA for
@@ -136,9 +147,9 @@ type Config struct {
 	UpstreamProxyNoProxy []string `json:"upstream_proxy_no_proxy,omitempty"`
 	// TrustedCAPEM is the OPERATOR's corporate CA bundle (WARDYN_TRUSTED_CA_FILE,
 	// wardynd's Config.TrustedCAPEM), forwarded verbatim per run so THIS
-	// sidecar's own outbound TLS (the forward/egress transport AND the
-	// control-plane transport, see NewServer) additionally trusts a corporate
-	// TLS-inspecting middlebox on the path to the real upstream. Control-plane
+	// sidecar's forward/egress transport additionally trusts a corporate
+	// TLS-inspecting middlebox on the path to the real upstream. Never the
+	// control-plane transport, which trusts ControlPlaneCAPEM alone. Control-plane
 	// authored, same trust boundary as MITMCACertPEM/MITMCAKeyPEM above — the
 	// sandbox cannot set it. Empty (the default) => system roots only,
 	// byte-identical to today.
@@ -168,6 +179,12 @@ type Config struct {
 	// route's own generic detail, plus the below-policy clause either way
 	// (proxyLLMRequest).
 	LLMUnavailableDetail string `json:"llm_unavailable_detail,omitempty"`
+	// Unattended marks a run nobody is driving (a non-interactive task run).
+	// A push that touches a push_rules.require_review_paths entry is then
+	// refused outright rather than held for a decision nobody is waiting to
+	// make (push_hold.go). Control-plane-authored at dispatch; false (the
+	// default) holds.
+	Unattended bool `json:"unattended,omitempty"`
 }
 
 const (
@@ -205,11 +222,25 @@ func LoadConfig(path string) (*Config, error) {
 // handshake anywhere. A key this binary cannot honour must fail the sidecar's
 // startup loudly instead of being dropped on the floor.
 func LoadConfigBytes(b []byte) (*Config, error) {
-	var c Config
+	// LegacyADOGrants is the ado_grants list an older control plane writes in
+	// place of ado_grant. It is read here and nowhere else.
+	var raw struct {
+		Config
+		LegacyADOGrants []ADOGrantConfig `json:"ado_grants"`
+	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&c); err != nil {
+	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	c := raw.Config
+	switch {
+	case len(raw.LegacyADOGrants) > 1:
+		return nil, fmt.Errorf("config: ado_grants carries %d grants; a sidecar holds one Azure DevOps grant", len(raw.LegacyADOGrants))
+	case len(raw.LegacyADOGrants) == 1 && c.ADOGrant != nil:
+		return nil, fmt.Errorf("config: ado_grants and ado_grant are both set; a sidecar holds one Azure DevOps grant")
+	case len(raw.LegacyADOGrants) == 1:
+		c.ADOGrant = &raw.LegacyADOGrants[0]
 	}
 	if err := c.applyDefaultsAndValidate(); err != nil {
 		return nil, err
@@ -257,6 +288,15 @@ func (c *Config) applyDefaultsAndValidate() error {
 	}
 	if c.RunToken == "" {
 		return fmt.Errorf("config: run_token is required")
+	}
+	if err := hoptls.CheckURL(c.ControlPlaneURL); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.ControlPlaneURL)), "https://") && c.ControlPlaneCAPEM == "" {
+		return fmt.Errorf("config: an https control_plane_url needs control_plane_ca_pem — control-plane calls trust wardynd's internal CA only, never the system roots")
+	}
+	if _, err := hoptls.ClientConfig(c.ControlPlaneCAPEM); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	// Validate (but do not retain) the upstream proxy URL: fail fast on a bad
 	// scheme/host/port. The live proxy re-parses it in NewServer.
@@ -324,9 +364,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	// An Azure DevOps grant is enforced by the REST gate, which runs only on a
 	// connection the proxy terminates. Without the MITM CA nothing terminates,
 	// and the covered hosts would degrade to a credential-less tunnel no gate
-	// sees — so a config carrying ado_grants without the CA is refused at boot.
-	if len(c.ADOGrants) > 0 && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
-		return fmt.Errorf("config: ado_grants requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
+	// sees — so a config carrying ado_grant without the CA is refused at boot.
+	if c.ADOGrant != nil && (c.MITMCACertPEM == "" || c.MITMCAKeyPEM == "") {
+		return fmt.Errorf("config: ado_grant requires mitm_ca_cert_pem and mitm_ca_key_pem — the Azure DevOps gate runs only on a terminated connection")
 	}
 	// Parse-check (but do not retain a compiled form) each configured LLM
 	// gateway base URL: api.ValidateLLMGateways already fail-fast-checked these

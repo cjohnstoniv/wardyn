@@ -27,7 +27,6 @@ declare -A ALLOWLIST=(
   # it is gated at the plain 1000-line threshold like any other file now.
   ["./internal/api/workspace_run.go"]=1180 # 1092 at freeze
   ["./internal/api/setup.go"]=1120         # 1028 at freeze
-  ["./ui/src/app/components/screens/setup/step-bodies.tsx"]=1150 # 1062 at freeze
   # The build-plumbing shell was unpoliced until 2026-07-29 and the three biggest
   # files are already near THRESHOLD. Their caps are frozen BELOW it so they stop
   # growing without forcing a refactor now; every other scripts/*.sh is gated at
@@ -46,7 +45,6 @@ declare -A ALLOWLIST=(
   # (workspace_requirements.go / workspace_envcode.go) rather than re-justified —
   # at 800 lines it came OFF this list and is gated at the plain threshold now.
   ["./internal/envbuild/builder.go"]=1100 # 1020 at v0.5 merge
-  ["./ui/src/app/components/screens/new-run/wizard-types.ts"]=1180 # 1092 at v0.5 merge
 )
 
 # The walk is git's, not find's: tracked files plus untracked-but-not-ignored

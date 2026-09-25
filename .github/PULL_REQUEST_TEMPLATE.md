@@ -10,6 +10,7 @@ Closes #<!-- issue --> <!-- or: Refs #N when a later PR finishes the issue; Depe
 - [ ] One issue per PR (or ≤3 tightly coupled issues, each named above)
 - [ ] The check I ran is quoted below: the command and the test names it executed, not a summary line
 - [ ] Docs land here: CHANGELOG `[Unreleased]`, `docs/AUDIT-ACTIONS.md` rows for new audit actions, `docs/ENV.md` rows for new variables
+- [ ] Released CHANGELOG sections are unchanged (new entries go under `[Unreleased]`)
 - [ ] Console change: mock/canon round approved or waived on the issue; a Playwright pin covers the new path
 - [ ] Conformance impact considered — new behaviour covered by or explicitly exempt from `test/conformance` on both substrates
 - [ ] Security invariants preserved ([ARCHITECTURE.md](../ARCHITECTURE.md) §Security invariants); `security-review` label if in doubt

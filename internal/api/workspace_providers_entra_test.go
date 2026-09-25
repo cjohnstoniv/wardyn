@@ -5,6 +5,8 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -161,6 +163,15 @@ func TestValidateProviderEntra(t *testing.T) {
 		{"shared without the lane is today's behaviour", withSource(block(adoRow("ado", false, "https://dev.azure.com/acme")), types.CredentialSourceShared), false},
 		{"an invented credential source", withSource(block(githubRow("gh", false, "https://github.com/acme")), "borrowed"), true},
 		{"an absent credential source on a legacy row", block(githubRow("gh", false, "https://github.com/acme")), false},
+
+		{"a second ENABLED row on the lane is refused", block(entraRow(nil), entraRow(func(r *types.GitProvider) {
+			r.ID, r.BaseURLs = "ado2", []string{"https://dev.azure.com/other"}
+		})), true},
+		{"a second row on the lane is admitted while it is disabled", block(entraRow(nil), entraRow(func(r *types.GitProvider) {
+			r.ID, r.BaseURLs, r.Disabled = "ado2", []string{"https://dev.azure.com/other"}, true
+		})), false},
+		{"a second Azure DevOps row on a shared lane beside the entra row", block(entraRow(nil),
+			adoRow("ado2", false, "https://dev.azure.com/other")), false},
 
 		{"the lane is refused on a github row's host", block(types.GitProvider{
 			ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.com/acme"},
@@ -382,4 +393,56 @@ func TestEntraProfileDefaultsToRead(t *testing.T) {
 	if !absent.RESTAPIEnabled() {
 		t.Error("a row with no block reads as REST-disabled")
 	}
+}
+
+// TestSecondEntraRowRefusedAtWrite is the write-time refusal for a second
+// enabled per-user Azure DevOps row: only the first is ever served a sign-in,
+// so the second would store as valid and fail every run for a false cause.
+// Both doors refuse it, and the refused write never reaches the store.
+func TestSecondEntraRowRefusedAtWrite(t *testing.T) {
+	two := `{"git":[` + entraRowJSON("ado", "acme") + `,` + entraRowJSON("ado2", "other") + `]}`
+	want := fmt.Sprintf(providers400EntraTwo, 1, 0, string(types.GitLaneEntra))
+
+	fake := &fakeProvidersStore{fakeSiteConfigStore: &fakeSiteConfigStore{}}
+	srv, _ := newProvidersHarness(t, fake)
+	w := do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken, two)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("a two-row PUT = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	var body struct{ Error string }
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || !strings.HasSuffix(body.Error, want) {
+		t.Errorf("400 body = %s, want it to end %q", w.Body.String(), want)
+	}
+	if fake.putSeen != nil {
+		t.Error("a refused write reached the store")
+	}
+
+	w = do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"workspace_providers":`+two+`}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("a two-row site-config PUT = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || !strings.HasSuffix(body.Error, want) {
+		t.Errorf("site-config 400 body = %s, want it to end %q", w.Body.String(), want)
+	}
+	if fake.putSeen != nil {
+		t.Error("a refused site-config write reached the store")
+	}
+
+	// One row alone is still a valid write.
+	w = do(t, srv, http.MethodPut, "/api/v1/workspace-providers", adminToken,
+		`{"git":[`+entraRowJSON("ado", "acme")+`]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("a one-row PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// entraRowJSON is entraRow on the wire, for the HTTP doors.
+func entraRowJSON(id, org string) string {
+	raw, err := json.Marshal(entraRow(func(r *types.GitProvider) {
+		r.ID, r.BaseURLs = id, []string{"https://dev.azure.com/" + org}
+	}))
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
 }

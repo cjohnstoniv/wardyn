@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Postgres-backed tests for the short-lived attach-ticket handoff row
-// (migration 0026). These close the gap the move out of process memory
-// opened: consume-once used to be a map delete under a mutex, and is now a
-// DELETE ... RETURNING whose atomicity and expiry predicate only a real
-// server can prove.
+// (migration 0026). Consume-once is a DELETE ... RETURNING whose atomicity
+// and expiry predicate only a real server can prove.
 //
 // Guarded by WARDYN_TEST_PG; skipped cleanly when unset. Every case uses fresh
 // ids so it is isolated inside the shared database.
