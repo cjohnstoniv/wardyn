@@ -27,13 +27,12 @@ takes. The packet supersedes the design record's §5.1 chips: the admin's own co
 | `MODEL_PROVIDERS.EMPTY_BODY` | A1 | Agent runs need one. Add the kinds your organisation uses — each person connects their own. |
 | `MODEL_PROVIDERS.KIND.anthropic_subscription` | second line, only when the name differs | Claude subscription |
 | `MODEL_PROVIDERS.KIND.bedrock_sso` | second line, only when the name differs | Amazon Bedrock |
-| `MODEL_PROVIDERS.KIND.bedrock_bearer` | second line, only when the name differs | Amazon Bedrock |
 | `MODEL_PROVIDERS.KIND.anthropic_api_key` | second line, only when the name differs | Anthropic API key |
 | `MODEL_PROVIDERS.KIND.openai_api_key` | second line, only when the name differs | OpenAI API key |
 | `MODEL_PROVIDERS.KIND.custom_endpoint` | second line, only when the name differs | Your own endpoint |
 | `MODEL_PROVIDERS.PROVIDES.SSO` | A2, A5, A9 | Each person signs in with one click |
 | `MODEL_PROVIDERS.PROVIDES.TOKEN` | A3, A4 | Each person adds their own token |
-| `MODEL_PROVIDERS.PROVIDES.KEY` | A3, A5, A7, A8 (and a Bedrock bearer row) | Each person adds their own key |
+| `MODEL_PROVIDERS.PROVIDES.KEY` | A3, A5, A7, A8 | Each person adds their own key |
 | `PROVIDER_EDITOR.PROVIDES_CLAUDE` | A3 subscription row (packet B's line) | Each person signs in with their own Claude subscription. |
 | `MODEL_PROVIDERS.USED_BY(harness)` | A2–A9 | Used by {harness} |
 | `MODEL_PROVIDERS.USED_BY(harness, harness)` | A4 | Used by Claude Code, Codex CLI |
@@ -50,9 +49,12 @@ takes. The packet supersedes the design record's §5.1 chips: the admin's own co
 
 ## Implementation strings
 
-Not in the packet, which draws no failed read; they follow the console's FETCH_FAILED pattern.
+Not in the packet. It draws no failed read, so those follow the console's FETCH_FAILED pattern. It
+names five kind labels, so `bedrock_bearer` reuses Bedrock's label, and its what-each-person-provides
+line is `MODEL_PROVIDERS.PROVIDES.KEY` (each person adds their own Bedrock API key).
 
 | Key | Renders at | Frozen string |
 |---|---|---|
+| `MODEL_PROVIDERS.KIND.bedrock_bearer` | second line, only when the name differs | Amazon Bedrock |
 | `MODEL_PROVIDERS.FETCH_FAILED_TITLE` | the list's read failed | Couldn't load model providers |
 | `MODEL_PROVIDERS.FETCH_FAILED_BODY` | the list's read failed | Something went wrong reaching the server. The providers already saved still apply — this list just can't show them right now. |
