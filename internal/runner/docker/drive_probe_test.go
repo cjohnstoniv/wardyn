@@ -86,8 +86,12 @@ func TestProbeDrive_RunsAsTheAgentUID(t *testing.T) {
 	if got == nil {
 		t.Fatal("no drive-probe container was created")
 	}
-	if got.cfg.User != driveProbeUser {
-		t.Errorf("probe container User = %q, want %q (the agent uid, never root)", got.cfg.User, driveProbeUser)
+	// The literal, not the driveProbeUser constant: a test that compares the
+	// constant to itself would still pass if the constant's own value regressed
+	// away from the agent image's real uid:gid — the property this test exists
+	// to pin.
+	if got.cfg.User != "1000:1000" {
+		t.Errorf("probe container User = %q, want %q (the agent uid, never root)", got.cfg.User, "1000:1000")
 	}
 	if !got.removed {
 		t.Error("the throwaway probe container was not removed")
