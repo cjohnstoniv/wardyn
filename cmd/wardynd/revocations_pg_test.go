@@ -23,7 +23,7 @@ func TestPGRevocations_Conformance(t *testing.T) {
 	if dsn == "" {
 		t.Skip("WARDYN_TEST_PG not set; skipping Postgres-backed revocation conformance")
 	}
-	pool, err := connectAndMigrate(t.Context(), dsn, "", 30*time.Second, 60*time.Second)
+	pool, err := connectAndMigrate(t.Context(), dsn, "", 30*time.Second, 60*time.Second, false)
 	if err != nil {
 		t.Fatalf("connectAndMigrate: %v", err)
 	}
