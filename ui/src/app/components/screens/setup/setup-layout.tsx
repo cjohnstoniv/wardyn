@@ -266,13 +266,16 @@ export function SetupLayout({
                   </div>
                 )}
                 {nextGate?.blocked && nextGate.action ? (
-                  <Button
-                    onClick={nextGate.action.onClick}
-                    disabled={!operator}
-                    title={!operator ? OPERATOR_ONLY_REASON : undefined}
-                  >
-                    {nextGate.action.label}
-                  </Button>
+                  // #459: standing alone in the footer — helper text under it,
+                  // not a title tooltip a disabled control can't surface.
+                  <div className="space-y-1">
+                    <Button onClick={nextGate.action.onClick} disabled={!operator}>
+                      {nextGate.action.label}
+                    </Button>
+                    {!operator && (
+                      <p className="text-right text-meta text-muted-foreground">{OPERATOR_ONLY_REASON}</p>
+                    )}
+                  </div>
                 ) : (
                   <Button
                     onClick={() => (nextGate?.onNext ? nextGate.onNext() : onSelect(next))}

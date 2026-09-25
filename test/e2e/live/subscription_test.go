@@ -190,7 +190,7 @@ func TestLive_SubscriptionEscapeHatch(t *testing.T) {
 	t.Logf("garbage sentinel credential rejected 401 — confirms NO live token was injected (legacy resident-copy behavior)")
 }
 
-// ── shared subscription helpers ──────────────────────────────────────────────
+// shared subscription helpers
 
 // launchSubscriptionInteractive seeds a trivial workspace and launches an
 // interactive run with the .claude credential mounts that engage subscription

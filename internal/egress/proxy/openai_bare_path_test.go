@@ -46,8 +46,8 @@ func TestClassifyLLMBothSpellingsOfEveryPromptBearingArm(t *testing.T) {
 		{"openai", http.MethodPost, "v1/completions", scanOpaque},
 		{"openai", http.MethodPost, "chat/completions", scanMessages},
 		{"openai", http.MethodPost, "v1/chat/completions", scanMessages},
-		// F112: the vendor's own content-upload surface, which the enumerated
-		// default used to stream through quietly with the brokered credential.
+		// The vendor's own content-upload surface must not stream through
+		// quietly with the brokered credential under the enumerated default.
 		{"openai", http.MethodPost, "v1/files", scanOpaque},
 		{"openai", http.MethodPost, "v1/audio/transcriptions", scanOpaque},
 		{"openai", http.MethodPost, "v1/audio/translations", scanOpaque},
@@ -66,12 +66,12 @@ func TestClassifyLLMBothSpellingsOfEveryPromptBearingArm(t *testing.T) {
 		{"anthropic", http.MethodPost, "v1/models", scanOpaque},
 		{"anthropic", http.MethodGet, "models", scanNone},
 		{"anthropic", http.MethodGet, "v1/models", scanNone},
-		// F088/F112 SECOND AXIS — the VERB. hasScannableBody accepts POST, PUT
-		// and PATCH, so a PUT/PATCH body reaches the vendor exactly as a POST
-		// body does; the classifiers used to answer scanNone for anything but a
-		// POST, which made `PUT /v1/messages` a silent brokered forward with the
-		// secret in the body under mode=block. Every body-bearing verb that is
-		// not the vendor's documented POST must land on the fail-closed default.
+		// Second axis — the verb. hasScannableBody accepts POST, PUT and PATCH,
+		// so a PUT/PATCH body reaches the vendor exactly as a POST body does; a
+		// classifier answering scanNone for anything but a POST would make `PUT
+		// /v1/messages` a silent brokered forward with the secret in the body
+		// under mode=block. Every body-bearing verb that is not the vendor's
+		// documented POST must land on the fail-closed default.
 		{"anthropic", http.MethodPut, "v1/messages", scanOpaque},
 		{"anthropic", http.MethodPatch, "v1/messages", scanOpaque},
 		{"anthropic", http.MethodPut, "messages", scanOpaque},

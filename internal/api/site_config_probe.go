@@ -20,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -287,11 +288,10 @@ fi
 // produced" exit (redirectProbeInconclusiveCode); probe 1 still propagates
 // curl's own code.
 //
-// The connect/max-time budgets are shell defaults (${VAR:-N}), not literals,
-// purely so a test that deliberately stalls a probe (an accept-and-hold
-// listener) can shrink WARDYN_PROBE_CONNECT_TIMEOUT/WARDYN_PROBE_MAX_TIME
-// instead of waiting out the real 5s/15s per curl — unset, production gets
-// the same 5/15 it always has.
+// The connect/max-time budgets are shell defaults (${VAR:-N}) so a test that
+// deliberately stalls a probe (an accept-and-hold listener) can shrink
+// WARDYN_PROBE_CONNECT_TIMEOUT/WARDYN_PROBE_MAX_TIME instead of waiting out the
+// real 5s/15s per curl; unset, production gets the same 5/15 it always has.
 const redirectProbeScript = `ct=${WARDYN_PROBE_CONNECT_TIMEOUT:-5}
 mt=${WARDYN_PROBE_MAX_TIME:-15}
 to() { curl -sS -f -o /dev/null --connect-timeout "$ct" --max-time "$mt" "$@"; }
@@ -859,8 +859,12 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	var getSecret func(context.Context, string) ([]byte, error)
 	if s.cfg.Secrets != nil {
 		// Operator namespace ONLY, matching resolveRunUpstreamProxy: the probe
-		// must resolve the same value real dispatch would.
-		getSecret = s.cfg.Secrets.For("").Get
+		// must resolve the same value real dispatch would. A status read: the
+		// probe grades the value, it does not use it.
+		sec := s.cfg.Secrets.For("")
+		getSecret = func(ctx context.Context, name string) ([]byte, error) {
+			return sec.Get(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), name)
+		}
 	}
 	resolvedUpstream, upstreamFailReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxyURL, siteCfg.UpstreamProxySecretRef, getSecret)
 	var upstream string

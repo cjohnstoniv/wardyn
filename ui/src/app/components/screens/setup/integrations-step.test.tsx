@@ -38,7 +38,8 @@ describe("IntegrationsStep", () => {
 
   // X3-F8: the lede's "Secrets page" mention must be a real link, not just
   // named text with no way to get there.
-  it("X3-F8: the lede's Secrets page mention is a real link to /secrets", () => {
+  it("the lede's Secrets page mention is a real link to /secrets", () => {
+    // ticket: X3-F8
     renderStep();
     const link = screen.getByRole("link", { name: STEP_LEDE_LINK });
     expect(link).toHaveAttribute("href", "/secrets");

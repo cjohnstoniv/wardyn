@@ -18,13 +18,11 @@ import (
 
 // syslogAvailable reports whether a local syslog socket exists, so the tests
 // below skip rather than fail on a platform without one (CI containers, macOS
-// without syslogd). It lived in syslog.go, whose own comment said "used only in
-// tests" while it shipped inside wardynd; this is where its only two callers
-// are.
+// without syslogd). It lives here, beside its only two callers, not in
+// syslog.go where it would ship inside wardynd.
 //
-// ONE arm, not one per GOOS: the linux and darwin branches it replaces were
-// byte-identical dials of the local socket, and every other platform has none
-// to find.
+// One arm, not one per GOOS: the linux and darwin dials of the local socket
+// are byte-identical, and every other platform has none to find.
 func syslogAvailable() bool {
 	switch runtime.GOOS {
 	case "linux", "darwin":
@@ -83,8 +81,8 @@ func TestSyslogSink_Emit(t *testing.T) {
 	}
 }
 
-// TestSyslogSink_RemoteEmitDoesNotBlockOnHungCollector is the regression test
-// for the HIGH finding: a remote (tcp) syslog collector that accepts the
+// TestSyslogSink_RemoteEmitDoesNotBlockOnHungCollector: a remote (tcp) syslog
+// collector that accepts the
 // connection but never reads must NOT be able to block the Emit caller. Emit is
 // reached synchronously from request handlers via Fanout.Emit, so blocking here
 // stalls the API request path.
@@ -96,10 +94,9 @@ func TestSyslogSink_Emit(t *testing.T) {
 // that every Emit returns within a tight bound and that the drop/timeout
 // counter advances — proving the caller is never parked on the hung collector.
 //
-// RED-FIRST: against the previous implementation Emit called s.w.Info directly
-// (no buffer, no timeout), so once the collector's socket buffer filled, Emit
-// would block on the TCP write and this test would hang (and never increment a
-// drop counter).
+// An Emit that called s.w.Info directly (no buffer, no timeout) would block on
+// the TCP write once the collector's socket buffer filled, and this test would
+// hang (and never increment a drop counter).
 func TestSyslogSink_RemoteEmitDoesNotBlockOnHungCollector(t *testing.T) {
 	// Listener that accepts connections but never reads — simulates a hung
 	// remote collector. We hold the accepted conns open (without reading) so the
@@ -241,16 +238,15 @@ type wedgedWriter struct{ release chan struct{} }
 func (w *wedgedWriter) Info(string) error { <-w.release; return nil }
 func (w *wedgedWriter) Close() error      { return nil }
 
-// TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon is the
-// regression: the LOCAL-socket path (Network=="") must not block Emit when the
-// syslog daemon wedges. Emit is reached synchronously from request handlers via
-// Fanout.Emit, so a blocked local write stalls the API request path (and the
-// kill cascade) even after the PG write already succeeded.
+// TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon: the local-socket
+// path (Network=="") must not block Emit when the syslog daemon wedges. Emit
+// is reached synchronously from request handlers via Fanout.Emit, so a blocked
+// local write stalls the API request path (and the kill cascade) even after
+// the PG write already succeeded.
 //
-// RED-FIRST: against the previous implementation the local path called
-// s.w.Info directly with no buffer/timeout, so once the daemon wedged Emit would
-// block on the write and this test would hang. Routing the local socket through
-// the same bounded async buffer as the remote path fixes it.
+// A local path that called s.w.Info directly with no buffer/timeout would
+// block on the write once the daemon wedged, and this test would hang; the
+// local socket goes through the same bounded async buffer as the remote path.
 func TestSyslogSink_LocalSocketEmitDoesNotBlockOnWedgedDaemon(t *testing.T) {
 	// Shrink the wait: the property under test is "a wedged write is counted
 	// as a drop", not the exact production timeout (restored after — see
