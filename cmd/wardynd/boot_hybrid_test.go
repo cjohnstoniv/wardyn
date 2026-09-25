@@ -66,6 +66,50 @@ func (m *failingPutSecrets) Put(_ context.Context, name string, v []byte) error 
 	return nil
 }
 
+// nthPutFailsSecrets fails only its Nth call to Put (1-indexed, failPutN==0
+// means never), otherwise behaving like hybridSecrets. It isolates a single
+// Put failure at a specific point in a multi-Put sequence — e.g. the SECOND
+// Put in one bootHybrid call, the one that clears ResetPending after the
+// reset and the local audit row are both durable — from the first Put (the
+// one loadOrCreateSecret makes to store the freshly generated credential),
+// which failingPutSecrets above already covers by failing every Put.
+type nthPutFailsSecrets struct {
+	mu       sync.Mutex
+	data     map[string][]byte
+	puts     int
+	failPutN int
+}
+
+func newNthPutFailsSecrets(failPutN int) *nthPutFailsSecrets {
+	return &nthPutFailsSecrets{data: map[string][]byte{}, failPutN: failPutN}
+}
+
+func (m *nthPutFailsSecrets) Get(_ context.Context, name string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if v, ok := m.data[name]; ok {
+		return v, nil
+	}
+	return nil, fmt.Errorf("secret %q not found: %w", name, secretstore.ErrNotFound)
+}
+
+func (m *nthPutFailsSecrets) Put(_ context.Context, name string, v []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.puts++
+	if m.puts == m.failPutN {
+		return errors.New("put failed")
+	}
+	m.data[name] = v
+	return nil
+}
+
+func (m *nthPutFailsSecrets) stored(name string) []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data[name]
+}
+
 // hybridStore is the local audit table (empty) and the org_federation row.
 type hybridStore struct {
 	mu      sync.Mutex
@@ -474,5 +518,75 @@ func TestBootHybrid_RevokedAfterCompletionStaysRevokedOnRestart(t *testing.T) {
 	}
 	if enrols, _ := org.seen(); len(enrols) != 1 {
 		t.Fatalf("restart re-enrolled despite the same spent token: %d enrolments", len(enrols))
+	}
+}
+
+// TestBootHybrid_ClearingPutFailureRefusesThenResumes pins C-04 crash window
+// 3: a failure in the SECOND Put — the one that persists ResetPending=false
+// once the reset and the local audit row are both durable — must still
+// refuse the boot rather than run the forwarder with ResetPending durably
+// true, and must resume cleanly on the next boot without spending the
+// enrolment token again. If that Put's error were ever swallowed instead of
+// refusing, the forwarder would run with ResetPending stuck true, and a later
+// genuine revocation would be wiped by the next restart (case (d) again, via
+// a different crash window).
+func TestBootHybrid_ClearingPutFailureRefusesThenResumes(t *testing.T) {
+	org := &hybridOrg{}
+	srv := org.serve(t)
+	// 1st Put (loadOrCreateSecret storing the freshly generated credential)
+	// succeeds; 2nd Put (clearing ResetPending after the reset completes)
+	// fails once.
+	secrets := newNthPutFailsSecrets(2)
+	st := &hybridStore{cursor: 7, head: 7, revoked: true}
+	rec := &hybridRecorder{}
+
+	// Boot 1: the clearing Put fails.
+	status, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec)
+	if err == nil || !strings.Contains(err.Error(), "persist reset completion") {
+		t.Fatalf("boot 1 err = %v, want a refusal naming persist reset completion", err)
+	}
+	if status != nil {
+		t.Fatal("boot 1 must not return a status accessor after refusing")
+	}
+	cred, ok := parseOrgCredential(secrets.stored(secretOrgDeviceCredential))
+	if !ok || !cred.ResetPending {
+		t.Fatal("boot 1: the stored credential must still carry ResetPending=true after the clearing Put failed")
+	}
+
+	// Boot 2: the same (already-spent) token resumes and completes.
+	status, err = bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := status()
+	if got.Revoked || got.AckedSeq != 0 {
+		t.Fatalf("boot 2 left stale state: revoked=%v acked_seq=%d; want active, cursor 0", got.Revoked, got.AckedSeq)
+	}
+	if enrols, _ := org.seen(); len(enrols) != 1 {
+		t.Errorf("boot 2 spent the enrolment token again: %d enrolments", len(enrols))
+	}
+	if len(rec.events) < 2 {
+		t.Fatalf("local rows = %+v, want at least 2 device.local.enrol rows (at-least-once across the retry)", rec.events)
+	}
+	for _, ev := range rec.events {
+		if ev.Action != "device.local.enrol" {
+			t.Fatalf("unexpected local row: %+v", ev)
+		}
+	}
+	cred2, ok := parseOrgCredential(secrets.stored(secretOrgDeviceCredential))
+	if !ok || cred2.ResetPending {
+		t.Fatal("boot 2: ResetPending must be durably false once the resumed reset completed")
+	}
+
+	// Boot 3: a genuine revocation of the now-complete identity must stick.
+	st.mu.Lock()
+	st.revoked = true
+	st.mu.Unlock()
+	status, err = bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status().Revoked {
+		t.Fatal("boot 3: a genuine revocation was cleared by a restart")
 	}
 }
