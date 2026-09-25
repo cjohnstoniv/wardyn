@@ -18,6 +18,8 @@ only.
 |---|---|---|---|
 | LL1 roles | Each identity signs in by redirect through Entra. The admin sees the admin nav, a member does not, and an identity with no Wardyn role is refused | Playwright | `WARDYN_LIVE_ENTRA=1` |
 | LL2 Azure DevOps | A member who signed in once, with the credential captured, launches a run that does an Azure DevOps REST read and `git ls-remote` | Go | `WARDYN_LIVE_ADO=1` |
+| LL2b Azure DevOps, bounded | A run that starts with `read` reads, has its push refused and raised for approval, pushes once the harness approves `code_write` for the run, and gets 403 with no request raised for `repo_admin`, which is above the ceiling | Go | `WARDYN_LIVE_ADO_WRITE=1` |
+| LL2c personal access token probe | Whether a third-party app registration can mint a personal access token through the token lifecycle API. It logs a verdict either way and revokes anything it mints | Go | `WARDYN_LIVE_ADO_PAT_PROBE=1` |
 | LL3 Bedrock | One Claude Haiku 4.5 call on Identity Center role credentials in the capped member account, and the reply is checked | Go | `WARDYN_LIVE_BEDROCK=1` |
 | LL4 AWS SSO through Entra | The per-user AWS SSO device sign-in URL, taken through the console's own extractor, lands on an Entra sign-in page | Playwright | `WARDYN_LIVE_AWS_SSO=1` |
 
@@ -67,7 +69,7 @@ output to the OS temp directory. Nothing is written inside the repository.
 **One at a time.** Run live suites one at a time, and never alongside a heavy
 test gate.
 
-## One-time setup (the owner)
+## One-time setup
 
 ### Test identities
 
@@ -131,6 +133,44 @@ run this suite: nothing here reads them.
    spaces and punctuation. To use other names, set
    `WARDYN_LIVE_ADO_SPACED_PROJECT` and `WARDYN_LIVE_ADO_SPACED_REPO`.
 
+### Azure DevOps, bounded (LL2b)
+
+LL2b uses LL2's member, organisation, project and repository. It pushes one
+branch, `wardyn/<run-id>/ll2b`, and deletes it again, so the member needs
+Contribute on the repository. The branch sits in the run's own namespace on
+purpose: a push to any other ref counts as a protected-ref move and asks for
+`policy_bypass`, not `code_write`. The deployment needs:
+
+- an `entra` provider row for the organisation with `default_profile`
+  `["read"]` and a `capability_ceiling` that holds `code_write` but not
+  `repo_admin`, for example `["read", "code_write", "pr"]`;
+- `first_use_approval: deny_with_review` in the policy the member's runs get
+  (`deploy/kind/sso/default-policy.json` sets it).
+
+If it fails, the message maps the run's exit code to the step that went wrong.
+
+### Personal access token probe (LL2c)
+
+Wardyn dropped its minted-token mode because a measurement said Azure DevOps
+mints personal access tokens only for Microsoft's own clients. Microsoft's
+documentation says a user-delegated Entra token with `vso.pats` may mint.
+LL2c re-measures it on your tenant.
+
+It must not use Wardyn's app registration: consent decides a token's scopes,
+so `vso.pats` consented there would ride along in every run's token. Register
+a separate public-client app for it, and delete it afterwards:
+
+```bash
+az ad app create --display-name wardyn-pat-probe --public-client-redirect-uris http://localhost \
+  --query appId -o tsv            # -> WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID
+```
+
+Run it with `-v`. It logs a sign-in URL: open it in a browser, sign in as the
+member and consent. The verdict line reads `MINT WORKS` or `MINT REFUSED`,
+with Azure DevOps' own error. To measure the full-access scope as well, run it
+again with
+`WARDYN_LIVE_ADO_PAT_PROBE_SCOPE=499b84ac-1321-427f-aa17-267ca6975798/user_impersonation`.
+
 ### AWS (LL3, LL4)
 
 The AWS identity source is the same Entra tenant, and the Bedrock caller is a
@@ -156,7 +196,16 @@ export WARDYN_LIVE_IDENTITIES_FILE=$HOME/wardyn-entra-live/identities.json
 
 # LL2
 WARDYN_LIVE_ADO=1 WARDYN_LIVE_ADO_ORG=... WARDYN_LIVE_ADO_PROJECT=... WARDYN_LIVE_ADO_REPO=... \
-  go test -tags live -count=1 -v -run TestLiveADO ./internal/testlive/
+  go test -tags live -count=1 -v -run 'TestLiveADO$' ./internal/testlive/
+
+# LL2b (same variables as LL2)
+WARDYN_LIVE_ADO_WRITE=1 WARDYN_LIVE_ADO_ORG=... WARDYN_LIVE_ADO_PROJECT=... WARDYN_LIVE_ADO_REPO=... \
+  go test -tags live -count=1 -v -run TestLiveADOBounded ./internal/testlive/
+
+# LL2c (needs no running Wardyn)
+WARDYN_LIVE_ADO_PAT_PROBE=1 WARDYN_LIVE_ADO_ORG=... \
+WARDYN_LIVE_ADO_PAT_PROBE_TENANT_ID=... WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID=... \
+  go test -tags live -count=1 -v -timeout 10m -run TestLiveADOPATMintProbe ./internal/testlive/
 
 # LL3
 WARDYN_LIVE_BEDROCK=1 \

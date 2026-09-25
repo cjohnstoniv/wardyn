@@ -5,7 +5,7 @@
 # The role walk on the two COMPOSE-shaped SSO deployments, hermetic and local:
 #
 #   mprime       the desktop member-mode envelope (deploy/desktop/
-#                wardyn.env.m-prime.example: WARDYN_MEMBER_MODE, default role
+#                wardyn.env.m-prime.example: WARDYN_USER_DESKTOP, default role
 #                member, the MDM-held admin token)
 #   compose-sso  the plain `docker compose --profile sso` stack
 #                (deploy/compose/.env.example's role map)
@@ -59,8 +59,13 @@ for p in "${UP_PORT}" "${DEX_PORT}" "${PG_PORT}" "${REGISTRY_PORT}" "${SSH_PORT}
   _listen="$(ss -ltn "( sport = :${p} )")"
   grep -q LISTEN <<<"${_listen}" && die "port ${p} is taken — another stack? refusing to start"
 done
-_listen8088="$(ss -ltn "( sport = :8088 )")"
-grep -q LISTEN <<<"${_listen8088}" && die "the hermetic e2e backend (:8088) is up — one e2e backend at a time"
+# By process, not by port: run-ui-e2e.sh now picks a free port per run, so a
+# hermetic backend can be on any port, in any checkout. Its binary is always
+# .e2e-bin/wardynd; the runner covers the gap between two specs' backends.
+# Anchored to the interpreter (pgrep never matches itself, so the old [r]
+# bracket trick bought nothing): a bare "run-ui-e2e.sh" substring also matches
+# an editor on the file, a grep, or an agent's wrapper shell that mentions it.
+pgrep -f "bash .*scripts/run-ui-e2e[.]sh|[.]e2e-bin/wardynd" >/dev/null && die "a hermetic e2e backend (run-ui-e2e.sh or .e2e-bin/wardynd) is running — one e2e backend at a time"
 pgrep -f "[k]ind-sso-walk.sh" >/dev/null && die "a kind SSO walk is running — one e2e backend at a time"
 for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}"; do
   docker image inspect "${img}" >/dev/null 2>&1 || die "${img} is not on ${DOCKER_HOST:-the default daemon} — build it from this tree (deploy/compose/Dockerfile.wardynd / Dockerfile.proxy)"
@@ -128,9 +133,9 @@ for shape in "${SHAPES[@]}"; do
 WARDYN_MANAGED_DIR=${SCRATCH}/managed
 WARDYN_AGENT_IMAGES=
 WARDYN_WORKSPACES_ROOT=${SCRATCH}/src
-WARDYN_MEMBER_WORKSPACE_ROOTS=${SCRATCH}/src
-WARDYN_MEMBER_WRITABLE_ROOTS=${SCRATCH}/src
-WARDYN_MEMBER_WRITABLE_DENY=${SCRATCH}/src/.git
+WARDYN_USER_WORKSPACE_ROOTS=${SCRATCH}/src
+WARDYN_USER_WRITABLE_ROOTS=${SCRATCH}/src
+WARDYN_USER_WRITABLE_DENY=${SCRATCH}/src/.git
 WARDYN_LOCAL_OPERATOR=local:roles-harness
 WARDYN_SSH_ADVERTISE=127.0.0.1:${SSH_PORT}
 EOF

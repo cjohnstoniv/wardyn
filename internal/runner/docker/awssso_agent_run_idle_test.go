@@ -13,11 +13,11 @@ import (
 	"time"
 )
 
-// The AWS sign-in sandbox runs the chained login command ITSELF now: an
-// operator who opened that run from the Runs list used to get a bare prompt,
-// type the obvious half (`aws sso login`), see "Successfully logged into Start
-// URL", and capture nothing — the token stays in ~/.aws/sso/cache and dies with
-// the container, because wardyn-aws-sso is the half that uploads it.
+// The AWS sign-in sandbox runs the chained login command itself: with only a
+// bare prompt, an operator who opened that run from the Runs list would type
+// the obvious half (`aws sso login`), see "Successfully logged into Start
+// URL", and capture nothing — the token stays in ~/.aws/sso/cache and dies
+// with the container, because wardyn-aws-sso is the half that uploads it.
 //
 // These are PURE-SHELL tests, the idiom attach_bashrc_test.go uses: they run the
 // REAL scripts, because the behaviour under test is shell and only a shell can
@@ -672,7 +672,7 @@ func TestSigninPane_EveryPathReachesTheShell(t *testing.T) {
 }
 
 // TestSigninPane_PrepNeverFinishedSaysSo — the 300 s wait has two ends, and the
-// second one used to be dishonest. A prep that never writes prep-done means no
+// second one must be honest too. A prep that never writes prep-done means no
 // MITM CA and no [sso-session wardyn] block, so the pair would fail — safely
 // (TLS verify fails closed, the CLI errors, nothing is captured) but on an error
 // about a missing profile, ending on the FAILED line, which names a command that
@@ -709,7 +709,7 @@ func TestSigninPane_PrepNeverFinishedSaysSo(t *testing.T) {
 }
 
 // TestSigninPane_FailedLineIsProseNotAFormat — the FAILED line is a canon string
-// under review, and it used to be handed to printf as a FORMAT. Two ways that
+// under review, so it must not be handed to printf as a format. Two ways that
 // breaks on an edit nobody would call risky: a literal `%` ("100% of the time")
 // makes printf emit garbage or an "invalid number" error, and dropping the `%s`
 // makes the command vanish silently — leaving "or run:" with nothing after it.

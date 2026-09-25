@@ -36,7 +36,7 @@ export const SESSION_ENDED_REASON = "Your session ended. Sign in again to contin
 // protocol-relative host a router's replaceState would dial cross-origin.
 // `/\evil.com` is the same trick some browsers normalize a backslash into a
 // slash for. Neither a bare `/` (the landing decision, not "where you were")
-// nor `/setup` (its own gate) is a real return path. Applied at BOTH ends —
+// nor `/setup` (its own gate) is a real return path, in either view. Applied at BOTH ends —
 // here at capture (belt) and again by the caller at restore (suspenders) —
 // one rule, checked twice, rather than trusted to travel through state
 // unchecked.
@@ -46,7 +46,9 @@ export function safeReturnPath(path: string | null | undefined): string {
     !path.startsWith("//") &&
     !path.startsWith("/\\") &&
     path !== "/" &&
-    path !== "/setup"
+    path !== "/setup" &&
+    path !== "/admin" &&
+    path !== "/admin/setup"
     ? path
     : "/runs";
 }
@@ -80,6 +82,13 @@ export function setToken(token: string | null, remember = false): void {
 
 export function onUnauthorized(fn: (reason: string, path: string) => void): void {
   _unauthorized = fn;
+}
+
+// Any 403 may mean this tab's view went stale (another tab switched the session
+// under it), so the view re-sync re-reads /me at once (view-switch.tsx).
+let _forbidden: (() => void) | null = null;
+export function onForbidden(fn: (() => void) | null): void {
+  _forbidden = fn;
 }
 
 export class HttpError extends Error {
@@ -239,6 +248,7 @@ export async function wfetch(
     _unauthorized?.(SESSION_ENDED_REASON, safeReturnPath(window.location.pathname));
     throw new HttpError(401, "Unauthorized");
   }
+  if (res.status === 403) _forbidden?.();
   return res;
 }
 

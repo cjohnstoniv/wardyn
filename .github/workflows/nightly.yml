@@ -378,10 +378,10 @@ jobs:
             dockerfile: deploy/images/aws-sso/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - name: Build both platforms (no push, no load — the result is discarded)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -524,6 +524,20 @@ jobs:
             test/reports/e2e/kind-sso/**
           if-no-files-found: error
 
+  # Coverage-guided fuzzing of the session-cookie decoder: a cookie whose HMAC
+  # does not verify must never decode into a session. Every PR runs the seed
+  # corpus as an ordinary test; this lane searches past it.
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Fuzz the session decoder
+        run: go test -run '^$' -fuzz '^FuzzDecodeSession$' -fuzztime 5m ./internal/auth/oidc/
+
   # ── The notification this workflow never had ───────────────────────────────
   # Nothing in .github/workflows/ used `if: failure()`, opened an issue, or
   # notified anywhere, and no nightly job is a branch-protection context — so a
@@ -541,8 +555,55 @@ jobs:
   # CI home of the guided first-run and of scripts/test-reset-all-sandbox-reap.sh.
   # A new lane joins this list; scripts/test-repo-guards.sh (in `make
   # test-scripts`) fails the build if one does not.
+  # T-07: the collision scripts/check-migration-numbers.sh (make lint) cannot
+  # see — two PRs open at once, each picking the next free migration number
+  # off origin/main as it stood when THAT PR's own gate ran, both green in
+  # isolation. It flags two open main-targeted PRs adding the same migration
+  # prefix (no merge needed), then merges every open, non-draft, main-targeted
+  # PR together, one at a time, in a throwaway worktree and runs go vet (all
+  # tag sets), `go test ./internal/db -run Migrat`, and the internal/api AST
+  # guards over the result. A binary search over the merge sequence names each
+  # PR that breaks them; PRs that conflict with an earlier one are set aside
+  # and listed. Also flags any open PR stacked on a branch that is no longer
+  # open (merged/closed) and so should have been retargeted to main. psql
+  # (preinstalled on ubuntu-latest) resets the database between check runs.
+  #
+  # Informational: it never merges or pushes anything for real, only reports.
+  # No measured baseline yet (new job) — 180 min budgets for about 30 check
+  # runs (a live dry run against 92 open PRs: 4 bad PRs, a binary search
+  # each); re-measure and tighten once nightly runs exist (docs/CI.md).
+  migration-merge-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      pull-requests: read
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: wardyn
+          POSTGRES_DB: wardyn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Octopus scratch merge + stacked-base retarget check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+        run: ./scripts/nightly-migration-merge-check.sh
+
   notify-new-lanes:
-    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk]
+    needs: [task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke, kind-sso-walk, fuzz]
     if: failure()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -563,7 +624,7 @@ jobs:
             gh issue comment "$existing" --body "Still failing: $RUN_URL"
           else
             body=$(printf '%s\n' \
-              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build) or kind-sso-walk." \
+              "One of the nightly lanes this job watches failed: task-e2e-live, ssh-e2e-live, test-drive, ci-mode-dogfood, docker-tagged-live, byoi-e2e-live, ui-sandbox-e2e-live, buildx-smoke (multi-arch build), kind-sso-walk or fuzz." \
               "" \
               "Every one of them was green when wired, and none shares the pre-existing failures of the older e2e-live job (deliberately not watched here) - so this is a real regression rather than known noise." \
               "" \

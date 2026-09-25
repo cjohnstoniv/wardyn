@@ -22,7 +22,7 @@ import (
 // SAME chi.Walk-proven routeMatrix TestAuthzMatrix executes once.
 //
 // The shapes differ only in the three knobs the daemon reads at this layer —
-// the admin token, WARDYN_SSO_ONLY and WARDYN_MEMBER_MODE — so each is that
+// the admin token, WARDYN_SSO_ONLY and WARDYN_USER_DESKTOP — so each is that
 // config over the maximally-mounted matrix server. Which role a sign-in
 // DERIVES on each shape is the other half, pinned against the shipped config
 // files by internal/auth/oidc's TestShippedShapeRoleDerivation; the live role
@@ -43,8 +43,8 @@ func TestSSOShapeRoleMatrix(t *testing.T) {
 	cast := ssoShapeCast{
 		admin:   ssoPersona{name: "admin", role: oidc.RoleAdmin, operator: true, security: true, cookie: ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)},
 		sec:     ssoPersona{name: "security_admin", role: oidc.RoleSecurityAdmin, security: true, cookie: ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)},
-		member:  ssoPersona{name: "member", role: oidc.RoleMember, cookie: ssoSession(t, ssoShapeMemberSub, "member@corp.example", oidc.RoleMember)},
-		member2: ssoPersona{name: "member2", role: oidc.RoleMember, cookie: ssoSession(t, "sub-member2", "member2@corp.example", oidc.RoleMember)},
+		member:  ssoPersona{name: "member", role: oidc.RoleUser, cookie: ssoSession(t, ssoShapeMemberSub, "member@corp.example", oidc.RoleUser)},
+		member2: ssoPersona{name: "member2", role: oidc.RoleUser, cookie: ssoSession(t, "sub-member2", "member2@corp.example", oidc.RoleUser)},
 	}
 	for _, sh := range shapes {
 		t.Run(sh.name, func(t *testing.T) {

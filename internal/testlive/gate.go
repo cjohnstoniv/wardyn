@@ -18,6 +18,7 @@ import (
 const (
 	EnvEntra      = "WARDYN_LIVE_ENTRA"
 	EnvADO        = "WARDYN_LIVE_ADO"
+	EnvADOWrite   = "WARDYN_LIVE_ADO_WRITE" // LL2b: pushes and deletes one scratch branch
 	EnvBedrock    = "WARDYN_LIVE_BEDROCK"
 	EnvAWSSSO     = "WARDYN_LIVE_AWS_SSO"
 	EnvBaseURL    = "WARDYN_LIVE_BASE_URL"
@@ -30,6 +31,12 @@ const (
 	// optional, defaulting to the fixture names docs/LIVE-TESTS.md lists.
 	EnvADOSpacedProject = "WARDYN_LIVE_ADO_SPACED_PROJECT"
 	EnvADOSpacedRepo    = "WARDYN_LIVE_ADO_SPACED_REPO"
+
+	// LL2c, the personal-access-token mint probe, on its own throwaway app.
+	EnvADOPATProbe       = "WARDYN_LIVE_ADO_PAT_PROBE"
+	EnvADOPATProbeTenant = "WARDYN_LIVE_ADO_PAT_PROBE_TENANT_ID"
+	EnvADOPATProbeClient = "WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID"
+	EnvADOPATProbeScope  = "WARDYN_LIVE_ADO_PAT_PROBE_SCOPE"
 
 	EnvSSORegion    = "WARDYN_LIVE_AWS_SSO_REGION"
 	EnvSSOTokenFile = "WARDYN_LIVE_AWS_SSO_TOKEN_FILE"

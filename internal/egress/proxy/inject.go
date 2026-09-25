@@ -104,9 +104,6 @@ type injEntry struct {
 // injection must never widen egress nor leak a secret to a wildcard/approved
 // host. Returns an error if any mint fails (fail closed at startup).
 func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
 	inj := &injector{
 		byHost: make(map[string]*injEntry), base: base, token: token, client: client,
 		reauth:    newReauthCoordinator(),
@@ -333,7 +330,7 @@ func (i *injector) requiresTLS(host string) bool {
 // every rendering of ONE header credential the proxy holds — not merely the
 // rendering the call site happens to be carrying.
 //
-// TRUST BOUNDARY (F155 — the mask is per-RENDERING, not per-credential; read
+// TRUST BOUNDARY (the mask is per-RENDERING, not per-credential; read
 // before trimming an arm): procRegistry is what stands between a proxy-held
 // credential and every sandbox-facing error body (Proxy.httpError ->
 // maskDecisionBytes) and every decision-log line (decisions.go). And
@@ -387,7 +384,7 @@ func registerHeaderCredential(formatted string) {
 // with http.Request.SetBasicAuth(user, tok) — the git-broker installation token
 // and the PAT lane's minted token.
 //
-// TRUST BOUNDARY (F155): SetBasicAuth does not send tok; it sends
+// TRUST BOUNDARY: SetBasicAuth does not send tok; it sends
 // base64(user + ":" + tok). Registering only the raw token therefore leaves the
 // form that is actually on the wire — and the form that lands in a transport
 // error quoting the request — unmasked. Both go in, via the same one definition
@@ -403,7 +400,7 @@ func registerBasicAuthCredential(user, tok string) {
 // stripSandboxCredentials removes EVERY credential header the sandbox may have
 // put on a request that is about to be injected with an operator-brokered one.
 //
-// TRUST BOUNDARY (F104 — this is the single definition, do not re-spell it at a
+// TRUST BOUNDARY (this is the single definition, do not re-spell it at a
 // call site): setting the brokered header is not enough, because the sandbox
 // chooses the OTHER headers. A rule that injects under `X-Api-Key` leaves an
 // `Authorization: Bearer <sandbox key>` untouched, and which of the two the
@@ -465,7 +462,7 @@ func stripSandboxCredentials(h http.Header, owned string) {
 // injectableTransport reports whether a brokered credential may be attached to
 // a forward request bound for scheme://host:port.
 //
-// TRUST BOUNDARY (F110): injection keys on the lowercased hostname alone, and
+// TRUST BOUNDARY: injection keys on the lowercased hostname alone, and
 // addAPIKeyGrant couples each grant to a BARE exact allowlist entry, which
 // policy.go matches on ANY port. The SANDBOX therefore picks the transport:
 // `POST http://<host>:443/…` on the plain lane made the proxy attach the
@@ -479,7 +476,7 @@ func stripSandboxCredentials(h http.Header, owned string) {
 //
 //   - https: the proxy runs the TLS leg. Always injectable.
 //   - cleartext to port 443: NEVER, whatever the allowlist says. This is the
-//     unconditional clamp F110 named, kept unconditional on purpose: an
+//     unconditional clamp, kept unconditional on purpose: an
 //     AUTHORED port cannot re-admit it. `allowed_domains: ["files.example.org:443"]`
 //     is the port-scoping remedy docs/POLICIES.md recommends, and addAPIKeyGrant
 //     (internal/api/llmcred.go) appends the BARE host beside whatever the
@@ -547,7 +544,7 @@ func (p *Proxy) injectableTransport(scheme, host string, port int) bool {
 // ships as its HTTPS port. Cleartext credential injection is refused to ALL of
 // them regardless of authoring.
 //
-// 443 alone was the F110 leak one port over: AuthoredPortFor deliberately reads
+// 443 alone would leave the same leak one port over: AuthoredPortFor deliberately reads
 // a port-qualified entry as the operator declaring the transport, so
 // `allowed_domains: ["vendor.example:8443"]` plus an api_key grant handed the
 // operator's credential to `POST http://vendor.example:8443/…` IN CLEARTEXT —
@@ -563,7 +560,7 @@ var tlsConventionalPorts = map[int]bool{443: true, 8443: true, 9443: true}
 
 // applyInjection is the plain forward lane's credential injection.
 //
-// The split is deliberate (F110): the PROXY decides whether the TRANSPORT may
+// The split is deliberate: the PROXY decides whether the TRANSPORT may
 // carry a brokered credential — that question needs the run's policy and the
 // vendor table, neither of which the injector holds — and the INJECTOR decides
 // whether a rule matches the host. A host with no rule is left byte-for-byte
@@ -649,7 +646,9 @@ func resolveInjectionQuery(ctx context.Context, base, token string, grantID uuid
 		// SANDBOX on the MITM refresh-failure path (serveMITMRequest), so it is an
 		// amplifier for control-plane text. Enough to diagnose a fail-closed
 		// startup, not a 4 KiB relay. (The mask still covers it — see httpError.)
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		// 1 KiB, not less: the longest Azure DevOps refusal plus its reason is
+		// past 256 bytes, and a cut body parses as no sentence at all.
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		// 423 is not a refusal: the control plane is asking for a human. It is
 		// answered by exactly one resolve (the captured-AWS-SSO session, whose
 		// owner has to sign in again) and becomes a typed error the re-resolve
