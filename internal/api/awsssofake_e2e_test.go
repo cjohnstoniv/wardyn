@@ -143,23 +143,20 @@ func parseRawSSOTime(v string) (time.Time, error) {
 // TestAWSSSOConfigAcceptedByRealBotocore_MultiAccountPinned is the
 // multi-account half: a blob carrying the PINNED account/role — the one at
 // index 1, never index 0 — generates an ~/.aws that real botocore resolves
-// AGAINST THAT ACCOUNT.
+// against that account.
 //
-// This used to say it REPLACED a live walk, on the grounds that the login
-// sandbox had no AWS_ENDPOINT_URL_SSO* passthrough and that adding one "would
-// be a production escape hatch". The second half was true of an UNGATED
-// passthrough only. 0.7.4 adds a gated one — WARDYN_AWS_SSO_ENDPOINT_OVERRIDE,
-// refused unless WARDYN_ALLOW_TEST_ENDPOINTS=true, WARNing on every boot, and
-// published as residual #45 (internal/api/awssso_endpoint.go) — so the live
-// walk exists: scripts/kind-sso-walk.sh signs two Dex principals in on a kind
-// cluster against test/awsssofake and asserts, from the fake's own /_seen, that
-// the MEMBER's pinned pair is what botocore asked for.
+// The live walk is scripts/kind-sso-walk.sh: it signs two Dex principals in on a
+// kind cluster against test/awsssofake, through the gated
+// WARDYN_AWS_SSO_ENDPOINT_OVERRIDE passthrough (refused unless
+// WARDYN_ALLOW_TEST_ENDPOINTS=true, WARNing on every boot, and published as
+// residual #45 in internal/api/awssso_endpoint.go), and asserts from the fake's
+// own /_seen that the member's pinned pair is what botocore asked for.
 //
-// This test is therefore no longer a substitute for that walk; it is its
-// hermetic, Docker-only-gated FLOOR. It runs with no cluster, in seconds, and
-// it isolates the GENERATOR: an identical-shaped config naming the wrong
-// account passes the sibling test above and fails this one, because the
-// assertion is on what botocore asked the portal to mint. A real two-entitlement
+// This test is not a substitute for that walk; it is its hermetic,
+// Docker-only-gated floor. It runs with no cluster, in seconds, and it isolates
+// the generator: an identical-shaped config naming the wrong account passes the
+// sibling test above and fails this one, because the assertion is on what
+// botocore asked the portal to mint. A real two-entitlement
 // AWS tenant remains owner-hardware-only.
 //
 // The sibling test above proves the generator's SHAPE with one account. This

@@ -220,7 +220,7 @@ IMAGES_ORIGIN=built
 #
 # The identity + issuer are the same two values docs/VERIFY.md s1/s2 tell an
 # operator to paste, and they live INSIDE the function so extracting it
-# (scripts/test-claims-match-code.sh C4) yields something that actually runs.
+# (scripts/test-up-probes.sh C4) yields something that actually runs.
 # Keyless: the check is "built by THIS repo's release workflow, from a tag",
 # not "signed by a key someone holds".
 cosign_verify() {

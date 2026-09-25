@@ -96,8 +96,8 @@ var writeMethods = []string{http.MethodPost, http.MethodPut, http.MethodPatch, h
 // GIT-OVER-HTTP IS OUT OF SCOPE and is refused by name rather than classified.
 // The ref names a push carries live in a pack protocol this catalogue does not
 // parse, so no answer here could tell a clone from a push onto a protected
-// branch; both used to land on CapUnclassifiedWrite, which told a caller
-// nothing about which it had. The transport is gated on its own.
+// branch; distinguishing them here would only be a guess. The transport is
+// gated on its own.
 func Classify(req Request) (Verdict, error) {
 	method, err := effectiveMethod(req.Method, req.Header)
 	if err != nil {
