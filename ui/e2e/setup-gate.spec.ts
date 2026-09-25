@@ -256,9 +256,8 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await mockGatedStatus(page, { onboarded: true });
     await page.goto("/runs");
     await expect(page).toHaveURL(/\/runs/);
-    await expect(
-      page.getByText(/each confined behind its own barrier/i),
-    ).toBeVisible();
+    // /runs is the User view, whose description is "Your runs · N" (M-7).
+    await expect(page.getByText(/^Your runs · \d+$/)).toBeVisible();
   });
 
   test("negative control: a member is never gated — their checks are redacted", async ({

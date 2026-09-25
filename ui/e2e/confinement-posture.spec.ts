@@ -91,7 +91,8 @@ test.describe("confinement posture (#162)", () => {
       }
     });
     await mockHealthz(page, { runner: "k8s", network_policy: "acknowledged" });
-    await gotoConsole(page);
+    // The band is Admin-view only (#635).
+    await gotoConsole(page, "admin");
     await page.getByRole("button", { name: "How to prove it" }).click();
 
     await expect(page).toHaveURL(/\/admin\/setup\?step=environment$/);
