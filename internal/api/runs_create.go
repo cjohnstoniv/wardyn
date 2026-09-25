@@ -607,8 +607,8 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 		warnings = append(warnings, fmt.Sprintf(
 			"codex-cli has no SSH clone lane — dropping ssh_key grant(s) for %s; use an HTTPS/PAT source for this repo, or run it under claude-code",
 			strings.Join(hosts, ", ")))
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.ssh.unsupported_agent",
-			req.Agent, "failure", mustJSON(map[string]any{"dropped_hosts": hosts})))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.ssh.drop",
+			req.Agent, "failure", mustJSON(map[string]any{"reason": "unsupported_agent", "dropped_hosts": hosts})))
 		gw.sshGrants = map[string]string{}
 		gw.sshEgress = nil
 	}
@@ -649,10 +649,14 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string,
 	scmSite types.SiteConfig,
 ) {
-	if added := unionWorkspaceEgress(spec, wsRefs); len(added) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.egress",
-			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
+	// One action for every lane that widens the allowlist; `kind` names the lane.
+	auditAdded := func(kind string, added []string) {
+		if len(added) > 0 {
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.egress.add",
+				runID.String(), "success", mustJSON(map[string]any{"kind": kind, "added_domains": added})))
+		}
 	}
+	auditAdded("workspace", unionWorkspaceEgress(spec, wsRefs))
 	// Repo clone host(s) each referenced workspace needs: a
 	// non-GitHub HTTPS clone (GitLab, self-hosted git) reaches its forge as an
 	// ordinary egress host, and nothing else in this union adds it — so a real run
@@ -666,10 +670,7 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 	for _, ws := range wsRefs {
 		cloneAdded = append(cloneAdded, unionAllowedDomains(spec, workspaceCloneEgress(ws))...)
 	}
-	if len(cloneAdded) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.clone_egress",
-			runID.String(), "success", mustJSON(map[string]any{"added_domains": cloneAdded})))
-	}
+	auditAdded("workspace_clone", cloneAdded)
 	// Site-config SCM hosts (GHES / ADO Server) are a CLONE lane, so union them
 	// only when this run actually declares a repo: a sealed
 	// local-dir-only analysis run must not inherit an unauthenticated HTTPS lane to
@@ -689,19 +690,10 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 		gw.firstGitHubGrantID != nil ||
 		len(gw.gitGrants) > 0 || len(gw.gitPATGrants) > 0 || len(gw.sshGrants) > 0
 	if declaresRepo {
-		if added := unionSiteConfigScmHosts(spec, scmSite); len(added) > 0 {
-			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.site_config.egress",
-				runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
-		}
+		auditAdded("site_config", unionSiteConfigScmHosts(spec, scmSite))
 	}
-	if added := unionAllowedDomains(spec, gw.sshEgress); len(added) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.ssh.egress",
-			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
-	}
-	if added := unionAllowedDomains(spec, gw.gitPATEgress); len(added) > 0 {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.git_pat.egress",
-			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
-	}
+	auditAdded("ssh", unionAllowedDomains(spec, gw.sshEgress))
+	auditAdded("git_pat", unionAllowedDomains(spec, gw.gitPATEgress))
 }
 
 // warnCeilingDeniedWorkspaceEgress names, at CREATE time, every host an operator

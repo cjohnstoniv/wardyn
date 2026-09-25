@@ -47,7 +47,7 @@ type Claims struct {
 // the token names a run. It carries that run id, which is the whole reason the
 // type exists: the API's internal-auth boundary sees only an error, so without it
 // "a run is calling /internal/* with a dead identity" cannot be recorded against
-// the run it is about (internal/api's run.identity.expired row).
+// the run it is about (internal/api's run.identity.expire row).
 //
 // It is NOT an authorization result. Verify still returns nil claims with it, and
 // every caller must keep failing closed — this says which run to TELL ABOUT the

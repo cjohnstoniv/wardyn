@@ -53,6 +53,12 @@ type dockerAPI interface {
 	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
 	ContainerKill(ctx context.Context, containerID string, options client.ContainerKillOptions) (client.ContainerKillResult, error)
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	// ContainerPause / ContainerUnpause back runner.Freezer (FreezeSandbox /
+	// ThawSandbox, RL-6): pause the agent's process in place — memory, disk and
+	// any established TCP connection keep their state — without stopping or
+	// removing it.
+	ContainerPause(ctx context.Context, containerID string, options client.ContainerPauseOptions) (client.ContainerPauseResult, error)
+	ContainerUnpause(ctx context.Context, containerID string, options client.ContainerUnpauseOptions) (client.ContainerUnpauseResult, error)
 	// ContainerWait blocks until the container reaches condition and yields its
 	// exit code. Used by Wait for EXEC-LESS runtimes (krun microVMs), whose agent
 	// workload runs as the container's MAIN process rather than a docker exec.

@@ -17,7 +17,7 @@ import (
 
 // TestCapAuditTarget is B6-F1's unit half — the rule, without a database.
 //
-// The audit `target` is `r.URL.Path` on the authz.denied / auth.failed lanes,
+// The audit `target` is `r.URL.Path` on the authz.denied / auth.fail lanes,
 // and chi matches a path of any length up to MaxHeaderBytes+4096 (~1 MiB).
 // The AUTHENTICATED lane has no limiter, so a member looping
 // `PUT /policies/<1 MiB>` writes megabyte rows into an append-only table an

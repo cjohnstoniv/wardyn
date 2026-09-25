@@ -132,7 +132,7 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 	// Audited whenever it happens, not only when it is said out loud: the
 	// operator's record of a collision must not shrink because the caller who
 	// caused it owns none of the runs it collided with.
-	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.collision",
+	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.collide",
 		workspacePath, "success", mustJSON(map[string]any{"other_runs": others})))
 	if len(visible) == 0 {
 		// Nothing to name that this caller may see. The advisory sentence is
@@ -653,7 +653,7 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		// Every way launch NARROWED what the caller asked for (resolveRunPolicy's
 		// clamp + capability notes). Request-scoped like the fields above, and this
 		// RUN-BOUND row is the only place a member can read them back: an inline
-		// policy's own policy.inline row carries no run id, and run.policy.effective
+		// policy's own policy.inline.apply row carries no run id, and run.policy.resolve
 		// carries the merged policy, not the list of tightenings that produced it.
 		// The run-detail "Effective policy" widget reads exactly this.
 		data["clamp_warnings"] = clampWarnings

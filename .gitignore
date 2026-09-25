@@ -140,6 +140,9 @@ ds-bundle/
 !/docs/design/admin-access-canon.md
 # #536's frozen-strings table (mock packet MP-A; the packet stays local).
 !/docs/design/model-providers-canon.md
+# #491's mock packet (owner-approved 2026-09-25) — the default-role-admin
+# warning proposal that widens #484's ssoRBACCheck.
+!/docs/design/491-default-admin-mock/
 # CONSOLE-RULES.md is a permanent doc, not a mock round: docs/README.md indexes it
 # and every UI review cites it, so it ships with the repo like any other doc.
 !/docs/design/SYNC.md

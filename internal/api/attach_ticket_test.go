@@ -181,7 +181,7 @@ func TestAttachWS_TicketRoleAuthorization(t *testing.T) {
 // TestAttachWS_TicketDenialsAreAudited: the ?ticket= lane is the only route to a
 // live PTY that never runs humanOrAdminAuth, and it audited NONE of its own
 // refusals — so probing it left no trace at all, where the sibling SSH gateway
-// records every rejection under ssh.auth. Both refusals in the lane (a ticket
+// records every rejection under ssh.authenticate. Both refusals in the lane (a ticket
 // that does not resolve, and a ticket that resolves but does not authorize the
 // run it names) must now land in the trail, with the principal named only when
 // the ticket actually proved one.

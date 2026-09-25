@@ -266,10 +266,13 @@ func TestPG_ListCapabilityGrantsForPage_MatchesUnpaged(t *testing.T) {
 	ctx := context.Background()
 	pg := store.NewPG(pool)
 	user, group, userType := "cap-page-u-"+uuid.NewString(), "cap-page-g-"+uuid.NewString(), "cap-page-t-"+uuid.NewString()[:8]
+	// Another type's grant, which neither read may return for this caller.
+	otherType := "cap-page-other-" + uuid.NewString()[:8]
 	for _, g := range []types.CapabilityGrant{
 		{SubjectType: types.CapabilitySubjectUser, Subject: user},
 		{SubjectType: types.CapabilitySubjectGroup, Subject: group},
 		{SubjectType: types.CapabilitySubjectUserType, Subject: userType},
+		{SubjectType: types.CapabilitySubjectUserType, Subject: otherType},
 	} {
 		g.Capability, g.Value, g.Effect, g.CreatedBy = "egress_host", "example.com", types.CapabilityAllow, "test"
 		if _, err := pg.UpsertCapabilityGrant(ctx, g); err != nil {
@@ -300,5 +303,12 @@ func TestPG_ListCapabilityGrantsForPage_MatchesUnpaged(t *testing.T) {
 	}
 	if len(got) != len(want) {
 		t.Errorf("paged %d rows, unpaged %d", len(got), len(want))
+	}
+	for name, rows := range map[string][]types.CapabilityGrant{"paged": got, "unpaged": want} {
+		for _, g := range rows {
+			if g.Subject == otherType {
+				t.Errorf("the %s read returns user type %q's grant to a caller of type %q", name, otherType, userType)
+			}
+		}
 	}
 }
