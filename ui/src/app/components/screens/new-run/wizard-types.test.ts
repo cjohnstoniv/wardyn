@@ -14,22 +14,17 @@ import {
   impliedEgressHosts,
   secretAutoGrants,
 } from "./wizard-types";
-import type { Workspace } from "../../../lib/types";
+import type { Workspace, WorkspaceKind, WorkspaceRequirementsMap } from "../../../lib/types";
+import { makeWorkspace } from "../../../../test/factories";
 
-// Workspace.requirements isn't on the shared Workspace TS type yet (see
-// wizard-types.ts's own import comment) — cast, matching how the module itself
-// reads it.
 function localDirWorkspace(id: string, requirements: Record<string, unknown> = {}): Workspace {
-  return {
+  return makeWorkspace({
     id,
     name: id,
     kind: "local_dir",
     source: `/home/me/${id}`,
-    status: "scanned",
-    created_at: "",
-    updated_at: "",
-    requirements,
-  } as Workspace;
+    requirements: requirements as WorkspaceRequirementsMap,
+  });
 }
 
 // Honesty constraint (Stage 4): the TRUST BOUNDARY in
@@ -164,24 +159,18 @@ describe("isValidDomain — never stricter than the server's ValidDomainEntry", 
 // SELECTED workspace contributes the FIRST local_dir mount, never simply
 // selections[0]. primaryWorkspaceId is the client-side twin.
 describe("primaryWorkspaceId — mounts-then-repos, mirroring the server's own pick (PARITY-3)", () => {
-  const repoWs = {
+  const repoWs = makeWorkspace({
     id: "ws-repo",
     name: "api-service",
     kind: "repo",
     source: "acme/api-service",
-    status: "scanned",
-    created_at: "",
-    updated_at: "",
-  } as Workspace;
-  const localWs = {
+  });
+  const localWs = makeWorkspace({
     id: "ws-local",
     name: "payments-local",
     kind: "local_dir",
     source: "/home/me/payments",
-    status: "scanned",
-    created_at: "",
-    updated_at: "",
-  } as Workspace;
+  });
 
   it("picks the FIRST local_dir-sourced selection even when a repo was attached first", () => {
     const selections = [{ workspaceId: "ws-repo" }, { workspaceId: "ws-local" }];
@@ -203,19 +192,16 @@ describe("primaryWorkspaceId — mounts-then-repos, mirroring the server's own p
   // (resolvableSources), not the flattened single-mirror kind (PARITY-2) — a
   // local_dir source anywhere in it still makes it primary-eligible.
   it("a multi-source workspace with a local_dir source anywhere in it still counts", () => {
-    const mixedWs = {
+    const mixedWs = makeWorkspace({
       id: "ws-mixed",
       name: "mixed",
-      kind: "" as unknown as Workspace["kind"],
+      kind: "" as unknown as WorkspaceKind,
       source: "",
-      status: "scanned",
-      created_at: "",
-      updated_at: "",
       sources: [
         { type: "repo", source: "acme/widgets" },
         { type: "local_dir", path: "/home/me/widgets" },
       ],
-    } as Workspace;
+    });
     const selections = [{ workspaceId: "ws-repo" }, { workspaceId: "ws-mixed" }];
     expect(primaryWorkspaceId(selections, [repoWs, mixedWs])).toBe("ws-mixed");
   });
@@ -237,21 +223,18 @@ describe("primaryWorkspaceId — mounts-then-repos, mirroring the server's own p
 // internal/api/workspace_run.go has always honored src.Writable; this is the
 // client mirror agreeing with it.
 describe("resolvedMountReadOnly — an explicitly writable source grants write", () => {
-  const writableWs = {
+  const writableWs = makeWorkspace({
     id: "ws-w",
     name: "slugify",
     kind: "local_dir",
     source: "/home/me/slugify",
-    status: "scanned",
-    created_at: "",
-    updated_at: "",
     sources: [{ type: "local_dir", path: "/home/me/slugify", target: "/home/agent/work", writable: true }],
-  } as unknown as Workspace;
+  });
 
-  const readOnlyWs = {
+  const readOnlyWs = makeWorkspace({
     ...writableWs,
     sources: [{ type: "local_dir", path: "/home/me/slugify", target: "/home/agent/work" }],
-  } as unknown as Workspace;
+  });
 
   it("mounts read-WRITE when the operator ticked the box", () => {
     expect(resolvedMountReadOnly(writableWs, { workspaceId: "ws-w" }, "/home/me/slugify")).toBe(false);
