@@ -356,8 +356,9 @@ func (s *Store) List(ctx context.Context) ([]string, error) {
 // newID and returns how many rows it rewrapped. It is the body of wardynd's
 // `-rotate-age-key` maintenance mode (cmd/wardynd's rotateAgeKeyMode) and is NOT
 // part of the secretstore.Store seam: the Store contract is per-name late-bound
-// access, while this is a whole-table administrative operation. Only
-// wrapped_dek and kek_id change; the sealed value (and its DEK) is untouched,
+// access, while this is a whole-table administrative operation. wrapped_dek,
+// kek_id and updated_at change — a rotation is a write, and least-retention
+// sweeps read updated_at — but the sealed value (and its DEK) is untouched,
 // so a rotation never decrypts a credential. platform is the separate platform
 // identity (WARDYN_PLATFORM_KEY_FILE), or nil: the boot keys under it are not
 // under the age key, and stay as they are.
@@ -397,8 +398,8 @@ func Rekey(ctx context.Context, pool *pgxpool.Pool, oldID, newID, platform age.I
 // (design §2.13 c) and returns how many it moved. It is the body of wardynd's
 // `-rewrap` maintenance mode: a row written before the purpose split (the
 // pre-split KEK), and, once WARDYN_PLATFORM_KEY_FILE is set, a boot key still
-// under the age key's platform KEK. Only wrapped_dek and kek_id change, as in
-// Rekey, and it is all-or-nothing the same way.
+// under the age key's platform KEK. Only wrapped_dek, kek_id and updated_at
+// change, as in Rekey, and it is all-or-nothing the same way.
 //
 // Moving the boot keys onto a separate platform key trusts what the age key
 // holds at that moment: it is the one step at which the age key vouches for a
@@ -464,7 +465,7 @@ func rewrapAll(ctx context.Context, pool *pgxpool.Pool, op string, source func(e
 			return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), rerr)
 		}
 		if _, uerr := tx.Exec(ctx,
-			`UPDATE secrets SET kek_id=$3, wrapped_dek=$4 WHERE owned_by=$1 AND name=$2`, e.ownedBy, e.name, to.ID(), wrapped,
+			`UPDATE secrets SET kek_id=$3, wrapped_dek=$4, updated_at=now() WHERE owned_by=$1 AND name=$2`, e.ownedBy, e.name, to.ID(), wrapped,
 		); uerr != nil {
 			return 0, rewrapAbort(op, i, len(all), rowRef(e.ownedBy, e.name), fmt.Errorf("update: %w", uerr))
 		}

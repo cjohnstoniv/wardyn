@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/google/uuid"
@@ -240,6 +241,43 @@ func TestRekeyOnEmptyStore(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("Rekey on an empty store re-encrypted %d rows, want 0", n)
+	}
+}
+
+// TestRekeyStampsUpdatedAt: every re-encrypted row carries updated_at=now() from
+// the rotation, so a row's age reflects the ciphertext actually stored rather
+// than the last Put under a key that no longer reads it.
+func TestRekeyStampsUpdatedAt(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	oldID, newID := mustIdentity(t), mustIdentity(t)
+	oldStore, err := New(pool, oldID)
+	if err != nil {
+		t.Fatalf("New(old): %v", err)
+	}
+	for name, val := range seeded {
+		if err := oldStore.Put(ctx, name, []byte(val)); err != nil {
+			t.Fatalf("Put %s: %v", name, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE secrets SET updated_at = now() - interval '1 day'`); err != nil {
+		t.Fatalf("backdate updated_at: %v", err)
+	}
+	var before time.Time
+	if err := pool.QueryRow(ctx, `SELECT now()`).Scan(&before); err != nil {
+		t.Fatalf("read the database clock: %v", err)
+	}
+
+	if _, err := Rekey(ctx, pool, oldID, newID, nil); err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+
+	var stale int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM secrets WHERE updated_at < $1`, before).Scan(&stale); err != nil {
+		t.Fatalf("count stale rows: %v", err)
+	}
+	if stale != 0 {
+		t.Errorf("%d of %d rows kept their pre-rotation updated_at; Rekey must stamp now()", stale, len(seeded))
 	}
 }
 
