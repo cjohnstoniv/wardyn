@@ -8,6 +8,7 @@
 // effective set. Mirrors internal/api/permissions.go; every route is under
 // /api/v1 via wfetch.
 import type {
+  AccessUserType,
   AvailabilityView,
   CapabilityGrant,
   CapabilityGrantInput,
@@ -20,9 +21,14 @@ import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 // image ref carries slashes, permissions_availability.go's availabilityTarget),
 // so each segment is encoded on its own rather than encodeURIComponent-ing the
 // whole value, which would turn a real "/" into "%2F" and 400 as a different
-// value than the one on screen.
+// value than the one on screen. The characters a Go path never escapes
+// ($&+,:;=@) are sent bare: escaped, they set URL.RawPath, the router hands the
+// handler "%3A" instead of ":", and an image ref's tag reads as another value.
 function availabilityPath(kind: string, value: string): string {
-  const encodedValue = value.split("/").map(encodeURIComponent).join("/");
+  const encodedValue = value
+    .split("/")
+    .map((s) => encodeURIComponent(s).replace(/%(24|26|2B|2C|3A|3B|3D|40)/gi, (e) => decodeURIComponent(e)))
+    .join("/");
   return `/permissions/availability/${encodeURIComponent(kind)}/${encodedValue}`;
 }
 
@@ -86,6 +92,13 @@ export const permissions = {
   async getAvailability(kind: string, value: string): Promise<AvailabilityView> {
     const res = await wfetch(availabilityPath(kind, value), { method: "GET" });
     return asJson<AvailabilityView>(res);
+  },
+
+  // GET /api/v1/user-types -> every user type (securityOps), so an audience
+  // chip can name a type rather than show its id.
+  async listUserTypes(): Promise<AccessUserType[]> {
+    const res = await wfetch("/user-types", { method: "GET" });
+    return unwrapList<AccessUserType>((await asJson<{ user_types?: unknown }>(res)).user_types);
   },
 
   // PUT /api/v1/permissions/availability/{kind}/{value} -> the same view, bit
