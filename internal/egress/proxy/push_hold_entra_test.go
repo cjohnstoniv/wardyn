@@ -49,7 +49,7 @@ func newEntraProxy(t *testing.T, spec types.RunPolicySpec, addr string, caps ...
 		Dial:            redirectDial(addr),
 		RunToken:        newTokenSource("RUNTOK"),
 		TLSClientConfig: testInsecureTLSConfig,
-		ADOGrants:       adoGrantMap{"dev.azure.com": ADOGrant{Organization: "acme", Capabilities: caps}},
+		ADOGrants:       adoGrantsByHost{"dev.azure.com": ADOGrant{Organization: "acme", Capabilities: caps}},
 	})
 	return p, sink, grantID
 }
