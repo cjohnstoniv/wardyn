@@ -4,9 +4,9 @@
  */
 
 // #160 — TitleGroup's second chip row: one counted chip per reason a group's
-// runs are waiting, a pinned "Checking…" before the approvals fetch resolves,
-// and a stale hold that no longer claims to be live. Its own file, extracted
-// alongside title-group.tsx so runs.test.tsx stays under the size gate.
+// runs are waiting, and a pinned "Checking…" before the approvals fetch
+// resolves. Its own file, extracted alongside title-group.tsx so
+// runs.test.tsx stays under the size gate.
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -116,8 +116,11 @@ describe("TitleGroup — the wait row (#160)", () => {
     expect(screen.queryByLabelText("What this group is waiting on")).not.toBeInTheDocument();
   });
 
-  it("a stale hold no longer claims to be live: it drops out of the counted chip and shows a neutral 'was held' one instead", () => {
-    const old = new Date(Date.now() - 90 * 60_000).toISOString();
+  // #509 — a PENDING tool_call stays counted as held at any age; only the
+  // server's own state (never client elapsed time) can move it off the
+  // counted "awaiting confirmation" chip.
+  it("a tool_call held for hours still counts in the live 'awaiting confirmation' chip", () => {
+    const old = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
     const signals = approvalSignals([
       approval({ id: "a1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
       approval({
@@ -134,8 +137,7 @@ describe("TitleGroup — the wait row (#160)", () => {
     ];
     renderGroup(runs, signals, true);
     const row = waitRow();
-    // Counted claim shrinks from 2 to 1 — the stale one is no longer counted live.
-    expect(within(row).getByText("1 awaiting confirmation")).toBeInTheDocument();
-    expect(within(row).getByText("1 was held")).toBeInTheDocument();
+    expect(within(row).getByText("2 awaiting confirmation")).toBeInTheDocument();
+    expect(within(row).queryByText(/was held/)).not.toBeInTheDocument();
   });
 });

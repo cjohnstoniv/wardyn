@@ -93,7 +93,8 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
   React.useEffect(() => {
     let active = true;
     const stored = loadStore();
-    Promise.all(
+    // never rejects (each item is pre-caught above) — fire-and-forget is safe.
+    void Promise.all(
       Object.entries(stored).map(async ([demoId, runId]) => {
         const r = await api.getRun(runId).catch(() => undefined);
         return [demoId, r] as const;

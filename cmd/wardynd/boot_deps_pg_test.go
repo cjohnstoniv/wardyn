@@ -3,15 +3,13 @@
 
 package main
 
-// TestConnectAndMigrate_SeparateBudgets is the W28-S1-4 regression: connect
-// and migrate get INDEPENDENT timeout budgets, not one shared deadline. Before
-// this fix, connectAndMigrate took a single ctx bounding BOTH db.Connect and
-// db.Migrate — a slow migration (e.g. an index build on the unbounded audit
-// table) had no knob separate from the fixed 30s connect budget and would
-// crash-loop the upgrade. A migrateTimeout of 0 forces db.Migrate to fail on
-// ITS OWN already-expired deadline while connectTimeout stays generous, proving
-// the two are independently controllable — this could not even be expressed
-// against the pre-fix 3-argument signature.
+// TestConnectAndMigrate_SeparateBudgets pins that connect and migrate get
+// independent timeout budgets, not one shared deadline. With a single ctx
+// bounding both db.Connect and db.Migrate, a slow migration (e.g. an index
+// build on the unbounded audit table) has no knob separate from the fixed 30s
+// connect budget and crash-loops the upgrade. A migrateTimeout of 0 forces
+// db.Migrate to fail on its own already-expired deadline while connectTimeout
+// stays generous, proving the two are independently controllable.
 //
 // Guarded by WARDYN_TEST_PG: skipped cleanly when unset, must PASS when set.
 // Run: WARDYN_TEST_PG="postgres://wardyn:wardyn@localhost:55434/wardyn?sslmode=disable" \
@@ -31,8 +29,8 @@ func TestConnectAndMigrate_SeparateBudgets(t *testing.T) {
 	}
 
 	// connectTimeout generous (30s, the production default), migrateTimeout
-	// already-expired (0) — if the two shared one deadline (the pre-fix
-	// behavior), connect itself would fail too; they don't, so it must fail
+	// already-expired (0) — if the two shared one deadline, connect itself
+	// would fail too; they don't, so it must fail
 	// specifically inside Migrate.
 	_, err := connectAndMigrate(t.Context(), dsn, "", 30*time.Second, 0, false)
 	if err == nil {

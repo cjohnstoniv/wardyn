@@ -58,9 +58,10 @@ MODULE="github.com/cjohnstoniv/wardyn/"
 # Packages whose real coverage requires a live Docker daemon (WARDYN_TEST_DOCKER).
 DOCKER_RE='^(internal/runner/docker|internal/envbuild|cmd/wardyn-runner)(/|$)'
 # Packages whose real coverage requires a real Kubernetes cluster
-# (WARDYN_TEST_K8S=1 / make test-conformance-k8s / kind-sso-walk.sh) — X1c-F13:
-# these funcs used to fall into "Untested" with nothing distinguishing "nobody
-# has ever exercised this" from "this needs a cluster no per-PR run has".
+# (WARDYN_TEST_K8S=1 / make test-conformance-k8s / kind-sso-walk.sh) — a past
+# review found these funcs used to fall into "Untested" with nothing
+# distinguishing "nobody has ever exercised this" from "this needs a cluster
+# no per-PR run has".
 K8S_RE='^(internal/runner/k8s)(/|$)'
 
 # classify emits: <category>\t<pkg>\t<func>\t<file:line>
@@ -282,7 +283,7 @@ render_cat() {
   echo "## Kubernetes-gated — need a real cluster (WARDYN_TEST_K8S=1)"
   echo
   echo "internal/runner/k8s's session funcs (Attach/Close/ExecStream/Read/Resize/Write)"
-  echo "— X1c-F13: these used to fall into \"Untested\" above with nothing distinguishing"
+  echo "— a past review found these used to fall into \"Untested\" above with nothing distinguishing"
   echo "\"nobody has ever exercised the k8s substrate\" from \"this needs a cluster no"
   echo "per-PR run has.\" Classified by package (no cluster here to prove it)."
   echo

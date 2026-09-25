@@ -247,7 +247,7 @@ func (i *index) changes(held map[string]bool) ([]Change, []string, error) {
 	}
 	slices.SortFunc(w.out, func(a, b Change) int {
 		return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(a.Mode, b.Mode),
-			cmp.Compare(a.Size, b.Size), strings.Compare(a.OID, b.OID))
+			cmp.Compare(a.size, b.size), strings.Compare(a.OID, b.OID))
 	})
 	return w.out, slices.Sorted(maps.Keys(w.bases)), nil
 }
@@ -370,6 +370,12 @@ type walker struct {
 	// depth is the prefix's component count — and leaf already deduplicates, so
 	// the second expansion could only re-emit what the first did.
 	walked map[string]bool
+	// diffed is every (prefix, old tree, new tree) comparison already made, a
+	// skip exact for the same reason walked's is. A merge compared against one
+	// parent re-compares every directory the other side changed — the same
+	// comparisons that side's own commits made — and charging them again cost
+	// merge-heavy history up to six times what charging each once does (#254).
+	diffed map[string]bool
 	// nodes counts the tree ENTRIES walked, against maxTreeNodes. The memo
 	// collapses a repeat of the same path; it cannot collapse b^d distinct paths
 	// through d levels of fan-out, and a fan-out whose subtrees resolve to no
@@ -386,13 +392,14 @@ type walker struct {
 }
 
 func newWalker(i *index) *walker {
-	return &walker{idx: i, seen: map[Change]bool{}, walked: map[string]bool{}, bases: map[string]bool{}}
+	return &walker{idx: i, seen: map[Change]bool{}, walked: map[string]bool{}, diffed: map[string]bool{},
+		bases: map[string]bool{}}
 }
 
 // charge accounts for n tree entries about to be walked.
 func (w *walker) charge(n int) error {
 	if w.nodes += n; w.nodes > maxTreeNodes {
-		return fmt.Errorf("%w: the push walks more than %d tree entries", ErrUninspectable, maxTreeNodes)
+		return fmt.Errorf("%w: the push walks more than %d tree entries", ErrTooLarge, maxTreeNodes)
 	}
 	return nil
 }
@@ -439,6 +446,11 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 	if oldOID == newOID {
 		return nil
 	}
+	key := prefix + "\x00" + oldOID + "\x00" + newOID
+	if w.diffed[key] {
+		return nil
+	}
+	w.diffed[key] = true
 	if depth > maxTreeDepth {
 		return fmt.Errorf("gitpack: trees nested deeper than %d", maxTreeDepth)
 	}
@@ -525,7 +537,7 @@ func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int) erro
 }
 
 func (w *walker) leaf(path string, e treeEntry) error {
-	return w.record(Change{Path: path, Mode: e.mode, Size: w.idx.blobSize(e.oid), OID: e.oid})
+	return w.record(Change{Path: path, Mode: e.mode, size: w.idx.blobSize(e.oid), OID: e.oid})
 }
 
 // uncarried reports a directory whose tree object the pack does not hold. Its
@@ -535,7 +547,7 @@ func (w *walker) leaf(path string, e treeEntry) error {
 // one left untouched. So it is reported, at its own path — the root is "" —
 // as an opaque entry carrying its tree's id, never skipped.
 func (w *walker) uncarried(prefix, oid string) error {
-	return w.record(Change{Path: strings.TrimSuffix(prefix, "/"), Mode: ModeUncarried, Size: -1, OID: oid})
+	return w.record(Change{Path: strings.TrimSuffix(prefix, "/"), Mode: ModeUncarried, size: -1, OID: oid})
 }
 
 func (w *walker) record(c Change) error {
@@ -543,7 +555,7 @@ func (w *walker) record(c Change) error {
 		return nil
 	}
 	if len(w.out) >= maxChanges {
-		return fmt.Errorf("%w: the push touches more than %d paths", ErrUninspectable, maxChanges)
+		return fmt.Errorf("%w: the push touches more than %d paths", ErrTooLarge, maxChanges)
 	}
 	w.seen[c] = true
 	w.out = append(w.out, c)

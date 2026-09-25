@@ -120,7 +120,7 @@ fi
 #     env-file only            -> image: ghcr.io/cjohnstoniv/wardynd@sha256:...
 #     shell var also exported  -> image: ghcr.io/cjohnstoniv/wardynd:latest
 #
-# `publish-image.yml` pushes wardynd:latest on EVERY push to main, so that
+# `publish-image.yml` pushes wardynd:latest after CI passes on main, so that
 # default had managed laptops tracking tip-of-main, unreleased, several times a
 # day.
 #
