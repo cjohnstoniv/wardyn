@@ -88,17 +88,17 @@ func TestPG_ConvertV0_ConvertsEveryRowOnceThenIsANoOp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := s.ConvertV0(ctx, id)
+	converted, err := s.ConvertV0(ctx, id)
 	if err != nil {
 		t.Fatalf("ConvertV0: %v", err)
 	}
-	if n != len(v0Fixture) {
+	if n := len(converted); n != len(v0Fixture) {
 		t.Fatalf("converted %d rows, want %d", n, len(v0Fixture))
 	}
 	after := rawRows(t, pool)
 	for _, f := range v0Fixture {
 		r := after[rowRef(f.owner, f.name)]
-		if r.version != encVersion || r.kekID != s.kek.ID() || len(r.wrapped) == 0 || bytes.HasPrefix(r.ct, []byte("age-encryption.org")) {
+		if r.version != encVersion || r.kekID != s.writer(f.owner, f.name).ID() || len(r.wrapped) == 0 || bytes.HasPrefix(r.ct, []byte("age-encryption.org")) {
 			t.Errorf("%s after conversion: enc_version=%d kek_id=%q — not a v1 envelope", rowRef(f.owner, f.name), r.version, r.kekID)
 		}
 		got, err := s.For(f.owner).Get(ctx, f.name)
@@ -108,8 +108,8 @@ func TestPG_ConvertV0_ConvertsEveryRowOnceThenIsANoOp(t *testing.T) {
 	}
 
 	again, err := s.ConvertV0(ctx, id)
-	if err != nil || again != 0 {
-		t.Fatalf("second ConvertV0 = (%d, %v), want (0, nil)", again, err)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("second ConvertV0 = (%d, %v), want (0, nil)", len(again), err)
 	}
 	for k, r := range rawRows(t, pool) {
 		was := after[k]
@@ -133,11 +133,11 @@ func TestPG_ConvertV0_AbortsOnAnUndecryptableRowAndCommitsNothing(t *testing.T) 
 	before := rawRows(t, pool)
 	s, _ := New(pool, id)
 
-	n, err := s.ConvertV0(ctx, id)
+	converted, err := s.ConvertV0(ctx, id)
 	if err == nil {
 		t.Fatal("ConvertV0 succeeded over a row the key cannot decrypt")
 	}
-	if n != 0 {
+	if n := len(converted); n != 0 {
 		t.Errorf("aborted conversion returned %d", n)
 	}
 	for _, want := range []string{"ABORTED", rowRef("bob@corp.example", "openai-api-key"), "nothing committed"} {
@@ -184,8 +184,8 @@ func TestPG_ConvertV0_IsSingleWriter(t *testing.T) {
 	done := make(chan result, 1)
 	go func() {
 		s, _ := New(pool, id)
-		n, err := s.ConvertV0(ctx, id)
-		done <- result{n, err}
+		converted, err := s.ConvertV0(ctx, id)
+		done <- result{len(converted), err}
 	}()
 
 	waiting := func() bool {
@@ -264,8 +264,8 @@ func TestPG_OlderWardyndWritingAfterConversion(t *testing.T) {
 	oldPut("fresh", "old-binary-new-name")
 	oldPut("replaced", "old-binary-replacement")
 
-	if n, err := s.ConvertV0(ctx, id); err != nil || n != 1 {
-		t.Fatalf("restart's ConvertV0 = (%d, %v), want the one new name converted", n, err)
+	if converted, err := s.ConvertV0(ctx, id); err != nil || len(converted) != 1 {
+		t.Fatalf("restart's ConvertV0 = (%d, %v), want the one new name converted", len(converted), err)
 	}
 	if got, err := s.Get(ctx, "fresh"); err != nil || string(got) != "old-binary-new-name" {
 		t.Errorf("a new name an older wardynd wrote = (%q, %v) after a restart, want it converted and readable", got, err)
@@ -322,10 +322,10 @@ func TestPG_UnknownEncVersionIsRefusedEverywhere(t *testing.T) {
 		assertRefused(t, "operator-fallback Get of an enc_version 3 row", got, err, "", name, name+"-value")
 	}
 
-	if n, err := s.ConvertV0(ctx, id); err != nil || n != 0 {
-		t.Fatalf("ConvertV0 = (%d, %v); an enc_version 3 row is not a v0 row and must be left alone", n, err)
+	if converted, err := s.ConvertV0(ctx, id); err != nil || len(converted) != 0 {
+		t.Fatalf("ConvertV0 = (%d, %v); an enc_version 3 row is not a v0 row and must be left alone", len(converted), err)
 	}
-	n, err := Rekey(ctx, pool, id, mustIdentity(t))
+	n, err := Rekey(ctx, pool, id, mustIdentity(t), nil)
 	if err == nil || n != 0 || !strings.Contains(err.Error(), want) {
 		t.Fatalf("Rekey over an enc_version 3 row = (%d, %v), want an abort that says %q", n, err, want)
 	}

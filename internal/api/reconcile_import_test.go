@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── + scan-reconcile scoped write ────────────────────────────────
+// + scan-reconcile scoped write
 
 // scanReconcileStore serves a stuck `scanning` workspace + its scan run, records
 // whether the reconcile used the scoped SetWorkspaceImportState (state) or the
@@ -45,11 +45,11 @@ func (s *scanReconcileStore) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws 
 	return ws, nil
 }
 
-// TestReconcileWorkspaceRun_StuckScanUsesScopedWrite is the regression:
-// the scan-error reconcile branch must use the scoped SetWorkspaceImportState
-// (status + cleared active_run_id only), NOT the full-row UpdateWorkspace that
-// replayed a stale snapshot over every column. It also honors the same
-// newer-run fence the verify branch does.
+// TestReconcileWorkspaceRun_StuckScanUsesScopedWrite: the scan-error reconcile
+// branch must use the scoped SetWorkspaceImportState (status + cleared
+// active_run_id only), not the full-row UpdateWorkspace, which replays a stale
+// snapshot over every column. It also honors the same newer-run fence the
+// verify branch does.
 func TestReconcileWorkspaceRun_StuckScanUsesScopedWrite(t *testing.T) {
 	h := newHarness(t)
 	runID, wsID := uuid.New(), uuid.New()
@@ -91,7 +91,7 @@ func TestReconcileWorkspaceRun_StuckScanUsesScopedWrite(t *testing.T) {
 	}
 }
 
-// ─── capture must not truncate at 1000 events ──────────────────────────
+// capture must not truncate at 1000 events
 
 // auditLimitRecordStore wraps recordStore to capture the LIMIT reconcileRecordRun
 // passes to QueryAuditEvents. The real store silently caps a 0/negative limit at
@@ -106,7 +106,7 @@ func (s *auditLimitRecordStore) QueryAuditEvents(ctx context.Context, runID uuid
 	return s.recordStore.QueryAuditEvents(ctx, runID, limit)
 }
 
-// TestReconcileRecordRun_CaptureUsesHighAuditLimit is the regression: a
+// TestReconcileRecordRun_CaptureUsesHighAuditLimit: a
 // recording with >1000 audit events must be captured with an explicit high bound,
 // not the silent 1000 default that would truncate the later egress out of the
 // derived observations. (The fake returns every event regardless of the limit;
@@ -139,7 +139,7 @@ func TestReconcileRecordRun_CaptureUsesHighAuditLimit(t *testing.T) {
 	}
 }
 
-// ─── launch abort finalizes + revokes the persisted run ────────────────
+// launch abort finalizes + revokes the persisted run
 
 // recordAbortStore drives launchRecordRun to the CreateGrant-failure abort path
 // (after CreateRun) and records the run finalize + slot release the abort must do.
@@ -179,7 +179,7 @@ func (s *recordAbortStore) ClearWorkspaceActiveRun(_ context.Context, _ uuid.UUI
 }
 
 // GetSiteConfig is a no-op stub: launchRecordRun now folds the run's model
-// access unconditionally (W20-W20-llm-transport-matrix-1, foldRunIntegration
+// access unconditionally (foldRunIntegration
 // always runs, not just when the workspace carries its own LLMCred binding),
 // which reaches defaultAgentRunsIntegration's GetSiteConfig read on every
 // call — the embedded nil store.Store would otherwise panic here.
@@ -187,7 +187,7 @@ func (s *recordAbortStore) GetSiteConfig(context.Context) (types.SiteConfig, err
 	return types.SiteConfig{}, nil
 }
 
-// TestLaunchRecordRun_CreateGrantFailureFinalizesRun is the regression: when
+// TestLaunchRecordRun_CreateGrantFailureFinalizesRun: when
 // CreateGrant fails AFTER CreateRun, the persisted RunPending run must be
 // finalized RunFailed and the revoke cascade must run (broker revocation of the
 // minted run) — not left orphaned with un-revoked grants. The abort happens
@@ -224,13 +224,13 @@ func TestLaunchRecordRun_CreateGrantFailureFinalizesRun(t *testing.T) {
 	}
 }
 
-// ─── scan settles when the run goes terminal during dispatch ──────
+// scan settles when the run goes terminal during dispatch
 
-// TestSettleTerminalLaunch_StuckScanSettles is the regression for the
-// synchronous path: a scan run CAS'd to terminal FAILED during dispatch (before
-// Exec, so no completion watcher and no reconcile hook ever fires) must settle
-// its workspace out of `scanning` — record already self-healed here, scan did
-// not. The counterfactual: without the settleTerminalLaunch call the launch fns
+// TestSettleTerminalLaunch_StuckScanSettles covers the synchronous path: a scan
+// run CAS'd to terminal FAILED during dispatch (before Exec, so no completion
+// watcher and no reconcile hook ever fires) must settle its workspace out of
+// `scanning`, as a record run does. The counterfactual: without the
+// settleTerminalLaunch call the launch fns
 // make, the workspace stays `scanning` forever (fake.state stays nil).
 func TestSettleTerminalLaunch_StuckScanSettles(t *testing.T) {
 	h := newHarness(t)
@@ -276,10 +276,10 @@ func TestSettleTerminalLaunch_NonTerminalRunNoOp(t *testing.T) {
 	}
 }
 
-// TestRepairStaleWorkspaceRuns_HealsStuckScan is the regression for the
-// crash-window catch-all: if wardynd died between the terminal CAS and the
-// synchronous settle, the next status read must heal a workspace stuck
-// `scanning` behind a terminal run — the same repair-on-read record already had.
+// TestRepairStaleWorkspaceRuns_HealsStuckScan covers the crash-window catch-all:
+// if wardynd died between the terminal CAS and the synchronous settle, the next
+// status read must heal a workspace stuck `scanning` behind a terminal run — the
+// same repair-on-read a record run gets.
 func TestRepairStaleWorkspaceRuns_HealsStuckScan(t *testing.T) {
 	h := newHarness(t)
 	runID, wsID := uuid.New(), uuid.New()

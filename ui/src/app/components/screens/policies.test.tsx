@@ -146,7 +146,8 @@ describe("PoliciesScreen — required fields + error announcement (ui-secretsPol
 // is now the one edit surface, and can't be dismissed by accident") blocks
 // dismissal outright rather than confirming: onPointerDownOutside/
 // onEscapeKeyDown preventDefault while dirty, scoped to this dialog only.
-describe("PoliciesScreen — F5-F9: the policy editor can't be dismissed by accident once dirty", () => {
+describe("PoliciesScreen — the policy editor can't be dismissed by accident once dirty", () => {
+  // ticket: F5-F9
   beforeEach(() => {
     listPoliciesMock.mockReset();
     listPoliciesMock.mockResolvedValue([]);

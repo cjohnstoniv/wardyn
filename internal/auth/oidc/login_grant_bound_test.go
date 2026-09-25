@@ -71,7 +71,7 @@ func newEntraLogin(t *testing.T, secure bool) *entraLogin {
 		IssuerURL:     fake.Issuer(),
 		ClientID:      fake.ClientID(),
 		RedirectURL:   redirect,
-		DefaultRole:   writoidc.RoleMember,
+		DefaultRole:   writoidc.RoleUser,
 		SecureCookies: secure,
 	}, testHMACKey)
 	if err != nil {

@@ -58,11 +58,12 @@ func (s *memSecrets) Put(_ context.Context, name string, v []byte) error {
 	s.owned[s.owner][name] = v
 	return nil
 }
-func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
+func (s *memSecrets) Get(ctx context.Context, name string) ([]byte, error) {
 	memSecretsMu.Lock()
 	defer memSecretsMu.Unlock()
 	if s.owner != "" {
 		if v, ok := s.owned[s.owner][name]; ok {
+			secretstore.NoteRow(ctx, secretstore.Row{Store: "mem", Owner: s.owner, Name: name, Ref: "mem:" + s.owner + "/" + name})
 			return v, nil
 		}
 		// Fall through to the operator row below — the owner-view fallback.
@@ -73,6 +74,7 @@ func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
 		// so callers can tell "never stored" from a backend failure).
 		return nil, secretstore.ErrNotFound
 	}
+	secretstore.NoteRow(ctx, secretstore.Row{Store: "mem", Name: name, Ref: "mem:/" + name})
 	return v, nil
 }
 func (s *memSecrets) Delete(_ context.Context, name string) error {
@@ -226,7 +228,10 @@ func TestInternalInjection_FailsClosed(t *testing.T) {
 // unavailableSecrets is a store whose external backend cannot answer.
 type unavailableSecrets struct{ *memSecrets }
 
-func (unavailableSecrets) Get(context.Context, string) ([]byte, error) {
+func (unavailableSecrets) Get(ctx context.Context, name string) ([]byte, error) {
+	// A real store names the row before it opens the value, so the failure is
+	// recorded against it.
+	secretstore.NoteRow(ctx, secretstore.Row{Store: "vaultkv", Name: name, Ref: "vaultkv:ns1/operator/" + name})
 	return nil, fmt.Errorf("vault GET wardyn/data/x: 503: %w", secretstore.ErrUnavailable)
 }
 func (u unavailableSecrets) For(string) secretstore.Store { return u }
@@ -248,9 +253,17 @@ func TestInternalInjection_StoreUnavailableIsDistinctFromMissing(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "couldn't reach the service") {
 		t.Fatalf("store unavailable: status = %d body=%s, want 503", rr.Code, rr.Body.String())
 	}
-	// Wardyn's own audit tells the outage apart too, not only the status.
-	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"store-unavailable"`) {
-		t.Fatalf("store unavailable: audit data = %s, want the store-unavailable reason", ev.Data)
+	// Wardyn's own audit tells the outage apart too, not only the status, and
+	// still says why the read happened, for whom, and which row it opened.
+	ev := lastAuditEvent(t, h.audit.events, "secret.read")
+	var d map[string]any
+	if err := json.Unmarshal(ev.Data, &d); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Outcome != "failure" || d["reason"] != "store-unavailable" || d["purpose"] != "proxy-injection" ||
+		d["owner"] != "alice@example.com" || d["store"] != "vaultkv" || d["row_owner"] != "" ||
+		d["ref"] != "vaultkv:ns1/operator/anthropic-api-key" {
+		t.Fatalf("store unavailable: audit %s %s, want a failure with reason store-unavailable, purpose proxy-injection, owner alice@example.com and the vaultkv row", ev.Outcome, ev.Data)
 	}
 }
 
@@ -354,8 +367,8 @@ func TestSecretsAPI_RejectsShortSecret(t *testing.T) {
 
 // TestSecretsAPI_ListExcludesReserved asserts the list endpoint NEVER surfaces a
 // reserved platform-internal secret name even when the underlying store holds
-// one (they back identity/session handling and are not user-managed). This was a
-// real leak: the reserved names were previously listable.
+// one (they back identity/session handling and are not user-managed, so listing
+// them would leak them).
 func TestSecretsAPI_ListExcludesReserved(t *testing.T) {
 	h, sec := newSecretsHarness(t)
 	// Seed a reserved key directly in the store (bypassing the write API, which

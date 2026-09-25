@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/secretstoretest"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/vaultkv"
 )
@@ -44,7 +45,7 @@ func TestBuildSecretStore_StoreModeBootsUnderFIPSOnly(t *testing.T) {
 
 	boot := func() [][]byte {
 		t.Helper()
-		s, err := buildSecretStore(ctx, pool, "", vaultkv.Name, ext)
+		s, err := buildSecretStore(ctx, pool, "", nil, vaultkv.Name, ext, 0, &capturingRecorder{})
 		if err != nil {
 			t.Fatalf("store-mode boot under fips140=only: %v", err)
 		}
@@ -65,7 +66,7 @@ func TestBuildSecretStore_StoreModeBootsUnderFIPSOnly(t *testing.T) {
 		}
 		var raw [][]byte
 		for _, n := range []string{secretSigningKey, secretSessionKey, secretUISessionKey, secretSSHHostKey, secretInternalCA} {
-			v, err := s.Get(ctx, n)
+			v, err := s.Get(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), n)
 			if err != nil {
 				t.Fatalf("read back %s: %v", n, err)
 			}
@@ -83,7 +84,7 @@ func TestBuildSecretStore_StoreModeBootsUnderFIPSOnly(t *testing.T) {
 		}
 	}
 
-	if _, err := buildSecretStore(ctx, pool, "", "", nil); err == nil || !strings.Contains(err.Error(), "fips140=only") {
+	if _, err := buildSecretStore(ctx, pool, "", nil, "", nil, 0, &capturingRecorder{}); err == nil || !strings.Contains(err.Error(), "fips140=only") {
 		t.Fatalf("a local-mode boot (ephemeral age key) under fips140=only = %v; want the refusal naming fips140=only", err)
 	}
 }

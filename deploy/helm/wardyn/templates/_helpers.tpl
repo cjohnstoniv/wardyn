@@ -202,3 +202,14 @@ for a values map that predates secretStore (--reuse-values).
 {{- $vault := (.Values.secretStore | default dict).vault | default dict -}}
 {{- if and $vault.addr (eq $vault.auth "kubernetes") -}}true{{- end -}}
 {{- end -}}
+
+{{/*
+wardyn.azureWorkloadIdentity: "true" when wardynd gets its Key Vault token
+through AKS workload identity (a Key Vault URL with auth workload-identity):
+the pod label and service-account annotation the webhook keys on. Nil-safe
+for a values map that predates secretStore.azure (--reuse-values).
+*/}}
+{{- define "wardyn.azureWorkloadIdentity" -}}
+{{- $azure := (.Values.secretStore | default dict).azure | default dict -}}
+{{- if and $azure.vaultUrl (eq ($azure.auth | default "workload-identity") "workload-identity") -}}true{{- end -}}
+{{- end -}}

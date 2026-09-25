@@ -451,8 +451,12 @@ func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
 	}, true
 }
 
-// ageKeyCheck warns when the secret store's age key is EPHEMERAL: stored secrets
-// become unreadable after a restart.
+// ageKeyCheck warns when the secret store's age key is EPHEMERAL: a fresh
+// identity is minted at every boot with none configured, so what is stored now
+// is lost at the next restart, and that boot refuses to start over the rows it
+// cannot decrypt (convertSecretStore). No earlier ephemeral key's rows can be
+// present while this row shows, since that same refusal kept them from booting;
+// the refusal is where the operator learns those are unrecoverable (#755).
 //
 // The Fix must never offer `helm: env.WARDYN_AGE_KEY` as the cluster
 // answer: it renders the secret store's MASTER key as a plaintext literal in
@@ -473,7 +477,7 @@ func ageKeyCheck(durable bool) SetupCheck {
 	}
 	return SetupCheck{
 		ID: "age_key", Label: "Secret store durability", Status: "warn",
-		Detail: "The secret store uses an EPHEMERAL age key generated at boot; stored secrets (API keys, GitHub App credentials) become unreadable after a restart.",
+		Detail: "The secret store uses an EPHEMERAL age key generated at boot: everything stored under it (API keys, GitHub App credentials) is lost at the next restart — no key set afterward can decrypt it — and the next boot refuses to start until those rows are deleted.",
 		Fix: "Generate a durable key with `wardynd -gen-age-key`, then wire it as WARDYN_AGE_KEY: " +
 			"on a host, -age-key or the env var; " +
 			"on Helm, keep it in a Secret — secrets.ageKeyFromSecret=true (an `age-key` entry in the Secret postgres.dsn.secretRef names) or secrets.ageKeySecretRef.name for a separate one. " +
@@ -492,6 +496,22 @@ func secretStoreCheck(external string, durable bool) SetupCheck {
 		ID: "store_external", Label: "Credential storage", Status: "ok",
 		Detail: "Credentials are stored in " + external + ". Wardyn holds no key; every use is logged there.",
 	}
+}
+
+// secretStoreRows is secretStoreCheck's row, then platform_shared in local
+// mode while no WARDYN_PLATFORM_KEY_FILE is set (design §3, §2.13 c): the age
+// key then protects wardynd's own signing and session keys and people's
+// credentials alike, so one leak of it forges run identities and sessions.
+func secretStoreRows(external string, durable, platformSeparate bool) []SetupCheck {
+	rows := []SetupCheck{secretStoreCheck(external, durable)}
+	if external == "" && !platformSeparate {
+		rows = append(rows, SetupCheck{
+			ID: "platform_shared", Label: "Platform key separation", Status: "warn",
+			Detail: "Wardyn's own signing and session keys are protected by the same key as people's credentials.",
+			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap` once, then restart wardynd with it set.",
+		})
+	}
+	return rows
 }
 
 // siteConfigCheck reports whether an operator-wide corporate baseline (upstream
@@ -712,7 +732,7 @@ func (s *Server) firstBrokeredRepoFromRuns(ctx context.Context) string {
 // upgrade-safe default; accessRolePosture's `before` reads the same arm) —
 // fine for a single-operator deployment, but it silently grants admin to
 // everyone the moment a second human signs in. An admin list alone is ok
-// (Q457-5): an unmatched person then derives member.
+// (Q457-5): an unmatched person then derives user.
 // consoleRows is whether the store currently holds at least one People-step
 // row (the same nil-Store guard setup.go's own read of it applies —
 // unreadable/absent reads as false, the conservative direction: it surfaces
@@ -728,13 +748,13 @@ func ssoRBACCheck(oidcConfigured, roleMapConfigured, consoleRows, adminList bool
 	if roleMapConfigured || consoleRows || adminList {
 		return SetupCheck{
 			ID: "sso_rbac", Label: "Who is an admin", Status: "ok",
-			Detail: "People are mapped to admin or member, so a person's role comes from their sign-in.",
+			Detail: "People are mapped to admin or user, so a person's role comes from their sign-in.",
 		}, true
 	}
 	return SetupCheck{
 		ID: "sso_rbac", Label: "Who is an admin", Status: "warn",
 		Detail:   "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin.",
-		Fix:      "Map people to admin or member on the People step, so only the people you name can change this deployment.",
+		Fix:      "Map people to admin or user on the People step, so only the people you name can change this deployment.",
 		Blocking: true,
 	}, true
 }

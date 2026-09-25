@@ -88,6 +88,10 @@ service:
 # controller / class / TLS story differs too much for the chart to guess a
 # working default. Gateway API HTTPRoute is deferred: no Gateway controller
 # in this chart's CI to exercise it against.
+#
+# Managed laptops (deploy/desktop's m' envelope) also enrol through THIS
+# Ingress — POST /api/v1/devices/enrol has no separate listener, so it has
+# to be reachable at whatever host you set below (README "Console Ingress").
 ingress:
   enabled: false
   className: ""
@@ -167,7 +171,8 @@ auth:
   # (plus WARDYN_OIDC_OPERATOR_EMAILS or WARDYN_OIDC_ROLE_MAP) and refuses to
   # render — same as wardynd itself refuses to boot (validateSSOOnlyPosture,
   # cmd/wardynd/boot_posture.go) — alongside adminToken above, or
-  # env.WARDYN_LOCAL_MODE / WARDYN_MEMBER_MODE / WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
+  # env.WARDYN_LOCAL_MODE / WARDYN_USER_DESKTOP (deprecated alias WARDYN_MEMBER_MODE,
+  # removed in 0.9) / WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
   ssoOnly: false
 
 secrets:
@@ -182,7 +187,7 @@ secrets:
   # postgres.dsn.secretRef.name is set (persistent Postgres) — the chart refuses
   # to render otherwise, because at the default (false, ephemeral key) the pod
   # crash-loops on its SECOND restart, unable to decrypt what the first boot
-  # encrypted. Wiring the key through env/extraEnv counts too, and
+  # encrypted — and no key set afterwards recovers those rows. Wiring the key through env/extraEnv counts too, and
   # allowEphemeralAgeKey below is the deliberate opt-out. See README
   # "Database (DSN)".
   ageKeyFromSecret: false
@@ -211,8 +216,14 @@ secrets:
 # not apply, and WARDYN_AGE_KEY is needed only until `wardynd -migrate-secrets
 # -to=vaultkv` has moved the existing rows. The default NetworkPolicy denies
 # wardynd's egress: add a rule for Vault to networkPolicy.egress.extra.
+#
+# backend azurekv is the same in Azure Key Vault (docs/OPERATIONS.md "Store
+# mode: credentials in Azure Key Vault"); allow its egress to the vault and to
+# the Entra token endpoint. One external store at a time: set vault.addr or
+# azure.vaultUrl, not both.
 secretStore:
-  # "pg" (sealed in Postgres under the age key) or "vaultkv" (store mode).
+  # "pg" (sealed in Postgres under the age key), "vaultkv" or "azurekv" (store
+  # mode).
   backend: pg
   vault:
     # https:// address of Vault. Required for vaultkv; set with backend pg it
@@ -230,6 +241,12 @@ secretStore:
     # Kubernetes-auth role; bind it to this chart's service account and the
     # release namespace, with audience = tokenAudience.
     role: ""
+    # Recommended: a second Kubernetes-auth role, bound to the same service
+    # account, whose policy covers only <kvPrefix>/platform/* — wardynd reads
+    # and writes its own signing, session and SSH host keys as this role, and
+    # everything else as role, whose policy then leaves platform/ out
+    # (docs/OPERATIONS.md, "Two Vault roles"). Empty = one role for both.
+    rolePlatform: ""
     tokenAudience: vault
     tokenExpirationSeconds: 3600
     tokenFile: ""
@@ -241,6 +258,31 @@ secretStore:
     maxVersions: 1
     # The Vault client trusts the system roots plus trustedCA (below), in a
     # TLS config of its own.
+  azure:
+    # https://<vault>.vault.azure.net. Required for azurekv; set with backend
+    # pg it lets this install READ rows written in store mode (a migration
+    # back). A vault dedicated to Wardyn; wardynd's identity needs Key Vault
+    # Secrets Officer on it.
+    vaultUrl: ""
+    # "workload-identity" (AKS): the chart labels the pod
+    # azure.workload.identity/use=true and annotates the service account with
+    # azure.workload.identity/client-id, so the webhook projects a token that
+    # wardynd exchanges for an Entra token (a federated credential on the
+    # identity, no client secret; with serviceAccount.create=false, annotate
+    # your own service account). "managed-identity": a node's IMDS.
+    auth: workload-identity
+    tenantId: ""
+    # The app registration's or user-assigned identity's client id.
+    clientId: ""
+    # Entra authority host; empty = the public cloud's.
+    authorityHost: ""
+    # Start of every secret name (empty = the release namespace).
+    prefix: ""
+    # Versions a secret holds before the next write starts a new name.
+    maxVersions: 100
+    # "auto": purge after a delete when the vault allows it; "never": leave
+    # deleted secrets for the vault's soft-delete retention.
+    purge: auto
 
 # Extra environment variables for wardynd (name: value). Use this to wire OIDC
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default

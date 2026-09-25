@@ -1,0 +1,492 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — Console residue (0.8) mock</title>
+<!--
+  Console-residue mock · static, for owner review.
+  Classification (the same table as docs/design/console-residue-0.8-prompt.md):
+  §1, §2, §3, §5 (variant (a)), §5.1 and §6 are FROZEN AS SHIPPED; only §4 PROPOSES
+  new strings (PREVIEW_SUBJECT_LABEL, PREVIEW_WARNING). Every product string
+  inside a .frame / .card is taken verbatim from the shipped copy modules:
+  lib/user-drives-copy.ts, lib/workspace-providers-copy.ts, lib/demo-videos.ts,
+  components/wardyn/copy.ts, copy/episodes.ts, copy/shell.ts and
+  components/wardyn/states.tsx — except §4's two proposed keys, the audit
+  toolbar's inline literals (audit.tsx has no copy module) and the drawn
+  example DATA (hosts, events, drive names, claims), which is illustrative.
+  No build, no deps, no fetch — open the file. The only script is the
+  light/dark toggle, carried over from the user-drives mock; the page starts
+  in the light theme (:root) and the button stamps data-theme. Tokens and CSS
+  idioms copied from docs/design/user-drives-mock/index.html and
+  docs/design/workspace-providers-mock/mock.css (.opts).
+
+  SCAFFOLD vs PRODUCT: the sticky bar, the `.tag` state labels, the `.varlabel`
+  variant strips and the HTML comments are REVIEW SCAFFOLDING — 11px uppercase,
+  muted, outside the product. Everything inside a `.frame` is the product,
+  except the native browser dialog in State 6c, which the browser owns.
+-->
+<style>
+:root{
+  --background:#ffffff; --foreground:#171717; --card:#ffffff; --surface-2:#f4f4f5;
+  --muted-foreground:#737373; --border:#e5e5e5; --border-strong:#d4d4d4;
+  --primary:#0f766e; --primary-fg:#ffffff;
+  --success:#047857; --success-subtle:rgba(4,120,87,.12); --warning:#92400e; --warning-subtle:rgba(245,158,11,.13);
+  --danger:#b91c1c; --danger-subtle:rgba(239,68,68,.13);
+  --info:#1d4ed8; --info-subtle:rgba(29,78,216,.13);
+  --neutral-subtle:rgba(115,115,115,.12);
+  --font-sans:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+html[data-theme="dark"]{
+  --background:#0a0a0a; --foreground:#ededed; --card:#111111; --surface-2:#1f1f1f;
+  --muted-foreground:#a3a3a3; --border:#262626; --border-strong:#333333;
+  --primary:#14b8a6; --primary-fg:#0a0a0a;
+  --success:#10b981; --success-subtle:rgba(16,185,129,.15); --warning:#f59e0b; --warning-subtle:rgba(245,158,11,.15);
+  --danger:#dc2626; --danger-subtle:rgba(220,38,38,.16);
+  --info:#3b82f6; --info-subtle:rgba(59,130,246,.16);
+  --neutral-subtle:rgba(163,163,163,.14);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);
+  font-family:var(--font-sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+code,.mono{font-family:var(--font-mono);font-size:.8125rem}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.01em}
+p{margin:0}
+a{color:var(--primary)}
+
+.sheet{max-width:1000px;margin:0 auto;padding:32px 24px 96px}
+.mockbar{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+  padding:12px 24px;background:var(--card);border-bottom:1px solid var(--border)}
+.mockbar h1{font-size:15px}
+.mockbar .sub{font-size:12.5px;color:var(--muted-foreground)}
+.mockbar button{margin-left:auto;font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground);cursor:pointer}
+.state{margin-top:44px}
+.state > .tag{display:flex;gap:10px;align-items:baseline;margin-bottom:10px;
+  font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground)}
+.state > .tag b{color:var(--foreground);font-size:13px;letter-spacing:0;text-transform:none}
+.frame{border:1px solid var(--border);border-radius:14px;background:var(--card);overflow:hidden}
+.frame > .pad{padding:22px 24px}
+.varlabel{padding:8px 24px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted-foreground);background:var(--surface-2);border-top:1px solid var(--border)}
+.varlabel b{color:var(--foreground);letter-spacing:0;text-transform:none}
+
+.lead{color:var(--muted-foreground);font-size:14px;margin-top:6px;max-width:74ch}
+.sectitle{font-size:14px;margin-top:0}
+.seclabel{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted-foreground);font-weight:600}
+
+.chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;
+  font-size:11.5px;font-weight:500;white-space:nowrap;border:1px solid transparent}
+.chip.neutral{background:var(--neutral-subtle);color:var(--muted-foreground)}
+.chip.success{background:var(--success-subtle);color:var(--success)}
+.chip.warning{background:var(--warning-subtle);color:var(--warning)}
+.chip.info{background:var(--info-subtle);color:var(--info)}
+.dot{width:6px;height:6px;border-radius:999px;background:currentColor}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.chip.pulse .dot{animation:pulse 1.4s ease-in-out infinite}
+
+.btn{font:inherit;font-size:13px;font-weight:500;padding:6px 13px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border-strong);background:var(--card);color:var(--foreground)}
+.btn.primary{background:var(--primary);color:var(--primary-fg);border-color:transparent}
+.btn.danger{background:var(--danger);color:#fff;border-color:transparent}
+.btn.ghost{background:none;border-color:transparent;color:var(--muted-foreground)}
+.btn.icon{padding:2px 8px}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+
+.toolbar{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
+.toolbar .spacer{margin-left:auto;display:flex;align-items:center;gap:10px}
+.toolbar .sel{font-size:13px;border:1px solid var(--border);border-radius:8px;padding:4px 10px}
+.evrow{padding:10px 0;font-size:13px;border-bottom:1px solid var(--border)}
+.evrow:last-child{border-bottom:none}
+.skel{height:12px;border-radius:4px;background:var(--surface-2);margin:14px 0}
+.errstate{display:flex;flex-direction:column;align-items:center;gap:10px;padding:40px 16px;text-align:center}
+.errstate .ico{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--danger);background:var(--danger-subtle);color:var(--danger);font-weight:700}
+.errstate p{font-size:13.5px;color:var(--muted-foreground)}
+
+.eprow{display:flex;align-items:center;gap:8px;padding:10px 0;font-size:13.5px;border-bottom:1px solid var(--border)}
+.eprow:last-child{border-bottom:none}
+.eprow .t{flex:1}
+.eprow .play{color:var(--muted-foreground);font-size:11px}
+
+.hostrow{display:flex;align-items:center;gap:12px;border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-top:8px}
+.hostrow .h{flex:1}
+.hostrow .prov{font-size:12px;color:var(--muted-foreground)}
+.tip{position:relative;display:inline-block}
+.tip .bubble{position:absolute;right:0;bottom:calc(100% + 6px);white-space:nowrap;font-size:12px;padding:4px 8px;
+  border-radius:6px;background:var(--foreground);color:var(--background)}
+
+.note{margin-top:10px;padding:10px 12px;border-radius:8px;font-size:12.5px}
+.note.plain{background:var(--surface-2);color:var(--foreground)}
+.note.warning{background:var(--warning-subtle);color:var(--warning)}
+.dl{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;font-size:12.5px;margin:8px 0 0}
+.dl dt{color:var(--muted-foreground)}
+.dl dd{margin:0}
+.dl .sub{display:block;color:var(--muted-foreground)}
+.dl .new{outline:1px dashed var(--info);outline-offset:2px;border-radius:2px}
+
+.opts{border:1px solid var(--border);border-radius:10px;background:var(--card);overflow:hidden;font-size:13px}
+.opts .o{padding:8px 12px;border-bottom:1px solid var(--border)}
+.opts .o:last-child{border-bottom:0}
+.opts .o.sel{background:var(--surface-2);font-weight:500}
+.opts .o.off{color:var(--muted-foreground);opacity:.6}
+.opts .o .why{display:block;font-size:11.5px;font-weight:400;margin-top:2px;color:var(--muted-foreground)}
+.field label{display:block;font-size:13px;font-weight:500;margin-bottom:6px}
+.field .hint{font-size:12px;color:var(--muted-foreground);margin-top:6px}
+
+.card{border:1px solid var(--border);border-radius:12px;background:var(--card);padding:16px;max-width:340px}
+.card h3{font-size:13px;font-weight:500}
+.card .body{margin-top:2px;font-size:12.5px;color:var(--muted-foreground)}
+.card .link{margin-top:12px;display:flex;align-items:center;justify-content:space-between;
+  border:1px solid var(--border);border-radius:8px;padding:8px 12px}
+.card .link b{display:block;font-size:13px;font-weight:500}
+.card .link span.meta{display:block;font-size:12px;color:var(--muted-foreground)}
+
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;font-size:13px}
+.seg span{padding:5px 12px}
+.seg span.on{background:var(--surface-2);font-weight:500}
+.toast{border:1px solid var(--border);border-radius:10px;background:var(--card);padding:10px 14px;font-size:13px;
+  box-shadow:0 8px 30px rgba(0,0,0,.12);max-width:340px;margin-left:auto}
+.toast.ok{border-left:3px solid var(--success)}
+.toast.err{border-left:3px solid var(--danger)}
+.dialog{border:1px solid var(--border);border-radius:12px;background:var(--card);max-width:420px;
+  padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+.dialog h4{font-size:15px}
+.dialog p{font-size:13.5px;color:var(--muted-foreground);margin-top:8px}
+.dialog .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.native{font-family:system-ui,sans-serif;border:1px dashed var(--border-strong);border-radius:6px;padding:14px;max-width:360px;
+  font-size:13px;color:var(--muted-foreground)}
+</style>
+</head>
+<body>
+<div class="mockbar">
+  <h1>Console residue — 0.8 mock</h1>
+  <span class="sub">docs/design/console-residue-0.8-prompt.md · #157</span>
+  <button id="tt" type="button">Toggle theme</button>
+</div>
+<div class="sheet">
+
+<!-- ============ §1. Audit liveness chip — frozen as shipped ============ -->
+<section class="state">
+  <div class="tag"><span>State 1</span><b>§1 Audit trail toolbar — loaded, the most recent read answered (components/screens/audit.tsx)</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="toolbar">
+        <span class="sel">All events</span>
+        <span class="sel">All actors</span>
+        <div class="spacer">
+          <span class="chip success pulse"><span class="dot"></span>Live · appending</span>
+          <span style="font-size:13px;color:var(--muted-foreground)">128 events</span>
+        </div>
+      </div>
+      <div class="evrow">workspace.created · alice@corp.example · 14:02:11</div>
+      <div class="evrow">run.started · agent · 14:02:44</div>
+    </div>
+    <div class="varlabel"><b>status === "ready" && !pollStale</b> — the initial load or the latest poll tick answered.</div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 1b</span><b>§1 Same toolbar, the latest poll tick rejected — no chip</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="toolbar">
+        <span class="sel">All events</span>
+        <span class="sel">All actors</span>
+        <div class="spacer">
+          <span style="font-size:13px;color:var(--muted-foreground)">128 events</span>
+        </div>
+      </div>
+      <div class="evrow">workspace.created · alice@corp.example · 14:02:11</div>
+      <div class="evrow">run.started · agent · 14:02:44</div>
+    </div>
+    <div class="varlabel"><b>status === "ready" && pollStale</b> — the last good rows stay on screen, unlabeled as live, until a tick answers again.</div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 1c</span><b>§1 Initial load in flight — no chip, no count</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="toolbar">
+        <span class="sel">All events</span>
+        <span class="sel">All actors</span>
+        <div class="spacer"></div>
+      </div>
+      <div class="skel" style="width:92%"></div>
+      <div class="skel" style="width:78%"></div>
+      <div class="skel" style="width:85%"></div>
+    </div>
+    <div class="varlabel"><b>status === "loading"</b> — TableSkeleton.</div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 1d</span><b>§1 Initial load failed — no chip, no count</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="toolbar">
+        <span class="sel">All events</span>
+        <span class="sel">All actors</span>
+        <div class="spacer"></div>
+      </div>
+      <div class="errstate">
+        <div class="ico">!</div>
+        <h4 style="font-size:15px">Something went wrong</h4>
+        <p>Wardyn isn't answering. Try again.</p>
+        <button class="btn" type="button">Retry</button>
+      </div>
+    </div>
+    <div class="varlabel"><b>status === "error"</b> — ErrorState (STATES.ERROR_TITLE / ERROR_DEFAULT / RETRY).</div>
+  </div>
+</section>
+
+<!-- ============ §2. Episode-catalog member chip — frozen as shipped ============ -->
+<section class="state">
+  <div class="tag"><span>State 2</span><b>§2 Episode catalog, multi-user group — the member-audience chip (components/screens/onboarding/episode-card.tsx)</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="seclabel">Your deployment — multi-user</div>
+      <div style="margin-top:6px">
+        <div class="eprow"><span class="play">▶</span><span class="t">One command to a cluster</span><span class="chip neutral">Not recorded yet</span></div>
+        <div class="eprow"><span class="play">▶</span><span class="t">A member's own workspace</span><span class="chip info">For your members</span><span class="chip neutral">Not recorded yet</span></div>
+        <div class="eprow"><span class="play">▶</span><span class="t">Who may do what</span><span class="chip neutral">Not recorded yet</span></div>
+        <div class="eprow"><span class="play">▶</span><span class="t">Your drive</span><span class="chip info">For your members</span><span class="chip neutral">Not recorded yet</span></div>
+        <div class="eprow"><span class="play">▶</span><span class="t">Audit and attach</span><span class="chip neutral">Not recorded yet</span></div>
+        <div class="eprow"><span class="play">▶</span><span class="t">Admin operations</span><span class="chip neutral">Not recorded yet</span></div>
+        <div class="eprow"><span class="play">▶</span><span class="t">Your terminal, our cluster</span><span class="chip info">For your members</span><span class="chip neutral">Not recorded yet</span></div>
+      </div>
+    </div>
+    <div class="varlabel">Chip count = <b>EPISODES.filter(path === "multi" && audience === "member").length</b> — 3 today (04b, 04d, 13), derived in the spec, never a literal.</div>
+  </div>
+</section>
+
+<!-- ============ §3. Security-tier reason — frozen as shipped ============ -->
+<section class="state">
+  <div class="tag"><span>State 3</span><b>§3 Allowed-hosts card, read by a member — SECURITY_ONLY_REASON on every row's remove control</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Allowed hosts · 2</h4>
+      <p class="lead" style="font-size:13px">Every run against this workspace may reach these. Nothing is here unless you approved it or a recording proved it was used.</p>
+      <div class="hostrow"><span class="h mono">api.example.dev</span><span class="prov">approved for this workspace</span>
+        <span class="tip"><button class="btn ghost icon" disabled aria-label="Remove api.example.dev">✕</button><span class="bubble">Requires the admin or security admin role.</span></span></div>
+      <div class="hostrow"><span class="h mono">registry.example.dev</span><span class="prov">required by this workspace</span>
+        <button class="btn ghost icon" disabled aria-label="Remove registry.example.dev">✕</button></div>
+    </div>
+    <div class="varlabel">The reason is the disabled remove button's title (hover drawn on the first row). The same string, unchanged, at every SECURITY-tier surface in §3's table.</div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 3b</span><b>§3 Same card, read by a security admin — the operator-authored row carries OPERATOR_ONLY_REASON</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Allowed hosts · 2</h4>
+      <p class="lead" style="font-size:13px">Every run against this workspace may reach these. Nothing is here unless you approved it or a recording proved it was used.</p>
+      <div class="hostrow"><span class="h mono">api.example.dev</span><span class="prov">approved for this workspace</span>
+        <button class="btn ghost icon" aria-label="Remove api.example.dev">✕</button></div>
+      <div class="hostrow"><span class="h mono">registry.example.dev</span><span class="prov">required by this workspace</span>
+        <span class="tip"><button class="btn ghost icon" disabled aria-label="Remove registry.example.dev">✕</button><span class="bubble">Requires the admin role.</span></span></div>
+    </div>
+    <div class="varlabel">Picked by the gate that fired: clearing an operator-authored requirement is PUT /workspaces/{id}/requirements, operator-only — so a security admin reads the narrower reason here.</div>
+  </div>
+</section>
+
+<!-- ============ §4. Drives preview dropped fields — PROPOSED ============ -->
+<section class="state">
+  <div class="tag"><span>State 4</span><b>§4 "Who gets what" answer, address pasted first on a hash drive — both staged rows (proposed)</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Who gets what</h4>
+      <div class="note plain">
+        <b>"Scratch" via the user allocation</b>
+        <dl class="dl">
+          <dt>Directory name</dt><dd class="mono">d-3f9a1c7e2b64d0a5e8c1</dd>
+          <dt>Storage object</dt><dd><span class="mono">wardyn-drive-scratch-d-3f9a1c7e2b64d0a5e8c1</span><span class="sub">What the reclaim command names — copy it when someone leaves.</span></dd>
+          <dt>Size</dt><dd>50 GiB</dd>
+          <dt>Mode</dt><dd><span class="chip warning">Writable</span></dd>
+          <dt>Enforcement</dt><dd>Size shown, not enforced</dd>
+          <dt class="new">Derived from</dt><dd class="mono new">alice@corp.example</dd>
+        </dl>
+      </div>
+      <div class="note warning new">the directory name keys on the sign-in subject; paste it first</div>
+    </div>
+    <div class="varlabel"><b>PREVIEW_SUBJECT_LABEL</b> (new last row, value = the claim the name was derived from) + <b>PREVIEW_WARNING</b> (new inline note, server text verbatim) — dashed outline marks the proposal; the five existing rows are unchanged.</div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 4b</span><b>§4 Same preview, subject pasted first on a share drive — the new row renders, the note does not</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Who gets what</h4>
+      <div class="note plain">
+        <b>"Home" via the group allocation</b>
+        <dl class="dl">
+          <dt>Directory name</dt><dd class="mono">00u8c21f0a9</dd>
+          <dt>Storage object</dt><dd><span class="mono">/srv/homes/00u8c21f0a9</span><span class="sub">What the reclaim command names — copy it when someone leaves.</span></dd>
+          <dt>Size</dt><dd>20 GiB</dd>
+          <dt>Mode</dt><dd><span class="chip warning">Writable</span></dd>
+          <dt>Enforcement</dt><dd>Size bounded by the share's own quota</dd>
+          <dt class="new">Derived from</dt><dd class="mono new">00u8c21f0a9</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="varlabel">home_subject is the pasted subject id; no warning is composed, so no note.</div>
+  </div>
+</section>
+
+<!-- ============ §5. F049-mock — frozen as shipped (a); owner rules Q13 ============ -->
+<section class="state">
+  <div class="tag"><span>State 5</span><b>§5 F049-mock · Drive editor, managed backend (Docker runner: docker_volume vs host_path) — variant (a), shipped: every non-derived option disabled, HOME_HINT says why</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle">Edit "Workbench"</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:14px">
+        <div class="field">
+          <label>Backend</label>
+          <div class="opts"><div class="o sel">Wardyn-managed volume (this Docker host)</div><div class="o">Share mounted on this host</div></div>
+          <div class="hint">Only the backends this deployment's runner can mount are offered.</div>
+        </div>
+        <div class="field">
+          <label>Directory name</label>
+          <div class="opts">
+            <div class="o sel">Derived (stable id)<span class="why">A short id derived from the drive and the person. It never collides and says nothing about who it is — Preview below finds a person's directory.</span></div>
+            <div class="o off">Sign-in subject<span class="why">The subject id your identity provider sends, lowercased. Stable, but rarely what a share already calls a person.</span></div>
+            <div class="o off">Email, before the @<span class="why">The part before the @, lowercased — the usual shape of a corporate home directory.</span></div>
+          </div>
+          <div class="hint">How each person's directory is named inside the drive. A share uses the name your directory already has; a managed drive can use a derived id.</div>
+          <div class="hint">A directory name is lowercase letters and digits, then any of <span class="mono">. _ -</span>, up to 63 characters. A person whose claim cannot name one is refused at their run, never guessed.</div>
+        </div>
+      </div>
+    </div>
+    <div class="varlabel"><b>(a) disabled with reason</b> — drive-editor.tsx#homeDisabled; recommended (drives round Q3). Source: ROADMAP F049-mock · workspace-providers-mock/canon.html State 3b · workspace-providers-prompt.md Q13.</div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 5b</span><b>§5 F049-mock · Q13's losing variant (b): the two claim options not offered at all</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="field" style="max-width:460px">
+        <label>Directory name</label>
+        <div class="opts"><div class="o sel">Derived (stable id)<span class="why">A short id derived from the drive and the person. It never collides and says nothing about who it is — Preview below finds a person's directory.</span></div></div>
+        <div class="hint">How each person's directory is named inside the drive. A share uses the name your directory already has; a managed drive can use a derived id.</div>
+        <div class="hint">A directory name is lowercase letters and digits, then any of <span class="mono">. _ -</span>, up to 63 characters. A person whose claim cannot name one is refused at their run, never guessed.</div>
+      </div>
+    </div>
+    <div class="varlabel"><b>(b) not offered</b> — drawn for the owner's ruling only; not what ships.</div>
+  </div>
+</section>
+
+<!-- ============ §5.1 Drives card — extra to the five, frozen as shipped ============ -->
+<section class="state">
+  <div class="tag"><span>State 5.1</span><b>§5.1 (extra) The drives card — loading / failed read: no meta line (components/screens/setup/user-drives-card.tsx)</b></div>
+  <div class="card">
+    <h3>User drives</h3>
+    <p class="body">Persistent storage people can mount into a run — separate from any workspace.</p>
+    <div class="link"><span><b>Manage drives</b></span><span style="color:var(--muted-foreground)">›</span></div>
+  </div>
+  <div class="varlabel">counts === null — CARD_LEAD renders; the button carries no meta line, never a placeholder count.</div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 5.1b</span><b>§5.1 (extra) The drives card — populated: the summary is the button's meta line</b></div>
+  <div class="card">
+    <h3>User drives</h3>
+    <p class="body">Persistent storage people can mount into a run — separate from any workspace.</p>
+    <div class="link"><span><b>Manage drives</b><span class="meta">4 drives · 11 allocations</span></span><span style="color:var(--muted-foreground)">›</span></div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 5.1c</span><b>§5.1 (extra) The drives card — empty</b></div>
+  <div class="card">
+    <h3>User drives</h3>
+    <p class="body">Persistent storage people can mount into a run — separate from any workspace.</p>
+    <div class="link"><span><b>Manage drives</b><span class="meta">No drives yet.</span></span><span style="color:var(--muted-foreground)">›</span></div>
+  </div>
+</section>
+
+<!-- ============ §6. Unsaved-changes guard — frozen as shipped ============ -->
+<section class="state">
+  <div class="tag"><span>State 6</span><b>§6 Unsaved-changes guard — clean (lib/use-unsaved-guard.tsx; caller providers-screen.tsx)</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle" style="font-size:16px">Workspace providers</h4>
+      <p class="lead">Where work can come from, and how big it can get. Enable a git provider to bound which repositories a run may clone; set the storage ceilings every run and every drive is held to.</p>
+      <div style="margin-top:14px"><div class="seg"><span class="on">Git providers</span><span>Storage</span><span>Agents</span></div></div>
+      <div style="margin-top:14px;display:flex;justify-content:flex-end"><button class="btn primary" type="button">Save providers</button></div>
+    </div>
+    <div class="varlabel">changedLines.length === 0 — no guard registered; nav links and the browser tab's close/reload behave normally. No dirty indicator renders.</div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 6b</span><b>§6 Dirty, navigating away in-app — the blocking confirm</b></div>
+  <div class="frame">
+    <div class="pad" style="display:flex;justify-content:center;background:var(--surface-2)">
+      <div class="dialog">
+        <h4>Leave without saving?</h4>
+        <p>This form has changes that aren't saved. Leaving now discards them.</p>
+        <div class="foot">
+          <button class="btn ghost" type="button">Keep editing</button>
+          <button class="btn danger" type="button">Discard changes</button>
+        </div>
+      </div>
+    </div>
+    <div class="varlabel">Fires on a sidebar nav link click while any registered form is dirty. A modifier/middle click (new tab) is left alone.</div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 6c</span><b>§6 Dirty, closing or reloading the tab — the browser's own prompt, no console copy</b></div>
+  <div class="frame">
+    <div class="pad" style="display:flex;justify-content:center;background:var(--surface-2)">
+      <div class="native">The browser's native leave-site prompt renders here. Its wording is the browser's, not Wardyn's.</div>
+    </div>
+    <div class="varlabel">window.beforeunload while dirty — a native browser dialog, shown only so the state is enumerated. Wardyn ships no copy for it.</div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 6d</span><b>§6 Dirty then saved — the guard un-registers, no dialog</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle" style="font-size:16px">Workspace providers</h4>
+      <div style="margin-top:14px"><div class="seg"><span class="on">Git providers</span><span>Storage</span><span>Agents</span></div></div>
+      <div style="margin-top:14px;display:flex;justify-content:flex-end"><button class="btn primary" type="button">Save providers</button></div>
+      <div class="toast ok" style="margin-top:14px">Providers saved.</div>
+    </div>
+    <div class="varlabel">The PUT's response becomes both draft and original → changedLines = 0 → a sidebar click navigates straight away.</div>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>State 6e</span><b>§6 Save failed, still dirty — the guard stays armed</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h4 class="sectitle" style="font-size:16px">Workspace providers</h4>
+      <div style="margin-top:14px"><div class="seg"><span class="on">Git providers</span><span>Storage</span><span>Agents</span></div></div>
+      <div style="margin-top:14px;display:flex;justify-content:flex-end"><button class="btn primary" type="button">Save providers</button></div>
+      <div class="toast err" style="margin-top:14px"><b style="font-weight:500">Couldn't save these providers.</b></div>
+    </div>
+    <div class="varlabel">Drawn: the no-answer arm (toast SAVE_ERROR; its description is the error text). A 412 raises the saved-elsewhere banner; a 400 renders SAVE_REFUSED_TITLE over the server's text. In every arm original is unchanged, so State 6b still fires on the next sidebar click.</div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+});
+</script>
+</body>
+</html>
