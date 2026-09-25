@@ -40,10 +40,9 @@ import (
 // It is NOT "this needs fixing" — nearly every warn/fail row does — and NOT a
 // severity ranking. Two families must never carry it. Rows graded through the
 // CALLER's own credential rather than the install: llmProviderCheck's per_user
-// and provider arms, bedrockProviderCheck's per_user arm, providerAccessCheck,
-// and awsSSOCredentialRow, which grades the caller's own AWS SSO session.
-// Confiscating the console over a fact about one person is exactly what this
-// flag exists to prevent. And advisory
+// and provider arms, bedrockProviderCheck's per_user arm, providerAccessCheck and
+// awsSSOCredentialRow (the caller's own AWS SSO session). Confiscating the console
+// over a fact about one person is exactly what this flag exists to prevent. And advisory
 // install rows, whose grade belongs on every surface that renders them but
 // whose fix is nobody's emergency: the SCM safest-path ladder, an ephemeral age
 // key, TLS cookie posture, an acknowledged egress canary. (harnessCredential-
@@ -325,8 +324,7 @@ const (
 // fact than "nothing is configured" (a cross-row contradiction:
 // bedrock_provider says Bedrock IS configured two rows down), so it gets its
 // own per-principal sentence instead of the generic optional-provider one.
-// access (provider_access) is read after both, for the same reason: a
-// provider block granting this caller providers is not "nothing configured".
+// access (provider_access) is read last: granted providers aren't "nothing configured".
 func llmProviderCheck(llmDetail string, bedrock SetupBedrock, access []SetupProviderAccess) SetupCheck {
 	if llmDetail != "" {
 		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "ok", Detail: llmDetail}
