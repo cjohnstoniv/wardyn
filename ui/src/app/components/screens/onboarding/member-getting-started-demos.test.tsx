@@ -214,9 +214,9 @@ describe("MemberGettingStarted — demos (M-6 D5)", () => {
     expect(screen.queryByTestId("demo-card-agent-in-the-box")).not.toBeInTheDocument();
   });
 
-  // D5 watch-only: a caller the server answers as a user (an SSO user, or an
-  // SSO admin in the User view) runs a demo through their own ceiling, so a
-  // demo that ceiling rewrites offers no Start. D1 "url" keeps Start on all.
+  // Owner ruling 2026-09-25: a demo a caller's own ceiling narrows is HIDDEN
+  // from this page entirely (no row, no card) rather than offered watch-only.
+  // D1 "url" has no ceiling, so every demo stays visible with Start.
   it.each([
     ["session-user", "held-at-the-door", false],
     ["session-user", "record-a-policy", false],
@@ -225,12 +225,15 @@ describe("MemberGettingStarted — demos (M-6 D5)", () => {
     ["url", "held-at-the-door", true],
     ["url", "record-a-policy", true],
     ["url", "sealed-box", true],
-  ] as const)("%s: %s offers Start: %s", async (access, id, start) => {
+  ] as const)("%s: %s renders (with Start): %s", async (access, id, visible) => {
     getSetupStatusMock.mockResolvedValue(redacted);
     renderPage(baseMe(), null, `?step=${id}`, access);
+    if (!visible) {
+      await screen.findByText(T.DEMOS_EGRESS_TITLE);
+      expect(screen.queryByTestId(`demo-card-${id}`)).not.toBeInTheDocument();
+      return;
+    }
     const card = await screen.findByTestId(`demo-card-${id}`);
-    if (start) expect(await within(card).findByTestId(`demo-start-${id}`)).toBeInTheDocument();
-    else expect(screen.queryByTestId(`demo-start-${id}`)).not.toBeInTheDocument();
-    expect(within(card).queryByTestId("demo-ceiling-watch-only") === null).toBe(start);
+    expect(await within(card).findByTestId(`demo-start-${id}`)).toBeInTheDocument();
   });
 });

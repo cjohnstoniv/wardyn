@@ -320,9 +320,13 @@ describe("walkableDemos — conditional demos are offered only once their precon
   });
 });
 
-// ceilingNarrows(demo) — D5's watch-only test, pinned to #850's per-demo
-// table (read against the shipped default policy): the demos whose inline
-// policy a user's ceiling would rewrite, and the ones it leaves alone.
+// ceilingNarrows(demo) — pinned to #850's per-demo table (read against the
+// shipped default policy): the demos whose inline policy a user's ceiling
+// would rewrite (and are therefore HIDDEN from the user's Getting Started,
+// per the owner's 2026-09-25 ruling), and the ones it leaves alone.
+// github-app-broker is UNTOUCHED here: #850 keeps that demo's github_token
+// grant with approval forced on rather than dropping it, so the demo still
+// runs — a click of approval, not a narrowed lesson.
 describe("ceilingNarrows — the demos a user's ceiling would rewrite (#850)", () => {
   const narrowed = [
     "held-at-the-door",
@@ -334,10 +338,16 @@ describe("ceilingNarrows — the demos a user's ceiling would rewrite (#850)", (
     "rest-api-token",
     "pat-stdout-only",
     "ssh-briefly-resident",
-    "github-app-broker",
     "sts-fail-closed",
   ];
-  const untouched = ["sealed-box", "fail-then-approve", "agent-in-the-box", "once-or-for-good", "write-only-by-design"];
+  const untouched = [
+    "sealed-box",
+    "fail-then-approve",
+    "agent-in-the-box",
+    "once-or-for-good",
+    "write-only-by-design",
+    "github-app-broker",
+  ];
 
   it("covers every catalog demo, split per the #850 table", () => {
     expect([...narrowed, ...untouched].sort()).toEqual(DEMOS.map((d) => d.id).sort());
