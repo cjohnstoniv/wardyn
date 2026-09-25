@@ -13,11 +13,20 @@ import { ADO } from "../src/app/lib/ado-entra-copy";
 // splice in `scm_access`, fulfill. Every other field stays what the daemon
 // actually serves.
 async function mockScmAccess(page: Page, scm_access: Record<string, unknown>): Promise<void> {
+  // Cache-and-serve, not route.fetch()+refulfill per match: the landing
+  // redirect (gotoConsole) and the setup screen's own mount both hit
+  // /setup/status, and a real round trip PER match raced Playwright disposing
+  // an in-flight route's response at teardown ("apiResponse.json: Response
+  // has been disposed").
+  let cached: Record<string, unknown> | null = null;
   await page.route("**/api/v1/setup/status*", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.scm_access = scm_access;
-    await route.fulfill({ response, json });
+    if (!cached) {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.scm_access = scm_access;
+      cached = json;
+    }
+    await route.fulfill({ json: cached! });
   });
 }
 

@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"slices"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -184,8 +186,10 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// override (nil => the global operator config).
 	if !t.harnessLogin {
 		// refresh=true: dispatch (like the real launch's create) may redeem a captured AWS SSO
-		// session's rotating refresh token and persist the rotated pair.
-		t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, true, bedrockRef, sso)
+		// session's rotating refresh token and persist the rotated pair — the same
+		// sso-refresh purpose the create path (resolveLLMLanes) records for a
+		// refreshing read, not a plain dispatch read.
+		t.bedrock = s.resolveBedrockAuth(secretstore.WithPurpose(ctx, secretstore.PurposeSSORefresh), run.Agent, t.subscription, modelRun, true, bedrockRef, sso)
 		t.bedrockReady = t.bedrock.ready
 		// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
 		// (never-resident); consumed by the CA / injection / MITM-host wiring
@@ -398,7 +402,9 @@ func (s *Server) applyBedrockTransport(run types.AgentRun, b bedrockAuth, policy
 func (s *Server) provisionDispatchMITMCA(ctx context.Context, run types.AgentRun, sandboxEnv map[string]string) (certPEM, keyPEM string, ok bool) {
 	pemCert, pemKey, caErr := generateRunCA(time.Now())
 	if caErr != nil {
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not provision the per-run TLS-interception CA: "+caErr.Error())
+		slog.ErrorContext(ctx, "wardynd: could not provision the per-run TLS-interception CA",
+			slog.String("run_id", run.ID.String()), slog.Any("err", caErr))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not provision the per-run TLS-interception CA")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "mitm ca: " + caErr.Error()})))
 		return "", "", false
@@ -548,7 +554,10 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 	}); gerr != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not author the "+injectSource+" credential injection: "+gerr.Error())
+		// The hint is member-visible: a fixed sentence, never the store's text.
+		slog.ErrorContext(ctx, "wardynd: could not record the "+injectSource+" credential grant",
+			slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not record the "+injectSource+" credential grant")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": injectSource + " inject grant: " + gerr.Error()})))
 		return injections, nil, false
@@ -604,7 +613,10 @@ func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.Age
 	}); gerr != nil {
 		// CAS from STARTING (claimed at dispatch entry) so a concurrent kill's
 		// KILLED state is preserved rather than clobbered back to FAILED.
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not author the Bedrock bearer credential injection: "+gerr.Error())
+		// The hint is member-visible: a fixed sentence, never the store's text.
+		slog.ErrorContext(ctx, "wardynd: could not record the Bedrock bearer credential grant",
+			slog.String("run_id", run.ID.String()), slog.Any("err", gerr))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "could not record the Bedrock bearer credential grant")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "bedrock bearer inject grant: " + gerr.Error()})))
 		return injections, nil, false

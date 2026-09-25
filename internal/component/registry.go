@@ -3,7 +3,7 @@
 
 // Package component provides the shared registry that backs Wardyn's pluggable
 // component seams: identity provider, secret store, recording store, and the
-// confinement substrate. NOT the policy evaluator — this doc used to list it and
+// confinement substrate. NOT the policy evaluator:
 // no evaluator registry exists; egress.Evaluator has an interface and a
 // conformance suite but exactly one implementation and no selector, which is why
 // /healthz reports policy_engine with no `available` list.

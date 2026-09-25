@@ -65,13 +65,13 @@ func TestDispatch_AuditsEffectivePolicyEnvelope(t *testing.T) {
 	}
 }
 
-// TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues is
-// W12-A-2 (secret-leak): the run.policy.effective envelope used to
-// mustJSON(policy) the FULL spec straight into the append-only audit log —
-// including llm_inspection.workspace_secret_values, contradicting the
-// field's own "NEVER logged" doc comment (types.LLMInspectionSpec). The
-// envelope must instead carry a redaction placeholder, and the redaction must
-// never corrupt what dispatch actually hands the proxy sidecar.
+// TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues: the
+// run.policy.effective envelope must not mustJSON(policy) the full spec
+// straight into the append-only audit log — that would include
+// llm_inspection.workspace_secret_values, contradicting the field's own
+// "NEVER logged" doc comment (types.LLMInspectionSpec). The envelope carries
+// a redaction placeholder instead, and the redaction must never corrupt what
+// dispatch actually hands the proxy sidecar.
 func TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues(t *testing.T) {
 	fr := &fakeRunner{}
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
@@ -116,7 +116,7 @@ func TestDispatch_AuditsEffectivePolicyEnvelope_RedactsLLMInspectionValues(t *te
 }
 
 // TestDispatch_ResolvesLLMInspectionSecretNamesAtDispatch is the structural
-// fix underlying W12-A-2/W12-S1-1: workspace_secret_names (what a policy
+// fix underlying: workspace_secret_names (what a policy
 // actually authors) is resolved against the secret store ONLY at dispatch,
 // onto the in-memory copy of the policy the proxy sidecar receives — never
 // stored, never read back, never logged. Belt-and-braces: every resolved

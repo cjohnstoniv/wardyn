@@ -86,7 +86,7 @@ type preflightResponse struct {
 //
 // It does persist one thing. Every gate it
 // reproduces is a real gate, and a gate that REFUSES a member writes its
-// authz.denied audit row — denyMemberField, from inside the shared code path.
+// authz.denied audit row — refuse, from inside the shared code path.
 // So a dry run that is refused (task_mode, the drive door, any other profile
 // limit) leaves exactly one row per refused door per call, with run_id NULL
 // because there is no run. A dry run that PASSES writes nothing at all.
@@ -168,7 +168,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// It can write one audit row on the grace lane
 	// (workspace.provider.legacy_host, from admitRepoSources) — the same "a
 	// refused dry run leaves the record of the refusal" rule this handler's doc
-	// comment already states for denyMemberField. In legacy open mode (no
+	// comment already states for refuse. In legacy open mode (no
 	// provider rows) it reads the site config and returns having refused,
 	// audited and warned nothing.
 	if s.requestRepoProviderRefusals(w, r, req, false) { // false: Review never gates on git_credential (F2)

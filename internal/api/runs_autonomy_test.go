@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the autonomy fixture ─────────────────────────────────────────────────────
+// the autonomy fixture
 
 // autonomyRubric returns a rubric that resolves to level WHATEVER the posture
 // is: all nine fields set to the same value.
@@ -87,7 +87,7 @@ func autonomyCreateAudit(t *testing.T, st *govEscapeStore, audit *recRecorder) m
 	return data
 }
 
-// ─── the ladder table ─────────────────────────────────────────────────────────
+// the ladder table
 
 // TestRunAutonomyLadder is the gate's behaviour table: four levels against the
 // request shapes the rungs are defined in terms of, driven end to end through
@@ -194,7 +194,7 @@ func TestRunAutonomyLadder(t *testing.T) {
 					t.Fatalf("status = %d, want %d: %s", w.Code, exp.status, w.Body.String())
 				}
 				if exp.status == http.StatusForbidden {
-					if got := lastAuthzDenied(audit.events); got != exp.target {
+					if got := lastAuthzDenied(audit.snapshot()); got != exp.target {
 						t.Errorf("authz.denied target = %q, want %q", got, exp.target)
 					}
 					st.mu.Lock()
@@ -246,7 +246,7 @@ func TestRunAutonomyFreezesTheLevelOnTheRun(t *testing.T) {
 	}
 }
 
-// ─── Review and launch answer with the same object ────────────────────────────
+// Review and launch answer with the same object
 
 // TestAutonomyReviewMatchesLaunch is the property the whole design is shaped
 // around: POST /runs/preflight returns the SAME autonomy object POST /runs
@@ -334,7 +334,7 @@ func autonomyBoundBy(t *testing.T, resolution map[string]any) []string {
 	return out
 }
 
-// ─── every tied cause is named ────────────────────────────────────────────────
+// every tied cause is named
 
 // TestAutonomyBoundByNamesEveryTiedCause is the #96 wire ruling, asserted
 // where it is load-bearing: bound_by is a LIST, and a member capped by a
@@ -451,7 +451,7 @@ func TestAutonomyReviewRefusesWhatLaunchRefuses(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("preflight = %d, want 403: %s", w.Code, w.Body.String())
 	}
-	if got := lastAuthzDenied(audit.events); got != "runs.task_mode" {
+	if got := lastAuthzDenied(audit.snapshot()); got != "runs.task_mode" {
 		t.Errorf("preflight authz.denied target = %q, want runs.task_mode", got)
 	}
 }
@@ -469,7 +469,7 @@ func TestAutonomyReviewRefusesWhatLaunchRefuses(t *testing.T) {
 // launch handed the member L3, the rung that permits `task_mode=exec`.
 //
 // The rubric therefore names the two egress postures with DIFFERENT levels, so
-// a regression shows up as a wrong level and not merely a wrong label.
+// a mistake shows up as a wrong level and not merely a wrong label.
 func TestAutonomyPostureIncludesWorkspaceEgressAtBothDoors(t *testing.T) {
 	const beyondBaselineHost = "forge.corp.example"
 	// workspace_repos, the same second door into the workspace lane row 10 of
@@ -691,7 +691,7 @@ func TestAutonomyPostureIncludesGrantLanesAtBothDoors(t *testing.T) {
 	}
 }
 
-// ─── the absent-row rule ──────────────────────────────────────────────────────
+// the absent-row rule
 
 // TestAutonomyAbsentRowChangesNothing pins the promise every GovernanceLimits
 // field makes and this one has the most to lose by breaking: a member with no
@@ -789,7 +789,7 @@ func bytesContainsKey(body []byte, key string) bool {
 	return ok
 }
 
-// ─── the two sentences on the 201 ─────────────────────────────────────────────
+// the two sentences on the 201
 
 // TestAutonomyWarningsOnTheCreatedRun pins the gate's advisory half, which the
 // audit row cannot speak for: the run was CREATED, so the only thing that
@@ -806,21 +806,53 @@ func bytesContainsKey(body []byte, key string) bool {
 func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 	const derived = "tool_approvals was set to hold"
 	const noLane = "has no Wardyn tool-approval lane"
+	const undelivered = "managed settings for autonomy level"
 	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
 
 	for _, tc := range []struct {
-		name   string
-		level  types.AutonomyLevel
-		body   string
-		want   []string
-		absent []string
+		name           string
+		level          types.AutonomyLevel
+		body           string
+		noManagedFiles bool
+		krunCC2        bool
+		want           []string
+		absent         []string
 	}{
+		{
+			// The exec-less krun ruling: the file is placed, but the row records
+			// delivered:false and the person launching the run is told the same.
+			name:    "a gated run on the exec-less krun runtime is told its managed settings are unverified",
+			level:   types.AutonomyL1,
+			body:    `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			krunCC2: true,
+			want:    []string{"claude-code's " + undelivered + " L1 are not delivered", "unverified on this runtime: libkrun may run the guest as root"},
+			absent:  []string{derived, noLane},
+		},
 		{
 			name:   "an overridden auto is reported, with the profile and every tied cause",
 			level:  types.AutonomyL1,
 			body:   `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"auto"}`,
 			want:   []string{derived, `governance profile "autonomy-warnings"`, "L1", "bound by egress_sealed, secrets_none and confinement_cc2"},
-			absent: []string{noLane},
+			absent: []string{noLane, undelivered},
+		},
+		{
+			// The run launches (A-Q3), and the person launching it is told the
+			// managed layer will not be there, in the row's own words.
+			name:           "a gated run on a runner that cannot deliver managed settings says so",
+			level:          types.AutonomyL1,
+			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			noManagedFiles: true,
+			want:           []string{"claude-code's " + undelivered + " L1 are not delivered", `runner "fake" does not deliver managed files`, "launch flags alone"},
+			absent:         []string{derived, noLane},
+		},
+		{
+			// No file is generated for this agent, so there is nothing undelivered.
+			name:           "an agent with no managed settings is not told they are undelivered",
+			level:          types.AutonomyL2,
+			body:           `{"agent":"codex-cli","task":"t","confinement_class":"CC2"}`,
+			noManagedFiles: true,
+			want:           []string{noLane},
+			absent:         []string{undelivered},
 		},
 		{
 			// Nothing was derived: the caller already asked for the supervision
@@ -860,6 +892,12 @@ func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 				p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(tc.level)}
 			}
 			srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
+			if tc.noManagedFiles {
+				srv.cfg.Runner = &fakeRunner{noManagedFiles: true}
+			}
+			if tc.krunCC2 {
+				srv.cfg.Runner = &fakeRunner{capsResolved: map[types.ConfinementClass]string{types.CC2: "oci/krun"}}
+			}
 			w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", member(t), tc.body)
 			if w.Code != http.StatusCreated {
 				t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
@@ -928,20 +966,21 @@ func TestAutonomyUndefinedLevelFailsClosed(t *testing.T) {
 	}
 }
 
-// ─── the per-person Azure DevOps lane (#474) ──────────────────────────────────
+// the per-person Azure DevOps lane (#474)
 
-// TestAutonomyPostureGradesTheADOEntraCredentialAtCreate is the security
-// review's probe, kept: the posture graded at create for a run on the
+// TestAutonomyPostureGradesTheADOEntraCredentialAtCreate compares the
+// posture graded at create for a run on the
 // per-person Azure DevOps lane, against the same run once dispatch has written
 // the api_key grants createADOEntraGrants authors for it.
 //
 // The two must fold to the SAME level, and the reason is the whole gate: the
 // level is frozen at create (resolveRunAutonomy) and the credential is
 // authored at dispatch (authorADOEntraLane), so a secrets axis reading
-// spec.EligibleGrants alone graded this run `none` — and launched it on the
-// autonomous rung while it carried the person's Entra bearer proxy-side.
+// spec.EligibleGrants alone would grade this run `none` — and launch it on
+// the autonomous rung while it carries the person's Entra bearer
+// proxy-side.
 //
-// The rubric names the secrets rows apart from the egress one so a regression
+// The rubric names the secrets rows apart from the egress one so a mistake
 // shows up as a wrong LEVEL, not merely a wrong label: the workspace's own
 // clone host already makes this run `open`, and with every row at one level
 // the miss would be invisible.

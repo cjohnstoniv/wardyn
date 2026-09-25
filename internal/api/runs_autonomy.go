@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -32,7 +33,7 @@ import (
 // dispatchParams literal is built, or the audit row and the sandbox env would
 // say `auto` while the resolution said `hold`.
 //
-// Returns ok=false once it has written its own 403 (denyMemberField, the
+// Returns ok=false once it has written its own 403 (refuse, the
 // existing member-refusal shape carrying the existing `governance_profile`
 // reason — the closed reason enum stays closed), or its own 500 when the site
 // config could not be read. The warnings ride the 201.
@@ -96,6 +97,14 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 		return res, nil, scmSite, grade, bedrock, true
 	}
 	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade, bedrock), ceiling.Profile.Name)
+	// Here rather than in the ladder: whether the managed settings land depends
+	// on the ENFORCED class's substrate, which only this function holds. No
+	// agent process on an exec run to say it about.
+	if ok && req.TaskMode != "exec" {
+		if msg := s.managedSettingsUndeliveredWarning(r.Context(), req.Agent, level, enforced); msg != "" {
+			warnings = append(warnings, msg)
+		}
+	}
 	return res, warnings, scmSite, grade, bedrock, ok
 }
 
@@ -124,10 +133,10 @@ func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *cre
 	//	seed_auto_tools   L2   the pre-attach span runs before any human is at the pane
 	//	non-interactive   L1   unattended at all
 	if level.Rank() < types.AutonomyL3.Rank() && req.TaskMode == "exec" {
-		s.denyMemberField(w, r, "runs.task_mode", "governance_profile", fmt.Sprintf(
+		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.task_mode", fmt.Sprintf(
 			"`task_mode=exec` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.",
-			name, level, bound))
+			name, level, bound)))
 		return nil, false
 	}
 	// The shell boot seed ranks WITH exec, not with seed_auto_tools, because it
@@ -139,25 +148,25 @@ func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *cre
 	// The agent form (`claude "$seed"`) is left alone: it parks its own
 	// approval prompt until a human joins, unless seed_auto_tools says otherwise.
 	if level.Rank() < types.AutonomyL3.Rank() && req.InteractiveStart != "agent" && interactiveBootSeed(interactive, req.Task) != "" {
-		s.denyMemberField(w, r, "runs.interactive_start", "governance_profile", fmt.Sprintf(
+		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive_start", fmt.Sprintf(
 			"a startup command is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and with `interactive_start` unset or `shell` an interactive run's task runs as a shell command at sandbox boot, before anyone attaches — "+
 				"what `task_mode=exec` does. Launch with `interactive_start=agent` to hand the task to the agent as its first prompt, or without a task.",
-			name, level, bound))
+			name, level, bound)))
 		return nil, false
 	}
 	if level.Rank() < types.AutonomyL2.Rank() && req.SeedAutoTools {
-		s.denyMemberField(w, r, "runs.seed_auto_tools", "governance_profile", fmt.Sprintf(
+		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.seed_auto_tools", fmt.Sprintf(
 			"`seed_auto_tools` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and the pre-attach seed runs before any human is at the pane. Launch without it.",
-			name, level, bound))
+			name, level, bound)))
 		return nil, false
 	}
 	if level.Rank() < types.AutonomyL1.Rank() && !interactive {
-		s.denyMemberField(w, r, "runs.interactive", "governance_profile", fmt.Sprintf(
+		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive", fmt.Sprintf(
 			"unattended runs are not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"which requires a human at the pane. Launch with `--interactive`, or narrow the run's egress, secrets or confinement.",
-			name, level, bound))
+			name, level, bound)))
 		return nil, false
 	}
 	return s.autonomyDerive(w, r, req, level, bound, name, interactive)
@@ -197,10 +206,10 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 	// there ships the unsupervised run the explicit-hold 400 already rejects —
 	// the same contradiction, arriving through a field the caller never set.
 	if !agentHasHoldLane(req.Agent) {
-		s.denyMemberField(w, r, "runs.agent", "governance_profile", fmt.Sprintf(
+		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.agent", fmt.Sprintf(
 			"%s is not supported under your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), which routes an "+
 				"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.",
-			autonomyAgentLabel(req.Agent), name, level, bound))
+			autonomyAgentLabel(req.Agent), name, level, bound)))
 		return nil, false
 	}
 	if req.ToolApprovals == "hold" {
