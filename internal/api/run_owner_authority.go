@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -122,7 +123,9 @@ func (s *Server) ownerProviderRows(ctx context.Context, repos []string) ([]types
 }
 
 // capAllowedForSub is capSeamAllowed for an owner known only by sub. A store
-// that cannot answer is an error, never an allow.
+// that cannot answer is an error, never an allow. A value restricted by
+// "Available to" counts as enforced and only an allow naming it lets the owner
+// in (capBatch.decide's step 3).
 func (s *Server) capAllowedForSub(ctx context.Context, sub, kind, value string) (bool, error) {
 	if s.cfg.Store == nil {
 		return true, nil
@@ -130,6 +133,11 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, kind, value string) 
 	grants, err := s.cfg.Store.ListCapabilityGrants(ctx)
 	if err != nil {
 		return false, fmt.Errorf("api: resolve capability %q: %w", kind, err)
+	}
+	batch := s.newCapBatch(ctx)
+	restricted, err := batch.isRestricted(ctx, kind, value)
+	if err != nil {
+		return false, err
 	}
 	sub = canonicalUserSubject(sub)
 	allow := false
@@ -144,6 +152,7 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, kind, value string) 
 			continue
 		}
 		if capValueMatches(kind, g.Value, value) &&
+			(!restricted || strings.TrimSpace(g.Value) == strings.TrimSpace(value)) &&
 			(g.SubjectType == types.CapabilitySubjectAll || (g.SubjectType == types.CapabilitySubjectUser && g.Subject == sub)) {
 			allow = true
 		}
@@ -151,11 +160,11 @@ func (s *Server) capAllowedForSub(ctx context.Context, sub, kind, value string) 
 	if allow {
 		return true, nil
 	}
-	enforced, err := s.newCapBatch(ctx).enforced(ctx, kind)
+	enforced, err := batch.enforced(ctx, kind)
 	if err != nil {
 		return false, err
 	}
-	return !enforced, nil
+	return !enforced && !restricted, nil
 }
 
 // ownerProfile is the run's captured profile, refusing when it no longer exists:

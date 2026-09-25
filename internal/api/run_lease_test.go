@@ -35,6 +35,11 @@ type leaseStore struct {
 	credGrants []types.CredentialGrant
 	casErr     error // returned once by UpdateRunStateIf
 	grantsErr  error // ListCapabilityGrants fails closed with this, never an implicit allow
+	restricted map[string]map[string]bool
+}
+
+func (s *leaseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return s.restricted, nil
 }
 
 func (s *leaseStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGrant, error) {

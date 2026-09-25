@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -171,6 +172,42 @@ func TestRevive_AnAdminCannotRuleOutTheOwnersGroups(t *testing.T) {
 		t.Fatalf("revive = %d %s, want 403", code, body)
 	}
 	f.assertReviveRefused(t, "capability_"+capAgent)
+}
+
+// TestRevive_HonoursAvailableTo (#903 x #893): a value restricted by
+// "Available to" counts as enforced, and only an allow naming it lets the owner
+// in; a wildcard allow names nobody. An admin's revive, which knows the owner
+// by sub alone, must answer as the owner's own revive does.
+func TestRevive_HonoursAvailableTo(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		enforced bool
+		caps     func(sub string) []types.CapabilityGrant
+		want     int
+	}{
+		{"restricted, switch off, no allow", false, func(string) []types.CapabilityGrant { return nil }, http.StatusForbidden},
+		{"restricted, wildcard allow for all", true, func(string) []types.CapabilityGrant {
+			return []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capAgent, capWildcard, types.CapabilityAllow)}
+		}, http.StatusForbidden},
+		{"restricted, allow naming the value for the owner", true, func(sub string) []types.CapabilityGrant {
+			return []types.CapabilityGrant{grant(types.CapabilitySubjectUser, sub, capAgent, "claude-code", types.CapabilityAllow)}
+		}, http.StatusOK},
+	} {
+		for _, owner := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/owner=%v", tc.name, owner), func(t *testing.T) {
+				f, _ := newOwnerFixture(t)
+				f.st.caps = tc.caps(f.run.CreatedBy)
+				f.st.enf = map[string]bool{capAgent: tc.enforced}
+				f.st.restricted = map[string]map[string]bool{capAgent: {"claude-code": true}}
+				if code, body := f.reviveAs(t, owner); code != tc.want {
+					t.Fatalf("revive = %d %s, want %d", code, body, tc.want)
+				}
+				if tc.want == http.StatusForbidden {
+					f.assertReviveRefused(t, "capability_"+capAgent)
+				}
+			})
+		}
+	}
 }
 
 // modelCredFixture is newOwnerFixture whose surviving api.anthropic.com
