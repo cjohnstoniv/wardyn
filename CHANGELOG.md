@@ -702,6 +702,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `TestCreateSandbox_PinsTheRuntimeClassPerTier` pins that a CC2/CC3 agent pod carries its pinned
   RuntimeClass, and that an unpinned, missing, weaker or since-changed RuntimeClass is refused
   before any pod, Secret or NetworkPolicy is created.
+- **The `webhook` audit sink takes a `timeout` key** (per HTTP request, default `15s`); a zero or
+  negative value is refused at startup, since it would let shutdown hang on a wedged collector (#471).
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away

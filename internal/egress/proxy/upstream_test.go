@@ -492,6 +492,13 @@ func TestUpstreamParseRejectsBadScheme(t *testing.T) {
 // before this dial happens, so without a read deadline the operator sees an
 // approved request stall indefinitely with no failure to act on.
 func TestUpstreamCONNECTStallFailsFast(t *testing.T) {
+	// Shrink the wait: the property under test is "bounded", not the exact
+	// production value (restored after — see
+	// TestUpstreamConnectTimeout_ProductionValueUnchanged).
+	prevTimeout := upstreamConnectTimeout
+	upstreamConnectTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { upstreamConnectTimeout = prevTimeout })
+
 	// A listener that accepts and then goes silent forever.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -517,8 +524,6 @@ func TestUpstreamCONNECTStallFailsFast(t *testing.T) {
 	}
 	p := newUpstreamProxy(t, up)
 
-	// Shrink the wait: the production budget is upstreamConnectTimeout, but the
-	// property under test is "bounded", not the exact value.
 	type result struct {
 		conn net.Conn
 		err  error
@@ -538,7 +543,16 @@ func TestUpstreamCONNECTStallFailsFast(t *testing.T) {
 		if !strings.Contains(got.err.Error(), "read upstream CONNECT response") {
 			t.Errorf("error = %v, want the CONNECT-response read to fail", got.err)
 		}
-	case <-time.After(upstreamConnectTimeout + 10*time.Second):
+	case <-time.After(upstreamConnectTimeout + 2*time.Second):
 		t.Fatal("dialThroughUpstream HUNG against a silent upstream — the read deadline is missing")
+	}
+}
+
+// TestUpstreamConnectTimeout_ProductionValueUnchanged pins the production
+// default of upstreamConnectTimeout. It does not check that a shrinking test restored it —
+// that test's own t.Cleanup does.
+func TestUpstreamConnectTimeout_ProductionValueUnchanged(t *testing.T) {
+	if upstreamConnectTimeout != 15*time.Second {
+		t.Fatalf("upstreamConnectTimeout = %v, want the production 15s default", upstreamConnectTimeout)
 	}
 }

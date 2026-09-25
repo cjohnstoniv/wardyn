@@ -214,7 +214,8 @@ stays the source of truth either way).
 
 Defaults for the fields not shown: `file` rotates at `max_bytes` 100 MiB keeping
 `keep` 5; `webhook` also takes `flush_interval` (`5s`), `buffer_size` (`4096`),
-`max_retries` (`3`) and `retry_base_delay` (`200ms`) — see
+`max_retries` (`3`), `retry_base_delay` (`200ms`) and `timeout` (`15s`, per HTTP request,
+must be positive) — see
 `internal/audit/sinks/webhook.go`. The compose stack ships the `file` sink
 pointed at `/data/audit/audit.log`.
 
@@ -361,6 +362,8 @@ the sidecar/sandbox environment and read there.
 | `WARDYN_PROBE_TO_URL` | string | (unset) | site-config test-redirect: the stored egress redirect's `to` URL the probe fetches through wardyn-proxy |
 | `WARDYN_PROBE_FROM_URL` | string | (unset) | site-config test-redirect: the stored egress redirect's `from` URL the probe fetches directly (`--noproxy`), to check whether the mirror is actually enforced |
 | `WARDYN_PROBE_TO_CONNECT` | string | (unset) | site-config test-redirect: the `host:port` the probe dials for the `to` URL while still presenting the `from` hostname for TLS (curl `--connect-to`). Set when the redirect target is a literal IP, whose certificate is scoped to the public hostname — dialing it directly would present the IP as SNI and fail verification against a mirror that a real run reaches fine, since a CONNECT tunnel takes SNI from the sandbox. Empty leaves the probe's first leg byte-identical |
+| `WARDYN_PROBE_CONNECT_TIMEOUT` | int (seconds) | `5` | redirectProbeScript's curl `--connect-timeout` for both probe legs. Test-only knob so a test that deliberately stalls a probe (an accept-and-hold listener) can shrink it instead of waiting out the real 5s per curl — unset in production |
+| `WARDYN_PROBE_MAX_TIME` | int (seconds) | `15` | redirectProbeScript's curl `--max-time` for both probe legs. Test-only knob, same reason as `WARDYN_PROBE_CONNECT_TIMEOUT` above — unset in production |
 | `WARDYN_SCAN_ONLY` | bool | (unset) | scan-only run flag |
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
