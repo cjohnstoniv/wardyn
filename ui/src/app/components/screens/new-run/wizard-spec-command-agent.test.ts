@@ -8,7 +8,7 @@
 // wizard-spec.test.ts, which sits at the 1000-line file-size cap — see
 // scripts/check-file-size.sh) rather than trimmed to fit.
 import { describe, it, expect } from "vitest";
-import { buildSpec, initialWizardState } from "./wizard-types";
+import { buildSpec, impliedEgressHosts, initialWizardState } from "./wizard-types";
 import { makeWorkspace } from "../../../../test/factories";
 
 // A command run whose target already carries a real base image — an
@@ -56,5 +56,32 @@ describe("buildSpec — a governed command omits agent when its target already c
       [ws],
     );
     expect(run.agent).toBe(initialWizardState().agent);
+  });
+});
+
+// Opus review of PR #1079 (MEDIUM): "a command run never emits the llm
+// api_key grant, the implied model host, integration_id or model_provider,
+// whatever stale state holds" was in the spec's CHANGE section but never
+// implemented — a run type toggled from "agent" (with a provider pinned via
+// integrationId, or a model key selected) back to "command" carried every one
+// of those stale fields straight onto the wire.
+describe("buildSpec — a governed command emits none of the model-access fields, even with stale state", () => {
+  it("drops integration_id, the api_key grant and the implied model host for a command run", () => {
+    const state = {
+      ...initialWizardState(),
+      runType: "command" as const,
+      task: "echo hi",
+      integrationId: "corp-openai",
+      llmSecretName: "my-anthropic-key",
+      // Isolate the IMPLIED host this stale llmSecretName would union in —
+      // initialWizardState()'s own preset (["api.anthropic.com"]) is the
+      // operator's own explicit Egress selection, unrelated to this fix.
+      allowedDomains: [],
+    };
+    const { run, inline_policy } = buildSpec(state);
+    expect(run.integration_id).toBeUndefined();
+    expect((inline_policy.eligible_grants ?? []).some((g) => g.kind === "api_key")).toBe(false);
+    expect(inline_policy.allowed_domains ?? []).not.toContain("api.anthropic.com");
+    expect(impliedEgressHosts(state)).toEqual([]);
   });
 });

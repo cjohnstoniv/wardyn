@@ -63,7 +63,14 @@ export function impliedEgressHosts(
   workspaces: Workspace[] = [],
 ): ImpliedEgressHost[] {
   const out: ImpliedEgressHost[] = [];
-  const impliedLlmHost = state.llmSecretName ? llmHostForSecret(state.agent, state.llmSecretName) : undefined;
+  // A governed command never resolves model access (task_mode=exec runs no
+  // harness) — gated here too, or a stale llmSecretName from a toggle back
+  // from "agent" would still union its host into the egress allowlist even
+  // though buildSpec below never emits the grant that host was for.
+  const impliedLlmHost =
+    state.runType !== "command" && state.llmSecretName
+      ? llmHostForSecret(state.agent, state.llmSecretName)
+      : undefined;
   if (impliedLlmHost) {
     out.push({ host: impliedLlmHost, why: "model key" });
   }
@@ -182,7 +189,9 @@ export function buildSpec(
   }
   // Run override: pins model/harness access to one specific integration,
   // overriding the workspace pin and server default (see step-access.tsx).
-  if (state.integrationId) {
+  // A governed command resolves no model/harness access at all, so a stale
+  // integrationId surviving a runType toggle must never ride along.
+  if (state.runType !== "command" && state.integrationId) {
     run.integration_id = state.integrationId;
   }
   // The member's USER DRIVE, requested as a bare FLAG — nothing here names a
@@ -280,8 +289,12 @@ export function buildSpec(
   }
 
   // The LLM api_key grant — no manual picker in step-access.tsx (model access
-  // resolves from integrations instead).
-  const llmGrantHost = state.llmSecretName ? llmHostForSecret(state.agent, state.llmSecretName) : undefined;
+  // resolves from integrations instead). Never for a governed command: it
+  // resolves no model access, so a stale llmSecretName must not mint one.
+  const llmGrantHost =
+    state.runType !== "command" && state.llmSecretName
+      ? llmHostForSecret(state.agent, state.llmSecretName)
+      : undefined;
   if (llmGrantHost) {
     const host = llmGrantHost;
     const { header, format } = apiKeyInjectionFor(host);

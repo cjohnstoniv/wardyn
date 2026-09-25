@@ -59,3 +59,35 @@ func TestReviewExecWithNoBaseImageWorkspaceRefusesWithNoImage(t *testing.T) {
 		t.Errorf("body = %s, want it to name the missing base image", w.Body.String())
 	}
 }
+
+// Opus review of PR #1079: the success path itself was unpinned.
+// TestReviewExecWithSingleWorkspacePassesAgentGate only asserts the response
+// is NOT the OLD "agent is required" 400 — against workspaceStoreFake (no
+// ImageBuilder wired), the request instead 400s on "no image builder wired"
+// downstream, so the test passed for the wrong reason: mutating
+// agentRequirementError/seedRequestWorkspace to refuse EVERY image-backed
+// workspace-only exec run (e.g. `if req.TaskMode == "exec" && req.Agent ==
+// "" {` at runs_create.go's post-seed check) still survives it. This pins
+// the actual success: 201, with the run's Agent left empty — using
+// seedImageFixture (which wires an ImageBuilder) so a real image-backed
+// workspace reaches the workspace/image validation this whole change exists
+// to unlock, not a builder refusal that happens to also be a 400.
+func TestExecNoAgentImageWorkspaceLaunches(t *testing.T) {
+	ws := baseImageWorkspace("", "ubuntu:24.04")
+	srv, _ := seedImageFixture(t, &capStore{enf: map[string]bool{capAgent: true}}, ws)
+	body := fmt.Sprintf(`{"task_mode":"exec","task":"echo hi","workspace_id":%q}`, ws.ID.String())
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, "sub-walled", []string{"eng"}, false), body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	st := srv.cfg.Store.(*seedImageStore)
+	st.mu.Lock()
+	var run types.AgentRun
+	for _, r := range st.runs {
+		run = r
+	}
+	st.mu.Unlock()
+	if run.Agent != "" {
+		t.Errorf("run.Agent = %q, want empty — an image-backed command run must not carry a hidden agent", run.Agent)
+	}
+}
