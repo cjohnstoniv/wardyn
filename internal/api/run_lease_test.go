@@ -76,6 +76,11 @@ func (s *leaseStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.Creden
 	return s.credGrants, nil
 }
 
+// UpdateRunStateIf's own casErr branch is currently unexercised: the one test
+// that sets casErr (TestRunLease_AFailedEndIsRevokedOnReassert) drives it
+// through stopKeptRun, which now calls StopKeptRunIf (F04), not this method.
+// Left in place, one-shot and shared with StopKeptRunIf's own check below, for
+// a future test that fails a kill or completion-watcher CAS on this fixture.
 func (s *leaseStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
 	s.mu.Lock()
 	err := s.casErr
@@ -619,5 +624,44 @@ func TestReviewLeaseExpiryWinsFirstThenRevisionsRefuse(t *testing.T) {
 	}
 	if f.rn.stopCount() != 1 {
 		t.Fatalf("stopCount = %d after the refused revisions, want 1 (no second teardown)", f.rn.stopCount())
+	}
+}
+
+// runsTerminalCount reads the wardyn_runs_total{state=...} counter directly
+// (same-package access, like the fakes' own unexported reads), under the
+// metrics struct's own lock.
+func runsTerminalCount(srv *Server, st types.RunState) int64 {
+	srv.metrics.mu.Lock()
+	defer srv.metrics.mu.Unlock()
+	return srv.metrics.runs[st]
+}
+
+// TestStopKeptRun_CountsTheTerminalTransitionItself is M6's pin (Opus review of
+// #1080): stopKeptRun stopped routing through casRunState when it moved to
+// StopKeptRunIf (F04), so casRunState's own runTerminal(to) call no longer
+// counts a kept run's stop. Deleting stopKeptRun's own s.metrics.runTerminal
+// call would silently stop counting every ended/lost run that gets torn down
+// — with nothing failing except the /metrics gauge going quiet. This pins
+// BOTH halves: the counter moves on an applying CAS, and it does NOT move on
+// a no-op one (the run already terminal from the first call).
+func TestStopKeptRun_CountsTheTerminalTransitionItself(t *testing.T) {
+	f := newLeaseFixture(t, -time.Minute)
+	f.srv.cfg.EndedRunGrace = 0 // fails closed: stopKeptRun runs, not the keep branch
+	before := runsTerminalCount(f.srv, types.RunStopped)
+
+	f.sweep(t) // applies: RUNNING -> STOPPED via stopKeptRun
+	if f.st.State() != types.RunStopped || f.rn.stopCount() != 1 {
+		t.Fatalf("state %s, StopSandbox %d; want STOPPED, 1", f.st.State(), f.rn.stopCount())
+	}
+	if got := runsTerminalCount(f.srv, types.RunStopped); got != before+1 {
+		t.Fatalf("wardyn_runs_total{state=STOPPED} = %d, want %d (one applying stopKeptRun)", got, before+1)
+	}
+
+	// A second stopKeptRun on the same (now-stale, pre-transition) run value:
+	// the row is already STOPPED, so state='RUNNING' fails and StopKeptRunIf
+	// no-ops. The counter must NOT move again.
+	f.srv.stopKeptRun(context.Background(), f.st, f.run, types.RunStopped, "test.reassert", nil)
+	if got := runsTerminalCount(f.srv, types.RunStopped); got != before+1 {
+		t.Fatalf("wardyn_runs_total{state=STOPPED} = %d after a no-op CAS, want unchanged at %d", got, before+1)
 	}
 }
