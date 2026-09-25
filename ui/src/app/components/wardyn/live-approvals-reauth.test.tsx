@@ -15,7 +15,9 @@ import { makeApproval } from "../../../test/factories";
 import { OperatorProvider } from "./operator-context";
 import { ModelAccessProvider } from "./model-access-context";
 import { SECURITY_ONLY_REASON } from "./copy";
-import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { MODEL_ACCESS_BANNER, REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
+import { WithDoor } from "../../../test/door-harness";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -29,6 +31,10 @@ vi.mock("../../lib/api/approvals", () => ({
 }));
 const toastSuccess = vi.fn();
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: (...a: unknown[]) => toastSuccess(...a), info: vi.fn() } }));
+
+vi.mock("../screens/settings/harness-login-pane", () => ({
+  HarnessLoginPane: (p: { modelProvider?: string }) => <div data-testid="fake-pane" data-model-provider={p.modelProvider ?? ""} />,
+}));
 
 import { LiveApprovals, isHeld } from "./live-approvals";
 
@@ -206,5 +212,35 @@ describe("LiveApprovals — the mid-run AWS sign-in row", () => {
     await screen.findByText(REAUTH_ROW.label);
     await new Promise((r) => setTimeout(r, 50));
     expect(toastSuccess).not.toHaveBeenCalled();
+  });
+});
+
+// #543 (the #991 review's F2): the cockpit row opens the door of the provider
+// the hold names — with two AWS providers, the claude-code default's sign-in is
+// accepted by the server and leaves the hold unresolved.
+describe("LiveApprovals — a provider run's hold opens its own provider's door", () => {
+  const { bedrock } = MODEL_PROVIDERS;
+  const bedrockDev = { ...bedrock, id: "bedrock-dev", name: "Bedrock (dev)" };
+
+  it("opens the hold's provider, not the claude-code default", async () => {
+    listApprovalsMock.mockReset().mockResolvedValue([
+      reauthRow({
+        requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: "alice@corp", provider: bedrock.id },
+      }),
+    ]);
+    render(
+      <WithDoor
+        principal="alice@corp"
+        operator={false}
+        status={providerStatus([{ provider: bedrockDev, defaultFor: ["claude-code"] }, { provider: bedrock }])}
+      >
+        <LiveApprovals runId="r1" />
+      </WithDoor>,
+    );
+    const panel = await screen.findByTestId("live-approvals");
+    await userEvent.click(within(panel).getByRole("button", { name: REAUTH_ROW.ariaLabel }));
+    const dialog = await screen.findByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE });
+    expect(dialog).toHaveTextContent(`For ${bedrock.name}`);
+    expect(await screen.findByTestId("fake-pane")).toHaveAttribute("data-model-provider", bedrock.id);
   });
 });

@@ -546,6 +546,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and shows a relaunch refused after its New Run screen was gone (B9). Installs with no model
   providers, and the Admin view, keep today's door and strip.
 
+- **A refused run opens the door of its own model provider (#543).** A run's header shows the
+  provider it chose ("Model provider · {name}", "(removed)" once deleted). A failed run refused
+  over its owner's credential offers that provider's door (Sign in to AWS, Sign in to Claude, Add
+  your key or Add your token), keyed by the `provider` its refusal names, never by what is selected
+  on screen: a Codex CLI run refused over its token no longer opens "Sign in to AWS" (#146). Anyone
+  but the owner, and every run in the Admin view, reads whose credential it ran on and gets no door;
+  the admin's own run gets "Open in user view". A New Run launch refusal opens the door its 422
+  names. The approvals reauth card is titled "AWS sign-in needed for this run", names the hold's
+  provider and opens that provider's door, as the run page's held-request row now does too.
+
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away

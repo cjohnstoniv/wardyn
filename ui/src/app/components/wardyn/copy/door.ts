@@ -28,6 +28,12 @@ export const CONNECTIONS = {
   ADD_TOKEN: "Add your token",
 } as const;
 
+// The run's model provider in the run header (#543, decision 5). A provider
+// deleted since the run chose it keeps its chip, marked removed.
+export const RUN_FACTS = {
+  PROVIDER: (name: string, removed: boolean) => `Model provider · ${name}${removed ? " (removed)" : ""}`,
+} as const;
+
 export const DOOR = {
   FOR: (name: string) => `For ${name}`,
 } as const;

@@ -17,14 +17,21 @@
 // this row — the subject the row names on the per_user lane, an operator on
 // the shared one (reauthResolvableBy, internal/api's injection_awssso.go).
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
-import { REAUTH_ROW, REAUTH_TITLE } from "../wardyn/model-access-copy";
+import { MODEL_ACCESS_BANNER, REAUTH_ROW, REAUTH_TITLE } from "../wardyn/model-access-copy";
+import { CONSOLE_VIEW } from "../wardyn/copy/console-view";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
+import { WithDoor } from "../../../test/door-harness";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock("./settings/harness-login-pane", () => ({
+  HarnessLoginPane: (p: { modelProvider?: string }) => <div data-testid="fake-pane" data-model-provider={p.modelProvider ?? ""} />,
+}));
 
 let mockScope: Record<string, unknown> = {};
 vi.mock("../../lib/api/approvals", () => ({
@@ -130,5 +137,60 @@ describe("/approvals — who is offered the held run's sign-in door", () => {
     // back to the decision pair the card renders for every other kind.
     expect(screen.queryByRole("button", { name: /^Approve$/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Deny$/ })).not.toBeInTheDocument();
+  });
+});
+
+// #543 (design §5.10, packet 1 door-cards.html state 5): the card names which
+// AWS provider the hold is for, and its door is THAT provider's — with two AWS
+// providers, the claude-code default's sign-in would leave the hold unresolved.
+describe("/approvals — a provider run's hold (#543)", () => {
+  const { bedrock } = MODEL_PROVIDERS;
+  const bedrockDev = { ...bedrock, id: "bedrock-dev", name: "Bedrock (dev)" };
+  const HOLD = { mechanism: "bedrock_sso", credential_source: "per_user", owner: "bob@acme.example", provider: bedrock.id };
+
+  async function mountAt(path: string, principal: string, scope: Record<string, unknown> = HOLD) {
+    mockScope = scope;
+    window.history.pushState({}, "", path);
+    render(
+      <WithDoor
+        path={path}
+        principal={principal}
+        operator={path.startsWith("/admin")}
+        status={providerStatus([{ provider: bedrockDev, defaultFor: ["claude-code"] }, { provider: bedrock }])}
+      >
+        <ApprovalsScreen />
+      </WithDoor>,
+    );
+    await screen.findByText(REAUTH_TITLE);
+  }
+  afterEach(() => window.history.pushState({}, "", "/"));
+
+  it("the owner: the title, the provider line, and Sign in to AWS opens the hold's OWN provider's door", async () => {
+    await mountAt("/approvals", "bob@acme.example");
+    expect(screen.getByText(REAUTH_ROW.PROVIDER(bedrock.name))).toBeInTheDocument();
+    expect(screen.getByText(REAUTH_ROW.hint)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: REAUTH_ROW.ariaLabel }));
+    const dialog = await screen.findByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE });
+    expect(dialog).toHaveTextContent(`For ${bedrock.name}`);
+    expect(await screen.findByTestId("fake-pane")).toHaveAttribute("data-model-provider", bedrock.id);
+  });
+
+  it("Admin view, another user's hold: whose sign-in it waits on, and no door", async () => {
+    await mountAt("/admin/approvals", "ann@acme.example");
+    expect(screen.getByText(REAUTH_ROW.PROVIDER(bedrock.name))).toBeInTheDocument();
+    expect(screen.getByText(REAUTH_ROW.notYoursHint("bob@acme.example"))).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeNull();
+    expect(screen.queryByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER })).toBeNull();
+  });
+
+  it("Admin view, the admin's own hold: no door, and Open in user view", async () => {
+    await mountAt("/admin/approvals", "ann@acme.example", { ...HOLD, owner: "ann@acme.example" });
+    expect(screen.getByText(REAUTH_ROW.notYoursHint("ann@acme.example"))).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeNull();
+    expect(screen.getByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER })).toBeInTheDocument();
+  });
+
+  it("the title names the need, not a pause (#146 defect 3)", () => {
+    expect(REAUTH_TITLE).toBe("AWS sign-in needed for this run");
   });
 });
