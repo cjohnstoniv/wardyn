@@ -286,7 +286,22 @@ in the run summary. **Recommend (a)**: the header bar is on every run page at ev
 
 ### Owner answers
 
-_(empty — the owner fills this at the gate)_
+Owner approved mock packet 1 on 2026-09-25 (#537 provider editor, #543 refusals, failure block and
+reauth card). All five decisions are approved **as drawn**:
+
+1. **Q1 — kind step.** #537 lists only the three kinds it builds (Anthropic API key, OpenAI API
+   key, Your own endpoint). #538 adds Amazon Bedrock and Claude subscription.
+2. **Q2 — E7/E9 wording.** The confirms have key wording and one-person wording, and there is no
+   confirm when nobody has connected yet — four new sentences (canon rows tagged New).
+3. **Q3 — editing.** The title is the provider name with a kind chip. The provider id is derived
+   from the name at first save, stays fixed, and isn't shown.
+4. **Q4 — after Save.** The editor closes to the list with the toast "Provider saved."
+5. **Q5 — the run's provider.** A neutral chip in the run header, "Model provider · {name}".
+
+**Settled without asking**, accepted as listed: the user view rename, the `REAUTH_TITLE` change,
+the required Path field, every compatible agent ticked by default, and accessible names.
+
+Every string in `canon.html` is now the app's string byte for byte.
 
 ### Round notes (author, 2026-09-25)
 
