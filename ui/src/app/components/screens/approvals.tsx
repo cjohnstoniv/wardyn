@@ -769,7 +769,7 @@ function PendingCard({
              control opens the same dialog every other sign-in surface opens. */
           reauthDoor ? (
             <ReauthAction provider={reauth.provider} />
-          ) : reauth.mine && reauth.provider ? (
+          ) : !reauth.canAct && reauth.mine && reauth.provider ? (
             // The admin's own hold, in the Admin view: its door is in the User view.
             <OpenInUserView />
           ) : null

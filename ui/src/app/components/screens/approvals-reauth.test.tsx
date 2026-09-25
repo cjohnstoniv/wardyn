@@ -195,6 +195,7 @@ describe("/approvals — a provider run's hold (#543)", () => {
     await mountAt("/approvals", "bob@acme.example", { ...HOLD, provider: "removed-provider" });
     expect(screen.getByText(REAUTH_ROW.hint)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeNull();
+    expect(screen.queryByRole("button", { name: CONSOLE_VIEW.OPEN_IN_USER })).toBeNull();
   });
 
   it("while /me is still resolving: no door and no Open in user view", async () => {
