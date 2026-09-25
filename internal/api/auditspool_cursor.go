@@ -100,8 +100,8 @@ func spoolCursorFingerprint(spoolPath string, offset int64) string {
 // moving a `.quarantine` file back) is often at least as large as the old
 // cursor. So the sidecar carries the offset AND a fingerprint of the content
 // ending there; a mismatch, or a one-field sidecar with no fingerprint, reads as
-// 0. That costs one extra replay of an in-flight batch — at-least-once, the
-// residual C1 accepts — never a loss.
+// 0. That costs one extra replay of an in-flight batch (at-least-once), never a
+// loss.
 func seedSpoolCursor(cursorPath, spoolPath string, size int64) int64 {
 	buf, err := os.ReadFile(cursorPath)
 	if err != nil {

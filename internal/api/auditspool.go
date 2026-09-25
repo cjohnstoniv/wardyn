@@ -261,11 +261,11 @@ const (
 // the move is never silent. Known limit: two ADJACENT unacceptable lines still wedge (the second reads
 // as an outage, the price of never quarantining during one); the suspect is logged by event id every
 // tick, and docs/OPERATIONS.md has the remedy. rec MUST NOT be the spooling chain: Drain holds the
-// spool lock throughout (safe against concurrent Append), so re-entering Append would deadlock.
-// At-least-once, bounded by the in-flight batch (saveSpoolCursor fsyncs at every advance). Not
-// `ON CONFLICT (id)`: audit_events has no unique id (42P10), and a unique index cannot be a boot
-// migration without disabling what db.AuditDDLProtected verifies. A duplicate is the benign direction;
-// exactly-once would be an operator-run CREATE UNIQUE INDEX CONCURRENTLY behind a flag.
+// spool lock throughout (safe against concurrent Append; the bounded batch keeps the hold short),
+// so re-entering Append would deadlock. At-least-once, bounded by the in-flight batch (saveSpoolCursor
+// fsyncs at every advance). Not `ON CONFLICT (id)`: audit_events has no unique id (42P10), and a unique
+// index cannot be a boot migration without disabling what db.AuditDDLProtected verifies. A duplicate
+// is the benign direction; exactly-once would be an out-of-band CREATE UNIQUE INDEX CONCURRENTLY.
 func (a *AuditSpool) Drain(ctx context.Context, rec audit.Recorder, batch int) (int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

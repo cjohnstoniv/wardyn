@@ -195,11 +195,11 @@ func artifactBaseURLs(sc types.SiteConfig) map[string]string {
 // planArtifactRedirect builds the dispatch-time egress-redirect plan for a run
 // from the operator-wide site-config: each Ecosystem-tier redirect's per-tool
 // config (URL-only) as a base64 env payload agent-run materializes under $HOME,
-// and, for each To host whose token secret EXISTS, a stored-secret api_key grant
-// + injection rule with the host marked for TLS-MITM (the injector cannot
-// rewrite an opaque CONNECT). A redirect with no token, a dangling token ref or
-// a failed grant create (audited) degrades to redirect-only, never failing the
-// run: anonymous-read corp mirrors work without a token.
+// and, for each To host (BOTH tiers; a network-only row contributes no file)
+// whose token secret EXISTS, a stored-secret api_key grant + injection rule with
+// the host marked for TLS-MITM (the injector cannot rewrite an opaque CONNECT).
+// No token, a dangling token ref or a failed grant create (audited) degrades to
+// redirect-only, never failing the run: anonymous-read mirrors need no token.
 //
 // preDomains is the run's PRE-substitution allowlist: injection + TLS-MITM only
 // when the run reaches a public host the redirect fronts (artifactRedirectApplies,

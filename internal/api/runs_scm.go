@@ -79,12 +79,12 @@ const repo400LocatorShape = "%s is not a repository address — a repository add
 // provider row's prefix match and is cloned, with that row's org credential, as
 // `evil/repo`. No prefix match survives a path server and client read differently,
 // so the traversable SHAPES are refused, at parseCloneTarget (where every
-// admission door resolves a clone URL) and again at the write doors: any "%"
-// (%2F sneaks a segment past a decoded compare), any "\" (a separator to some
-// clients), any empty, "." or ".." segment. The ONE "%" exception is an Azure
-// DevOps address already canonical (canonicalRepoAddress): names there carry
-// escapes, and adoscope's name rule has already refused every escape that decodes
-// to structure. A locator with no path is unclonable anyway and not handled here.
+// admission door resolves a clone URL) and at the write doors: any "%" (%2F
+// sneaks a segment past a decoded compare), any "\", any empty, "." or ".."
+// segment. The ONE "%" exception is an already-canonical Azure DevOps address
+// (canonicalRepoAddress): adoscope's name rule has refused every escape that
+// decodes to structure, so the decoded compare and the raw path cannot disagree
+// about where a segment ends. A locator with no path is not handled here.
 func repoLocatorPathSafe(raw string, adoServerHosts []string) bool {
 	s := strings.TrimSpace(raw)
 	if strings.Contains(s, `\`) {
