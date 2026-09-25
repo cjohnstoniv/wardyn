@@ -152,23 +152,22 @@ describe("OnboardingScreen (welcome hero)", () => {
   });
 });
 
-// B4 HIGH-4: a member has no Getting Started nav entry, but a direct /setup
-// navigation must still land honestly — never the operator funnel (built from
-// a redacted SetupStatus a member can't act on), never a silent bounce. Since
-// Phase 5, it lands on the member's OWN Getting Started
-// (member-getting-started.tsx) rather than the old one-line notice —
-// member-getting-started.test.tsx covers that screen's own sections in full;
-// this suite only proves the routing swap.
-describe("GettingStarted (member direct navigation)", () => {
-  // ticket: B4 HIGH-4
+// M-6: which Getting Started renders is the VIEW (the URL), not the caller's
+// role — see onboarding-screen.tsx's own header comment for why. B4 HIGH-4's
+// original concern (a user landing honestly on a direct /setup navigation,
+// never the operator funnel built from a redacted SetupStatus they can't act
+// on) still holds; member-getting-started.test.tsx covers that screen's own
+// sections in full, this suite only proves the routing swap.
+describe("GettingStarted (the view decides the page, not role)", () => {
+  // ticket: M-6, B4 HIGH-4
   beforeEach(() => {
     localStorage.clear();
     getSetupStatusMock.mockReset().mockResolvedValue(status());
   });
 
-  it("a member sees their own Getting Started, not the admin welcome hero", async () => {
+  it("/setup shows the User Getting Started, not the admin welcome hero", async () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={["/setup"]}>
         <RoleProvider role="user">
           <GettingStarted onDone={() => {}} />
         </RoleProvider>
@@ -179,17 +178,17 @@ describe("GettingStarted (member direct navigation)", () => {
     expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
   });
 
-  // R4/F034: the guard was two-valued (`role === "user"`) after role became
-  // three-valued, so a security admin fell THROUGH to the deployer funnel —
-  // built from a SetupStatus the server redacts for them
-  // (redactSetupStatusForMember zeroes Checks/Providers/Secrets,
-  // internal/api/setup.go), driving mutations that are super-admin-only.
-  // setupGateActive already reads `!== "admin"` for exactly this reason.
-  it("a security admin sees the member Getting Started, not the deployer funnel", async () => {
+  // R4/F034 (pre-M-6, when this read `role` alone): the guard was two-valued
+  // (`role === "user"`) after role became three-valued, so a security
+  // admin fell THROUGH to the deployer funnel — built from a SetupStatus the
+  // server redacts for them (redactSetupStatusForMember zeroes
+  // Checks/Providers/Secrets, internal/api/setup.go), driving mutations that
+  // are super-admin-only.
+  it("/setup shows the User Getting Started for a security admin too, not the deployer funnel", async () => {
     // The literal redacted payload the server hands a non-operator.
     getSetupStatusMock.mockResolvedValue(status({ checks: [], providers: [], secrets: { present: [], github_app: false } }));
     render(
-      <MemoryRouter>
+      <MemoryRouter initialEntries={["/setup"]}>
         <RoleProvider role="security_admin">
           <GettingStarted onDone={() => {}} />
         </RoleProvider>
@@ -199,17 +198,60 @@ describe("GettingStarted (member direct navigation)", () => {
     expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
   });
 
-  it("an admin (or the fail-open default) still sees the welcome hero", () => {
-    render(<GettingStarted onDone={() => {}} status={status()} />);
+  // A security admin IS reachable at /admin/setup (their landing page on an
+  // install that isn't onboarded, or a typed URL — the Admin nav gives them
+  // no Setup link): viewAccess (console-view.tsx) maps both "admin" and
+  // "security_admin" to "session-admin", which passes ViewGate's /admin/*
+  // check. The role check here is what actually keeps them off the deployer
+  // funnel in that case.
+  it("/admin/setup shows the User Getting Started for a security admin, not the deployer funnel", async () => {
+    getSetupStatusMock.mockResolvedValue(status({ checks: [], providers: [], secrets: { present: [], github_app: false } }));
+    render(
+      <MemoryRouter initialEntries={["/admin/setup"]}>
+        <RoleProvider role="security_admin">
+          <GettingStarted onDone={() => {}} />
+        </RoleProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Getting started")).toBeInTheDocument();
+    expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
+  });
+
+  it("/admin/setup (or the fail-open default view) still shows the welcome hero", () => {
+    render(
+      <MemoryRouter initialEntries={["/admin/setup"]}>
+        <GettingStarted onDone={() => {}} status={status()} />
+      </MemoryRouter>,
+    );
     expect(screen.getByText("Sandboxed. Governed. Self-hosted. Free.")).toBeInTheDocument();
     expect(screen.getByText(/Barrier:/)).toBeInTheDocument();
+  });
+
+  // D1: a single-operator install is the one place role and view can genuinely
+  // differ for the SAME person — the admin token has no SSO clamp, so nothing
+  // stops them browsing straight to plain /setup, and there the URL is the
+  // presentation lens the design calls for (§5 D1), not the operator funnel.
+  it("D1: an admin (local/token auth, no SSO) at plain /setup still gets the User Getting Started", async () => {
+    render(
+      <MemoryRouter initialEntries={["/setup"]}>
+        <RoleProvider role="admin">
+          <GettingStarted onDone={() => {}} status={status()} />
+        </RoleProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Getting started")).toBeInTheDocument();
+    expect(screen.queryByText("Sandboxed. Governed. Self-hosted. Free.")).not.toBeInTheDocument();
   });
 
   // X3-F11: "Getting started" lives in the account menu (app-shell.tsx), not
   // the sidebar — NAV_ITEMS has nine entries, none of them this.
   it('the "revisit anytime" note names the account menu, not the sidebar', () => {
     // ticket: X3-F11
-    render(<GettingStarted onDone={() => {}} status={status()} />);
+    render(
+      <MemoryRouter initialEntries={["/admin/setup"]}>
+        <GettingStarted onDone={() => {}} status={status()} />
+      </MemoryRouter>,
+    );
     expect(screen.getByText(/Barrier:/)).toBeInTheDocument();
     expect(screen.getByText(/in the account menu/i)).toBeInTheDocument();
     expect(screen.queryByText(/in the sidebar/i)).not.toBeInTheDocument();

@@ -79,6 +79,25 @@ test.describe("confinement posture (#162)", () => {
     expect(await chip.getAttribute("title")).toContain("network confinement is acknowledged, not proven");
   });
 
+  // The strip's action opens the Admin view's Environment step. Plain /setup is
+  // the User view's Getting Started (M-6), which has no such step.
+  test("the strip's action opens the Admin view's Environment step", async ({ page }) => {
+    // The funnel shows the welcome hero first until this flag is set.
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("wardyn-onboarding-seen", "1");
+      } catch {
+        /* private mode — ignore */
+      }
+    });
+    await mockHealthz(page, { runner: "k8s", network_policy: "acknowledged" });
+    await gotoConsole(page);
+    await page.getByRole("button", { name: "How to prove it" }).click();
+
+    await expect(page).toHaveURL(/\/admin\/setup\?step=environment$/);
+    await expect(page.getByRole("heading", { name: "Pick your barrier", level: 2 })).toBeVisible();
+  });
+
   test("k8s, unenforced: danger strip + warning ring + glyph", async ({ page }) => {
     await mockHealthz(page, { runner: "k8s", network_policy: "unenforced" });
     await gotoConsole(page, "admin");

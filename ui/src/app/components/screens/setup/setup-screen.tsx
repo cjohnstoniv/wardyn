@@ -19,7 +19,7 @@
 // below still dismisses the funnel's own "seen it" flag (setup-gate.ts), which
 // is per-browser cosmetic state, not a lock on the rest of the console.
 import * as React from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import type {
   ConfinementClass,
@@ -38,6 +38,7 @@ import type { AccessLoadState } from "./access-panel";
 import { resolveDefaultCc } from "../../wardyn/default-confinement";
 import { deploymentMode, deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
+import { switchView, useViewAccess } from "../../wardyn/console-view";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
@@ -55,7 +56,6 @@ import { PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-cop
 import { SITE } from "../../wardyn/copy";
 import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
-  DEMO_STEP_IDS,
   OPTIONAL_STEPS,
   REQUIRED_STEPS,
   STEP_ORDER,
@@ -69,8 +69,6 @@ import {
   type CorpNetworkState,
   type SetupStepId,
 } from "./steps";
-import { DEMOS, loadLaunchedDemos } from "../demos/demo-catalog";
-
 // The dismiss flag lives in ./setup-gate so App.tsx can import it without
 // pulling this module's terminal-heavy graph into the entry chunk. Re-exported
 // here: this is still its public home.
@@ -83,12 +81,6 @@ import {
   markIntegrationsSkipped,
   markStepVisited,
 } from "./setup-gate";
-
-// Each demo sub-step renders DemoDetail, which pulls AttachTerminal → xterm.
-// Lazy-load it so that terminal-heavy graph stays out of the setup chunk until
-// the operator opens a demo step (the reasoning the deleted /demos route had). The pure
-// demo catalog + launched-set reader are imported eagerly above (xterm-free).
-const DemoDetail = React.lazy(() => import("./demos-step"));
 
 export function SetupScreen({
   onDone,
@@ -115,9 +107,10 @@ export function SetupScreen({
   // absent value just starts at the beginning); the URL is not kept in sync
   // afterwards, since the rail is the navigation from then on.
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [stepId, setStepId] = React.useState<SetupStepId>(() => {
     const want = searchParams.get("step");
-    // Validated against the FULL order — status (and so which conditional demo
+    // Validated against the FULL order — status (and so which conditional
     // steps survive) isn't known yet at mount, which is exactly what
     // stepOrder(null) returns. An unmet step that slips through here is pulled
     // back by the re-correct effect below the moment status lands.
@@ -135,12 +128,6 @@ export function SetupScreen({
   // Bumped whenever a host re-check COMPLETES — EnvironmentStep reads it as
   // recheckToken to surface a tier's "still not detected" line after a re-probe.
   const [recheckCount, setRecheckCount] = React.useState(0);
-  // Per-demo "launched at least once" set (per browser). Seeded from the durable
-  // record markDemoLaunched writes, and grown live via onDemoLaunched so each demo
-  // sub-step earns its checkmark this session too. See the stepDone override.
-  const [launchedDemos, setLaunchedDemos] = React.useState<Set<string>>(
-    () => new Set(loadLaunchedDemos()),
-  );
   // The operator explicitly skipped the (optional) Integrations step — earns it
   // a checkmark with nothing connected. Per-browser (setup-gate); a real
   // connected integration supersedes it. Generalized from the old per-step
@@ -291,24 +278,21 @@ export function SetupScreen({
   //
   // CROSSING-based, not target-index-based. A "is the target past
   // corp_network?" test looks equivalent and isn't: `integrations` also
-  // indexes past it, so that version dead-ends the operator ON a demo — no way
-  // back to Integrations, and every rail click refused. What the gate actually
-  // forbids is CROSSING it, so three cases are always free:
+  // indexes past it, so that version dead-ends the operator on a later step
+  // with no way back to Integrations, and every rail click refused. What the
+  // gate actually forbids is CROSSING it, so two cases are always free:
   //  - anything at or before where you already are (Back, and re-entering a
   //    step you've reached, decide nothing new);
-  //  - any demo step — a shared demo link has to open the demo. Demos gate
-  //    their own Start on barrierReady, so nothing unsafe opens; the accepted
-  //    trade is that a cold session can reach a demo and Back into the
-  //    optional Integrations step without the network proof;
   //  - anything at or before corp_network itself.
-  // Workspaces and Review stay gated, which is the part that matters.
+  // Workspaces and Review stay gated, which is the part that matters. (M-6/D5
+  // retired this predicate's third free case, any demo step: demos moved out
+  // of the admin funnel entirely, so `next` can no longer name one.)
   const refuseSelect = React.useCallback(
     (next: SetupStepId, from: SetupStepId = stepId): string | undefined => {
       const gate = corpGateRef.current;
       if (gate.on) return undefined;
       const order = stepOrder(status);
       if (order.indexOf(next) <= order.indexOf(from)) return undefined;
-      if (DEMOS.some((d) => d.id === next)) return undefined;
       if (order.indexOf(next) <= order.indexOf("corp_network"))
         return undefined;
       return gate.reason;
@@ -579,9 +563,8 @@ export function SetupScreen({
   }, [status]);
 
   // …and the OTHER correction, deliberately its own effect and deliberately
-  // UN-LATCHED: a conditional demo step can leave the walk at any time (the
-  // operator deletes the demo secret on /secrets, a model disconnects), not
-  // just at mount. If the step on screen is no longer in stepOrder(status),
+  // UN-LATCHED: a conditional step can leave the walk at any time, not just at
+  // mount. If the step on screen is no longer in stepOrder(status),
   // indexOf(current) === -1 and the shell's "Step N of M"/prev/next and the
   // rail's active state all quietly break. Fall BACK to the nearest surviving
   // step — never forward, which would advance the operator past something they
@@ -608,6 +591,31 @@ export function SetupScreen({
     dismissSetup();
     onDone();
   }, [onDone]);
+
+  // M-6 (QM-8/§4.8): the Finish step's own offer — the admin's own model
+  // connection and first run are in the User view, so Finish hands off there.
+  // It finishes setup too, as `finish` does: otherwise `/` keeps landing a
+  // single-operator install (D1) back in this funnel. The click is the
+  // confirmation, so a session-admin switches here rather than meeting
+  // ViewGate's interstitial and being asked again; if that switch fails, the
+  // plain navigation below lands on the interstitial, which can retry. Every
+  // other principal takes the plain navigation, which ViewGate answers.
+  const viewAccess = useViewAccess();
+  const finishSwitchToUser = React.useCallback(async () => {
+    // Awaited: a session-admin's switch reloads the page, which could cut the
+    // request short. completeOnboarding never rejects.
+    await setupApi.completeOnboarding();
+    dismissSetup();
+    if (viewAccess === "session-admin") {
+      try {
+        await switchView("user", "/setup");
+        return;
+      } catch {
+        // Fall through to the interstitial.
+      }
+    }
+    void navigate("/setup");
+  }, [viewAccess, navigate]);
 
   const readiness = status ? deriveReadiness(status) : null;
   // Effective default-barrier selection: the explicit click this session if
@@ -712,14 +720,6 @@ export function SetupScreen({
     corpRedirects,
     providerCount,
   );
-  // Each demo sub-step earns its checkmark once THAT demo has been launched (a
-  // per-browser signal kept out of the pure stepBadges/stepDone — see steps.ts).
-  for (const id of DEMO_STEP_IDS) {
-    if (launchedDemos.has(id)) {
-      done[id] = true;
-      badges[id] = { text: "Done · demo run", tone: "success" };
-    }
-  }
   // An explicitly-skipped (optional) Integrations step earns its checkmark — a
   // deliberate "nothing connected" decision reads as done, not as an unfinished
   // "Optional". A real connected integration always wins and shows its own
@@ -863,23 +863,9 @@ export function SetupScreen({
             onRecheck={recheck}
           />
         )}
-        {DEMOS.some((d) => d.id === stepId) && (
-          <React.Suspense
-            fallback={
-              <p className="text-sm text-muted-foreground">Loading demo…</p>
-            }
-          >
-            <DemoDetail
-              demo={DEMOS.find((d) => d.id === stepId)!}
-              barrierReady={readiness.barrierReady}
-              githubAppReady={status ? !!status.secrets.github_app : true}
-              onJump={selectStep}
-              onDemoLaunched={(id) =>
-                setLaunchedDemos((s) => new Set(s).add(id))
-              }
-            />
-          </React.Suspense>
-        )}
+        {/* No demo sub-step renders here any more (M-6/D5) — demos moved to
+            User Getting Started (member-getting-started.tsx), which renders
+            the same DemoDetail this funnel used to. */}
         {/* The step's BODY is the card (zero teal — the footer Next is the
             step's one affirmative; the forms and Save providers live on
             /providers). setup/providers-card.tsx is also the Settings card,
@@ -900,6 +886,7 @@ export function SetupScreen({
             rechecking={rechecking}
             lastCheckedAt={lastCheckedAt}
             onJump={selectStep}
+            onSwitchToUser={() => void finishSwitchToUser()}
           />
         )}
       </SetupLayout>

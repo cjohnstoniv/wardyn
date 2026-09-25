@@ -22,6 +22,8 @@ import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
 import { FIRST_RUN_DEMOS_SUBTITLE } from "../wardyn/copy";
 import { DEMOS } from "./demos/demo-catalog";
+import { ceilingNarrows } from "./setup/steps";
+import { useViewAccess } from "../wardyn/console-view";
 
 export default function FirstRunDemoGrid({
   llmReady,
@@ -30,6 +32,10 @@ export default function FirstRunDemoGrid({
   llmReady: boolean;
   secretNames: string[];
 }) {
+  // D5: outside D1 "Run it" lands in the User view, where a demo the caller's
+  // ceiling rewrites is watch-only (member-getting-started.tsx), so its card
+  // says so instead of promising a Start the destination doesn't offer.
+  const ceilingApplies = useViewAccess() !== "url";
   return (
     <div className="w-full max-w-[900px] space-y-4">
       <div className="space-y-1 text-center">
@@ -82,7 +88,9 @@ export default function FirstRunDemoGrid({
                 // primary action on the page ("New run" above). Per-card: the
                 // funnel step for THIS demo, not a catalog page to hunt in.
                 <Button variant="outline" size="sm" className="self-start" asChild>
-                  <Link to={`/setup?step=${demo.id}`}>Run it</Link>
+                  <Link to={`/setup?step=${demo.id}`}>
+                    {ceilingApplies && ceilingNarrows(demo) ? "See it" : "Run it"}
+                  </Link>
                 </Button>
               )}
             </div>

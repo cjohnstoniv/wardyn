@@ -127,6 +127,19 @@ export function WorkspaceDetailScreen() {
         // hasLlmPath(READY_FALLBACK) is always false — `unreachable` is
         // checked first so a daemon that simply never answered doesn't read
         // as "no model provider configured".
+        //
+        // M-6/QM-10 known gap (not verified at runtime): hasLlmPath(s) is the
+        // DEPLOYMENT's model path, not this caller's own connection.
+        // ModelAccessNote's Admin-view branch (record-pane-chips.tsx) reads
+        // this same value as `modelReady`, i.e. "is MY connection
+        // configured" — so it can show the "connect your own" line when the
+        // real gap is a missing deployment provider, and stay silent when
+        // only the admin's own connection (status.model_access, the field
+        // member-getting-started.tsx's "Your model key" section keys on) is
+        // what's missing. Stays deployment-level until MP wires the admin's
+        // own model_access into this pane — do not "fix" this by swapping in
+        // status.model_access without first confirming it answers the
+        // ADMIN's own state, not a member's, for an Admin-view caller.
         setLlmReady(s.unreachable ? null : hasLlmPath(s));
         setHostClasses(s.runner?.confinement_classes ?? null);
       })

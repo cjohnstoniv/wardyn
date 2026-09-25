@@ -26,7 +26,7 @@ strings; this table is where a reviewer checks them. It supersedes the `sso_rbac
 | `sso_rbac.ok` | People are mapped to admin or user, so a person's role comes from their sign-in. | setup row `detail`, ok |
 | `ADMIN_ACCESS_BANNER.TITLE` | Everyone who signs in is an admin | shell banner (`access-posture-copy.ts`) |
 | `ADMIN_ACCESS_BANNER.BODY` | Nobody is mapped to a role and no admin list is set, so every person your identity provider lets in can change policies, read and write secrets, decide approvals, and open a shell in any running sandbox. | shell banner |
-| `ADMIN_ACCESS_BANNER.ACTION` | Set who is an admin | shell banner CTA → `/setup?step=people` |
+| `ADMIN_ACCESS_BANNER.ACTION` | Set who is an admin | shell banner CTA → `/admin/setup?step=people` |
 | `SIGNIN_HELP.TITLE` | When someone can't sign in | People-step card (`access-posture-copy.ts`) |
 | `SIGNIN_HELP.LEAD` | Wardyn says what happened. You say what to do about it. | People-step card |
 | `SIGNIN_HELP.TEXT_LABEL` | What to tell them | card, text field |

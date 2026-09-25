@@ -650,6 +650,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   names. The approvals reauth card is titled "AWS sign-in needed for this run", names the hold's
   provider and opens that provider's door, as the run page's held-request row now does too.
 
+- **Getting Started splits by view (#637).** The Admin view funnel drops its "Egress demos" and
+  "Secrets demos" phases, renames "Your work" to "Code and workspaces", and its Finish step now
+  offers a **Switch to user view** button — the admin's own model connection and first run live
+  there. The button finishes setup as **Finish setup** does, and on SSO it switches straight away
+  instead of asking a second time. The User view's own Getting Started gains those same demos as two
+  new sections and a **Your model connections** link to `/account`, and the Record control's "no
+  model provider" note, in the Admin view, now says Record runs on the admin's own connection and
+  links **Open in user view** to `/account`. Which page renders (the funnel vs. the User view's own)
+  is now decided by the URL, not the caller's role, matching every other split screen — a
+  single-operator install sees the funnel only at `/admin/setup`, and the User view's Getting
+  Started everywhere else, `/setup` included. The links into the funnel (the Host card's **Corporate
+  proxy & egress**, the confinement-posture banner's action and the empty Runs board's guided tour)
+  now open `/admin/setup`.
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away

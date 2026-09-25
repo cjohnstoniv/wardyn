@@ -98,7 +98,7 @@ export function ConfinementPostureBanner({ view = "user" }: { view?: ConsoleView
       </div>
       <button
         type="button"
-        onClick={() => navigate("/setup?step=environment")}
+        onClick={() => navigate("/admin/setup?step=environment")}
         className="shrink-0 font-medium underline underline-offset-2"
       >
         {spec.action}

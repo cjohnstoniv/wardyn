@@ -15,7 +15,7 @@ import { Button } from "../../ui/button";
 import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { useRole } from "../../wardyn/operator-context";
+import { useConsoleMode } from "../../wardyn/console-view";
 import { lsGet, lsSet } from "../../../lib/storage";
 import { deploymentMode } from "../../../lib/readiness";
 import type { SetupStatus } from "../../../lib/types";
@@ -24,6 +24,7 @@ import { EpisodeList } from "./episode-card";
 import { MemberGettingStarted } from "./member-getting-started";
 import { deriveReadiness } from "../../../lib/readiness";
 import { SetupScreen } from "../setup/setup-screen";
+import { useRole } from "../../wardyn/operator-context";
 
 // "Have they seen the welcome" flag — localStorage, private-mode tolerant.
 // Distinct from wardyn-setup-dismissed so the welcome and the setup funnel track
@@ -39,12 +40,24 @@ export function markOnboardingSeen(): void {
 // The "Getting started" flow: the welcome hero first (until seen), then the setup
 // funnel. No double stepper — the welcome has no stepper; the funnel has one.
 //
-// B4 HIGH-4 / Phase 5: a member has no "Getting started" nav entry (setup is
-// the operator's funnel — app-shell.tsx), but nothing stops a direct /setup
-// navigation (an old bookmark, a shared link). Land on the member's OWN
-// Getting Started (member-getting-started.tsx) instead of the operator funnel
-// (built from a redacted SetupStatus a member can't act on) — replaces the
-// former one-line MemberSetupNotice bounce.
+// M-6 (admin-member-modes-design.md §4.8/§6): which page renders follows the
+// VIEW (the URL — /admin/setup vs /setup) first — a single-operator install
+// (D1, `access === "url"`) sees the operator funnel at /admin/setup and the
+// User Getting Started at /setup, because there the URL is the only thing
+// that ever decided the mode at all, which `role` alone could never answer.
+//
+// The role check stays alongside it: `viewAccess` (console-view.tsx) maps
+// BOTH "admin" and "security_admin" to "session-admin", and a session-admin
+// passes ViewGate's /admin/* check — so a security admin who reaches
+// /admin/setup (its landing page, or a typed URL; the Admin nav gives them
+// no Setup link) would otherwise get the deployer funnel, built from a
+// SetupStatus redacted for anyone not the operator.
+//
+// B4 HIGH-4 / Phase 5: this also still answers a direct /setup navigation (an
+// old bookmark, a shared link) honestly — MemberGettingStarted, never the
+// operator funnel (built from a SetupStatus redacted for anyone not the
+// operator, internal/api/setup.go's redactSetupStatusForMember) — replacing
+// the former one-line MemberSetupNotice bounce.
 export function GettingStarted({
   onDone,
   status,
@@ -52,6 +65,7 @@ export function GettingStarted({
   onDone: () => void;
   status?: SetupStatus | null;
 }) {
+  const view = useConsoleMode();
   const role = useRole();
   // The hero is a fact about the install (status.onboarding_complete), not
   // the browser: a per-browser flag is origin-scoped, so the same console
@@ -70,8 +84,8 @@ export function GettingStarted({
   // drives is super-admin-only server-side. A security admin falling through
   // here would get the operator funnel built from a status they cannot act on
   // and a wizard whose every button 403s.
-  if (role !== "admin") {
-    // No onDone: this is a page a member returns to, not a funnel step with
+  if (view !== "admin" || role !== "admin") {
+    // No onDone: this is a page a user returns to, not a funnel step with
     // an exit action — the old MemberSetupNotice's "Go to Runs" button (and
     // the onDone it called) leaves with it.
     return <MemberGettingStarted />;

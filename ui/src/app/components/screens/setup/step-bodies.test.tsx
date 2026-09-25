@@ -212,6 +212,29 @@ describe("step-bodies.tsx — smoke", () => {
     expect(screen.queryByRole("button", { name: /edit workspace…/i })).not.toBeInTheDocument();
   });
 
+  // M-6 (QM-8/§4.8): Finish's own "Switch to user view" offer — a
+  // presentational click through to the orchestrator-owned handler
+  // (setup-screen.tsx's finishSwitchToUser, a plain navigate("/setup") —
+  // ViewGate's own interstitial owns the busy/failed state from there).
+  it("Finish's 'Switch to user view' calls onSwitchToUser", async () => {
+    const user = userEvent.setup();
+    const onSwitchToUser = vi.fn();
+    const status = baseStatus();
+    render(
+      <ReviewStep
+        status={status}
+        readiness={deriveReadiness(status)}
+        onRecheck={vi.fn()}
+        rechecking={false}
+        lastCheckedAt={null}
+        onJump={vi.fn()}
+        onSwitchToUser={onSwitchToUser}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Switch to user view" }));
+    expect(onSwitchToUser).toHaveBeenCalledTimes(1);
+  });
+
   it("ReviewStep renders the 'About this host' rollup", () => {
     const status = baseStatus();
     render(

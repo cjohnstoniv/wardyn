@@ -20,7 +20,7 @@ export const ADMIN_ACCESS_BANNER = {
 } as const;
 
 // The People step, where role mappings live (setup/steps.ts's "people").
-export const ADMIN_ACCESS_PEOPLE_STEP = "/setup?step=people";
+export const ADMIN_ACCESS_PEOPLE_STEP = "/admin/setup?step=people";
 
 // #484 — the People step's "When someone can't sign in" card
 // (setup/sign-in-help-card.tsx), frozen byte-for-byte from the same canon doc.

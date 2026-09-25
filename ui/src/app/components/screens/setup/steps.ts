@@ -46,15 +46,17 @@ const demoStepsIn = (section: Demo["section"]): DemoStepId[] =>
 //
 // 10 -> 12 -> 10: the tier-1/2/3 library split briefly gave Directories & repos
 // and Base images their own steps (`sources`, `images`) alongside `workspaces`
-// under "Your work". Both retired with sources-library.tsx/image-catalog.tsx —
-// `workspaces` (now backed by the single AddWorkspaceDialog, not the retired
-// wizard) is "Your work" again on its own.
+// under "Your work" (renamed "Code and workspaces" in M-6). Both retired with
+// sources-library.tsx/image-catalog.tsx — `workspaces` (now backed by the
+// single AddWorkspaceDialog, not the retired wizard) is on its own again.
 //
-// 10 -> 15: /demos died and Getting Started absorbed it, so the funnel lists
-// the WHOLE catalog (10 demos across two phases) instead of five. 15 is the
-// full order; stepOrder(status) is the order actually walked — see it below
-// for the conditional steps that drop out. PHASES is the count to trust, not
-// this history.
+// 10 -> 15 -> 5: /demos died and Getting Started briefly absorbed the whole
+// catalog into the admin funnel (10 demos across two phases, 15 steps total).
+// M-6 moved them back out, to User Getting Started (D5) — a demo is a sandbox
+// run, a user act. `DemoStepId` stays part of this union (DemoDetail is
+// rendered from both funnels), but PHASES below no longer walks any of them
+// in the admin funnel. stepOrder(status) is the order actually walked; PHASES
+// is the count to trust, not this history.
 export type SetupStepId =
   | "environment"
   | "people"
@@ -120,26 +122,25 @@ export interface PhaseDef {
   steps: SetupStepId[];
 }
 
-// Walk order: essentials → demos → your work → finish. Corporate network sits
-// right after Environment, BEFORE Integrations: if this machine reaches the
-// internet through a corporate proxy or an internal registry mirror, that has
-// to be set up before a model provider or a git host is added, or an
+// Walk order: essentials → code and workspaces → finish. Corporate network
+// sits right after Environment, BEFORE Integrations: if this machine reaches
+// the internet through a corporate proxy or an internal registry mirror, that
+// has to be set up before a model provider or a git host is added, or an
 // unconfigured corporate network reads as a bad credential (the ORDER is the
 // fix, not a banner — see corp-network-step.tsx's T.CORP_LEDE). Integrations
 // itself still carries the model/SCM-host picker; it no longer owns host proxy
 // or egress redirection — those moved to Corporate network (T.EMBED_SCOPE_NOTE
 // on the embedded list explains the split to anyone who visited it before).
 //
-// The demos are TWO phases, not one grouped list inside a single step: egress
-// governance (a destination) and secrets governance (a value) are different
-// subjects, and folding the second into the first would be satisfying "add a
-// section" by embedding it. Each phase's membership is derived from the
-// catalog's own `section` field.
+// M-6 (admin-member-modes-design.md §4.8, D5): a demo is a sandbox run, a
+// user act, so the two demo phases left the admin funnel for User Getting
+// Started (member-getting-started.tsx, which filters DEMOS by section the
+// same way demoStepsIn does below). `work` is renamed "Code and workspaces"
+// (QM-8): in the Admin view nothing set up here is "yours" — the phase
+// configures the org's Git providers and workspaces.
 export const PHASES: PhaseDef[] = [
   { id: "essentials", label: "Essentials", steps: ["environment", "people", "corp_network", "integrations"] },
-  { id: "demos_egress", label: "Egress demos", steps: demoStepsIn("egress") },
-  { id: "demos_secrets", label: "Secrets demos", steps: demoStepsIn("secrets") },
-  { id: "work", label: "Your work", steps: ["providers", "workspaces"] },
+  { id: "work", label: "Code and workspaces", steps: ["providers", "workspaces"] },
   { id: "finish", label: "Finish", steps: ["review"] },
 ];
 
@@ -179,32 +180,66 @@ export const DEMO_SECRETS_IDS: DemoStepId[] = demoStepsIn("secrets");
 // deep link is validated against this, and refusing an unmet step before the
 // answer is known would bounce a legitimate link on every cold load. The
 // orchestrator re-corrects once status lands (setup-screen.tsx).
+// A demo's precondition — the ONLY gate a conditional demo gets (never a
+// disabled Start; see demos/demo-runner.tsx's own header comment). True for
+// every keyless demo; `barrierReady` is DemoDetail's own separate gate,
+// checked once a demo is actually open.
+function demoMet(d: Demo, llmReady: boolean, present: string[]): boolean {
+  return !((d.needsModel && !llmReady) || (d.needsSecret && !present.includes(d.needsSecret)));
+}
+
 export function stepOrder(status: SetupStatus | null): SetupStepId[] {
   if (!status) return STEP_ORDER;
   const { llmReady } = deriveReadiness(status);
   const present = status.secrets.present;
-  const unmet = new Set<string>(
-    DEMOS.filter(
-      (d) => (d.needsModel && !llmReady) || (d.needsSecret && !present.includes(d.needsSecret)),
-    ).map((d) => d.id),
-  );
+  const unmet = new Set<string>(DEMOS.filter((d) => !demoMet(d, llmReady, present)).map((d) => d.id));
   return STEP_ORDER.filter((id) => !unmet.has(id));
 }
 
-const DEMO_ID_SET = new Set<string>(DEMO_STEP_IDS);
+// The demos User Getting Started (member-getting-started.tsx) may actually
+// offer right now — M-6 moved the demos themselves out of the admin funnel's
+// walk, and this is the gate that moved with them (the same precondition
+// stepOrder used to filter STEP_ORDER by, before PHASES stopped walking any
+// demo id at all). `status` null (not yet loaded) offers nothing, same as
+// stepOrder's own null branch is FULL rather than empty for the opposite
+// reason: that branch trusts a ?step= link that already named a real step;
+// this one is a first render with no honest answer yet for a precondition it
+// cannot check.
+export function walkableDemos(status: SetupStatus | null): Demo[] {
+  if (!status) return [];
+  const { llmReady } = deriveReadiness(status);
+  const present = status.secrets.present;
+  return DEMOS.filter((d) => demoMet(d, llmReady, present));
+}
 
-// The honest "N optional setup steps and M demos follow" counts the setup
-// shell's counter and rail render (#213). `config` is a true constant
-// (CONFIG_STEPS never drops a member); `demos` is NOT — stepOrder(status)
-// drops a demo whose needsModel/needsSecret precondition is unmet, so a host
-// with more connected walks more than the ten a fresh install sees (the
-// prototype README's own open question #3). Live-derived rather than a
-// baked-in "10" so this never goes stale the way a hand-kept count would.
-export function optionalStepCounts(status: SetupStatus | null): { config: number; demos: number } {
-  return {
-    config: CONFIG_STEPS.length,
-    demos: stepOrder(status).filter((id) => DEMO_ID_SET.has(id)).length,
-  };
+// M-6 (D5, admin-member-modes-design.md §4.8/§6 — "each such demo either
+// becomes watch-only or is fixed in M-6"): whether a member's own ceiling
+// (internal/api's narrowMemberInlinePolicy/filterMemberGrants, invoked via
+// boundMemberSpec at run-create) would rewrite THIS demo's policy, changing
+// what it actually shows. Read directly off the demo's own policy shape —
+// the same three things the ceiling narrows — rather than a hand-maintained
+// id list that could drift from demo-catalog.ts: `allow_all_egress` is
+// dropped, `wait_for_review` is raised to `deny_with_review`, and an
+// api_key/git_pat/ssh_key/cloud_sts/github_token eligible_grants entry is
+// either dropped or (github_token) forced to require approval. #850 has the
+// full per-demo accounting, read against the shipped default policy.
+const CEILING_GRANT_KINDS = new Set(["api_key", "git_pat", "ssh_key", "cloud_sts", "github_token"]);
+export function ceilingNarrows(d: Demo): boolean {
+  if (d.policy.allow_all_egress) return true;
+  if (d.policy.first_use_approval === "wait_for_review") return true;
+  return !!d.policy.eligible_grants?.some((g) => CEILING_GRANT_KINDS.has(g.kind));
+}
+
+// The honest "N optional setup steps follow" count the setup shell's counter
+// renders (#213). A true constant (CONFIG_STEPS never drops a member) —
+// `status` stays a parameter for call-site symmetry with stepOrder/
+// walkableDemos, and in case a future optional step ever gets a precondition
+// of its own. M-6 (D5) dropped the once-live `demos` count: the admin funnel
+// walks none any more (they moved to User Getting Started), so it was always
+// zero — "0 demos follow" was a stale, faintly false claim the counter no
+// longer makes at all.
+export function optionalStepCounts(_status: SetupStatus | null): { config: number } {
+  return { config: CONFIG_STEPS.length };
 }
 
 // Steps that render an "Optional" chip in the shell (everything outside the
