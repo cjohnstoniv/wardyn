@@ -402,6 +402,29 @@ func (s *Store) DeleteEverywhere(ctx context.Context, names []string) (int, erro
 	return int(tag.RowsAffected()), nil
 }
 
+// Holders returns every owner of each name's rows — see
+// secretstore.Store.Holders. One query over the rows, never a value: a
+// pointer row's owner is on the row, so the external store is not asked.
+func (s *Store) Holders(ctx context.Context, names []string) (map[string][]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT name, owned_by FROM secrets WHERE name = ANY($1) ORDER BY name, owned_by`, names)
+	if err != nil {
+		return nil, fmt.Errorf("pg secretstore: holders: %w", err)
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var name, owner string
+		if err := rows.Scan(&name, &owner); err != nil {
+			return nil, fmt.Errorf("pg secretstore: scan holder: %w", err)
+		}
+		out[name] = append(out[name], owner)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pg secretstore: iterate holders: %w", err)
+	}
+	return out, nil
+}
+
 // List returns this view's OWN secret names only, in lexical order — never
 // unioned with the operator's. A caller wanting "everything a principal may
 // see" composes For("").List() ∪ For(owner).List() itself.

@@ -58,8 +58,18 @@ func storedModelProviders(sc types.SiteConfig) types.ModelProviders {
 	return *sc.ModelProviders
 }
 
-// handleGetModelProviders returns the stored records with an ETag; a
-// never-configured install gets {} with 200.
+// modelProvidersRead is GET's body: the stored block, and ConnectedPeople —
+// per provider ID, how many people hold a credential of their own for it
+// (#970). Read-only: PUT's strict decode refuses the field, and the ETag
+// covers the stored block alone, so a person connecting never stales an
+// admin's edit. Admins only, as the route is: a member never reads this list.
+type modelProvidersRead struct {
+	types.ModelProviders
+	ConnectedPeople map[string]int `json:"connected_people,omitempty"`
+}
+
+// handleGetModelProviders returns the stored records with an ETag and each
+// one's connected-people count; a never-configured install gets {} with 200.
 //
 //	GET /api/v1/model-providers
 func (s *Server) handleGetModelProviders(w http.ResponseWriter, r *http.Request) {
@@ -69,8 +79,13 @@ func (s *Server) handleGetModelProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	block := storedModelProviders(sc)
+	connected, err := s.connectedPeople(r.Context(), block)
+	if err != nil {
+		writeServerError(w, r, "count connected people", err)
+		return
+	}
 	w.Header().Set("ETag", computeETag(block))
-	writeJSON(w, http.StatusOK, block)
+	writeJSON(w, http.StatusOK, modelProvidersRead{ModelProviders: block, ConnectedPeople: connected})
 }
 
 // handlePutModelProviders replaces the WHOLE block; {} is the clear form.

@@ -47,6 +47,8 @@ func (s getErrStore) For(string) secretstore.Store { return s }
 
 func (getErrStore) DeleteEverywhere(context.Context, []string) (int, error) { return 0, nil }
 
+func (getErrStore) Holders(context.Context, []string) (map[string][]string, error) { return nil, nil }
+
 // TestReadManagedBlob_DistinguishesStoreErrors pins only ErrNotFound is
 // "not connected" (found=false, err=nil). Any OTHER store error (decrypt failure
 // after key rotation, backend down) MUST propagate rather than masquerade as

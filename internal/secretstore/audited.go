@@ -154,6 +154,11 @@ func (a *audited) DeleteEverywhere(ctx context.Context, names []string) (int, er
 	return a.inner.DeleteEverywhere(ctx, names)
 }
 
+// Holders is not audited: it reads which namespaces hold a row, never a value.
+func (a *audited) Holders(ctx context.Context, names []string) (map[string][]string, error) {
+	return a.inner.Holders(ctx, names)
+}
+
 // StoresExternally forwards the wrapped store's description of the external
 // store its writes go to (the pg store in store mode), or "": metadata for the
 // setup row, never a value.

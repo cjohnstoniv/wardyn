@@ -72,6 +72,12 @@ type Store interface {
 	// credential for it with it, and no caller knows every owner to Delete
 	// them one by one.
 	DeleteEverywhere(ctx context.Context, names []string) (int, error)
+	// Holders is DeleteEverywhere's read twin: for each of names, every
+	// namespace holding a row of it — the operator's ("") included — whatever
+	// view it is called on. A name nobody holds is absent. It reads rows,
+	// never a value, so a store-mode backend's external store is not asked:
+	// the model providers list counts the people connected to each provider.
+	Holders(ctx context.Context, names []string) (map[string][]string, error)
 	// For returns a view of the store scoped to owner, the per-principal
 	// namespace introduced by migration 0050 (member BYOK). owner "" is the
 	// OPERATOR namespace — the zero value of every existing caller, so a call

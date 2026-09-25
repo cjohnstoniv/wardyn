@@ -38,6 +38,10 @@ const (
 	providerSSOPart   = "sso"
 )
 
+// providerSecretParts are every part a person's credential for one provider
+// may be stored under.
+var providerSecretParts = []string{providerKeyPart, providerOAuthPart, providerSSOPart}
+
 func providerSecretName(uid, part string) string { return providerSecretPrefix + uid + "-" + part }
 
 // providerSignInSecret reports whether name is a per-person sign-in capture
@@ -254,9 +258,9 @@ func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *ty
 	if len(uids) == 0 || s.cfg.Secrets == nil {
 		return 0, nil
 	}
-	names := make([]string, 0, 3*len(uids))
+	names := make([]string, 0, len(providerSecretParts)*len(uids))
 	for _, uid := range uids {
-		for _, part := range []string{providerKeyPart, providerOAuthPart, providerSSOPart} {
+		for _, part := range providerSecretParts {
 			names = append(names, providerSecretName(uid, part))
 		}
 	}
@@ -265,4 +269,54 @@ func (s *Server) purgeProviderCredentials(ctx context.Context, before, after *ty
 		return 0, fmt.Errorf("purge model provider credentials: %w", err)
 	}
 	return n, nil
+}
+
+// connectedPeople is, per provider ID in block, how many distinct people hold
+// a credential of their own for it — a key, a Claude sign-in or an AWS sign-in,
+// one person counted once. One store call over the rows, never a value read;
+// the operator namespace is no person. Every provider has an entry, 0
+// included. A never-configured block, or no secret store, reads nil and all
+// zeros respectively.
+func (s *Server) connectedPeople(ctx context.Context, block types.ModelProviders) (map[string]int, error) {
+	if len(block.Providers) == 0 {
+		return nil, nil
+	}
+	out := map[string]int{}
+	providerOf := map[string]string{}
+	names := make([]string, 0, len(providerSecretParts)*len(block.Providers))
+	for _, p := range block.Providers {
+		out[p.ID] = 0
+		for _, part := range providerSecretParts {
+			name := providerSecretName(p.UID, part)
+			providerOf[name] = p.ID
+			names = append(names, name)
+		}
+	}
+	if s.cfg.Secrets == nil {
+		return out, nil
+	}
+	holders, err := s.cfg.Secrets.Holders(ctx, names)
+	if err != nil {
+		return nil, fmt.Errorf("list model provider credential holders: %w", err)
+	}
+	people := map[string]map[string]bool{}
+	for name, owners := range holders {
+		id, ok := providerOf[name]
+		if !ok {
+			continue
+		}
+		for _, owner := range owners {
+			if owner == "" {
+				continue
+			}
+			if people[id] == nil {
+				people[id] = map[string]bool{}
+			}
+			people[id][owner] = true
+		}
+	}
+	for id, set := range people {
+		out[id] = len(set)
+	}
+	return out, nil
 }

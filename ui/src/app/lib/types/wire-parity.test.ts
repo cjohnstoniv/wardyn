@@ -191,4 +191,17 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const tsKeys = tsInterfaceTopKeys(runsTs, "AttachHolder");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
+
+  // GET /model-providers' body (#970): the stored block (types.ModelProviders,
+  // embedded) plus connected_people, mirrored as ModelProvidersRead extending
+  // ModelProviders.
+  it("modelProvidersRead (GET /model-providers): full parity with the TS ModelProvidersRead mirror", () => {
+    const siteTs = readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8");
+    const readGo = readFileSync(join(root, "internal/api/model_providers_api.go"), "utf8");
+    const blockGo = readFileSync(join(root, "internal/types/model_provider.go"), "utf8");
+    expect(readGo).toMatch(/type modelProvidersRead struct \{\n\ttypes\.ModelProviders\n/);
+    expect(siteTs).toMatch(/export interface ModelProvidersRead extends ModelProviders \{/);
+    expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProvidersRead"))).toEqual(new Set(goJSONTags(readGo, "modelProvidersRead")));
+    expect(new Set(tsInterfaceTopKeys(siteTs, "ModelProviders"))).toEqual(new Set(goJSONTags(blockGo, "ModelProviders")));
+  });
 });

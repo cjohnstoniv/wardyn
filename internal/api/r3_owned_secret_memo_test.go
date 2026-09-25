@@ -79,6 +79,9 @@ func (c *countingSecretStore) List(context.Context) ([]string, error) {
 func (c *countingSecretStore) DeleteEverywhere(context.Context, []string) (int, error) {
 	return 0, nil
 }
+func (c *countingSecretStore) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, nil
+}
 func (c *countingSecretStore) For(owner string) secretstore.Store {
 	cp := *c
 	cp.owner = owner
