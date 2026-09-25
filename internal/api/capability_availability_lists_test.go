@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -31,6 +33,15 @@ type policyListStore struct {
 
 func (s *policyListStore) ListPolicies(context.Context) ([]types.RunPolicy, error) {
 	return slices.Clone(s.pols), nil
+}
+
+func (s *policyListStore) GetPolicy(_ context.Context, id uuid.UUID) (types.RunPolicy, error) {
+	for _, p := range s.pols {
+		if p.ID == id {
+			return p, nil
+		}
+	}
+	return types.RunPolicy{}, store.ErrNotFound
 }
 
 // pagedPolicyStore is policyListStore as a store.Pager (production PG's
@@ -149,4 +160,53 @@ func TestAvailability_RestrictedModelProviderLeftOutOfSetupStatus(t *testing.T) 
 			}
 		})
 	}
+}
+
+// TestAvailability_RestrictedPolicyReadByID: GET /policies/{id} answers a
+// caller below the security tier exactly as the launch door would for that id.
+func TestAvailability_RestrictedPolicyReadByID(t *testing.T) {
+	devOnly := types.RunPolicy{ID: uuid.New(), Name: "dev only"}
+	get := func(t *testing.T, cs *capStore, role, typ string) (*httptest.ResponseRecorder, *Server) {
+		t.Helper()
+		cs.userTypes = utKnown
+		cs.restricted = restrictedOne(capPolicy, devOnly.ID.String())
+		cs.grants = []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, utDev, capPolicy, devOnly.ID.String(), types.CapabilityAllow)}
+		h := newHarness(t)
+		h.srv.cfg.Store = &policyListStore{capStore: cs, pols: []types.RunPolicy{devOnly}}
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("id", devOnly.ID.String())
+		ctx := context.WithValue(utCtx(role, typ, []string{}), chi.RouteCtxKey, rctx)
+		w := httptest.NewRecorder()
+		h.srv.handleGetPolicy(w, httptest.NewRequest(http.MethodGet, "/api/v1/policies/"+devOnly.ID.String(), nil).WithContext(ctx))
+		return w, h.srv
+	}
+	t.Run("a type outside the list is refused as at launch", func(t *testing.T) {
+		w, srv := get(t, &capStore{}, oidc.RoleUser, utPM)
+		want := "Stored policy " + devOnly.ID.String() + " isn't available to you. Ask your admin, or launch without policy_id."
+		var body struct{ Error string }
+		if w.Code != http.StatusForbidden || json.Unmarshal(w.Body.Bytes(), &body) != nil || body.Error != want {
+			t.Fatalf("GET = %d %s, want 403 %q", w.Code, w.Body.String(), want)
+		}
+		if reasons := auditReasons(t, srv, "authz.denied"); !slices.Equal(reasons, []string{"capability_policy"}) {
+			t.Fatalf("authz.denied reasons = %v, want [capability_policy]", reasons)
+		}
+	})
+	for _, leg := range []struct{ name, role, typ string }{
+		{"the listed type reads it", oidc.RoleUser, utDev},
+		{"a security admin outside the list reads it", oidc.RoleSecurityAdmin, utPM},
+	} {
+		t.Run(leg.name, func(t *testing.T) {
+			if w, _ := get(t, &capStore{}, leg.role, leg.typ); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), devOnly.ID.String()) {
+				t.Fatalf("GET = %d %s, want 200 with the policy", w.Code, w.Body.String())
+			}
+		})
+	}
+	// The unlisted caller: a listed one is settled by their named allow before
+	// the restriction is ever read (capRead.granted), so no error can reach them.
+	t.Run("a resolver error is a 500 that carries no policy", func(t *testing.T) {
+		w, _ := get(t, &capStore{restrictErr: errors.New("pg down")}, oidc.RoleUser, utPM)
+		if b := w.Body.String(); w.Code != http.StatusInternalServerError || strings.Contains(b, devOnly.ID.String()) || strings.Contains(b, devOnly.Name) {
+			t.Fatalf("GET = %d %s, want 500 without the policy", w.Code, b)
+		}
+	})
 }

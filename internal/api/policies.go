@@ -110,6 +110,12 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "get policy", err)
 		return
 	}
+	// Below the security tier, answered as the launch door answers this id
+	// (runs.policy): the list leaves it out, so the read by id must too.
+	if !s.isSecurityOperator(r.Context()) && s.denyUserCapability(w, r, capPolicy, p.ID.String(), "policies.read",
+		"Stored policy "+p.ID.String()+" isn't available to you. Ask your admin, or launch without policy_id.") {
+		return
+	}
 	writeJSON(w, http.StatusOK, redactPolicyForRead(p, s.isSecurityOperator(r.Context())))
 }
 

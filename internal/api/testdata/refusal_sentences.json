@@ -81,6 +81,11 @@
   },
   {
     "reason": "capKinds[capPolicy].reason",
+    "target": "\"policies.read\"",
+    "sentence": "\"Stored policy \" + p.ID.String() + \" isn't available to you. Ask your admin, or launch without policy_id.\""
+  },
+  {
+    "reason": "capKinds[capPolicy].reason",
     "target": "\"runs.policy\"",
     "sentence": "\"Stored policy \" + req.PolicyID.String() + \" isn't available to you. Ask your admin, or launch without policy_id.\""
   },
