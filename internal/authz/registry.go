@@ -39,6 +39,10 @@ const (
 	ReasonRunQuota                       Reason = "run_quota"
 	ReasonUserTypeUnknown                Reason = "user_type_unknown"
 	ReasonUserViewTypeDeleted            Reason = "user_view_type_deleted"
+	// ReasonAdminView: an admin in the user view launched a run after the type
+	// the view looks through was deleted. Not audited on its own — the cause
+	// row is ReasonUserViewTypeDeleted, which the launch response answered.
+	ReasonAdminView Reason = "admin_view"
 )
 
 // Refusal is one reason's registry row.
@@ -80,6 +84,7 @@ var refusals = map[Reason]Refusal{
 	ReasonRunQuota:                       {Effect: EffectUnprocessable},
 	ReasonUserTypeUnknown:                {Effect: EffectDeny, Audit: true},
 	ReasonUserViewTypeDeleted:            {Effect: EffectDeny, Audit: true},
+	ReasonAdminView:                      {Effect: EffectConflict},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

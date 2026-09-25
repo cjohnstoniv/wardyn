@@ -32,6 +32,10 @@ const (
 	// refusal is never an existence oracle.
 	EffectHidden        Effect = "hidden"
 	EffectUnprocessable Effect = "unprocessable"
+	// EffectConflict is a refusal answered 409: the request is well-formed and
+	// the caller could otherwise make it, but their own session state (a
+	// deleted user-view type) conflicts with it.
+	EffectConflict Effect = "conflict"
 )
 
 // Status is the HTTP status a refusal with this effect answers with.
@@ -43,6 +47,8 @@ func (e Effect) Status() int {
 		return 404
 	case EffectUnprocessable:
 		return 422
+	case EffectConflict:
+		return 409
 	default:
 		return 403 // an unknown effect refuses
 	}
@@ -147,16 +153,18 @@ type Origin struct {
 	Placement string     `json:"placement,omitempty"`
 }
 
-var reservedDatumKeys = []string{"reason", "method", "member_mode", "device_channel", "dropped"}
+var reservedDatumKeys = []string{"reason", "method", "member_mode", "device_channel", "dropped", "user_type"}
 
 // Datum is the data of d's audit row, refused to p over method (empty when no
 // request carried it). A detail never stands in for a reserved key, so it can
 // never forge the reason or a marker.
 //
-// member_mode is a marker, present only when true, and user_type (the type the
-// view looks through) rides beside it. device_channel is a
-// sibling of the ingest marker device_origin, never that key: device_origin
-// stays the mark of a row a laptop hashed and forwarded.
+// member_mode is a marker, present only when true. user_type (the caller's
+// stamped type, or the type a member view looks through) rides on its own,
+// whenever the principal carries one — a stamped type refused on its own
+// (user_type_unknown) is not a member view. device_channel is a sibling of the
+// ingest marker device_origin, never that key: device_origin stays the mark of
+// a row a laptop hashed and forwarded.
 func Datum(d Decision, p Principal, method string) map[string]any {
 	m := make(map[string]any, len(d.Detail)+len(reservedDatumKeys))
 	for k, v := range d.Detail {
@@ -170,6 +178,8 @@ func Datum(d Decision, p Principal, method string) map[string]any {
 	}
 	if p.MemberView {
 		m["member_mode"] = true
+	}
+	if p.UserType != "" {
 		m["user_type"] = p.UserType
 	}
 	if p.Origin.DeviceID != nil {

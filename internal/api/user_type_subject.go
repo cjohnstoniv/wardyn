@@ -105,8 +105,7 @@ func (s *Server) callerSubjects(ctx context.Context) (callerSubjects, error) {
 	_, err := s.cfg.Store.GetUserType(ctx, c.userType)
 	if errors.Is(err, store.ErrNotFound) {
 		if s.cfg.Audit != nil && !isDisplayRead(ctx) && firstUserTypeRefusal(ctx) {
-			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonUserTypeUnknown, "user_type", userTypeUnknownMsg).
-				With("user_type", c.userType))
+			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonUserTypeUnknown, "user_type", userTypeUnknownMsg))
 		}
 		return callerSubjects{}, errUserTypeUnknown
 	}

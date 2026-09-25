@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -174,11 +175,25 @@ func TestUserViewDeletedTypeRefusesTheNextRequest(t *testing.T) {
 	}
 
 	// The launch doors answer the S1 409 and never reach the handler: the
-	// store behind them would panic on a run write.
+	// store behind them would panic on a run write. The status is asserted
+	// against the registry, not the 409 literal, so a Lookup(ReasonAdminView)
+	// that drifted from EffectConflict would fail here rather than agree with
+	// a hand-picked constant.
+	adminViewRef, ok := authz.Lookup(authz.ReasonAdminView)
+	if !ok || adminViewRef.Effect != authz.EffectConflict || adminViewRef.Effect.Status() != http.StatusConflict {
+		t.Fatalf("authz.ReasonAdminView registry row = %+v, ok=%v, want EffectConflict/409", adminViewRef, ok)
+	}
 	for _, path := range []string{"/api/v1/runs", "/api/v1/runs/preflight"} {
 		w := doSSO(t, srv, http.MethodPost, path, view, `{"agent":"claude-code","task":"t"}`)
-		if w.Code != http.StatusConflict || json.Unmarshal(w.Body.Bytes(), &body) != nil || body.Reason != "admin_view" {
-			t.Fatalf("POST %s after the delete = %d %s, want 409 admin_view", path, w.Code, w.Body.String())
+		if w.Code != adminViewRef.Effect.Status() || json.Unmarshal(w.Body.Bytes(), &body) != nil || body.Reason != "admin_view" {
+			t.Fatalf("POST %s after the delete = %d %s, want %d admin_view", path, w.Code, w.Body.String(), adminViewRef.Effect.Status())
+		}
+		// The cause row still records user_view_type_deleted, with what the
+		// response actually answered riding beside it.
+		ev := lastAuditEvent(t, h.audit.events, "authz.denied")
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil || data["reason"] != "user_view_type_deleted" || data["answered"] != "admin_view" {
+			t.Fatalf("POST %s authz.denied = %s, want reason user_view_type_deleted, answered admin_view", path, ev.Data)
 		}
 	}
 

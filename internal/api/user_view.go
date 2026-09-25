@@ -221,11 +221,14 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request) *http.Requ
 	// human is published, and the body carries its reason code (409 admin_view
 	// on a launch door, where the row still records user_view_type_deleted).
 	d := authz.Deny(authz.ReasonUserViewTypeDeleted, r.URL.Path, userViewTypeDeleted(typeID))
-	s.recordAudit(ctx, s.refusalEvent(ctx, types.ActorHuman, oidc.PrincipalFromContext(ctx), r.Method, d))
 	if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/runs" || r.URL.Path == "/api/v1/runs/preflight") {
-		writeJSON(w, http.StatusConflict, errorBody{Error: userViewLaunchRefusal(typeID), Reason: "admin_view"})
+		s.recordAudit(ctx, s.refusalEvent(ctx, types.ActorHuman, oidc.PrincipalFromContext(ctx), r.Method,
+			d.With("answered", "admin_view")))
+		launch := authz.Deny(authz.ReasonAdminView, r.URL.Path, userViewLaunchRefusal(typeID))
+		writeJSON(w, launch.Status, errorBody{Error: launch.Sentence, Reason: string(launch.Reason)})
 		return nil
 	}
+	s.recordAudit(ctx, s.refusalEvent(ctx, types.ActorHuman, oidc.PrincipalFromContext(ctx), r.Method, d))
 	writeJSON(w, d.Status, errorBody{Error: d.Sentence, Reason: string(d.Reason)})
 	return nil
 }
