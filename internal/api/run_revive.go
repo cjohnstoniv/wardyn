@@ -120,6 +120,9 @@ func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAge
 	// Local mode mints for the host operator (runIdentitySubject), not for the
 	// run's owner, so only the principal that created the run may revive it.
 	if localPrincipalFromContext(r.Context()) != "" && actor != run.CreatedBy {
+		// O4: audited like every other revive refusal, never silent.
+		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, "run.revive", run.ID.String(),
+			"denied", mustJSON(map[string]any{"subject": run.CreatedBy, "reason": "local_mode_not_owner"})))
 		return reviveResult{}, reviveRefused(http.StatusForbidden, "in local mode only the run's owner can revive it")
 	}
 	return s.reviveRunProxy(r.Context(), run, actorType, actor, startAgent)
