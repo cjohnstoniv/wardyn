@@ -434,8 +434,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `authz.denied` is the one listed exception. See "Upgrading" below. The page also gains a
   Consumers column naming what inside Wardyn reads each action back. The
   `egress.decisions.dropped:<n>` `rule_source` value is now `egress:dropped-decisions-<n>`, and the
-  same test now checks every `rule_source` row is `family:kebab`. `secret.read`'s eight kebab-case
-  refusal reasons are snake_case, like the rest of its reasons. The `wardyn_egress_denies_total`
+  same test now checks every `rule_source` row is `family:kebab`. Every `secret.read`
+  refusal reason is snake_case, like the rest of its reasons. The `wardyn_egress_denies_total`
   metric's `HELP` text no longer promises a `reason` label the series does not carry — the series
   itself is unchanged, still one unlabeled counter.
 - **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
@@ -1320,7 +1320,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   service-account token (Kubernetes auth) or a token file, never a token in an environment
   variable; it refuses `http://` to a non-loopback Vault and uses a TLS config of its own. A
   sealed, throttled or unreachable Vault is transient (the credential sink answers 503, distinct
-  from a missing credential's 424, and audits `secret.read` with `reason` `store-unavailable`); a
+  from a missing credential's 424, and audits `secret.read` with `reason` `store_unavailable`); a
   401/403 is definitive, and re-authenticates at most once every 30 s. On a transient failure the
   proxy keeps injecting its last value for a bounded grace (#589, above). A KV v2 mount
   that does not exist fails boot, and a write or delete Vault answers 404 fails rather than reading

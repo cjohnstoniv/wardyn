@@ -249,8 +249,8 @@ func TestInternalInjection_FailsClosed(t *testing.T) {
 	if rr.Code != http.StatusFailedDependency || !strings.Contains(rr.Body.String(), "wardyn secret set") {
 		t.Fatalf("missing secret: status = %d body=%s", rr.Code, rr.Body.String())
 	}
-	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"not-found"`) {
-		t.Fatalf("missing secret: audit data = %s, want the not-found reason", ev.Data)
+	if ev := lastAuditEvent(t, h.audit.events, "secret.read"); !strings.Contains(string(ev.Data), `"reason":"not_found"`) {
+		t.Fatalf("missing secret: audit data = %s, want the not_found reason", ev.Data)
 	}
 
 	// No auth => 401.
@@ -294,10 +294,10 @@ func TestInternalInjection_StoreUnavailableIsDistinctFromMissing(t *testing.T) {
 	if err := json.Unmarshal(ev.Data, &d); err != nil {
 		t.Fatal(err)
 	}
-	if ev.Outcome != "failure" || d["reason"] != "store-unavailable" || d["purpose"] != "proxy-injection" ||
+	if ev.Outcome != "failure" || d["reason"] != "store_unavailable" || d["purpose"] != "proxy-injection" ||
 		d["owner"] != "alice@example.com" || d["store"] != "vaultkv" || d["row_owner"] != "" ||
 		d["ref"] != "vaultkv:ns1/operator/anthropic-api-key" {
-		t.Fatalf("store unavailable: audit %s %s, want a failure with reason store-unavailable, purpose proxy-injection, owner alice@example.com and the vaultkv row", ev.Outcome, ev.Data)
+		t.Fatalf("store unavailable: audit %s %s, want a failure with reason store_unavailable, purpose proxy-injection, owner alice@example.com and the vaultkv row", ev.Outcome, ev.Data)
 	}
 }
 

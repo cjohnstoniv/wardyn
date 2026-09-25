@@ -292,6 +292,13 @@ func TestProviderSubscriptionSink(t *testing.T) {
 					t.Fatalf("refusal carries a token: %s", body)
 				}
 			}
+			// secret.read's refusal reasons are snake_case (docs/AUDIT-ACTIONS.md, #205).
+			ev := lastAuditEvent(t, h.audit.events, "secret.read")
+			var d struct{ Reason string }
+			_ = json.Unmarshal(ev.Data, &d)
+			if ev.Outcome != "failure" || d.Reason == "" || strings.ContainsAny(d.Reason, "- ") {
+				t.Errorf("secret.read = %s %s, want a failure with a snake_case reason", ev.Outcome, ev.Data)
+			}
 		})
 	}
 }

@@ -227,7 +227,7 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	switch {
 	case errors.Is(berr, secretstore.ErrUnavailable):
 		// Transient: the proxy may ride it out on its last-good header.
-		return fail(http.StatusServiceUnavailable, "store-unavailable", sinkStoreUnreachable, nil)
+		return fail(http.StatusServiceUnavailable, "store_unavailable", sinkStoreUnreachable, nil)
 	case berr != nil:
 		// Definitive (storeReadRefusal): the store refused the session.
 		return fail(http.StatusForbidden, reasonStoreError, credentialReauthStoreErrorBody, nil)
