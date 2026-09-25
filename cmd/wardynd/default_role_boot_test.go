@@ -21,8 +21,9 @@ import (
 // TestValidDefaultRole pins validDefaultRole's one deliberate divergence from
 // oidc.ValidRole: RoleSecurityAdmin is a MAPPED tier only (see its doc) and
 // must never be admissible as the boot-time fallthrough default, while the
-// two ladder roles and an unrecognized value behave exactly as ValidRole
-// already says.
+// two ladder roles are, and a malformed value is not. "Admin" is the typo
+// case: tiers and user type ids are lowercase, so it is neither, whereas a
+// lowercase slug such as "junk" is a well-formed user type id in 0.8.
 func TestValidDefaultRole(t *testing.T) {
 	for _, tt := range []struct {
 		role string
@@ -31,7 +32,7 @@ func TestValidDefaultRole(t *testing.T) {
 		{oidc.RoleAdmin, true},
 		{oidc.RoleUser, true},
 		{oidc.RoleSecurityAdmin, false},
-		{"junk", false},
+		{"Admin", false},
 		{"", false},
 	} {
 		if got := validDefaultRole(tt.role); got != tt.want {
@@ -93,7 +94,7 @@ func defaultRoleBootFlags(issuerURL, defaultRole string) *bootFlags {
 // half: that boot actually calls validDefaultRole with the resolved
 // WARDYN_OIDC_DEFAULT_ROLE value and fails closed before an oidc.Authenticator
 // is ever constructed, on both the tier the design specifically refuses
-// (security_admin) and an ordinary typo. A role that passes keeps going —
+// (security_admin) and a malformed value ("Admin"). A role that passes keeps going —
 // proven by a real discovery round trip against a test IdP succeeding and
 // wiring a non-nil Authenticator, the same "no hand-set bool" shape as
 // TestSSOOnlyPosture_WiredThroughTheRealBootPath above.
@@ -119,7 +120,7 @@ func TestBuildOptionalFeatures_DefaultRoleBootRefusal(t *testing.T) {
 		wantErr bool
 	}{
 		{"security_admin refused", oidc.RoleSecurityAdmin, true},
-		{"junk value refused", "junk", true},
+		{"malformed value refused", "Admin", true},
 		{"admin boots clean", oidc.RoleAdmin, false},
 		{"user boots clean", oidc.RoleUser, false},
 	} {
