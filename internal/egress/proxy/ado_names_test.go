@@ -84,6 +84,17 @@ func TestADONames_ApprovalRepoKeyIsOneSpelling(t *testing.T) {
 	if got := adoRepoOf("/acme/_apis/git/repositories/a%252Fb/pushes"); got != "" {
 		t.Errorf("adoRepoOf of a doubly-encoded separator = %q, want none", got)
 	}
+
+	// A repository name holding a literal "%" (spelled %25 on the wire) is one
+	// key at both doors, decoded exactly once — not the doubly-decoded
+	// spelling a %2550 would read as if a door decoded twice.
+	const pct = "growth%50"
+	if got := adoRepoOf("/acme/Payments%20Platform/_apis/git/repositories/Growth%2550/pushes"); got != pct || got == "growthp" {
+		t.Errorf("REST door: adoRepoOf(%%-bearing name) = %q, want %q", got, pct)
+	}
+	if got := adoGitAsk(mustLocalReq(t, http.MethodPost, "/wardyn/git/dev.azure.com/acme/Payments%20Platform/_git/Growth%2550/git-receive-pack", nil)).repo; got != pct || got == "growthp" {
+		t.Errorf("git door: adoGitAsk(%%-bearing name).repo = %q, want %q", got, pct)
+	}
 }
 
 // A held push on a spaced repository asks the control plane about the
