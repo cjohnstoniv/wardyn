@@ -510,16 +510,16 @@ func TestDecideScope_AlwaysRejectSetsAreNotSymmetric(t *testing.T) {
 	}
 }
 
-// TestReconcileWorkspaceEgressDecisions is the D28 heal: the post-Decide
+// TestReconcileWorkspaceEgressDecisions pins the heal: the post-Decide
 // write-back is not atomic with Decide, so a PG blip there leaves an approval
 // durably decided `always` while its workspace never got the allow/deny row —
 // the operator's permanent decision dropped behind a 200. Reconcile re-applies
 // every decided always-egress decision to its workspace, recreating the dropped
 // row (and idempotently no-op'ing already-persisted ones).
 //
-// The pre-fix state is modelled directly: a decided always approval whose
-// workspace egress lists are empty (the dropped write-back). Before the fix
-// nothing recreated it; after, reconcile does — proven by the row appearing.
+// The dropped write-back is modelled directly: a decided always approval
+// whose workspace egress lists are empty. Reconcile must recreate the row —
+// proven by the row appearing.
 func TestReconcileWorkspaceEgressDecisions(t *testing.T) {
 	f := newScopeFixture(t)
 	// A workspace linked to the fixture's run, with EMPTY egress lists — the

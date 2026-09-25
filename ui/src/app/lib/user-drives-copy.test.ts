@@ -10,6 +10,7 @@ import * as GovernanceCopy from "./governance-copy";
 import { MEMBER } from "./governance-copy";
 import * as UserDrivesCopy from "./user-drives-copy";
 import { DRIVE_MEMBER, DRIVE_RUN, DRIVES } from "./user-drives-copy";
+import { parseFrozenTables, renderFromNamespaces, splitKey } from "./copy-doc-parity";
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
@@ -36,34 +37,14 @@ import { DRIVE_MEMBER, DRIVE_RUN, DRIVES } from "./user-drives-copy";
 // a file: URL under the jsdom environment, so it can't resolve this.
 const DOC = resolve(process.cwd(), "../docs/design/user-drives-prompt.md");
 
-const unmono = (s: string) => s.replace(/`/g, "");
-
-/** key -> frozen string, for every row of §7.2-§7.8's tables. */
-function parseFrozenTables(): Map<string, string> {
-  const rows = new Map<string, string>();
-  let inSection = false;
-  for (const line of readFileSync(DOC, "utf8").split("\n")) {
-    if (line.startsWith("#")) {
-      // §7.2-§7.8 only: §7.1 is the reused-canon table (strings that live in
-      // permissions-copy.ts / people-access-copy.ts / governance-copy.ts /
-      // the server) and its second table (server-composed, no Key column),
-      // neither of which are keys this module freezes. There is no §7.9 in
-      // this doc. §7.1's second table is not unguarded, though — it is checked
-      // against the Go source at the bottom of this file, where the truth is
-      // the emitting literal rather than a key in this module.
-      inSection = /^### 7\.[2-8]\b/.test(line);
-      continue;
-    }
-    if (!inSection || !line.startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells[0] === "Key") continue; // header
-    if (/^:?-+:?$/.test(cells[0])) continue; // separator
-    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
-  }
-  return rows;
-}
-
-const doc = parseFrozenTables();
+// §7.2-§7.8 only: §7.1 is the reused-canon table (strings that live in
+// permissions-copy.ts / people-access-copy.ts / governance-copy.ts / the
+// server) and its second table (server-composed, no Key column), neither of
+// which are keys this module freezes. There is no §7.9 in this doc. §7.1's
+// second table is not unguarded, though — it is checked against the Go
+// source at the bottom of this file, where the truth is the emitting literal
+// rather than a key in this module.
+const doc = parseFrozenTables(DOC, /^### 7\.[2-8]\b/);
 
 // The four keys whose doc cell carries an "A / B" pluralisation alternation
 // rather than a single renderable string (§5 #9) — checked in their own test.
@@ -83,21 +64,9 @@ const SIZE_HELPERS = ["SIZE_MIB(n)", "SIZE_GIB(n)"];
 // too, which a hand-written map by construction could never notice.
 const NAMESPACES: Record<string, unknown>[] = [DRIVES, DRIVE_MEMBER, DRIVE_RUN];
 
-/** `EDITOR_TITLE_EDIT(name)` -> ["EDITOR_TITLE_EDIT", ["name"]]. */
-function splitKey(docKey: string): [string, string[]] {
-  const m = /^([A-Z0-9_]+)\((.*)\)$/.exec(docKey);
-  return m ? [m[1], m[2].split(",").map((a) => a.trim())] : [docKey, []];
-}
-
 // ONE lookup across the three namespaces is safe because none of their keys
 // collide (122 / 22 / 2); the completeness test below is what keeps that true.
-function render(docKey: string): string {
-  const [name, args] = splitKey(docKey);
-  const ns = NAMESPACES.find((n) => name in n);
-  if (!ns) throw new Error(`${docKey}: no such key in DRIVES / DRIVE_MEMBER / DRIVE_RUN`);
-  const value = ns[name];
-  return typeof value === "function" ? (value as (...a: string[]) => string)(...args.map((a) => `{${a}}`)) : String(value);
-}
+const render = (docKey: string) => renderFromNamespaces(docKey, NAMESPACES);
 
 // The six keys that cannot go through the placeholder path get their own tests
 // below (§5 #9, #10).
@@ -458,24 +427,9 @@ const goShape = (lit: string) => lit.replace(GO_VERB, (v) => (v.endsWith("q") ? 
 /** A doc cell as the same shape: `{name}` is the hole the verb fills. */
 const docShape = (text: string) => text.replace(/\{[A-Za-z_]+\}/g, HOLE);
 
-/** key -> frozen string, for the rows of ONE `### 7.N` table. */
-function parseOneSection(heading: RegExp): Map<string, string> {
-  const rows = new Map<string, string>();
-  let inSection = false;
-  for (const line of readFileSync(DOC, "utf8").split("\n")) {
-    if (line.startsWith("#")) {
-      inSection = heading.test(line);
-      continue;
-    }
-    if (!inSection || !line.startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
-    if (cells[0] === "Key" || /^:?-+:?$/.test(cells[0])) continue;
-    rows.set(unmono(cells[0]), unmono(cells[cells.length - 1]));
-  }
-  return rows;
-}
-
-const sec77 = parseOneSection(/^### 7\.7\b/);
+// parseFrozenTables() already scopes to one heading when the regex matches
+// only that heading — the same parser §7.2-§7.8 above uses, for §7.7 alone.
+const sec77 = parseFrozenTables(DOC, /^### 7\.7\b/);
 const mountGo = readFileSync(resolve(process.cwd(), "../internal/runner/mount.go"), "utf8");
 // The drives-bearing api files as ONE text: the size-cap split (53674b46) moved driveRefusal()
 // into user_drives_me.go, and a pure move must not redden a parity test — so every
@@ -646,7 +600,8 @@ describe("user-drives-prompt §7.3 — the preview note matches what the endpoin
 // that freezes it, even when it introduces no string of its own. Pinned in BOTH
 // directions — the doc must describe the note AND the block must still render
 // it, gated on the server's own total rather than a client-side stand-in.
-describe("user-drives-prompt §7.3 — the allocations truncation note (R4/F092)", () => {
+describe("user-drives-prompt §7.3 — the allocations truncation note", () => {
+  // ticket: R4/F092
   const doc = readFileSync(DOC, "utf8");
   const section = doc.slice(doc.indexOf("### 7.3 "), doc.indexOf("### 7.4 "));
   const allocations = readFileSync(
@@ -678,7 +633,9 @@ describe("user-drives-prompt §7.3 — the allocations truncation note (R4/F092)
 // managed backend refuses every non-hash template, not just email_local),
 // not just the share-side one. Pin both halves so a revert to
 // one-directional gating — in the doc OR the component — fails here instead
-// of drifting silently again.
+// of drifting silently again. Since #808 the editor routes through
+// homeTemplateDisabled (api/drives.ts), whose every direction drives.test.ts
+// pins per backend; here we pin only that the editor still delegates to it.
 describe("user-drives-prompt §2.4 — the home-template rule's mirror direction", () => {
   const doc224 = readFileSync(resolve(process.cwd(), "../docs/design/user-drives-prompt.md"), "utf8");
   const editorSrc = readFileSync(
@@ -691,7 +648,7 @@ describe("user-drives-prompt §2.4 — the home-template rule's mirror direction
     expect(doc224).toMatch(/A managed drive with any non-`hash` directory name.*mirror/);
   });
 
-  it("drive-editor.tsx's homeDisabled still gates both directions", () => {
-    expect(editorSrc).toMatch(/homeDisabled\s*=\s*\(t: HomeTemplate\)\s*=>\s*\(managed \? t !== "hash" : t === "hash"\)/);
+  it("drive-editor.tsx's homeDisabled still gates both directions, through the shared predicate", () => {
+    expect(editorSrc).toMatch(/homeDisabled\s*=\s*\(t: HomeTemplate\)\s*=>\s*homeTemplateDisabled\(backend, t\)/);
   });
 });

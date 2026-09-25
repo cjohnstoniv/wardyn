@@ -14,8 +14,14 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// The control plane reaches the orphan sweep by type assertion on the Runner it
+// holds, so a signature drift here would make the docker sweep a silent no-op
+// rather than a build failure. This line makes it a build failure.
+var _ api.SandboxOrphanSweeper = (*Driver)(nil)
 
 // seedSandbox registers an agent container (plus its sibling proxy and per-run
 // network) in the fake, so a teardown this sweep drives removes the real three

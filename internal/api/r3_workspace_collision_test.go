@@ -143,7 +143,7 @@ func TestWorkspaceCollisionNamesOnlyRunsTheCallerMaySee(t *testing.T) {
 		}
 	})
 
-	// THE SAME GAP EXISTED ON BOTH BRANCHES, so the pin covers both: a store
+	// The same gap existed on both branches, so the pin covers both: a store
 	// without ActiveRunsAtWorkspacePath falls back to ListRuns + an in-Go
 	// filter, which appended ids just as unfiltered.
 	t.Run("the in-Go fallback branch filters too", func(t *testing.T) {

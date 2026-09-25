@@ -12,8 +12,9 @@ code it will change and carries the threat argument for why it exists.
 **0.7.3 citation note:** every `http.go:<line>` citation below had already rotted by
 the 0.7.2 base — `internal/api/http.go` grows a middleware roughly every release, and
 `docs/design/` carries **no citation guard at all** (`scripts/test-claims-match-code.sh`
-covers `ENV.md`/`VERIFY.md`/`OPERATIONS.md`/`RELEASING.md`/`README.md`/`SSH.md`/
-`POLICIES.md`/`DESKTOP.md`; `cmd/wardynd/audit_actions_doc_guard_test.go` covers only
+covers `ENV.md`/`VERIFY.md`/`OPERATIONS.md`/`RELEASING.md`/`README.md`/the two
+`docs/ci/*.yml` examples; `scripts/test-up-probes.sh` covers `scripts/up.sh` itself;
+`cmd/wardynd/audit_actions_doc_guard_test.go` covers only
 `docs/AUDIT-ACTIONS.md`), which is why the drift went unnoticed. Fixed here by
 re-pointing to the SYMBOL (`isOperator`, `requireOperator`, `resolveLocalMode`) rather
 than a line number — a symbol survives the next added middleware; a line number does

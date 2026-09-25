@@ -55,5 +55,13 @@ export const SITE = {
   // F22: the Network step's trusted-CA count, from /setup/status
   // (trusted_ca_certs) — the inline ternary (§5 #9), never a second helper.
   TRUSTED_CA_COUNT: (n: number) => `${n} trusted CA certificate${n === 1 ? "" : "s"}`,
+  // #492 — the same If-Match discipline sign-in-help-card.tsx's own
+  // SIGNIN_HELP.SAVED_ELSEWHERE names for its card, worded for a step rather
+  // than a card: setup-screen.tsx's saveSiteConfig throws this in place of
+  // the server's raw "If-Match does not match…" refusal on a 412, so the
+  // toast every corp-network save already shows (useSiteConfigStep's mutate)
+  // reads as a sentence an admin acts on, not an HTTP precondition.
+  SAVED_ELSEWHERE:
+    "Someone else saved this deployment's site config since this step last loaded it. Reloaded the latest — your change here wasn't saved; make it again if it still applies.",
 } as const;
 

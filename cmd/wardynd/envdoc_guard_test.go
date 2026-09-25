@@ -28,8 +28,14 @@ var envDocRoots = []string{"cmd", "internal"}
 var envDocAllow = map[string]bool{
 	"WARDYN_TEST_BOOL": true, "WARDYN_TEST_DUR": true, "WARDYN_TEST_STR": true,
 	"WARDYN_TEST_PG": true, "WARDYN_TEST_DOCKER": true, "WARDYN_TEST_CACHE_REPO": true,
+	"WARDYN_TEST_VAULT": true, "WARDYN_TEST_VAULT_TOKEN_FILE": true, "WARDYN_TEST_VAULT_K8S_JWT_FILE": true,
+	"WARDYN_TEST_AZURE_KV":  true,
 	"WARDYN_TEST_TOOLS_DIR": true, "WARDYN_ENVBUILD_TEST_FLOAT": true,
 	"WARDYN_ENVBUILD_TEST_INT": true, "WARDYN_FAKE_MARKER": true, "WARDYN_NEGCTL": true,
+	// internal/testfloor.Marker: the skip-floor probe sentinel scripts/test-report.sh
+	// greps from `go test -json` log output — never read via os.Getenv, so it is
+	// scaffolding, not operator configuration.
+	"WARDYN_FLOOR_PROBE": true,
 	"WARDYN_E2E_BASE_URL": true, "WARDYN_E2E_CLAUDE_CREDS": true,
 	"WARDYN_E2E_REAL_MODEL": true, "WARDYN_E2E_TASKS_DIR": true,
 	"WARDYN_E2E_WORK_ROOT": true, "WARDYN_E2E_EXPECT_INJECT": true,
@@ -66,6 +72,8 @@ var envDocAllow = map[string]bool{
 	// F061: run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
 	// file, and screenshots.sh's own self-set gate for docs.spec.ts.
 	"WARDYN_E2E_ALLOW_ALL_SKIPPED": true, "WARDYN_SCREENSHOTS": true,
+	// scripts/lib/common.sh's log() prefix, set by each e2e script that sources it.
+	"WARDYN_LOG_TAG": true,
 	// 0.7.4: run-ui-e2e.sh's LIVE mode — the external base URL that points the
 	// `live` Playwright project (ui/e2e/live/) at a real cluster instead of the
 	// hermetic backend. Shell-only, so the E2E-shell ratchet below is what keeps
@@ -78,6 +86,8 @@ var envDocAllow = map[string]bool{
 	"WARDYN_LIVE_AWS_SSO": true, "WARDYN_LIVE_BASE_URL": true, "WARDYN_LIVE_IDENTITIES_FILE": true,
 	"WARDYN_LIVE_ADO_ORG": true, "WARDYN_LIVE_ADO_PROJECT": true, "WARDYN_LIVE_ADO_REPO": true,
 	"WARDYN_LIVE_ADO_SPACED_PROJECT": true, "WARDYN_LIVE_ADO_SPACED_REPO": true,
+	"WARDYN_LIVE_ADO_WRITE": true, "WARDYN_LIVE_ADO_PAT_PROBE": true, "WARDYN_LIVE_ADO_PAT_PROBE_SCOPE": true,
+	"WARDYN_LIVE_ADO_PAT_PROBE_TENANT_ID": true, "WARDYN_LIVE_ADO_PAT_PROBE_CLIENT_ID": true,
 	"WARDYN_LIVE_AWS_SSO_START_URL": true, "WARDYN_LIVE_AWS_SSO_REGION": true,
 	"WARDYN_LIVE_AWS_SSO_TOKEN_FILE": true, "WARDYN_LIVE_BEDROCK_ACCOUNT_ID": true,
 	"WARDYN_LIVE_BEDROCK_ROLE_NAME": true, "WARDYN_LIVE_BEDROCK_REGION": true,
@@ -96,6 +106,9 @@ var envDocShellOnly = map[string]bool{
 	// sibling, and a mapping only: what enables the gateway is
 	// WARDYN_UI_SANDBOX_LISTEN, which Go does read.
 	"WARDYN_UI_SANDBOX_PORT": true,
+	// The store-mode compose overlay's host directory holding the Vault token
+	// (deploy/compose/docker-compose.vault.yaml); Go reads the mounted file.
+	"WARDYN_VAULT_TOKEN_DIR": true,
 	// UI build stage + its cross-compile targets: read by scripts/up.sh and
 	// interpolated by docker-compose.yaml into build args, never by Go.
 	"WARDYN_UI_STAGE": true, "WARDYN_HOST_GOOS": true, "WARDYN_HOST_GOARCH": true,
@@ -244,11 +257,11 @@ func documentedVars(docText string) map[string]bool {
 // test so a fixture doc can exercise it. Returns the Go-read vars docs/ENV.md
 // does not name, sorted.
 //
-// R5 F211: this used to be strings.Contains over the whole document, which any
-// var that is a strict PREFIX of another documented var passed with its own row
-// deleted — ten of them, including the secret WARDYN_GROUNDTRUTH_TOKEN
-// (absorbed by WARDYN_GROUNDTRUTH_TOKEN_FILE). Compare against the same
-// tokenized name set the reverse ratchet already builds.
+// Compare against the tokenized name set the reverse ratchet builds, not
+// strings.Contains over the whole document: under a substring match any var
+// that is a strict prefix of another documented var passes with its own row
+// deleted — the secret WARDYN_GROUNDTRUTH_TOKEN, for one, is absorbed by
+// WARDYN_GROUNDTRUTH_TOKEN_FILE.
 func envDocForwardMissing(read map[string]bool, docText string) []string {
 	documented := documentedVars(docText)
 	var missing []string
@@ -289,7 +302,8 @@ func TestEnvDoc_ForwardRejectsPrefixAbsorbedRow(t *testing.T) {
 	}
 
 	// Drop only that var's own row(s); the WARDYN_GROUNDTRUTH_TOKEN_FILE row
-	// that used to absorb it stays, which is what makes this a counterfactual.
+	// that would absorb it under a substring match stays, which is what makes
+	// this a counterfactual.
 	var kept []string
 	dropped := 0
 	for _, line := range strings.Split(readEnvDoc(t, root), "\n") {
@@ -340,16 +354,13 @@ func envDocRowFor(v string, docLines []string) string {
 	return ""
 }
 
-// TestEnvDoc_RowsNameTheirFlag is D-5 (v0.7.4 review): half of V13's guard
-// ask — "envdoc_guard_test.go uses wardynVarLit and asserts rows name their
-// flag" — was never implemented; the lane hand-fixed the two rows X1a found
-// missing their flag name (WARDYN_REQUIRE_OPERATOR_SET_EGRESS,
-// WARDYN_GIT_PAT_BROKER) with nothing to stop a third. Derives every (flag,
-// WARDYN_X) pair boot_flags.go actually registers and requires that var's
-// docs/ENV.md row to contain the flag literal — skipping a row that says
-// "No flag" (a var read once at boot with no CLI surface is a real shape,
-// not an omission) and a var with no row at all (TestEnvDoc_ForwardEveryReadIsDocumented's
-// job, not this test's).
+// TestEnvDoc_RowsNameTheirFlag pins that every docs/ENV.md row for a
+// flag-backed var names its flag, so no row can drop it silently. Derives
+// every (flag, WARDYN_X) pair boot_flags.go actually registers and requires
+// that var's docs/ENV.md row to contain the flag literal — skipping a row that
+// says "No flag" (a var read once at boot with no CLI surface is a real shape,
+// not an omission) and a var with no row at all
+// (TestEnvDoc_ForwardEveryReadIsDocumented's job, not this test's).
 func TestEnvDoc_RowsNameTheirFlag(t *testing.T) {
 	root := repoRoot(t)
 	src, err := os.ReadFile(filepath.Join(root, "cmd", "wardynd", "boot_flags.go"))
@@ -444,17 +455,15 @@ func readE2EShellVars(t *testing.T, root string) map[string]bool {
 // half for the Playwright e2e backend specifically: every WARDYN_* token read
 // by envDocE2EShellFiles must appear as a literal token somewhere in
 // docs/ENV.md. A new WARDYN_E2E_* var with no doc row fails here instead of
-// drifting silently forever, the way ten of the eleven it caught on
-// introduction had.
+// drifting silently.
 //
-// R4 F063-B1: this used to also pass on `envDocAllow[v] || envDocShellOnly[v]`
-// — and the same diff that added this test also added all 13 WARDYN_E2E_*
-// vars to envDocAllow, so the ENV.md rows were never what made it pass; a
-// deleted row could not turn it red. envDocAllow/envDocShellOnly stay the
-// gate for the OTHER two ratchets above (which reason about Go readers, a
-// question those maps genuinely answer); this one reasons about shell
-// scripts, where the only question is "does docs/ENV.md say this name
-// anywhere", so the check is that condition alone.
+// This passes on the doc row alone, never on `envDocAllow[v] ||
+// envDocShellOnly[v]`: the WARDYN_E2E_* vars are in envDocAllow, so an
+// allowlist pass would mean a deleted row could never turn it red.
+// envDocAllow/envDocShellOnly stay the gate for the other two ratchets above
+// (which reason about Go readers, a question those maps genuinely answer);
+// this one reasons about shell scripts, where the only question is "does
+// docs/ENV.md say this name anywhere", so the check is that condition alone.
 func TestEnvDoc_E2EShellVarsAreDocumented(t *testing.T) {
 	root := repoRoot(t)
 	documented := documentedVars(readEnvDoc(t, root))

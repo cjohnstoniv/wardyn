@@ -257,7 +257,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 			"an API token cannot create another API token — sign in to the console to mint one")
 		return
 	}
-	// Member mode refuses, it does not clamp. store.RefreshAPITokenRoles
+	// Member mode refuses, it does not clamp. store.RefreshAPITokenIdentity
 	// (fired by OnLogin) re-stamps EVERY token of a principal with their freshly
 	// derived role at the next sign-in, so a wdn_ token minted "as a member"
 	// would silently become an admin one — a credential outliving the mode that
@@ -433,7 +433,7 @@ func (s *Server) handleRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 // path for the stamp
 // ceiling migration 0045 documents — a demoted admin's outstanding tokens keep
 // the role they were minted under until their owner's next login re-stamps it
-// (store.RefreshAPITokenRoles, fired from the same OnLogin hook that has
+// (store.RefreshAPITokenIdentity, fired from the same OnLogin hook that has
 // refreshed SSH keys) or until they are revoked here. This route is
 // the path that takes effect IMMEDIATELY, and the only one that helps for an
 // owner who never signs in again — and for a token
@@ -569,7 +569,7 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // Why it revokes at all (owner adjudication). An api_token's role is
 // stamped at mint and read verbatim on every request until something re-stamps
 // it, and the only thing that does is the owner's own next login
-// (store.RefreshAPITokenRoles). So removing someone's admin through the People
+// (store.RefreshAPITokenIdentity). So removing someone's admin through the People
 // screen took effect on THEIR schedule — and never at all for someone who has
 // left, which is the case a demotion is most often about. "Removing admin
 // removes admin" is the contract; a bound that waits for the demoted human to
