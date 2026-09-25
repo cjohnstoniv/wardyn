@@ -49,13 +49,14 @@ import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { cn } from "../../ui/utils";
 import { HarnessLoginPane } from "./harness-login-pane";
 import { MODEL_ACCESS_BANNER } from "../../wardyn/model-access-copy";
+import { MODEL_LEDE } from "../../../lib/model-providers-copy";
 
 // Canon strings (local/ux-0.5-mock/CANON-STRINGS.md § Settings). Kept here
 // rather than in lib/integrations.ts's T, which belongs to the page being
 // deleted and shrinks with it.
 export const S = {
   MODEL_TITLE: "Model provider",
-  MODEL_LEDE: "Agent runs need one. Governed commands don't.",
+  MODEL_LEDE,
   // The old footer said "Keys never enter the sandbox" full stop, which is true
   // of the subscription lane, both api-key lanes, and Bedrock's BEARER key — the
   // proxy injects a static header on the wire for all four. It is NOT true of

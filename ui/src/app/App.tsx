@@ -120,6 +120,11 @@ const SettingsScreen = React.lazy(() =>
     default: m.SettingsScreen,
   })),
 );
+const AddModelProviderStub = React.lazy(() =>
+  import("./components/screens/settings/model-providers-list").then((m) => ({
+    default: m.AddModelProviderStub,
+  })),
+);
 const WorkspacesScreen = React.lazy(() =>
   import("./components/screens/workspaces").then((m) => ({
     default: m.WorkspacesScreen,
@@ -725,6 +730,7 @@ export default function App() {
             <Route path="/admin/audit" element={suspend(<AuditScreen />)} />
             <Route path="/admin/recordings" element={suspend(<RecordingScreen />)} />
             <Route path="/admin/settings" element={suspend(<SettingsScreen />)} />
+            <Route path="/admin/settings/model-providers/new" element={suspend(<AddModelProviderStub />)} />
             <Route path="/admin/providers" element={suspend(<ProvidersScreen />)} />
             <Route path="/admin/drives" element={suspend(<DrivesScreen />)} />
             <Route path="/admin/*" element={<Navigate to="/admin/runs" replace />} />
