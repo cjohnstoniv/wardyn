@@ -182,7 +182,7 @@ func (c resolverCase) want(door resolverDoor, kind string) (allowed, wantErr boo
 
 func resolverCases() []resolverCase {
 	var out []resolverCase
-	for _, tier := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleMember} {
+	for _, tier := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser} {
 		for _, stale := range []bool{false, true} {
 			for _, allow := range []string{"", "user", "all*", "other"} {
 				for _, deny := range []string{"", "user", "group"} {
@@ -235,7 +235,7 @@ func TestCapResolverNonescapeTable(t *testing.T) {
 // per-value wrappers always made them, so no store failure can turn a refusal
 // the rule order already decided into a 500.
 func TestCapResolverReadsStayLazy(t *testing.T) {
-	member := resolverCtx(oidc.RoleMember, false)
+	member := resolverCtx(oidc.RoleUser, false)
 	boom := errors.New("connection refused")
 
 	t.Run("an unenforced widening kind never reads grants", func(t *testing.T) {
@@ -289,7 +289,7 @@ func TestCapResolverReadsStayLazy(t *testing.T) {
 	t.Run("one memo, one snapshot across doors", func(t *testing.T) {
 		st := &resolverTableStore{enf: map[string]bool{capImage: true}}
 		srv := capServer(st)
-		ctx := withCapBatch(resolverCtx(oidc.RoleMember, true))
+		ctx := withCapBatch(resolverCtx(oidc.RoleUser, true))
 		if withCapBatch(ctx).Value(capBatchKey{}) != ctx.Value(capBatchKey{}) {
 			t.Fatal("withCapBatch(withCapBatch(ctx)) installed a second memo; a nested resolution must share the outer one")
 		}

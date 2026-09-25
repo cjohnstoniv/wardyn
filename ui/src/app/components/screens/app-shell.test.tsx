@@ -14,44 +14,50 @@ import { TopBar } from "./top-bar";
 import { useUserDrive, type Role } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { baseMeDrive } from "../../lib/test-fixtures";
+import { registerUnsaved } from "../../lib/unsaved-registry";
+import { UnsavedGuardProvider } from "../../lib/use-unsaved-guard";
+import { UNSAVED } from "../../lib/unsaved-copy";
+import { aheadByHours } from "../../lib/test-clock";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
 // items, or loses its aria-expanded/Escape wiring.
 // role is the full three-valued union since 0.7. operator/securityOperator
 // mirror the server's two predicates exactly: "admin" is both, "security_admin"
-// is only the second, "member" is neither.
-function renderMobileNav(role: Role = "admin") {
+// is only the second, "user" is neither.
+function renderMobileNav(role: Role = "admin", memberMode = false) {
   return render(
     <MemoryRouter>
-      <MobileNav
-        pendingApprovals={2}
-        attentionCount={0}
-        meta={{
-          trustDomain: "example.test",
-          identityProvider: "spiffe",
-          principal: "u@example.test",
-          email: "",
-          name: "",
-          method: "sso",
-          resolved: true,
-          identityResolved: true,
-          operator: role === "admin",
-          securityOperator: role !== "member",
-          role,
-          sessionExpiresAt: null,
-          memberLocalDirRoot: null,
-          userDrive: null,
-          userDriveDeniedByProfile: "",
-          userDriveUnavailable: "",
-          memberMode: false,
-          memberModeNoCredential: false,
-          memberPreviewAvailable: false,
-          runner: "",
-          networkPolicy: "",
-          sso: false,
-        }}
-      />
+      <UnsavedGuardProvider>
+        <MobileNav
+          pendingApprovals={2}
+          attentionCount={0}
+          meta={{
+            trustDomain: "example.test",
+            identityProvider: "spiffe",
+            principal: "u@example.test",
+            email: "",
+            name: "",
+            method: "sso",
+            resolved: true,
+            identityResolved: true,
+            operator: role === "admin",
+            securityOperator: role !== "user",
+            role,
+            sessionExpiresAt: null,
+            memberLocalDirRoot: null,
+            userDrive: null,
+            userDriveDeniedByProfile: "",
+            userDriveUnavailable: "",
+            memberMode,
+            memberModeNoCredential: false,
+            memberPreviewAvailable: false,
+            runner: "",
+            networkPolicy: "",
+            sso: false,
+          }}
+        />
+      </UnsavedGuardProvider>
     </MemoryRouter>,
   );
 }
@@ -97,7 +103,8 @@ describe("AppShell (control plane unreachable)", () => {
 // this is the warning that never existed, pinned against /me's
 // session_expires_at (an admin-token/local session, absent here, must never
 // warn: it has nothing to expire).
-describe("AppShell — session-expiry warning (W31-S1-7)", () => {
+describe("AppShell — session-expiry warning", () => {
+  // ticket: W31-S1-7
   afterEach(() => vi.unstubAllGlobals());
 
   function renderWithMe(sessionExpiresAt: string | undefined) {
@@ -142,7 +149,7 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   }
 
   it("warns and offers a re-auth link when the session is about to die", async () => {
-    renderWithMe(new Date(Date.now() + 2 * 60 * 1000).toISOString());
+    renderWithMe(aheadByHours(2 / 60)); // 2 minutes
     expect(
       await screen.findByText(/session is expiring soon/i),
     ).toBeInTheDocument();
@@ -152,7 +159,7 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   });
 
   it("stays silent while the session has plenty of time left", async () => {
-    renderWithMe(new Date(Date.now() + 60 * 60 * 1000).toISOString());
+    renderWithMe(aheadByHours(1));
     await screen.findByText("cj"); // let /me resolve
     expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
   });
@@ -166,7 +173,8 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   // A session already past its expiry must read "has expired", not
   // "expiring soon" forever — a one-sided predicate would never resolve to
   // the third state.
-  it("F3-F11: a session already past its expiry reads 'has expired', not 'expiring soon'", async () => {
+  it("a session already past its expiry reads 'has expired', not 'expiring soon'", async () => {
+    // ticket: F3-F11
     renderWithMe(new Date(Date.now() - 60 * 1000).toISOString());
     expect(await screen.findByText(/session has expired/i)).toBeInTheDocument();
     expect(screen.queryByText(/expiring soon/i)).toBeNull();
@@ -175,7 +183,8 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   // `new Date("not-a-date")` parses to an Invalid Date, not null — any
   // arithmetic read off it is NaN, so the banner must guard against that
   // rather than disabling itself silently.
-  it("F3-F11: an unparseable session_expires_at never warns (guarded, not NaN'd into silence)", async () => {
+  it("an unparseable session_expires_at never warns (guarded, not NaN'd into silence)", async () => {
+    // ticket: F3-F11
     renderWithMe("not-a-real-date");
     await screen.findByText("cj");
     expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
@@ -187,7 +196,8 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
 // would flash ADMIN in the account menu next to a still-"unknown" principal
 // before /me resolves, or forever if /me never resolves at all. Gated on
 // meta.method, same as its sibling line just below it.
-describe("AppShell — account-menu role chip gating (L1)", () => {
+describe("AppShell — account-menu role chip gating", () => {
+  // ticket: L1
   afterEach(() => vi.unstubAllGlobals());
 
   it("never shows the role chip while /me hasn't resolved (a permanently failing fetch)", async () => {
@@ -215,7 +225,7 @@ describe("AppShell — account-menu role chip gating (L1)", () => {
 
     const menu = screen.getByRole("menu");
     expect(within(menu).queryByText("admin", { exact: true })).toBeNull();
-    expect(within(menu).queryByText("member", { exact: true })).toBeNull();
+    expect(within(menu).queryByText("user", { exact: true })).toBeNull();
   });
 });
 
@@ -225,7 +235,8 @@ describe("AppShell — account-menu role chip gating (L1)", () => {
 // (probeAuth trivially re-succeeds against the auth-bypassed API on whatever's
 // typed). The account menu must hide Sign out — and say why — whenever /me
 // reports method:"local", while a real session (sso/token) keeps it.
-describe("AppShell — Sign out hidden in local mode (W31-S1-1)", () => {
+describe("AppShell — Sign out hidden in local mode", () => {
+  // ticket: W31-S1-1
   afterEach(() => vi.unstubAllGlobals());
 
   function renderShellAs(method: "local" | "sso" | "token") {
@@ -453,13 +464,14 @@ describe("MobileNav (below-md nav fallback)", () => {
 // left the sidebar entirely — Demos moved to the account
 // menu (TopBar), which since Phase 5 hides it for members (its own describe
 // block below) — routes.go still has no server-side gate on it at all.
-describe("SidebarNav (member role — B3)", () => {
+describe("SidebarNav (member role)", () => {
+  // ticket: B3
   // Workspaces joined the member set (mock M6): a member launches runs AGAINST
   // workspaces and could previously only glimpse them inside the New run
   // picker.
   it("shows Runs, Approvals and Workspaces — admin-only items are absent", async () => {
     const user = userEvent.setup();
-    renderMobileNav("member");
+    renderMobileNav("user");
     await user.click(
       screen.getByRole("button", { name: /open navigation menu/i }),
     );
@@ -522,29 +534,53 @@ describe("SidebarNav (member role — B3)", () => {
       labels,
     );
   });
-});
 
-// Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the
-// describe block above only drives the sidebar) is meaningless on a member's
-// own Getting Started, which has no /setup?step= deep link at all.
-function renderTopBar(role: Role) {
-  return render(
-    <MemoryRouter>
-      <ThemeProvider>
-        <TopBar
-          onSignOut={() => {}}
+  // #460 (Q460-1): Settings joined the sidebar (#217) as an admin-only entry
+  // — a member's own three-item nav stays exactly as small as B3 pins above.
+  // The account menu keeps its own entry for BOTH roles (Q460-2, TopBar's own
+  // describe block below has the general Demos-gating precedent for that
+  // menu) — this is Settings's own pin that it didn't move.
+  it("Settings sits last in the admin sidebar", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    const links = screen.getAllByRole("link");
+    expect(links.at(-1)!.textContent).toMatch(/^Settings/);
+  });
+
+  it("Settings is absent from a member's sidebar", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("user");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.queryByRole("link", { name: /^Settings/ })).toBeNull();
+  });
+
+  // #460 review (M13) — `role`'s own fail-open default is "admin"
+  // (operator-context.tsx) while identity is still unresolved. Gating only
+  // on `role !== "user"` (as an earlier draft did) would show Settings
+  // during that window for EVERY role — including a member, who then sees
+  // it vanish the instant their real "user" role lands. Pinning
+  // identityResolved directly, independent of role, is what a mutation
+  // dropping that clause back to the old shape would fail here.
+  it("Settings is absent while identity is unresolved, even though role fails open to admin", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <MobileNav
+          pendingApprovals={0}
+          attentionCount={0}
           meta={{
             trustDomain: "example.test",
             identityProvider: "spiffe",
-            principal: "u@example.test",
+            principal: "",
             email: "",
             name: "",
-            method: "sso",
-            resolved: true,
-            identityResolved: true,
-            operator: role === "admin",
-            securityOperator: role !== "member",
-            role,
+            method: "",
+            resolved: false,
+            identityResolved: false,
+            operator: true,
+            securityOperator: true,
+            role: "admin",
             sessionExpiresAt: null,
             memberLocalDirRoot: null,
             userDrive: null,
@@ -557,20 +593,170 @@ function renderTopBar(role: Role) {
             networkPolicy: "",
             sso: false,
           }}
-          pendingApprovals={0}
-          attentionCount={0}
-          onNewRun={() => {}}
         />
-      </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    expect(screen.queryByRole("link", { name: /^Settings/ })).toBeNull();
+  });
+});
+
+// M-2 (packet M-A): two nav sets, the security-admin filter, the eyebrow and
+// the lower slot, and the switch at the top of the sheet.
+describe("SidebarNav — per view (M-2)", () => {
+  async function open(role: Role, memberMode = false) {
+    renderMobileNav(role, memberMode);
+    await userEvent.setup().click(screen.getByRole("button", { name: /open navigation menu/i }));
+    const sheet = screen.getByRole("dialog");
+    const labels = within(sheet)
+      .getAllByRole("link")
+      .map((el) => el.textContent?.replace(/\d+$/, "") ?? "");
+    return { sheet, labels };
+  }
+
+  it("an admin's Admin view: the eyebrow, the nine items, then Setup and Settings", async () => {
+    const { sheet, labels } = await open("admin");
+    expect(within(sheet).getByText("Admin view", { selector: ".label-eyebrow" })).toBeInTheDocument();
+    expect(labels).toEqual([
+      "Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions",
+      "Secrets", "Audit", "Recordings", "Setup", "Settings",
+    ]);
+    expect(within(sheet).getByRole("link", { name: /^Runs/ })).toHaveAttribute("href", "/admin/runs");
+  });
+
+  it("a security admin's Admin view: Drives joins; Secrets, Recordings, Setup and Settings do not", async () => {
+    const { labels } = await open("security_admin");
+    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Policies", "Governance", "Permissions", "Drives", "Audit"]);
+  });
+
+  it("a user: no eyebrow, three items, then Getting started and Your account", async () => {
+    const { sheet, labels } = await open("user");
+    expect(within(sheet).queryByText("Admin view", { selector: ".label-eyebrow" })).toBeNull();
+    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Getting started", "Your account"]);
+    expect(within(sheet).queryByRole("group", { name: "Console view" })).toBeNull();
+  });
+
+  it("an admin in the User view gets the user's nav, and the switch tops the sheet", async () => {
+    const { sheet, labels } = await open("user", true);
+    expect(labels).toEqual(["Runs", "Approvals", "Workspaces", "Getting started", "Your account"]);
+    const group = within(sheet).getByRole("group", { name: "Console view" });
+    expect(within(group).getByRole("button", { name: "User view" })).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+// TopBar, driven directly (the describe blocks above only drive the sidebar).
+// #460 review — wrapped in UnsavedGuardProvider: a no-op while nothing's
+// dirty (every existing assertion below is unaffected), and what the
+// account-menu guard test just past this function needs to see the real
+// confirm dialog instead of the context's no-provider fallback.
+function renderTopBar(role: Role) {
+  return render(
+    <MemoryRouter>
+      <UnsavedGuardProvider>
+        <ThemeProvider>
+          <TopBar
+            onSignOut={() => {}}
+            meta={{
+              trustDomain: "example.test",
+              identityProvider: "spiffe",
+              principal: "u@example.test",
+              email: "",
+              name: "",
+              method: "sso",
+              resolved: true,
+              identityResolved: true,
+              operator: role === "admin",
+              securityOperator: role !== "user",
+              role,
+              sessionExpiresAt: null,
+              memberLocalDirRoot: null,
+              userDrive: null,
+              userDriveDeniedByProfile: "",
+              userDriveUnavailable: "",
+              memberMode: false,
+              memberModeNoCredential: false,
+              memberPreviewAvailable: false,
+              runner: "",
+              networkPolicy: "",
+              sso: false,
+            }}
+            pendingApprovals={0}
+            attentionCount={0}
+            onNewRun={() => {}}
+          />
+        </ThemeProvider>
+      </UnsavedGuardProvider>
     </MemoryRouter>,
   );
 }
+
+// #460 review — every plain <Link> in the header (top-bar.tsx) and the rail
+// goes through the one guardedClick; Settings is the entry the review named
+// explicitly, and since M-2 it lives in the rail's lower slot, not the menu.
+describe("Header and rail links are guarded (#460 review)", () => {
+  it("Settings, dirty: opens the confirm, and Keep editing stays", async () => {
+    const user = userEvent.setup();
+    const unregister = registerUnsaved("dirty-test-editor-stay", () => "unsaved text");
+    try {
+      renderMobileNav("admin");
+      await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+      await user.click(screen.getByRole("link", { name: /^Settings/ }));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(UNSAVED.TITLE)).toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole("button", { name: UNSAVED.STAY }));
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("Settings, dirty: Discard proceeds", async () => {
+    const user = userEvent.setup();
+    const unregister = registerUnsaved("dirty-test-editor-discard", () => "unsaved text");
+    try {
+      renderMobileNav("admin");
+      await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+      await user.click(screen.getByRole("link", { name: /^Settings/ }));
+      await user.click(await screen.findByRole("button", { name: UNSAVED.DISCARD }));
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("a clean session's Settings click opens no dialog", async () => {
+    const user = userEvent.setup();
+    renderMobileNav("admin");
+    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    await user.click(screen.getByRole("link", { name: /^Settings/ }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  // #460 review (M9b) — every plain <Link> here is guarded, not only
+  // Settings: the wordmark itself links to the view's home and is the FIRST
+  // control in the header, reached before the account menu on every screen.
+  it("the wordmark/logo link (-> the view's home) is guarded too", async () => {
+    const user = userEvent.setup();
+    const unregister = registerUnsaved("dirty-logo-test", () => "unsaved text");
+    try {
+      renderTopBar("admin");
+      await user.click(screen.getByRole("link", { name: /Wardyn/i }));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(UNSAVED.TITLE)).toBeInTheDocument();
+    } finally {
+      unregister();
+    }
+  });
+});
 
 // 0.7.3 F6: the Fence/NetworkPolicy chips are gone outright — no degraded
 // chip, no replacement. Both were deployment-wide facts fixed at boot that
 // never changed while the console was open; posture now lives on the setup
 // Environment step alone (environment-step.tsx's k8sEgressRow/k8sClassesRow).
-describe("TopBar — the header states no posture (0.7.3 F6)", () => {
+describe("TopBar — the header states no posture", () => {
+  // ticket: 0.7.3 F6
   it("carries no NetworkPolicy or barrier chip", () => {
     renderTopBar("admin");
     const header = screen.getByRole("banner");
@@ -581,45 +767,47 @@ describe("TopBar — the header states no posture (0.7.3 F6)", () => {
   });
 });
 
-describe("TopBar — account-menu Demos entry (Phase 5)", () => {
-  it("member: no Demos item", async () => {
+// M-2 (packet M-A): the avatar menu is identity and Sign out only; the view is
+// the switch beside the wordmark, and New run is the User view's alone.
+describe("TopBar — the switch, New run and the slimmed avatar menu (M-2)", () => {
+  it.each(["admin", "security_admin", "user"] as Role[])("%s: the menu holds Sign out and nothing else", async (role) => {
     const user = userEvent.setup();
-    renderTopBar("member");
+    renderTopBar(role);
     await user.click(screen.getAllByRole("button").at(-1)!);
-    const menu = screen.getByRole("menu");
-    expect(within(menu).queryByText("Demos")).toBeNull();
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    expect(items.map((i) => i.textContent?.trim())).toEqual(["Sign out"]);
   });
 
-  // The item deep-links to /setup?step=sealed-box, which only the SUPER
-  // admin's SetupScreen honours. A security admin's /setup/status is redacted
-  // on the same !isOperator predicate a member's is (internal/api/setup.go), so
-  // they land where a member lands — a Getting Started that ignores ?step — and
-  // the item is a dead invitation for them too. `role !== "admin"`, matching
-  // setupGateActive and GettingStarted.
-  it("security admin: no Demos item — the deep link is as dead for them as for a member", async () => {
-    const user = userEvent.setup();
-    renderTopBar("security_admin");
-    await user.click(screen.getAllByRole("button").at(-1)!);
-    const menu = screen.getByRole("menu");
-    expect(within(menu).queryByText("Demos")).toBeNull();
-  });
-
-  it("admin: Demos item present", async () => {
-    const user = userEvent.setup();
+  it("an SSO admin in the Admin view: the switch, Admin view pressed, no New run", () => {
     renderTopBar("admin");
+    const group = screen.getByRole("group", { name: "Console view" });
+    expect(within(group).getByRole("button", { name: "Admin view" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(group).getByRole("button", { name: "Admin view" })).toHaveAttribute("aria-disabled", "true");
+    expect(within(group).getByRole("button", { name: "User view" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: "New run" })).toBeNull();
+  });
+
+  it("a user: no switch, and New run", () => {
+    renderTopBar("user");
+    expect(screen.queryByRole("group", { name: "Console view" })).toBeNull();
+    expect(screen.getByRole("button", { name: "New run" })).toBeInTheDocument();
+  });
+
+  it("the role chip calls the non-admin side a user", async () => {
+    const user = userEvent.setup();
+    renderTopBar("user");
     await user.click(screen.getAllByRole("button").at(-1)!);
-    const menu = screen.getByRole("menu");
-    expect(within(menu).getByText("Demos")).toBeInTheDocument();
+    expect(within(screen.getByRole("menu")).getByText("user", { exact: true })).toBeInTheDocument();
   });
 });
 
-// 0.7 — the shell's ONE GET /me is what fills UserDriveContext: New Run and the
+// 0.7 — the shell's ONE GET /me is what fills MeIdentity.userDrive: New Run and the
 // member Getting Started page read the caller's drive off the context and issue
 // no fetch of their own. That seam had only e2e coverage, and a component test
 // cannot see it: workspace-card.test.tsx renders the block perfectly from props
 // the shell might never actually hand it. Pinned here, at the one place the
 // wire body becomes the context value.
-describe("AppShell — /me's drive bits reach UserDriveContext", () => {
+describe("AppShell — /me's drive bits reach useUserDrive()", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   function DriveProbe() {
@@ -683,7 +871,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
       principal: "alice@corp.example",
       method: "sso",
       operator: false,
-      role: "member",
+      role: "user",
       user_drive: drive,
       user_drive_denied_by_profile: "",
     });
@@ -705,7 +893,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
       principal: "alice@corp.example",
       method: "sso",
       operator: false,
-      role: "member",
+      role: "user",
       user_drive: null,
       user_drive_denied_by_profile: "Greenfield contractors",
     });
@@ -725,7 +913,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
       principal: "alice@corp.example",
       method: "sso",
       operator: false,
-      role: "member",
+      role: "user",
     });
 
     // Let /me land before reading the probe, so this is the RESOLVED value and
@@ -755,13 +943,13 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
     ["unavailable"],
     ["governance_unavailable"],
   ])(
-    "carries %s through to UserDriveContext beside the suppressed allocation",
+    "carries %s through to useUserDrive() beside the suppressed allocation",
     async (reason) => {
       renderShellWithMe({
         principal: "alice@corp.example",
         method: "sso",
         operator: false,
-        role: "member",
+        role: "user",
         user_drive: null,
         user_drive_denied_by_profile: "",
         user_drive_unavailable: reason,
@@ -790,7 +978,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
       principal: "alice@corp.example",
       method: "sso",
       operator: false,
-      role: "member",
+      role: "user",
       user_drive: null,
       user_drive_denied_by_profile: "Greenfield contractors",
       user_drive_unavailable: "",

@@ -185,7 +185,7 @@ func grantableCapabilities(i int, field string, caps []adoscope.Capability) erro
 	for j, c := range caps {
 		if !c.Grantable() {
 			return fmt.Errorf(providers400EntraCap, i, field, j, string(c),
-				strings.Join(adoscope.GrantableCapabilityList(), ", "))
+				adoscope.GrantableCapabilityList())
 		}
 	}
 	return nil

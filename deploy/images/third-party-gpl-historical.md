@@ -1,12 +1,4 @@
-## Previously conveyed, no longer published
-
-Offers in this section cover copies conveyed while the listed tags were
-pullable. Conveyance has ceased for all of them; each offer stands for three
-years after the last conveyance. This section is frozen text — the artifacts it
-covers no longer exist to re-scan — and must be retained until every window
-below has lapsed.
-
-### Intermediate tags 0.6.6 through 0.7.7, not individually re-scanned (added 2026-09-21)
+## Intermediate tags 0.6.6 through 0.7.7, not individually re-scanned (still pullable)
 
 `wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli` and `agent-aws-sso`
 were tagged and published at every one of 0.6.6 through 0.7.7 (all still
@@ -25,6 +17,21 @@ and `libutempter0`. The corresponding-source obligation for 0.6.6 through
 0.7.7 is discharged the same way as 0.7.8's: `https://snapshot.debian.org`
 pinned to each package's own version, which this note and the 0.6.6 commit
 above are enough to reconstruct even though no per-tag table was generated.
+
+Unlike the section below, these tags have not been withdrawn: per the header's
+own rule (this offer stands while an image remains pullable, and for three
+years after the last copy of it is conveyed), the offer for 0.6.6 through
+0.7.7 stands now because the tags are still pullable — not under the
+"conveyance has ceased" rule that governs the withdrawn and removed artifacts
+that follow. (added 2026-09-21)
+
+## Previously conveyed, no longer published
+
+Offers in this section cover copies conveyed while the listed tags were
+pullable. Conveyance has ceased for all of them; each offer stands for three
+years after the last conveyance. This section is frozen text — the artifacts it
+covers no longer exist to re-scan — and must be retained until every window
+below has lapsed.
 
 ### Withdrawn release tags of the current images (offer stands until at least 2029-08-30)
 

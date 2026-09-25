@@ -46,7 +46,7 @@ import { GOVERNANCE_NAV_TITLE } from "./nav-copy";
 //   PERM.COL_WHO / FIELD_WHO / COL_ADDED / SUBJECT_USER / SUBJECT_GROUP /
 //   SUBJECT_ALL / HINT_USER / HINT_GROUP / HINT_ALL / REMOVE — the assignments
 //     table's "Who" column, its three subject kinds, and their hints.
-//   PEOPLE.CANCEL / ROLE_ADMIN / ROLE_MEMBER / FIELD_VALUE / ADD_CTA /
+//   PEOPLE.CANCEL / ROLE_ADMIN / ROLE_USER / FIELD_VALUE / ADD_CTA /
 //     FIELD_ROLE.
 //   PREVIEW.FIELD_CLAIMS / FIELD_CLAIMS_HINT — the resolved preview takes the
 //     claims a token would carry, which is exactly what the People step's
@@ -351,7 +351,7 @@ export const POSITIONING = {
 export const DIRECTORY = {
   // RE-EXPORTED, never retyped: §7.9 freezes this as the picker option, the
   // table chip AND the mapped-role label — one string for all three — and puts
-  // its home next to PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_MEMBER, which is why it
+  // its home next to PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_USER, which is why it
   // is title case AS THE CHIP; a sentence takes its lowercase
   // (people-access-prompt.md §7.2, access-panel.tsx's roleLabelInSentence).
   // Two homes for one frozen label is how they drift

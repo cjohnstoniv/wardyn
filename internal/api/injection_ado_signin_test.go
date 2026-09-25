@@ -277,7 +277,7 @@ func TestADOSignIn_BootFailsWithAHintAndRecordsTheEnd(t *testing.T) {
 		t.Fatalf("stored sign-in = %+v, want its end recorded", blob)
 	}
 
-	access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject)
+	access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject)
 	if len(access) != 1 || access[0].State != modelAccessExpiredSignin || access[0].Cause != scmAccessCauseEnded {
 		t.Fatalf("scm-access = %+v, want expired_signin / ended", access)
 	}
@@ -295,7 +295,7 @@ func TestADOSignIn_BootFailsWithAHintAndRecordsTheEnd(t *testing.T) {
 	if w := f.capture(t, f.subject); w.Code != http.StatusFound {
 		t.Fatalf("re-sign-in: %d %s", w.Code, w.Body.String())
 	}
-	if access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject); access[0].State != modelAccessLive {
+	if access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject); access[0].State != modelAccessLive {
 		t.Fatalf("after a fresh sign-in scm-access = %+v, want live", access)
 	}
 }
@@ -328,7 +328,7 @@ func TestADOSignIn_WidenedCeiling(t *testing.T) {
 	if w := f.resolveQ(t, "?phase=boot"); w.Code != http.StatusOK {
 		t.Fatalf("a run on the old baseline no longer boots: %d %s", w.Code, w.Body.String())
 	}
-	if access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject); len(access) != 1 ||
+	if access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject); len(access) != 1 ||
 		access[0].State != modelAccessLive {
 		t.Fatalf("scm-access = %+v, want live while the baseline is covered", access)
 	}
@@ -345,7 +345,7 @@ func TestADOSignIn_WidenedCeiling(t *testing.T) {
 	// The baseline outgrows the sign-in: re-consent state, and the gate says so.
 	row.Entra.DefaultProfile = []adoscope.Capability{adoscope.CapRead, adoscope.CapBuildExecute}
 	f.st.site = adoSite(row)
-	access := f.srv.computeSCMAccessRowsFor(context.Background(), f.st.site, f.subject)
+	access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject)
 	if len(access) != 1 || access[0].State != modelAccessExpiredSignin || access[0].Cause != scmAccessCauseConsentNeeded {
 		t.Fatalf("scm-access = %+v, want expired_signin / consent_needed", access)
 	}

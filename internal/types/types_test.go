@@ -16,8 +16,8 @@ import (
 
 // These are PURE wire-contract tests for the core domain vocabulary. They lock
 // down (a) JSON round-trips of every exported wire struct, (b) the exact string
-// value of every enum constant (notably RunCompleted=="COMPLETED" — the
-// regression for the COMPLETED critical), (c) zero-value marshalling, (d)
+// value of every enum constant (notably RunCompleted=="COMPLETED", the
+// terminal success state), (c) zero-value marshalling, (d)
 // forward-compat tolerance of unknown JSON fields, and (e) the helper methods on
 // these types.
 
@@ -44,11 +44,10 @@ func roundTrip[T any](t *testing.T, v T) T {
 
 // ---- enum string-value stability ----------------------------------------
 
-// TestRunStateValues pins the exact wire string of every RunState. The
-// RunCompleted=="COMPLETED" row is the regression for the COMPLETED critical:
-// if anyone renames or drops the completed string, the completion watcher /
-// terminal-state logic in internal/api breaks silently. Each constant must keep
-// its documented value.
+// TestRunStateValues pins the exact wire string of every RunState. If anyone
+// renames or drops RunCompleted=="COMPLETED", the completion watcher /
+// terminal-state logic in internal/api breaks silently. Each constant must
+// keep its documented value.
 func TestRunStateValues(t *testing.T) {
 	tests := []struct {
 		name string
@@ -63,7 +62,7 @@ func TestRunStateValues(t *testing.T) {
 		{"archived", RunArchived, "ARCHIVED"},
 		{"failed", RunFailed, "FAILED"},
 		{"killed", RunKilled, "KILLED"},
-		// COMPLETED critical regression: the terminal success state.
+		// COMPLETED: the terminal success state.
 		{"completed", RunCompleted, "COMPLETED"},
 	}
 	for _, tc := range tests {

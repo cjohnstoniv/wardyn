@@ -81,6 +81,25 @@ beforeEach(() => {
   myCapabilitiesMock.mockReset().mockReturnValue(null);
 });
 
+// M-1b: Policies is Admin view only (/admin/policies), so the empty picker's
+// "New policy →" door renders only for the tier that authors policies — for a
+// user it would lead to a page that is guaranteed to refuse them.
+describe("NewRunScreen — the empty saved-policy picker's New policy door", () => {
+  it("an admin gets New policy → /admin/policies", async () => {
+    renderScreen();
+    await user.click(await screen.findByRole("button", { name: /Reuse a saved policy/ }));
+    expect(await screen.findByText(/No saved policies yet/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "New policy →" })).toHaveAttribute("href", "/admin/policies");
+  });
+
+  it("neg: a user sees the empty note with no door", async () => {
+    renderAsMember();
+    await user.click(await screen.findByRole("button", { name: /Reuse a saved policy/ }));
+    expect(await screen.findByText(/No saved policies yet/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "New policy →" })).not.toBeInTheDocument();
+  });
+});
+
 describe("NewRunScreen — the saved-policy lane", () => {
   // A member's list read redacts secret refs (redactPoliciesForRead) — this is
   // what that redacted body looks like on the wire.
@@ -126,7 +145,8 @@ describe("NewRunScreen — the saved-policy lane", () => {
   // fail-open (true) while /me is unresolved or the fetch failed
   // (operator-context.tsx), which is the wrong direction for a clear that must
   // still fire for a member in that state.
-  it("R1: a member whose /me hasn't resolved yet still gets a redacted body cleared", async () => {
+  it("a member whose /me hasn't resolved yet still gets a redacted body cleared", async () => {
+    // ticket: R1
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
     render(
       <MemoryRouter>
@@ -149,7 +169,8 @@ describe("NewRunScreen — the saved-policy lane", () => {
   // R1 neg — a security_admin's saved-policy body is the real one (the server
   // redacts on isSecurityOperator, which a security_admin passes); the clear
   // must not fire and throw it away.
-  it("R1 neg: a resolved security_admin keeps the real body — no clear", async () => {
+  it("negative control: a resolved security_admin keeps the real body — no clear", async () => {
+    // ticket: R1
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
     render(
       <MemoryRouter>

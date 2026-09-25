@@ -14,11 +14,11 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 )
 
-// TestCastKeyMirrorsRecording is D-6 (v0.7.4 review): inlining CastKey into
-// pkg/client (to keep sdk.md's "one non-stdlib dependency" claim true — see
-// GetRecording's own comment) created a by-hand-synced copy with nothing
-// proving the two stay in sync. A test-only import of internal/recording
-// costs pkg/client's real consumers nothing (test files never ship).
+// TestCastKeyMirrorsRecording: CastKey is inlined into pkg/client (to keep
+// sdk.md's "one non-stdlib dependency" claim true — see GetRecording's own
+// comment), which makes it a by-hand-synced copy; this proves the two stay in
+// sync. A test-only import of internal/recording costs pkg/client's real
+// consumers nothing (test files never ship).
 func TestCastKeyMirrorsRecording(t *testing.T) {
 	for _, tc := range []struct{ runID, suffix string }{
 		{"id", ""},
