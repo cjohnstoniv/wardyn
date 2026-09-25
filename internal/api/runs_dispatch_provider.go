@@ -361,16 +361,21 @@ func (s *Server) refuseProviderDispatch(ctx context.Context, run types.AgentRun,
 // auditing each, every injection that would credential this run's model other
 // than the ones its arm authors after it — a provider key or sign-in name
 // (only an arm names one), the subscription, managed and AWS SSO sentinels,
-// bedrock-api-key, and any grant on this agent's vendor host, on the boot
-// gateway that re-points it, or on a host the chosen provider's arm
-// credentials (laneHosts). Such a grant comes from a stored or default policy,
+// bedrock-api-key, and any grant on a model vendor's host (every harness's,
+// not only this run's: an OpenAI key on a claude-code run is still a model
+// credential), on the boot gateway that re-points one, or on a host the chosen
+// provider's arm credentials (laneHosts). Such a grant comes from a stored or default policy,
 // a recorded profile or a legacy fold, and it reads the operator's
 // credential — or, on the arm's own host, would be a second injection for one
 // host, which fails the sidecar at startup. It must run before every arm
 // authors: it deletes the very names the arms write.
 func (s *Server) dropLegacyModelInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant, laneHosts []string) []runner.InjectionGrant {
-	conv, _ := agentLLMProvider(run.Agent)
-	hosts := append([]string{conv.host, gatewayHost(s.cfg.LLMGateways[conv.host])}, laneHosts...)
+	hosts := slices.Clone(laneHosts)
+	for _, h := range harnessCatalog {
+		if h.Gateway != nil {
+			hosts = append(hosts, h.Gateway.host, gatewayHost(s.cfg.LLMGateways[h.Gateway.host]))
+		}
+	}
 	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
 		name := ig.Rule.SecretName
 		model := strings.HasPrefix(name, providerSecretPrefix) ||

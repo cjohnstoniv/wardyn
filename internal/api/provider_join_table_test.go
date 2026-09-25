@@ -171,8 +171,10 @@ func (k joinKind) joinLegacy(withLaneHost bool) (legacy []runner.InjectionGrant,
 	ig := func(host, secret string) runner.InjectionGrant {
 		return runner.InjectionGrant{GrantID: uuid.New(), Rule: egress.InjectionRule{Host: host, Header: "x-api-key", Format: "%s", SecretName: secret}}
 	}
+	otherVendor := map[string]string{"api.anthropic.com": "api.openai.com", "api.openai.com": "api.anthropic.com"}[conv.host]
 	legacy = []runner.InjectionGrant{
 		ig(conv.host, "operator-model-key"),
+		ig(otherVendor, "operator-other-vendor-key"), // still a model credential on the other harness's vendor host
 		ig("api.anthropic.com", types.SubscriptionOAuthSecret),
 		ig("api.anthropic.com", types.ManagedOAuthSecret),
 		ig("portal.sso.us-east-1.amazonaws.com", types.AWSSSOAccessTokenSecret),
