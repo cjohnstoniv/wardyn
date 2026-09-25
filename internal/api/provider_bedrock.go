@@ -23,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -152,6 +153,18 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 	return blob, "", nil
 }
 
+// modelCredential is the create door's model-credential fact for a run that
+// chose a provider, which skips enforceCreateLLMMechanism: a Bedrock provider's
+// run carries its owner's Bedrock credential, so the autonomy gate grades it
+// WITH that credential, as it does every legacy Bedrock lane (#504,
+// bedrockCredGradeHolds). Zero for every other choice.
+func (c runProviderChoice) modelCredential() modelCredentialFacts {
+	if !c.chosen || !c.provider.Kind.IsBedrock() {
+		return modelCredentialFacts{}
+	}
+	return modelCredentialFacts{bedrockHost: providerBedrockRuntimeHost(c.provider)}
+}
+
 // providerBedrockTransport is the Bedrock arm of resolveProviderTransport:
 // the owner's own credential, checked live, wired onto the sandbox through
 // the same applyBedrockTransport the legacy lanes use, with the region, model
@@ -160,7 +173,9 @@ func (s *Server) providerBedrockTransport(ctx context.Context, run types.AgentRu
 	sandboxEnv map[string]string, mp types.ModelProvider, fail func(types.ModelProviderKind, string) (llmTransport, bool),
 ) (llmTransport, bool) {
 	c := chosenProvider{provider: mp, owner: runIdentitySubject(ctx, run.CreatedBy)}
-	blob, refusal, err := s.providerBedrockRefusal(ctx, mp, run.Agent, c.owner, true)
+	// The same purpose the legacy lanes read and renew under at dispatch
+	// (resolveLLMTransport's resolveBedrockAuth).
+	blob, refusal, err := s.providerBedrockRefusal(secretstore.WithPurpose(ctx, secretstore.PurposeSSORefresh), mp, run.Agent, c.owner, true)
 	if err != nil {
 		return fail(mp.Kind, fmt.Sprintf(mpBRReadFailed, mp.ID))
 	}
@@ -258,10 +273,13 @@ func (s *Server) resolveProviderBedrockKeyInjection(w http.ResponseWriter, r *ht
 		return false
 	}
 	ctx := r.Context()
+	// This site records its own secret.read, so its one store read is marked
+	// SiteAudited and each record carries the row it read (withStoreRow).
+	rctx, row := secretstore.SiteAudited(ctx)
 	fail := func(status int, reason, body string) bool {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", name, "failure",
-			mustJSON(map[string]any{"reason": reason, "grant_id": grantID, "source": "provider"})))
+			mustJSON(withStoreRow(map[string]any{"reason": reason, "grant_id": grantID, "source": "provider"}, row))))
 		writeError(w, status, body)
 		return true
 	}
@@ -288,7 +306,7 @@ func (s *Server) resolveProviderBedrockKeyInjection(w http.ResponseWriter, r *ht
 	if !hostEqual(minted.Injection.Host, providerBedrockRuntimeHost(p)) {
 		return fail(http.StatusForbidden, "host-not-provider", mpBRSinkHost)
 	}
-	key, found, err := s.ownSecret(ctx, claims.Sub, name)
+	key, found, err := s.ownSecret(rctx, claims.Sub, name)
 	switch {
 	case err != nil:
 		return fail(http.StatusServiceUnavailable, "store_unreadable", mpBRSinkUnreadKey)
@@ -303,10 +321,10 @@ func (s *Server) resolveProviderBedrockKeyInjection(w http.ResponseWriter, r *ht
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", name, "success",
-		mustJSON(map[string]any{
+		mustJSON(withStoreRow(map[string]any{
 			"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI,
 			"source": "provider", "provider": p.ID, "owner": claims.Sub,
-		})))
+		}, row))))
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: "Authorization", Value: formatted, JTI: minted.JTI,
 	})

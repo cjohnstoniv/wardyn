@@ -17,8 +17,8 @@ import (
 // SourceDeterministic) — nothing ambiguous to resolve when the lone scanned
 // source is also primary. When the lone profile is NOT primary (Sources[0]
 // is a different, unscanned/ephemeral attachment), HasDevcontainer/
-// HasDockerfile must not ride along unchanged — the exact reconcile-wave1
-// regression, which lived in this len==1 shortcut.
+// HasDockerfile must not ride along unchanged, and the len==1 shortcut is
+// exactly where that can go wrong.
 func TestMergeProfiles_EmptyAndSingle(t *testing.T) {
 	if got := MergeProfiles(nil, nil, ""); !reflect.DeepEqual(got, WorkspaceProfile{}) {
 		t.Errorf("MergeProfiles(nil) = %+v, want the zero profile", got)

@@ -600,9 +600,12 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 
 	// The durable record is committed above (in-tx). Fan the SAME event out to the
 	// SIEM sinks — best-effort, primary store NOT re-written (see the siem field
-	// doc). The Fanout logs any per-child failure itself.
+	// doc). The Fanout logs any per-child failure itself. WithoutCancel: the
+	// credential is already the caller's, so a client hanging up now must not
+	// cost its SIEM record (SyslogSink.Emit skips on a done ctx). Every sink
+	// enqueues or writes locally, so detaching cannot pin the request.
 	if b.siem != nil {
-		_ = b.siem.Emit(ctx, mintEv)
+		_ = b.siem.Emit(context.WithoutCancel(ctx), mintEv)
 	}
 
 	// Register the minted token — and, for ssh_key, its known_hosts material —
@@ -857,6 +860,7 @@ var reservedBrokerSecretNames = map[string]bool{
 	"github-app-id":         true,
 	"github-app-key":        true,
 	"wardyn-ssh-host-key":   true,
+	"wardyn-internal-ca":    true,
 	"bedrock-api-key":       true,
 }
 

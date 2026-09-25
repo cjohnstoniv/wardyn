@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -55,7 +56,7 @@ type SetupProviderAccess struct {
 // the handler to one statement (its own funlen ratchet, setup.go's doc comment).
 func (s *Server) setupModelProviderState(ctx context.Context, sc types.SiteConfig, owner string) ([]SetupModelProvider, []SetupProviderAccess, []SetupCheck) {
 	mp := s.setupModelProviders(ctx, sc)
-	access := s.setupProviderAccess(ctx, sc, mp, owner)
+	access := s.setupProviderAccess(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sc, mp, owner)
 	defaultFor := map[string][]string{}
 	for _, sp := range mp {
 		defaultFor[sp.ID] = sp.DefaultFor

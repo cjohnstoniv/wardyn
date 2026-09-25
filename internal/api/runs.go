@@ -219,23 +219,6 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Posture-gated autonomy, resolved ONCE and enforced at both doors
-	// (handlePreflightRun calls the SAME gate). Sited immediately after the
-	// enforced class because that class is the posture's third axis — and
-	// before the mint, so a refusal leaves no run row, and before
-	// createRunAuditData and the dispatchParams literal below, which both read
-	// the req.ToolApprovals this gate may derive to `hold`. Writes its own 403
-	// and stops on false; its warnings join the 201 list further down.
-	// scmSite is the one site-config snapshot the gate graded the SCM-host lane
-	// from; unionRunEgress below dispatches from the same value.
-	// adoGrade is what the gate RESOLVED about the per-person Azure DevOps lane;
-	// it rides to dispatch on the ceiling so the credential dispatch authors can
-	// only be the one this level was graded against (adoEntraGrade).
-	autonomy, autonomyWarns, scmSite, adoGrade, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling)
-	if !ok {
-		return
-	}
-
 	// No cross-mechanism fallback, at the door: when the org declared how this
 	// agent reaches its model and the lane that would carry this run is not that
 	// one, refuse HERE — before a run row, an identity or a grant exists — rather
@@ -257,6 +240,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// model credential is the captured-AWS-SSO lane — resolving it a second
 	// way here would risk the two surfaces disagreeing about whether a run
 	// carries the advisory.
+	//
+	// Ahead of the autonomy gate because that gate grades THIS resolution: the
+	// Bedrock model credential is handed to the run at dispatch, and a secrets
+	// axis graded without it froze the level a rung too high (#504).
 	// The model-provider choice first: with a provider block, it is the run's
 	// provider that decides its lane, and one this build cannot dispatch yet is
 	// refused here rather than handed to the lane chain below. mpChoice is
@@ -271,8 +258,28 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// A chosen provider's arm alone credentials the run, so the roster's
 	// declared-mechanism gate, which grades the legacy lanes, does not apply.
-	var modelCred modelCredentialFacts
+	modelCred := mpChoice.modelCredential()
 	if !mpChoice.chosen && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
+		return
+	}
+
+	// Posture-gated autonomy, resolved ONCE and enforced at both doors
+	// (handlePreflightRun calls the SAME gate). Sited after the enforced class
+	// because that class is the posture's third axis, after the model-credential
+	// gate because its resolution is graded on the secrets axis — and before the
+	// mint, so a refusal leaves no run row, and before
+	// createRunAuditData and the dispatchParams literal below, which both read
+	// the req.ToolApprovals this gate may derive to `hold`. Writes its own 403
+	// and stops on false; its warnings join the 201 list further down.
+	// scmSite is the one site-config snapshot the gate graded the SCM-host lane
+	// from; unionRunEgress below dispatches from the same value.
+	// adoGrade is what the gate RESOLVED about the per-person Azure DevOps lane;
+	// it rides to dispatch on the ceiling so the credential dispatch authors can
+	// only be the one this level was graded against (adoEntraGrade).
+	// bedrockGrade is the same freeze for the Amazon Bedrock model credential
+	// the gate graded from modelCred (bedrockCredGrade).
+	autonomy, autonomyWarns, scmSite, adoGrade, bedrockGrade, ok := s.resolveRunAutonomy(w, r, &req, spec, wsRefs, enforced, ceiling, modelCred)
+	if !ok {
 		return
 	}
 
@@ -319,6 +326,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// mpChoice.provider.ID is "" when mpChoice.chosen is false.
 		ModelProviderID: mpChoice.provider.ID,
 	}
+	s.captureRunLimits(&run, ceiling)
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		writeServerError(w, r, "create run", err)
@@ -436,11 +444,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// image build + dispatch continue server-side (runs_create_launch.go).
 	w.Header().Set("Location", "/api/v1/runs/"+runID.String())
 	writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
-	go s.finishCreateRunLaunch(context.WithoutCancel(ctx), createRunLaunch{
-		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade), gw: gw,
+	launch := createRunLaunch{
+		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, adoGrade, bedrockGrade), gw: gw,
 		wsRefs: wsRefs, driveMount: driveMount, ephemeralDirs: ephemeralDirs,
 		bedrockRef: bedrockRef, runToken: id.Token, created: created,
-	})
+	}
+	launchCtx := context.WithoutCancel(ctx)
+	s.goBackground(func() { s.finishCreateRunLaunch(launchCtx, launch) })
 }
 
 // seedAndAdmitWorkspace folds a named workspace onto the resolved spec and then

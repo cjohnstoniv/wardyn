@@ -363,7 +363,7 @@ func TestSetupStatusProviderAccess(t *testing.T) {
 	sec := srv.cfg.Secrets.(*memSecrets)
 	status := func(t *testing.T, sub string) SetupStatus {
 		t.Helper()
-		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", ssoSession(t, sub, sub+"@corp.example", oidc.RoleMember), "")
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", ssoSession(t, sub, sub+"@corp.example", oidc.RoleUser), "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET /setup/status = %d; body=%s", w.Code, w.Body.String())
 		}

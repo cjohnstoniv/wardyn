@@ -197,7 +197,7 @@ describe("RecordPane — open-record session lifecycle", () => {
     renderPane(
       {
         record_results: { "build-test": rr },
-        profile: { setup_commands: [{ stage: "install", command: "npm ci" }] } as unknown as Workspace["profile"],
+        profile: { setup_commands: [{ stage: "install", command: "npm ci" }] },
       },
       { onDoneRecording },
     );
@@ -882,10 +882,11 @@ describe("RecordPane — approve-hosts is operatorOnly, above the pane's own tie
 
     const perHost = within(blocked).getByRole("button", { name: /^approve$/i });
     expect(perHost).toBeDisabled();
-    expect(perHost).toHaveAttribute("title", OPERATOR_ONLY_REASON);
     const guided = screen.getByRole("button", { name: /^approve 1 selected host and replay again$/i });
     expect(guided).toBeDisabled();
-    expect(guided).toHaveAttribute("title", OPERATOR_ONLY_REASON);
+    // The reason is now visible text beside/under each control, not a title
+    // tooltip — one per-host trailing hint, one standalone helper line.
+    expect(within(blocked).getAllByText(OPERATOR_ONLY_REASON)).toHaveLength(2);
   });
 
   it("leaves both Approve controls live for an admin, who holds the requirements tier", () => {

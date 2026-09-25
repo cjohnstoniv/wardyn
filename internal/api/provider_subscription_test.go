@@ -100,7 +100,7 @@ func subHarness(t *testing.T, p types.ModelProvider) (*harness, *subStore, *memS
 // dispatchSub runs the real dispatch LLM phase for st.run.
 func dispatchSub(h *harness, st *subStore, policy *types.RunPolicySpec, env map[string]string, injections []runner.InjectionGrant) (dispatchLLMPlan, bool) {
 	return h.srv.resolveLLMInjections(context.Background(), st.run, dispatchParams{},
-		policy, env, injections, "", artifactRedirectPlan{}, false, st.site, st.siteErr == nil, false)
+		policy, env, injections, "", artifactRedirectPlan{}, false, st.site, st.siteErr == nil, false, bedrockCredUngraded())
 }
 
 // resolveSub asks the sink to resolve st's first grant as the proxy would.

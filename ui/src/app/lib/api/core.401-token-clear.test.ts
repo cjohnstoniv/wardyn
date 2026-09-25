@@ -73,7 +73,8 @@ describe("wfetch — a real 401 clears the stored admin token", () => {
   // captured HERE, at the module level (window.location.pathname), because by
   // the time a component could ask, the routed tree the SignIn branch
   // replaces is already gone (App.tsx renders SignIn OUTSIDE <Routes>).
-  it("X3-F7: the handler receives a reason and window.location.pathname", async () => {
+  it("the handler receives a reason and window.location.pathname", async () => {
+    // ticket: X3-F7
     window.history.pushState({}, "", "/workspaces/ws-1");
     const handler = vi.fn();
     onUnauthorized(handler);

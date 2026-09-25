@@ -134,7 +134,7 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 		t.Fatalf("get run: %v", err)
 	}
 
-	// Field-by-field round-trip. got/want on each so a single regression is clear.
+	// Field-by-field round-trip. got/want on each so a single mismatch is clear.
 	if got.CreatedBy != r.CreatedBy {
 		t.Errorf("created_by = %q, want %q", got.CreatedBy, r.CreatedBy)
 	}
@@ -190,8 +190,7 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 }
 
 // TestPG_UpdateRunStateIf_ConditionalTransition is the core state-machine
-// regression backing the reaper + completion-watcher fixes. UpdateRunStateIf
-// must:
+// guard behind the reaper and the completion watcher. UpdateRunStateIf must:
 //   - apply (return true) only when the row is STILL in fromState, and
 //   - return false WITHOUT clobbering when the row has already moved to a
 //     terminal state (the TOCTOU "someone else won the transition" case).
@@ -459,7 +458,7 @@ func TestPG_TouchRun_Keepalive(t *testing.T) {
 	}
 }
 
-// TestPG_TouchRun_RefusesATerminalRun (W6-S1) pins the guard that bounds the
+// TestPG_TouchRun_RefusesATerminalRun pins the guard that bounds the
 // killed-run liveness gate's five-minute tail-upload grace.
 //
 // That grace is measured from agent_runs.updated_at, and TouchRun is called by
