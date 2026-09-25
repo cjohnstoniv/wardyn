@@ -71,8 +71,18 @@
   },
   {
     "reason": "capKinds[capModelProvider].reason",
+    "target": "\"model_provider.credential\"",
+    "sentence": "fmt.Sprintf(mpcNotGranted, p.ID)"
+  },
+  {
+    "reason": "capKinds[capModelProvider].reason",
     "target": "\"model_provider.sign_in\"",
     "sentence": "fmt.Sprintf(mpsNotGranted, p.ID)"
+  },
+  {
+    "reason": "capKinds[capPolicy].reason",
+    "target": "\"policies.read\"",
+    "sentence": "\"Stored policy \" + p.ID.String() + \" isn't available to you. Ask your admin, or launch without policy_id.\""
   },
   {
     "reason": "capKinds[capPolicy].reason",

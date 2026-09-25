@@ -1031,6 +1031,21 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **"Available to" now also hides the resource from people it leaves out, and blocks storing a key for it (#612, #923).**
+  `GET /policies` leaves out a stored policy the caller isn't listed for. It filters before the
+  page window, so neither the page nor `X-Wardyn-Truncated` counts a hidden policy, and a
+  failed permission read hides every policy. Admins and security admins still see every policy,
+  since they write the lists. `/setup/status` leaves out a model provider the caller isn't listed
+  for, in `model_providers` and in the `provider_access` rows. `PUT
+  /model-providers/{id}/credential` refuses such a caller with an audited 403
+  (`capability_model_provider`) and stores nothing, the same check the launch door makes, so a
+  security admin who isn't listed is refused too. Deleting a key stays open to everyone.
+- **An image reference with a backslash, or an empty, `.` or `..` path segment, is refused (#612, #923).**
+  No registry names an image that way, and an image reference is also a value the Images tab
+  builds a control from, so a workspace's `base_image.image` could plant `../policy/<uuid>`
+  there. `POST /workspaces`, `PUT /workspaces/{id}`, `POST /base-images`, and image grants and
+  availability writes now answer 400. The availability route decodes its value first, so
+  `%2e%2e` is refused as `..` and an encoded reference is stored as the reference it spells.
 - **A person's credentials can be erased in one step, and dead sign-ins are deleted (#590).**
   `DELETE /api/v1/people/{principal}/credentials` (admin or `security_admin`) deletes every
   credential that person has stored — keys, tokens and captured sign-ins — and answers with the

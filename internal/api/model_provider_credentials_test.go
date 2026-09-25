@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -192,6 +193,68 @@ func TestProviderCredentialRefusals(t *testing.T) {
 		if w := doSSO(t, srv, http.MethodPut, "/api/v1/model-providers/anthropic/credential", member,
 			`{"value":"sk-ant-member-own-key-0001"}`); w.Code != http.StatusNotFound {
 			t.Fatalf("PUT = %d, want 404", w.Code)
+		}
+	})
+}
+
+// TestProviderCredentialAvailableTo: the key door stores nothing for a person
+// the provider's "Available to" list does not admit — the launch door's own
+// capModelProvider check, its audited refusal, and its tiers (a security admin
+// is bounded, a super admin exempt). A resolver error refuses too.
+func TestProviderCredentialAvailableTo(t *testing.T) {
+	site := credentialSite(keyProvider("anthropic", "claude-code"))
+	const path, body = "/api/v1/model-providers/anthropic/credential", `{"value":"sk-ant-member-own-key-0001"}`
+	restricted := func() *capStore {
+		return &capStore{
+			restricted: restrictedOne(capModelProvider, "anthropic"),
+			grants: []types.CapabilityGrant{{SubjectType: types.CapabilitySubjectUser, Subject: "listed@corp.example",
+				Capability: capModelProvider, Value: "anthropic", Effect: types.CapabilityAllow}},
+		}
+	}
+	for _, tc := range []struct {
+		name, sub, email, role string
+		want                   int
+	}{
+		{"listed: stored", "sub-listed", "listed@corp.example", oidc.RoleUser, http.StatusNoContent},
+		{"unlisted: refused", "sub-member", "member@corp.example", oidc.RoleUser, http.StatusForbidden},
+		{"an unlisted security admin is bounded like the launch door", "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin, http.StatusForbidden},
+		{"a super admin is exempt", "sub-admin", "admin@corp.example", oidc.RoleAdmin, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := modelProvidersStatusSrv(t, site, restricted())
+			mem := srv.cfg.Secrets.(*memSecrets)
+			w := doSSO(t, srv, http.MethodPut, path, ssoSession(t, tc.sub, tc.email, tc.role), body)
+			if w.Code != tc.want {
+				t.Fatalf("PUT = %d, want %d; body=%s", w.Code, tc.want, w.Body.String())
+			}
+			stored := len(mem.owned) != 0 || len(mem.m) != 0
+			if tc.want == http.StatusNoContent {
+				if !stored {
+					t.Fatal("an admitted PUT stored nothing")
+				}
+				return
+			}
+			if stored {
+				t.Fatalf("a refused PUT wrote %v / %v", mem.m, mem.owned)
+			}
+			var got struct{ Error string }
+			if want := fmt.Sprintf(mpcNotGranted, "anthropic"); json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Error != want {
+				t.Errorf("body = %s, want %q", w.Body.String(), want)
+			}
+			if reasons := auditReasons(t, srv, "authz.denied"); !slices.Equal(reasons, []string{"capability_model_provider"}) {
+				t.Errorf("authz.denied reasons = %v, want [capability_model_provider]", reasons)
+			}
+		})
+	}
+
+	t.Run("a resolver error refuses and stores nothing, even for the listed person", func(t *testing.T) {
+		cs := restricted()
+		cs.restrictErr = errors.New("pg down")
+		srv := modelProvidersStatusSrv(t, site, cs)
+		mem := srv.cfg.Secrets.(*memSecrets)
+		w := doSSO(t, srv, http.MethodPut, path, ssoSession(t, "sub-listed", "listed@corp.example", oidc.RoleUser), body)
+		if w.Code < 400 || len(mem.owned) != 0 || len(mem.m) != 0 {
+			t.Fatalf("PUT = %d, stored %v / %v; want a refusal and nothing stored", w.Code, mem.m, mem.owned)
 		}
 	})
 }

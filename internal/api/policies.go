@@ -60,21 +60,39 @@ func decodePolicyRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoa
 // at the router — a stored policy is selectable CONTENT, and a security admin
 // who could author one could pair any operator secret with egress of their
 // choosing and simply select it.
+//
+// "Available to" (capPolicy): anyone below the security tier gets only the
+// rows the launch door would let them select (capVisible), filtered BEFORE the
+// window so the page and X-Wardyn-Truncated count nothing they cannot see. The
+// security tier sees every row for the same reason it sees them unredacted: it
+// writes each policy's Available to list and cannot do it against rows it is
+// not shown. Selecting one is still capability-bounded at the door.
+//
+// ponytail: a filtered reader fetches every row and windows in Go, as
+// GET /integrations does; stored policies are an admin-authored handful.
 func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	page, ok := parseListPage(w, r, defaultListLimit)
 	if !ok {
 		return
 	}
+	ctx := r.Context()
+	security := s.isSecurityOperator(ctx)
 	var pageFn func(store.Page) ([]types.RunPolicy, error)
-	if pg, ok := s.cfg.Store.(store.Pager); ok {
+	if pg, ok := s.cfg.Store.(store.Pager); ok && security {
 		pageFn = func(p store.Page) ([]types.RunPolicy, error) {
-			ps, err := pg.ListPoliciesPage(r.Context(), p)
-			return redactPoliciesForRead(ps, s.isSecurityOperator(r.Context())), err
+			ps, err := pg.ListPoliciesPage(ctx, p)
+			return redactPoliciesForRead(ps, security), err
 		}
 	}
 	servePage(w, r, page, pageFn, func() ([]types.RunPolicy, error) {
-		ps, err := s.cfg.Store.ListPolicies(r.Context())
-		return redactPoliciesForRead(ps, s.isSecurityOperator(r.Context())), err
+		ps, err := s.cfg.Store.ListPolicies(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !security {
+			ps = capVisible(ctx, s, capPolicy, ps, func(p types.RunPolicy) string { return p.ID.String() })
+		}
+		return redactPoliciesForRead(ps, security), nil
 	})
 }
 
@@ -90,6 +108,12 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeServerError(w, r, "get policy", err)
+		return
+	}
+	// Below the security tier, answered as the launch door answers this id
+	// (runs.policy): the list leaves it out, so the read by id must too.
+	if !s.isSecurityOperator(r.Context()) && s.denyUserCapability(w, r, capPolicy, p.ID.String(), "policies.read",
+		"Stored policy "+p.ID.String()+" isn't available to you. Ask your admin, or launch without policy_id.") {
 		return
 	}
 	writeJSON(w, http.StatusOK, redactPolicyForRead(p, s.isSecurityOperator(r.Context())))
