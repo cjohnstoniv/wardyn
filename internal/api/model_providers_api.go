@@ -34,6 +34,15 @@ func (s *Server) mountModelProviderRoutes(operatorOnly chi.Router) {
 	operatorOnly.Put("/model-providers", s.handlePutModelProviders)
 }
 
+// mountProviderRoutes mounts the three operatorOnly provider documents —
+// workspace, agent and model — as one line in routes(), which sits at its
+// funlen ratchet.
+func (s *Server) mountProviderRoutes(operatorOnly chi.Router) {
+	s.mountWorkspaceProviderRoutes(operatorOnly)
+	s.mountAgentProviderRoutes(operatorOnly)
+	s.mountModelProviderRoutes(operatorOnly)
+}
+
 // storedModelProviders is the stored block as a VALUE — what GET returns and
 // what both verbs' ETag is computed over.
 func storedModelProviders(sc types.SiteConfig) types.ModelProviders {

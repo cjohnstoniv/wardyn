@@ -28,6 +28,9 @@ export interface AuditEvent {
   // GET /api/v1/audit/chain/verify, never by reading these back off a row.
   prev_hash?: string;
   row_hash?: string;
+  // The enrolled device that forwarded this row (AuditEvent.DeviceID), read
+  // from the stored row; absent on rows this control plane wrote itself.
+  device_id?: string;
 }
 
 // Tool-rule decisions

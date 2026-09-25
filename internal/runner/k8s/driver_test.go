@@ -23,8 +23,8 @@ func TestName(t *testing.T) {
 	}
 }
 
-// TestSecurityContext_AgentVsDefault_RunAsUserSplit is the H2 regression
-// test: RunAsNonRoot:true with a nil RunAsUser fails kubelet admission for
+// TestSecurityContext_AgentVsDefault_RunAsUserSplit: RunAsNonRoot:true with a
+// nil RunAsUser fails kubelet admission for
 // every agent image (they document `USER agent`, a NAME the kubelet cannot
 // verify as non-root). Agent containers (main + ephemeral) must carry an
 // explicit numeric RunAsUser; the proxy/canary containers (the wardyn-proxy

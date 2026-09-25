@@ -50,7 +50,7 @@ const defaultMaxScanBytes = 1 << 20 // 1 MiB
 // spans burns CPU proportional to the whole body regardless of the per-span
 // cap — measured at 8-15s of proxy CPU for a 22-31 MiB body of thousands of
 // ~1 KiB spans, each three orders of magnitude under the per-span cap so
-// span_oversize never fires (F073). Once the running total crosses this
+// span_oversize never fires. Once the running total crosses this
 // budget the scan stops for the rest of the request (fail-open, recorded as
 // Skipped{scan_budget}) exactly like an oversize span.
 const defaultMaxTotalScanBytes = 4 << 20 // 4 MiB
@@ -59,7 +59,7 @@ const defaultMaxTotalScanBytes = 4 << 20 // 4 MiB
 // REPORTS (the decision log copied verbatim to stdout and POSTed to the
 // control-plane audit). Nothing else bounds this: each detector appends per
 // span with no cross-span limit, so a body split into many spans can fan out
-// into hundreds of thousands of findings (F075; measured 600,000 findings /
+// into hundreds of thousands of findings (measured 600,000 findings /
 // ~104 MiB of decision-log output for one 22.4 MiB request). Once the cap is
 // hit, findings past it are dropped (counted in Result.FindingsDropped) and
 // the result is marked Skipped{findings_capped} — EXCEPT a finding whose
@@ -67,7 +67,7 @@ const defaultMaxTotalScanBytes = 4 << 20 // 4 MiB
 // a hard ceiling) so a request cannot buy a quiet forward by fanning out cheap
 // noise ahead of the real secret (B5).
 //
-// Severity priority applies in EVERY mode (F075 fix-up), by two mechanisms:
+// Severity priority applies in EVERY mode, by two mechanisms:
 // block mode GROWS the report to a hard 2*maxFindings ceiling (enforcement
 // evidence must survive), while every other mode DISPLACES a retained
 // below-blockMin finding instead, so the report stays exactly maxFindings long.
@@ -162,10 +162,10 @@ type Result struct {
 	// however many were kept back (measured, block mode + default
 	// block_min_severity: 100 examined with 0 actually dropped for a
 	// 600-finding body; 700 examined with 200 dropped for a 1,200-finding
-	// one). See B5/F075/B6. No JSON tag here — Result is the in-process shape;
+	// one). No JSON tag here — Result is the in-process shape;
 	// the proxy copies this onto egress.ScanSummary.FindingsPastCap, which IS
-	// the wire field (F075 fix-up: a capped scan used to be indistinguishable
-	// on the wire from a scan that happened to find exactly maxFindings).
+	// the wire field (so a capped scan is distinguishable on the wire from a
+	// scan that happened to find exactly maxFindings).
 	FindingsDropped int `json:"-"`
 
 	// FindingsSeen is the number of findings the detectors PRODUCED across
@@ -196,8 +196,7 @@ type Result struct {
 	// FindingsCapped records that the per-request cap TRUNCATED this result,
 	// independently of SkipReason. SkipReason holds a single value and the
 	// first writer keeps it, so a body whose first span was oversize reported
-	// span_oversize and said nothing at all about the truncation that followed
-	// (F075 fix-up).
+	// span_oversize and said nothing at all about the truncation that followed.
 	FindingsCapped bool `json:"-"`
 }
 
@@ -221,8 +220,8 @@ type Engine struct {
 	detectors []Detector
 	maxBytes  int
 	// maxTotalScanBytes bounds total scanned bytes across every span of ONE
-	// request (F073); maxFindings bounds the number of findings ONE request may
-	// return (F075). Both are built-in safety limits, not policy-configurable.
+	// request; maxFindings bounds the number of findings ONE request may
+	// return. Both are built-in safety limits, not policy-configurable.
 	maxTotalScanBytes int
 	maxFindings       int
 	failOpen          bool // on a scanner ERROR (parse_error): allow (true) vs block (false)
@@ -353,7 +352,7 @@ func (e *Engine) sanitizeFieldPath(path string) string {
 // displace are the arm's cursors, carried across spans by ScanRequest and
 // returned updated.
 func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
-	// F075/B5: cap what this request REPORTS, never what block mode
+	// Cap what this request REPORTS, never what block mode
 	// ENFORCES. The CPU bound is scan_budget above, so scanning
 	// CONTINUES for the rest of the body (this cap only trims the
 	// decision log). Findings past the cap are dropped UNLESS they are
@@ -361,7 +360,7 @@ func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
 	// otherwise an agent could fan out cheap noise ahead of its real
 	// secret and suppress the finding that matters (B5).
 	//
-	// The keep-back is NOT conditioned on ModeBlock (F075 fix-up).
+	// The keep-back is NOT conditioned on ModeBlock.
 	// blockMin is not an enforcement threshold in alert mode, but it is
 	// still the operator's statement of "this severity is what I care
 	// about", and alert mode's only product is the alert: with the
@@ -383,7 +382,7 @@ func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
 	if vetted > start {
 		start = vetted
 	}
-	// SEVERITY PRIORITY, in every mode (F075 fix-up), but by a different
+	// SEVERITY PRIORITY, in every mode, but by a different
 	// mechanism per mode because the two modes are protecting different
 	// things:
 	//
@@ -422,7 +421,7 @@ func (e *Engine) capFindings(res *Result, vetted, displace int) (int, int) {
 	}
 	res.Findings = kept
 	// FindingsCapped is a FLAG, not a reason, so a leading span_oversize or
-	// scan_budget cannot hide the truncation (F075 fix-up): SkipReason holds one
+	// scan_budget cannot hide the truncation: SkipReason holds one
 	// value and the first writer keeps it, which made a capped scan behind an
 	// earlier skip indistinguishable from a complete one.
 	res.FindingsCapped = true
@@ -472,7 +471,7 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 			return // skip this oversize span; keep scanning the rest (partial coverage)
 		}
 		if e.maxTotalScanBytes > 0 && scannedBytes >= e.maxTotalScanBytes {
-			// F073: the per-request scan budget is exhausted — stop running
+			// The per-request scan budget is exhausted — stop running
 			// detectors over the rest of the body. !res.Skipped mirrors the
 			// sidecar guard below: a later budget hit must not clobber an
 			// earlier span_oversize/sidecar_error skip's reason.
@@ -517,7 +516,7 @@ func (e *Engine) ScanRequest(channel Channel, body []byte) (res Result, out []by
 		return res, body, err
 	}
 	// Opt-in: also decode+scan base64 attachment bytes (Anthropic only). Best-
-	// effort, but a genuine decode failure is recorded honestly (F056) — NOT
+	// effort, but a genuine decode failure is recorded honestly — NOT
 	// as a clean scan — so ShouldBlock/on_scanner_error still governs whether
 	// an undecodable attachment refuses the request under block mode.
 	if e.scanAttachments && channel == ChannelAnthropicMessages {

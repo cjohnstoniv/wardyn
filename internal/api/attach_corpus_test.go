@@ -45,7 +45,7 @@ func TestAttachCorpus_TakeoverPromotesWebObserverOverSSHHolder(t *testing.T) {
 		srv, _, fr, audit, run := holderTestServer(t)
 		ts := httptest.NewServer(panicFails(t, srv.Handler()))
 		defer ts.Close()
-		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+		owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 
 		// holderSecond holds the run's terminal from the CLI...
 		ch := newFakeSSHChannel()
@@ -186,7 +186,7 @@ func TestAttachCorpus_ReconnectAfterDaemonRebuildSharesStore(t *testing.T) {
 		return New(cfg)
 	}
 
-	// ── the first daemon process: a writer attaches and registers ──
+	// the first daemon process: a writer attaches and registers
 	fr1 := &holderTestRunner{}
 	srv1 := build(fr1)
 	ts1 := httptest.NewServer(panicFails(t, srv1.Handler()))
@@ -201,7 +201,7 @@ func TestAttachCorpus_ReconnectAfterDaemonRebuildSharesStore(t *testing.T) {
 	// registry, exactly what an in-process map cannot survive.
 	ts1.Close()
 
-	// ── the daemon restarts: a NEW Server, the SAME store, a fresh registry ──
+	// the daemon restarts: a new Server, the same store, a fresh registry
 	fr2 := &holderTestRunner{}
 	srv2 := build(fr2)
 	ts2 := httptest.NewServer(panicFails(t, srv2.Handler()))

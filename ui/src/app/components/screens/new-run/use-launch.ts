@@ -37,6 +37,9 @@ export interface UseLaunchResult {
   launchDisabled: boolean;
   launchSpinning: boolean;
   error: string | null;
+  /** Bumped on every failed launch, including a repeat of the same message —
+   *  so the rail's alert region remounts and gets re-announced (#459). */
+  errorSeq: number;
   credentialRefused: boolean;
   launchWarnings: string[];
   launchedRunId: string | null;
@@ -44,6 +47,8 @@ export interface UseLaunchResult {
   preflighting: boolean;
   preflightResult: PreflightResult | null;
   preflightError: string | null;
+  /** Same remount purpose as errorSeq, for the preflight alert. */
+  preflightErrorSeq: number;
   /** Whether preflightResult/preflightError are graded from the request buildRunInput would send RIGHT NOW. */
   preflightIsCurrent: boolean;
   preflight: () => Promise<void>;
@@ -62,6 +67,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   // spinner once the request has been running long enough to need one.
   const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
+  const [errorSeq, setErrorSeq] = React.useState(0);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
   // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
   const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
@@ -74,6 +80,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
   const [preflighting, setPreflighting] = React.useState(false);
   const [preflightResult, setPreflightResult] = React.useState<PreflightResult | null>(null);
   const [preflightError, setPreflightError] = React.useState<string | null>(null);
+  const [preflightErrorSeq, setPreflightErrorSeq] = React.useState(0);
   // The request body the verdict on screen was graded FROM. A preflight result
   // is a statement about one body, and the rail renders it directly above
   // Launch as "the last thing read before committing" — so the moment the body
@@ -130,10 +137,11 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
         setLaunchedRunId(created.id);
         setLaunching(false); // nothing reads it once onOpenRun is set.
       } else {
-        navigate(`/runs/${encodeURIComponent(created.id)}`);
+        void navigate(`/runs/${encodeURIComponent(created.id)}`);
       }
     } catch (e) {
       setError(getErrorMessage(e) || "Failed to launch run.");
+      setErrorSeq((n) => n + 1);
       setCredentialRefused(isCredentialRefusal(e));
       onLaunchError?.(e);
       setLaunching(false);
@@ -175,6 +183,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
       setPreflightResult(await runsApi.preflightRun(body));
     } catch (e) {
       setPreflightError(getErrorMessage(e) || "Preflight failed.");
+      setPreflightErrorSeq((n) => n + 1);
     } finally {
       setPreflightedBody(key);
       setPreflighting(false);
@@ -186,6 +195,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     launchDisabled,
     launchSpinning,
     error,
+    errorSeq,
     credentialRefused,
     launchWarnings,
     launchedRunId,
@@ -193,6 +203,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLa
     preflighting,
     preflightResult,
     preflightError,
+    preflightErrorSeq,
     preflightIsCurrent,
     preflight,
   };
