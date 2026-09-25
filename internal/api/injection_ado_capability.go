@@ -333,7 +333,7 @@ func (s *Server) raiseADOCapability(w http.ResponseWriter, r *http.Request, clai
 			path = path[:adoMaxAuditPath]
 		}
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
-			"credential.capability.requested", created.ID.String(), "success",
+			"credential.capability.request", created.ID.String(), "success",
 			mustJSON(map[string]any{
 				"approval_id": created.ID, "capability": c, "organisation": sn.Organisation,
 				"provider_row": sn.ProviderRowID, "owner": sn.OwnerSubject, "repo": scope.Repo,
@@ -401,7 +401,7 @@ func (s *Server) raiseADOConsent(w http.ResponseWriter, r *http.Request, claims 
 	}
 	if created.ID == raisedID {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",
-			"credential.reauth.requested", created.ID.String(), "success",
+			"credential.reauth.request", created.ID.String(), "success",
 			mustJSON(map[string]any{
 				"approval_id": created.ID, "owner": sn.OwnerSubject, "provider": adoApprovalLane,
 				"reason": string(ADOEntraFailureConsentRequired), "detail": adoResolveConsentRequired,
@@ -434,7 +434,7 @@ func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.Approval
 	if !subsetOf(sc.Scopes, blob.Scopes) {
 		return ap
 	}
-	ev := s.auditEvent(&ap.RunID, types.ActorHuman, sc.Owner, "credential.reauth.resolved", ap.ID.String(), "success",
+	ev := s.auditEvent(&ap.RunID, types.ActorHuman, sc.Owner, "credential.reauth.resolve", ap.ID.String(), "success",
 		mustJSON(map[string]any{
 			"approval_id": ap.ID, "owner": sc.Owner, "resolved_by": sc.Owner, "provider": adoApprovalLane,
 		}))

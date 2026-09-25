@@ -1,0 +1,160 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Available to canon</title>
+<!--
+  "Available to" mock, the canon (#923) · static, for owner review.
+  One row per user-visible string on editors.html and states.html, with a stable id. Once
+  approved, each console row becomes the app's string byte for byte (the lane transcribes
+  docs/design/available-to-prompt.md §7, which carries the same rows).
+  Status: Packet UT-A = frozen by user-types packet A (approved 2026-09-23); Packet MP-A / MP-B
+  = frozen by the multi-provider packets A / B (approved 2026-09-22) and drawn in the
+  model-providers mock; Reused = on main in ui/src today; New = this packet, waiting on its
+  decision (a New row marked "PR #919" is already in that open PR's availability-copy.ts but
+  not on main and never went to the owner); Wire = composed by the server and rendered
+  verbatim, listed for reference and frozen by its server issue, not here.
+  A {placeholder} is filled by the caller; the text inside the braces is the fixture.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Available to — canon (#923)</h1>
+    <div class="sub">Every string the two pages show, one row each. Approved rows become app strings byte for byte.</div>
+  </div>
+  <nav><a href="index.html">Packet</a><a href="editors.html">The four editors</a><a href="states.html">States</a><a class="cur" href="canon.html">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>Table 1</span><b>The control, the same on every family (availability-copy.ts)</b></div>
+  <div class="frame tblwrap">
+    <table class="canon">
+      <thead><tr><th>Id</th><th>String</th><th>Status</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td class="id">AVAILABILITY.LABEL</td><td class="str">Available to</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>Every family</td></tr>
+        <tr><td class="id">AVAILABILITY.EVERYONE</td><td class="str">Everyone</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>Policy, model provider (and the integration option)</td></tr>
+        <tr><td class="id">AVAILABILITY.ADMINS_ONLY</td><td class="str">Admins only</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>Base image, in place of Everyone (decision 2). Packet A's reverse-view state, reused</td></tr>
+        <tr><td class="id">AVAILABILITY.ONLY</td><td class="str">Only these</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>Every family</td></tr>
+        <tr><td class="id">AVAILABILITY.CHIP_TYPE(name)</td><td class="str">{Developer}</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>An audience chip for a user type: the type's name. PR #919 draws <span class="mono">User type: developer</span></td></tr>
+        <tr><td class="id">AVAILABILITY.CHIP_GROUP(name)</td><td class="str">{Data engineering} (group)</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>An audience chip for a group</td></tr>
+        <tr><td class="id">AVAILABILITY.CHIP_USER(email)</td><td class="str">{alice@corp.com}</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>An audience chip for a person</td></tr>
+        <tr><td class="id">AVAILABILITY.REMOVE_ARIA(chip)</td><td class="str">Remove {Developer}</td><td class="st"><span class="tag-new">New</span></td><td>A chip's ×, its accessible name. PR #919 composes <span class="mono">Remove User type developer</span></td></tr>
+        <tr><td class="id">PERM.SUBJECT_USER_TYPE</td><td class="str">User type</td><td class="st"><span class="tag-new">New</span></td><td>The adder's first segment (PR #919, from the user-types branch)</td></tr>
+        <tr><td class="id">PERM.SUBJECT_GROUP</td><td class="str">Group</td><td class="st"><span class="tag-reused">Reused</span></td><td>The adder's second segment</td></tr>
+        <tr><td class="id">PERM.SUBJECT_USER</td><td class="str">User</td><td class="st"><span class="tag-reused">Reused</span></td><td>The adder's third segment</td></tr>
+        <tr><td class="id">AVAILABILITY.ADD_PLACEHOLDER</td><td class="str">Add a type, group or person…</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>The adder's field, placeholder</td></tr>
+        <tr><td class="id">AVAILABILITY.HINT_USER_TYPE</td><td class="str">The user type's id, exactly as it appears on the User types screen.</td><td class="st"><span class="tag-new">New</span></td><td>The field's accessible name while User type is chosen (PR #919)</td></tr>
+        <tr><td class="id">AVAILABILITY.HINT_GROUP</td><td class="str">A group or app-role name exactly as your identity provider sends it in the token.</td><td class="st"><span class="tag-new">New</span></td><td>The same, Group (PR #919)</td></tr>
+        <tr><td class="id">AVAILABILITY.HINT_USER</td><td class="str">An email address or the sign-in subject id.</td><td class="st"><span class="tag-new">New</span></td><td>The same, User (PR #919)</td></tr>
+        <tr><td class="id">AVAILABILITY.ADD_CTA</td><td class="str">Add</td><td class="st"><span class="tag-new">New</span></td><td>The adder's button (PR #919)</td></tr>
+        <tr><td class="id">AVAILABILITY.LAST_AUDIENCE_LOCKED</td><td class="str">Choose Everyone before removing the last one, or nobody could use this.</td><td class="st"><span class="tag-new">New</span></td><td>States 4 and 5: the last chip's tooltip and the line under the list (PR #919)</td></tr>
+        <tr><td class="id">AVAILABILITY.LAST_AUDIENCE_LOCKED_IMAGE</td><td class="str">Choose Admins only before removing the last one.</td><td class="st"><span class="tag-new">New</span></td><td>The same, on a base image (decision 2)</td></tr>
+        <tr><td class="id">AVAILABILITY.LOAD_FAILED</td><td class="str">Available to — couldn't load.</td><td class="st"><span class="tag-new">New</span></td><td>State 7, where the control would be (PR #919)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Table 2</span><b>Each family's lines, and a new resource (decisions 2, 4, 5)</b></div>
+  <div class="frame tblwrap">
+    <table class="canon">
+      <thead><tr><th>Id</th><th>String</th><th>Status</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td class="id">AVAILABILITY.PROVIDER_ONLY_HINT</td><td class="str">Only these — people not listed can't add or run repositories from this organisation. Runs already going aren't affected.</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>Not drawn: the git provider row (#919). The pattern decision 5 follows</td></tr>
+        <tr><td class="id">AVAILABILITY.PROVIDER_NOTE</td><td class="str">Security admins can change this list from the type editor too. The organisation itself is edited only by super admins.</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>Not drawn: the git provider row (#919). The pattern decision 5 follows</td></tr>
+        <tr><td class="id">AVAILABILITY.POLICY_ONLY_HINT</td><td class="str">Only these — people not listed can't choose this policy for a run. Runs already going aren't affected.</td><td class="st"><span class="tag-new">New</span></td><td>Stored policy, after the Only these label (decision 5)</td></tr>
+        <tr><td class="id">AVAILABILITY.POLICY_NOTE</td><td class="str">Security admins can change this list from the type editor too. The policy itself is edited only by super admins.</td><td class="st"><span class="tag-new">New</span></td><td>Stored policy, under the adder (decision 5)</td></tr>
+        <tr><td class="id">AVAILABILITY.MODEL_PROVIDER_ONLY_HINT</td><td class="str">Only these — people not listed can't run with this provider, even from a workspace pinned to it. Runs already going aren't affected.</td><td class="st"><span class="tag-new">New</span></td><td>Model provider (decision 5)</td></tr>
+        <tr><td class="id">AVAILABILITY.MODEL_PROVIDER_NOTE</td><td class="str">Security admins can change this list from the type editor too. The provider itself is edited only by super admins.</td><td class="st"><span class="tag-new">New</span></td><td>Model provider (decision 5)</td></tr>
+        <tr><td class="id">AVAILABILITY.IMAGE_HINT</td><td class="str">Images are off for everyone until you list someone here.</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>Base image: the one line under the choice, in either state (no Only these line)</td></tr>
+        <tr><td class="id">AVAILABILITY.IMAGE_NOTE</td><td class="str">Security admins can change this list from the type editor too. The image list itself is edited only by super admins.</td><td class="st"><span class="tag-new">New</span></td><td>Base image row (decision 5)</td></tr>
+        <tr><td class="id">AVAILABILITY.CREATE_PARTIAL_TITLE</td><td class="str">Saved, but not who it's available to</td><td class="st"><span class="tag-new">New</span></td><td>A creation form: the resource saved, the list write was refused (decision 4)</td></tr>
+        <tr><td class="id">AVAILABILITY.CREATE_PARTIAL_EVERYONE</td><td class="str">It is available to everyone until you set it again below.</td><td class="st"><span class="tag-new">New</span></td><td>Under the server's sentence: policy, model provider (decision 4)</td></tr>
+        <tr><td class="id">AVAILABILITY.CREATE_PARTIAL_IMAGE</td><td class="str">It stays admins-only until you set it again below.</td><td class="st"><span class="tag-new">New</span></td><td>The same, Add image (decision 4; not drawn)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Table 3</span><b>The surfaces around the control</b></div>
+  <div class="frame tblwrap">
+    <table class="canon">
+      <thead><tr><th>Id</th><th>String</th><th>Status</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td class="id">policies.tsx DetailField</td><td class="str">Policy ID · Barrier · Created · Updated</td><td class="st"><span class="tag-reused">Reused</span></td><td>Policy sheet facts</td></tr>
+        <tr><td class="id">CC_META.CC2.label</td><td class="str">Wall</td><td class="st"><span class="tag-reused">Reused</span></td><td>Policy sheet, Barrier chip (fixture)</td></tr>
+        <tr><td class="id">RESIDUAL_PREFIX</td><td class="str">Doesn't stop:</td><td class="st"><span class="tag-reused">Reused</span></td><td>Policy sheet</td></tr>
+        <tr><td class="id">CC_META.CC2.doesntProtect</td><td class="str">A flaw in the sandbox software itself (rare); it's still not a fully separate machine.</td><td class="st"><span class="tag-reused">Reused</span></td><td>Policy sheet</td></tr>
+        <tr><td class="id">POLICY_UI_APPS.label · none</td><td class="str">UI apps · None declared</td><td class="st"><span class="tag-reused">Reused</span></td><td>Policy sheet</td></tr>
+        <tr><td class="id">policies.tsx</td><td class="str">View raw JSON</td><td class="st"><span class="tag-reused">Reused</span></td><td>Policy sheet</td></tr>
+        <tr><td class="id">policies.tsx</td><td class="str">Edit policy</td><td class="st"><span class="tag-reused">Reused</span></td><td>Policy sheet</td></tr>
+        <tr><td class="id">OPERATOR_ONLY_REASON</td><td class="str">Requires the admin role.</td><td class="st"><span class="tag-reused">Reused</span></td><td>Policy sheet, anyone but a super admin (state 8)</td></tr>
+        <tr><td class="id">MODEL_PROVIDERS.ADD_CTA</td><td class="str">Add model provider</td><td class="st"><span class="tag-reused">Packet MP-A</span></td><td>Provider editor title, new provider</td></tr>
+        <tr><td class="id">MODEL_PROVIDERS.KIND.*</td><td class="str">Your own endpoint · Anthropic API key</td><td class="st"><span class="tag-reused">Packet MP-A</span></td><td>Provider editor, kind chip</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.PROVIDES_KEY · PROVIDES_TOKEN</td><td class="str">Each person adds their own key. · Each person adds their own token. You set how it is sent.</td><td class="st"><span class="tag-reused">Packet MP-B</span></td><td>Provider editor</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.NAME · NAME_HINT</td><td class="str">Name · What people see when they choose it.</td><td class="st"><span class="tag-reused">Packet MP-B</span></td><td>Provider editor</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.ROUTE_THROUGH · ROUTE_THROUGH_HINT(host)</td><td class="str">Route through a gateway (optional) · Send requests to your gateway instead of {api.anthropic.com}. Each person's key goes with them, and they are told where it goes.</td><td class="st"><span class="tag-reused">Packet MP-B</span></td><td>Provider editor, key kind</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.BASE_URL · BASE_URL_HINT</td><td class="str">Base URL · https only. Wardyn sends this provider's requests here.</td><td class="st"><span class="tag-reused">Packet MP-B</span></td><td>Provider editor, endpoint kind</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.USE_WITH</td><td class="str">Use with</td><td class="st"><span class="tag-reused">Packet MP-B</span></td><td>Provider editor</td></tr>
+        <tr><td class="id">harnessCatalog display name</td><td class="str">Claude Code · Codex CLI</td><td class="st"><span class="tag-reused">Reused</span></td><td>Use with rows</td></tr>
+        <tr><td class="id">INTEGRATIONS.X_KEY_CODEX</td><td class="str">Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.</td><td class="st"><span class="tag-reused">Reused</span></td><td>Provider editor, new key provider</td></tr>
+        <tr><td class="id">PROVIDER_EDITOR.REMOVE · CANCEL · SAVE</td><td class="str">Remove · Cancel · Save</td><td class="st"><span class="tag-reused">Packet MP-B</span></td><td>Provider editor footer</td></tr>
+        <tr><td class="id">PROVIDERS.TITLE</td><td class="str">Workspace providers</td><td class="st"><span class="tag-reused">Reused</span></td><td>Images tab's page</td></tr>
+        <tr><td class="id">PROVIDERS.LEAD</td><td class="str">Where work can come from, and how big it can get. Enable a git provider to bound which repositories a run may clone; set the storage ceilings every run and every drive is held to.</td><td class="st"><span class="tag-reused">Reused</span></td><td>Images tab's page</td></tr>
+        <tr><td class="id">PROVIDERS.GIT_TITLE · STORAGE_TAB · AGENTS.AGENTS_TITLE</td><td class="str">Git providers · Storage · Agents</td><td class="st"><span class="tag-reused">Reused</span></td><td>The page's tabs</td></tr>
+        <tr><td class="id">IMAGES.TAB</td><td class="str">Images</td><td class="st"><span class="tag-new">New</span></td><td>The new tab (decision 1)</td></tr>
+        <tr><td class="id">IMAGES.LEAD</td><td class="str">Images people may launch by name, with `--image` or as their own workspace's image. An image you set on an org workspace needs nothing here.</td><td class="st"><span class="tag-new">New</span></td><td>Images tab (decision 1); backticks render mono</td></tr>
+        <tr><td class="id">IMAGES.ADD_CTA</td><td class="str">Add image</td><td class="st"><span class="tag-new">New</span></td><td>Images tab, its empty state, its dialog's title and button (decision 1)</td></tr>
+        <tr><td class="id">IMAGES.EMPTY_TITLE</td><td class="str">No images listed</td><td class="st"><span class="tag-new">New</span></td><td>Images tab, empty (decision 1)</td></tr>
+        <tr><td class="id">IMAGES.EMPTY_BODY</td><td class="str">Until you add one, only admins can launch an image by name.</td><td class="st"><span class="tag-new">New</span></td><td>Images tab, empty (decision 1)</td></tr>
+        <tr><td class="id">IMAGES.REF</td><td class="str">Image</td><td class="st"><span class="tag-new">New</span></td><td>Add image, the field (required)</td></tr>
+        <tr><td class="id">IMAGES.REF_HINT</td><td class="str">The exact reference people will type, e.g. ghcr.io/acme/dev-toolbox:1.4.</td><td class="st"><span class="tag-new">New</span></td><td>Add image, under the field</td></tr>
+        <tr><td class="id">USER_TYPES.GETS_TITLE(type)</td><td class="str">{Portfolio manager} · What this type gets</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>The type editor's reverse view (UT-7a), states 5 and decision 1's option</td></tr>
+        <tr><td class="id">USER_TYPES.NOT_AVAILABLE · ONLY(types)</td><td class="str">Not available · only {Developer}</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>Reverse view row</td></tr>
+        <tr><td class="id">USER_TYPES.IMAGES</td><td class="str">Images</td><td class="st"><span class="tag-reused">Packet UT-A</span></td><td>Reverse view row, with Admins only</td></tr>
+        <tr><td class="id">S.MODEL_TITLE · S.MODEL_LEDE</td><td class="str">Model provider · Agent runs need one. Governed commands don't.</td><td class="st"><span class="tag-reused">Reused</span></td><td>Decision 3's other option only (connection-cards.tsx)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Table 4</span><b>Server sentences shown as sent: reference only, frozen by their server issues</b></div>
+  <div class="frame tblwrap">
+    <table class="canon">
+      <thead><tr><th>Id</th><th>String</th><th>Status</th><th>Owner</th></tr></thead>
+      <tbody>
+        <tr><td class="id">availabilityOnlyEmptyMsg</td><td class="str">Add at least one person, group or user type before choosing Only, or nobody could use this.</td><td class="st"><span class="tag-wire">Wire</span></td><td>UT-10 (#612), permissions_availability.go · state 3</td></tr>
+        <tr><td class="id">accessUnknownUserType(id)</td><td class="str">The user type {"analyst"} doesn't exist. Create it under User types first.</td><td class="st"><span class="tag-wire">Wire</span></td><td>UT-1 branch, access.go · state 7, decision 4</td></tr>
+        <tr><td class="id">availabilityTarget, kind not restrictable</td><td class="str">{"policy"} can't be restricted to a list; only the resources people are offered can be.</td><td class="st"><span class="tag-wire">Wire</span></td><td>Not drawn: what a policy's control gets today, before #818</td></tr>
+        <tr><td class="id">the frozen refusal (§2.6 answer 3)</td><td class="str">{Read-only research} isn't available to you as a {Portfolio manager}. Ask your admin.</td><td class="st"><span class="tag-wire">Wire</span></td><td>#736 (AK-2); UT-11 for a policy; the image doors · state 5, section 3</td></tr>
+        <tr><td class="id">LLM_PROVIDER_REFUSAL, not granted</td><td class="str">This run's model provider is {Bloomberg gateway}, and you are not granted it — choose another model provider, or ask your admin. Wardyn does not substitute a different model provider.</td><td class="st"><span class="tag-wire">Wire</span></td><td>#532 · section 2</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>

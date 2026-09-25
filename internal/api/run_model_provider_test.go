@@ -360,9 +360,21 @@ func TestRunModelProviderPersistsOnTheRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("audit recorder = %T, want *recRecorder", srv.cfg.Audit)
 	}
+	// Outcome must be "success", not just Action == "run.create": this
+	// provider's kind (ModelProviderAnthropicAPIKey) has no dispatch-time arm
+	// yet (resolveProviderTransport's default case, provider_subscription.go),
+	// so the detached launch (finishCreateRunLaunch, started after the 201)
+	// always goes on to fail the run and write its OWN "run.create"/failure
+	// row with no model_provider field. That write races with this read, and
+	// waiting longer only makes the race MORE likely to bite: the failure is
+	// certain to happen eventually, not a transient blip. The row this test
+	// means to read is the one written synchronously, before the 201, by the
+	// create handler (runs.go's recordAudit(..., "run.create", ..., "success",
+	// ...)); filtering on outcome picks it deterministically no matter how the
+	// async failure row races in.
 	var snapshot map[string]any
 	for _, ev := range rec.snapshot() {
-		if ev.Action != "run.create" {
+		if ev.Action != "run.create" || ev.Outcome != "success" {
 			continue
 		}
 		var data struct {

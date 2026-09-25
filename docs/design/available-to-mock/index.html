@@ -1,0 +1,122 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Available to packet</title>
+<!--
+  "Available to" mock packet (#923, UT-7d) · static, for owner review.
+  The landing page: what each screen is for, the states it shows, and the decisions this
+  packet asks for. The design brief is docs/design/available-to-prompt.md; the model is the
+  user-types design §2.6 and user-types packet A (approved 2026-09-23, epic #622).
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Available to — mock packet for #923</h1>
+    <div class="sub">Say "approve the packet", or name the decisions you'd change. Static: nothing here is wired.</div>
+  </div>
+  <nav><a class="cur" href="index.html">Packet</a><a href="editors.html">The four editors</a><a href="states.html">States</a><a href="canon.html">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>What this is</span><b>The last four families still without their "Available to" control</b></div>
+  <p class="lead" style="margin-top:0">You approved one "Available to" on every resource an admin sets up (user-types packet A, D1). #919 puts it on git providers, agents and org workspaces. #923 covers the other four: stored policies, model providers, integrations and base images. Two of those have an editor to put it in. The other two don't, and #923 asks for a mock round to decide where it goes.</p>
+  <p class="lead">When you approve, #923 loses <span class="mono">needs-mock</span>. The policy part can start once #818 lands, the model provider part once #537 lands and the kind is made restrictable, and the image part once #919's control is on main.</p>
+</section>
+
+<section class="state">
+  <div class="tag"><span>The screens</span><b>Two pages, one stylesheet. All four families use one control, so it is drawn once in its own page.</b></div>
+  <div class="grid2">
+    <a class="pagecard" href="editors.html">
+      <b>The four editors</b>
+      <p>One section per family: where the control sits, and what is different about that family.</p>
+      <ul>
+        <li>Stored policy: the policy's detail sheet</li>
+        <li>Model provider: editing, a new provider (decision 4), and a save where the list didn't go through</li>
+        <li>Base image: a new Images tab, its empty state, Add image (decisions 1, 2)</li>
+        <li>Integration: where each kind's list already lives (decision 3)</li>
+        <li>What someone who isn't listed is told, on each</li>
+      </ul>
+    </a>
+    <a class="pagecard" href="states.html">
+      <b>States of the control</b>
+      <p>Every state, drawn once, with a stored policy as the example.</p>
+      <ul>
+        <li>Default: Everyone</li>
+        <li>A subset of user types, a group, a person</li>
+        <li>None selected: refused by the server</li>
+        <li>The last one on the list is locked</li>
+        <li>Taking a type off, and what follows for its people</li>
+        <li>Saving, a refused add, a list that couldn't load</li>
+        <li>Who sees it: a security admin, and everyone else</li>
+      </ul>
+    </a>
+  </div>
+  <a class="pagecard" href="canon.html" style="margin-top:18px">
+    <b>Canon</b>
+    <p>One row per string on the two pages, with a stable id and where it came from: user-types packet A, the model-provider packets, shipped today, new in this packet, or a server sentence shown as sent.</p>
+  </a>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Decisions</span><b>Five, each drawn as recommended. Everything else follows packet A and #919.</b></div>
+  <ol class="decisions">
+    <li><b>Where a base image's list lives.</b> Drawn: a new Images tab on Workspace providers, after Agents. It has one row per image in the catalog that workspaces already fill (<span class="mono">GET /base-images</span>), each row with its control, and an Add image button that takes one reference. The other option is no Images page at all: images are listed for a type only from the type editor (UT-7a), where packet A already shows "Admins only · Images".
+      <p>Recommended: the tab. Images are admins-only until someone is listed, so without a page there is no place to see which images are open and to whom. The trade-off: a new tab and seven new strings.</p></li>
+    <li><b>What the first choice says on an image.</b> Drawn: <b>Admins only</b> / Only these, with packet A's line "Images are off for everyone until you list someone here." The other option is the same Everyone / Only these as every other family. But an image nobody is listed for can only be launched by admins, so "Everyone" would be selected on something almost nobody can use.
+      <p>Recommended: Admins only. It is what the server does, and packet A's type view already uses the words. It needs one extra line for the locked last chip: "Choose Admins only before removing the last one."</p></li>
+    <li><b>Integrations get no editor of their own.</b> Every integration the console shows is one of two things. The AI kinds become model providers in 0.8 (MP-15 removes them), and their list is on the provider editor. GitHub App and git host rows are git provider rows, which already have the control (#919). Drawn: a map of where each kind's list lives, and nothing new. The other option adds the control to Settings → Model provider for the card's integration, until MP-15 removes it.
+      <p>Recommended: no editor. A control on a kind that is going away would be taken out again within the release. Until then, the type editor can still set <span class="mono">integration</span> availability.</p></li>
+    <li><b>A new policy, provider or image.</b> Design §2.6 says a resource created after 0.8 asks on its creation form, starting at Everyone (Admins only for an image). It doesn't say how, and the control can only write once the resource has an id. Drawn: the form holds the choice, and Save creates the resource, writes the list, then turns Only these on. If the list is refused after the resource saved, the editor stays open on it with "Saved, but not who it's available to", the server's sentence, and "It is available to everyone until you set it again below." The other option leaves the control off creation forms: a new resource starts at Everyone, and the list is set once it has been saved.
+      <p>Recommended: as drawn, because it is what the approved design says. The trade-off: three new strings, and a partly failed save the admin has to finish. For a policy or a provider, both options leave it open to everyone between the two writes; an image starts admins-only, so there is no such gap.</p></li>
+    <li><b>Each family's two lines.</b> Drawn: policies and model providers follow the git provider's approved pattern. After "Only these" comes what someone not listed loses, plus "Runs already going aren't affected". Under the list comes "Security admins can change this list from the type editor too. The … itself is edited only by super admins." An image keeps only packet A's line, plus the note. The other option is no family lines, which is how #919 draws agents and workspaces.
+      <p>Recommended: as drawn. The only-these line is where the admin reads what taking someone off does, and no other state explains it. The trade-off: five new strings. "Runs already going aren't affected" still has to be checked on the model provider, where each model call might re-check the grant.</p></li>
+  </ol>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Settled without asking</span><b>Called out so none of them is a surprise</b></div>
+  <ul style="font-size:13px;color:var(--muted-foreground);max-width:86ch;padding-left:18px">
+    <li><b>"None selected" is not a state.</b> Choosing Only these with nobody listed is refused by the server, and its sentence is shown as sent (design §2.6). While Only these is on, the last chip's × is disabled (#919), so a list can't be emptied by removing people one by one.</li>
+    <li><b>Chips follow packet A.</b> A user type shows its name, a group shows "(group)", and a person shows their email. #919 currently draws <span class="mono">User type: developer</span>, and the lane should change it to match.</li>
+    <li><b>The adder follows #919:</b> User type / Group / User, a field, and Add. A typed name alone can't say whether it is a type or a group. The field's placeholder is packet A's.</li>
+    <li><b>A refused add is shown under the adder, not in a toast.</b> A refusal is worth reading twice (CONSOLE-RULES §9). #919 uses a toast titled "Add".</li>
+    <li><b>Taking a type off asks for no confirmation.</b> It can be undone, and runs already going keep what they have. Their next launch is where it bites: the server's list leaves the resource out, and naming it anyway gets #736's sentence.</li>
+    <li><b>Changes write at once, never through the editor's Save</b> (#919). The one exception is a creation form (decision 4).</li>
+    <li><b>Only security admins and super admins see the control.</b> The policy sheet is the only one of the four editors that anyone else can open, and for them the control is simply absent. The provider editor and the Images tab are for super admins only, so a security admin sets those lists from the type editor.</li>
+  </ul>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Not drawn</span><b>Out of #923, or not described by it</b></div>
+  <ul style="font-size:13px;color:var(--muted-foreground);max-width:86ch;padding-left:18px">
+    <li>The type editor's "What this type gets" (UT-7a) and the person side (#922). Each gets one row or one sentence here, only to show what follows a change.</li>
+    <li>The kind-wide switch, "restrict every value of this kind", and an image restricted while that switch is on.</li>
+    <li>Two catalog rows with the same reference. Availability is keyed by the reference, so both would show one shared list.</li>
+    <li>Removing an image from the catalog, and a save that races another admin's. Neither is in #923.</li>
+    <li>Secrets, egress hosts, drives, and the SSH and token features. Their "Available to" is other issues' work.</li>
+  </ul>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>

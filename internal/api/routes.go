@@ -51,7 +51,7 @@ func (s *Server) routes() chi.Router {
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
 		// A sign-in refused over its user type (ambiguous or unknown) is an
-		// auth.failed row; the oidc package stays audit-agnostic.
+		// auth.fail row; the oidc package stays audit-agnostic.
 		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.auditSignInDenied))
 	}
 
@@ -194,8 +194,8 @@ func (s *Server) routes() chi.Router {
 			r.Post("/runs/preflight", s.handlePreflightRun)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
+			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
-			r.Post("/runs/{id}/kill", s.handleKillRun)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
@@ -301,7 +301,7 @@ func (s *Server) routes() chi.Router {
 			// to model access at all. A member with no such row still gets 403 —
 			// from authorizeHarnessLogin, which also requires capAgent on the row's
 			// agent. Every connect/disconnect is audited
-			// (harness.credential.captured/disconnected).
+			// (harness.credential.capture/disconnected).
 			s.mountSetupMutationRoutes(r, operatorOnly)
 
 			// Policy management (gated to authenticated humans — a valid SSO
@@ -677,6 +677,16 @@ func (s *Server) routes() chi.Router {
 	return r
 }
 
+// mountRunLeaseRoutes registers a run's end/wait change, its kill and its
+// revive on r — carved out of routes() purely for funlen.
+func (s *Server) mountRunLeaseRoutes(r chi.Router) {
+	// The run's end and wait (#569): owner or SUPER admin, clamped to the
+	// run's captured limits — handleSetRunEndAndWait.
+	r.Patch("/runs/{id}", s.handleSetRunEndAndWait)
+	r.Post("/runs/{id}/kill", s.handleKillRun)
+	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go)
+}
+
 // mountAccountRoutes registers the caller's own account surfaces — per-user
 // API tokens (self-service on r; the two admin twins on securityOps) and the
 // run-detail layout — carved out of routes() purely for funlen; the routes()
@@ -824,4 +834,9 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// case — see reconcile.go) and deliberately not a ticker; see
 	// handleSweepSandboxes for the cost argument.
 	operatorOnly.Post("/admin/sandboxes/sweep", s.handleSweepSandboxes)
+	// Standing runs (run_revive.go). SUPER: a restart replaces the proxy of
+	// runs the caller does not own, under each owner's own ceiling, and the
+	// listing reads the whole fleet.
+	operatorOnly.Get("/admin/runs/proxy-window", s.handleAdminProxyWindow)
+	operatorOnly.Post("/admin/runs/restart", s.handleAdminRestartRuns)
 }

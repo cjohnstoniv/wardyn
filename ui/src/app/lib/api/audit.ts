@@ -12,7 +12,7 @@ import type { AuditEvent, EgressDecision, Outcome, RunEnding, RunEndingKind, Run
 import { toolRuleDecision } from "../types";
 import { asJson, num, str, unwrapList, wfetch, withLimit } from "./core";
 
-// Project egress.allow / egress.deny / egress.pending audit events into
+// Project egress.allow / egress.deny / egress.hold audit events into
 // the EgressDecision shape the run-detail screen renders. Exported so callers
 // that already hold a run's audit events can derive egress WITHOUT a second
 // /audit round-trip.
@@ -20,7 +20,7 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
   const map: Record<string, "allow" | "deny" | "pending"> = {
     "egress.allow": "allow",
     "egress.deny": "deny",
-    "egress.pending": "pending",
+    "egress.hold": "pending",
   };
   return events
     // A tool call the run's own tool_rules answered is NOT a connection: its
@@ -40,7 +40,7 @@ export function egressFromAudit(events: AuditEvent[]): EgressDecision[] {
         domain,
         decision: map[e.action],
         bytes: num(d.bytes),
-        // B3: only egress.pending stamps one (docs/AUDIT-ACTIONS.md); str()
+        // B3: only egress.hold stamps one (docs/AUDIT-ACTIONS.md); str()
         // answers undefined for the other two actions and for an older trail.
         approval_id: str(d.approval_id),
       } satisfies EgressDecision;
