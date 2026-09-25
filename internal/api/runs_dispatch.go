@@ -134,8 +134,9 @@ type dispatchParams struct {
 // set RUNNING but SKIPS the agent Exec entirely (no `claude -p`) and does NOT
 // start the completion watcher (there is no agent process to wait on — the
 // watcher would otherwise mark the idle run COMPLETED the moment Wait failed).
-// The sandbox comes up idle (the container holds open via `sleep infinity`) so a
-// human can `wardyn attach <id>` and drive it. A non-interactive run is
+// The sandbox comes up idle (the container holds open via the TERM-aware idle
+// loop, AgentIdleScript / `agent-run --idle`) so a human can `wardyn attach
+// <id>` and drive it. A non-interactive run is
 // unchanged. Pair an interactive run with a never-reap policy (AutoStopAfterSec
 // < 0) or the idle reaper will stop the idle sandbox.
 //

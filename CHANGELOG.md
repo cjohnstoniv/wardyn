@@ -308,6 +308,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "CHANGELOG entry or `no user-visible change` stated" — sits beside the existing docs-landing
   and frozen-section lines, so a PR that adds neither has to say so instead of leaving the box
   ambiguous (#730).
+- **Stopped runs no longer wait out the full kill timeout (#468).** The sandbox's idle main
+  process ended in `exec sleep infinity`; as PID 1, `sleep` ignores SIGTERM, so every stop
+  (k8s and docker, task mode and interactive `agent-run --idle`) sat out the whole grace period
+  before the runtime force-killed it. It now traps TERM/INT and exits immediately.
 - **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
   `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
   `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →
