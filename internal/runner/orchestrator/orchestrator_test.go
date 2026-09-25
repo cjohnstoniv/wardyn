@@ -5,6 +5,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -290,8 +291,8 @@ func TestOrchestrator_NameIsSoleSubstrate(t *testing.T) {
 
 // TestOrchestrator_ClassesCachedWithinTTL pins Capabilities()/substrateFor()
 // memoize each substrate's ClassSupport for capsCacheTTL, so repeated hot-path
-// calls collapse to ONE daemon probe per substrate per TTL (they previously did a
-// live docker Info() round-trip every call). A countable fake proves the probe
+// calls collapse to one daemon probe per substrate per TTL, not a live docker
+// Info() round-trip every call. A countable fake proves the probe
 // count; a fake clock proves the TTL boundary forces exactly one refresh.
 func TestOrchestrator_ClassesCachedWithinTTL(t *testing.T) {
 	oci := &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1, types.CC2}, resolved: map[types.ConfinementClass]string{types.CC1: "oci/runc"}}
@@ -454,5 +455,40 @@ func TestCapabilities_EphemeralDiskEnforcementIsTheWeakestWord(t *testing.T) {
 				t.Errorf("EphemeralDiskEnforcement = %q, want %q", caps.EphemeralDiskEnforcement, tc.want)
 			}
 		})
+	}
+}
+
+// endingSubstrate is a fakeSubstrate that can keep an ended sandbox.
+type endingSubstrate struct {
+	*fakeSubstrate
+	ends []string
+}
+
+func (e *endingSubstrate) EndSandbox(_ context.Context, ref string) error {
+	e.rec(&e.ends, ref)
+	return nil
+}
+
+// TestOrchestrator_EndSandbox: the lease end reaches a substrate that can keep
+// a stopped sandbox, and keeps the route so a later kill still finds it. One
+// that cannot keep it (Kubernetes) answers ErrEndUnsupported, which the control
+// plane turns into a full teardown.
+func TestOrchestrator_EndSandbox(t *testing.T) {
+	ctx := context.Background()
+	oci := &endingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
+	o := New(oci)
+	if err := o.EndSandbox(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("EndSandbox: %v", err)
+	}
+	if err := o.KillSandbox(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("KillSandbox after the end: %v", err)
+	}
+	if len(oci.ends) != 1 || len(oci.kills) != 1 {
+		t.Errorf("ends %v kills %v; want the end forwarded and the route kept for the kill", oci.ends, oci.kills)
+	}
+
+	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
+	if err := k8s.EndSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrEndUnsupported) {
+		t.Errorf("EndSandbox on a substrate that cannot keep a sandbox = %v, want ErrEndUnsupported", err)
 	}
 }

@@ -42,7 +42,7 @@ function verb(page: Page, text: string): Locator {
 }
 
 test.beforeEach(async ({ page }) => {
-  await gotoConsole(page);
+  await gotoConsole(page, "admin");
   await navTo(page, "Audit");
   await expect(page.getByRole("heading", { name: "Audit" })).toBeVisible();
 });

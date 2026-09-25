@@ -61,7 +61,7 @@ func seq(from byte, n int) []byte {
 }
 
 func TestLocalKEK_GoldenVectors(t *testing.T) {
-	l, err := newLocal(goldenIKM, goldenRecipient)
+	l, err := newLocal(goldenIKM, goldenRecipient, "local:", localInfo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +108,72 @@ func TestLocalKEK_GoldenVectors(t *testing.T) {
 	}
 }
 
+// TestLocalPurposeKEK_GoldenVectors pins the purpose split (design §2.13 c),
+// computed outside Go like the vectors above: each purpose is its own HKDF
+// info and its own kek_id, AAD_kek carries that id under the unchanged label,
+// and AAD_secret is untouched.
+func TestLocalPurposeKEK_GoldenVectors(t *testing.T) {
+	cases := map[string]struct{ key, id string }{
+		PurposePlatform: {"9cd38afd47776338a67066f214d0e1c207e14827d1fbcc9193b55e5dacaa1080", "local/platform:929a37ad7ab6608f"},
+		PurposeCred:     {"5c2159f189fcced495ce3a9b8fb6ebd0e0e89b2c6cc66c1d106ab0fc59cb0c06", "local/cred:929a37ad7ab6608f"},
+	}
+	for purpose, want := range cases {
+		l, err := newLocal(goldenIKM, goldenRecipient, "local/"+purpose+":", localInfo+"/"+purpose)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := hex.EncodeToString(l.key); got != want.key {
+			t.Errorf("%s KEK = %s, want %s", purpose, got, want.key)
+		}
+		if l.ID() != want.id {
+			t.Errorf("%s kek_id = %s, want %s", purpose, l.ID(), want.id)
+		}
+	}
+	cred, _ := newLocal(goldenIKM, goldenRecipient, "local/cred:", localInfo+"/cred")
+	aad, err := cred.aad(Bind(goldenOwner, goldenName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantAAD = "0000000d77617264796e2f6b656b2f763100000012616c69636540636f72702e6578616d706c6500000011616e7468726f7069632d6170692d6b65790000001b6c6f63616c2f637265643a39323961333761643761623636303866"
+	if got := hex.EncodeToString(aad); got != wantAAD {
+		t.Errorf("AAD_kek (cred) = %s, want %s", got, wantAAD)
+	}
+}
+
+// TestLocalPurposeKEK_OneIdentityTwoUnrelatedKeys: the platform and credential
+// KEKs of one age key, and the pre-split KEK, are three keys, and a wrap made
+// under any one of them opens under neither other — so a credential KEK can
+// never unwrap (or forge) a platform row.
+func TestLocalPurposeKEK_OneIdentityTwoUnrelatedKeys(t *testing.T) {
+	ctx := context.Background()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform, err := NewLocalPurpose(id, PurposePlatform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred, _ := NewLocalPurpose(id, PurposeCred)
+	legacy, _ := NewLocal(id)
+	keks := []*Local{platform, cred, legacy}
+	for i, a := range keks {
+		wrapped, err := a.Wrap(ctx, seq(0x40, DEKSize), Bind("", "wardyn-signing-key"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for j, b := range keks {
+			_, err := b.Unwrap(ctx, wrapped, Bind("", "wardyn-signing-key"))
+			if (i == j) != (err == nil) {
+				t.Errorf("wrapped by %s, unwrapped by %s: err = %v", a.ID(), b.ID(), err)
+			}
+		}
+	}
+	if _, err := NewLocalPurpose(id, "people"); err == nil {
+		t.Error("NewLocalPurpose accepted a purpose that is not platform or cred")
+	}
+}
+
 // TestNewLocal_DerivesFromTheCanonicalIdentityString pins the one step the
 // golden vectors leave to code: the IKM is identity.String() and the id is
 // taken over identity.Recipient().String(), and both are stable for the same
@@ -121,7 +187,7 @@ func TestNewLocal_DerivesFromTheCanonicalIdentityString(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := newLocal(id.String(), id.Recipient().String())
+	want, _ := newLocal(id.String(), id.Recipient().String(), "local:", localInfo)
 	reparsed, err := age.ParseX25519Identity(id.String())
 	if err != nil {
 		t.Fatal(err)
@@ -152,8 +218,8 @@ func TestEncode_IsInjective(t *testing.T) {
 // it was made for, under the key that made it.
 func TestLocalKEK_RefusesAnyOtherBinding(t *testing.T) {
 	ctx := context.Background()
-	a, _ := newLocal("ikm-a", "rcpt-a")
-	b, _ := newLocal("ikm-b", "rcpt-b")
+	a, _ := newLocal("ikm-a", "rcpt-a", "local:", localInfo)
+	b, _ := newLocal("ikm-b", "rcpt-b", "local:", localInfo)
 	dek := seq(0x40, DEKSize)
 	wrapped, err := a.Wrap(ctx, dek, Bind("alice", "k"))
 	if err != nil {
