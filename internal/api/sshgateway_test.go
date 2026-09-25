@@ -140,7 +140,7 @@ func (s *sshMemStore) ListGroupDenyGrants(context.Context, string) ([]types.Capa
 // No "Available to" restriction (#612): capFeature is restrictable, so the
 // resolver reads the set before it decides.
 func (s *sshMemStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
-	return nil, nil
+	return map[string]map[string]bool{}, nil
 }
 
 // sshFakeRunner is Attach/ExecStream-capable (the brief's explicit "fake

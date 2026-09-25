@@ -39,6 +39,9 @@ type leaseStore struct {
 }
 
 func (s *leaseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	if s.restricted == nil {
+		return map[string]map[string]bool{}, nil
+	}
 	return s.restricted, nil
 }
 
