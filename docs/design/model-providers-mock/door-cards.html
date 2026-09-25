@@ -1,0 +1,232 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Refusals and doors mock</title>
+<!--
+  Model-providers mock, refusals and doors (#543, MP-24) · static, for owner review.
+  Draws design §5.7 (the run's provider fact, the failure block), §5.8 (which door a
+  refusal opens) and §5.10 (the approvals reauth card), as packet E approved them on
+  2026-09-22, with the user-types rename (Member view → User view) applied.
+
+  Two kinds of text:
+  - SERVER sentences (the refusal, "This run's model provider is …") come from #532 (MP-11)
+    and render verbatim; canon.html lists them as reference rows, not console canon.
+  - CONSOLE strings are canon.html's rows, byte for byte.
+  The doors themselves (their opening, device-code and saved states) are #544's; this
+  page draws only which door opens and its first line.
+
+  SCAFFOLD vs PRODUCT: the sticky bar, `.tag` labels, `.varlabel` strips and these
+  comments are review scaffolding. Everything inside a `.frame` is the product.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Model providers — refusals, the failure block, the reauth card (#543)</h1>
+    <div class="sub">A refusal opens its own provider's door, for the run's owner only. Static: nothing here is wired.</div>
+  </div>
+  <nav><a href="index.html">Packet</a><a href="provider-editor.html">Provider editor</a><a class="cur" href="door-cards.html">Refusals and doors</a><a href="canon.html">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- ===== FACT ===== -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>State 1 · §5.7</span><b>The run's model provider, in the run header's chip bar (decision 5). The run records the provider it chose, so this never changes after launch.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Case (a)</b> — one provider</div>
+    <div class="hdrbar"><span class="title">docs sweep</span><span class="chip danger">Failed</span><span class="chip neutral">Model provider · Bedrock (prod)</span><span class="chip neutral">Fence</span></div>
+    <div class="varlabel"><b>Cases (b) and (c)</b> — the gateway</div>
+    <div class="hdrbar"><span class="title">refactor auth</span><span class="chip success"><i class="dot"></i>Running</span><span class="chip neutral">Model provider · Corp gateway</span><span class="chip neutral">Fence</span></div>
+    <div class="varlabel"><b>Removed since</b> — the provider was deleted after this run chose it</div>
+    <div class="hdrbar"><span class="title">refactor auth</span><span class="chip neutral">Completed</span><span class="chip neutral">Model provider · Corp gateway (removed)</span><span class="chip neutral">Fence</span></div>
+  </div>
+</section>
+
+<!-- ===== FAILURE BLOCK, OWNER ===== -->
+<section class="state">
+  <div class="tag"><span>State 2 · §5.7</span><b>The failure block, User view, the run's owner — the door of the run's own provider. Today it always offers AWS; a Codex CLI run refused over its token opened "Sign in to AWS" (#146 defect 2).</b></div>
+  <div class="frame">
+    <div class="pad cases">
+      <div>
+        <p class="fieldset-t" style="margin:0 0 8px">AWS sign-in</p>
+        <div class="fb">
+          <p class="eyebrow">What happened</p>
+          <p class="hint">This run's model provider is Bedrock (prod), and you are not signed in to AWS for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.</p>
+          <div class="door"><button class="btn primary sm" type="button">Sign in to AWS</button><span>Sign in here. This run stays failed — relaunch it from the run header.</span></div>
+          <div class="audit"><button class="btn sm" type="button">Open audit trail</button></div>
+        </div>
+      </div>
+      <div>
+        <p class="fieldset-t" style="margin:0 0 8px">Token</p>
+        <div class="fb">
+          <p class="eyebrow">What happened</p>
+          <p class="hint">This run's model provider is Corp gateway, and you have not added your token for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.</p>
+          <div class="door"><button class="btn primary sm" type="button">Add your token</button><span>Add it here. This run stays failed — relaunch it from the run header.</span></div>
+          <div class="audit"><button class="btn sm" type="button">Open audit trail</button></div>
+        </div>
+      </div>
+      <div>
+        <p class="fieldset-t" style="margin:0 0 8px">Key (and Bedrock bearer key)</p>
+        <div class="fb">
+          <p class="eyebrow">What happened</p>
+          <p class="hint">This run's model provider is Anthropic API key, and you have not added your key for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.</p>
+          <div class="door"><button class="btn primary sm" type="button">Add your key</button><span>Add it here. This run stays failed — relaunch it from the run header.</span></div>
+          <div class="audit"><button class="btn sm" type="button">Open audit trail</button></div>
+        </div>
+      </div>
+      <div>
+        <p class="fieldset-t" style="margin:0 0 8px">Claude sign-in</p>
+        <div class="fb">
+          <p class="eyebrow">What happened</p>
+          <p class="hint">This run's model provider is Claude subscription, and you are not signed in to Claude for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.</p>
+          <div class="door"><button class="btn primary sm" type="button">Sign in to Claude</button><span>Sign in here. This run stays failed — relaunch it from the run header.</span></div>
+          <div class="audit"><button class="btn sm" type="button">Open audit trail</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FAILURE BLOCK, NOT OWNER ===== -->
+<section class="state">
+  <div class="tag"><span>State 3 · §5.7</span><b>Anyone but the owner, and every run in the Admin view — the sentence, whose credential it ran on, no door. An admin's sign-in lands in the admin's own namespace and can never serve bob's run.</b></div>
+  <div class="frame">
+    <div class="pad cases">
+      <div>
+        <p class="fieldset-t" style="margin:0 0 8px">Admin view · bob's run (or another user's)</p>
+        <div class="fb">
+          <p class="eyebrow">What happened</p>
+          <p class="hint">This run's model provider is Bedrock (prod), and it runs on bob@acme.example's own credential — only they can reconnect it. Wardyn does not substitute a different model provider.</p>
+          <p class="own">It ran on bob@acme.example's own credential — only they can reconnect it.</p>
+          <div class="audit"><button class="btn sm" type="button">Open audit trail</button></div>
+        </div>
+      </div>
+      <div>
+        <p class="fieldset-t" style="margin:0 0 8px">Admin view · the admin's own run</p>
+        <div class="fb">
+          <p class="eyebrow">What happened</p>
+          <p class="hint">This run's model provider is Bedrock (prod), and you are not signed in to AWS for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.</p>
+          <p class="own">It ran on ann@acme.example's own credential — only they can reconnect it.</p>
+          <div class="door"><button class="btn link sm" type="button">Open in user view</button></div>
+          <div class="audit"><button class="btn sm" type="button">Open audit trail</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Off, not available, not granted</b> — anyone; no door. At New Run the rail focuses the picker instead (state 4)</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:12px">
+      <div class="fb"><p class="eyebrow">What happened</p><p class="hint">This run's model provider is Corp gateway, and it is turned off — choose another model provider, or ask your admin. Wardyn does not substitute a different model provider.</p><div class="audit"><button class="btn sm" type="button">Open audit trail</button></div></div>
+      <div class="fb"><p class="eyebrow">What happened</p><p class="hint">This run's model provider is Anthropic API key, and it is not available to Codex CLI — choose another model provider, or ask your admin. Wardyn does not substitute a different model provider.</p><div class="audit"><button class="btn sm" type="button">Open audit trail</button></div></div>
+      <div class="fb"><p class="eyebrow">What happened</p><p class="hint">This run's model provider is Corp gateway, and you are not granted it — choose another model provider, or ask your admin. Wardyn does not substitute a different model provider.</p><div class="audit"><button class="btn sm" type="button">Open audit trail</button></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== WHICH DOOR ===== -->
+<section class="state">
+  <div class="tag"><span>State 4 · §5.8</span><b>Which door a refusal opens — keyed by the refusal's own <span class="mono">provider</span>, never by what is selected on screen (#146 ruling). The rail shows the server's sentence on its launch-error line, as it does today.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>The rule</b> — scaffold table; the first column is the wire's own value</div>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>The refused provider's kind</th><th>The door</th></tr></thead>
+        <tbody>
+          <tr><td><span class="mono">bedrock_sso</span></td><td>The AWS door for that provider. On New Run it opens on its own, and the run launches again after sign-in.</td></tr>
+          <tr><td>a key, token or <span class="mono">bedrock_bearer</span> kind</td><td>The key or token door for that provider</td></tr>
+          <tr><td><span class="mono">anthropic_subscription</span></td><td>The Claude door for that provider</td></tr>
+          <tr><td>another person's run</td><td>None; the sentence only (state 3)</td></tr>
+          <tr><td>off, not available, not granted, or a choice is required</td><td>None; on New Run the rail focuses the picker</td></tr>
+          <tr><td>no <span class="mono">provider</span> field (a sign-in renewal that did not complete)</td><td>None</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="varlabel"><b>New Run · AWS sign-in</b> — the rail, then the door it opens (the door's own states are #544's)</div>
+    <div class="pad cases">
+      <div class="card">
+        <p class="fieldset-t" style="margin-top:0">Credentials</p>
+        <p style="font-size:13px;margin-top:6px">Model provider · Bedrock (prod)</p>
+        <div style="margin-top:14px"><button class="btn primary" type="button">Launch run</button></div>
+        <p class="alert" role="alert"><span aria-hidden="true">⚠</span><span>This run's model provider is Bedrock (prod), and you are not signed in to AWS for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.</span></p>
+      </div>
+      <div class="dlg" style="margin:0"><h3>Sign in to AWS</h3><p>For Bedrock (prod)</p></div>
+    </div>
+    <div class="varlabel"><b>New Run · token</b> — a Codex CLI run on the gateway now opens the token door, not AWS</div>
+    <div class="pad cases">
+      <div class="card">
+        <p class="fieldset-t" style="margin-top:0">Credentials</p>
+        <div class="form one" style="padding:8px 0 0"><div class="f"><label>Model provider</label><div class="ctl">Corp gateway — your token · not added</div></div></div>
+        <div style="margin-top:14px"><button class="btn primary" type="button">Launch run</button></div>
+        <p class="alert" role="alert"><span aria-hidden="true">⚠</span><span>This run's model provider is Corp gateway, and you have not added your token for it — connect it from Getting started in the console, or from the banner the console shows on every page. Wardyn does not substitute a different model provider.</span></p>
+      </div>
+      <div class="dlg" style="margin:0"><h3>Add your token for Corp gateway</h3><p>Sent to <span class="mono">gateway.corp.example</span></p></div>
+    </div>
+    <div class="varlabel"><b>New Run · turned off since the page loaded</b> — no door; focus moves to the picker</div>
+    <div class="pad">
+      <div class="card" style="max-width:520px">
+        <p class="fieldset-t" style="margin-top:0">Credentials</p>
+        <div class="form one" style="padding:8px 0 0"><div class="f"><label>Model provider</label><div class="ctl focus">Corp gateway — your token · added</div></div></div>
+        <div style="margin-top:14px"><button class="btn primary" type="button">Launch run</button></div>
+        <p class="alert" role="alert"><span aria-hidden="true">⚠</span><span>This run's model provider is Corp gateway, and it is turned off — choose another model provider, or ask your admin. Wardyn does not substitute a different model provider.</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== REAUTH CARD ===== -->
+<section class="state">
+  <div class="tag"><span>State 5 · §5.10</span><b>The approvals reauth card — the title stays about AWS (only an AWS sign-in can hold a running request), and a new line names which AWS provider. A sign-in to another AWS provider can't clear it.</b></div>
+  <div class="frame">
+    <div class="pad cases">
+      <div>
+        <p class="fieldset-t" style="margin:0 0 8px">User view · the run's owner</p>
+        <div class="appcard">
+          <span class="chip warning">AWS sign-in needed</span>
+          <h4>AWS sign-in needed for this run</h4>
+          <p class="prov">Model provider · Bedrock (prod)</p>
+          <div class="banner"><p><b>What you're approving:</b> AWS sign-in needed.</p><p>If a model call is waiting on your sign-in, the run continues after you sign in; if it already failed, relaunch it.</p></div>
+          <div class="acts"><button class="btn primary sm" type="button">Sign in to AWS</button></div>
+        </div>
+      </div>
+      <div>
+        <p class="fieldset-t" style="margin:0 0 8px">Admin view, or anyone but the owner</p>
+        <div class="appcard">
+          <span class="chip warning">AWS sign-in needed</span>
+          <h4>AWS sign-in needed for this run</h4>
+          <p class="prov">Model provider · Bedrock (prod)</p>
+          <div class="banner"><p><b>What you're approving:</b> AWS sign-in needed.</p><p>Waiting on bob@acme.example's AWS sign-in — only they can complete it.</p></div>
+        </div>
+      </div>
+      <div>
+        <p class="fieldset-t" style="margin:0 0 8px">Admin view · the admin's own run</p>
+        <div class="appcard">
+          <span class="chip warning">AWS sign-in needed</span>
+          <h4>AWS sign-in needed for this run</h4>
+          <p class="prov">Model provider · Bedrock (prod)</p>
+          <div class="banner"><p><b>What you're approving:</b> AWS sign-in needed.</p><p>Waiting on ann@acme.example's AWS sign-in — only they can complete it.</p></div>
+          <div class="acts"><button class="btn link sm" type="button">Open in user view</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>

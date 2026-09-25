@@ -171,6 +171,10 @@ ds-bundle/
 # announced-failures-canon.md is the shipped canon for #459's frozen strings
 # (RAIL.LAUNCH_ERROR_LABEL etc.) — the accompanying copy modules cite it.
 !/docs/design/announced-failures-canon.md
+# model-providers-mock is #537/#543's owner-approved mock round: the provider
+# editor and refusal doors, and the frozen canon table that draws them.
+!/docs/design/model-providers-prompt.md
+!/docs/design/model-providers-mock/
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 
