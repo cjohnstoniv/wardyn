@@ -4,8 +4,8 @@
  */
 
 import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navToRoute } from "./fixtures";
-import { AGENTS, MODEL_ACCESS_CHIP_LABEL } from "../src/app/lib/workspace-providers-copy";
-import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../src/app/components/wardyn/copy";
+import { MEMBER_GETTING_STARTED } from "../src/app/components/wardyn/copy";
+import { CONNECTIONS } from "../src/app/components/wardyn/copy/door";
 
 // Member Getting Started (Phase 5) — same mockMemberRole splice
 // member-console.spec.ts uses (the seeded backend always authenticates as
@@ -116,6 +116,38 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect.poll(() => mp4Requests, { timeout: 5000 }).toBeGreaterThanOrEqual(1);
   });
 
+  // #541 fix review: a legacy install (no model-providers block) keeps "Your
+  // model key" as Getting Started's own door until #548 converts every
+  // install to a provider block — its button is what this pins now. Once a
+  // real provider block exists, Your model connections (Your account) is the
+  // only door (the test below pins its absence here); one-door.spec.ts's
+  // "Your model connections and the strip open the same provider door" pins
+  // that provider-mode entrance.
+  test("a legacy per_user AWS lane keeps its own Sign-in button on Getting Started", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.model_access = { state: "not_configured", mechanism: "bedrock_sso", action: "Sign in to AWS" };
+      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
+        h.id === "claude-code"
+          ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
+          : h,
+      );
+      await route.fulfill({ response, json: body });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+    await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your model key" })).toBeVisible();
+    // No model-providers block on this fixture: legacySummary
+    // (lib/model-connections.ts) is the summary chip's fallback, reading the
+    // same not_configured state model_access carries: Needs you.
+    await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible();
+    // Tightened (fix review): exactly one — not merely "at least one". Two
+    // would mean a leftover chip-row duplicate of the card's own button.
+    await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(1);
+  });
+
   // Appendix A finding 5: not_applicable is the admin-token principal's own
   // answer, not a member's — it must never dangle a "Sign in to AWS" button
   // in front of a caller with no person to sign in as, whatever the
@@ -147,7 +179,14 @@ test.describe("member Getting Started (mocked /me role)", () => {
   // `live`: the wire shape every member of such a deployment gets
   // (userModelAccess projects the ADMIN's credential for them). The chip row
   // used to read "Model access · Your AWS sign-in" over a card saying "Provided
-  // by your admin" — a sign-in this member has never done. One owner, one chip.
+  // by your admin" — a sign-in this member has never done. One owner, one
+  // chip.
+  //
+  // Fix review: the chip vocabulary is now Ready/Needs you/Not set up
+  // (legacySummary, lib/model-connections.ts) rather than the retired
+  // MODEL_ACCESS_CHIP_LABEL/MODEL_ACCESS_PROVIDED_CHIP pair — legacySummary
+  // reads model_access.state alone, ownership-agnostic, so a shared row's
+  // `live` still reads Ready.
   test("a shared bedrock row's live credential is the ADMIN's on the chip row too", async ({ page }) => {
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
@@ -162,40 +201,7 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await gotoConsole(page);
     await navToRoute(page, "/setup");
     await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
-    await expect(page.getByText(MODEL_ACCESS_CHIP_LABEL.live)).toHaveCount(0);
-    await expect(page.getByText(MEMBER_GETTING_STARTED.MODEL_ACCESS_PROVIDED_CHIP).first()).toBeVisible();
-  });
-
-  // U-13 (a11y) — the page's two "Sign in to AWS" buttons had the same
-  // accessible name. The visible text is unchanged; the names are not.
-  test("the two Sign in to AWS buttons are distinguishable to a screen reader", async ({ page }) => {
-    await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      body.model_access = { state: "not_configured" };
-      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
-        h.id === "claude-code"
-          ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
-          : h,
-      );
-      await route.fulfill({ response, json: body });
-    });
-    await gotoConsole(page);
-    await navToRoute(page, "/setup");
-    await expect(
-      page.getByRole("button", { name: MEMBER_GETTING_STARTED.SIGN_IN_AWS_ARIA_SUMMARY, exact: true }),
-    ).toBeVisible();
-    const cardButton = page.getByRole("button", { name: YOUR_MODEL_KEY.SIGN_IN_AWS_ARIA_CARD, exact: true });
-    await expect(cardButton).toBeVisible();
-    // Both still SAY the frozen visible text.
-    await expect(cardButton).toHaveText(AGENTS.SIGN_IN_AWS);
-    // …and opening the one door (a modal, #544) takes the card's duplicate
-    // out of reach.
-    await page
-      .getByRole("button", { name: MEMBER_GETTING_STARTED.SIGN_IN_AWS_ARIA_SUMMARY, exact: true })
-      .click();
-    await expect(page.getByTestId("harness-login-pane")).toBeVisible();
-    await expect(cardButton).toHaveCount(0);
+    await expect(page.getByText(CONNECTIONS.SUMMARY_READY)).toBeVisible();
   });
 
   // X3-F3 — the one write path a member has named the wrong secret. The roster
@@ -239,6 +245,17 @@ test.describe("member Getting Started (mocked /me role)", () => {
       const response = await route.fetch();
       const body = await response.json();
       body.model_access = { state: "not_configured", mechanism: "bedrock_sso", action: "Sign in to AWS" };
+      // fix review: this e2e backend seeds no agent roster at all
+      // (scripts/e2e-backend.sh), so "Your model key" grades band "other"
+      // (model-key-state.ts) without a per_user claude-code row and shows no
+      // button regardless of model_access — the roster override every sibling
+      // legacy fixture in this file already carries is what this test needs
+      // too, to reach the button the rest of it is about.
+      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
+        h.id === "claude-code"
+          ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
+          : h,
+      );
       await route.fulfill({ response, json: body });
     });
     await page.route("**/api/v1/setup/harness-login", async (route) =>
@@ -267,6 +284,57 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect(page.getByText(/requires the admin role/i)).toHaveCount(0);
   });
 
+  // The provider-mode chip: Ready when the granted harness's default provider
+  // is connected — computed by the SAME predicate Your account's own header
+  // chip reads (lib/model-connections.ts's connectionsSummary). A real
+  // provider block also retires "Your model key" for THIS install: Your
+  // account is the only door (MP-D's own drawing).
+  test("the summary chip reads Ready with a connected default provider, and Your model key is gone", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.model_providers = [
+        {
+          id: "bedrock-prod",
+          name: "Bedrock (prod)",
+          kind: "bedrock_sso",
+          harnesses: ["claude-code"],
+          default_for: ["claude-code"],
+          host: "bedrock-runtime.us-east-1.amazonaws.com",
+        },
+      ];
+      body.provider_access = [{ provider: "bedrock-prod", state: "live" }];
+      await route.fulfill({ response, json: body });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+    await expect(page.getByText(CONNECTIONS.SUMMARY_READY)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your model key" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
+  });
+
+  // Fix review (MED, the empty-grant shape): a REAL provider block that
+  // grants this caller nothing (`model_providers: []`, no `omitempty` on the
+  // wire any more) is a different fact from no block at all — Not set up by
+  // your admin, and still no "Your model key" card, since a block exists.
+  test("model_providers: [] is a real block granting nothing — Not set up, no legacy card", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.model_access = { state: "live" }; // proves legacySummary would say Ready — this must not
+      body.model_providers = [];
+      body.provider_access = [];
+      await route.fulfill({ response, json: body });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+    await expect(page.getByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your model key" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
+  });
+
   // member-cold-load lane (plan P3, absorbs F3-F7): a COLD document load of
   // /setup (bookmark, reload, the SSO callback's return) used to mount
   // SetupScreen — the ADMIN orchestrator — under the role context's fail-open
@@ -278,12 +346,13 @@ test.describe("member Getting Started (mocked /me role)", () => {
   // GET /api/v1/site-config and GET /api/v1/workspace-providers are
   // unambiguous — no member surface ever calls either. GET /api/v1/secrets is
   // NOT: secrets.ts's listSecrets() (the admin orchestrator's operator-wide
-  // read) and listSecretsMine() (MemberGettingStarted's own "Your model key"
-  // read) hit the IDENTICAL URL — the server tells the two apart by caller
-  // identity, not the request. So instead of a zero-count on that path (which
-  // would false-fail on the member's OWN legitimate read), this pins the
-  // request COUNT at exactly one: the leaked admin-orchestrator read this fix
-  // removes would have shown up as a second, earlier GET before role resolved.
+  // read) and listSecretsMine() ("Your model key"'s own read, restored in the
+  // #541 fix review — it is the legacy install's only door until #548 lands)
+  // hit the IDENTICAL URL — the server tells the two apart by caller identity,
+  // not the request. So instead of a zero-count on that path (which would
+  // false-fail on the member's OWN legitimate read), this pins the request
+  // COUNT at exactly one: the leaked admin-orchestrator read this fix removes
+  // would have shown up as a second, earlier GET before role resolved.
   test("a direct cold page.goto(\"/setup\") fires no admin-only reads", async ({ page }) => {
     const requests: { method: string; url: string }[] = [];
     page.on("request", (req) => requests.push({ method: req.method(), url: req.url() }));

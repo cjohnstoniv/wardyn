@@ -58,10 +58,10 @@ export const RAIL_CREDENTIAL = {
   // chip's shape because it is the same kind of fact: a bound, stated up front.
   // OWNERSHIP, not status. This chip must be painted from the ROSTER ROW
   // alone — the rail never reads model_access — so it must not reuse "Your
-  // AWS sign-in" (byte-identical to YOUR_MODEL_KEY.SIGNED_IN_CHIP, which on
-  // Getting Started is the SIGNED-IN success chip), which would tell a
-  // member who had not signed in that they had. The row's fact is whose
-  // credential the lane uses, and that is what it says.
+  // AWS sign-in" (Getting Started's retired "Your model key" card's own
+  // SIGNED-IN success chip, #541), which would tell a member who had not
+  // signed in that they had. The row's fact is whose credential the lane
+  // uses, and that is what it says.
   SANDBOX_BEDROCK_CHIP_PER_USER: "Per-person AWS sign-in",
   SANDBOX_BEDROCK_CHIP_SHARED: "Admin's credential",
   // residency "sandbox", subscription: WARDYN_SUBSCRIPTION_INJECT=off, which is

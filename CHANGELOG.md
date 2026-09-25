@@ -8,6 +8,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **Your account ▸ Your model connections (#541).** Every person — admins included, by switching to
+  Member view — now connects their own credential for each model provider their admin enabled for
+  them, one row per provider: an AWS or Claude sign-in, or an API key/token, each with its own
+  live/expiring/signed-out state and a "Ready" / "Needs you" / "Not set up by your admin" summary
+  chip. Reached from Getting Started, which keeps only that summary chip and a link. This is
+  additive: an install with no per-provider model records (#551) at all is unaffected, and keeps
+  "Your model key" on Getting Started as its own credential door until #548 converts it.
+
+### Changed
+
+- **`GET /setup/status`'s `model_providers` no longer omits itself when a provider block exists but
+  grants the caller nothing (#541 fix review).** It now reads `[]` for that shape and `null` (or is
+  absent, from an older daemon) only when there is no provider block at all — the two are different
+  facts, and collapsing them into the same missing key made a real "not connected to anything" grant
+  indistinguishable from an admin who has not started setting providers up.
+
 ### Fixed
 
 - **Review states where a chosen model provider's credential lives (#983).** A run that chose a
@@ -22,6 +40,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `resolved`, `expired` and `timeout` outcomes all folded in the per-person Azure DevOps lane's
   own credential_reauth rows. Each is now scoped to the AWS SSO lane, the same split `cancelled`
   already used (#968).
+- **Getting Started's model-access chip read "Not set up by your admin" for every legacy install
+  (#541 fix review).** #541's new per-provider connections chip graded only `model_providers`/
+  `provider_access`, which are empty for any install predating provider records — every shared or
+  per_user-roster install still on main, since the admin funnel writes no provider block until
+  #548 lands. `legacySummary` (`lib/model-connections.ts`) restores the old per-principal
+  `model_access`/`llm_ready` reading as Getting Started's own fallback whenever there is no
+  provider block, and the per_user lede is back for a per_user roster row; a real provider block
+  shows Your model connections' own lede. The expiring row's own line
+  (`Your account`'s connections list) now reads a clock time, matching packet MP-D's own drawn
+  text, instead of a relative offset.
 - **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
   map being set was previously enough to hide the "Who is an admin" setup row and the shell
   banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still

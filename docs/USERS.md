@@ -228,21 +228,36 @@ console. Leave off `?run_id=` and you get an empty `200`: a collection
 endpoint's answer when it has nothing scoped to show you, not an error. The
 action vocabulary is [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 
-## Your model key
+## Your model connections
 
-Store your own key under the provider-convention name from Getting Started ▸
-Your model key (`anthropic-api-key` for Claude, `openai-api-key` for Codex)
-via `PUT /secrets/<name>` or the console — `GET /secrets` shows it under
-`mine`, never under a name another member wrote. Pick it under Model access
-when you launch a run; your run then uses YOUR key, injected proxy-side
-exactly like an operator's own (the value is never resident in the sandbox).
-Setting your own key needs no operator integration or workspace requirement
-first — an unpaired stored secret still needs one of those, but your own
-key naming the provider convention does not. The same rule reaches a
-workspace's integration requirement: when your admin's integration names a
-credential the admin has not stored, a secret you store under that same
-name is what your run injects — the integration's host, header and egress
-stay the admin's; only the value is yours.
+Which of the two shapes below applies depends on whether your admin has set
+up per-provider model records (#551) — the console tells you which one you
+are in: a "Your model connections" card on Your account means the
+provider-block shape; a "Your model key" card on Getting Started means the
+legacy one. `GET /setup/status`'s `model_providers` is `null` under the
+legacy shape and an array (possibly empty, if your admin has started but
+granted you nothing yet) under the provider-block one.
+
+**Provider-block installs (#551).** Add your own credential for a provider
+from Your account ▸ Your model connections in the console — one row per
+provider your admin enabled for your agents, each with its own sign-in or key
+button. There is no `PUT /secrets` step here: the console's own door stores it
+for you, scoped to that provider.
+
+**Legacy installs (today's more common shape, until #548 converts every
+install).** The console's entry point is Getting Started ▸ Your model key.
+Store your own key under the provider-convention name (`anthropic-api-key`
+for Claude, `openai-api-key` for Codex) via `PUT /secrets/<name>` or that
+card. `GET /secrets` shows it under `mine`, never under a name another member
+wrote. Pick it under Model access when you launch a run; your run then uses
+YOUR key, injected proxy-side exactly like an operator's own (the value is
+never resident in the sandbox). Setting your own key needs no operator
+integration or workspace requirement first — an unpaired stored secret still
+needs one of those, but your own key naming the provider convention does not.
+The same rule reaches a workspace's integration requirement: when your
+admin's integration names a credential the admin has not stored, a secret you
+store under that same name is what your run injects — the integration's
+host, header and egress stay the admin's; only the value is yours.
 
 Bounds: this is API-key mode only — the resident Claude-subscription mount
 stays operator-only (see [DESKTOP.md § Model access on
@@ -282,7 +297,7 @@ their own inline policy.
   integration, or a workspace requirement, re-adds a model grant after your
   policy is clamped — see [DESKTOP.md § Model access on
   m′](DESKTOP.md#model-access-on-m). If you'd rather bring your own key, see
-  [Your model key](#your-model-key) above — no admin action needed.
+  [Your model connections](#your-model-connections) above — no admin action needed.
 - **A git provider your repo's host is on.** If onboarding a repository or
   launching a run against it is refused because its host is not an enabled git
   provider, only an admin can fix it — by enabling a provider row for that host,

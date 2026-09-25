@@ -26,6 +26,36 @@ export const CONNECTIONS = {
   SIGN_IN_CLAUDE: "Sign in to Claude",
   ADD_KEY: "Add your key",
   ADD_TOKEN: "Add your token",
+  // §5.4's own page (packet MP-D, states C3-C10) — the page every person,
+  // admins included, connects their own credential from. Not wired here: C9b
+  // (a token removed by an admin's address change) and C11 (the admin-token
+  // caller, which never mounts this page — model-access-context.tsx's own
+  // comment). SetupProviderAccess carries no signal distinguishing "removed"
+  // from "never stored", so C9b's own sentence is left unwired rather than
+  // invented — see #541's report.
+  TITLE: "Your model connections",
+  LEDE: "Connect the model providers your admin set up. Your runs use your own sign-in or key.",
+  FOR: (harnesses: string) => `For ${harnesses}`,
+  SUMMARY_READY: "Model access · Ready",
+  SUMMARY_NEEDS_YOU: "Model access · Needs you",
+  SUMMARY_NOT_SET_UP: "Model access · Not set up by your admin",
+  NOT_SIGNED_IN: "Not signed in",
+  SIGNED_IN: "Signed in",
+  EXPIRING: "Expiring",
+  EXPIRING_LINE: (when: string) => `Sign in again before ${when}`,
+  SIGNED_OUT: "Signed out",
+  NO_KEY: "No key added",
+  NO_TOKEN: "No token added",
+  KEY_GOES_TO: (host: string) => `Your key goes to ${host}`,
+  // vendor is fixed to "Anthropic" at every call site (packet MP-D's own
+  // wording) — the packet's own report flags this as questionable on a row
+  // that also serves a non-Anthropic agent; shipped as drawn.
+  TOKEN_GOES_TO: (host: string, vendor: string) => `Your token goes to ${host} — not directly to ${vendor}`,
+  YOUR_KEY: "Your key",
+  YOUR_TOKEN: "Your token",
+  SENT_TO: (host: string) => `Sent to ${host}`,
+  REPLACE: "Replace",
+  CLAUDE_AGING: "Your Claude sign-in is over 11 months old and may stop working — sign in again.",
 } as const;
 
 // The run's model provider in the run header (#543, decision 5). A provider

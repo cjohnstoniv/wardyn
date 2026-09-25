@@ -79,6 +79,7 @@ import { STARTING_UNSCHEDULABLE } from "../../src/app/components/screens/run-sta
 // 0.7.6 lanes ui-model-access-door (the strip) and ui-new-run-model-access (the
 // rail), by constant name from local/v076/canon/*-docs.md.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
+import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
 import {
   MEMBER_GETTING_STARTED,
   RAIL_CREDENTIAL,
@@ -334,6 +335,10 @@ test("B (ui-member-model-key): a per_user member's card names their OWN AWS sign
   // by sso-member.spec.ts's second case plus the lane's own vitest matrix — the
   // ONE thing only a live walk can show is the SIGNED-IN branch under a real
   // per_user roster row, with a real captured session behind it.
+  //
+  // #541 fix review: this install has no model-providers block, which keeps
+  // "Your model key" as Getting Started's own door (and this card) until #548
+  // converts every install to a provider block.
   await dexSignIn(page, MEMBER_EMAIL);
   expect((await modelAccess(page)).state, "sso-member.spec.ts must leave the member live").toBe("live");
 
@@ -1116,6 +1121,13 @@ test("F (member-preview): an admin previews the state a member is in before they
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("not_configured");
   await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
+  // #541 fix review: this deployment has no model-providers block (a per_user
+  // roster row alone), which keeps "Your model key" as Getting Started's own
+  // door until #548 converts every install to a provider block; its own
+  // connections-summary chip falls back to legacySummary
+  // (lib/model-connections.ts), reading the same not_configured state: Needs
+  // you.
+  await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
 
   // …and the one door that could WRITE inside the preview is refused, because a
   // capture made here would land on the admin's own identity and overwrite

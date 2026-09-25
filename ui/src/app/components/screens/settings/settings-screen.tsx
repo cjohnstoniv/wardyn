@@ -38,6 +38,7 @@ import { useOperator, useOperatorResolved } from "../../wardyn/operator-context"
 import { isProxyConfigured } from "../setup/corp-network-proxy";
 import { SshKeysPane } from "../ssh-keys";
 import { ModelProviderCard } from "./connection-cards";
+import { ModelConnectionsCard } from "./model-connections-card";
 import { UserDrivesCard } from "../setup/user-drives-card";
 import { ProvidersCard } from "../setup/providers-card";
 import { AdoConnectionCard } from "./ado-connection";
@@ -267,6 +268,10 @@ export function SettingsScreen() {
               subscriptionAvailable={status.checks.find((c) => c.id === "claude_signin_image")?.status !== "warn"}
             />
           )}
+          {/* #541 (§5.4, packet MP-D): every person's own model-provider
+              credentials, User view only — an admin reaches it by switching
+              to Member view. Renders nothing with no provider block. */}
+          {!adminView && <ModelConnectionsCard status={status} onChanged={load} />}
           <ModelProviderCard
             status={status}
             siteConfig={siteConfig}
