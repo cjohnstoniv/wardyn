@@ -27,7 +27,6 @@ vi.mock("../../lib/api/ssh-keys", () => ({
 }));
 
 import { SSHKeysScreen } from "./ssh-keys";
-import { aheadByHours } from "../../lib/test-clock";
 
 function renderScreen() {
   return render(
