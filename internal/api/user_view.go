@@ -178,7 +178,7 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 	// rows until it is repointed. docs/OPERATIONS.md's "Renamed in 0.8"
 	// appendix says so; removed in 0.9.
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"auth.user_view", "/api/v1/me/view", "success", mustJSON(datum)))
+		"auth.user_view.set", "/api/v1/me/view", "success", mustJSON(datum)))
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"auth.member_mode", "/api/v1/me/view", "success", mustJSON(datum)))
 	resp := map[string]any{"user_view": entered, "user_type": nil, "user_view_no_credential": entered && preview}
@@ -308,7 +308,7 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request, typeID str
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/me" {
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidc.PrincipalFromContext(ctx),
-			"auth.user_view", "/api/v1/me", "success",
+			"auth.user_view.set", "/api/v1/me", "success",
 			mustJSON(map[string]any{"enabled": false, "user_type": typeID, "reason": "user_type_deleted"})))
 		return r.WithContext(dropped)
 	}

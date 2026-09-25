@@ -524,6 +524,15 @@ var auditActionGrammarAllow = map[string]bool{
 	// grammar did. "unserialized" ends in the same past-participle shape the
 	// no-past-tense check rejects, for the same reason as the two above.
 	"auth.signin_unserialized": true,
+	// The lost-run rows (#574) are run.ended's siblings: the same kept-run
+	// state, named the same way, so they are allowlisted with it rather than
+	// renamed alone.
+	"run.lost":         true,
+	"run.lost.expired": true,
+	// The user view's compat row: dual-emitted beside auth.user_view.set under
+	// its exact pre-0.8 name for one minor (OD-18, #617), which is its whole
+	// purpose. Removed in 0.9.
+	"auth.member_mode": true,
 }
 
 // actionSegment is one dot-separated segment of an action name.

@@ -296,10 +296,10 @@ func (p *Provider) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 // reached, rather than widening the Provider contract for one caller.
 func (p *Provider) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error {
 	if err := p.revocations.RevokeJTI(ctx, jti, runID); err != nil {
-		p.audit(ctx, runID, p.spiffeIDString(runID), "identity.revoke_jti", jti, "failure")
+		p.audit(ctx, runID, p.spiffeIDString(runID), "identity.jti.revoke", jti, "failure")
 		return fmt.Errorf("embedded identity: revoke jti for run %s: %w", runID, err)
 	}
-	p.audit(ctx, runID, p.spiffeIDString(runID), "identity.revoke_jti", jti, "success")
+	p.audit(ctx, runID, p.spiffeIDString(runID), "identity.jti.revoke", jti, "success")
 	return nil
 }
 

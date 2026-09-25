@@ -1114,7 +1114,7 @@ migration `0050`)** are the second and third owned nouns after runs.
   refresh token the provider refuses for good (`invalid_grant`) is deleted at
   that renewal, and a stored AWS sign-in is deleted by a daily sweep once it can
   no longer be used or renewed (its row's `expires_at`); both audit
-  `credential.expired_deleted`. The person is then shown as not connected and
+  `credential.expired.delete`. The person is then shown as not connected and
   signs in again. A Conditional Access refusal does not delete anything — the
   sign-in still works once the person is present.
 - **Cross-user admin access is queryable.** An admin acting on a member-owned
@@ -2465,7 +2465,7 @@ screen, and **Admin view** is the way back; there is no band, because the User
 view is a normal state. Other tabs follow the session into the same view. Every
 audit row the session writes still names **your
 own sub** — this is not impersonation, and there is no way to become anybody
-else. The transition itself is audited as `auth.user_view` (`auth.member_mode`
+else. The transition itself is audited as `auth.user_view.set` (`auth.member_mode`
 dual-emitted alongside it through 0.8.x, [Renamed in 0.8](#renamed-in-08))
 (`enabled`, `real_role`, and `no_credential` on the preview below), and each `403` an **admin-tier gate** raises while the
 mode is on carries `user_view: true` on its `authz.denied` row — the two
@@ -2510,7 +2510,7 @@ a member who has not signed in meets, and `POST /setup/harness-login` answers
 `409` — *"Exit the user view to sign in to AWS — the capture would land on your
 own identity."* Nothing is deleted: your session sits untouched in the store
 and comes back the moment you exit. The transition is audited as
-`auth.user_view` (`auth.member_mode` dual-emitted alongside it through 0.8.x)
+`auth.user_view.set` (`auth.member_mode` dual-emitted alongside it through 0.8.x)
 with `no_credential: true` beside `enabled` and `real_role`.
 
 Inside the preview, **signing in is refused** — `POST /setup/harness-login`
@@ -5601,7 +5601,7 @@ names forever; only what the server emits GOING FORWARD changed.
 |---|---|---|
 | The toggle ("view as member"/the user view) | `POST /me/member-mode {"enabled":bool}` | `POST /me/view {"view":"user"\|"admin","user_type":"…"}` |
 | `/me` fields | `member_mode`, `member_mode_no_credential`, `member_preview_available` | `user_view`, `user_view_no_credential`, `user_preview_available` |
-| Audit action | `auth.member_mode` | `auth.user_view` — **dual-emitted** alongside `auth.member_mode` (identical `Data`) for one minor (0.8.x, OD-18), so a dashboard or SIEM rule still filtering on the old name keeps seeing rows; the compat row is removed in 0.9 |
+| Audit action | `auth.member_mode` | `auth.user_view.set` — **dual-emitted** alongside `auth.member_mode` (identical `Data`) for one minor (0.8.x, OD-18), so a dashboard or SIEM rule still filtering on the old name keeps seeing rows; the compat row is removed in 0.9 |
 | `authz.denied` datum | `member_mode: true` | `user_view: true` — a clean rename, not dual-emitted (it lives inside `authz.denied`'s own row, which is not itself renamed) |
 | `authz.denied` reason | `byoi_member` | `byoi_user` |
 | Go: `runner` package | `MemberMountPolicy`, `SandboxSpec.MemberMountRoots`, `ParseMemberMountPolicy`, `ValidateMemberMount`, `ValidateMemberMountSource`, `deniedMemberSegment`, `memberCeilingRoots`, `validateMemberSource` | `UserMountPolicy`, `SandboxSpec.UserMountRoots`, `ParseUserMountPolicy`, `ValidateUserMount`, `ValidateUserMountSource`, `deniedUserSegment`, `userCeilingRoots`, `validateUserSource` |

@@ -409,7 +409,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `POST /me/view {"view":"user"|"admin","user_type":"…"}` (a clean break — `POST /me/member-mode`'s
   `{"enabled":bool}` shape is not aliased); `/me` reports `user_view`, `user_view_no_credential`
   and `user_preview_available` in place of `member_mode`, `member_mode_no_credential` and
-  `member_preview_available`. The audit action is `auth.user_view` (dual-emitted alongside
+  `member_preview_available`. The audit action is `auth.user_view.set` (dual-emitted alongside
   `auth.member_mode` for one minor for SIEM stability, removed in 0.9); the `authz.denied`
   marker is `user_view`; the BYOI refusal reason is `byoi_user`. `runner.MemberMountPolicy` is
   `UserMountPolicy` and 29 more `*Member*` server functions (`denyMember*`, `filterMemberGrants`,
@@ -904,7 +904,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   deleted, the next request is refused `403` `user_view_type_deleted` (a launch `409` `admin_view`)
   rather than answered as the admin, and the view turns off; `GET /me` answers the real tier with
   `user_view_dropped`. A run records the type it was launched as (`agent_runs.user_type`, and
-  `user_type` / `user_view` on `run.create`); the switch is audited as `auth.user_view`.
+  `user_type` / `user_view` on `run.create`); the switch is audited as `auth.user_view.set`.
 - **SSH keys and API tokens can be turned off per person, group or user type (#614).** A new
   capability kind `feature` (values `ssh_key` and `api_token`, or `*`) is checked at `POST
   /me/ssh-keys` and `POST /me/tokens`. It narrows: until an admin enforces it on the Permissions
@@ -1135,7 +1135,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   with a credential left behind, and it cannot touch the operator's own credentials. Audited
   `credential.erase`. A captured AWS or Azure DevOps sign-in whose refresh token the provider
   refuses for good (`invalid_grant`) is deleted at once, and a stored AWS sign-in is deleted by a
-  daily sweep once its expiry passes; both are audited `credential.expired_deleted`. A person
+  daily sweep once its expiry passes; both are audited `credential.expired.delete`. A person
   whose sign-in was deleted this way is shown as not connected and signs in again.
 - **An admin can no longer set a secret in someone else's namespace (#590).** `PUT
   /api/v1/secrets/{name}?owner=` is refused with `403` for everyone, audited `secret.write`

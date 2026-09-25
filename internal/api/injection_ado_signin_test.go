@@ -276,8 +276,8 @@ func TestADOSignIn_BootFailsWithAHintAndDeletesTheSignIn(t *testing.T) {
 	if _, found := f.stored(t, f.subject); found {
 		t.Fatal("the dead sign-in is still stored, want it deleted")
 	}
-	if del := f.audit.find("credential.expired_deleted"); len(del) != 1 || del[0].Outcome != "success" {
-		t.Fatalf("credential.expired_deleted rows = %+v, want one success row", del)
+	if del := f.audit.find("credential.expired.delete"); len(del) != 1 || del[0].Outcome != "success" {
+		t.Fatalf("credential.expired.delete rows = %+v, want one success row", del)
 	}
 
 	access := scmAccessRows(t, f.srv, context.Background(), f.st.site, f.subject)
