@@ -182,3 +182,67 @@ func TestAWSSSOMintSites_LetTheAccessTokenGoAfterItsExpiry(t *testing.T) {
 		check(t, s.cfg.MaskRegistry, expiry, blob.AccessToken, blob.RefreshToken, blob.ClientSecret)
 	})
 }
+
+// TestAWSSSORefresh_ProviderMaskKeyDoesNotClobberTheRosters pins 1b61b04ce: a
+// provider-scoped refresh must key its mask-set entry on scope.ssoSecret()
+// (wardyn-provider-<uid>-sso), not the roster's harnessCredSecretName. Keying
+// it on the roster's name would collide with the SAME person's roster
+// credential's own key (AddGlobalUntil replaces a key's whole current set) and
+// retire its live refresh token and client secret at once — SweepGlobals then
+// drops them, unmasking a roster credential still in use.
+func TestAWSSSORefresh_ProviderMaskKeyDoesNotClobberTheRosters(t *testing.T) {
+	ctx := context.Background()
+	reg := secretmask.NewRegistry()
+	s := &Server{cfg: Config{
+		BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		Secrets: &memSecrets{}, MaskRegistry: reg, Now: func() time.Time { return awsSSOTestFixedNow }, Audit: &memAudit{},
+	}}
+	const owner = "alice@example.com"
+	rosterScope := awsSSOScope{perUser: true, owner: owner}
+	providerScope := awsSSOScope{perUser: true, owner: owner, provider: uuid.NewString()}
+
+	// The roster credential's OWN mask entries, as its own earlier capture
+	// registered them: a live refresh token and client secret with no expiry of
+	// their own, and an access token expiring far in the future.
+	rosterAccess, rosterRefresh, rosterSecret := "roster-access-token-1234567890", "roster-refresh-token-1234567890", "roster-client-secret-1234567890"
+	rosterExpiry := awsSSOTestFixedNow.Add(24 * time.Hour)
+	reg.AddGlobalUntil(rosterScope.rowOwner(), rosterScope.ssoSecret(), awsSSOTestFixedNow, rosterExpiry,
+		[]byte(rosterAccess), []byte(rosterRefresh), []byte(rosterSecret))
+
+	// An expired provider-scoped blob due for renewal.
+	blob := awsSSOBlob{
+		AccessToken: "provider-access-token-123456789", RefreshToken: "provider-refresh-token-123456789",
+		ClientID: "provider-client-id", ClientSecret: "provider-client-secret-1234567890",
+		StartURL: "https://acme.awsapps.com/start", Region: "us-east-1",
+		AccountID: "123456789012", RoleName: "WardynBedrockRole",
+		ExpiresAt: awsSSOTestFixedNow.Add(-time.Minute), RegistrationExpiresAt: awsSSOTestFixedNow.Add(90 * 24 * time.Hour),
+	}
+	if err := s.storeAWSSSOBlob(ctx, providerScope, blob); err != nil {
+		t.Fatalf("seed provider row: %v", err)
+	}
+	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"accessToken": "fresh-provider-access-token-abcd", "expiresIn": 3600,
+			"refreshToken": "rotated-provider-refresh-token-ab",
+		})
+	})
+
+	next, failure := s.refreshAWSSSOBlob(ctx, providerScope, blob)
+	if failure != "" || next.AccessToken != "fresh-provider-access-token-abcd" {
+		t.Fatalf("refresh failure=%q next=%+v; want a clean renewal", failure, next)
+	}
+
+	// The provider's OWN new values are masked under the provider key.
+	if !masksValue(reg, next.AccessToken) || !masksValue(reg, next.RefreshToken) {
+		t.Fatal("the provider's refreshed values were not masked")
+	}
+
+	// A sweep shortly after the refresh, well before the roster access token's
+	// own (far-future) expiry, must not touch ANY of the roster's values —
+	// keying the provider's AddGlobalUntil on the roster's name would have
+	// retired them all at the refresh, and this sweep would drop them.
+	reg.SweepGlobals(awsSSOTestFixedNow.Add(time.Second))
+	if !masksValue(reg, rosterAccess) || !masksValue(reg, rosterRefresh) || !masksValue(reg, rosterSecret) {
+		t.Fatal("a provider-scoped refresh unmasked the roster credential's still-current values")
+	}
+}

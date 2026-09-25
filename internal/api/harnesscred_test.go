@@ -913,3 +913,77 @@ func TestLoginEnv_PinWithNoConfigEnvDoesNotPanic(t *testing.T) {
 		t.Errorf("an unpinned non-AWS login seeded %v, want nil", got)
 	}
 }
+
+// awsSSOScopeDeleteBlob builds a minimal, structurally-valid captured blob so
+// readAWSSSOBlob's valid() shape check passes, distinguished by access token.
+func awsSSOScopeDeleteBlob(access string) awsSSOBlob {
+	return awsSSOBlob{
+		AccessToken: access, StartURL: "https://acme.awsapps.com/start", Region: "us-east-1",
+		AccountID: "123456789012", RoleName: "WardynBedrockRole", ExpiresAt: awsSSOTestFixedNow.Add(time.Hour),
+	}
+}
+
+// TestDeleteSpentAWSSSOBlob_ProviderScopeDeletesOnlyItsOwnRow pins dcc0c9622:
+// after the model-provider stack, a provider-scoped scope's session lives
+// under scope.ssoSecret() (wardyn-provider-<uid>-sso), not the roster's
+// harnessCredSecretName(awsSSOProvider). A provider refresh AWS refuses must
+// delete only the provider's own row and leave the same person's roster AWS
+// sign-in (harnessCredSecretName(awsSSOProvider)) alone.
+func TestDeleteSpentAWSSSOBlob_ProviderScopeDeletesOnlyItsOwnRow(t *testing.T) {
+	ctx := context.Background()
+	s := &Server{cfg: Config{Secrets: &memSecrets{}, Now: func() time.Time { return awsSSOTestFixedNow }}}
+	const owner = "alice@example.com"
+	rosterScope := awsSSOScope{perUser: true, owner: owner}
+	providerScope := awsSSOScope{perUser: true, owner: owner, provider: uuid.NewString()}
+
+	if err := s.storeAWSSSOBlob(ctx, rosterScope, awsSSOScopeDeleteBlob("roster-access-token-1234567890")); err != nil {
+		t.Fatalf("seed roster row: %v", err)
+	}
+	if err := s.storeAWSSSOBlob(ctx, providerScope, awsSSOScopeDeleteBlob("provider-access-token-123456789")); err != nil {
+		t.Fatalf("seed provider row: %v", err)
+	}
+
+	s.deleteSpentAWSSSOBlob(ctx, providerScope)
+
+	if _, found, err := s.readAWSSSOBlob(ctx, providerScope); err != nil || found {
+		t.Errorf("provider row after its own refresh was refused: found=%v err=%v, want gone", found, err)
+	}
+	roster, found, err := s.readAWSSSOBlob(ctx, rosterScope)
+	if err != nil || !found {
+		t.Fatalf("roster row after a PROVIDER-scoped refusal: found=%v err=%v, want intact", found, err)
+	}
+	if roster.AccessToken != "roster-access-token-1234567890" {
+		t.Errorf("roster row AccessToken = %q, want the original — a provider-scoped delete touched it", roster.AccessToken)
+	}
+}
+
+// TestDeleteSpentAWSSSOBlob_RosterScopeDeletesOnlyItsOwnRow is the reverse: a
+// roster-scoped refusal (no provider) must delete only the roster row and
+// leave the same person's provider-scoped row alone.
+func TestDeleteSpentAWSSSOBlob_RosterScopeDeletesOnlyItsOwnRow(t *testing.T) {
+	ctx := context.Background()
+	s := &Server{cfg: Config{Secrets: &memSecrets{}, Now: func() time.Time { return awsSSOTestFixedNow }}}
+	const owner = "alice@example.com"
+	rosterScope := awsSSOScope{perUser: true, owner: owner}
+	providerScope := awsSSOScope{perUser: true, owner: owner, provider: uuid.NewString()}
+
+	if err := s.storeAWSSSOBlob(ctx, rosterScope, awsSSOScopeDeleteBlob("roster-access-token-1234567890")); err != nil {
+		t.Fatalf("seed roster row: %v", err)
+	}
+	if err := s.storeAWSSSOBlob(ctx, providerScope, awsSSOScopeDeleteBlob("provider-access-token-123456789")); err != nil {
+		t.Fatalf("seed provider row: %v", err)
+	}
+
+	s.deleteSpentAWSSSOBlob(ctx, rosterScope)
+
+	if _, found, err := s.readAWSSSOBlob(ctx, rosterScope); err != nil || found {
+		t.Errorf("roster row after its own refresh was refused: found=%v err=%v, want gone", found, err)
+	}
+	provider, found, err := s.readAWSSSOBlob(ctx, providerScope)
+	if err != nil || !found {
+		t.Fatalf("provider row after a ROSTER-scoped refusal: found=%v err=%v, want intact", found, err)
+	}
+	if provider.AccessToken != "provider-access-token-123456789" {
+		t.Errorf("provider row AccessToken = %q, want the original — a roster-scoped delete touched it", provider.AccessToken)
+	}
+}
