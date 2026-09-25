@@ -40,8 +40,8 @@ function render(docKey: string): string {
 }
 
 describe("sign-in-copy / states — signin-first-contact-canon.md, #457", () => {
-  it("finds all 17 frozen keys in the doc", () => {
-    expect(doc.size).toBe(17);
+  it("finds all 19 frozen keys in the doc", () => {
+    expect(doc.size).toBe(19);
   });
 
   it.each([...doc.keys()])("%s is byte-exact", (key) => {
