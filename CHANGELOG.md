@@ -433,13 +433,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   this a SIGTERM landing between the claim and the teardown could drop the `run.kill` row and both
   revocations, since `Shutdown` only waits for in-flight HTTP handlers, not work a handler had
   already detached from itself.
-- **The Helm chart and the compose stack give `wardynd` 60 seconds to stop (#554).** An orderly
-  stop drains HTTP for up to 15s, waits up to 35s for detached work (a run launch, a superseded
-  sign-in's teardown) and then flushes the audit sinks. The Kubernetes default grace of 30s and
-  `docker stop`'s 10s could SIGKILL a teardown partway through, leaving a run `KILLED` with its
-  sandbox up and no `run.kill` row. The chart sets `terminationGracePeriodSeconds: 60` (a new
-  value), and the `wardynd` compose service sets `stop_grace_period: 60s`. A unit test fails if
-  either falls below the daemon's own shutdown budget.
+- **The Helm chart and the compose stack give `wardynd` 70 seconds to stop (#554).** An orderly
+  stop drains HTTP for up to 15s (waiting for background work even if that drain times out), waits
+  up to 35s for detached work (a run launch, a superseded sign-in's teardown), then flushes the
+  audit sinks — up to another 15s, the webhook sink's own delivery timeout. The Kubernetes default
+  grace of 30s and `docker stop`'s 10s could SIGKILL a teardown partway through, leaving a run
+  `KILLED` with its sandbox up and no `run.kill` row. The chart sets
+  `terminationGracePeriodSeconds: 70` (a new value), and the `wardynd` compose service sets
+  `stop_grace_period: 70s`. A unit test fails if either falls below the daemon's own shutdown
+  budget.
 - **Two UI e2e runs on one host no longer collide (#210, in part).** Left unset,
   `scripts/run-ui-e2e.sh` now picks free ports for its backend instead of `:8088`/`:8089`, and
   names its database `wardyn_e2e_<pid>`, which it drops on exit. `scripts/run-e2e-subscription.sh`

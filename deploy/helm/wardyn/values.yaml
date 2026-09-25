@@ -554,12 +554,14 @@ networkPolicy:
 podAnnotations: {}
 
 # How long Kubernetes waits after SIGTERM before SIGKILL. wardynd's orderly
-# stop needs up to ~60s: http.Server.Shutdown (15s), then the detached work it
+# stop needs up to ~65s: http.Server.Shutdown (15s), then the detached work it
 # waits for (a run launch, a superseded sign-in's teardown: up to 35s), then
-# the audit sinks' final flush. The Kubernetes default of 30s can SIGKILL a
-# teardown mid-KillSandbox, leaving the run KILLED with its sandbox still up
-# and no run.kill row. Keep it at 60 or above.
-terminationGracePeriodSeconds: 60
+# the audit sinks' final flush (the webhook sink's own timeout: 15s). The
+# Kubernetes default of 30s can SIGKILL a teardown mid-KillSandbox, leaving
+# the run KILLED with its sandbox still up and no run.kill row. Keep it at 70
+# or above. 0 is not supported: the template's `| default` treats an explicit
+# 0 the same as unset and falls back to the chart default.
+terminationGracePeriodSeconds: 70
 
 # Pod-level security context. distroless:nonroot runs as uid/gid 65532.
 podSecurityContext:
