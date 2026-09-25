@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check cover-union release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -51,7 +51,12 @@ BASE_IMAGE          ?=
 # Emit "--build-arg NAME=VALUE" only when VALUE is non-empty, so an unset knob
 # never overrides a Dockerfile default with an empty string.
 _build_arg = $(if $(2),--build-arg $(1)="$(2)",)
+# The commit each local image is built from, with "-dirty" when tracked files
+# differ from it. scripts/gpl-source-offer.sh names it in a pre-publication
+# (bootstrap) GPL offer, read back from the image's SBOM (#357).
+IMAGE_REVISION := $(shell git describe --always --dirty --exclude='*' 2>/dev/null)
 DOCKER_BUILD_ARGS = \
+	$(if $(IMAGE_REVISION),--label org.opencontainers.image.revision=$(IMAGE_REVISION),) \
 	$(call _build_arg,NPM_REGISTRY,$(NPM_REGISTRY)) \
 	$(call _build_arg,HTTP_PROXY,$(HTTP_PROXY)) \
 	$(call _build_arg,HTTPS_PROXY,$(HTTPS_PROXY)) \
@@ -149,29 +154,16 @@ test: ## Run all Go tests
 	@echo "Running Go tests..."
 	WARDYN_TEST_PG= go test ./...
 
-# Race-detector sweep. The kill/dispatch FSM has dedicated concurrent tests
-# (internal/api/kill_dispatch_race_test.go) that only mean something under -race;
-# the rest of the tree rides along. Required green before restructuring runs.go.
-# ALL THREE tag sets: the tagless pass alone never compiles the -tags docker
-# runner tree (internal/runner/docker, internal/envbuild) — the concurrency-heavy
-# sandbox lifecycle — so it would get zero race coverage. The docker-tagged pass
-# needs no daemon (the real-Docker cases self-skip unless WARDYN_TEST_DOCKER=1).
-# The k8s pass is the same argument for the OTHER substrate, and it was missing:
-# internal/runner/k8s compiles under `-tags k8s` alone, so both passes above
-# skipped the whole L1 substrate — its drive provisioning, its teardown
-# wait-for-gone poll and its orphan sweep all run concurrently with a live
-# apiserver and none of it was ever under the detector. Daemon-free too: every
-# test there drives a fake clientset.
-test-race: ## Race-detector sweep over ALL tag sets (tagless + -tags docker + -tags k8s)
-	@echo "Running Go tests under the race detector (tagless)..."
-	WARDYN_TEST_PG= go test -race ./...
-	@echo "Running Go tests under the race detector (-tags docker)..."
-	WARDYN_TEST_PG= go test -race -tags docker ./...
-	@echo "Running Go tests under the race detector (-tags k8s)..."
-	WARDYN_TEST_PG= go test -race -tags k8s ./...
+# Alias kept as a name developers already type: -race rides along INSIDE the
+# three test-report* suites below (see their comments and cover-check), so this
+# target no longer runs its own separate tagless/docker/k8s sweep — that was six
+# full Go passes (three for coverage, three more for race) where three, each
+# doing both, suffice.
+test-race: cover-check ## Alias: race coverage now rides along inside the test-report suites (see cover-check)
 
-# THE PG LANE UNDER -race. `test-race` above deliberately strips the DSN
-# (WARDYN_TEST_PG=), so every WARDYN_TEST_PG-gated test is SKIPPED there — and
+# THE PG LANE UNDER -race. The race passes in cover-check's three test-report*
+# suites deliberately strip the DSN (WARDYN_TEST_PG=), so every
+# WARDYN_TEST_PG-gated test is SKIPPED there — and
 # `test-report-pg`, the one target that sets the DSN, runs without -race. The
 # result was that internal/broker's exactly-once concurrency proofs
 # (concurrency_pg_test.go: TestPG_ConcurrentMint_ExactlyOnceWins,
@@ -184,9 +176,19 @@ test-race: ## Race-detector sweep over ALL tag sets (tagless + -tags docker + -t
 # than the whole pg suite: -race over every pg package would multiply the job's
 # runtime for tests that are sequential by construction. -p 1 for test-report-pg's
 # reason — one shared database.
+#
+# ./internal/api/... gets its own narrower line: its pg suite is large and
+# mostly sequential, so -run picks only the goroutine-spawning proofs
+# (harnesscred_supersede_pg_test.go's TestPG_LoginSupersede… and
+# devices_ingest_pg_test.go's TestPG_DeviceIngest_…ConcurrentPushes…), which
+# were never raced by any gate (I-3). The F137 guard checks every
+# goroutine-spawning TestPG_ function matches some line's package AND -run.
+# ./internal/secretstore/pg/ rides the first line: its pg suite is small and
+# convert_pg_test.go's TestPG_ConvertV0_IsSingleWriter converts in a goroutine.
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
-	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/broker/... ./internal/store/...
+	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
+	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)' ./internal/api/...
 
 test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
@@ -202,14 +204,18 @@ test-gaps: ## Regenerate docs/TEST-GAPS.md from test/reports/go coverage output
 
 # Emits per-suite artifacts under test/reports/go/<suite>/. See
 # scripts/test-report.sh.
-test-report: ## Go unit suite with per-suite JSON + coverage artifacts
+test-report: ## Go unit suite with per-suite JSON + coverage artifacts, under the race detector
 # WARDYN_TEST_PG stripped: pg-gated tests belong to test-report-pg (which
 # serializes packages — see its -p 1 note). Inheriting the DSN here (e.g. from
 # `WARDYN_TEST_PG=… make release-check`) re-runs them in PARALLEL packages
 # against the one shared DB, resurrecting the site_config race. CI matches:
 # only the pg job sets the DSN (ci.yml).
-	@echo "Running Go unit suite with detailed reports..."
-	WARDYN_TEST_PG= ./scripts/test-report.sh unit ./...
+# -race: the kill/dispatch FSM has dedicated concurrent tests
+# (internal/api/kill_dispatch_race_test.go) that only mean something under
+# -race; the rest of the tree rides along. This suite is the tagless race pass,
+# one pass for coverage and race rather than two.
+	@echo "Running Go unit suite with detailed reports (-race)..."
+	WARDYN_TEST_PG= ./scripts/test-report.sh unit -race ./...
 
 test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # -p 1: every package in this suite shares ONE database (the WARDYN_TEST_PG
@@ -226,21 +232,23 @@ test-report-pg: ## Postgres-gated suite with reports (needs WARDYN_TEST_PG)
 # The whole tree under -tags docker, so the container-hardening driver
 # (internal/runner/docker), internal/envbuild and the wardynd wiring that calls
 # them — none of which the tagless build can even compile — are actually tested
-# and measured. No daemon needed: the real-Docker cases self-skip unless
+# and measured, under -race (the concurrency-heavy sandbox lifecycle gets no
+# race coverage from the tagless pass). No daemon needed: the real-Docker cases self-skip unless
 # WARDYN_TEST_DOCKER=1, leaving the fakeDocker-backed tests to run anywhere.
-test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon needed)
-	@echo "Running docker-tagged suite with reports (fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
-	WARDYN_TEST_PG= ./scripts/test-report.sh docker -tags docker ./...
+test-report-docker: ## -tags docker suite with reports (fakeDocker; no daemon needed), under the race detector
+	@echo "Running docker-tagged suite with reports (-race; fakeDocker; WARDYN_TEST_DOCKER=1 adds the real-daemon cases)..."
+	WARDYN_TEST_PG= ./scripts/test-report.sh docker -race -tags docker ./...
 
 # The whole tree under -tags k8s, so the k8s confinement substrate
 # (internal/runner/k8s) and the wardynd wiring that calls it — none of which
-# the tagless build can even compile — are actually tested and measured. No
-# cluster needed: the real-cluster case (test/conformance's TestConformanceK8s)
+# the tagless build can even compile — are actually tested and measured, under
+# -race (drive provisioning, the teardown wait-for-gone poll and the orphan
+# sweep all run concurrently against the apiserver). No cluster needed: the real-cluster case (test/conformance's TestConformanceK8s)
 # self-skips unless WARDYN_TEST_K8S=1, leaving the fake-clientset-backed unit
 # tests (internal/runner/k8s/*_test.go) to run anywhere.
-test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed)
-	@echo "Running k8s-tagged suite with reports (fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
-	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -tags k8s ./...
+test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster needed), under the race detector
+	@echo "Running k8s-tagged suite with reports (-race; fake clientset; WARDYN_TEST_K8S=1 + a kubeconfig adds the real-cluster conformance case)..."
+	WARDYN_TEST_PG= ./scripts/test-report.sh k8s -race -tags k8s ./...
 
 # Coverage floor gate. Override with `make cover-check COVER_MIN=NN`.
 # Enforced over the UNION of all three shipped builds (tagless + -tags docker +
@@ -259,6 +267,11 @@ test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster nee
 # the call; re-measure at the next release.
 COVER_MIN ?= 78
 cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER_MIN floor over ALL THREE shipped builds, unioned
+	@$(MAKE) --no-print-directory cover-union
+
+# The floor alone, over the three profiles already on disk. ci.yml runs the
+# three suites on separate runners and this once over their downloaded profiles.
+cover-union: ## Enforce COVER_MIN over the unit/docker/k8s profiles already in test/reports/go
 	@./scripts/cover-union.sh --self-test
 	@./scripts/cover-union.sh $(COVER_MIN) test/reports/go/union \
 		test/reports/go/unit/cover.out test/reports/go/docker/cover.out test/reports/go/k8s/cover.out
@@ -480,15 +493,17 @@ tidy-check: ## Fail if go.mod/go.sum are untidy (go mod tidy -diff)
 	@echo "Checking go.mod/go.sum are tidy (go mod tidy -diff must be empty)..."
 	go mod tidy -diff
 
-lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + actionlint gates
+lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + migration-numbering + actionlint gates + console ESLint
 	@echo "Running go vet (default + docker + k8s tags)..."
 	go vet ./...
 	go vet -tags docker ./...
 	go vet -tags k8s ./...
 	@echo "Running golangci-lint $(GOLANGCI_LINT_VERSION) (function-size/complexity gate, .golangci.yml)..."
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
+	GOLANGCI_LINT_CACHE=$(CURDIR)/.golangci-cache go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 	@echo "Running file-size gate (scripts/check-file-size.sh)..."
 	./scripts/check-file-size.sh
+	@echo "Running fixture-date gate (scripts/check-fixture-dates.sh)..."
+	./scripts/check-fixture-dates.sh
 	@echo "Running image-pin gate (scripts/check-image-pins.sh)..."
 	./scripts/check-image-pins.sh
 	@echo "Running workflow-artifact gate (scripts/check-workflow-artifacts.sh)..."
@@ -504,6 +519,8 @@ lint: ## go vet (all tag sets) + golangci-lint size/complexity + file-size + mig
 	# only run it `if command -v shellcheck`), and actionlint's own YAML/
 	# expression checks are what this gate is actually for.
 	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION) -shellcheck=
+	@echo "Running console ESLint (react-hooks + no-floating-promises, ui/eslint.config.js)..."
+	cd ui && pnpm install --frozen-lockfile && pnpm lint
 
 # The shell half of the test suite: each of these pins a fixed regression in
 # scripts/ that no Go test can see (up.sh's reset warnings, the compose
@@ -521,6 +538,8 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-claims-match-code.sh
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-desktop-profile.sh
+	./scripts/test-fixture-dates.sh
+	./scripts/test-gpl-source-offer.sh
 	./scripts/test-image-pins.sh
 	./scripts/test-install-sh-trust.sh
 	./scripts/test-install-sh.sh
@@ -547,7 +566,9 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 # (no --log-opts) is `git log --full-history --all`, which also scans every
 # other fetched branch (fetch-depth: 0 fetches all of them) — an unmerged
 # branch's own finding then reds every unrelated PR and main alike (#372/G6).
-GITLEAKS_LOG_OPTS ?= HEAD --full-history
+# Passing --log-opts replaces gitleaks' whole default (`--full-history --all
+# --diff-filter=tuxdb`), so the diff filter is restated (#665).
+GITLEAKS_LOG_OPTS ?= HEAD --full-history --diff-filter=tuxdb
 gitleaks: ## Scan this branch's own git history for committed secrets
 	@echo "Scanning git history (log-opts: $(GITLEAKS_LOG_OPTS)) for secrets with gitleaks $(GITLEAKS_VERSION)..."
 	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git -c .gitleaks.toml --log-opts="$(GITLEAKS_LOG_OPTS)" -v
@@ -663,7 +684,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "checksum/trusted-ca:" || { echo "trustedCA did not stamp the checksum pod annotation — an edit to the CA bundle alone would not roll the pod"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_TRUSTED_CA_FILE" | grep -q 'value: "/etc/wardyn/trusted-ca/ca.pem"' || { echo "trustedCA did not wire WARDYN_TRUSTED_CA_FILE at the mounted path — wardynd would boot trusting only the public roots while the operator believes the corporate CA is installed"; exit 1; }; \
 	echo "$$out" | grep -q "mountPath: /etc/wardyn/trusted-ca" || { echo "trustedCA rendered no volumeMount — WARDYN_TRUSTED_CA_FILE would name a path nothing mounts"; exit 1; }; \
-	echo "$$out" | grep -A2 '^        - name: trusted-ca$$' | grep -q "name: wardyn-trusted-ca" || { echo "the trusted-ca volume does not source the ConfigMap the chart rendered"; exit 1; }
+	echo "$$out" | grep -A2 '^        - name: trusted-ca$$' | grep -q "name: wardyn-trusted-ca" || { echo "the trusted-ca volume does not source the ConfigMap the chart rendered"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_VAULT_TOKEN_FILE" | grep -q '/vault/secrets/token' || { echo "secretStore.vault.auth=token-file did not render WARDYN_VAULT_TOKEN_FILE"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_VAULT_KV_PREFIX" | grep -q 'wardyn-ci' || { echo "secretStore.vault.kvPrefix did not render"; exit 1; }; \
+	echo "$$out" | grep -q "wardyn-vault-token" && { echo "token-file auth still projected the Kubernetes Vault token"; exit 1; } || true
 	@# The control-plane -> proxy hop (#561): proxies dial https on the internal
 	@# TLS listener, pinned to wardynd's own internal CA. There is deliberately no
 	@# CA Secret to assert: the CA lives in wardynd's secret store (Postgres,
@@ -686,6 +710,31 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set postgres.dsn.secretRef.name="" 2>&1 | grep -q "set either postgres.dsn" || { echo "chart no longer refuses an install with no DSN"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKey=fake 2>&1 | grep -q "secrets.ageKey applies to inline mode only" || { echo "chart no longer refuses an ageKey it would silently drop"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth 2>&1 | grep -q "no age identity is wired" || { echo "chart no longer refuses an external-DSN install with an ephemeral age key — boot 2 cannot decrypt what boot 1 wrote, so the pod crash-loops on its SECOND start and those rows are unrecoverable (W27-S1-5)"; exit 1; }
+	@# Store mode (#644): no age key is the goal, a dedicated audience-"vault" token is projected, and a missing address or role is a render refusal (wardynd would refuse to boot).
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn) || { echo "store mode with an external DSN and no age key no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_SECRET_STORE" | grep -q 'value: "vaultkv"' || { echo "secretStore.backend=vaultkv did not render WARDYN_SECRET_STORE"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_VAULT_K8S_TOKEN_FILE" | grep -q '/var/run/secrets/wardyn-vault/token' || { echo "store mode did not point wardynd at the projected Vault token"; exit 1; }; \
+	echo "$$out" | grep -A3 "serviceAccountToken:" | grep -q 'audience: "vault"' || { echo "the projected Vault token lost its audience — a token for the API server would be sent to Vault"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_AGE_KEY" && { echo "store mode rendered WARDYN_AGE_KEY although none was wired"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'automountServiceAccountToken: false')" = "2" ] || { echo "store mode turned on the API-server token automount — the Vault token is a separate projected volume"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv 2>&1 | grep -q "needs secretStore.vault.addr" || { echo "chart no longer refuses vaultkv with no Vault address"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 2>&1 | grep -q "needs secretStore.vault.role" || { echo "chart no longer refuses Kubernetes auth with no Vault role"; exit 1; }
+	@# Two Vault roles (#646): rolePlatform renders WARDYN_VAULT_ROLE_PLATFORM, and a second role that separates nothing is a render refusal.
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn-credentials --set secretStore.vault.rolePlatform=wardyn-platform | grep -A1 "name: WARDYN_VAULT_ROLE_PLATFORM" | grep -q 'value: "wardyn-platform"' || { echo "secretStore.vault.rolePlatform did not render WARDYN_VAULT_ROLE_PLATFORM"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn --set secretStore.vault.rolePlatform=wardyn 2>&1 | grep -q "needs secretStore.vault.auth=kubernetes and a role other than" || { echo "chart no longer refuses a platform role equal to the credentials role"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.auth=token-file --set secretStore.vault.tokenFile=/vault/secrets/token --set secretStore.vault.rolePlatform=wardyn-platform 2>&1 | grep -q "needs secretStore.vault.auth=kubernetes and a role other than" || { echo "chart no longer refuses a platform role with token-file auth"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn | grep -q "WARDYN_VAULT_ROLE_PLATFORM" && { echo "one Vault role rendered WARDYN_VAULT_ROLE_PLATFORM"; exit 1; } || true
+	@# Store mode in Azure Key Vault (#645): workload identity labels the pod and annotates the service account, no age key is required, and a missing URL, tenant or client id, or two stores at once, is a render refusal.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=azurekv --set secretStore.azure.vaultUrl=https://kv1.vault.azure.net --set secretStore.azure.tenantId=tenant-1 --set secretStore.azure.clientId=client-1) || { echo "azurekv store mode with an external DSN and no age key no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_SECRET_STORE" | grep -q 'value: "azurekv"' || { echo "secretStore.backend=azurekv did not render WARDYN_SECRET_STORE"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_AZURE_KV_URL" | grep -q 'kv1.vault.azure.net' || { echo "secretStore.azure.vaultUrl did not render WARDYN_AZURE_KV_URL"; exit 1; }; \
+	echo "$$out" | grep -q 'azure.workload.identity/use: "true"' || { echo "workload identity did not label the pod — the webhook would inject no token"; exit 1; }; \
+	echo "$$out" | grep -q 'azure.workload.identity/client-id: client-1' || { echo "workload identity did not annotate the service account with the client id"; exit 1; }; \
+	echo "$$out" | grep -q "name: WARDYN_AGE_KEY" && { echo "azurekv store mode rendered WARDYN_AGE_KEY although none was wired"; exit 1; } || true
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=azurekv 2>&1 | grep -q "needs secretStore.azure.vaultUrl" || { echo "chart no longer refuses azurekv with no Key Vault URL"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=azurekv --set secretStore.azure.vaultUrl=https://kv1.vault.azure.net 2>&1 | grep -q "needs secretStore.azure.tenantId" || { echo "chart no longer refuses workload identity with no tenant or client id"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.azure.vaultUrl=https://kv1.vault.azure.net --set secretStore.azure.tenantId=t --set secretStore.azure.clientId=c --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=r --set secrets.allowEphemeralAgeKey=true 2>&1 | grep -q "not both" || { echo "chart no longer refuses two external secret stores"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.allowEphemeralAgeKey=true | grep -q "azure.workload.identity" && { echo "a pg install carries workload identity markers"; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.allowEphemeralAgeKey=true >/dev/null 2>&1 || { echo "secrets.allowEphemeralAgeKey no longer renders — the refusal has become a wall with no documented way past"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set env.WARDYN_AGE_KEY=AGE-SECRET-KEY-EXAMPLE >/dev/null 2>&1 || { echo "an age identity wired through .Values.env no longer satisfies the refusal — the chart refuses a render that is actually fine"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set readinessProbe.path=/healthz | grep -q 'path: "/healthz"' || { echo "readinessProbe.path no longer pins the probe back to /healthz — an image <= 0.5.0 serves no /readyz, so the pod would never become Ready and the rollout would hang"; exit 1; }
@@ -795,7 +844,11 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: WARDYN_ADMIN_TOKEN" && { echo "auth.ssoOnly=true rendered a WARDYN_ADMIN_TOKEN — sso-only asserts SSO is the only way in, and a rendered admin bearer is a second one"; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "no OIDC issuer is configured" || { echo "chart no longer refuses auth.ssoOnly=true with no OIDC issuer — sso-only with no SSO at all would leave the console with no usable sign-in"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com 2>&1 | grep -q "auth.ssoOnly is set together with an admin token" || { echo "chart no longer refuses auth.ssoOnly=true alongside an admin token"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com --set env.WARDYN_MEMBER_MODE=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_MEMBER_MODE" || { echo "chart no longer refuses auth.ssoOnly=true alongside WARDYN_MEMBER_MODE — member mode relies on the admin token as a process credential, which sso-only forbids outright"; exit 1; }
+	@# One line per spelling: the template's refusal checks the new name and the
+	@# deprecated alias as two separate hasKey terms, each needing its own proof.
+	@for k in WARDYN_USER_DESKTOP WARDYN_MEMBER_MODE; do \
+		helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_OIDC_OPERATOR_EMAILS=a@example.com --set env.$$k=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_USER_DESKTOP (or its deprecated alias WARDYN_MEMBER_MODE" || { echo "chart no longer refuses auth.ssoOnly=true alongside env.$$k — member mode relies on the admin token as a process credential, which sso-only forbids outright"; exit 1; }; \
+	done
 	@helm template wardyn ./deploy/helm/wardyn --set auth.ssoOnly=true --set secrets.ageKeyFromSecret=true --set env.WARDYN_OIDC_ISSUER=https://issuer.example --set env.WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true 2>&1 | grep -q "auth.ssoOnly is set together with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST" || { echo "chart no longer refuses auth.ssoOnly=true alongside WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST — that override is exactly the ambiguity sso-only exists to close off"; exit 1; }
 	@# A WARDYN_SSO_ONLY=true set straight in env (not auth.ssoOnly) declares the same posture to the
 	@# daemon, so it must hit the same refusals — otherwise it renders clean and crash-loops at boot.
@@ -1019,10 +1072,23 @@ compose-config: ## Validate the compose files parse (no daemon needed)
 	@echo "Validating docker-compose config..."
 	docker compose -f $(COMPOSE_FILE) config >/dev/null
 	WARDYN_CI_TOOLS_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.ci.yaml config >/dev/null
+	WARDYN_VAULT_ADDR=https://vault.example:8200 WARDYN_VAULT_TOKEN_DIR=/tmp docker compose -f $(COMPOSE_FILE) -f deploy/compose/docker-compose.vault.yaml config >/dev/null
 	@# The desktop entrypoint too: it `include:`s the base file, and an include
 	@# that collides with the imported stack only fails when Compose RESOLVES it —
 	@# which no daemon-free gate did before, so it broke in CI first (0.6.1).
 	docker compose --env-file deploy/desktop/wardyn.env.example -f deploy/desktop/docker-compose.yaml config >/dev/null
+	@# #616: an m' envelope still using only the deprecated WARDYN_MEMBER_* names
+	@# must reach wardynd with every new name EMPTY, or the new name wins over the
+	@# old one in cmd/wardynd's alias (empty = unset) and member mode boots off.
+	@envf=$$(mktemp); \
+	sed -E -e 's/^WARDYN_USER_DESKTOP=/WARDYN_MEMBER_MODE=/' -e 's/^WARDYN_USER_(WORKSPACE_ROOTS|WORKSPACE_ROOTS_MAP|WRITABLE_ROOTS|WRITABLE_DENY)=/WARDYN_MEMBER_\1=/' deploy/desktop/wardyn.env.m-prime.example > "$$envf"; \
+	grep -q '^WARDYN_MEMBER_MODE=true$$' "$$envf" || { rm -f "$$envf"; echo "compose: the m-prime envelope no longer sets WARDYN_USER_DESKTOP=true, so the deprecated-name check below proves nothing"; exit 1; }; \
+	out=$$(env -u WARDYN_USER_DESKTOP -u WARDYN_USER_WORKSPACE_ROOTS -u WARDYN_USER_WORKSPACE_ROOTS_MAP -u WARDYN_USER_WRITABLE_ROOTS -u WARDYN_USER_WRITABLE_DENY docker compose --env-file "$$envf" -f deploy/desktop/docker-compose.yaml config 2>&1); rm -f "$$envf"; \
+	echo "$$out" | grep -q 'WARDYN_MEMBER_MODE: "true"' || { echo "compose: an envelope setting the deprecated WARDYN_MEMBER_MODE=true does not forward it to wardynd: $$out"; exit 1; }; \
+	echo "$$out" | grep -q 'WARDYN_MEMBER_WRITABLE_DENY: /' || { echo "compose: an envelope setting the deprecated WARDYN_MEMBER_WRITABLE_DENY does not forward it to wardynd"; exit 1; }; \
+	for k in WARDYN_USER_DESKTOP WARDYN_USER_WORKSPACE_ROOTS WARDYN_USER_WORKSPACE_ROOTS_MAP WARDYN_USER_WRITABLE_ROOTS WARDYN_USER_WRITABLE_DENY; do \
+		echo "$$out" | grep -q "^ *$$k: \"\"$$" || { echo "compose: $$k does not render empty for an envelope using only the deprecated names — a non-empty compose default outranks the deprecated value and wardynd never sees it"; exit 1; }; \
+	done
 	@# R5 F022: the SSO callback must FOLLOW the published port and honour an
 	@# explicit override, or `WARDYN_UP_PORT=8090 --profile sso` sends the browser
 	@# to a port nothing serves and the documented WARDYN_OIDC_REDIRECT_URL is inert.
@@ -1106,7 +1172,12 @@ npm-audit-dev: ## Non-blocking: full (dev+prod) advisory scan, to catch a pinned
 # the table is printed on failure too. No two of these share a prerequisite, so
 # nothing runs twice. The cost: `make -j ci` runs them one at a time, and
 # `make -k ci` stops at the first failing target.
-CI_TARGETS := build build-docker build-k8s tidy-check lint test-scripts cover-check test-race staticcheck govulncheck license-headers licenses notices gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub
+# build-docker/build-k8s dropped: cover-check's test-report-docker/test-report-k8s
+# already compile (and run) those tag sets, so a bare `go build` of the same
+# tag set here was a compile with no test coverage riding along. test-race
+# dropped too: it is now an alias for cover-check (see its target), and listing
+# both here would run the same three test-report suites twice.
+CI_TARGETS := build tidy-check lint test-scripts cover-check staticcheck govulncheck license-headers licenses notices gitleaks helm-lint compose-config dco diagrams npm-license npm-audit ui-typecheck ui-test ui test-conformance-stub
 ci: ## Daemon-free merge gate: every CI check that needs no daemon or service
 	@t0=$$(date +%s); times=""; \
 	for t in $(CI_TARGETS); do \

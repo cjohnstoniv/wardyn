@@ -222,8 +222,8 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 //     only after that — so a DNS-rebind denial or a failed dial burns the grant
 //     and the operator is re-asked. Consuming after the dial instead would mean
 //     holding a.mu across it; this is the cheaper end of that trade, not an
-//     oversight. The METHOD check is no longer part of that window: since F032
-//     it runs BEFORE the approval flow (proxy.go, evaluate step 2), so a
+//     oversight. The METHOD check is no longer part of that window: it runs
+//     BEFORE the approval flow (proxy.go, evaluate step 2), so a
 //     method-denied request neither raises an approval, nor takes a hold slot,
 //     nor spends a `once` grant.
 //   - `until` is enforced against TWO CLOCKS. The control plane validates
@@ -433,7 +433,7 @@ type resolveResult struct {
 // same string in both, deliberately, because those are the two surfaces that
 // would disagree if they ever diverged.
 //
-// P0.3 (R3-F001/F108/F145) asked whether an egress_domain approval is host-wide
+// This asks whether an egress_domain approval is host-wide
 // or host:port-scoped. The answer for 0.7.2 is HOST-WIDE, unchanged, and the
 // three surfaces are being aligned to SAY so rather than quietly relying on it.
 // This function is the server-side half of that: it strips a port if one is ever
@@ -624,7 +624,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 // Mode carries the run's first-use mode so the UI can tell a live-HELD
 // (wait_for_review) request apart from a passive deny_with_review pending.
 //
-// Host, and no port, and that is the semantic (P0.3 — R3-F001/F108/F145): a
+// Host, and no port, and that is the semantic: a
 // decision on this approval reaches EVERY port of that host for whatever span
 // its decision_scope names. Host is always the bare host — approvalHostKey
 // guarantees it, and is the same value this client keys its cache on — so the
@@ -650,6 +650,12 @@ func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, err
 	if err != nil {
 		return uuid.Nil, err
 	}
+	return a.raiseBytes(ctx, body)
+}
+
+// raiseBytes POSTs one marshalled raise body and returns the approval's id —
+// a new row, or the PENDING one the control plane deduplicated it to.
+func (a *approvalClient) raiseBytes(ctx context.Context, body []byte) (uuid.UUID, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		a.base+"/api/v1/internal/approvals", bytes.NewReader(body))
 	if err != nil {
@@ -689,22 +695,8 @@ func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, err
 // transient error can never overwrite a good scope with a blank one — and callers
 // gate the store on `decided` anyway.
 func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, newState approvalState, scope types.ApprovalScope, expiresAt time.Time) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		a.base+"/api/v1/internal/approvals/"+id.String(), nil)
-	if err != nil {
-		return false, apPending, "", time.Time{}
-	}
-	req.Header.Set("Authorization", "Bearer "+a.token.Get())
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return false, apPending, "", time.Time{}
-	}
-	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return false, apPending, "", time.Time{}
-	}
-	var ar types.ApprovalRequest
-	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
+	ar, ok := a.fetch(ctx, id)
+	if !ok {
 		return false, apPending, "", time.Time{}
 	}
 	// Nullable on the wire (it is set only for scope=until), so a nil pointer
@@ -728,4 +720,28 @@ func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, 
 	default:
 		return false, apPending, "", time.Time{}
 	}
+}
+
+// fetch reads one approval this run raised; ok=false on any failure, which
+// every caller reads as "still pending".
+func (a *approvalClient) fetch(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		a.base+"/api/v1/internal/approvals/"+id.String(), nil)
+	if err != nil {
+		return types.ApprovalRequest{}, false
+	}
+	req.Header.Set("Authorization", "Bearer "+a.token.Get())
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return types.ApprovalRequest{}, false
+	}
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return types.ApprovalRequest{}, false
+	}
+	var ar types.ApprovalRequest
+	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
+		return types.ApprovalRequest{}, false
+	}
+	return ar, true
 }

@@ -3,7 +3,7 @@
 
 package db
 
-// THE ARITHMETIC THAT PUTS TWO CLOCKS ON ONE, driven with no database.
+// The arithmetic that puts two clocks on one, driven with no database.
 //
 // The end-to-end proof of this finding is PG-shaped — set wardynd's clock ahead
 // of Postgres's, mint a token, revoke the principal, and assert the token stops

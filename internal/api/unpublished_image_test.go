@@ -9,11 +9,10 @@ import (
 )
 
 // Wardyn does not redistribute a vendor CLI, so `--agent claude-code` cannot get
-// one from us. What the operator SEES changed in 0.7: the catalog row's ImageKey
-// now points at the published agent-base, so the pull succeeds and the CLI is
-// simply absent from PATH, where it used to be a registry 404 on a tag that
-// looks like it should exist. Warn about the symptom they will actually hit,
-// with the fix, so they are not debugging an empty PATH either.
+// one from us. The catalog row's ImageKey points at the published agent-base, so
+// the pull succeeds and the CLI is simply absent from PATH. Warn about the
+// symptom the operator will actually hit, with the fix, so they are not
+// debugging an empty PATH.
 func TestUnpublishedAgentImage(t *testing.T) {
 	t.Run("claude-code on the convention fallback warns", func(t *testing.T) {
 		got := withUnpublishedImageWarning(nil, "claude-code", nil)

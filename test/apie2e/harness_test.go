@@ -70,7 +70,7 @@ const trustDomain = "wardyn.local"
 // re-declares the value here (kept in lockstep with internal/api/server.go).
 const internalAudience = "wardyn-internal"
 
-// ─── in-process secret store ──────────────────────────────────────────────────
+// in-process secret store
 
 // memSecrets is a minimal secretstore.Store backed by an in-memory map. It
 // mirrors the fake in internal/api/injection_test.go so api_key injection-
@@ -144,7 +144,7 @@ func (s *memSecrets) For(owner string) secretstore.Store {
 	return &memSecrets{owner: owner, m: s.m, owned: s.owned}
 }
 
-// ─── approval service adapter (copied from cmd/wardynd/adapters.go) ─────────────
+// approval service adapter (copied from cmd/wardynd/adapters.go)
 //
 // cmd/wardynd is package `main`, so its approvalService adapter cannot be
 // imported. It is copied here verbatim (the ~20-line adapter the lane brief
@@ -197,14 +197,17 @@ func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.Approval
 func (s *approvalService) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
 	return store.NewPG(s.pool).ListApprovals(ctx, state)
 }
-func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
+func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	return approval.CancelForRun(ctx, s.st(), runID, reason)
+}
+func (s *approvalService) ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error {
+	return approval.ExpireOne(ctx, s.st(), id, actor, reason)
 }
 func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	return store.NewPG(s.pool).CountApprovalsForRun(ctx, runID)
 }
 
-// ─── fake runner ──────────────────────────────────────────────────────────────
+// fake runner
 
 // fakeRunner is an in-package runner.Runner that lets the e2e tests drive the
 // run lifecycle deterministically. It mirrors the shape of the fake in
@@ -335,7 +338,7 @@ func (f *fakeRunner) stopCount() int {
 
 var _ runner.Runner = (*fakeRunner)(nil)
 
-// ─── harness ──────────────────────────────────────────────────────────────────
+// harness
 
 // harness is one fully-wired, black-box-testable control plane: the real server
 // behind an httptest server, a live pool, the real broker + approval service,

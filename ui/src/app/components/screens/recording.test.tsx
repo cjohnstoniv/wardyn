@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, Recording } from "../../lib/types";
+import { makeRun } from "../../../test/factories";
 
 // R4-F077: the screen used to have no "list all recordings" endpoint to call
 // — it listed every run, then probed api.probeRecording(run.id) PER RUN and
@@ -54,7 +55,7 @@ vi.mock("../wardyn/terminal-player", () => ({
 import { RecordingScreen } from "./recording";
 
 function run(id: string, overrides: Partial<AgentRun> = {}): AgentRun {
-  return {
+  return makeRun({
     id,
     created_at: "2026-06-01T00:00:00.000Z",
     updated_at: "2026-06-01T00:00:00.000Z",
@@ -67,7 +68,7 @@ function run(id: string, overrides: Partial<AgentRun> = {}): AgentRun {
     spiffe_id: `spiffe://wardyn/${id}`,
     runner_target: "docker",
     ...overrides,
-  } as AgentRun;
+  });
 }
 
 // A run whose server-side projection found a recording — has_recording=true

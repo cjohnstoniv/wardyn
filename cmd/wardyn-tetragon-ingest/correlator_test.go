@@ -116,7 +116,7 @@ func TestParseLabels(t *testing.T) {
 	}
 }
 
-// ── W24-S1-1 regression: unmapped host-wide events must not leak ───────────
+// Unmapped host-wide events must not leak
 
 // fakeGTCorrelator implements groundtruth.Correlator with a single known
 // mapping, so a synthetic exec line can be made to resolve (or not) without
@@ -133,15 +133,14 @@ func (f fakeGTCorrelator) RunForContainer(id string) (uuid.UUID, bool) {
 	return uuid.Nil, false
 }
 
-// TestUnmappedHostEventNotForwardedByDefault is the W24-S1-1 regression:
-// Tetragon is a HOST sensor and observes every process on the box, not only
-// Wardyn's. Before this fix, an exec event from a container the docker
-// correlator does not recognise (a non-Wardyn container, or a bare host
-// process) was still forwarded to the control plane's undeletable audit log /
-// SIEM fanout with run_id NULL + correlation=unmapped — a secret/PII leak of
-// workloads Wardyn does not own. Red-first: verified empirically against base
-// 6d76911 (pre-gatedMapper processLine, unmodified) — the equivalent scenario
-// there forwards the unmapped event and this assertion fails.
+// TestUnmappedHostEventNotForwardedByDefault pins the default gate. Tetragon
+// is a host sensor and observes every process on the box, not only Wardyn's.
+// An exec event from a container the docker correlator does not recognise (a
+// non-Wardyn container, or a bare host process) must not reach the control
+// plane's undeletable audit log / SIEM fanout with run_id NULL +
+// correlation=unmapped — that would leak secrets and PII of workloads Wardyn
+// does not own. A processLine without gatedMapper forwards the unmapped
+// event, and this assertion fails.
 func TestUnmappedHostEventNotForwardedByDefault(t *testing.T) {
 	run := uuid.MustParse("44444444-4444-4444-4444-444444444444")
 	corr := fakeGTCorrelator{id: "wardyncontainerid0000", run: run}
@@ -216,14 +215,14 @@ func TestGatedMapper_ForwardsUnmappedWhenOptedIn(t *testing.T) {
 	}
 }
 
-// ── E1/E2 regression: the frozen counter (short-lived containers) ───────────
+// Short-lived containers must keep moving the counters
 
 // TestDockerCorrelator_ResolvesAfterContainerExits is half of the frozen-counter
-// regression. Refresh used to REPLACE the index with the current `docker ps`
-// snapshot, so the moment a run's container exited (and teardown removed it)
-// every kernel event still coming down the lagging Tetragon tail resolved
-// unmapped, was gated, and moved no counter at all. Entries must now outlive
-// their container by containerRetention.
+// guard. If Refresh replaced the index with the current `docker ps` snapshot,
+// then the moment a run's container exited (and teardown removed it) every
+// kernel event still coming down the lagging Tetragon tail would resolve
+// unmapped, be gated, and move no counter at all. Entries outlive their
+// container by containerRetention.
 func TestDockerCorrelator_ResolvesAfterContainerExits(t *testing.T) {
 	run := uuid.MustParse("55555555-5555-5555-5555-555555555555")
 	full := "aaaabbbbccccddddeeeeffff00001111"
