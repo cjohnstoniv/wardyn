@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The provider editor (#537): one test per state provider-editor.html draws,
-// every visible string asserted against lib/model-providers-copy.ts (itself
-// pinned to canon.html by model-providers-copy.test.ts).
+// The provider editor (#537, #538): one test per state provider-editor.html /
+// mp-packet-B.html draws, every visible string asserted against
+// lib/model-providers-copy.ts (itself pinned to
+// docs/design/model-providers-canon.md by model-providers-copy.test.ts).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -15,7 +16,7 @@ import type { ModelProvidersList } from "../../../lib/api/model-providers";
 import { T } from "../../../lib/integrations";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR as E, PROVIDERS } from "../../../lib/model-providers-copy";
 import type { ModelProvider } from "../../../lib/types/site";
-import { PROVIDERS as WS_PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, AGENTS_DRAFT, PROVIDERS as WS_PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { ModelProviderEditor, type ModelProviderEditorProps } from "./model-provider-editor";
 import { addressChanged, providerIdFrom } from "./model-provider-draft";
 
@@ -48,6 +49,26 @@ const ANTHROPIC: ModelProvider = {
   uid: "u-2",
   name: "Anthropic API key",
   kind: "anthropic_api_key",
+  harnesses: [{ harness: "claude-code" }],
+};
+const BEDROCK: ModelProvider = {
+  id: "bedrock-prod",
+  uid: "u-3",
+  name: "Bedrock (prod)",
+  kind: "bedrock_sso",
+  bedrock: {
+    region: "us-east-1",
+    sso_start_url: "https://acme.awsapps.com/start",
+    sso_account_id: "111122223333",
+    sso_role_name: "WardynBedrockUser",
+  },
+  harnesses: [{ harness: "claude-code", model: "acme.claude-sonnet" }],
+};
+const SUBSCRIPTION: ModelProvider = {
+  id: "claude-subscription",
+  uid: "u-4",
+  name: "Claude subscription",
+  kind: "anthropic_subscription",
   harnesses: [{ harness: "claude-code" }],
 };
 
@@ -84,19 +105,35 @@ beforeEach(() => {
 });
 
 describe("the kind step", () => {
-  it("lists the three kinds #537 builds, in order, and Cancel — no Next", async () => {
+  it("lists all five kinds in order, and Cancel — no Next", async () => {
     const { onClose, user } = renderEditor();
     expect(screen.getByRole("heading", { name: MODEL_PROVIDERS.ADD_CTA })).toBeInTheDocument();
     const group = screen.getByRole("group", { name: E.KIND_TITLE });
     expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      MODEL_PROVIDERS.KIND.anthropic_subscription,
+      MODEL_PROVIDERS.KIND.bedrock_sso,
       MODEL_PROVIDERS.KIND.anthropic_api_key,
       MODEL_PROVIDERS.KIND.openai_api_key,
       MODEL_PROVIDERS.KIND.custom_endpoint,
     ]);
-    expect(screen.queryByText(MODEL_PROVIDERS.KIND.bedrock_sso)).toBeNull();
-    expect(screen.queryByText(MODEL_PROVIDERS.KIND.anthropic_subscription)).toBeNull();
     await user.click(screen.getByRole("button", { name: E.CANCEL }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("Q1/QB-5: Claude subscription is enabled by default (subscriptionAvailable defaults true)", async () => {
+    const { user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_subscription }));
+    expect(screen.getByText(E.PROVIDES_CLAUDE)).toBeInTheDocument();
+  });
+
+  it("QB-5: disabled with its reason, word for word, when the sign-in image doesn't resolve", async () => {
+    const { user } = renderEditor({ subscriptionAvailable: false });
+    const subscription = screen.getByText(E.CLAUDE_IMAGE_MISSING).closest("button")!;
+    expect(subscription).toBeDisabled();
+    await user.click(subscription);
+    expect(screen.queryByText(E.PROVIDES_CLAUDE)).toBeNull();
+    // The other four options stay enabled.
+    expect(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.bedrock_sso })).toBeEnabled();
   });
 });
 
@@ -231,6 +268,138 @@ describe("E5 — an agent that can't be ticked", () => {
     expect(box("Claude Code")).not.toBeChecked();
     expect(screen.getByText(T.X_OPENAI_CLAUDE)).toBeInTheDocument();
     expect(box("Codex CLI")).toBeChecked();
+  });
+});
+
+describe("E3 — a new Bedrock provider (#538)", () => {
+  it("empty: SSO by default, the IDC block, Model required and open, Codex CLI disabled with Bedrock's reason", async () => {
+    const { user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.bedrock_sso }));
+
+    expect(screen.getByText(E.PROVIDES_SSO)).toBeInTheDocument();
+    expect(screen.getByLabelText(E.NAME)).toHaveValue(MODEL_PROVIDERS.KIND.bedrock_sso);
+    // No key/token/route-through field anywhere — configuration only.
+    expect(screen.queryByLabelText(E.ROUTE_THROUGH)).toBeNull();
+    expect(screen.queryByLabelText(E.BASE_URL)).toBeNull();
+
+    const signIn = screen.getByRole("radiogroup", { name: E.HOW_PEOPLE_SIGN_IN });
+    expect(within(signIn).getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO })).toHaveAttribute("aria-checked", "true");
+    expect(within(signIn).getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER })).toHaveAttribute("aria-checked", "false");
+
+    expect(screen.getByText(E.IDC_GROUP)).toBeInTheDocument();
+    expect(screen.getByLabelText(E.REGION)).toHaveValue("");
+    expect(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL)).toHaveValue("");
+    expect(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toHaveValue("");
+    expect(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toHaveValue("");
+    expect(screen.getByText(E.SSO_SETUP_HINT)).toBeInTheDocument();
+
+    expect(box("Claude Code")).toBeChecked();
+    expect(box("Codex CLI")).not.toBeChecked();
+    expect(box("Codex CLI")).toBeDisabled();
+    expect(screen.getByText(T.X_BEDROCK_CODEX)).toBeInTheDocument();
+    // Collapsed unless a required field is empty (QB-2) — Model is required
+    // for Bedrock, so it stays open here.
+    expect(screen.getByLabelText(E.MODEL)).toBeRequired();
+    expect(screen.getByText(E.MODEL_HINT_BEDROCK)).toBeInTheDocument();
+  });
+
+  it("How people sign in flips to Bearer: the IDC-only fields drop, Region stays, the provides line becomes a key line", async () => {
+    const { user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.bedrock_sso }));
+    await user.click(screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER }));
+
+    expect(screen.getByText(E.PROVIDES_KEY)).toBeInTheDocument();
+    expect(screen.getByLabelText(E.REGION)).toBeInTheDocument();
+    expect(screen.queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
+    expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toBeNull();
+    expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toBeNull();
+  });
+
+  it("filled: saves the SSO fields under bedrock, and the ticked agent's model", async () => {
+    const { user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.bedrock_sso }));
+    await user.clear(screen.getByLabelText(E.NAME));
+    await user.type(screen.getByLabelText(E.NAME), "Bedrock (prod)");
+    await user.type(screen.getByLabelText(E.REGION), "us-east-1");
+    await user.type(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL), "https://acme.awsapps.com/start");
+    await user.type(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID), "111122223333");
+    await user.type(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME), "WardynBedrockUser");
+    await user.type(screen.getByLabelText(E.MODEL), "acme.claude-sonnet");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+
+    await waitFor(() => expect(putMock).toHaveBeenCalled());
+    const [p] = putBody().providers;
+    expect(p).toMatchObject({
+      id: "bedrock-prod",
+      name: "Bedrock (prod)",
+      kind: "bedrock_sso",
+      base_url: undefined,
+      auth: undefined,
+      bedrock: {
+        region: "us-east-1",
+        sso_start_url: "https://acme.awsapps.com/start",
+        sso_account_id: "111122223333",
+        sso_role_name: "WardynBedrockUser",
+      },
+      harnesses: [{ harness: "claude-code", model: "acme.claude-sonnet", path: undefined }],
+    });
+  });
+
+  it("editing a stored Bearer provider: Bearer is selected, no SSO-only fields, the id and kind stay put", async () => {
+    const BEARER: ModelProvider = { ...BEDROCK, id: "bedrock-bearer", kind: "bedrock_bearer" };
+    renderEditor({ editing: BEARER, list: list([BEARER]) });
+    expect(within(dialog()).getByText(MODEL_PROVIDERS.KIND.bedrock_bearer)).toBeInTheDocument();
+    expect(screen.getByText(E.PROVIDES_KEY)).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText(E.REGION)).toHaveValue("us-east-1");
+    expect(screen.queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
+  });
+});
+
+describe("E4 — a new Claude subscription provider (#538)", () => {
+  it("empty: named after its kind, no key/token/route-through field, Claude Code ticked, Codex CLI disabled", async () => {
+    const { user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_subscription }));
+
+    expect(screen.getByText(E.PROVIDES_CLAUDE)).toBeInTheDocument();
+    expect(screen.getByLabelText(E.NAME)).toHaveValue(MODEL_PROVIDERS.KIND.anthropic_subscription);
+    expect(screen.queryByLabelText(E.ROUTE_THROUGH)).toBeNull();
+    expect(screen.queryByLabelText(E.BASE_URL)).toBeNull();
+    expect(screen.queryByText(E.HOW_PEOPLE_SIGN_IN)).toBeNull();
+    expect(screen.queryByText(E.IDC_GROUP)).toBeNull();
+
+    expect(box("Claude Code")).toBeChecked();
+    expect(box("Codex CLI")).not.toBeChecked();
+    expect(box("Codex CLI")).toBeDisabled();
+    expect(screen.getByText(T.X_SUB_CODEX)).toBeInTheDocument();
+    // Model is optional for a subscription (Bedrock's own rule) — collapsed.
+    expect(screen.queryByLabelText(E.MODEL)).toBeNull();
+  });
+
+  it("filled: saves the kind with no bedrock or auth block", async () => {
+    const { user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_subscription }));
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+
+    await waitFor(() => expect(putMock).toHaveBeenCalled());
+    const [p] = putBody().providers;
+    expect(p).toMatchObject({
+      id: "claude-subscription",
+      name: "Claude subscription",
+      kind: "anthropic_subscription",
+      base_url: undefined,
+      auth: undefined,
+      bedrock: undefined,
+      harnesses: [{ harness: "claude-code", model: undefined, path: undefined }],
+    });
+  });
+
+  it("editing: the kind chip reads Claude subscription", async () => {
+    renderEditor({ editing: SUBSCRIPTION, list: list([SUBSCRIPTION]) });
+    // The name equals the kind label for this fixture, so both the title and
+    // the chip render it — two occurrences, not a stray duplicate.
+    expect(within(dialog()).getAllByText(MODEL_PROVIDERS.KIND.anthropic_subscription)).toHaveLength(2);
+    expect(screen.getByText(E.PROVIDES_CLAUDE)).toBeInTheDocument();
   });
 });
 
@@ -386,6 +555,17 @@ describe("E9 — changing where it sends requests", () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
+
+  // Bedrock's region or endpoint (E9's colfoot) — a key kind, so the key wording.
+  it("a changed Bedrock region asks too, with the key wording", async () => {
+    const { user } = renderEditor({ editing: BEDROCK, list: list([BEDROCK], { "bedrock-prod": 3 }) });
+    await user.clear(screen.getByLabelText(E.REGION));
+    await user.type(screen.getByLabelText(E.REGION), "eu-west-1");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    expect(within(alert()).getByText(E.ADDRESS_BODY_KEY(3))).toBeInTheDocument();
+    await user.click(within(alert()).getByRole("button", { name: E.CANCEL }));
+    expect(putMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("the draft rules", () => {
@@ -401,5 +581,18 @@ describe("the draft rules", () => {
     expect(addressChanged(CORP, { ...CORP, auth: { header: "Authorization", format: "Token %s" } })).toBe(false);
     expect(addressChanged(CORP, { ...CORP, auth: { header: "X-Api-Key", format: "%s" } })).toBe(true);
     expect(addressChanged(ANTHROPIC, { ...ANTHROPIC, base_url: "https://llm.corp.example" })).toBe(true);
+  });
+
+  it("rule 8 also reads Bedrock's region and endpoint, but not the AWS sign-in portal or its pin", () => {
+    expect(addressChanged(BEDROCK, { ...BEDROCK, bedrock: { ...BEDROCK.bedrock, region: "eu-west-1" } })).toBe(true);
+    expect(
+      addressChanged(BEDROCK, { ...BEDROCK, bedrock: { ...BEDROCK.bedrock, base_url: "https://vpce.example" } }),
+    ).toBe(true);
+    expect(
+      addressChanged(BEDROCK, { ...BEDROCK, bedrock: { ...BEDROCK.bedrock, sso_start_url: "https://other.awsapps.com/start" } }),
+    ).toBe(false);
+    expect(
+      addressChanged(BEDROCK, { ...BEDROCK, bedrock: { ...BEDROCK.bedrock, sso_account_id: "999988887777" } }),
+    ).toBe(false);
   });
 });

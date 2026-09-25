@@ -9,14 +9,27 @@
 // from the name, every compatible agent ticked, rule 8) are testable without
 // rendering the dialog.
 import { IMPOSSIBLE } from "../../../lib/integrations";
-import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
+import { MODEL_PROVIDERS, PROVIDER_EDITOR } from "../../../lib/model-providers-copy";
 import type { ModelProvider, ModelProviderKind, ProviderHarness } from "../../../lib/types/site";
 import { agentCapabilityFor } from "../providers/agents-tab";
 
-// The kinds #537 builds, in the kind step's order (decision 1); #538 adds
-// Amazon Bedrock and Claude subscription.
-export const EDITOR_KINDS = ["anthropic_api_key", "openai_api_key", "custom_endpoint"] as const;
+// The five kinds the editor draws, in the kind step's order (mp-packet-B.html
+// §"Case (a) first"): Claude subscription, Amazon Bedrock, Anthropic API key,
+// OpenAI API key, Your own endpoint. "Amazon Bedrock" is ONE kind-step option
+// that starts a bedrock_sso draft — the "How people sign in" toggle inside the
+// form (#538, E3) is what reaches bedrock_bearer; that kind is never a kind-
+// step option of its own; editing a stored bedrock_bearer provider reaches the
+// form directly via draftFrom, bypassing this list.
+export const EDITOR_KINDS = [
+  "anthropic_subscription",
+  "bedrock_sso",
+  "anthropic_api_key",
+  "openai_api_key",
+  "custom_endpoint",
+] as const;
 export type EditorKind = (typeof EDITOR_KINDS)[number];
+
+export const isBedrock = (kind: ModelProviderKind) => kind === "bedrock_sso" || kind === "bedrock_bearer";
 
 // One catalog agent a provider can serve (SetupStatus.harnesses without the
 // no-managed-auth rows).
@@ -38,6 +51,11 @@ export interface ProviderDraft {
   authHeader: string;
   // Shown with "{token}" where the wire format carries "%s".
   authFormat: string;
+  // Bedrock kinds only (bedrock_sso, bedrock_bearer) — mp.Bedrock's fields.
+  region: string;
+  ssoStartUrl: string;
+  ssoAccountId: string;
+  ssoRoleName: string;
   harnesses: Record<string, HarnessDraft>;
 }
 
@@ -47,10 +65,31 @@ export const isEndpoint = (kind: ModelProviderKind) => kind === "custom_endpoint
 export const vendorHost = (kind: ModelProviderKind) =>
   kind === "openai_api_key" ? "api.openai.com" : "api.anthropic.com";
 
+// The provides-line under the dialog title (§2.2, per kind) — the editor's own
+// wording, distinct from the list row's compact providesLine (model-providers-
+// copy.ts), which drops the trailing period for a table cell.
+export function editorProvidesLine(kind: ModelProviderKind): string {
+  switch (kind) {
+    case "bedrock_sso":
+      return PROVIDER_EDITOR.PROVIDES_SSO;
+    case "anthropic_subscription":
+      return PROVIDER_EDITOR.PROVIDES_CLAUDE;
+    case "custom_endpoint":
+      return PROVIDER_EDITOR.PROVIDES_TOKEN;
+    default:
+      return PROVIDER_EDITOR.PROVIDES_KEY;
+  }
+}
+
 // The catalog's own reason this kind can't drive this agent, or undefined.
+// bedrock_sso and bedrock_bearer both fold to IMPOSSIBLE's single "bedrock"
+// row (lib/integrations.ts's AiType has no separate entry for either) — cast
+// as a loose Record rather than AiType so custom_endpoint (no IMPOSSIBLE row
+// at all) still falls through to undefined instead of a type error.
 export function incompatibleReason(kind: ModelProviderKind, harness: string): string | undefined {
   const cap = agentCapabilityFor(harness);
-  return cap && (IMPOSSIBLE as Record<string, Partial<Record<string, string>>>)[kind]?.[cap];
+  const key = isBedrock(kind) ? "bedrock" : kind;
+  return cap && (IMPOSSIBLE as Record<string, Partial<Record<string, string>>>)[key]?.[cap];
 }
 
 const toDisplayFormat = (f: string) => f.replace("%s", "{token}");
@@ -65,6 +104,10 @@ export function newDraft(kind: EditorKind, harnesses: HarnessRow[]): ProviderDra
     baseUrl: "",
     authHeader: "Authorization",
     authFormat: "Bearer {token}",
+    region: "",
+    ssoStartUrl: "",
+    ssoAccountId: "",
+    ssoRoleName: "",
     harnesses: Object.fromEntries(
       harnesses.map((h) => [h.id, { ticked: !incompatibleReason(kind, h.id), model: "", path: "" }]),
     ),
@@ -83,6 +126,10 @@ export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDr
     baseUrl: p.base_url ?? "",
     authHeader: p.auth?.header ?? "Authorization",
     authFormat: toDisplayFormat(p.auth?.format ?? "Bearer %s"),
+    region: p.bedrock?.region ?? "",
+    ssoStartUrl: p.bedrock?.sso_start_url ?? "",
+    ssoAccountId: p.bedrock?.sso_account_id ?? "",
+    ssoRoleName: p.bedrock?.sso_role_name ?? "",
     harnesses: rows,
   };
 }
@@ -107,6 +154,8 @@ export function providerIdFrom(name: string, taken: string[]): string {
 // scheme) is carried through untouched.
 export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, taken: string[]): ModelProvider {
   const endpoint = isEndpoint(draft.kind);
+  const bedrock = isBedrock(draft.kind);
+  const sso = draft.kind === "bedrock_sso";
   const name = draft.name.trim();
   const harnesses: ProviderHarness[] = Object.entries(draft.harnesses)
     .filter(([, h]) => h.ticked)
@@ -125,6 +174,18 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
     auth: endpoint
       ? { header: draft.authHeader.trim() || undefined, format: toWireFormat(draft.authFormat.trim()) || undefined }
       : undefined,
+    // Anything the editor doesn't show (a custom Bedrock endpoint override) is
+    // carried through untouched, same rule as the endpoint kind's per-harness
+    // auth_header/auth_format above.
+    bedrock: bedrock
+      ? {
+          ...base?.bedrock,
+          region: draft.region.trim() || undefined,
+          sso_start_url: sso ? draft.ssoStartUrl.trim() || undefined : undefined,
+          sso_account_id: sso ? draft.ssoAccountId.trim() || undefined : undefined,
+          sso_role_name: sso ? draft.ssoRoleName.trim() || undefined : undefined,
+        }
+      : undefined,
     harnesses,
   };
 }
@@ -134,9 +195,18 @@ const header = (p: ModelProvider) => (isEndpoint(p.kind) ? p.auth?.header?.trim(
 
 // Rule 8, the server's providerAddressChanged: where requests go, or how each
 // person's credential is sent, differs — which deletes everyone's credential
-// for the provider (E9).
+// for the provider (E9). E9's colfoot names "Bedrock's region or endpoint"
+// alongside the base URL/path/header this already covered; the AWS access
+// portal and its pin are identity, not address, so they don't belong here.
 export function addressChanged(a: ModelProvider, b: ModelProvider): boolean {
-  if (normURL(a.base_url) !== normURL(b.base_url) || header(a) !== header(b)) return true;
+  if (
+    normURL(a.base_url) !== normURL(b.base_url) ||
+    header(a) !== header(b) ||
+    normURL(a.bedrock?.region) !== normURL(b.bedrock?.region) ||
+    normURL(a.bedrock?.base_url) !== normURL(b.bedrock?.base_url)
+  ) {
+    return true;
+  }
   return (a.harnesses ?? []).some((ha) =>
     (b.harnesses ?? []).some(
       (hb) =>
