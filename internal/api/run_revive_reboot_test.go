@@ -199,3 +199,55 @@ func TestReviveRun_AfterAnExtension(t *testing.T) {
 		t.Errorf("run.revive data = %v; want from outage, agent_started (the agent was stopped, so revive started it)", data)
 	}
 }
+
+// hookRunner wraps startingRunner so a test can run code partway through
+// ReplaceProxy — modelling a slow proxy-image pull whose duration outlives
+// the watcher lease's own sweep interval.
+type hookRunner struct {
+	*startingRunner
+	hook func()
+}
+
+func (h *hookRunner) ReplaceProxy(ctx context.Context, ref string, cfg []byte) error {
+	h.hook()
+	return h.startingRunner.ReplaceProxy(ctx, ref, cfg)
+}
+
+// TestReviveRun_RebootReviveRacesTheWatcherSweep is F2's fix: a watcher sweep
+// that lands after the revive's claim (which cleared lost_at) but before the
+// agent is started again — ReplaceProxy is slow, an image pull in production —
+// must not re-lose the run. keepRebootedRun leaves a run a revive already owns
+// alone, so the revive finishes with the agent live, exactly one run.revive
+// success row, and no run.lost row from the racing sweep.
+func TestReviveRun_RebootReviveRacesTheWatcherSweep(t *testing.T) {
+	f, sr := newRebootFixture(t)
+	// The fixture itself lost this run twice already (once to the outage
+	// sweepTokens in newReviveFixture, once to the reboot sweepWatchers in
+	// newRebootFixture): the baseline, so the assertion below is about what
+	// the RACING sweep does DURING the revive, not the setup.
+	before := len(f.audit.eventsFor(f.run.ID, "run.lost"))
+
+	hr := &hookRunner{startingRunner: sr}
+	hr.hook = func() {
+		f.ls.claimed = false // the watcher lease looks stale: the sweep claims the run again
+		f.sweepWatchers(t)
+	}
+	f.srv.cfg.Runner = hr
+
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive: code %d, want 200", code)
+	}
+	if got := sr.starts(); !slices.Equal(got, []int{1}) {
+		t.Fatalf("StartSandbox calls = %v; want one, after the new proxy", got)
+	}
+	if lostAt, _ := f.st.lost(); lostAt != nil || f.st.State() != types.RunRunning {
+		t.Errorf("lost %v, state %s; want the run live and RUNNING despite the racing sweep", lostAt, f.st.State())
+	}
+	if ev := f.audit.eventsFor(f.run.ID, "run.revive"); len(ev) != 1 || ev[0].Outcome != "success" {
+		t.Errorf("run.revive events = %+v, want exactly one success", ev)
+	}
+	if lost := f.audit.eventsFor(f.run.ID, "run.lost"); len(lost) != before {
+		t.Errorf("run.lost events = %+v (%d new); want none: the racing sweep must not re-lose the run mid-revive",
+			lost, len(lost)-before)
+	}
+}

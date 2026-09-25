@@ -73,6 +73,12 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 // caller's finalize as before. A substrate that cannot keep it (Kubernetes)
 // tears it down in the state the exit code says, as the finalize would have.
 func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st runner.Status) bool {
+	// F2 (Fable review): a revive already in flight owns this run — a watcher
+	// sweep that lands mid-revive (its claim cleared lost_at, but the new proxy
+	// or agent is not up yet) must leave it alone, never lose it again.
+	if _, busy := s.reviving.Load(run.ID); busy {
+		return true
+	}
 	loser, ok := s.cfg.Store.(store.RunLoser)
 	if !ok || st.ExitCode == nil {
 		return false

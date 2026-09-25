@@ -43,7 +43,10 @@ import (
 // is still lost, but its lost_reason stays outage (run_lost.go); this is
 // detected by probing the agent's own status rather than trusted from the
 // label, and takes the same start-again path a reboot does (F1.2, Fable
-// review).
+// review). The proxy image is pulled before the claim below, never after, so
+// the window a watcher sweep must leave the run alone in covers only a fast
+// create+start, not a pull (F2); keepRebootedRun (run_lost.go) is the guard
+// that actually leaves it alone.
 //
 // Authority is the OWNER's, never the caller's: an admin's own ceiling is
 // empty (effectiveCeiling's operator short-circuit), so resolving the caller
@@ -172,6 +175,15 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 		return reviveResult{}, reviveRefused(http.StatusInternalServerError, "encode proxy config: "+err.Error())
 	}
 
+	// F2 (Fable review): a slow first pull of the proxy image belongs BEFORE
+	// the claim below, never after — the claim is what makes a watcher sweep
+	// leave this run alone (keepRebootedRun's busy check only helps once the
+	// run IS claimed), so the window it opens must cover only a fast
+	// docker create+start, not an image pull.
+	if err := rv.EnsureProxyImage(ctx); err != nil {
+		return reviveResult{}, reviveRefused(http.StatusBadGateway, "pull the proxy image: "+err.Error())
+	}
+
 	// The claim comes BEFORE the new proxy starts: once the run is no longer
 	// lost, the lease sweep stops re-asserting the old proxy's stop, and the
 	// fresh token stamp keeps the lapsed-token sweep off it. It lands only on
@@ -213,6 +225,18 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 			msg: "the run's proxy could not be replaced, so the run has no egress and is lost until revived: " + err.Error()}
 	}
 	if rebooted {
+		// F2: refresh the watcher lease right before starting the agent — on a
+		// multi-replica deployment the claim's own stamp can go stale while
+		// ReplaceProxy ran, and a sweep that then adopted this run would probe
+		// an agent not yet started and lose it again mid-revive. Best-effort:
+		// keepRebootedRun's busy check is the load-bearing guard; this only
+		// narrows the window it has to cover.
+		if wl, ok := s.cfg.Store.(store.RunWatcherLeaser); ok {
+			if err := wl.HeartbeatRunWatcher(ctx, run.ID, watcherOwner); err != nil {
+				slog.WarnContext(ctx, "wardynd: heartbeating a revived run's watcher lease before starting its agent failed",
+					slog.String("run_id", run.ID.String()), slog.Any("err", err))
+			}
+		}
 		// Only now, behind the new proxy. A failed start is lost (reboot) again,
 		// which stops the new proxy with the agent.
 		if err := starter.StartSandbox(ctx, run.SandboxRef); err != nil {

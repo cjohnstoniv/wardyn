@@ -688,6 +688,14 @@ type ProxyStopper interface {
 type ProxyReviver interface {
 	ProxyConfig(ctx context.Context, ref string) ([]byte, error)
 	ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error
+	// EnsureProxyImage pulls the proxy sidecar image if it is not already
+	// present locally. The control plane calls this BEFORE the revive claim
+	// (long-holds design rev 4 §4.1; F2, Fable review): a slow first pull then
+	// happens while the run is still marked lost, so the window the claim
+	// opens — during which a watcher sweep must leave the run alone rather
+	// than lose it again — covers only a fast remove+create+start, never an
+	// image pull.
+	EnsureProxyImage(ctx context.Context) error
 }
 
 // ErrReviveUnsupported is ProxyReviver's answer from a router whose substrate

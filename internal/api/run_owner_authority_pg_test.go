@@ -33,6 +33,8 @@ func (r *pgReviveRunner) ProxyConfig(context.Context, string) ([]byte, error) {
 	return r.cfg, nil
 }
 
+func (r *pgReviveRunner) EnsureProxyImage(context.Context) error { return nil }
+
 func (r *pgReviveRunner) ReplaceProxy(_ context.Context, _ string, cfg []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -85,6 +85,8 @@ func (r *reviveRunner) ProxyConfig(context.Context, string) ([]byte, error) {
 	return r.cfg, nil
 }
 
+func (r *reviveRunner) EnsureProxyImage(context.Context) error { return nil }
+
 func (r *reviveRunner) Status(context.Context, string) (runner.Status, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

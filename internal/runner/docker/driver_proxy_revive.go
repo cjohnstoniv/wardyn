@@ -107,6 +107,14 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	return resp.ID, nil
 }
 
+// EnsureProxyImage — see runner.ProxyReviver. ReplaceProxy also ensures the
+// image itself (a cheap local check once it is cached); calling this first
+// keeps a slow FIRST pull out of the window between the revive claim and the
+// new proxy actually starting (F2).
+func (d *Driver) EnsureProxyImage(ctx context.Context) error {
+	return d.ensureImage(ctx, d.cfg.ProxyImage, func() {})
+}
+
 // ProxyConfig reads the agent ref's proxy sidecar's rendered config back from
 // its env (runner.ProxyReviver). The sidecar may be running or stopped (a
 // lost run's, see StopProxy); a missing one is an error, because nothing

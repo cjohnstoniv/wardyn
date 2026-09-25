@@ -439,6 +439,22 @@ func (o *Orchestrator) ReplaceProxy(ctx context.Context, ref string, cfgJSON []b
 	return rv.ReplaceProxy(ctx, ref, cfgJSON)
 }
 
+// EnsureProxyImage ensures every substrate's proxy sidecar image ahead of a
+// revive claim (runner.ProxyReviver), not just the one ref's own substrate:
+// this runs BEFORE the claim identifies which run it is for, and pulling an
+// already-present image is a cheap local check (F2). There is exactly one
+// revivable substrate today; this loops in case a future one joins it.
+func (o *Orchestrator) EnsureProxyImage(ctx context.Context) error {
+	for _, s := range o.substrates {
+		if rv, ok := s.(runner.ProxyReviver); ok {
+			if err := rv.EnsureProxyImage(ctx); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // StartSandbox forwards a kept agent's restart to ref's substrate when it can
 // start one again (runner.SandboxStarter). The route is kept.
 func (o *Orchestrator) StartSandbox(ctx context.Context, ref string) error {
