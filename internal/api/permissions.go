@@ -294,6 +294,12 @@ func canonicalGrantValue(capability, value string) (string, error) {
 		if err := proxy.ValidDomainEntry(v); err != nil {
 			return "", fmt.Errorf("value: %w", err)
 		}
+	case capImage:
+		// Verbatim, as above, but never a dot-segment path: the base-image doors'
+		// own rule, so a grant or restriction cannot target a value no image has.
+		if !imageRefPathSafe(v) {
+			return "", fmt.Errorf("value: "+image400DotSegment, fmt.Sprintf("%q", v))
+		}
 	case capWorkspace, capPolicy:
 		id, err := uuid.Parse(v)
 		if err != nil {
