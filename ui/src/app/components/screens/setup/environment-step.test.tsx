@@ -188,7 +188,8 @@ describe("EnvironmentStep — matrix-as-picker", () => {
 
   // #213 — the recommendation is the strongest INSTALLED barrier, and the
   // note under the matrix says what's stronger and not yet set up.
-  it("(R2) names the stronger, not-yet-installed tiers under the matrix", () => {
+  it("names the stronger, not-yet-installed tiers under the matrix", () => {
+    // ticket: R2
     renderStep(); // default fixture: CC1+CC2 installed, kvm true
     expect(
       screen.getByText(
@@ -211,7 +212,8 @@ describe("EnvironmentStep — matrix-as-picker", () => {
 
   // #213 — the host-reports-nothing case: no chip at all, and the note says
   // why instead of silently omitting Recommended.
-  it("(R3) a host reporting no barrier gets no Recommended chip and the honest 'nothing to recommend' note", () => {
+  it("a host reporting no barrier gets no Recommended chip and the honest 'nothing to recommend' note", () => {
+    // ticket: R3
     const status = baseStatus({ runner: { driver: "docker", confinement_classes: [] } });
     renderStep({ status });
     expect(screen.queryByText("Recommended")).not.toBeInTheDocument();
@@ -223,7 +225,8 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   });
 
   // Honesty invariants (delete-the-row must fail the suite)
-  it("(H1) the permanent Doesn't-stop row renders RESIDUAL_PREFIX + each tier's residual", () => {
+  it("the permanent Doesn't-stop row renders RESIDUAL_PREFIX + each tier's residual", () => {
+    // ticket: H1
     renderStep();
     expect(screen.getByText(RESIDUAL_PREFIX)).toBeInTheDocument();
     for (const cc of ["CC1", "CC2", "CC3"] as const) {
@@ -231,7 +234,8 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     }
   });
 
-  it("(H2) a caveat matrix cell's title === RESIDUAL_PREFIX + its tier's residual", () => {
+  it("a caveat matrix cell's title === RESIDUAL_PREFIX + its tier's residual", () => {
+    // ticket: H2
     renderStep();
     // CC2 carries caveat marks (kernel-exploit + full-break-in rows). Its cell
     // title must reuse the residual copy verbatim — no re-authored risk wording.
@@ -245,7 +249,8 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   // at all. Tone is counted off the three graded-cell aria-labels rather than
   // the CSS classes, since the rest of the step carries success/warning tones
   // too.
-  it("(H3) renders every CC_MATRIX_ROWS label + where-it-runs cell, graded from the data", () => {
+  it("renders every CC_MATRIX_ROWS label + where-it-runs cell, graded from the data", () => {
+    // ticket: H3
     renderStep();
     for (const row of CC_MATRIX_ROWS) {
       expect(screen.getByText(row.label)).toBeInTheDocument();
@@ -266,7 +271,8 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   });
 
   // recommendedTier helper (exported for tests only)
-  it("(R1) recommendedTier picks the strongest INSTALLED tier, never inferred from hardware or the OS", () => {
+  it("recommendedTier picks the strongest INSTALLED tier, never inferred from hardware or the OS", () => {
+    // ticket: R1
     // Default fixture: CC1+CC2 installed, CC3 not — CC2 is recommended even
     // though this host is kvm-capable (kvm:true) and could in principle run
     // Vault: #213's whole point is that "could run it" is not "recommended".
@@ -351,7 +357,8 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   // HIGH-4: a member's redacted runner is Driver:"" (the Go zero value, not
   // the "none" sentinel) — must read identically to "none", not fall through
   // to the wrong ("start the Docker daemon") fix text.
-  it("(HIGH-4) an empty driver string reads as no-driver, with the -runner docker fix (not the daemon fix)", () => {
+  it("an empty driver string reads as no-driver, with the -runner docker fix (not the daemon fix)", () => {
+    // ticket: HIGH-4
     const status = baseStatus({ runner: { driver: "", confinement_classes: [] } });
     renderStep({ status });
     expect(screen.getByText(/No sandbox runner/)).toBeInTheDocument();
@@ -365,7 +372,8 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   // an absent one: the red "No sandbox runner" card, an operator-only fix they
   // cannot run, and — the third symptom — a dead picker, because `selectable`
   // is gated on the same `noRunner`. Unknown, not broken.
-  it("(X3-F1) an empty driver WITH live classes is unknown, not absent: no card, picker still selectable", async () => {
+  it("an empty driver WITH live classes is unknown, not absent: no card, picker still selectable", async () => {
+    // ticket: X3-F1
     const status = baseStatus({ runner: { driver: "", confinement_classes: ["CC1", "CC2"] } });
     const { onSelect } = renderStep({ status });
     expect(screen.queryByText(/No sandbox runner/)).not.toBeInTheDocument();
@@ -381,7 +389,8 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   // whatever the classes say. Without this case the predicate could be
   // simplified to `classes.length === 0` alone and every other pin here would
   // still pass.
-  it('(X3-F1) an explicit "none" driver keeps the card even with classes present', () => {
+  it('an explicit "none" driver keeps the card even with classes present', () => {
+    // ticket: X3-F1
     renderStep({ status: baseStatus({ runner: { driver: "none", confinement_classes: ["CC1"] } }) });
     expect(screen.getByText(/No sandbox runner/)).toBeInTheDocument();
     expect(screen.getByText(/-runner docker/)).toBeInTheDocument();

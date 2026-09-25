@@ -318,9 +318,9 @@ type ProxyConfig struct {
 	// forge's PAT is minted proxy-side and never enters the sandbox. Empty => no
 	// host brokered. See proxy.Config.PATGrants.
 	PATGrants map[string]proxy.PATGrant
-	// ADOGrants is the run's per-person Azure DevOps grant for the proxy's REST
-	// gate. See proxy.Config.ADOGrants.
-	ADOGrants []proxy.ADOGrantConfig
+	// ADOGrant is the run's per-person Azure DevOps grant for the proxy's REST
+	// gate. See proxy.Config.ADOGrant.
+	ADOGrant *proxy.ADOGrantConfig
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar chains
 	// egress through (http://[user:pass@]host[:port] — https-to-proxy is rejected
 	// by the sidecar's own config validation, parseUpstreamProxy). Threaded
@@ -366,6 +366,10 @@ type ProxyConfig struct {
 	// generic detail. Threaded to the proxy via proxy.Config's identically-named
 	// field (BuildProxyConfig below).
 	LLMUnavailableDetail string
+	// Unattended marks a run nobody is driving (a non-interactive task run):
+	// a push its push_rules would hold for review is refused instead, since
+	// there is nobody to ask. See proxy.Config.Unattended.
+	Unattended bool
 }
 
 // InjectionGrant pairs an api_key credential grant with its proxy-side
@@ -625,6 +629,23 @@ type Runner interface {
 	// plane cascades identity + credential revocation around this call.
 	KillSandbox(ctx context.Context, ref string) error
 }
+
+// SandboxEnder is an OPTIONAL Runner capability: stop a sandbox and KEEP it
+// (the lease end, long-holds design rev 4). EndSandbox stops the agent without
+// removing it, so its files survive, and removes the proxy sidecar, so nothing
+// the agent could restart has a network path. StopSandbox/KillSandbox still
+// tear the kept sandbox down later. Idempotent on a missing sandbox.
+//
+// A substrate that cannot keep a stopped sandbox (Kubernetes: stopping a pod
+// deletes it) does not implement it, and a router in front of one returns
+// ErrEndUnsupported; the control plane then stops the run outright.
+type SandboxEnder interface {
+	EndSandbox(ctx context.Context, ref string) error
+}
+
+// ErrEndUnsupported is EndSandbox's answer from a router whose substrate for
+// ref cannot keep a stopped sandbox.
+var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
 
 // ImageChecker is an OPTIONAL Runner capability: a
 // substrate whose local image cache can go stale out from under a workspace's

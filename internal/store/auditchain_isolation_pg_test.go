@@ -49,7 +49,7 @@ func repeatableReadSchemaPool(t *testing.T) *pgxpool.Pool {
 	}
 	ctx := context.Background()
 
-	// AN UNREACHABLE SERVER IS A FAILURE, NOT AN UNMET PRECONDITION.
+	// An unreachable server is a failure, not an unmet precondition.
 	//
 	// The two guards above are the preconditions: no DSN, or a DSN this helper
 	// cannot point at another schema. Past them the operator has NAMED a server

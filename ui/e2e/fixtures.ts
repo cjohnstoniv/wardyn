@@ -64,10 +64,15 @@ export type NavLabel =
   | "Secrets"
   | "Audit"
   | "Recordings"
-  // #217 — last, under a divider (app-shell.tsx#SidebarNav): the account
-  // menu keeps its own Settings entry too, so this is a SECOND way in, not a
-  // replacement for it.
-  | "Settings";
+  // A security admin's Admin view only (packet M-A).
+  | "Drives"
+  // #217's slot, under a divider (app-shell.tsx#SidebarNav): Setup and
+  // Settings in the Admin view, Getting started and Your account in the User
+  // view.
+  | "Setup"
+  | "Settings"
+  | "Getting started"
+  | "Your account";
 
 // Sidebar entries are react-router <NavLink>s (role="link"), not <button>s.
 // Their accessible name can carry trailing content beyond the label — Runs/
@@ -79,15 +84,18 @@ export function sidebarLink(page: Page, label: NavLabel): Locator {
 }
 
 // gotoConsole loads the app shell (pre-authed) and waits for the sidebar.
-export async function gotoConsole(page: Page): Promise<void> {
-  await page.goto("/");
+// The harness is a single-operator install (a bare admin bearer, no SSO), so
+// "/" lands in the User view once onboarded (D1); pass "admin" to land in the
+// Admin view, whose sidebar carries Policies, Permissions, Audit and the rest.
+export async function gotoConsole(page: Page, view: "user" | "admin" = "user"): Promise<void> {
+  await page.goto(view === "admin" ? "/admin" : "/");
   // "/" never stays "/": FirstRunLanding redirects to /runs or /setup once
   // status and role resolve. The sidebar mounts BEFORE that redirect fires, so
   // waiting on the sidebar alone returns with a Navigate still pending — and a
   // test that immediately pushes its own route can then have it clobbered by
   // the stale redirect (a race that widens under suite load; it cost a
   // member-console run at /runs/new). Console-ready means the landing settled.
-  await page.waitForURL((u) => u.pathname !== "/");
+  await page.waitForURL((u) => u.pathname !== "/" && u.pathname !== "/admin");
   await expect(sidebarLink(page, "Runs")).toBeVisible();
 }
 
@@ -157,7 +165,7 @@ export async function mockMemberRole(page: Page): Promise<void> {
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
-    json.role = "member";
+    json.role = "user";
     json.operator = false;
     json.security_operator = false;
     await route.fulfill({ response, json });
