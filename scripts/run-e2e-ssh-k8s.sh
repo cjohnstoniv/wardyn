@@ -52,9 +52,10 @@
 # up only what it created (its run, its key). GUARD: self-skips unless
 # WARDYN_TEST_K8S=1, the same knob the other cluster-dependent lanes use — AND
 # self-skips (out loud, exit 77 via skip_lane) if WARDYN_TEST_K8S=1 is set but
-# no wardyn install exists in the expected context/namespace, so "asked for
-# but nothing to run against" reports the same as "not asked for" rather than
-# as a red that looks like a real defect.
+# no wardyn install exists in the expected context/namespace — named and
+# printed, never silent. Under `make test-e2e-ssh-k8s` that exit 77 IS a make
+# failure like any other nonzero exit (#463): once WARDYN_TEST_K8S=1 opts in,
+# a missing cluster is a red, not a quiet no-op CI can pass past.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -80,8 +81,9 @@ BASE="http://127.0.0.1:8080"
 # WARDYN_TEST_K8S=1 says "run the cluster-dependent lane"; it does not say a
 # cluster is actually up. A cluster that was asked for but is not there is
 # the SAME "nothing to prove against" case as the guard above, so it gets the
-# same treatment: an out-loud skip_lane (exit 77), never a silent one and
-# never a red that looks like a real defect.
+# same treatment: an out-loud skip_lane (exit 77), never a silent one — and,
+# under `make test-e2e-ssh-k8s`, a make failure like any other nonzero exit,
+# not a red CI has learned to look past (#463).
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment wardyn >/dev/null 2>&1 || {
   skip_lane "run-e2e-ssh-k8s: no wardyn install in context ${CONTEXT}, namespace ${NAMESPACE} — run 'make kind-quickstart' first (this script never creates a cluster) -- skipping."
 }
