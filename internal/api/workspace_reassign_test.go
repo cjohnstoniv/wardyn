@@ -248,8 +248,8 @@ func TestWorkspaceReassign_UnknownWorkspaceIsNotFound(t *testing.T) {
 //
 // Swept across the workspace-scoped write surface rather than one route: the
 // generic scopedWorkspaceWrite chokepoint, two handlers that audit directly,
-// and the reassign added by O6. A new workspace write that forgets the marker
-// is the regression this exists to catch.
+// and the workspace reassign. A new workspace write that forgets the marker
+// fails here.
 func TestWorkspaceOwner_NoImpersonation(t *testing.T) {
 	const adminSub = "sub-owner-admin"
 	srv, st, h, admin, _, _ := reassignHarness(t)

@@ -17,6 +17,7 @@ import (
 	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -216,14 +217,16 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request) *http.Requ
 			mustJSON(map[string]any{"enabled": false, "user_type": typeID, "reason": "user_type_deleted"})))
 		return r.WithContext(dropped)
 	}
-	s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidc.PrincipalFromContext(ctx),
-		"authz.denied", r.URL.Path, "denied",
-		mustJSON(map[string]any{"reason": "user_view_type_deleted", "method": r.Method, "member_mode": true, "user_type": typeID})))
+	// Written here rather than through refuse: the gate runs before the api's
+	// human is published, and the body carries its reason code (409 admin_view
+	// on a launch door, where the row still records user_view_type_deleted).
+	d := authz.Deny(authz.ReasonUserViewTypeDeleted, r.URL.Path, userViewTypeDeleted(typeID))
+	s.recordAudit(ctx, s.refusalEvent(ctx, types.ActorHuman, oidc.PrincipalFromContext(ctx), r.Method, d))
 	if r.Method == http.MethodPost && (r.URL.Path == "/api/v1/runs" || r.URL.Path == "/api/v1/runs/preflight") {
 		writeJSON(w, http.StatusConflict, errorBody{Error: userViewLaunchRefusal(typeID), Reason: "admin_view"})
 		return nil
 	}
-	writeJSON(w, http.StatusForbidden, errorBody{Error: userViewTypeDeleted(typeID), Reason: "user_view_type_deleted"})
+	writeJSON(w, d.Status, errorBody{Error: d.Sentence, Reason: string(d.Reason)})
 	return nil
 }
 

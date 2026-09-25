@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/approval"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
@@ -27,7 +28,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── item 9: the chi.Walk-enumerated authorization matrix ────────────────────
+// item 9: the chi.Walk-enumerated authorization matrix
 //
 // The router's ACTUAL routes are discovered at runtime via chi.Walk — never
 // hand-listed. routeMatrix below classifies each one; TestAuthzMatrix fails
@@ -124,7 +125,7 @@ const (
 // ownerTier names WHICH ADMIN TIER an owner-scoped route's admin bypass belongs
 // to. Required whenever class == classOwner, the same way entity already is.
 //
-// WHY THE TABLE NEEDED A THIRD DIMENSION (F155). routeMatrix is what routes.go
+// Why the table needed a third dimension (F155). routeMatrix is what routes.go
 // calls authoritative, and classAdmin/classSecurity carry the tier so that a
 // route wired to the wrong predicate reddens TestSecurityAdminRouteTier.
 // classOwner carried none, so all 16 owner-scoped routes were SKIPPED by that
@@ -170,7 +171,7 @@ type classifiedRoute struct {
 // the method comment on TestAuthzMatrix for how to regenerate it if this ever
 // needs re-verifying against the live router.
 var routeMatrix = map[string]classifiedRoute{
-	// ── anonymous ──
+	// anonymous
 	"GET /": {class: classAnonymous},
 	// The console SPA, registered INSTEAD of "GET /" when a UIDir is set —
 	// which the shipped image does (ENV WARDYN_UI_DIR=/srv/ui). Anonymous by
@@ -188,7 +189,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// necessity and rate-limited per TCP peer instead (handleDeviceEnrol).
 	"POST /api/v1/devices/enrol": {class: classAnonymous},
 
-	// ── admin (SUPER only: a security_admin is refused here too) ──
+	// admin (SUPER only: a security_admin is refused here too)
 	"GET /metrics":                                       {class: classAdmin},
 	"POST /api/v1/setup/onboarding-complete":             {class: classAdmin},
 	"PUT /api/v1/setup/harness-credential/{provider}":    {class: classAdmin},
@@ -287,12 +288,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// cascade across every run in the deployment from one call, and the host is
 	// one of the three axes securityOps never gets.
 	//
-	// It used to be justified here as "it TEARS DOWN containers — other people's
-	// live runs, mid-flight — which is reach INTO runs the caller does not own,
-	// the one axis the security tier never gets". Both halves were false: the
-	// sweep skips every non-terminal run (it reaps the sandbox of runs that have
-	// ALREADY ended), and the security tier CAN stop a foreign run, on purpose —
-	// ownsRunOrAdmin is isSecurityOperator, so kill admits it on any run. See
+	// It is not justified by reach into runs: the sweep skips every non-terminal
+	// run (it reaps the sandbox of runs that have already ended), and the
+	// security tier can stop a foreign run, on purpose — ownsRunOrAdmin is
+	// isSecurityOperator, so kill admits it on any run. See
 	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
 	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
 	// Minting a device enrolment token creates a credential, so it is SUPER;
@@ -300,7 +299,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// already puts on the security tier (classSecurity below).
 	"POST /api/v1/admin/devices/enrolment-tokens": {class: classAdmin},
 
-	// ── security (0.7 §B: admin OR security_admin; a member still 403s) ──
+	// security (0.7 §B: admin or security_admin; a member still 403s)
 	// The admin twins of /me/tokens: the deployment-wide inventory names other
 	// humans, and revoke-any is the remediation path for a token whose owner was
 	// demoted or has left (migration 0045's stamp ceiling). Incident response,
@@ -313,6 +312,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// credential material and the revoke only subtracts.
 	"GET /api/v1/admin/devices":         {class: classSecurity},
 	"DELETE /api/v1/admin/devices/{id}": {class: classSecurity},
+	// The same pair for enrolment tokens not yet redeemed: the list carries
+	// neither the token nor its hash, and the revoke only subtracts.
+	"GET /api/v1/admin/devices/enrolment-tokens":         {class: classSecurity},
+	"DELETE /api/v1/admin/devices/enrolment-tokens/{id}": {class: classSecurity},
 	// The workspace EGRESS-DECISION lane. Deciding which hosts a workspace's
 	// runs may reach is the same authority as deciding an egress approval, and
 	// promote-egress is literally its bulk form.
@@ -367,7 +370,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/governance/assignments":        {class: classSecurity},
 	"DELETE /api/v1/governance/assignments/{id}": {class: classSecurity},
 	"POST /api/v1/governance/preview":            {class: classSecurity},
-	// User types (migration 0069_user_types): defining a type is the security
+	// User types (migration 0071_user_types): defining a type is the security
 	// tier's duty, like a profile. Who IS a type is the /access routes'
 	// (classAdmin). A member reads their own type from /me, never this list.
 	"GET /api/v1/user-types":         {class: classSecurity},
@@ -404,8 +407,8 @@ var routeMatrix = map[string]classifiedRoute{
 	// 503 here rather than disappearing from this walk.
 	"GET /api/v1/access/directory/search": {class: classSecurity},
 
-	// ── member (any authenticated human/token; internally scoped where the
-	// handler itself narrows the response — see the classMember doc) ──
+	// member (any authenticated human/token; internally scoped where the
+	// handler itself narrows the response — see the classMember doc)
 	"GET /api/v1/approvals":    {class: classMember},
 	"GET /api/v1/audit":        {class: classMember},
 	"GET /api/v1/audit/export": {class: classMember},
@@ -508,7 +511,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/runs/preflight":              {class: classMember},
 	"DELETE /api/v1/me/ssh-keys/{fingerprint}": {class: classMember},
 
-	// ── owner-or-admin ──
+	// owner-or-admin
 	// The workspace CRUD/scan/build tier (0048): a member acts on the workspaces
 	// THEY own, a foreign owned one is the byte-identical 404, and an admin
 	// reaches every one. The 403 an operator-owned row still returns to a member
@@ -563,19 +566,20 @@ var routeMatrix = map[string]classifiedRoute{
 	// TestSecurityAdminRouteTier 403s a security_admin on this route.
 	"GET /api/v1/runs/{id}/attach": {class: classAdmin},
 
-	// ── internal (run-token / ground-truth-token bearer only) ──
-	"GET /api/v1/internal/approvals/{id}":       {class: classInternal},
-	"GET /api/v1/internal/injection/{grantID}":  {class: classInternal},
-	"POST /api/v1/internal/approvals":           {class: classInternal},
-	"POST /api/v1/internal/credentials/mint":    {class: classInternal},
-	"POST /api/v1/internal/decisions":           {class: classInternal},
-	"POST /api/v1/internal/groundtruth":         {class: classInternal},
-	"POST /api/v1/internal/token/renew":         {class: classInternal},
-	"PUT /api/v1/internal/recordings/{runID}":   {class: classInternal},
-	"PUT /api/v1/internal/scan-results/{runID}": {class: classInternal},
-	"PUT /api/v1/internal/sso-token/{runID}":    {class: classInternal},
+	// internal (run-token / ground-truth-token bearer only)
+	"GET /api/v1/internal/approvals/{id}":         {class: classInternal},
+	"GET /api/v1/internal/injection/{grantID}":    {class: classInternal},
+	"POST /api/v1/internal/approvals":             {class: classInternal},
+	"POST /api/v1/internal/approvals/{id}/expire": {class: classInternal},
+	"POST /api/v1/internal/credentials/mint":      {class: classInternal},
+	"POST /api/v1/internal/decisions":             {class: classInternal},
+	"POST /api/v1/internal/groundtruth":           {class: classInternal},
+	"POST /api/v1/internal/token/renew":           {class: classInternal},
+	"PUT /api/v1/internal/recordings/{runID}":     {class: classInternal},
+	"PUT /api/v1/internal/scan-results/{runID}":   {class: classInternal},
+	"PUT /api/v1/internal/sso-token/{runID}":      {class: classInternal},
 
-	// ── device (a `wdd_` device bearer on its own {id} only) ──
+	// device (a `wdd_` device bearer on its own {id} only)
 	"POST /api/v1/devices/{id}/audit":     {class: classDevice},
 	"POST /api/v1/devices/{id}/heartbeat": {class: classDevice},
 }
@@ -762,9 +766,9 @@ func TestAuthzMatrix(t *testing.T) {
 		t.Fatalf("seed device: %v", err)
 	}
 
-	// ── discover every ACTUAL route via chi.Walk; classify or fail ──
+	// discover every actual route via chi.Walk; classify or fail
 	//
-	// BOTH SHIPPED CONFIGURATIONS ARE WALKED, and the UNION is what must be
+	// Both shipped configurations are walked, and the union is what must be
 	// classified. UIDir decides the root route — `GET /*` with a console,
 	// `GET /` without — so walking one server alone asserts completeness for a
 	// router half the deployments do not run. The shipped image sets
@@ -803,7 +807,7 @@ func TestAuthzMatrix(t *testing.T) {
 		}
 	}
 
-	// ── execute the table ──
+	// execute the table
 	for key, rc := range routeMatrix {
 		key, rc := key, rc
 		method, pattern, ok := strings.Cut(key, " ")
@@ -966,6 +970,56 @@ func TestAuthzMatrix(t *testing.T) {
 			}
 		})
 	}
+
+	// ── the query-param id row class (authz_query_id_test.go) ──
+	//
+	// The path probes above never put an id in the QUERY string, so a member
+	// naming someone else's run in `?run_id=` on a classMember route was never
+	// asked. Each row seeds an owned and a foreign entity and probes both.
+	for key, row := range queryIDMatrix {
+		if row.foreign == 0 {
+			continue // pinnedBy carries it; TestQueryParamIDsAreClassified holds it to that
+		}
+		route, param, _ := strings.Cut(key, "?")
+		method, pattern, _ := strings.Cut(route, " ")
+		t.Run(key, func(t *testing.T) {
+			var own, foreign string
+			var leaks []string
+			switch row.entity {
+			case entityRun:
+				ownRun, foreignRun := seedRun(memberSub), seedRun(otherSub)
+				aap.seed(ownRun)
+				leaks = []string{foreignRun.String(), aap.seed(foreignRun).String()}
+				own, foreign = ownRun.String(), foreignRun.String()
+			case entityPrincipal:
+				own, foreign = memberSub, otherSub
+				leaks = []string{otherSub}
+			default:
+				t.Fatalf("query-param row %q has no seedable entity %q", key, row.entity)
+			}
+			at := func(id string) string { return buildPath(pattern, "x1") + "?" + param + "=" + id }
+			body := bodyFor(method, routeMatrix[route])
+
+			w := doSSO(t, srv, method, at(foreign), memberSess, body)
+			if w.Code != row.foreign {
+				t.Errorf("member naming a FOREIGN %s: status = %d, want %d; body=%s", param, w.Code, row.foreign, w.Body.String())
+			}
+			for _, leak := range leaks {
+				if strings.Contains(w.Body.String(), leak) {
+					t.Errorf("member naming a FOREIGN %s got a body carrying %s: %s", param, leak, w.Body.String())
+				}
+			}
+			if row.ownAdmitted {
+				if w := doSSO(t, srv, method, at(own), memberSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
+					t.Errorf("member naming their OWN %s: status = %d, want admitted; body=%s", param, w.Code, w.Body.String())
+				}
+			}
+			assertNotBlocked(t, "admin naming a FOREIGN "+param, doSSO(t, srv, method, at(foreign), adminSess, body))
+			if w := doSSO(t, srv, method, at(own), nil, body); w.Code != http.StatusUnauthorized {
+				t.Errorf("unauthenticated: status = %d, want 401; body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
 }
 
 // TestSecurityAdminRouteTier is the security-admin twin of
@@ -995,7 +1049,7 @@ func TestAuthzMatrix(t *testing.T) {
 // handler ran and answered on its own merits — a 4xx for the deliberately
 // bogus "x1" path id or the empty body is expected and irrelevant here).
 //
-// AND THAT DOCTRINE IS WHERE THIS TEST STOPS. "x1" is not a UUID, so on every
+// And that doctrine is where this test stops. "x1" is not a UUID, so on every
 // {id}-bearing route parseIDParam 400s before the handler's own authorization
 // runs: what is pinned here is the ROUTER GATE, never what the tier can then
 // reach. A route sitting on the right tier is not evidence that the handler
@@ -1165,12 +1219,13 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// enrolment token creates a credential, so it is born SUPER (= 39), while
 	// the device inventory and revoke are the /tokens pair's twins and land on
 	// the security tier (= 26 SEC). 0.8's user types then added four /user-types
-	// routes on the security tier, a profile's peers (= 30 SEC). A route silently
-	// reclassified in the table above would still pass every probe — it would
-	// just be enforcing the WRONG tier, exactly the drift the per-route loop
-	// cannot see.
-	if sec != 30 || super != 39 {
-		t.Errorf("tier split = %d security / %d admin, want 30 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the 4 /user-types routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	// routes on the security tier, a profile's peers (= 30 SEC), and #506 added
+	// the device pair's twins for enrolment tokens not yet redeemed, list and
+	// revoke (= 32 SEC). A route silently reclassified in the table above would
+	// still pass every probe — it would just be enforcing the WRONG tier,
+	// exactly the drift the per-route loop cannot see.
+	if sec != 32 || super != 39 {
+		t.Errorf("tier split = %d security / %d admin, want 32 / 39 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 
@@ -1229,7 +1284,7 @@ func TestDecide_MemberKindRestriction(t *testing.T) {
 	}
 }
 
-// ─── in-memory store.Store fake ───────────────────────────────────────────
+// in-memory store.Store fake
 //
 // Full coverage (compile-time asserted against store.Store) rather than an
 // embedded-nil partial fake: this matrix issues real requests against
@@ -1448,7 +1503,7 @@ func (s *authzStore) setWorkspaceEgressList(id uuid.UUID, domains []string, appr
 // it, not merely its signature. The cross-list removal is the half worth
 // mirroring: deny beats allow everywhere the proxy evaluates policy, so a host
 // left on both lists makes one direction a silent no-op — a fake that only
-// appended would let exactly that regression through green. Dedupe and the
+// appended would let exactly that fault through green. Dedupe and the
 // "an already-listed host always passes the cap" rule are here for the same
 // reason: an idempotent re-decide must not be reported as "cap reached".
 func (s *authzStore) AddWorkspaceEgressDecision(_ context.Context, id uuid.UUID, host string, allow bool, maxApproved int) (types.Workspace, error) {
@@ -1656,7 +1711,7 @@ func (s *authzStore) RefreshAPITokenIdentity(context.Context, string, string, []
 	return nil
 }
 
-// ─── per-user api tokens (migration 0045) ─────────────────────────────────
+// per-user api tokens (migration 0045)
 //
 // Honest empty state, same rationale as the SSH stubs above: this matrix pins
 // the coarse admit/refuse boundary of the five token routes, not the feature.
@@ -1679,7 +1734,7 @@ func (s *authzStore) RevokeAPIToken(context.Context, uuid.UUID, string, time.Tim
 	return types.APIToken{}, store.ErrNotFound
 }
 
-// ─── capability grants (migration 0042) ───────────────────────────────────
+// capability grants (migration 0042)
 //
 // authzStore is the one NON-embedding store.Store double in the tree (see this
 // type's doc comment on why it implements every method rather than embedding),
@@ -1713,7 +1768,7 @@ func (s *authzStore) PutCapabilityEnforcement(_ context.Context, enabled map[str
 	return enabled, nil
 }
 
-// ─── role mappings (migration 0051, Phase 2 lane A) ───────────────────────
+// role mappings (migration 0051, Phase 2 lane A)
 //
 // Same honest-empty-state posture as the capability grant stubs above: no
 // rows is exactly a freshly-upgraded deployment with nothing configured on
@@ -1730,7 +1785,7 @@ func (s *authzStore) ListRoleMappings(context.Context) ([]types.RoleMapping, err
 	return nil, nil
 }
 
-// ─── user types (migration 0069_user_types) ──────────────────────────────
+// user types (migration 0071_user_types)
 //
 // The same honest empty state: the matrix exercises the tier on /user-types,
 // not the rows behind it.
@@ -1747,7 +1802,7 @@ func (s *authzStore) UpdateUserType(context.Context, types.UserType) (types.User
 func (s *authzStore) UserTypeReferences(context.Context, string) (int, error) { return 0, nil }
 func (s *authzStore) DeleteUserType(context.Context, string) error            { return store.ErrNotFound }
 
-// ─── governance profiles (migration 0052) ─────────────────────────────────
+// governance profiles (migration 0052)
 //
 // Same honest-empty-state posture as the two stub blocks above, and here it is
 // also the exact state the matrix wants: NO profile and NO assignment is the
@@ -1784,7 +1839,7 @@ func (s *authzStore) HasGroupTierAssignments(context.Context) (bool, error) {
 	return false, nil
 }
 
-// ─── user drives (migration 0054) ─────────────────────────────────────────
+// user drives (migration 0054)
 //
 // Same honest-empty-state posture as the governance block above, and here it is
 // also the exact state the matrix wants: NO drive and NO grant is the
@@ -1823,7 +1878,7 @@ func (s *authzStore) HasGroupTierDriveGrants(context.Context) (bool, error) {
 	return false, nil
 }
 
-// ─── in-memory ApprovalService fake, ownership-aware ──────────────────────
+// in-memory ApprovalService fake, ownership-aware
 
 // authzApprovals is a minimal approval FSM backed by an in-memory map, PLUS
 // store.ApprovalsByRunCreatorPager (item 2) — it consults ast (the SAME
@@ -1906,10 +1961,10 @@ func (a *authzApprovals) List(_ context.Context, state types.ApprovalState) ([]t
 	return out, nil
 }
 
-func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (int, error) {
+func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	n := 0
+	byKind := map[string]int{}
 	for id, ap := range a.byID {
 		if ap.RunID != runID || ap.State != types.ApprovalPending {
 			continue
@@ -1917,9 +1972,22 @@ func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason
 		ap.State = types.ApprovalCancelled
 		ap.DecidedBy, ap.Reason = "system", reason
 		a.byID[id] = ap
-		n++
+		byKind[approval.TallyKey(ap)]++
 	}
-	return n, nil
+	return byKind, nil
+}
+
+func (a *authzApprovals) ExpireOne(_ context.Context, id uuid.UUID, _, _ string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ap, ok := a.byID[id]
+	if !ok || ap.State != types.ApprovalPending {
+		return nil
+	}
+	ap.State = types.ApprovalExpired
+	ap.DecidedBy = "system"
+	a.byID[id] = ap
+	return nil
 }
 
 func (a *authzApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, error) {

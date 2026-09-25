@@ -31,7 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fakes ─────────────────────────────────────────────────────────────────
+// fakes
 
 // sshMemStore is a minimal in-memory store.Store for this test: only the
 // methods the gateway's auth/channel path touches are implemented; every
@@ -268,7 +268,7 @@ func (s *fakeShellSession) Close() error                                 { _ = s
 
 var _ runner.Session = (*fakeShellSession)(nil)
 
-// ─── harness ───────────────────────────────────────────────────────────────
+// harness
 
 // sshTestHarness starts a real SSH gateway (ServeSSHGateway) on a loopback
 // port backed by st/fr, and returns everything a test needs to dial it.
@@ -450,7 +450,27 @@ func sshDial(t *testing.T, h *sshTestHarness, username string, clientPriv ed2551
 	})
 }
 
-// ─── tests ─────────────────────────────────────────────────────────────────
+// tests
+
+// TestSSHGateway_FreshRunRefusesAKeptRun: sshFreshRun re-checks the run on
+// every channel open; a run the lease ended is RUNNING with a live sandbox
+// ref but nothing to attach to, so it must be refused the same as the two
+// attach gates (TestAttach_RefusesAKeptRun) rather than accepting a channel
+// that dies on its first ExecStream.
+func TestSSHGateway_FreshRunRefusesAKeptRun(t *testing.T) {
+	st := newSSHMemStore()
+	runID := uuid.New()
+	endedAt := time.Now()
+	st.putRun(types.AgentRun{
+		ID: runID, CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sbx-1",
+		LostAt: &endedAt, LostReason: types.LostEnded,
+	})
+	srv := New(Config{Store: st, Runner: &sshFakeRunner{}})
+
+	if run, msg := srv.sshFreshRun(context.Background(), runID); msg == "" || !strings.Contains(msg, "run has ended") {
+		t.Fatalf("kept run: run=%+v msg=%q, want a \"run has ended\" refusal", run, msg)
+	}
+}
 
 // TestSSHGateway_AuthRejectAccept covers auth reject/accept: an unregistered
 // key is rejected, a registered key authenticating for a run it does NOT own
@@ -723,17 +743,16 @@ func TestSSHGateway_OverrideRoleIsBoundedStale(t *testing.T) {
 	}
 }
 
-// TestSSHGateway_OfferWithoutSignatureNeverAudited pins W25.4-1: PublicKeyCallback
-// (sshAuth) fires on the UNSIGNED "query" every pubkey auth attempt opens
-// with (RFC 4252 §7) — before the client ever proves it holds the matching
-// private key. Auditing "ssh.auth success" there (the pre-fix behavior) let
-// an attacker who merely KNOWS a victim's public key — never the private key
-// — mint a forged success row attributed to that victim. The offered key
-// here is genuinely registered and owned (sshAuth's own checks all pass, so
-// the query itself is accepted server-side) — but offerOnlySigner can never
-// sign, so the connection ultimately fails and VerifiedPublicKeyCallback
-// (where success is audited post-fix, and only after a real Verify) never
-// runs.
+// TestSSHGateway_OfferWithoutSignatureNeverAudited: PublicKeyCallback (sshAuth)
+// fires on the unsigned "query" every pubkey auth attempt opens with (RFC 4252 §7)
+// — before the client ever proves it holds the matching private key. Auditing
+// "ssh.auth success" there would let an attacker who merely knows a victim's
+// public key — never the private key — mint a forged success row attributed to
+// that victim. The offered key here is genuinely registered and owned (sshAuth's
+// own checks all pass, so the query itself is accepted server-side) — but
+// offerOnlySigner can never sign, so the connection ultimately fails and
+// VerifiedPublicKeyCallback (where success is audited, and only after a real
+// Verify) never runs.
 func TestSSHGateway_OfferWithoutSignatureNeverAudited(t *testing.T) {
 	st, run, principal := sshOwnedRunningRun(t)
 	_, pub := mustSSHKeypair(t)
@@ -751,8 +770,8 @@ func TestSSHGateway_OfferWithoutSignatureNeverAudited(t *testing.T) {
 	}
 
 	// We want the ABSENCE of an event, so a bounded sleep-out is the right
-	// shape here (giving the server-side query handling — and, pre-fix, its
-	// forged success write — a moment to run), not waitForAudit's
+	// shape here (giving the server-side query handling — and any forged
+	// success write — a moment to run), not waitForAudit's
 	// poll-until-found, which would just time out either way.
 	time.Sleep(200 * time.Millisecond)
 	if ev := findAudit(h.audit.snapshot(), run.ID, "ssh.auth", "success"); ev != nil {
@@ -1026,25 +1045,25 @@ func TestSSHGateway_DirectTCPIPLoopbackRestriction(t *testing.T) {
 	}
 }
 
-// TestSSHGateway_ForwardAuditSurvivesKill pins the audit-race the live C5
-// e2e caught (scripts/run-e2e-ssh.sh's -L forward step, see its step-5
-// comment): killing the WHOLE SSH session (not just the forwarded conn)
-// races handleSSHConn's connCtx cancellation — deferred, fires the instant
-// the connection tears down — against handleSSHDirectTCPIP's own trailing
-// recordAudit call for ssh.forward. That call used to run on connCtx; if the
-// cancellation lands first, the write is attempted on an already-cancelled
-// context and is silently dropped (sshTestRecorder.Record mirrors the real
-// store/pgx behaviour here: it errors on a cancelled ctx instead of writing).
-// The fix runs that trailing write on s.cfg.BaseCtx instead — see
-// bridgeSSHExec's FINDING comment in sshgateway_channels.go.
+// TestSSHGateway_ForwardAuditSurvivesKill pins an audit race: killing the
+// whole SSH session (not just the forwarded conn) races handleSSHConn's
+// connCtx cancellation — deferred, fires the instant the connection tears
+// down — against handleSSHDirectTCPIP's own trailing recordAudit call for
+// ssh.forward. On connCtx that write would be attempted on an
+// already-cancelled context whenever the cancellation lands first, and
+// silently dropped (sshTestRecorder.Record mirrors the real store/pgx
+// behaviour here: it errors on a cancelled ctx instead of writing). The
+// trailing write runs on s.cfg.BaseCtx instead — see bridgeSSHExec's comment
+// in sshgateway_channels.go. scripts/run-e2e-ssh.sh's -L forward step
+// exercises the same race live.
 //
 // Deterministic, not timing-dependent: the fake ExecSession's Stdout blocks
 // until this test itself closes it, so "the connection is already dead" is
 // guaranteed true (a bounded wait lets handleSSHConn's teardown actually
 // finish) BEFORE the bridge's tail — and its recordAudit call — is ever
-// allowed to run. Revert the s.cfg.BaseCtx fix and this test fails (the
-// event never appears within waitForAudit's deadline); with the fix, BaseCtx
-// is never cancelled by the kill, so the row lands regardless.
+// allowed to run. With the trailing write on connCtx this test fails (the
+// event never appears within waitForAudit's deadline); on BaseCtx, which the
+// kill never cancels, the row lands regardless.
 func TestSSHGateway_ForwardAuditSurvivesKill(t *testing.T) {
 	st, run, principal := sshOwnedRunningRun(t)
 	priv, pub := mustSSHKeypair(t)
@@ -1277,7 +1296,7 @@ func TestSSHGateway_HandshakeTimeoutFires(t *testing.T) {
 	}
 }
 
-// ─── small helpers ─────────────────────────────────────────────────────────
+// small helpers
 
 // sshOwnedRunningRun seeds a store with one RUNNING, owned run and returns it
 // alongside the principal, for the tests that don't need to exercise auth
@@ -1312,16 +1331,15 @@ func containsPrefix(env []string, prefix string) bool {
 // TestSSHGateway_MixedChannelTypesShareOneCap is B2′.
 //
 // TestSSHGateway_MaxSessionsPerRunEnforced above exercises "session" channels
-// ONLY. Nothing proved that "direct-tcpip" (-L forwards) draws on the SAME
-// per-run counter — which is the whole structural finding: Wardyn's cap is
-// per-RUN and shared across channel TYPES, inverting the OpenSSH model, where
-// MaxSessions scopes to session channels and a direct-tcpip is dispatched
-// straight to the forward path. That inversion is why a client which opens
-// shells and forwards together (VS Code Remote-SSH being the motivating case)
-// can exhaust a cap that looks generous for shells alone.
+// only. This proves that "direct-tcpip" (-L forwards) draws on the same
+// per-run counter: Wardyn's cap is per-run and shared across channel types,
+// inverting the OpenSSH model, where MaxSessions scopes to session channels
+// and a direct-tcpip is dispatched straight to the forward path. That
+// inversion is why a client which opens shells and forwards together (VS Code
+// Remote-SSH being the motivating case) can exhaust a cap that looks generous
+// for shells alone.
 //
-// It also pins the audit, which did not exist before 0.7: a refusal used to be
-// invisible to the deployment.
+// It also pins the audit: a refusal must be visible to the deployment.
 func TestSSHGateway_MixedChannelTypesShareOneCap(t *testing.T) {
 	st, run, principal := sshOwnedRunningRun(t)
 	priv, pub := mustSSHKeypair(t)

@@ -630,6 +630,9 @@ func (s *Server) routes() chi.Router {
 			r.Post("/internal/decisions", s.handlePostDecision)
 			r.Post("/internal/approvals", s.handleInternalRequestApproval)
 			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
+			// wardyn-toolgate's own give-up signal (#811): closes the row it
+			// raised instead of leaving it PENDING for the sweep.
+			r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 			r.Post("/internal/credentials/mint", s.handleInternalMint)
 
 			// Token renew: POST /api/v1/internal/token/renew
@@ -781,7 +784,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
-	// User types (migration 0069_user_types): defining a type is the same
+	// User types (migration 0071_user_types): defining a type is the same
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.
 	s.mountUserTypeRoutes(securityOps)

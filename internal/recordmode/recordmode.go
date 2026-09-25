@@ -229,12 +229,12 @@ func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Obse
 		}
 	}
 
-	// B11b-F4: the ONE anomaly this run's own events can never carry. An
+	// The ONE anomaly this run's own events can never carry. An
 	// unmapped kernel event is precisely one that correlated to NO run: the
 	// sidecar's gate drops it, and what survives arrives with a nil run_id,
 	// which the caller's own WHERE run_id = $1 then excludes. The captureConnect
-	// branch that used to look for correlation=unmapped here was therefore dead
-	// code claiming a detection nothing could trigger.
+	// branch would therefore be dead code here, claiming a detection nothing
+	// could trigger.
 	//
 	// The condition is drops AND NOTHING CORRELATED, not drops alone (SR-1).
 	// DroppedUnmapped is cumulative over the sensor's whole process lifetime and

@@ -34,7 +34,7 @@ func entraSite(clientID string) fakeSiteConfig {
 var testLogin = newADOEntraLogin("https://login.microsoftonline.com/"+testTenant+"/v2.0",
 	testLoginClient, "console-secret", "https://wardyn.corp.example/auth/callback", false)
 
-// AN UNCONFIGURED DEPLOYMENT IS UNCHANGED: no entra row answers found=false,
+// An unconfigured deployment is unchanged: no entra row answers found=false,
 // which is the same refusal the sign-in doors give with no source at all.
 func TestADOEntraSource_UnconfiguredIsNotFound(t *testing.T) {
 	for name, sc := range map[string]fakeSiteConfig{

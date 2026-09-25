@@ -128,7 +128,8 @@ describe("deriveIntegrations — AI providers", () => {
     expect(row.posture).toEqual({ kind: "region_model_unset" });
   });
 
-  it("Bedrock: a member's redacted status ({ready} only) still renders the row as configured (RIDER B7-F6)", () => {
+  it("Bedrock: a member's redacted status ({ready} only) still renders the row as configured", () => {
+    // ticket: B7-F6 (rider)
     const [row] = deriveIntegrations(baseStatus({ bedrock: { ready: true, creds_present: false } }), null, []).ai;
     expect(row.id).toBe("ai:bedrock");
     expect(row.posture).toEqual({ kind: "configured" });
@@ -219,7 +220,8 @@ describe("deriveIntegrations — SCM hosts", () => {
     expect(row.canReCheck).toBeFalsy();
   });
 
-  it("a github-pat secret yields a resident_env row when siteConfig reports the broker OFF (#381 F8)", () => {
+  it("a github-pat secret yields a resident_env row when siteConfig reports the broker OFF (#381)", () => {
+    // ticket: F8
     const data = deriveIntegrations(
       baseStatus(),
       { scm_hosts: ["github.com"], workspace_providers: { git_pat_broker_enabled: false } },

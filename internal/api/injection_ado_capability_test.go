@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -354,6 +355,59 @@ func TestADOCapability_ConsentChainsAndTheSignInResolvesIt(t *testing.T) {
 	}
 }
 
+// A capability or consent hold the approval store cannot even raise used to
+// answer a bare 503 with no audit trace. #204 routes both through fail(), so
+// each leaves the lane's secret.read failure row and carries reason on the wire.
+func TestADOCapability_RaiseFailureIsAudited(t *testing.T) {
+	f := newADOCapFixture(t)
+	f.approvals.requestErr = errors.New("approvals store unavailable")
+	f.assertRaiseFailed(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath))
+	if _, ok := f.failureReasonOf(t)["capability"]; !ok {
+		t.Error("the capability raise's failure row does not name the capability")
+	}
+}
+
+func TestADOCapability_ConsentRaiseFailureIsAudited(t *testing.T) {
+	f := newADOCapFixture(t)
+	a := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath), adoCapabilityPendingState)
+	f.decide(t, a, types.ApprovalApproved, types.ScopeOnce)
+	f.fake.SetConsentRequired(true)
+	f.approvals.requestErr = errors.New("approvals store unavailable")
+	f.assertRaiseFailed(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath))
+	// The consent arm's row carries no capability key; the capability arm's does.
+	if c, ok := f.failureReasonOf(t)["capability"]; ok {
+		t.Errorf("the consent raise failed through the capability arm (capability=%v)", c)
+	}
+}
+
+// assertRaiseFailed: a 503, exactly one secret.read failure row, and reason
+// raise_failed on both that row and the wire.
+func (f *adoCapFixture) assertRaiseFailed(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d body %s, want 503", w.Code, w.Body.String())
+	}
+	failures := 0
+	for _, row := range f.audit.find("secret.read") {
+		if row.Outcome == "failure" {
+			failures++
+		}
+	}
+	if failures != 1 {
+		t.Fatalf("secret.read failure rows = %d, want exactly one", failures)
+	}
+	if got := f.failureReasonOf(t)["reason"]; got != "raise_failed" {
+		t.Errorf("audit reason = %v, want raise_failed", got)
+	}
+	var body errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Reason != "raise_failed" {
+		t.Errorf("wire reason = %q, want raise_failed", body.Reason)
+	}
+}
+
 // failureReasonOf is the reason on the LAST secret.read failure row.
 func (f *adoCapFixture) failureReasonOf(t *testing.T) map[string]any {
 	t.Helper()
@@ -368,7 +422,7 @@ func (f *adoCapFixture) failureReasonOf(t *testing.T) map[string]any {
 	return map[string]any{}
 }
 
-// ─── the decide matrix ──────────────────────────────────────────────────────
+// the decide matrix
 
 // seedADO puts an escalation row on the fixture's run. sandboxShaped drops the
 // grant id, which is what the sandbox's own route produces whatever its scope
@@ -558,4 +612,27 @@ func testRepoOf(path string) string {
 	}
 	repo, _, _ := strings.Cut(rest, "/")
 	return repo
+}
+
+// ?approval= is a query-param id (authz_query_id_test.go): it is looked up
+// among the CALLING run's approvals only. An approved-once row that belongs to
+// another run — same grant, same capability, so only the run differs — is a
+// mismatch, and it is not spent.
+func TestADOCapability_AnotherRunsApprovalIsRefused(t *testing.T) {
+	f := newADOCapFixture(t)
+	a := pendingID(t, f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, uuid.Nil, prPath), adoCapabilityPendingState)
+	f.decide(t, a, types.ApprovalApproved, types.ScopeOnce)
+	f.approvals.mu.Lock()
+	ap := f.approvals.byID[a]
+	ap.RunID = uuid.New()
+	f.approvals.byID[a] = ap
+	f.approvals.mu.Unlock()
+
+	w := f.ask(t, adoscope.CapPR, types.FirstUseWaitForReview, a, prPath)
+	if w.Code != http.StatusForbidden || f.failureReasonOf(t)["reason"] != "approval_mismatch" {
+		t.Fatalf("status %d body %s, want 403 approval_mismatch", w.Code, w.Body.String())
+	}
+	if f.row(a).MintedJTI != "" {
+		t.Fatal("another run's approval was spent")
+	}
 }

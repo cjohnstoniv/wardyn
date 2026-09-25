@@ -114,6 +114,8 @@ describe("health — site-config integrations round-trip", () => {
       // The agent roster rides on the same door and needs the same strip: a
       // stale spread would silently re-enable an agent the admin just turned off.
       agent_providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
+      // The model-provider block, for the agent roster's reason.
+      model_providers: { providers: [{ id: "corp-gateway", kind: "custom_endpoint", base_url: "https://gw.corp.example" }] },
       effective_scm_hosts: ["github.com"],
     };
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(echoed), { status: 200 }));
@@ -496,7 +498,8 @@ function tsInterfaceKeys(src: string, name: string): string[] {
   return keys;
 }
 
-describe("source parity — GET /me's Go body vs the TS Me mirror (F010)", () => {
+describe("source parity — GET /me's Go body vs the TS Me mirror", () => {
+  // ticket: F010
   const root = repoRoot();
   const meGo = readFileSync(join(root, "internal/api/me.go"), "utf8");
   // Every non-test internal/api/user_drives*.go as one text: meUserDrive moved to

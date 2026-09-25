@@ -230,7 +230,7 @@ func TestSecrets_InjectionRequiresRunToken(t *testing.T) {
 	}
 }
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// helpers
 
 // assertSecretListBodyHidesValue fetches the raw GET /api/v1/secrets body and
 // asserts the secret value does not appear anywhere in it.

@@ -18,11 +18,12 @@ func apiKeyRuleGrant(host, secret, header, format string) types.GrantSpec {
 	})}
 }
 
-// TestFilterMemberGrants_ReHeaderedGrantDropped is the F097 regression on the
-// CLAMP half. The member pairing check compared (host, secret, known_hosts)
-// only, so a member or profile grant that kept the operator's blessed pairing
-// and named a DIFFERENT header — or a different format — matched the operator's
-// ceiling entry and was kept. That is a re-homing of the operator's blessed
+// TestFilterMemberGrants_ReHeaderedGrantDropped is the clamp half. The member
+// pairing check must compare the header and format as well as (host, secret,
+// known_hosts): otherwise a member or profile grant that keeps the operator's
+// blessed pairing and names a different header — or a different format —
+// matches the operator's ceiling entry and is kept. That is a re-homing of the
+// operator's blessed
 // secret: the proxy writes the authored header verbatim onto the forwarded
 // request (internal/egress/proxy/inject.go; the brokered LLM lane strips the
 // four known credential headers and then sets the authored one) and relays the
@@ -64,12 +65,11 @@ func TestFilterMemberGrants_ReHeaderedGrantDropped(t *testing.T) {
 	}
 }
 
-// TestValidateEligibleGrant_FormatRule is the F097 regression on the VALIDATION
-// half. The sink does fmt.Sprintf(format, secret) unconditionally
-// (formatInjectionValue), and the INTEGRATION authoring path has always rejected
-// a format that is not exactly one %s with no CR/LF — while the policy path for
-// the identical wire field checked nothing at all. One rule
-// (validInjectionFormat), both authoring paths.
+// TestValidateEligibleGrant_FormatRule is the validation half. The sink does
+// fmt.Sprintf(format, secret) unconditionally (formatInjectionValue), so the
+// policy path and the integration authoring path must both reject a format that
+// is not exactly one %s with no CR/LF. One rule (validInjectionFormat), both
+// authoring paths.
 func TestValidateEligibleGrant_FormatRule(t *testing.T) {
 	bad := map[string]string{
 		"two verbs":  "tok=%s;copy=%s",

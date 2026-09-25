@@ -63,7 +63,7 @@ type UserTypeSource interface {
 	ListUserTypes(ctx context.Context) ([]types.UserType, error)
 }
 
-// userTypeIDRe is the slug shape migration 0069_user_types CHECKs.
+// userTypeIDRe is the slug shape migration 0071_user_types CHECKs.
 var userTypeIDRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 const maxUserTypeIDLen = 63

@@ -61,7 +61,7 @@ func TestRecordRunHonorsCeilingLimits(t *testing.T) {
 			t.Fatalf("launchRecordRun err = %v, want a governance-limit refusal — a deny_interactive profile "+
 				"must not get a server-authored, allow-all, attachable sandbox", err)
 		}
-		// A REFUSAL COSTS NO STATE: the check runs before the CAS claim, so
+		// A refusal costs no state: the check runs before the CAS claim, so
 		// nothing was launched and nothing has to be aborted.
 		if fr.lastSpec.RunID != uuid.Nil {
 			t.Errorf("a refused record launch still reached the runner (run %s) — the limit must be applied "+
