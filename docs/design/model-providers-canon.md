@@ -109,10 +109,11 @@ The agent reasons reused, `INTEGRATIONS.X_BEDROCK_CODEX` and `INTEGRATIONS.X_SUB
 `AGENTS.MECHANISM_BEDROCK_SSO`, `AGENTS.MECHANISM_BEDROCK_BEARER`, `AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID`
 and `AGENTS_DRAFT.FIELD_SSO_ROLE_NAME`, are `lib/workspace-providers-copy.ts`'s own.
 
-`PROVIDER_EDITOR.REGION` is flagged: the packet's frozen table calls the four Bedrock labels
-(including "Region") "Reused" as a group, but no shipped `Region` Field constant exists to pin
-against — only the word in `connection-cards.tsx`'s legacy-Bedrock prose. Reused verbatim as the
-single word it is; see the #538 report.
+`PROVIDER_EDITOR.REGION` — the packet's frozen table calls the four Bedrock labels (including
+"Region") "Reused" as a group, but no shipped `Region` Field constant existed to pin against, only
+the word in `connection-cards.tsx`'s legacy-Bedrock prose. Flagged in the #538 report; **the owner
+approved `Region` as canon on 2026-09-25** (PR #1038 review). It is canon from that date, the same
+as every other row below.
 
 | Key | Renders at | Frozen string |
 |---|---|---|

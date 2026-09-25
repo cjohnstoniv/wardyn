@@ -566,6 +566,31 @@ describe("E9 — changing where it sends requests", () => {
     await user.click(within(alert()).getByRole("button", { name: E.CANCEL }));
     expect(putMock).not.toHaveBeenCalled();
   });
+
+  // Owner ruling 2026-09-25 (PR #1038 review): switching SSO <-> Bearer on an
+  // existing Bedrock provider mints a fresh UID server-side (assignModelProviderUIDs)
+  // and orphans every stored credential — the SAME fact rule 8 already confirms
+  // for an address change, so it reuses that confirm verbatim rather than a new one.
+  it("switching How people sign in on a stored Bedrock provider asks too, with the key wording; Cancel writes nothing", async () => {
+    const { user } = renderEditor({ editing: BEDROCK, list: list([BEDROCK], { "bedrock-prod": 3 }) });
+    await user.click(screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER }));
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+
+    expect(within(alert()).getByText(E.ADDRESS_TITLE(BEDROCK.name!))).toBeInTheDocument();
+    expect(within(alert()).getByText(E.ADDRESS_BODY_KEY(3))).toBeInTheDocument();
+    expect(putMock).not.toHaveBeenCalled();
+    await user.click(within(alert()).getByRole("button", { name: E.CANCEL }));
+    expect(putMock).not.toHaveBeenCalled();
+  });
+
+  it("switching How people sign in and confirming Save writes the new kind", async () => {
+    const { onSaved, user } = renderEditor({ editing: BEDROCK, list: list([BEDROCK], { "bedrock-prod": 3 }) });
+    await user.click(screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER }));
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    await user.click(within(alert()).getByRole("button", { name: E.SAVE }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(putBody().providers[0]).toMatchObject({ id: "bedrock-prod", kind: "bedrock_bearer" });
+  });
 });
 
 describe("the draft rules", () => {

@@ -33,10 +33,10 @@ export const PROVIDER_EDITOR = {
   PROVIDES_SSO:
     "Each person signs in with one click. You set up your organisation's IAM Identity Center connection once, below.",
   IDC_GROUP: "AWS IAM Identity Center",
-  // Not in any shipped copy module — the packet calls it "Reused" without
-  // naming a source; connection-cards.tsx labels the same legacy Bedrock
-  // setting "Region" in prose, but no Field constant existed to pin against.
-  // Flagged in the #538 report rather than blocking the build on it.
+  // Flagged in the #538 report: not in any shipped copy module (the packet
+  // calls it "Reused" without naming a source; connection-cards.tsx labels
+  // the same legacy Bedrock setting "Region" in prose, but no Field constant
+  // existed to pin against). Owner-approved as canon 2026-09-25 (PR #1038).
   REGION: "Region",
   SSO_SETUP_HINT: "These make each person's sign-in one click.",
   MODEL_HINT_BEDROCK: "An inference profile id.",

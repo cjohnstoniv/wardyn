@@ -198,8 +198,17 @@ const header = (p: ModelProvider) => (isEndpoint(p.kind) ? p.auth?.header?.trim(
 // for the provider (E9). E9's colfoot names "Bedrock's region or endpoint"
 // alongside the base URL/path/header this already covered; the AWS access
 // portal and its pin are identity, not address, so they don't belong here.
+//
+// A kind change is the same fact by a different door: it is only reachable
+// today via E3's "How people sign in" toggle (bedrock_sso <-> bedrock_bearer —
+// every other kind is fixed after first save, decision 3), and the server
+// mints a fresh UID on any kind change (assignModelProviderUIDs), which
+// orphans every credential given under the old one. Owner ruling 2026-09-25
+// (PR #1038 review): the existing confirm covers it verbatim — no new string,
+// no new dialog.
 export function addressChanged(a: ModelProvider, b: ModelProvider): boolean {
   if (
+    a.kind !== b.kind ||
     normURL(a.base_url) !== normURL(b.base_url) ||
     header(a) !== header(b) ||
     normURL(a.bedrock?.region) !== normURL(b.bedrock?.region) ||
