@@ -275,7 +275,7 @@ describe("SettingsScreen — a FAILED site-config read is not a proxy posture", 
 
 // X3-F1 (second symptom): a member reaches /settings from the account menu and
 // the BarrierChip link, and their /setup/status body carries `checks: []`
-// because redactSetupStatusForMember stripped it — not because this deployment
+// because redactSetupStatusForUser stripped it — not because this deployment
 // has no image builder. The row read the absence as a fact and told them the
 // per-run builder was Off. `checks_redacted` is the server saying which it is.
 describe("SettingsScreen — a redacted checks list is not an Off image builder", () => {

@@ -141,17 +141,17 @@ type SandboxSpec struct {
 	// deny-list defense-in-depth (see runner/docker/driver.go) even though the
 	// values came from policy. Default ReadOnly.
 	Mounts []Mount
-	// MemberMountRoots, when non-nil, marks this run as one whose mounts were
+	// UserMountRoots, when non-nil, marks this run as one whose mounts were
 	// authored by a MEMBER (a member-owned workspace's local_dir) and carries
 	// the operator/MDM-set roots those mounts must resolve inside. Resolved at
-	// create-run from the owning member's principal (MemberMountPolicy.RootsFor)
+	// create-run from the owning member's principal (UserMountPolicy.RootsFor)
 	// and re-checked by the driver at BIND time — the last moment this process
-	// can resolve the real path — via ValidateMemberMountSource.
+	// can resolve the real path — via ValidateUserMountSource.
 	//
 	// NIL for every operator/non-member run, and nil means the driver does
 	// EXACTLY what it does today: the member gate is purely additive and can
 	// never narrow an operator mount. See member_mount.go for the threat model.
-	MemberMountRoots []string
+	UserMountRoots []string
 	// Drive is the acting principal's USER DRIVE (migration 0054), already
 	// resolved, folded and narrowed by the control plane — nil for every run
 	// that did not ask for one. It is NOT a Mount: it never rides
@@ -219,7 +219,7 @@ type Mount struct {
 	ReadOnly bool   `json:"read_only"`
 	// MemberAuthored marks a bind whose SOURCE a MEMBER chose — a member-owned
 	// workspace's local_dir. ONLY these are re-checked against
-	// SandboxSpec.MemberMountRoots at bind time, because the roots bound what a
+	// SandboxSpec.UserMountRoots at bind time, because the roots bound what a
 	// MEMBER may name and nothing else: the same spec also carries binds WARDYN
 	// ITSELF authored (the subscription ~/.claude credential staging, the Bedrock
 	// ~/.aws dir) and an operator-owned workspace's dirs, none of which live
@@ -228,7 +228,7 @@ type Mount struct {
 	// subscription or Bedrock deployment.
 	//
 	// Set by internal/api dispatch from the run's member-owned workspaces
-	// (memberMountPosture); false — the operator default — everywhere else.
+	// (userMountPosture); false — the operator default — everywhere else.
 	MemberAuthored bool `json:"member_authored,omitempty"`
 	// DriveAuthored marks the ONE bind a driver synthesizes from
 	// SandboxSpec.Drive: the host_path user drive's per-person subdirectory.
@@ -679,4 +679,61 @@ type ImageRemover interface {
 	// already absent (raced by a manual prune, a prior partial cleanup) is
 	// NOT an error — same idempotent-teardown contract as StopSandbox.
 	ImageRemove(ctx context.Context, ref string) error
+}
+
+// DriveProbeResult is the closed set of answers a DriveProber gives about one
+// resolved drive mount. Three states, not a bool, because "I checked and it
+// is fine" and "I could not tell" are different claims with different
+// remedies — see DriveProbeUnknown.
+type DriveProbeResult string
+
+const (
+	// DriveProbeReadable: the probe ran AS THE AGENT'S OWN UID (never the
+	// daemon's process, which is root) and that uid could read the mount.
+	DriveProbeReadable DriveProbeResult = "readable"
+	// DriveProbeUnreadable: the probe ran as the agent's own uid and that uid
+	// could NOT read the mount — the exact failure a daemon-side os.Stat (run
+	// as root) cannot see, because root can read almost anything the agent
+	// user cannot.
+	DriveProbeUnreadable DriveProbeResult = "unreadable"
+	// DriveProbeUnknown: the probe could not be run to a conclusion — e.g. the
+	// Kubernetes substrate has no filesystem of its own to stat and can only
+	// Get the claim and read its phase, which is a fact about provisioning,
+	// not about whether the agent uid can read it once mounted. A caller MUST
+	// NOT treat Unknown as DriveProbeReadable: a probe that cannot see the
+	// storage has not proved anything, and reading Unknown as a pass would
+	// re-introduce the exact bug this interface exists to close.
+	DriveProbeUnknown DriveProbeResult = "unknown"
+)
+
+// DriveProbe is a DriveProber's answer for one resolved mount.
+type DriveProbe struct {
+	Result DriveProbeResult
+	// Detail is operator-facing context on why the probe landed here (an exec
+	// exit code, a claim phase) — logged, never shown to the member.
+	Detail string
+}
+
+// DriveProber is an OPTIONAL Runner capability, modelled on ImageChecker: a
+// substrate that can ask whether the SANDBOX'S OWN USER — not the daemon's own
+// process, which is root — can actually read a resolved user-drive mount.
+//
+// It exists because the inline os.Stat a daemon runs itself
+// (internal/api/user_drives_run.go, pre-#165) always runs as root, so a share
+// readable by root but not by the agent uid passed create, preflight and /me
+// and only failed once the run was already inside the sandbox — and on
+// Kubernetes there was no filesystem for the daemon to stat at all.
+//
+// An OPTIONAL capability rather than a widening of Runner: five
+// implementations satisfy Runner today, mounting a drive five different ways,
+// and a new required method would have to be stubbed everywhere it means
+// nothing. Callers type-assert the wired Runner and treat "does not
+// implement" the same as ImageChecker's absence — the check simply does not
+// run, which is exactly what the code answered before this interface existed.
+type DriveProber interface {
+	// ProbeDrive answers whether mount would be readable by the uid the
+	// sandbox actually runs as, bounded by ctx. It is called BEFORE a sandbox
+	// exists (create, preflight, a /me poll) and MUST honour ctx's deadline —
+	// the caller is a request thread, not a background sweep.
+	ProbeDrive(ctx context.Context, mount types.DriveMount) (DriveProbe, error)
 }

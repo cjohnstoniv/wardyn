@@ -177,7 +177,7 @@ func run() error {
 	// and the separate connect/migrate timeout budgets — a fixed 30s
 	// bounds the connect, -migrate-timeout/WARDYN_MIGRATE_TIMEOUT (default 5m)
 	// bounds db.Migrate so a slow migration doesn't crash-loop the upgrade.
-	pool, err := connectAndMigrate(rootCtx, *f.dsn, *f.migrateDSN, 30*time.Second, *f.migrateTimeout)
+	pool, err := connectAndMigrate(rootCtx, *f.dsn, *f.migrateDSN, 30*time.Second, *f.migrateTimeout, *f.allowUnknownMigrations)
 	if err != nil {
 		return err
 	}
@@ -439,7 +439,7 @@ func run() error {
 		SessionRevocations:        sessionRevocationsFor(feats.authn, pool),
 		OperatorEmails:            splitCSV(*f.oidcOperatorEmails),
 		AllowEmailMappings:        *f.oidcAllowEmailMappings,
-		MemberMounts:              memberMounts,
+		UserMounts:                memberMounts,
 		UserDriveHostRoots:        driveHostRoots,
 		ImageBuilder:              feats.imgBuilder,
 		AgentImages:               agentImages,

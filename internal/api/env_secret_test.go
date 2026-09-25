@@ -72,23 +72,23 @@ func TestFilterMemberGrants_EnvSecretIsAdminOnly(t *testing.T) {
 	}
 	listed := envSecretGrant("CORP_API_TOKEN", "corp-token")
 
-	kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{listed})
+	kept, warns, code, err := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{listed})
 	if len(kept) != 0 || len(warns) != 1 || code != 0 || err != nil {
 		t.Fatalf("default posture: kept=%d warns=%d code=%d err=%v, want (0,1,0,nil) — env_secret is admin-only",
 			len(kept), len(warns), code, err)
 	}
 
 	t.Setenv(envAllowMemberEnvSecret, "1")
-	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{listed}); len(kept) != 1 {
+	if kept, _, _, _ := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{listed}); len(kept) != 1 {
 		t.Fatalf("posture open, ceiling-listed pairing: kept=%d, want 1", len(kept))
 	}
 	// Still bounded by the ceiling pairing once open: the NAME is part of the
 	// match, so an operator-blessed secret cannot be re-homed to a variable the
 	// operator never wrote.
-	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{envSecretGrant("OTHER_VAR", "corp-token")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{envSecretGrant("OTHER_VAR", "corp-token")}); len(kept) != 0 {
 		t.Fatalf("posture open, unlisted variable name: kept=%d, want 0", len(kept))
 	}
-	if kept, _, _, _ := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{envSecretGrant("CORP_API_TOKEN", "prod-db-password")}); len(kept) != 0 {
+	if kept, _, _, _ := h.srv.filterUserGrants(context.Background(), "", nil, []types.GrantSpec{envSecretGrant("CORP_API_TOKEN", "prod-db-password")}); len(kept) != 0 {
 		t.Fatalf("posture open, unlisted secret: kept=%d, want 0", len(kept))
 	}
 }
@@ -154,7 +154,7 @@ type envSecretCeilingStore struct {
 	policy  types.RunPolicy
 }
 
-func (s *envSecretCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *envSecretCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if s.profile == nil {
 		return nil, types.CapabilitySubjectUser, store.ErrNotFound
 	}
@@ -178,18 +178,22 @@ func (s *envSecretCeilingStore) ListCapabilityGrants(context.Context) ([]types.C
 func (s *envSecretCeilingStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
-func (s *envSecretCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (s *envSecretCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (s *envSecretCeilingStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, nil
 }
 
+func (s *envSecretCeilingStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 // TestEnvSecretPosture_BindsWithoutAGovernanceAssignment is the pin for the
 // admin-only posture at the seam that decides a real run, not at
-// filterMemberGrants' front door.
+// filterUserGrants' front door.
 //
-// TestFilterMemberGrants_EnvSecretIsAdminOnly above calls filterMemberGrants
+// TestFilterMemberGrants_EnvSecretIsAdminOnly above calls filterUserGrants
 // DIRECTLY, so it cannot see whether anything reaches it — and for the default
 // posture nothing did: the stored/default branch of resolveRunPolicy gates the
 // whole member pipeline on `ceiling.Profile != nil`, so an UNASSIGNED member

@@ -172,16 +172,16 @@ func oidcExpiryFromContext(ctx context.Context) time.Time {
 	return t
 }
 
-// withHumanIdentity publishes the five keys that TOGETHER describe an
+// withHumanIdentity publishes the six keys that TOGETHER describe an
 // authenticated human: who they are (sub), the email an admin may have written
-// a grant against, the role isOperator gates on, the group snapshot the
-// capability resolver matches, and whether that snapshot is COMPLETE. It exists
-// so the SSO-session branch and the api-token branch of humanOrAdminAuth cannot
-// DRIFT: a sixth identity key added to one path and forgotten on the other is
-// exactly how a token would silently resolve to a different permission set than
-// the session that minted it — and for a DENY grant, silently resolving to "no
-// match" is a breach, not a degradation. Both branches call this and nothing
-// else.
+// a grant against, the role isOperator gates on, their user type, the group
+// snapshot the capability resolver matches, and whether that snapshot is
+// COMPLETE. It exists so the SSO-session branch and the api-token branch of
+// humanOrAdminAuth cannot DRIFT: an identity key added to one path and
+// forgotten on the other is exactly how a token would silently resolve to a
+// different permission set than the session that minted it — and for a DENY
+// grant, silently resolving to "no match" is a breach, not a degradation. Both
+// branches call this and nothing else.
 //
 // groupsTruncated is a parameter rather than something derived from groups
 // because it CANNOT be derived: a truncated snapshot and a complete one are
@@ -191,10 +191,11 @@ func oidcExpiryFromContext(ctx context.Context) time.Time {
 // Session EXPIRY is deliberately NOT here. It is a property of a cookie, not of
 // an identity: an api token has no session to expire, so the key stays zero for
 // one and is set by the SSO branch alone (see oidcExpiryCtxKey).
-func withHumanIdentity(ctx context.Context, sub, email, role string, groups []string, groupsTruncated bool) context.Context {
+func withHumanIdentity(ctx context.Context, sub, email, role, userType string, groups []string, groupsTruncated bool) context.Context {
 	ctx = withOIDCHuman(ctx, sub)
 	ctx = withOIDCEmail(ctx, email)
 	ctx = withOIDCRole(ctx, role)
+	ctx = withOIDCUserType(ctx, userType)
 	ctx = withOIDCGroupsTruncated(ctx, groupsTruncated)
 	return withOIDCGroups(ctx, groups)
 }
@@ -203,6 +204,12 @@ func withHumanIdentity(ctx context.Context, sub, email, role string, groups []st
 type errorBody struct {
 	Error  string `json:"error"`
 	Reason string `json:"reason,omitempty"` // machine-readable refusal class; the SDK exposes it as APIError.Reason; coverage phased in under #204
+	// Provider and Kind (#532) name the model provider a run.create/Review 422
+	// is ABOUT, so the console can open the door of that provider instead of
+	// guessing from the roster. Present only on a model-provider refusal whose
+	// provider is known — never on an unrelated 4xx.
+	Provider string `json:"provider,omitempty"`
+	Kind     string `json:"kind,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -424,6 +431,11 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				writeError(w, http.StatusForbidden, err.Error())
 				return
 			}
+			// A user view whose type was deleted is refused here, before any
+			// handler reads the tier; GET /me alone drops back (user_view.go).
+			if r = s.userViewGate(w, r, oidc.UserTypeFromContext(r.Context())); r == nil {
+				return
+			}
 			// Publish the verified human on an api-owned context key so
 			// actorFromRequest attributes the action to the real SSO human
 			// (and IGNORES any X-Wardyn-Principal header — a real identity won).
@@ -439,6 +451,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			ctx := withHumanIdentity(r.Context(), sub,
 				oidc.EmailFromContext(r.Context()),
 				oidc.RoleFromContext(r.Context()),
+				oidc.UserTypeFromContext(r.Context()),
 				oidc.GroupsFromContext(r.Context()),
 				oidc.GroupsTruncatedFromContext(r.Context()))
 			// The display name rides along for /me only — outside
@@ -500,7 +513,7 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 			// Do not name the allowlist/role-map's members — the caller learns
 			// only that they are not an admin.
 			// authz.denied: a member denied a reachable admin surface. Low-noise
-			// by design (see the audit doc in runs_create.go's denyMemberRequest) —
+			// by design (see the audit doc in runs_create.go's denyUserRequest) —
 			// this is the ONE universal chokepoint every admin-gated route funnels
 			// through (incl. the attach WS's ticketOrHumanAuth fallback lane), so
 			// one audit call here covers all of them.
@@ -569,7 +582,7 @@ func (s *Server) isOperator(ctx context.Context) bool {
 // why (approvals.go carries only same-line pointers — it sits two lines under
 // the file-size gate):
 //
-//   - approvals.go's list, authorizeMemberDecision and the
+//   - approvals.go's list, authorizeUserDecision and the
 //     decision_scope=always gate. The latter two are a LOCKSTEP PAIR: deciding
 //     an approval and persisting that decision are the same authority, one
 //     merely durable, and a tier that may decide but not record would re-decide
@@ -968,11 +981,13 @@ func claimsFromContext(r *http.Request) (*identity.Claims, error) {
 	return c, nil
 }
 
-// ceilingMemoMiddleware installs the per-request ceiling memo. Separate from
-// humanOrAdminAuth's body only so the three auth modes (local, SSO, admin token)
-// cannot each forget it — it wraps the whole chain once, above the branch.
+// ceilingMemoMiddleware installs the per-request ceiling memo, and the bit that
+// keeps a user_type_unknown refusal to one audit row per request
+// (callerSubjects). Separate from humanOrAdminAuth's body only so the three
+// auth modes (local, SSO, admin token) cannot each forget it — it wraps the
+// whole chain once, above the branch.
 func ceilingMemoMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(withCeilingMemo(r.Context())))
+		next.ServeHTTP(w, r.WithContext(withUserTypeRefusalOnce(withCeilingMemo(r.Context()))))
 	})
 }

@@ -82,12 +82,12 @@ const composerWorkspaceTarget = "/home/agent/work"
 // run→workspace linkage the scan/verify/record uploads authorize on, so a user
 // run must never claim it.
 //
-// seededImageOwner is the ownership half of denyMemberSeededImage's fix: the
+// seededImageOwner is the ownership half of denyUserSeededImage's fix: the
 // OwnedBy of the workspace whose base_image just set req.Image, and "" in
 // every other case — including a member-owned workspace that set no image and an
 // operator-owned one that did. The callers' capability re-check keys on exactly
 // that emptiness, so returning the owner unconditionally would turn an
-// ownership-scoped guard into the unconditional variant denyMemberSeededImage
+// ownership-scoped guard into the unconditional variant denyUserSeededImage
 // exists to prevent — a catastrophic regression.
 func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (ephemeralDirs []string, seededImageOwner string, code int, err error) {
 	if req.WorkspaceID == nil {
@@ -169,7 +169,7 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 // source is folded, but a source can also reach the spec WITHOUT naming an id —
 // a hand-authored inline or stored policy naming the host path directly. That
 // second door landed in the same room: validateWorkspaceSources admits the
-// source because it IS onboarded, and memberMountAllowed then re-checks it
+// source because it IS onboarded, and userMountAllowed then re-checks it
 // against the OWNING member's roots, so a per-principal root map constrains the
 // caller not at all. This closes it at the same chokepoint the onboarding gate
 // uses, over the RESOLVED spec, so no authoring surface can route around it.

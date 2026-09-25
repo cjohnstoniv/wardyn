@@ -163,7 +163,7 @@ func TestGovernanceCeiling_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
 	})
 
 	// GET /secrets is the site this file's own premise had not been applied to.
-	// It resolved the ceiling (memberVisibleOperatorSecretNames) and mapped the
+	// It resolved the ceiling (userVisibleOperatorSecretNames) and mapped the
 	// status with ceilingErrorStatus — the right 403 — but wrote
 	// "list secrets: " + err.Error(), publishing the BARE sentinel. A member
 	// read `groups_snapshot_stale` with no remedy, while every sibling seam

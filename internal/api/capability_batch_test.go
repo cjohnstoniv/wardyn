@@ -16,7 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// countingCapStore counts the three capability reads narrowMemberInlinePolicy's
+// countingCapStore counts the three capability reads narrowUserInlinePolicy's
 // loops can make, so the assertion below is a COUNT rather than a stopwatch —
 // a wall-clock threshold on a shared CI box is a flake, while "how many round
 // trips did one request make" is the actual defect and is exact.
@@ -36,7 +36,7 @@ type countingCapStore struct {
 // unresolvable-group-deny fallback exists. A double that returned every grant
 // regardless would surface the group deny through the ordinary loop and the
 // stale arm below would pass without ever reaching the code it names.
-func (c *countingCapStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+func (c *countingCapStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
 	c.forCalls.Add(1)
 	var out []types.CapabilityGrant
 	for _, g := range c.grants {
@@ -49,6 +49,10 @@ func (c *countingCapStore) ListCapabilityGrantsFor(_ context.Context, users, gro
 			}
 		case types.CapabilitySubjectGroup:
 			if slices.Contains(groups, g.Subject) {
+				out = append(out, g)
+			}
+		case types.CapabilitySubjectUserType:
+			if userType != "" && g.Subject == userType {
 				out = append(out, g)
 			}
 		}
@@ -83,6 +87,10 @@ func (c *countingCapStore) GetCapabilityEnforcement(context.Context) (map[string
 	c.enfCalls.Add(1)
 	return c.enf, nil
 }
+
+func (c *countingCapStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
 func (c *countingCapStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 	return c.workspaces, nil
 }
@@ -93,9 +101,9 @@ func (c *countingCapStore) total() int64 {
 // TestCapBatch_StoreReadsAreFlatInCallerInput is the pin for the growth law.
 //
 // spec.AllowedDomains is the request body's list, and nothing on this path caps
-// or de-duplicates it before narrowMemberInlinePolicy's loop:
+// or de-duplicates it before narrowUserInlinePolicy's loop:
 // validatePolicySpec's count caps have no allowed_domains arm AND run after
-// boundMemberSpec, and composer.Clamp's intersection preserves duplicates of a
+// boundUserSpec, and composer.Clamp's intersection preserves duplicates of a
 // permitted entry and is skipped entirely under a ceiling with allow_all_egress.
 // capSeamAllowed makes two uncached Postgres round trips (three when the
 // caller's group snapshot is unanswerable), so calling it once per entry is
@@ -120,7 +128,7 @@ func TestCapBatch_StoreReadsAreFlatInCallerInput(t *testing.T) {
 			domains[i] = "api.anthropic.com" // one legal entry, repeated: nothing dedupes it
 		}
 		spec := types.RunPolicySpec{AllowedDomains: domains}
-		if _, _, err := srv.narrowMemberInlinePolicy(govMemberCtx([]string{"eng"}, stale), "", &spec); err != nil {
+		if _, _, err := srv.narrowUserInlinePolicy(govMemberCtx([]string{"eng"}, stale), "", &spec); err != nil {
 			t.Fatalf("n=%d stale=%v: %v", n, stale, err)
 		}
 		return cs.total(), len(spec.AllowedDomains)
@@ -159,7 +167,7 @@ func TestCapBatch_StoreReadsAreFlatInCallerInput(t *testing.T) {
 		h := newHarness(t)
 		srv := New(baseTestConfig(h, cs))
 		spec := types.RunPolicySpec{}
-		if _, _, err := srv.narrowMemberInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
+		if _, _, err := srv.narrowUserInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
 			t.Fatal(err)
 		}
 		if got := cs.total(); got != 0 {
@@ -171,7 +179,7 @@ func TestCapBatch_StoreReadsAreFlatInCallerInput(t *testing.T) {
 // TestCapBatch_CPUIsFlatInCallerInput is the second half of the growth law, and
 // the half 0.7 shipped OPEN: the store round trips were made flat and the CPU
 // was not. capBatch.allowed walked the caller's WHOLE grant set for every value,
-// `continue`-ing past every row of another kind, and narrowMemberInlinePolicy
+// `continue`-ing past every row of another kind, and narrowUserInlinePolicy
 // called it once per allowed_domains ENTRY — a list taken verbatim from the
 // request body, which nothing on this path caps or de-duplicates. So one
 // authenticated member's POST /runs/preflight bought O(len(AllowedDomains) x
@@ -210,7 +218,7 @@ func TestCapBatch_CPUIsFlatInCallerInput(t *testing.T) {
 			domains[i] = "granted-7.example.com" // one legal entry, repeated: nothing dedupes it
 		}
 		spec := types.RunPolicySpec{AllowedDomains: domains}
-		if _, _, err := srv.narrowMemberInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
+		if _, _, err := srv.narrowUserInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
 			t.Fatalf("n=%d: %v", n, err)
 		}
 		if len(spec.AllowedDomains) != n {
@@ -236,7 +244,7 @@ func TestCapBatch_CPUIsFlatInCallerInput(t *testing.T) {
 		h := newHarness(t)
 		srv := New(baseTestConfig(h, &countingCapStore{grants: grants}))
 		spec := types.RunPolicySpec{AllowedDomains: []string{"granted-1.example.com", "granted-2.example.com", "granted-1.example.com"}}
-		if _, _, err := srv.narrowMemberInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
+		if _, _, err := srv.narrowUserInlinePolicy(govMemberCtx([]string{"eng"}, false), "", &spec); err != nil {
 			t.Fatal(err)
 		}
 		if len(spec.AllowedDomains) != 3 {

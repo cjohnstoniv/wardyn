@@ -235,6 +235,10 @@ func (s *Server) handleDeleteUserType(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "count user type references", err)
 		return
 	}
+	if use.tokens, err = s.cfg.Store.UserTypeTokenStamps(r.Context(), id); err != nil {
+		writeServerError(w, r, "count user type token stamps", err)
+		return
+	}
 	if msg := use.refusal(); msg != "" {
 		writeError(w, http.StatusConflict, msg)
 		return
@@ -258,12 +262,13 @@ func (s *Server) handleDeleteUserType(w http.ResponseWriter, r *http.Request) {
 }
 
 // userTypeInUse is everything that still names a user type a DELETE would
-// remove: a WARDYN_OIDC_ROLE_MAP value, WARDYN_OIDC_DEFAULT_ROLE, and the
+// remove: a WARDYN_OIDC_ROLE_MAP value, WARDYN_OIDC_DEFAULT_ROLE, the
 // capability-grant, governance-assignment and drive-grant rows written
-// against it.
+// against it, and the unrevoked API tokens stamped with it (a token whose type
+// is gone would carry a type nothing defines).
 type userTypeInUse struct {
 	chart, defaultRole bool
-	rows               int
+	rows, tokens       int
 }
 
 // refusal is the 409 sentence naming what holds the type, or "" when nothing
@@ -291,6 +296,14 @@ func (u userTypeInUse) refusal() string {
 		}
 		clauses = append(clauses, fmt.Sprintf("%d permission, profile or drive %s it", u.rows, noun))
 		fixes = append(fixes, "remove those rows")
+	}
+	switch {
+	case u.tokens == 1:
+		clauses = append(clauses, "1 API token carries it")
+		fixes = append(fixes, "revoke the token or wait for its holder to sign in again")
+	case u.tokens > 1:
+		clauses = append(clauses, fmt.Sprintf("%d API tokens carry it", u.tokens))
+		fixes = append(fixes, "revoke the tokens or wait for their holders to sign in again")
 	}
 	if len(clauses) == 0 {
 		return ""

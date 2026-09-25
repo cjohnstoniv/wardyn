@@ -80,6 +80,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   groups under the "Your deployment — single-user" heading (the readiness chips above it already
   say "Checking…"). It corrects itself once the status resolves — after a failed read, on the
   next five-minute status poll.
+- **A deleted user type's orphaned subject row could silently rebind to a same-id type created
+  later.** `userTypeSubjectExists`' existence check races a concurrent `DeleteUserType`: a
+  capability grant, governance assignment or drive grant can finish writing just after the type it
+  names was deleted (migration `0079` carries no FK, by design), leaving a row nothing owns.
+  `CreateUserType` now refuses (`409`) an id any of those three tables still names, so the id stays
+  dead until an operator clears the orphan rows themselves, rather than quietly inheriting whatever
+  a later type of the same id is given to (#610).
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
@@ -359,6 +366,35 @@ and does not yet follow semantic versioning (interfaces are not stable).
   process ended in `exec sleep infinity`; as PID 1, `sleep` ignores SIGTERM, so every stop
   (k8s and docker, task mode and interactive `agent-run --idle`) sat out the whole grace period
   before the runtime force-killed it. It now traps TERM/INT and exits immediately.
+- **API tokens carry a user type (#611).** Migration `0082_api_tokens_user_type` adds
+  `api_tokens.user_type`: a new token is stamped with its session's user type (every existing
+  token becomes Standard user), the holder's next sign-in re-stamps it beside the role and
+  groups, and every request the token authenticates carries it — `/me` now reports `user_type`
+  through a token too, and `token.create` audit rows name it. A People-page edit that changes the
+  type a value derives revokes every live token still carrying the old type that names the value,
+  or whose group snapshot can't say whether it does, and counts them in `tokens_revoked`; the
+  holder mints a new one after signing in. On the first type assignment to a value that derived
+  Standard user before, that is every token minted before 0.7 whose holder hasn't signed in since
+  and every truncated-snapshot token, whoever holds it. A type change made in the chart reaches a token only at
+  its holder's next sign-in (threat model #38). `DELETE /user-types/{id}` is refused (`409`) while
+  a live token carries the type, and the database now refuses a token with an empty `user_type`.
+- **Server rename sweep: "view as member" is the user view (#617).** The route is
+  `POST /me/view {"view":"user"|"admin","user_type":"…"}` (a clean break — `POST /me/member-mode`'s
+  `{"enabled":bool}` shape is not aliased); `/me` reports `user_view`, `user_view_no_credential`
+  and `user_preview_available` in place of `member_mode`, `member_mode_no_credential` and
+  `member_preview_available`. The audit action is `auth.user_view` (dual-emitted alongside
+  `auth.member_mode` for one minor for SIEM stability, removed in 0.9); the `authz.denied`
+  marker is `user_view`; the BYOI refusal reason is `byoi_user`. `runner.MemberMountPolicy` is
+  `UserMountPolicy` and 29 more `*Member*` server functions (`denyMember*`, `filterMemberGrants`,
+  …) are renamed to their `*User*` counterparts (`SetMemberMode`/`handleSetMemberMode` were
+  already renamed to `SetUserView`/`handleSetUserView` by #835's type-selecting `/me/view` route,
+  which this sweep folds into rather than duplicating). See docs/OPERATIONS.md's "Renamed in 0.8"
+  appendix for the full old-name/new-name table. Refusal sentences now say "the user view": the
+  no-SSO `400` ("The user view needs a signed-in SSO human…"), the API-token mint `409` ("Exit
+  the user view to mint a token."), and "Exit the user view to sign in to AWS…"; an unrecognised
+  `view` value refuses `400` with `The "view" field must be "user" or "admin".` The SSH-key door
+  no longer refuses inside the view — a key registered there is stored capped instead (migration
+  0070), re-stamped to the caller's real role at their next sign-in.
 - **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
   `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
   `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →
@@ -535,6 +571,35 @@ and does not yet follow semantic versioning (interfaces are not stable).
   pin is not exempt. A run launched on a workspace by id (`workspace_id`, the CLI's `--workspace`)
   chooses like any other.
 
+- **Key and endpoint providers dispatch from the run owner's own credential (#528).** A run that
+  chose an Anthropic key, OpenAI key or custom endpoint provider launches: dispatch re-reads the
+  provider and authors one grant, the owner's own `wardyn-provider-<uid>-key` on the provider's
+  host (the vendor's, or its route-through or endpoint address, exactly allowlisted), and hands the
+  sidecar that run's own upstream (`BaseURL`+`Path` for the harness's dialect) instead of the boot
+  gateways. The injection sink resolves the key only from a grant recording the run's own subject,
+  and only from that namespace. Create, Review and dispatch refuse, naming the provider, when the
+  caller's own key or token is not stored, and dispatch also when the provider is gone, off or no
+  longer serves the agent. A dispatch that cannot read the site config refuses every model run, as
+  create does, whether or not it chose a provider: it cannot tell whether a block governs the run,
+  and the legacy lanes serve the operator's credentials. Once a provider block is set, a model run
+  never reaches the legacy lanes: no AI integration folds (`integration_id` is refused), no
+  declared-mechanism check, no managed or host-mounted subscription, and every other model
+  credential in its policy is dropped and audited; a run no provider serves launches with no model
+  credential and says so. Record sessions choose a provider the same way.
+
+- **Model-provider refusals and audit rows name the provider and its kind (#532).** The create and
+  Review 422 for a model-provider refusal (`enforceRunModelProvider`) now carries `provider` and
+  `kind` in the wire body whenever it names a provider, so the console can open that provider's own
+  door instead of guessing from the roster. Only a credential refusal (your own key or token is not
+  stored) also carries `reason: "model_credential"`, the class the console answers with a sign-in
+  and a relaunch; a provider that is turned off or not available to the agent carries none. The
+  `run.create` failure row dispatch writes for a model-provider refusal gains the same `kind`, the
+  legacy `mechanism` field written as that kind, and on a credential refusal the same `reason`, so
+  the console's audit reader grades that ending as a credential one (it reads `mechanism` only on
+  such a row, until MP-24 moves it off that key). When
+  the site config itself cannot be read, the create door's bare 500 (`get site config`) becomes
+  dispatch's 503 and sentence, so both doors now refuse the same way.
+
 - **A run on a Claude subscription model provider uses its owner's own sign-in (#529).** A run
   that chose an `anthropic_subscription` provider is dispatched on that provider alone: the run
   owner's own Claude sign-in (`wardyn-provider-<uid>-oauth`, read strictly from their own
@@ -549,7 +614,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The injection sink re-reads the provider by UID on every resolve and serves only the run token's
   own subject, the provider's own host, and a run still on that provider. A stored, inline or
   recorded grant naming a sign-in sentinel is dropped at dispatch (`run.injection.dropped`, reason
-  `provider_signin_not_dispatch_authored`), and Record Mode leaves one out of a profile. Nobody can
+  `model_credential_not_provider_authored`), and Record Mode leaves one out of a profile. Nobody can
   sign in to a provider yet (#533), so until then such runs are refused at create.
 - **A run on a Bedrock model provider uses its owner's own AWS credential (#530).** A run that
   chose a `bedrock_sso` or `bedrock_bearer` provider reaches Bedrock with the region, model and
@@ -558,7 +623,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   strictly from their own namespace. The kind names the one lane: the operator's bearer, captured
   session, host `~/.aws` mount and static SigV4 keys never credential it, and every other model
   injection the run carries (the legacy sentinels, anything bound for `api.anthropic.com`) is
-  dropped (`run.injection.dropped`, reason `not_the_chosen_provider`). An AWS sign-in must match
+  dropped (`run.injection.dropped`, reason `model_credential_not_provider_authored`). An AWS sign-in must match
   the provider's access portal and, when set, its pinned account and role. Create, Review and
   dispatch refuse, naming the provider, a run whose owner has not added their key or is not signed
   in to AWS for it. The injection sinks re-read the provider on every resolve and serve only the
@@ -606,6 +671,47 @@ and does not yet follow semantic versioning (interfaces are not stable).
   as roster runs are: the hold's `requested_scope` names the provider (`provider`, `provider_uid`),
   and only its owner's sign-in for that provider answers it. `harness.login.started`,
   `harness.credential.captured` and `credential.reauth.*` gain `model_provider`.
+- **Every model-provider kind dispatches through one gate and one lane (#551).** The key and
+  endpoint kinds (#528, #532) and the subscription and Bedrock kinds (#529, #530) were built on
+  two lines and are now one path. A provider block that is set, or cannot be read, governs every
+  model run, whatever its provider's kind: a run no provider serves gets no model credential,
+  where a build carrying only the subscription and Bedrock kinds fell through to the operator's
+  lanes. Every door — create, Review, a record session and dispatch — checks the run owner's own
+  credential by the provider's kind, and dispatch drops every other model credential — including
+  one on another harness's vendor host, such as an OpenAI key on a claude-code run — before the
+  kind's arm authors its own (`run.injection.dropped`, reason
+  `model_credential_not_provider_authored`, which on a provider run now also carries `provider`;
+  it replaces `not_the_chosen_provider`, `provider_signin_not_dispatch_authored` and
+  `provider_key_not_dispatch_authored`). Subscription and Bedrock refusals now follow #532: the
+  create and Review 422 carries `provider` and `kind`, and `reason: "model_credential"` when the
+  person's own sign-in or key repairs it — not signed in to Claude or to AWS, no Bedrock key, or an
+  AWS sign-in for another pinned account and role or another access portal — as does dispatch's
+  `run.create` row, beside `mechanism`. An install that cannot serve the kind, the admin token, a
+  Bedrock provider with no region or model, and an AWS renewal AWS did not answer carry no reason.
+  A credential that cannot be read answers 503 with the sentence alone at create and Review, not
+  a bare 500. The "not yet available on this build" refusal is gone: every kind has an arm. A
+  person's key for an Anthropic, OpenAI, custom-endpoint or Bedrock key provider resolves through
+  one injection sink (the Bedrock key's own sink used to claim that name first and refuse every
+  key and endpoint run at proxy startup); a Bedrock key is now re-checked against its provider
+  about every 10 minutes too. Review's model-access row no longer says an AWS sign-in never
+  reaches the sandbox, and a record session on a subscription or Bedrock provider says so rather
+  than `api-key`.
+- **Under a model-provider block, an `env_secret` grant cannot set a model credential (#551, owner
+  ruling 2026-09-25).** A run's model credential comes only from its provider, so a grant that
+  would set a variable a model credential rides in, or one a provider arm sets —
+  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID`, what else Claude Code reads that carries a model
+  credential or re-points it past the brokered route (`ANTHROPIC_CUSTOM_HEADERS`,
+  `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `ANTHROPIC_FOUNDRY_BASE_URL`,
+  `ANTHROPIC_FOUNDRY_RESOURCE`, `CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_VERTEX`,
+  `ANTHROPIC_VERTEX_BASE_URL`, `ANTHROPIC_VERTEX_PROJECT_ID`, `ANTHROPIC_AWS_API_KEY`,
+  `ANTHROPIC_AWS_BASE_URL`, `ANTHROPIC_PROFILE`) and each arm's own base-URL, model, region and
+  config variables — is refused at create and Review (a 422 carrying `provider` and `kind` when one
+  was chosen and a sentence naming the grant and the variable; no `reason`, since no sign-in
+  repairs it), and dispatch refuses the run again before anything is authored (`run.create`
+  failure, with `variable` and `grant`). Previously such a grant could put an operator's key in the
+  sandbox env of a subscription or Bedrock run. Every other `env_secret` grant is placed as before;
+  with no provider block nothing changes.
 
 - **A run's model provider persists on the row (#527).** `agent_runs.model_provider_id` (migration
   `0076_agent_runs_model_provider_id`) freezes the id `chooseModelProvider` (#526) resolved a run to
@@ -734,6 +840,58 @@ and does not yet follow semantic versioning (interfaces are not stable).
   inside is windowed. The Go SDK gains `ListGrantsPage`, `ListSSHKeysPage` and
   `ListSecretsPage`, each surfacing the truncation signal the same way `ListRunsPage` does;
   `ListGrants`, `ListSSHKeys` and `ListSecrets` now also accept a `ListOpts` to page.
+- **"Available to": one resource can be limited to the people listed for it (#612).** Migration
+  `0081_capability_restrictions` adds a restricted bit per value of the `workspace`, `image`, `agent`,
+  `integration` and `workspace_provider` kinds, set with `PUT /permissions/availability/{kind}/{value}`
+  (`{"restricted": true}` for "Only…", `false` for Everyone) and read with `GET` on the same path,
+  which also lists the allow rows naming the value. Both are admin or `security_admin`, and each
+  write records a `capability.availability.write` audit row. A restricted value counts as enforced
+  whatever its kind's switch says, and only an allow row naming that value lets a caller in: a `*`
+  allow no longer does, a deny still wins, and security admins are bound like anyone else. On an
+  image, the restriction also switches that one image on for the people listed while `image` stays
+  off for every other one. Turning "Only…" on with no allow row naming the value is refused (`400`).
+  The launch fields, the six git-provider doors and the per-person model sign-in refuse a restricted
+  value; an inline policy's workspace repo is dropped with a warning, as an ungranted one already is.
+- **The user view looks through a chosen user type (#615).** `POST /me/view` with
+  `{"view": "user", "user_type": "<id>"}` puts an admin in the user view as that type: its grants,
+  governance profile, drives and run limits bind exactly as for a person of that type, and the tier
+  stays clamped to `user`. With no type given, the view uses the admin's previous choice (migration
+  `0080_user_view_type` adds `principal_prefs`, so the choice follows them across devices), then
+  their own type, then the built-in one; an unknown type is refused `400`. If the viewed type is
+  deleted, the next request is refused `403` `user_view_type_deleted` (a launch `409` `admin_view`)
+  rather than answered as the admin, and the view turns off; `GET /me` answers the real tier with
+  `user_view_dropped`. A run records the type it was launched as (`agent_runs.user_type`, and
+  `user_type` / `user_view` on `run.create`); the switch is audited as `auth.user_view`.
+- **SSH keys and API tokens can be turned off per person, group or user type (#614).** A new
+  capability kind `feature` (values `ssh_key` and `api_token`, or `*`) is checked at `POST
+  /me/ssh-keys` and `POST /me/tokens`. It narrows: until an admin enforces it on the Permissions
+  page nothing changes, and a deny bites at once, so a deny on a user type turns the feature off
+  for everyone of that type. A refused mint is a `403` (`SSH keys aren't available to you. Ask your
+  admin.` / `API tokens aren't available to you. Ask your admin.`) with an `authz.denied` row
+  (reason `capability_feature`, target `me.ssh_keys` or `me.tokens`) and writes nothing. A super
+  admin is exempt; a security admin is bounded like anyone. It gates new keys and tokens only:
+  ones that already exist keep working until removed or revoked. Your SSH keys disables Add key
+  and shows the same sentence. Any other grant value is refused (`400`).
+
+- **Stored policies are a capability kind (#613).** `policy` (value: a stored policy's id, or `*`)
+  bounds which stored policy a person may select with `policy_id`. It narrows: until an admin
+  enforces it on the Permissions page nothing changes, and a deny bites at once. A refused
+  selection is a `403` on `POST /runs` and preflight alike, with an `authz.denied` row (reason
+  `capability_policy`, target `runs.policy`), whether or not the id names a row. A run that names
+  no policy is never gated, and a super admin is exempt; a security admin is bounded like anyone.
+  Grant values are folded to the canonical uuid, and anything else is refused (`400`).
+
+- **A user type is a subject (#610).** Migration `0079_user_type_subject` lets a capability
+  grant, a governance assignment and a drive grant name `subject_type: "user_type"` with a type's
+  id. A grant on a type is one more subject beside user and group: an allow lets that type's
+  people in, and a deny is a wall no user or group allow lifts (a `security_admin` of that type
+  included). For the governance ceiling and drives the type is a tier: user > group > user type >
+  all. Writing a row against a type that doesn't exist is refused (`400`). A session whose type
+  was deleted after sign-in is refused `403` wherever a control names a type, with an
+  `authz.denied` row (reason `user_type_unknown`), one per request. API tokens carry no type
+  until #611 stamps them, so until then a token answers as Standard user whatever its holder's
+  type. The governance and drive previews take an optional `user_type`, and the console's
+  Permissions, Governance and Drives tables show a type's rows as "User type".
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away
@@ -904,6 +1062,24 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and that a store-mode boot mints and re-reads every boot key without X25519. `make helm-lint` now
   checks that store mode with `secretFiles.enabled` renders no secret as an env value or
   `secretKeyRef`.
+- **The injection sink trusts the model provider record, never the grant (#531).** Each resolve of
+  a person's provider key re-reads the run's provider by UID and injects only while it is still
+  that run's choice, on, serving the agent, with the same host, header and format the grant
+  carries; the key is read from the namespace the grant snapshots. A resolved key now expires
+  after 15 minutes, so the proxy re-checks about every 10 minutes while the run makes model calls
+  (each re-check re-mints the grant: one `credential.mint` and one `secret.read` audit row), and a
+  provider removed, turned off or re-pointed mid-run fails closed within that window rather than
+  keep its startup copy. Once a provider block is set, or when it cannot be read, the two legacy
+  shared subscription sentinels are refused before the operator's token is touched; the boot
+  gateway (`WARDYN_ANTHROPIC_BASE_URL`) no longer widens where a subscription token may go under a
+  block.
+- **An older wardynd now refuses a database a newer one migrated (#675).** Boot used to skip the
+  migrations it knew and never look at the ones it did not, so `helm rollback` or a pinned older
+  image booted over a schema whose one-way conversions it could not read. Boot now stops before
+  writing anything, naming the newest `schema_migrations` file this binary does not ship; restore
+  the pre-upgrade dump. `WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true` is the break-glass. Saving the site
+  config or a governance profile also keeps top-level keys this binary does not know, so a key a
+  newer wardynd wrote — a governance limit, where absent means no limit — is no longer dropped.
 - **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
   that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
   sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the
@@ -1230,6 +1406,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **A user drive readable by root but not by the agent user is refused, not launched.** The daemon's
+  own `os.Stat` in `internal/api/user_drives_run.go` ran as root, so a share only the daemon (not the
+  sandboxed uid 1000) could read passed create, preflight and `/me` and only failed once the run was
+  already inside the sandbox — and on Kubernetes there was no filesystem for the daemon to stat at
+  all. A new optional `runner.DriveProber` capability (mirroring `ImageChecker`, not a change to the
+  `Runner` interface) asks the substrate to answer instead: the Docker driver runs a short-lived
+  container as uid 1000 against the resolved host root, and the Kubernetes driver reads the claim's
+  phase, answering `unknown` — never a guessed pass — for a claim it cannot even read.
 - **`WARDYN_DAEMON_PROXY_SECRET`** lets an estate whose egress proxy requires a
   credential run the daemon behind it. `WARDYN_DAEMON_PROXY_URL` keeps refusing a
   `user:pass@` URL (a credential in the process environment is visible to
@@ -1240,6 +1424,31 @@ and does not yet follow semantic versioning (interfaces are not stable).
   both vars are set rather than picking one silently. See `docs/ENV.md`.
   This resolves 0.7.6's known gap that `WARDYN_DAEMON_PROXY_URL` had no credentialed-proxy
   form.
+- **Push rules govern Azure DevOps REST pushes too (#494).** The per-person Azure DevOps credential
+  writes content over REST as well as git: Git Pushes - Create carries files inline, and it never
+  reached `push_rules` — a REST push adding `.github/workflows/exfil.yml` under
+  `deny_paths: [".github/**"]` answered `201`. With push rules set the REST gate now reads a push
+  body path by path (every `item.path`, and `sourceServerItem` for a rename) before the capability
+  check: a deny match is refused (`brokered:git:push-rules`), a review match is held for an admin
+  on the same `push_content` approval (its `commits` carries the SHA-256 of the request body, since
+  a REST push names no commit yet), an unattended run refuses. A body it cannot read whole, and
+  every other REST route that puts content on a branch without naming its paths — import requests,
+  server-side commits, merges, cherry-picks, reverts and suggestions, fork syncs, annotated tags, a
+  ref pointed at a commit, a pull request completed or set to auto-complete (created that way or
+  updated to it), wiki pages, TFVC check-ins — is refused (`brokered:git:push-uninspectable`), on
+  its effective method, so an `X-HTTP-Method-Override` cannot turn a push into a non-write. A run with no `push_rules` is
+  unchanged. The GitHub App and `git_pat` lanes were checked for the same class and have no REST
+  door: their credentials stay in the proxy, their routes admit only git's smart-HTTP endpoints,
+  and `api.github.com` is denied to a brokered run.
+- **Push rules cover the Azure DevOps Entra lane (#494).** A push through the per-person Azure
+  DevOps lane now gets the same `push_rules` step the GitHub App and `git_pat` lanes run —
+  `deny_paths` refuses (`brokered:git:push-rules`), `require_review_paths` holds for an admin
+  (`brokered:git:push-held`, `acts_as_kind: "ado_entra"`, labelled with the person whose sign-in the
+  push uses), an unattended run refuses (`brokered:git:push-held-unattended`) — and it runs
+  BEFORE the capability check, so nobody is asked to approve `code_write` or `policy_bypass` for a
+  push the rules refuse. The lane also advertises `no-thin` on the same trigger, so a shallow
+  clone's push arrives readable. A probe that moves no ref is untouched, and a run with no
+  `push_rules` behaves exactly as before.
 - **A push that touches a reviewed path is held for an admin's decision (#180).** `push_rules`
   gains `require_review_paths` — deny_paths' pattern language and write-time checks — and
   `hold_seconds` (default 120, at most 600). A brokered push no deny path refuses, but which
@@ -1258,7 +1467,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   cannot, even on their own run. An unattended (non-interactive) run refuses at once with no
   approval raised (`brokered:git:push-held-unattended`). Both lanes that enforce deny paths hold:
   the GitHub App lane and the `git_pat` lane (Azure DevOps over a PAT included); the Azure DevOps
-  Entra lane applies no content rules yet. Migration `0075_approval_push_content` adds the kind
+  Entra lane holds too (below). Migration `0075_approval_push_content` adds the kind
   to the `approvals.kind` CHECK.
 
 - **A brokered push that touches a denied path, cannot be inspected, or is too large is refused.**

@@ -23,7 +23,7 @@ type staleAuditStore struct {
 	hasGroupTier bool
 }
 
-func (staleAuditStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (staleAuditStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
 func (s staleAuditStore) HasGroupTierAssignments(context.Context) (bool, error) {

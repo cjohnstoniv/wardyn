@@ -329,12 +329,12 @@ func TestResolveRunLLMAccess_AdminsOwnPerUserCaptureResolvesAtCreate(t *testing.
 	s := New(cfg)
 
 	req := createRunRequest{Agent: "claude-code", Task: "ship it"}
-	la := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, admin)
+	la := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, admin, runProviderChoice{})
 	if la == nil || !la.Provisioned {
 		t.Fatalf("the admin's OWN per_user capture must resolve at create, got %+v", la)
 	}
 	// …and the same call for somebody with no capture must not borrow it.
-	if other := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, "member@corp.example"); other != nil && other.Provisioned {
+	if other := s.resolveRunLLMAccess(context.Background(), req, types.RunPolicySpec{}, map[string]bool{}, nil, "member@corp.example", runProviderChoice{}); other != nil && other.Provisioned {
 		t.Errorf("a member with no capture resolved provisioned: %+v", other)
 	}
 }
@@ -650,13 +650,13 @@ func TestSetupModelAccess_LocalOperatorIsAPerson(t *testing.T) {
 }
 
 // TestMemberModelAccess_NotApplicablePassesThrough: not_applicable must survive
-// memberModelAccess unchanged. Fail-safe — the mechanism principal is never a
+// userModelAccess unchanged. Fail-safe — the mechanism principal is never a
 // real human member today — but without an explicit early return the default
 // arm below rewrites any unrecognized state to `live`, which is a worse lie.
 func TestMemberModelAccess_NotApplicablePassesThrough(t *testing.T) {
 	in := SetupModelAccess{State: modelAccessNotApplicable, Mechanism: string(types.AgentMechanismBedrockSSO)}
-	if got := memberModelAccess(in); got != in {
-		t.Errorf("memberModelAccess(%+v) = %+v, want it passed through unchanged", in, got)
+	if got := userModelAccess(in); got != in {
+		t.Errorf("userModelAccess(%+v) = %+v, want it passed through unchanged", in, got)
 	}
 }
 
@@ -667,7 +667,7 @@ func TestMemberModelAccess_NotApplicablePassesThrough(t *testing.T) {
 // would land in the SAME namespace (owner == "admin-token") and overwrite the
 // last person's session. A shared row is unaffected: the admin token still
 // may connect it. S-07: the refusal is an authz.denied row — the sibling
-// refusals in authorizeHarnessLogin (refuse/denyMemberCapability)
+// refusals in authorizeHarnessLogin (refuse/denyUserCapability)
 // both audit, and this is the one refusal on the credential-capture route an
 // operator's own CI job hits with no error budget to notice it by otherwise.
 func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
@@ -775,7 +775,7 @@ func TestHandleHarnessLogin_LocalDevHeaderDoesNotTripTheRefusal(t *testing.T) {
 // PerUser, because `expired_signin` + "Sign in to AWS" is an answer only a
 // principal who OWNS the credential may be given: under `shared` it is the
 // operator's lifecycle and an instruction the server then refuses, and
-// memberModelAccess collapses it. See modelaccess_member_redaction_test.go.
+// userModelAccess collapses it. See modelaccess_member_redaction_test.go.
 func TestRedactSetupStatusForMember_KeepsModelAccess(t *testing.T) {
 	in := SetupStatus{
 		ModelAccess: SetupModelAccess{
@@ -785,7 +785,7 @@ func TestRedactSetupStatusForMember_KeepsModelAccess(t *testing.T) {
 		Checks:  []SetupCheck{{ID: "runner", Detail: "operator detail"}},
 		Secrets: SetupSecrets{Present: []string{"bedrock-api-key"}},
 	}
-	out := redactSetupStatusForMember(in, false, false)
+	out := redactSetupStatusForUser(in, false, false)
 	if out.ModelAccess != in.ModelAccess {
 		t.Fatalf("ModelAccess = %+v, want it kept verbatim (%+v)", out.ModelAccess, in.ModelAccess)
 	}

@@ -172,6 +172,10 @@ func (s *inertGrantStore) GetCapabilityEnforcement(context.Context) (map[string]
 	return map[string]bool{capWorkspace: true}, nil
 }
 
+func (s *inertGrantStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 // TestListPermissionsMarksRowsThatCanNeverMatch: the value rule is a
 // write-boundary rule, and capability_grants can hold rows written before it
 // existed.

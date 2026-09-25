@@ -67,6 +67,14 @@ type metrics struct {
 	// answers a PING (see writeHealthGauges), which a healthy pool passes while
 	// one table denies a read or one statement times out.
 	authStoreErrors int64
+	// driveProbeErrors counts host_path drive agent-readability probes
+	// (driveHomeReadableByAgent) that could not run at all — a transient
+	// docker/apiserver error, not a substrate saying "unreadable". Those
+	// errors fail OPEN (the caller falls back to "cannot tell" rather than
+	// refusing), so without this counter a daemon whose probe is never
+	// succeeding reads as ordinary, silent passes — this is the series that
+	// makes that visible.
+	driveProbeErrors int64
 	// driveRefusals counts runs REFUSED their user drive, by reason. It is the
 	// series that made a whole class of failure operable: a refused drive was
 	// answered to the member as a 422 and recorded NOWHERE — no audit row (the
@@ -276,6 +284,14 @@ func (m *metrics) authStoreErrorInc() {
 	m.authStoreErrors++
 }
 
+// driveProbeErrorInc records one host_path drive agent-readability probe
+// that could not run (see driveProbeErrors).
+func (m *metrics) driveProbeErrorInc() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.driveProbeErrors++
+}
+
 func (m *metrics) runTerminal(st types.RunState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -428,6 +444,8 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_device_ingest_failures_suppressed_total counter\nwardyn_device_ingest_failures_suppressed_total %d\n", m.deviceIngestSuppressed)
 	fmt.Fprintf(w, "# HELP wardyn_auth_store_errors_total Requests an authentication lane could not decide because its store read failed (answered 500). Not covered by wardyn_store_up, which only pings.\n"+
 		"# TYPE wardyn_auth_store_errors_total counter\nwardyn_auth_store_errors_total %d\n", m.authStoreErrors)
+	fmt.Fprintf(w, "# HELP wardyn_drive_probe_errors_total Host_path drive agent-readability probes that could not run at all (fails open: the caller falls back to \"cannot tell\" rather than refusing).\n"+
+		"# TYPE wardyn_drive_probe_errors_total counter\nwardyn_drive_probe_errors_total %d\n", m.driveProbeErrors)
 	fmt.Fprint(w, "# HELP wardyn_run_start_wait_seconds Time a sandbox still being created spent waiting on each substrate reason (pulling an image, waiting for a node, a reference that will not pull).\n"+
 		"# TYPE wardyn_run_start_wait_seconds summary\n")
 	for _, reason := range startWaitReasons {

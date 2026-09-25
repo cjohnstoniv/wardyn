@@ -245,21 +245,23 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Bedrock model credential is handed to the run at dispatch, and a secrets
 	// axis graded without it froze the level a rung too high (#504).
 	// The model-provider choice first: with a provider block, it is the run's
-	// provider that decides its lane, and one this build cannot dispatch yet is
-	// refused here rather than handed to the lane chain below. mpChoice is
+	// provider that decides its lane, and one whose credential its owner does
+	// not hold is refused here rather than at dispatch. mpChoice is
 	// this run's ONLY source for ModelProviderID below and for the run.create
 	// audit snapshot (#527) — mpChoice.chosen is false, with a zero
 	// mpChoice.provider, on every "today's path" return (no block, or a block
 	// serving no provider for this agent), so ModelProviderID freezes "" there,
 	// same as a legacy row.
-	mpChoice, ok := s.enforceRunModelProvider(w, r, req, wsRefs)
+	mpChoice, ok := s.enforceRunModelProvider(w, r, req, spec, wsRefs)
 	if !ok {
 		return
 	}
-	// A chosen provider's arm alone credentials the run, so the roster's
-	// declared-mechanism gate, which grades the legacy lanes, does not apply.
+	// Under a provider block the chosen provider's arm, or nothing, credentials
+	// the run, so the roster's declared-mechanism gate, which grades the legacy
+	// lanes, does not apply; a Bedrock provider's run is graded with its
+	// owner's Bedrock credential (modelCredential).
 	modelCred := mpChoice.modelCredential()
-	if !mpChoice.chosen && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
+	if !mpChoice.governs && !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, true) {
 		return
 	}
 
@@ -325,6 +327,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// below instead (AgentRun.ModelProviderID's own doc explains why).
 		// mpChoice.provider.ID is "" when mpChoice.chosen is false.
 		ModelProviderID: mpChoice.provider.ID,
+		UserType:        runCreatorUserType(ctx),
 	}
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)
@@ -355,7 +358,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// run is narrower than what the caller asked for, and launch is the ONLY
 	// place a member sees that — preflight, which carries the same notes, is
 	// never called by the console. The strings are
-	// narrowMemberInlinePolicy's/filterMemberGrants' own: they name the kind
+	// narrowUserInlinePolicy's/filterUserGrants' own: they name the kind
 	// and the dropped VALUE (a host, a secret NAME), never a secret value.
 	warnings := withUnpublishedImageWarning(append(policyWarns, s.warnWorkspaceCollision(r, runID, workspacePath)...), req.Agent, s.cfg.AgentImages)
 	if taskWarning != "" {
@@ -404,12 +407,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings, belowFloor := appendCredentialConfinementAdvisory(warnings, spec, enforced, modelCred.Mechanism)
 
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice))))
+		runID.String(), "success", mustJSON(withRunUserType(ctx, run.UserType, createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns, autonomy, belowFloor, mpChoice)))))
 
 	// Model-resolution fail-fast, as a warning; see noModelAccessWarning.
-	if !mpChoice.chosen {
-		warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject)...)
-	}
+	warnings = append(warnings, s.noModelAccessWarning(ctx, req, spec, present, bedrockRef, ssoSubject, mpChoice)...)
 
 	// Widen the RESOLVED spec's egress from the deterministic operator-trusted
 	// sources (onboarded-workspace registries, site-config SCM hosts, the SSH and
@@ -493,7 +494,7 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 		writeError(w, code, "workspace_id: "+seedErr.Error())
 		return nil, false
 	}
-	if s.denyMemberSeededImage(w, r, seededImageOwner, req.Image) {
+	if s.denyUserSeededImage(w, r, seededImageOwner, req.Image) {
 		return nil, false
 	}
 	if msg := s.validateImageBuildRequest(*req); msg != "" {
@@ -527,7 +528,7 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 	if s.admitRepoSources(w, r, repos...) {
 		return nil, false
 	}
-	if s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", repos...) {
+	if s.denyUserWorkspaceProviders(w, r, "runs.workspace_provider", repos...) {
 		return nil, false
 	}
 	if gate && s.gitCredentialRefusal(w, r, repos...) {
@@ -567,13 +568,17 @@ func (s *Server) repoSourceWarnings(ctx context.Context, runID uuid.UUID, spec t
 // spec through the SAME helper preflight's checklist uses, so the two agree.
 // Extracted from handleCreateRun for the function-size gate.
 func (s *Server) noModelAccessWarning(ctx context.Context, req createRunRequest, spec types.RunPolicySpec,
-	present map[string]bool, bedrockRef *types.WorkspaceBedrockRef, ssoSubject string,
+	present map[string]bool, bedrockRef *types.WorkspaceBedrockRef, ssoSubject string, mp runProviderChoice,
 ) []string {
 	if !runNeedsModelWarning(req) {
 		return nil
 	}
-	if la := s.resolveRunLLMAccess(ctx, req, spec, present, bedrockRef, ssoSubject); la != nil && la.Provisioned {
+	la := s.resolveRunLLMAccess(ctx, req, spec, present, bedrockRef, ssoSubject, mp)
+	switch {
+	case la != nil && la.Provisioned:
 		return nil
+	case mp.governs && la != nil:
+		return []string{la.Note}
 	}
 	return []string{s.noModelAccessWarningFor(req.Agent)}
 }
@@ -707,7 +712,13 @@ type createRunResponse struct {
 // subject is the CALLER's run-identity subject — whose captured AWS SSO session
 // this run would resolve under a per_user roster row. "" is the operator
 // namespace, i.e. every deployment that never declared per_user.
-func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, spec types.RunPolicySpec, presentSecrets map[string]bool, bedrockRef *types.WorkspaceBedrockRef, subject string) *composeLLMAccess {
+//
+// mp is the run's model-provider choice: under a provider block the verdict is
+// the provider's alone, since no legacy lane serves the run.
+func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, spec types.RunPolicySpec, presentSecrets map[string]bool, bedrockRef *types.WorkspaceBedrockRef, subject string, mp runProviderChoice) *composeLLMAccess {
+	if mp.governs {
+		return providerLLMAccess(req.Agent, mp)
+	}
 	llmSpec := spec
 	llmSpec.EligibleGrants = slices.Clone(spec.EligibleGrants)
 	// Which lanes this run has available — resolved by the same helper the

@@ -13,7 +13,7 @@ import { MODEL_PROVIDERS, baseStatus, providerStatus } from "./test-fixtures";
 import type { SetupHarnessTool, SetupModelAccess, SetupStatus } from "./types";
 
 // The fixtures are REAL server shapes (internal/api/modelaccess.go's
-// setupModelAccess + memberModelAccess), not hand-picked field bags: whose
+// setupModelAccess + userModelAccess), not hand-picked field bags: whose
 // credential a row grades is the whole question this predicate answers, and a
 // fixture that cannot occur would prove a render no daemon produces.
 

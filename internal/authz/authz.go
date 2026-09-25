@@ -32,6 +32,10 @@ const (
 	// refusal is never an existence oracle.
 	EffectHidden        Effect = "hidden"
 	EffectUnprocessable Effect = "unprocessable"
+	// EffectConflict is a refusal answered 409: the request is well-formed and
+	// the caller could otherwise make it, but their own session state (a
+	// deleted user-view type) conflicts with it.
+	EffectConflict Effect = "conflict"
 )
 
 // Status is the HTTP status a refusal with this effect answers with.
@@ -43,6 +47,8 @@ func (e Effect) Status() int {
 		return 404
 	case EffectUnprocessable:
 		return 422
+	case EffectConflict:
+		return 409
 	default:
 		return 403 // an unknown effect refuses
 	}
@@ -132,8 +138,11 @@ type Principal struct {
 	Subject string `json:"subject"`
 	// MemberView: an admin exercising "view as member"; the tier the kernel
 	// saw is already clamped, this only marks the row.
-	MemberView bool   `json:"member_view,omitempty"`
-	Origin     Origin `json:"origin"`
+	MemberView bool `json:"member_view,omitempty"`
+	// UserType is the type a member view looks through; read only with
+	// MemberView.
+	UserType string `json:"user_type,omitempty"`
+	Origin   Origin `json:"origin"`
 }
 
 // Origin is where a request reached the deciding control plane from. Zero in
@@ -144,15 +153,22 @@ type Origin struct {
 	Placement string     `json:"placement,omitempty"`
 }
 
-var reservedDatumKeys = []string{"reason", "method", "member_mode", "device_channel", "dropped"}
+var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type"}
 
 // Datum is the data of d's audit row, refused to p over method (empty when no
 // request carried it). A detail never stands in for a reserved key, so it can
 // never forge the reason or a marker.
 //
-// member_mode is a marker, present only when true. device_channel is a
-// sibling of the ingest marker device_origin, never that key: device_origin
-// stays the mark of a row a laptop hashed and forwarded.
+// user_view is a marker, present only when true — renamed in 0.8 from
+// member_mode (docs/OPERATIONS.md's "Renamed in 0.8" appendix; history not
+// rewritten, and no dual-emit here unlike auth.user_view's own action row:
+// this key lives inside authz.denied's own Data map, not on a separate audit
+// row, so there is no old-key row to keep landing). user_type (the caller's
+// stamped type, or the type a user view looks through) rides on its own,
+// whenever the principal carries one — a stamped type refused on its own
+// (user_type_unknown) is not a user view. device_channel is a sibling of the
+// ingest marker device_origin, never that key: device_origin stays the mark of
+// a row a laptop hashed and forwarded.
 func Datum(d Decision, p Principal, method string) map[string]any {
 	m := make(map[string]any, len(d.Detail)+len(reservedDatumKeys))
 	for k, v := range d.Detail {
@@ -165,7 +181,10 @@ func Datum(d Decision, p Principal, method string) map[string]any {
 		m["method"] = method
 	}
 	if p.MemberView {
-		m["member_mode"] = true
+		m["user_view"] = true
+	}
+	if p.UserType != "" {
+		m["user_type"] = p.UserType
 	}
 	if p.Origin.DeviceID != nil {
 		m["device_channel"] = map[string]any{"device_id": p.Origin.DeviceID.String()}

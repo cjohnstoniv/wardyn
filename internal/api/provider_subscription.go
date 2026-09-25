@@ -29,7 +29,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -43,7 +42,6 @@ const (
 	mpSubNoImage      = "the Claude sign-in image it needs is not built on this install"
 	mpRunRemedySignIn = "connect it from Getting started in the console, or from the banner the console shows on every page."
 	mpRunRemedyPerson = "sign in to the console, or use your own wdn_ API token."
-	mpRunUnreadable   = "Wardyn couldn't read its model providers just now — nothing was started. Try again in a moment."
 	mpSubReadFailed   = "Wardyn couldn't read your Claude sign-in for model provider %s just now — nothing was started. Try again in a moment."
 
 	mpSubSinkNotRecorded = "a per-person Claude sign-in is injected only through the grant Wardyn authors when a run " +
@@ -84,25 +82,26 @@ func (s *Server) perPersonSubscriptionPosture(ctx context.Context, owner string)
 }
 
 // providerSubscriptionRefusal is the liveness check for a chosen Claude
-// subscription, shared by create, Review and dispatch: "" when owner may run on
-// p, else the whole refusal sentence. A store failure is returned, never read
-// as "not signed in".
-func (s *Server) providerSubscriptionRefusal(ctx context.Context, p types.ModelProvider, owner string) (string, error) {
+// subscription (providerLiveness's arm, so every door's): the zero denial when
+// owner may run on p. Only "not signed in" is a credential refusal; an install
+// that cannot hold or build a sign-in, and the admin token, are repaired by no
+// sign-in. A store failure is returned, never read as "not signed in".
+func (s *Server) providerSubscriptionRefusal(ctx context.Context, p types.ModelProvider, owner string) (providerDenial, error) {
 	if state := s.perPersonSubscriptionPosture(ctx, owner); state != "" {
 		remedy := mpRunRemedy
 		if state == mpSubNotPerson {
 			remedy = mpRunRemedyPerson
 		}
-		return fmt.Sprintf(mpRunRefusal, p.ID, state, remedy), nil
+		return stateDenial(p.ID, state, remedy), nil
 	}
 	_, found, err := s.ownSecret(ctx, owner, providerSecretName(p.UID, providerOAuthPart))
 	if err != nil {
-		return "", err
+		return providerDenial{}, err
 	}
 	if !found {
-		return fmt.Sprintf(mpRunRefusal, p.ID, mpSubNotSignedIn, mpRunRemedySignIn), nil
+		return connectDenial(p.ID, mpSubNotSignedIn), nil
 	}
-	return "", nil
+	return providerDenial{}, nil
 }
 
 // ownerSubscriptionToken is the per-person managed-token provider: the managed
@@ -119,61 +118,6 @@ func providerSubscriptionBase(p types.ModelProvider) string {
 	return cmp.Or(p.BaseURL, "https://"+subscriptionInjectionHost)
 }
 
-// resolveProviderTransport is dispatch for a run that chose a model provider.
-// It re-reads the provider and refuses, naming it, when it is gone, off, no
-// longer serves the run's agent, or its kind has no arm; then the kind's arm
-// decides the transport. Fails closed on an unreadable provider block. ok=false
-// means the run is already marked FAILED.
-func (s *Server) resolveProviderTransport(ctx context.Context, run types.AgentRun, p dispatchParams,
-	policy *types.RunPolicySpec, sandboxEnv map[string]string, siteCfg types.SiteConfig, siteCfgOK bool,
-) (llmTransport, bool) {
-	if !isModelRun(p.TaskMode, run.WorkspaceID, run.SourceID, p.Interactive) || run.Task == harnessLoginTask {
-		// A run that calls no model gets no model credential.
-		return llmTransport{}, true
-	}
-	fail := func(kind types.ModelProviderKind, msg string) (llmTransport, bool) {
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{
-				"error": msg, "provider": run.ModelProviderID, "kind": kind,
-			})))
-		return llmTransport{}, false
-	}
-	if !siteCfgOK {
-		return fail("", mpRunUnreadable)
-	}
-	mp, found := modelProviderByID(siteCfg.ModelProviders, run.ModelProviderID)
-	switch {
-	case !found:
-		return fail("", providerRefusal(run.ModelProviderID, mpRunStateMissing).refusal)
-	case mp.Disabled:
-		return fail(mp.Kind, providerRefusal(mp.ID, mpRunStateOff).refusal)
-	case !mp.Serves(run.Agent):
-		return fail(mp.Kind, providerRefusal(mp.ID, fmt.Sprintf(mpRunStateNotServing, run.Agent)).refusal)
-	}
-	// The host ~/.claude mount is the operator's credential: no provider's
-	// run carries it beside its own.
-	policy.WorkspaceMounts = slices.DeleteFunc(policy.WorkspaceMounts, func(m types.WorkspaceMount) bool {
-		return m.Target == claudeCredTarget || m.Target == claudeCredJSONTarget
-	})
-	switch mp.Kind {
-	case types.ModelProviderBedrockSSO, types.ModelProviderBedrockBearer:
-		return s.providerBedrockTransport(ctx, run, policy, sandboxEnv, mp, fail)
-	case types.ModelProviderAnthropicSubscription:
-		owner := runIdentitySubject(ctx, run.CreatedBy)
-		refusal, err := s.providerSubscriptionRefusal(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), mp, owner)
-		if err != nil {
-			return fail(mp.Kind, fmt.Sprintf(mpSubReadFailed, mp.ID))
-		}
-		if refusal != "" {
-			return fail(mp.Kind, refusal)
-		}
-		return s.providerSubscriptionTransport(run, sandboxEnv, chosenProvider{provider: mp, owner: owner}), true
-	default:
-		return fail(mp.Kind, fmt.Sprintf(mpRunNotYet, mp.ID))
-	}
-}
-
 // providerSubscriptionTransport wires the sandbox for the run owner's own
 // Claude subscription: the managed lane's wire posture (direct to the vendor or
 // the provider's route-through, over the tunnel, with a writable config dir and
@@ -182,12 +126,12 @@ func (s *Server) resolveProviderTransport(ctx context.Context, run types.AgentRu
 func (s *Server) providerSubscriptionTransport(run types.AgentRun,
 	sandboxEnv map[string]string, c chosenProvider,
 ) llmTransport {
-	sandboxEnv["ANTHROPIC_BASE_URL"] = providerSubscriptionBase(c.provider)
-	sandboxEnv["CLAUDE_CONFIG_DIR"] = "/home/agent/.claude-run"
-	sandboxEnv["WARDYN_CLAUDE_MANAGED_B64"] = managedSentinelCredsB64()
+	sandboxEnv[envAnthropicBaseURL] = providerSubscriptionBase(c.provider)
+	sandboxEnv[envClaudeConfigDir] = "/home/agent/.claude-run"
+	sandboxEnv[envClaudeManagedCreds] = managedSentinelCredsB64()
 	for _, h := range c.provider.Harnesses {
 		if h.Harness == run.Agent && h.Model != "" {
-			sandboxEnv["ANTHROPIC_MODEL"] = h.Model
+			sandboxEnv[envAnthropicModel] = h.Model
 		}
 	}
 	return llmTransport{modelRun: true, provider: &c}
@@ -228,30 +172,6 @@ func (s *Server) authorProviderSubscriptionInjection(ctx context.Context, run ty
 		snapshot: providerGrantSnapshot{ProviderUID: c.provider.UID, OwnerSubject: c.owner},
 	})
 	return injections, mitmHosts, ok
-}
-
-// dropUnauthoredProviderInjections removes every injection naming a
-// per-person model-provider credential (wardyn-provider-<uid>-oauth / -sso /
-// -key), auditing each. Their one author is dispatch, which runs after this; a
-// stored, inline or recorded policy's grant carries no record of whose
-// credential it is, and the sink refuses it — which would fail the proxy's
-// startup.
-func (s *Server) dropUnauthoredProviderInjections(ctx context.Context, run types.AgentRun, injections []runner.InjectionGrant) []runner.InjectionGrant {
-	return slices.DeleteFunc(injections, func(ig runner.InjectionGrant) bool {
-		if !strings.HasPrefix(ig.Rule.SecretName, providerSecretPrefix) {
-			return false
-		}
-		reason := "provider_key_not_dispatch_authored"
-		if providerSignInSecret(ig.Rule.SecretName) {
-			reason = "provider_signin_not_dispatch_authored"
-		}
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.injection.dropped",
-			ig.GrantID.String(), "denied", mustJSON(map[string]any{
-				"grant_id": ig.GrantID, "secret_name": ig.Rule.SecretName, "host": ig.Rule.Host,
-				"reason": reason,
-			})))
-		return true
-	})
 }
 
 // providerOAuthUID returns the provider UID a wardyn-provider-<uid>-oauth

@@ -23,7 +23,7 @@ export interface GovernanceLimits extends RunLimits {
   deny_interactive?: boolean;
   // types.GovernanceLimits.DenyUserDrive (0.7 user drives) — the door the
   // profile editor's third LimitRow writes. A run under this profile mounts no
-  // user drive even when one is allocated to the person; denyMemberDrive's 403
+  // user drive even when one is allocated to the person; denyUserDrive's 403
   // is what enforces it, and this is only what the editor authors.
   deny_user_drive?: boolean;
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.

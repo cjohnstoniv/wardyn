@@ -433,8 +433,8 @@ func TestProviderSignInClaudeCapture(t *testing.T) {
 		if len(sec.m) != 0 || len(sec.owned) != 1 {
 			t.Fatalf("operator rows %v, namespaces %d — want none and one", slices.Collect(maps.Keys(sec.m)), len(sec.owned))
 		}
-		if refusal, err := srv.providerSubscriptionRefusal(context.Background(), p, owner); err != nil || refusal != "" {
-			t.Fatalf("after signing in, dispatch's check = (%q, %v), want live", refusal, err)
+		if d, err := srv.providerSubscriptionRefusal(context.Background(), p, owner); err != nil || d.msg != "" {
+			t.Fatalf("after signing in, dispatch's check = (%+v, %v), want live", d, err)
 		}
 		audit.mu.Lock()
 		defer audit.mu.Unlock()

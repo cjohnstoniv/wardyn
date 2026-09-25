@@ -500,7 +500,7 @@ func (s *Server) routes() chi.Router {
 			//
 			// What makes the wider tier honest is the PROJECTION, not a claim
 			// about the payload: a non-operator is answered
-			// memberSafeIntegration's view (setup_integrations.go) — identity,
+			// userSafeIntegration's view (setup_integrations.go) — identity,
 			// kind, disabled, default_for and the live capability matrix, its
 			// reasons scrubbed of anything withheld — with secrets[], egress[],
 			// config and docs dropped. The tier stays wide because the launch
@@ -715,16 +715,18 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// namespace, so neither route can reach anyone else's credential whatever
 	// tier the caller holds.
 	s.mountAzureDevOpsSignInRoutes(r)
-	// "View as member" (membermode.go). Registered HERE rather than
+	// The user view (user_view.go), renamed in 0.8 from "view as member" /
+	// POST /me/member-mode (docs/OPERATIONS.md's "Renamed in 0.8" appendix; a
+	// clean break — the old path is not aliased). Registered HERE rather than
 	// beside the ssh-keys block in routes() only because routes() sits exactly
 	// on the funlen ratchet — this is the /me self-service family either way.
 	//
 	// On r and never operatorOnly: the toggle acts on the CALLER's own session
-	// and nobody else's, and inside the mode the caller's effective role IS
-	// member, so an operator-gated exit would be a door that locks from the
+	// and nobody else's, and inside the view the caller's effective role IS
+	// user, so an operator-gated exit would be a door that locks from the
 	// inside. The no-per-human-role lane (admin token, local mode, no IdP) is
 	// refused inside the handler — a 400, not a tier.
-	r.Post("/me/member-mode", s.handleSetMemberMode)
+	r.Post("/me/view", s.handleSetUserView)
 }
 
 // mountSecretRoutes mounts secret management: write/delete/list only. Values
@@ -772,6 +774,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Post("/permissions/grants", s.handleUpsertCapabilityGrant)
 	securityOps.Delete("/permissions/grants/{id}", s.handleDeleteCapabilityGrant)
 	securityOps.Put("/permissions/enforcement", s.handlePutCapabilityEnforcement)
+	// The value is the rest of the path: an image ref carries slashes.
+	securityOps.Get("/permissions/availability/{kind}/*", s.handleGetAvailability)
+	securityOps.Put("/permissions/availability/{kind}/*", s.handlePutAvailability)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,

@@ -704,7 +704,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
 //
 // mockMemberBedrockRowRedacted below is this file's own composed splice
 // instead: ONE **/api/v1/setup/status* handler that mirrors
-// redactSetupStatusForMember's structural drops (the same shape
+// redactSetupStatusForUser's structural drops (the same shape
 // mockMemberSetupStatus, fixtures.ts, mirrors for every OTHER member spec in
 // this repo) AND injects the harnesses row, so nothing here can bypass the
 // redaction the way stacking two routes on the same pattern did.
@@ -733,7 +733,7 @@ async function mockMemberBedrockRowRedacted(
   let bearerPresent = initialBearerPresent;
   await page.route("**/api/v1/setup/status*", async (route) => {
     const body = (await (await route.fetch()).json()) as Record<string, unknown>;
-    // Mirrors redactSetupStatusForMember (internal/api/setup.go) — the same
+    // Mirrors redactSetupStatusForUser (internal/api/setup.go) — the same
     // drop list mockMemberSetupStatus (fixtures.ts) applies for every other
     // member spec, plus the #337 BearerPresent carve-out that function now
     // applies under the caller's own per_user bearer row.

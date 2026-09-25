@@ -482,18 +482,18 @@ func subscriptionInjectPosture(runnerTarget string, oidcConfigured, localMode, a
 // that consults no drive allocation. This function is where both lists exist at
 // once, so the comparison is made here and warned about in the same voice
 // (runner.MountCeilingOverlapWarnings).
-func parseMountCeilings(f *bootFlags) (runner.MemberMountPolicy, []string, error) {
-	memberMounts, memberWarns, err := runner.ParseMemberMountPolicy(
+func parseMountCeilings(f *bootFlags) (runner.UserMountPolicy, []string, error) {
+	memberMounts, memberWarns, err := runner.ParseUserMountPolicy(
 		*f.memberRoots, *f.memberRootsMap, *f.memberWritableRoots, *f.memberWritableDeny)
 	if err != nil {
-		return runner.MemberMountPolicy{}, nil, err
+		return runner.UserMountPolicy{}, nil, err
 	}
 	for _, warn := range memberWarns {
 		slog.Warn("wardynd: member workspace roots — " + warn)
 	}
 	driveHostRoots, driveWarns, err := runner.ParseUserDriveHostRoots(*f.userDriveHostRoots)
 	if err != nil {
-		return runner.MemberMountPolicy{}, nil, err
+		return runner.UserMountPolicy{}, nil, err
 	}
 	for _, warn := range driveWarns {
 		slog.Warn("wardynd: user drive host roots — " + warn)

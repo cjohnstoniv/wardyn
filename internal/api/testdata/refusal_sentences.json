@@ -20,22 +20,27 @@
     "sentence": "\"requires admin role\" (registry)"
   },
   {
+    "reason": "admin_view",
+    "target": "r.URL.Path",
+    "sentence": "userViewLaunchRefusal(typeID)"
+  },
+  {
     "reason": "attach_ticket_foreign_run",
     "target": "run.ID.String()",
     "sentence": "\"run not found\""
   },
   {
-    "reason": "byoi_member",
+    "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image\""
   },
   {
-    "reason": "byoi_member",
+    "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"image \" + image + \" comes from your own workspace's base image and is not granted to you — \" + \"ask an admin to grant the exact image ref, or launch with the agent's convention image\""
   },
   {
-    "reason": "byoi_member",
+    "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"image \" + req.Image + \" is not granted to you — ask an admin to grant the exact image ref, \" + \"or launch with the agent's convention image or an onboarded workspace's base image\""
   },
@@ -50,6 +55,16 @@
     "sentence": "fmt.Sprintf(harnessLoginAgentRefusal, row.ID)"
   },
   {
+    "reason": "capKinds[capFeature].reason",
+    "target": "\"me.ssh_keys\"",
+    "sentence": "sshKeyFeatureRefusal"
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
+    "target": "\"me.tokens\"",
+    "sentence": "apiTokenFeatureRefusal"
+  },
+  {
     "reason": "capKinds[capIntegration].reason",
     "target": "\"runs.integration\"",
     "sentence": "\"you are not granted integration \" + req.IntegrationID + \" — ask an admin to grant it, or launch without integration_id\""
@@ -58,6 +73,11 @@
     "reason": "capKinds[capModelProvider].reason",
     "target": "\"model_provider.sign_in\"",
     "sentence": "fmt.Sprintf(mpsNotGranted, p.ID)"
+  },
+  {
+    "reason": "capKinds[capPolicy].reason",
+    "target": "\"runs.policy\"",
+    "sentence": "\"Stored policy \" + req.PolicyID.String() + \" isn't available to you. Ask your admin, or launch without policy_id.\""
   },
   {
     "reason": "capKinds[capWorkspaceProvider].reason",
@@ -160,6 +180,21 @@
     "sentence": "harnessLoginNotPerUserRefusal"
   },
   {
+    "reason": "model_provider (credential: d.credential)",
+    "target": "choice.provider.ID",
+    "sentence": "d.msg"
+  },
+  {
+    "reason": "model_provider (credential: false)",
+    "target": "choice.provider.ID",
+    "sentence": "fmt.Sprintf(mpRunModelEnvSecret, secretName, name)"
+  },
+  {
+    "reason": "model_provider (credential: false)",
+    "target": "choice.providerID",
+    "sentence": "choice.refusal"
+  },
+  {
     "reason": "not_owner",
     "target": "id.String()",
     "sentence": "(audit only)"
@@ -203,5 +238,15 @@
     "reason": "security_admin_surface",
     "target": "r.URL.Path",
     "sentence": "\"requires admin role\" (registry)"
+  },
+  {
+    "reason": "user_type_unknown",
+    "target": "\"user_type\"",
+    "sentence": "userTypeUnknownMsg"
+  },
+  {
+    "reason": "user_view_type_deleted",
+    "target": "r.URL.Path",
+    "sentence": "userViewTypeDeleted(typeID)"
   }
 ]

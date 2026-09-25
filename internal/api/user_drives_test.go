@@ -1901,7 +1901,7 @@ func TestDriveTargetIsReservedOnEveryCompositionSeam(t *testing.T) {
 			{Source: "/srv/legacy2", Target: runner.DriveTarget + "/shared", ReadOnly: &ro},
 			{Source: "/srv/work", Target: "/home/agent/work", ReadOnly: &ro},
 		}}
-		mounts := buildRunMounts(policy, llmTransport{}, memberMountPosture{})
+		mounts := buildRunMounts(policy, llmTransport{}, userMountPosture{})
 		if len(mounts) != 1 || mounts[0].Target != "/home/agent/work" {
 			t.Fatalf("mounts = %+v, want ONLY the ordinary bind — a reserved-target bind fails the whole "+
 				"CreateSandbox, so every run under this stored policy dies at STARTING", mounts)

@@ -56,7 +56,7 @@ export function markOnboardingSeen(): void {
 // B4 HIGH-4 / Phase 5: this also still answers a direct /setup navigation (an
 // old bookmark, a shared link) honestly — MemberGettingStarted, never the
 // operator funnel (built from a SetupStatus redacted for anyone not the
-// operator, internal/api/setup.go's redactSetupStatusForMember) — replacing
+// operator, internal/api/setup.go's redactSetupStatusForUser) — replacing
 // the former one-line MemberSetupNotice bounce.
 export function GettingStarted({
   onDone,
@@ -79,7 +79,7 @@ export function GettingStarted({
   // Deliberately `!== "admin"`, not `role === "user"`, for the reason
   // setupGateActive (setup/setup-gate.ts) is written the same way now that role
   // is three-valued: GET /setup/status is redacted for every non-operator
-  // (handleSetupStatus -> redactSetupStatusForMember zeroes Checks, Providers
+  // (handleSetupStatus -> redactSetupStatusForUser zeroes Checks, Providers
   // and Secrets, internal/api/setup.go), and every mutation the deployer funnel
   // drives is super-admin-only server-side. A security admin falling through
   // here would get the operator funnel built from a status they cannot act on

@@ -89,11 +89,11 @@ describe("the model-access strip is absent in the Admin view (§4.2, M-3)", () =
   });
 
   it("the same admin sees it once switched to the User view", async () => {
-    // member_mode: true is the session clamp the switch flips (§2.2) — an SSO
+    // user_view: true is the session clamp the switch flips (§2.2) — an SSO
     // admin who has NOT switched stays in the Admin view regardless of the
     // URL (currentView), so this is what actually puts the session's
     // resolved view at "user".
-    renderShellAt("/runs", { ...ADMIN_ME, member_mode: true });
+    renderShellAt("/runs", { ...ADMIN_ME, user_view: true });
     expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
 });
@@ -119,12 +119,12 @@ describe("the confinement posture band is absent in the User view (§4.2, M-3)",
 describe("a clamped admin at an /admin/* path reads the resolved view, not the URL (§4.2, M-3)", () => {
   it("a clamped admin's per-user strip shows, and the posture band stays silent, at /admin/runs", async () => {
     // The interstitial case the PR description calls out: an SSO admin who
-    // has switched to the User view (member_mode: true) but still has an
+    // has switched to the User view (user_view: true) but still has an
     // /admin/* path in the address bar (e.g. a stale tab). useShellView
     // resolves this session to the User view regardless of the URL, so the
     // two bands must follow that resolved view, not viewOfPath(pathname) —
     // which would still say "admin" here.
-    renderShellAt("/admin/runs", { ...ADMIN_ME, member_mode: true }, { runner: "k8s", network_policy: "unenforced" });
+    renderShellAt("/admin/runs", { ...ADMIN_ME, user_view: true }, { runner: "k8s", network_policy: "unenforced" });
     // Positive control first: the strip is Admin-view-suppressed, so seeing
     // it proves the shell resolved this session to the User view.
     expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();

@@ -292,7 +292,7 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 // owns the rows that would have filled it.
 //
 // ponytail: the capWorkspace capability is NOT re-applied here. It governs
-// which workspace a member may LAUNCH a run against (denyMemberRequest,
+// which workspace a member may LAUNCH a run against (denyUserRequest,
 // runs_create_validate.go), and re-deriving it per row would pay two indexed
 // reads per listed workspace on the console's hot path to hide a NAME the
 // launch seam already refuses. Filter the list too only if a deployment ever
@@ -467,7 +467,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.admitRepoSources(w, r, repoSourceLocators(req.Sources)...) {
 		return
 	}
-	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
+	if s.denyUserWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
 		return
 	}
 	// Ownership stamp (0048). A MEMBER's workspace is owner-stamped from the
@@ -499,7 +499,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// A member's own local_dir sources must clear the member-safe mount gate
 	// (root allowlist + canonicalized real path + credential-dotfile deny +
 	// the writable allowlist). An operator's are unaffected.
-	if msg := s.memberSourcesAllowed(r, owner, req.Sources); msg != "" {
+	if msg := s.userSourcesAllowed(r, owner, req.Sources); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -551,8 +551,8 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		Warnings: s.legacyHostAdmissionWarnings(r.Context(), repoSourceLocators(req.Sources)...)})
 }
 
-// memberSourcesAllowed gates a MEMBER-owned workspace's local_dir sources
-// through the member-safe mount rules (internal/runner's MemberMountPolicy):
+// userSourcesAllowed gates a MEMBER-owned workspace's local_dir sources
+// through the member-safe mount rules (internal/runner's UserMountPolicy):
 // the operator/MDM root allowlist matched on the CANONICALIZED real path, the
 // credential-dotfile deny-list, and — only for a source asking to be writable —
 // the separate writable allowlist minus its deny carve-out. It returns "" (fine)
@@ -562,9 +562,9 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 // mounts keep exactly the reach they have today (runner.ValidateMountSource
 // alone, already run by validateWorkspaceSource). This function only ever
 // NARROWS, never widens — it is additive on top of that deny-list, matching
-// SandboxSpec.MemberMountRoots' nil-means-today's-behavior contract at the
+// SandboxSpec.UserMountRoots' nil-means-today's-behavior contract at the
 // other end of the same path.
-func (s *Server) memberSourcesAllowed(r *http.Request, owner string, sources []types.WorkspaceSource) string {
+func (s *Server) userSourcesAllowed(r *http.Request, owner string, sources []types.WorkspaceSource) string {
 	if owner == "" {
 		return ""
 	}
@@ -572,7 +572,7 @@ func (s *Server) memberSourcesAllowed(r *http.Request, owner string, sources []t
 		if src.Type != types.WorkspaceSourceTypeLocalDir {
 			continue
 		}
-		if err := s.cfg.MemberMounts.ValidateMemberMount(owner, src.Path, src.Writable); err != nil {
+		if err := s.cfg.UserMounts.ValidateUserMount(owner, src.Path, src.Writable); err != nil {
 			return fmt.Sprintf("sources[%d]: %s", i, err.Error())
 		}
 	}
@@ -614,7 +614,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	if msg := s.memberSourcesAllowed(r, ws.OwnedBy, req.Sources); msg != "" {
+	if msg := s.userSourcesAllowed(r, ws.OwnedBy, req.Sources); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -625,7 +625,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.admitRepoSources(w, r, repoSourceLocators(req.Sources)...) {
 		return
 	}
-	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
+	if s.denyUserWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
 		return
 	}
 	// this GET→mutate→UPDATE can race an async repo-scan upload and

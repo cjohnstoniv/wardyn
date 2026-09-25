@@ -286,6 +286,21 @@ describe("PermissionsScreen — the grant table", () => {
     expect(within(table).getByText(PERM.EFFECT_DENY).className).toContain("danger");
   });
 
+  // 0.8: a row naming a user type reads "User type" beside the type's id, not
+  // the raw wire token.
+  it("a user type row renders the User type chip and the type's id", async () => {
+    getPermissionsMock.mockResolvedValue({
+      grants: [grant({ subject_type: "user_type", subject: "portfolio-manager", effect: "deny" })],
+      enforcement: {},
+    });
+    renderScreen();
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText(PERM.SUBJECT_USER_TYPE)).toBeInTheDocument();
+    expect(within(table).getByText("portfolio-manager")).toBeInTheDocument();
+    expect(within(table).queryByText("user_type")).toBeNull();
+  });
+
   // F4-F5/F6-F5 (Appendix A V8): a grant markInertGrants flagged Inert on the
   // wire (a pre-canonicalization value that can never match) must not render
   // as an ordinary red Deny/amber Allow chip — a rule that has never fired,

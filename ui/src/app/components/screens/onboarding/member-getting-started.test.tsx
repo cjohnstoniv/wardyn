@@ -755,7 +755,7 @@ describe("MemberGettingStarted", () => {
     });
 
     // U-1 (W6 blind lens) — the wire shape the server really emits for a shared
-    // bedrock_sso row: memberModelAccess (internal/api/modelaccess.go) projects
+    // bedrock_sso row: userModelAccess (internal/api/modelaccess.go) projects
     // `live` for the ADMIN's credential, so the fixture above (no model_access at
     // all) never exercises the branch that actually renders. Without this, the
     // chip row would read "Model access · Your AWS sign-in" — a sign-in this
@@ -936,7 +936,7 @@ describe("MemberGettingStarted", () => {
 
 // M-6 (D5) — the two demo sections member-getting-started.tsx adds, gated by
 // walkableDemos (setup/steps.ts) the same way the funnel's PHASES walk used
-// to. #850's redaction (internal/api/setup.go's redactSetupStatusForMember)
+// to. #850's redaction (internal/api/setup.go's redactSetupStatusForUser)
 // zeroes secrets.present and providers for a non-operator, so these cases
 // exercise the exact shape a real SSO user's browser receives, not the
 // admin-token D1 fixture the demos.spec/secrets-demos.spec e2e run as.

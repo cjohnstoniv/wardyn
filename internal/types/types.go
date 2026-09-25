@@ -285,6 +285,11 @@ type AgentRun struct {
 	// and for every run created before this field existed. Migration 0076 adds
 	// the column NOT NULL DEFAULT ''.
 	ModelProviderID string `json:"model_provider_id,omitempty"`
+	// UserType freezes the user type the run's creator resolved as at create
+	// time: the chosen type for a run launched in the user view, the stamped
+	// one otherwise. Empty for a run with no human creator (admin token, local
+	// mode) or created before migration 0080.
+	UserType string `json:"user_type,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
@@ -517,7 +522,7 @@ const (
 	// an admin decides (internal/egress/proxy/push_hold.go). Its requested
 	// scope is a PushContentScope. Admin-decidable only: a member deciding
 	// their own run's workflow-file edit is the exfiltration the rule stops,
-	// so authorizeMemberDecision keeps members to egress_domain.
+	// so authorizeUserDecision keeps members to egress_domain.
 	ApprovalPushContent ApprovalKind = "push_content"
 )
 
@@ -850,6 +855,10 @@ type SSHPublicKey struct {
 // oidcGroupsCtxKey in internal/api/http.go): nil means "snapshot unavailable",
 // empty means "the IdP sent no usable groups".
 //
+// UserType is the user type of the minting session (migration 0082), stamped
+// and re-stamped beside Role. A person whose type changes on the People page
+// has their tokens revoked rather than re-stamped (revokeDemotedRoleSnapshots).
+//
 // Token carries the PLAINTEXT credential and is populated on exactly one
 // response — the create call — and is never stored, listed or logged. Every
 // other path leaves it empty, and `omitempty` keeps it out of those bodies.
@@ -870,6 +879,7 @@ type APIToken struct {
 	Principal       string     `json:"principal"`
 	Email           string     `json:"email,omitempty"`
 	Role            string     `json:"role"`
+	UserType        string     `json:"user_type"`
 	Groups          []string   `json:"groups,omitempty"`
 	GroupsTruncated *bool      `json:"groups_truncated,omitempty"`
 	Name            string     `json:"name"`
@@ -896,13 +906,19 @@ const (
 	// CapabilitySubjectAll is every signed-in human — the baseline for an IdP
 	// that emits no usable groups claim. Subject is "" for this type.
 	CapabilitySubjectAll CapabilitySubjectType = "all"
+	// CapabilitySubjectUserType is everyone of one user type, named by the
+	// type's id (UserType.ID). A person holds exactly one type, stamped at
+	// sign-in. For the governance ceiling and drives it is a tier between
+	// group and all; for capability grants it is one more subject, so a DENY
+	// written against a type is a wall no user or group allow lifts.
+	CapabilitySubjectUserType CapabilitySubjectType = "user_type"
 )
 
-// Valid reports whether t is one of the three subject types. Used to reject a
+// Valid reports whether t is one of the four subject types. Used to reject a
 // garbage value at the API write boundary, mirroring ApprovalScope.Valid.
 func (t CapabilitySubjectType) Valid() bool {
 	switch t {
-	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll:
+	case CapabilitySubjectUser, CapabilitySubjectGroup, CapabilitySubjectAll, CapabilitySubjectUserType:
 		return true
 	default:
 		return false

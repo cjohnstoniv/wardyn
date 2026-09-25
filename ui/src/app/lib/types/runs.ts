@@ -136,6 +136,13 @@ export interface AgentRun {
   // runs. Server/crash-recovery bookkeeping only; no console reader today, kept
   // for mirror parity, same reason as source_id above.
   agent_exec_id?: string;
+  // The user type the run's creator resolved as at create time
+  // (internal/types/types.go's AgentRun.UserType, migration 0080) — the chosen
+  // type for a run launched in the user view, the stamped one otherwise. Empty
+  // for a run with no human creator or created before the migration. No
+  // console reader today, kept for mirror parity, same reason as source_id
+  // above.
+  user_type?: string;
   // Server-authored one-line reason for a pre-agent-start failure arm
   // (internal/types/types.go's AgentRun.FailureHint, migration 0044) — set
   // when the run never got as far as an exit code (e.g. workspace mount
@@ -508,7 +515,7 @@ export interface PreflightResult {
   risk_assessment?: RiskItem[];
   overall_risk?: RiskLevel;
   // Clamp notices — non-empty only for a MEMBER whose inline_policy the server
-  // bounded (composer.Clamp) or whose grant it dropped (filterMemberGrants). The
+  // bounded (composer.Clamp) or whose grant it dropped (filterUserGrants). The
   // same benign "Tightened by policy:" class the compose Review shows; here it
   // tells the member WHY the enforced policy differs from what they typed, since
   // launch itself stays silent. Absent on an older server that predates it.

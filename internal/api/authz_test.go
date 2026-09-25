@@ -346,6 +346,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/permissions/grants":        {class: classSecurity},
 	"DELETE /api/v1/permissions/grants/{id}": {class: classSecurity},
 	"PUT /api/v1/permissions/enforcement":    {class: classSecurity},
+	// "Available to" (#612): the restricted bit is a grant fact, on the same
+	// tier as the grant rows that list who gets the value.
+	"GET /api/v1/permissions/availability/{kind}/*": {class: classSecurity},
+	"PUT /api/v1/permissions/availability/{kind}/*": {class: classSecurity},
 	// Cutting a compromised human's live sessions: the time-critical half of
 	// incident response, and a revocation only ever SUBTRACTS reach.
 	"POST /api/v1/sessions/revoke": {class: classSecurity},
@@ -520,10 +524,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// (admin token / local mode / no IdP) is refused inside the handler, which
 	// is a 400 rather than a tier.
 	//
-	// No `body` override: the generic "{}" bodyFor sends decodes to
-	// enabled:false and the handler answers 200, which is what classMember's
+	// No `body` override: the generic "{}" bodyFor sends decodes to an empty
+	// View (off) and the handler answers 200, which is what classMember's
 	// assertNotBlocked probe needs.
-	"POST /api/v1/me/member-mode":              {class: classMember},
+	"POST /api/v1/me/view":                     {class: classMember},
 	"POST /api/v1/policies/grade":              {class: classMember},
 	"POST /api/v1/runs":                        {class: classMember},
 	"POST /api/v1/runs/preflight":              {class: classMember},
@@ -1239,13 +1243,15 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// the security tier (= 26 SEC). 0.8's user types then added four /user-types
 	// routes on the security tier, a profile's peers (= 30 SEC), #506 added
 	// the device pair's twins for enrolment tokens not yet redeemed, list and
-	// revoke (= 32 SEC), and CS-5 added the credential erase, which only
-	// subtracts (= 33 SEC). 0.8's model providers add GET/PUT /model-providers,
-	// SUPER for the agent roster's reason (= 41). A route silently reclassified
-	// in the table above would still pass every probe — it would just be
-	// enforcing the WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 33 || super != 41 {
-		t.Errorf("tier split = %d security / %d admin, want 33 / 41 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	// revoke (= 32 SEC), CS-5 added the credential erase, which only
+	// subtracts (= 33 SEC), and #612 the GET/PUT /permissions/availability pair
+	// beside the grant rows (= 35 SEC). 0.8's model providers add GET/PUT
+	// /model-providers, SUPER for the agent roster's reason (= 41). A route
+	// silently reclassified in the table above would still pass every probe — it
+	// would just be enforcing the WRONG tier, exactly the drift the per-route
+	// loop cannot see.
+	if sec != 35 || super != 41 {
+		t.Errorf("tier split = %d security / %d admin, want 35 / 41 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the 2 /permissions/availability routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 
@@ -1727,7 +1733,7 @@ func (s *authzStore) DeleteSSHKey(context.Context, string, string) error { retur
 func (s *authzStore) RefreshSSHKeyRoles(context.Context, string, string, time.Time) error {
 	return nil
 }
-func (s *authzStore) RefreshAPITokenIdentity(context.Context, string, string, []string, bool) error {
+func (s *authzStore) RefreshAPITokenIdentity(context.Context, string, string, string, []string, bool) error {
 	return nil
 }
 
@@ -1778,7 +1784,7 @@ func (s *authzStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGr
 func (s *authzStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
-func (s *authzStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (s *authzStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (s *authzStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
@@ -1786,6 +1792,14 @@ func (s *authzStore) GetCapabilityEnforcement(context.Context) (map[string]bool,
 }
 func (s *authzStore) PutCapabilityEnforcement(_ context.Context, enabled map[string]bool) (map[string]bool, error) {
 	return enabled, nil
+}
+
+func (s *authzStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
+func (s *authzStore) SetCapabilityRestriction(context.Context, string, string, bool, string) error {
+	return nil
 }
 
 // role mappings (migration 0051, Phase 2 lane A)
@@ -1819,8 +1833,9 @@ func (s *authzStore) CreateUserType(_ context.Context, t types.UserType) (types.
 func (s *authzStore) UpdateUserType(context.Context, types.UserType) (types.UserType, error) {
 	return types.UserType{}, store.ErrNotFound
 }
-func (s *authzStore) UserTypeReferences(context.Context, string) (int, error) { return 0, nil }
-func (s *authzStore) DeleteUserType(context.Context, string) error            { return store.ErrNotFound }
+func (s *authzStore) UserTypeReferences(context.Context, string) (int, error)  { return 0, nil }
+func (s *authzStore) UserTypeTokenStamps(context.Context, string) (int, error) { return 0, nil }
+func (s *authzStore) DeleteUserType(context.Context, string) error             { return store.ErrNotFound }
 
 // governance profiles (migration 0052)
 //
@@ -1852,7 +1867,7 @@ func (s *authzStore) DeleteGovernanceAssignment(context.Context, uuid.UUID) erro
 func (s *authzStore) ListGovernanceAssignments(context.Context) ([]types.GovernanceAssignment, error) {
 	return nil, nil
 }
-func (s *authzStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *authzStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
 func (s *authzStore) HasGroupTierAssignments(context.Context) (bool, error) {
@@ -1890,7 +1905,7 @@ func (s *authzStore) DeleteUserDriveGrant(context.Context, uuid.UUID) (types.Use
 func (s *authzStore) ListUserDriveGrants(context.Context) ([]types.UserDriveGrant, error) {
 	return nil, nil
 }
-func (s *authzStore) ResolveUserDrive(context.Context, []string, []string) (
+func (s *authzStore) ResolveUserDrive(context.Context, []string, []string, string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	return nil, nil, "", store.ErrNotFound
 }

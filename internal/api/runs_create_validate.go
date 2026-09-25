@@ -117,7 +117,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	}
 
 	// The request-level fields a member does not get to choose freely (see
-	// denyMemberRequest) — checked before the XOR/builder validation below so a
+	// denyUserRequest) — checked before the XOR/builder validation below so a
 	// member's request is refused with 403, never a 400 that implies the shape
 	// alone is the problem.
 	//
@@ -126,12 +126,12 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// one: two resolves in one request could disagree (the rows are read live),
 	// and a request refused under one ceiling must never be derived under
 	// another. Zero-valued for an operator, who short-circuits before the read.
-	ceiling, denied := s.denyMemberRequest(w, r, req)
+	ceiling, denied := s.denyUserRequest(w, r, req)
 	if denied {
 		return req, noCeiling, "", "", false
 	}
 
-	// The LEGACY single `repo` field, which reaches neither denyMemberRequest
+	// The LEGACY single `repo` field, which reaches neither denyUserRequest
 	// (it is not a capability kind of its own) nor validateWorkspaceSources (it
 	// is not a spec entry) — and is nonetheless cloned by the sandbox,
 	// broker-minted for and unioned into the run's egress. Its provider is the
@@ -141,7 +141,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// req.devcontainer_repo rides the SAME call, and its siting is the point:
 	// the image builder clones it SERVER-SIDE (resolveWorkspaceImage ->
 	// envbuilder's ENVBUILDER_GIT_URL), and the only principals who can set it at
-	// all are operators — members are refused it by denyMemberRequest above. So
+	// all are operators — members are refused it by denyUserRequest above. So
 	// the check belongs HERE, after that return and UNCONDITIONAL on req.Image,
 	// not beside the member refusal (unreachable for the field's only callers) and
 	// not in validateImageBuildRequest (gated on req.Image != "").
@@ -250,7 +250,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// though the caller asked for nothing (or asked for `auto`). Sited here so
 	// the two shapes a derived hold could contradict are already settled — the
 	// codex-cli refusal and the interactive one, both raised above with the
-	// profile's own wording (denyMemberRequest) rather than the generic 400s a
+	// profile's own wording (denyUserRequest) rather than the generic 400s a
 	// derived value would otherwise trip.
 	req.ToolApprovals = effectiveToolApprovals(req, ceiling)
 	return req, ceiling, reqCC, warning, true
@@ -261,7 +261,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 // req.Interactive is the wrong question everywhere the ANSWER matters.
 //
 // It exists because two callers need that answer BEFORE the coercion runs:
-// denyMemberRequest (called from decodeAndValidateCreateRun above, and whose
+// denyUserRequest (called from decodeAndValidateCreateRun above, and whose
 // deny_interactive limit is otherwise evaded by simply omitting the task) and
 // effectiveToolApprovals. The
 // expression is deliberately the same one the coercion itself branches on — one
@@ -378,14 +378,14 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 		"Drop tool_approvals, or launch without --interactive."
 }
 
-// denyMemberRequest is the REQUEST-LEVEL half of a member's launch gate: the
+// denyUserRequest is the REQUEST-LEVEL half of a member's launch gate: the
 // fields the inline_policy clamp (resolveRunPolicy) never touches because they
 // are not policy at all. Reports true — having written the 403 and an
 // authz.denied audit event — when the run must not proceed; callers must return
 // immediately. An operator is exempt in one line at the top, so nothing below
 // ever costs them a store read.
 //
-// Five fields, three different answers:
+// Six fields, three different answers:
 //
 //   - devcontainer_repo is UNCONDITIONALLY operator-only, and is not a
 //     capability kind at all. It hands attacker-authored build configuration
@@ -396,10 +396,10 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 //     its own comment). Same build path as devcontainer_repo, but a pinned ref
 //     an admin wrote down is a bounded thing; a repo whose contents change
 //     under them is not.
-//   - workspace, agent and integration_id all NARROW: each is something every
-//     member could already do, so each stays allowed until an admin enforces
-//     its kind (denyMemberCapability, capSeamAllowed). Each gates the member's
-//     OWN choice and nothing else — never the workspace a stored policy or a
+//   - workspace, agent, integration_id and policy_id all NARROW: each is
+//     something every member could already do, so each stays allowed until an
+//     admin enforces its kind (denyUserCapability, capSeamAllowed). Each
+//     gates the member's OWN choice and nothing else — never the workspace a stored policy or a
 //     scan linkage brings in, never the workspace pin or site default
 //     resolveRunIntegration falls back to, all of which are admin-authored
 //     (the doctrine in OPERATIONS §Multi-user).
@@ -422,14 +422,14 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 // operator short-circuit, which never reads one): the create path's tool-
 // approval derivation needs the same ceiling this function's refusals were
 // decided under, and re-resolving would read the rows a second time.
-func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req createRunRequest) (governanceCeiling, bool) {
+func (s *Server) denyUserRequest(w http.ResponseWriter, r *http.Request, req createRunRequest) (governanceCeiling, bool) {
 	if s.isOperator(r.Context()) {
 		return governanceCeiling{}, false
 	}
 	// One capability snapshot for every field below (capBatch's ctx memo).
 	r = r.WithContext(withCapBatch(r.Context()))
 	if req.DevcontainerRepo != "" {
-		return governanceCeiling{}, s.refuse(w, r, authz.Deny(authz.ReasonBYOIMember, "runs.image",
+		return governanceCeiling{}, s.refuse(w, r, authz.Deny(authz.ReasonBYOIUser, "runs.image",
 			"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image"))
 	}
 	if req.Image != "" {
@@ -439,27 +439,33 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 			return governanceCeiling{}, true
 		}
 		if !granted {
-			return governanceCeiling{}, s.refuse(w, r, authz.Deny(authz.ReasonBYOIMember, "runs.image",
+			return governanceCeiling{}, s.refuse(w, r, authz.Deny(authz.ReasonBYOIUser, "runs.image",
 				"image "+req.Image+" is not granted to you — ask an admin to grant the exact image ref, "+
 					"or launch with the agent's convention image or an onboarded workspace's base image"))
 		}
 	}
-	if req.WorkspaceID != nil && s.denyMemberCapability(w, r, capWorkspace, req.WorkspaceID.String(), "runs.workspace",
+	if req.WorkspaceID != nil && s.denyUserCapability(w, r, capWorkspace, req.WorkspaceID.String(), "runs.workspace",
 		"you are not granted workspace "+req.WorkspaceID.String()+" — ask an admin for access, or launch without a workspace") {
 		return governanceCeiling{}, true
 	}
 	// An empty agent names nothing to bound — an exec run may legitimately omit
 	// it (agentRequirementError), and gating "" would refuse those on a kind
 	// that has nothing to say about them.
-	if req.Agent != "" && s.denyMemberCapability(w, r, capAgent, req.Agent, "runs.agent",
+	if req.Agent != "" && s.denyUserCapability(w, r, capAgent, req.Agent, "runs.agent",
 		"you are not granted agent "+req.Agent+" — ask an admin to grant it, or launch one you hold") {
 		return governanceCeiling{}, true
 	}
 	// Tier 1 only (capIntegration's own comment): the run-explicit
 	// integration_id is the sole member-authored tier. A workspace's pin and the
 	// operator's site default fold on untouched.
-	if req.IntegrationID != "" && s.denyMemberCapability(w, r, capIntegration, req.IntegrationID, "runs.integration",
+	if req.IntegrationID != "" && s.denyUserCapability(w, r, capIntegration, req.IntegrationID, "runs.integration",
 		"you are not granted integration "+req.IntegrationID+" — ask an admin to grant it, or launch without integration_id") {
+		return governanceCeiling{}, true
+	}
+	// The stored policy the caller SELECTED, and only that: a run naming no
+	// policy runs under its own ceiling, which is nothing to bound.
+	if req.PolicyID != nil && s.denyUserCapability(w, r, capPolicy, req.PolicyID.String(), "runs.policy",
+		"Stored policy "+req.PolicyID.String()+" isn't available to you. Ask your admin, or launch without policy_id.") {
 		return governanceCeiling{}, true
 	}
 	ceiling, err := s.effectiveCeiling(r.Context())
@@ -467,13 +473,13 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 		writeCeilingError(w, r, err)
 		return governanceCeiling{}, true
 	}
-	if s.denyMemberGovernance(w, r, req, ceiling) {
+	if s.denyUserGovernance(w, r, req, ceiling) {
 		return governanceCeiling{}, true
 	}
 	return ceiling, false
 }
 
-// denyMemberCapability is the NARROWING seam the request-level kinds share:
+// denyUserCapability is the NARROWING seam the request-level kinds share:
 // resolve, 500 on a store that cannot answer, and one refusal carrying the
 // kind's own `capability_<kind>` reason. Returns true when the caller must stop.
 //
@@ -482,7 +488,7 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 // routed here is one a member could already use before enforcement, so an unenforced kind
 // must stay allowed; capGranted answers the opposite (widening) question and
 // refuses on !enforced, which is why capImage keeps its own call site above.
-func (s *Server) denyMemberCapability(w http.ResponseWriter, r *http.Request, kind, value, target, msg string) bool {
+func (s *Server) denyUserCapability(w http.ResponseWriter, r *http.Request, kind, value, target, msg string) bool {
 	allowed, err := s.capSeamAllowed(r.Context(), kind, value)
 	if err != nil {
 		writeServerError(w, r, "resolve capability", err)
@@ -494,9 +500,9 @@ func (s *Server) denyMemberCapability(w http.ResponseWriter, r *http.Request, ki
 	return s.refuse(w, r, authz.Deny(capKinds[kind].reason, target, msg))
 }
 
-// denyMemberGovernance is denyMemberRequest's governance half: the request
+// denyUserGovernance is denyUserRequest's governance half: the request
 // SHAPES an assigned profile can refuse, plus its one quota. Split out so
-// denyMemberRequest's branch count stays under the gocyclo gate, exactly as
+// denyUserRequest's branch count stays under the gocyclo gate, exactly as
 // clampOperatorSwitches is split out of Clamp.
 //
 // Every one keys on `ceiling.Profile != nil`, never on the ceiling's contents —
@@ -507,7 +513,7 @@ func (s *Server) denyMemberCapability(w http.ResponseWriter, r *http.Request, ki
 // The strings are the mock round's frozen member copy (docs/design/
 // governance-prompt.md §7.7) and are reproduced BYTE-EXACT: the console never
 // rewords a server refusal, so this file is where that copy actually ships.
-func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, req createRunRequest, ceiling governanceCeiling) bool {
+func (s *Server) denyUserGovernance(w http.ResponseWriter, r *http.Request, req createRunRequest, ceiling governanceCeiling) bool {
 	if ceiling.Profile == nil {
 		return false
 	}
@@ -535,7 +541,7 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 		return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive", fmt.Sprintf(
 			"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.", name)))
 	}
-	if s.denyMemberRunQuota(w, r, ceiling) {
+	if s.denyUserRunQuota(w, r, ceiling) {
 		return true
 	}
 	if !governanceHoldRules(ceiling) {
@@ -561,7 +567,7 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 	return false
 }
 
-// denyMemberRunQuota is the third limit and the one that is NOT a refusal of a
+// denyUserRunQuota is the third limit and the one that is NOT a refusal of a
 // request shape: MaxConcurrentRuns caps how many non-terminal runs one assigned
 // member may hold at once.
 //
@@ -583,7 +589,7 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 // both land. Accepted, exactly as the two 20-caps above accept it — the cap is a
 // runaway-loop guard, not a licence meter, and a transaction around create just
 // to make a soft cap exact is not worth the write path it would complicate.
-func (s *Server) denyMemberRunQuota(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
+func (s *Server) denyUserRunQuota(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
 	limit := ceiling.Limits.MaxConcurrentRuns
 	if limit <= 0 {
 		return false
@@ -601,9 +607,9 @@ func (s *Server) denyMemberRunQuota(w http.ResponseWriter, r *http.Request, ceil
 		limit, ceiling.Profile.Name, active)))
 }
 
-// denyMemberSeededImage closes a gap: a MEMBER-OWNED
+// denyUserSeededImage closes a gap: a MEMBER-OWNED
 // workspace's base_image is copied into req.Image by seedRequestWorkspace AFTER
-// denyMemberRequest has already run, and the follow-up re-validation
+// denyUserRequest has already run, and the follow-up re-validation
 // (validateImageBuildRequest) only re-checks the XOR and the builder — never
 // capGranted(capImage, …). So a member onboards a workspace whose base_image is
 // any ref they like, launches against it, and reaches the one WIDENING
@@ -612,7 +618,7 @@ func (s *Server) denyMemberRunQuota(w http.ResponseWriter, r *http.Request, ceil
 // Ownership-scoped, and the scoping is not a nicety. seededOwner is non-empty
 // only when the seed actually set req.Image AND the seeding workspace was
 // member-owned; an operator-authored workspace's base_image stays exactly what
-// denyMemberRequest's own doc says it is — operator config, not a member's
+// denyUserRequest's own doc says it is — operator config, not a member's
 // free-text choice — and this function no-ops on it, byte-for-byte today.
 //
 // The trap, named because the next refactor will reach for it: an UNCONDITIONAL
@@ -621,7 +627,7 @@ func (s *Server) denyMemberRunQuota(w http.ResponseWriter, r *http.Request, ceil
 // (capabilities.go) — which means an unconditional call would 403 every member
 // run against every base-image workspace on every deployment that has not
 // enforced capImage, i.e. all of them on upgrade day.
-func (s *Server) denyMemberSeededImage(w http.ResponseWriter, r *http.Request, seededOwner, image string) bool {
+func (s *Server) denyUserSeededImage(w http.ResponseWriter, r *http.Request, seededOwner, image string) bool {
 	if seededOwner == "" {
 		return false
 	}
@@ -636,7 +642,7 @@ func (s *Server) denyMemberSeededImage(w http.ResponseWriter, r *http.Request, s
 	// The SAME refusal the explicit --image branch raises (target, reason and
 	// shape), because it is the same capability answered about the same value —
 	// only the door differs, and the message says which one.
-	return s.refuse(w, r, authz.Deny(authz.ReasonBYOIMember, "runs.image",
+	return s.refuse(w, r, authz.Deny(authz.ReasonBYOIUser, "runs.image",
 		"image "+image+" comes from your own workspace's base image and is not granted to you — "+
 			"ask an admin to grant the exact image ref, or launch with the agent's convention image"))
 }

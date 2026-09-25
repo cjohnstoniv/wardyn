@@ -80,6 +80,23 @@ func TestADONames_ApprovalRepoKeyIsOneSpelling(t *testing.T) {
 			t.Errorf("git door: adoGitAsk(%q).repo = %q, want %q", path, got, want)
 		}
 	}
+	// pushTarget.repo — the string a held push is deduped and re-asked by, not
+	// just adoGitAsk's display name — is one key at both doors too.
+	p := &Proxy{}
+	const wantTarget = "dev.azure.com/acme/payments platform/_git/card auth (v2).service"
+	for _, path := range []string{
+		"/wardyn/git/dev.azure.com/acme/Payments%20Platform/_git/Card%20Auth%20(v2).Service/git-receive-pack",
+		"/wardyn/git/dev.azure.com/acme/Payments%20Platform/_git/card%20auth%20(v2).service/git-receive-pack",
+	} {
+		r := mustLocalReq(t, http.MethodPost, path, nil)
+		if got := p.adoPushTarget("dev.azure.com", adoGitRepoKeys(r)).repo; got != wantTarget {
+			t.Errorf("git door: adoPushTarget(%q).repo = %q, want %q", path, got, wantTarget)
+		}
+	}
+	grant := ADOGrant{Organization: "acme"}
+	if got := p.adoRESTTarget("dev.azure.com", grant, "payments platform/_git/card auth (v2).service").repo; got != wantTarget {
+		t.Errorf("REST door: adoRESTTarget(...).repo = %q, want %q", got, wantTarget)
+	}
 	// A spelling that hides structure names no repository at all.
 	if got := adoRepoOf("/acme/_apis/git/repositories/a%252Fb/pushes"); got != "" {
 		t.Errorf("adoRepoOf of a doubly-encoded separator = %q, want none", got)

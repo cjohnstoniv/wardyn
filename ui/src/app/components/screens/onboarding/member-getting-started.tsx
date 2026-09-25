@@ -85,7 +85,7 @@ type Variant = "default" | "outline";
 
 // U-1 (W6 blind lens) — WHOSE credential the state describes, which the label
 // table alone cannot say. Under a row that is NOT per_user the server still
-// projects `live`/`expiring` (memberModelAccess, internal/api/modelaccess.go):
+// projects `live`/`expiring` (userModelAccess, internal/api/modelaccess.go):
 // that is the ADMIN's shared credential, graded for this member. Rendering
 // MODEL_ACCESS_LIVE ("Your AWS sign-in") there claimed a sign-in the member does
 // not have, directly above a card reading "Provided by your admin" and a New Run
@@ -109,7 +109,7 @@ export function MemberGettingStarted() {
   // token runs both views, so there is no ceiling for a demo run of theirs
   // to fall under and every demo stays fully interactive. Every other access
   // tier is a real member (or an SSO admin viewing the member page) whose
-  // OWN runs are bound by boundMemberSpec — ceilingNarrows below decides
+  // OWN runs are bound by boundUserSpec — ceilingNarrows below decides
   // per-demo which ones that would actually rewrite.
   const ceilingApplies = useViewAccess() !== "url";
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
@@ -307,7 +307,7 @@ export function MemberGettingStarted() {
   // narrow (ceilingNarrows) is dropped from this list too, so it never
   // renders here — it is not offered watch-only (#850's own mock round
   // decides that, separately). KNOWN GAPS, all in #850.
-  // internal/api/setup.go's redactSetupStatusForMember zeroes secrets.present
+  // internal/api/setup.go's redactSetupStatusForUser zeroes secrets.present
   // and providers for a caller the server answers as a user, so a
   // needsSecret demo (five of the eight "secrets" ones) is never offered to
   // an SSO user, and neither is a needsModel one unless the model access is a

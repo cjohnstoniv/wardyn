@@ -38,7 +38,7 @@ import (
 // ⇒ Config.DefaultPolicy" is exactly what that deployment does.
 type noGovernanceStore struct{ store.Store }
 
-func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", store.ErrNotFound
 }
 
@@ -71,11 +71,16 @@ func (*capStore) ListUserTypes(context.Context) ([]types.UserType, error) {
 	return seededUserTypes, nil
 }
 
-func (*capStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+func (s *capStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	for _, t := range s.userTypes {
+		if t.ID == id {
+			return t, nil
+		}
+	}
 	return seededUserType(id)
 }
 
-func (noGovernanceStore) ResolveUserDrive(context.Context, []string, []string) (
+func (noGovernanceStore) ResolveUserDrive(context.Context, []string, []string, string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	return nil, nil, "", store.ErrNotFound
 }
@@ -114,7 +119,7 @@ func (noGovernanceStore) LatestAuditEventByAction(context.Context, string) (type
 // double that is non-nil but incomplete must answer the SAME way rather than
 // panic on the call capSeamAllowed's non-nil branch (capAllowed -> capScan)
 // then makes (#338).
-func (noGovernanceStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (noGovernanceStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 
@@ -125,6 +130,10 @@ func (noGovernanceStore) ListCapabilityGrantsFor(context.Context, []string, []st
 // seams ListCapabilityGrantsFor's comment does not cover (#338).
 func (noGovernanceStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return map[string]bool{}, nil
+}
+
+func (noGovernanceStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 
 // ListGroupDenyGrants answers no group-deny rows — capUnresolvableGroupDeny's
@@ -205,9 +214,20 @@ type capStore struct {
 	// this knob is what a test for it needs.
 	driveErr             error
 	driveHasGroupTierErr error
+
+	// userTypes are the custom types GetUserType finds beside the seeded
+	// built-in one; a stamped type absent from both is a deleted type.
+	userTypes []types.UserType
+
+	// restricted is capability_restrictions: kind -> restricted values.
+	restricted map[string]map[string]bool
+	// restrictErr fails ListCapabilityRestrictions alone, distinct from the
+	// general s.err every other method checks — so a test can fail JUST the
+	// restriction read and see whether that alone can turn into an allow.
+	restrictErr error
 }
 
-func (s *capStore) ResolveUserDrive(context.Context, []string, []string) (
+func (s *capStore) ResolveUserDrive(context.Context, []string, []string, string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
 	if s.driveErr != nil {
 		return nil, nil, "", s.driveErr
@@ -234,7 +254,7 @@ func (s *capStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return s.site, nil
 }
 
-func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string, _ string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if s.govErr != nil {
 		return nil, "", s.govErr
 	}
@@ -283,7 +303,7 @@ func (s *capStore) ListGroupDenyGrants(_ context.Context, capability string) ([]
 	return out, nil
 }
 
-func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []string, userType string) ([]types.CapabilityGrant, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -300,6 +320,10 @@ func (s *capStore) ListCapabilityGrantsFor(_ context.Context, users, groups []st
 			if slices.Contains(groups, g.Subject) {
 				out = append(out, g)
 			}
+		case types.CapabilitySubjectUserType:
+			if userType != "" && g.Subject == userType {
+				out = append(out, g)
+			}
 		}
 	}
 	return out, nil
@@ -313,6 +337,37 @@ func (s *capStore) GetCapabilityEnforcement(context.Context) (map[string]bool, e
 		return map[string]bool{}, nil
 	}
 	return s.enf, nil
+}
+
+func (s *capStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	if s.restrictErr != nil {
+		return nil, s.restrictErr
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	if s.restricted == nil {
+		return map[string]map[string]bool{}, nil
+	}
+	return s.restricted, nil
+}
+
+func (s *capStore) SetCapabilityRestriction(_ context.Context, kind, value string, restricted bool, _ string) error {
+	if s.err != nil {
+		return s.err
+	}
+	if s.restricted == nil {
+		s.restricted = map[string]map[string]bool{}
+	}
+	if s.restricted[kind] == nil {
+		s.restricted[kind] = map[string]bool{}
+	}
+	if restricted {
+		s.restricted[kind][value] = true
+	} else {
+		delete(s.restricted[kind], value)
+	}
+	return nil
 }
 
 // fixtures
@@ -645,7 +700,7 @@ func TestCapabilitySubjectsStaleSnapshot(t *testing.T) {
 // devcontainer_repo, which is deliberately NOT a capability: it executes
 // attacker-authored build config and stays unconditionally admin-only.
 func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
-	want := []string{"egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider", "model_provider"}
+	want := []string{"egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider", "model_provider", "feature", "policy"}
 	if !slices.Equal(capabilityKinds, want) {
 		t.Errorf("capabilityKinds = %v, want %v (and ui/src/app/lib/permissions-copy.ts must match)", capabilityKinds, want)
 	}
@@ -669,7 +724,7 @@ func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
 // DEFAULT arm — nothing was added for them, so nothing but a test proves the
 // default is what they got.
 func TestCapValueMatchesIsExactOffTheHostLane(t *testing.T) {
-	for _, kind := range []string{capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capModelProvider} {
+	for _, kind := range []string{capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider, capModelProvider, capFeature, capPolicy} {
 		if capValueMatches(kind, "*.corp", "api.corp") {
 			t.Errorf("%s: a wildcard-looking grant matched a suffix; only egress_host may do that", kind)
 		}

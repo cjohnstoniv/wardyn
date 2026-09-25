@@ -279,8 +279,8 @@ services:
       # ends up writable. It only bounds what THIS wardynd container can itself
       # see (EvalSymlinks + the credential dotfile deny-list, both reads) —
       # WARDYN_USER_WRITABLE_ROOTS alone (checked in
-      # internal/runner/member_mount.go's ValidateMemberMount /
-      # ValidateMemberMountSource) decides writability, purely by root/deny-list
+      # internal/runner/member_mount.go's ValidateUserMount /
+      # ValidateUserMountSource) decides writability, purely by root/deny-list
       # match; neither function opens or stat-for-write-checks the source. The
       # actual sandbox bind is created by the HOST dockerd straight from the
       # source path string (DooD siblings) and never passes through this

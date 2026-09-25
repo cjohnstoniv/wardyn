@@ -650,7 +650,7 @@ test.describe("killing a run cancels its still-PENDING approvals", () => {
 
 // ---------------------------------------------------------------------------
 // F-12 pinning — LiveApprovals' row-level gate follows canDecideApproval
-// (server truth: authorizeMemberDecision, internal/api/approvals.go), not a
+// (server truth: authorizeUserDecision, internal/api/approvals.go), not a
 // blanket !operator disable. A member may decide an egress_domain approval on
 // a run they own; credential and tool_call stay admin-only regardless.
 //

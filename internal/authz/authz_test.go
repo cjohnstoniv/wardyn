@@ -68,12 +68,12 @@ func TestDenyTakesItsEffectFromTheRegistry(t *testing.T) {
 func TestDatumMarksWhereAndHowARefusalWasMet(t *testing.T) {
 	plain := Datum(Deny(ReasonNotOwner, "t", ""), Principal{Subject: "bob"}, "GET")
 	if want := map[string]any{"reason": "not_owner", "method": "GET"}; !reflect.DeepEqual(plain, want) {
-		t.Errorf("plain datum = %#v, want %#v — member_mode and device_channel are markers, absent when unset", plain, want)
+		t.Errorf("plain datum = %#v, want %#v — user_view and device_channel are markers, absent when unset", plain, want)
 	}
 
 	dev := uuid.New()
 	marked := Datum(Deny(ReasonAdminSurface, "t", ""), Principal{MemberView: true, Origin: Origin{DeviceID: &dev}}, "")
-	if marked["member_mode"] != true {
+	if marked["user_view"] != true {
 		t.Errorf("member view not marked: %#v", marked)
 	}
 	if ch, _ := marked["device_channel"].(map[string]any); ch["device_id"] != dev.String() {
@@ -87,9 +87,9 @@ func TestDatumMarksWhereAndHowARefusalWasMet(t *testing.T) {
 	}
 
 	// A detail cannot forge a reserved key.
-	forged := Deny(ReasonNotOwner, "t", "").With("reason", "admin_surface").With("member_mode", "true").With("host", "h")
+	forged := Deny(ReasonNotOwner, "t", "").With("reason", "admin_surface").With("user_view", "true").With("host", "h")
 	got := Datum(forged, Principal{}, "")
-	if got["reason"] != "not_owner" || got["member_mode"] != nil || got["host"] != "h" {
+	if got["reason"] != "not_owner" || got["user_view"] != nil || got["host"] != "h" {
 		t.Errorf("datum = %#v, want the decision's reason, no marker, and the host detail", got)
 	}
 

@@ -52,7 +52,7 @@ func TestSetupStatus_SSORBACAdminListIsOK(t *testing.T) {
 // whatever it says — unchanged by #484.
 func TestRedactSetupStatusForMember_DropsSSORBACWarn(t *testing.T) {
 	warn, _ := ssoRBACCheck(true, false, false, false)
-	got := redactSetupStatusForMember(SetupStatus{Checks: []SetupCheck{warn}}, false, false)
+	got := redactSetupStatusForUser(SetupStatus{Checks: []SetupCheck{warn}}, false, false)
 	if len(got.Checks) != 0 || !got.ChecksRedacted {
 		t.Errorf("member checks = %+v (redacted=%v), want none", got.Checks, got.ChecksRedacted)
 	}

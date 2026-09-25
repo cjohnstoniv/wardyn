@@ -213,8 +213,8 @@ export function walkableDemos(status: SetupStatus | null): Demo[] {
 }
 
 // M-6 (D5, admin-member-modes-design.md §4.8/§6): whether a member's own
-// ceiling (internal/api's narrowMemberInlinePolicy/filterMemberGrants,
-// invoked via boundMemberSpec at run-create) would rewrite THIS demo's
+// ceiling (internal/api's narrowUserInlinePolicy/filterUserGrants,
+// invoked via boundUserSpec at run-create) would rewrite THIS demo's
 // policy in a way that changes what it actually demonstrates — never merely
 // requires an extra click. Per the owner's 2026-09-25 ruling, a demo this
 // narrows is HIDDEN from the user's Getting Started (setup/steps.ts callers),

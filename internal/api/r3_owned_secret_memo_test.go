@@ -23,7 +23,7 @@ type r3PlainStore struct {
 	store.Store
 }
 
-func (r3PlainStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (r3PlainStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	return nil, "", nil
 }
 func (r3PlainStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
@@ -33,11 +33,15 @@ func (r3PlainStore) ListCapabilityGrants(context.Context) ([]types.CapabilityGra
 func (r3PlainStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
-func (r3PlainStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (r3PlainStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (r3PlainStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, nil
+}
+
+func (r3PlainStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 func (r3PlainStore) ListWorkspaces(context.Context) ([]types.Workspace, error) { return nil, nil }
 func (r3PlainStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
@@ -123,7 +127,7 @@ func r3MemberPreflightBody(t *testing.T, n int) string {
 // maxAllowedDomainsPerSpec capped that list — but the member pipeline's OTHER
 // caller-sized list, spec.eligible_grants, has no cap at all and buys an
 // UNMEMOIZED For(owner).List per grant at three separate sites
-// (filterMemberGrants' 6c own-key arm, narrowMemberInlinePolicy's ownership
+// (filterUserGrants' 6c own-key arm, narrowUserInlinePolicy's ownership
 // exemption, validateInlineSecretRefs' unknown-name arm). So "per-request cost
 // stays O(1) store reads regardless of body content" was still false: it just
 // moved lists.
@@ -211,8 +215,8 @@ func TestMemberPipelineOwnedSecretReadsPerSite(t *testing.T) {
 	}
 
 	sites := map[string]func(t *testing.T, srv *Server, ctx context.Context, n int){
-		"filterMemberGrants": func(t *testing.T, srv *Server, ctx context.Context, n int) {
-			kept, _, code, err := srv.filterMemberGrants(ctx, "sub-gov-bob", []string{"api.anthropic.com"}, apiKeyGrants(n))
+		"filterUserGrants": func(t *testing.T, srv *Server, ctx context.Context, n int) {
+			kept, _, code, err := srv.filterUserGrants(ctx, "sub-gov-bob", []string{"api.anthropic.com"}, apiKeyGrants(n))
 			if err != nil {
 				t.Fatalf("n=%d: code=%d %v", n, code, err)
 			}
@@ -220,9 +224,9 @@ func TestMemberPipelineOwnedSecretReadsPerSite(t *testing.T) {
 				t.Fatalf("n=%d: kept %d grants, want %d — a loop that stopped running proves nothing", n, len(kept), n)
 			}
 		},
-		"narrowMemberInlinePolicy": func(t *testing.T, srv *Server, ctx context.Context, n int) {
+		"narrowUserInlinePolicy": func(t *testing.T, srv *Server, ctx context.Context, n int) {
 			spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: apiKeyGrants(n)}
-			if _, _, err := srv.narrowMemberInlinePolicy(ctx, "sub-gov-bob", &spec); err != nil {
+			if _, _, err := srv.narrowUserInlinePolicy(ctx, "sub-gov-bob", &spec); err != nil {
 				t.Fatalf("n=%d: %v", n, err)
 			}
 			if len(spec.EligibleGrants) != n {

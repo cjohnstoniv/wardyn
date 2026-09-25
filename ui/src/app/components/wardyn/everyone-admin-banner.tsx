@@ -7,7 +7,7 @@
 // every page (Q457-4). The state is the server's, not re-derived here: the
 // /setup/status sso_rbac row warns only when neither a role map nor an admin
 // list is set (Q457-5). Members never see it twice over — the row is redacted
-// out of their /setup/status (redactSetupStatusForMember), and the band also
+// out of their /setup/status (redactSetupStatusForUser), and the band also
 // renders only for a RESOLVED admin, so the fail-open operator default can
 // never paint it for someone who cannot act on it.
 //

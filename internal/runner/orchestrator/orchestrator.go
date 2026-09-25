@@ -144,6 +144,21 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 	return false, errors.New("orchestrator: no wired substrate supports image presence checks")
 }
 
+// ProbeDrive implements runner.DriveProber by delegating to the first wired
+// substrate that implements it — the same single-fan-out ImagePresent uses. A
+// drive's backend is already scoped to this deployment's dispatch target
+// before this is ever called (driveBindFailureHere's own backend/target
+// check), so with the one substrate production wires per deployment this is
+// unambiguous.
+func (o *Orchestrator) ProbeDrive(ctx context.Context, mount types.DriveMount) (runner.DriveProbe, error) {
+	for _, s := range o.substrates {
+		if dp, ok := s.(runner.DriveProber); ok {
+			return dp.ProbeDrive(ctx, mount)
+		}
+	}
+	return runner.DriveProbe{}, errors.New("orchestrator: no wired substrate supports drive probing")
+}
+
 // Capabilities aggregates the substrates' ClassSupport into one Capabilities:
 // the union of enforceable classes (strongest last) and the merged per-class
 // substrate labels. A class is advertised only when SOME substrate enforces it.

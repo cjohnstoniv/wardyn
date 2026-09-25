@@ -21,10 +21,12 @@ const (
 	ReasonSecurityAdminSurface           Reason = "security_admin_surface"
 	ReasonNotOwner                       Reason = "not_owner"
 	ReasonAttachTicketForeignRun         Reason = "attach_ticket_foreign_run"
-	ReasonBYOIMember                     Reason = "byoi_member"
+	ReasonBYOIUser                       Reason = "byoi_user"
 	ReasonCapabilityAgent                Reason = "capability_agent"
 	ReasonCapabilityEgressHost           Reason = "capability_egress_host"
+	ReasonCapabilityFeature              Reason = "capability_feature"
 	ReasonCapabilityIntegration          Reason = "capability_integration"
+	ReasonCapabilityPolicy               Reason = "capability_policy"
 	ReasonCapabilitySecret               Reason = "capability_secret"
 	ReasonCapabilityWorkspace            Reason = "capability_workspace"
 	ReasonCapabilityWorkspaceProvider    Reason = "capability_workspace_provider"
@@ -38,6 +40,12 @@ const (
 	ReasonRunTerminal                    Reason = "run_terminal"
 	ReasonSecondHumanRequired            Reason = "second_human_required"
 	ReasonRunQuota                       Reason = "run_quota"
+	ReasonUserTypeUnknown                Reason = "user_type_unknown"
+	ReasonUserViewTypeDeleted            Reason = "user_view_type_deleted"
+	// ReasonAdminView: an admin in the user view launched a run after the type
+	// the view looks through was deleted. Not audited on its own — the cause
+	// row is ReasonUserViewTypeDeleted, which the launch response answered.
+	ReasonAdminView Reason = "admin_view"
 )
 
 // Refusal is one reason's registry row.
@@ -61,10 +69,12 @@ var refusals = map[Reason]Refusal{
 	ReasonSecurityAdminSurface:           {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
 	ReasonNotOwner:                       {Effect: EffectHidden, Audit: true},
 	ReasonAttachTicketForeignRun:         {Effect: EffectHidden, Audit: true},
-	ReasonBYOIMember:                     {Effect: EffectDeny, Audit: true},
+	ReasonBYOIUser:                       {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityAgent:                {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityEgressHost:           {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityFeature:              {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityIntegration:          {Effect: EffectDeny, Audit: true},
+	ReasonCapabilityPolicy:               {Effect: EffectDeny, Audit: true},
 	ReasonCapabilitySecret:               {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityWorkspace:            {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityWorkspaceProvider:    {Effect: EffectDeny, Audit: true},
@@ -78,6 +88,9 @@ var refusals = map[Reason]Refusal{
 	ReasonRunTerminal:                    {Effect: EffectDeny, Audit: true},
 	ReasonSecondHumanRequired:            {Effect: EffectDeny, Audit: true},
 	ReasonRunQuota:                       {Effect: EffectUnprocessable},
+	ReasonUserTypeUnknown:                {Effect: EffectDeny, Audit: true},
+	ReasonUserViewTypeDeleted:            {Effect: EffectDeny, Audit: true},
+	ReasonAdminView:                      {Effect: EffectConflict},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

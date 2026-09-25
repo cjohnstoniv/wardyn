@@ -220,7 +220,7 @@ func (s *Server) isModelProviderHost(h string) bool {
 	}
 	// An operator-configured internal gateway host counts too — it IS the
 	// model-provider host for every run under the api-key lane (6c's
-	// filterMemberGrants arm and denyAlwaysReject below both need this).
+	// filterUserGrants arm and denyAlwaysReject below both need this).
 	for _, base := range s.cfg.LLMGateways {
 		if gatewayHost(base) == hl {
 			return true
@@ -645,6 +645,14 @@ func (s *Server) foldRunIntegration(ctx context.Context, owner string, spec *typ
 	if _, ok := s.llmProviderFor(req.Agent); !ok {
 		return types.Integration{}, "", nil // non-LLM agent — nothing to bind
 	}
+	// A model-provider block owns every model credential once it is set: the
+	// run's chosen provider supplies it at dispatch, from its owner's own
+	// credential, and an AI integration folds nothing — its grant would read
+	// the operator's secret. An unreadable site config folds nothing either:
+	// the doors that read it next refuse the run.
+	if s.modelProvidersSet(ctx) {
+		return types.Integration{}, "", nil
+	}
 	integ, ok := s.resolveRunIntegration(ctx, owner, req.IntegrationID, workspaceRef)
 	if !ok {
 		return types.Integration{}, "", nil
@@ -661,6 +669,16 @@ func (s *Server) foldRunIntegration(ctx context.Context, owner string, spec *typ
 		applyLLMCredMount(spec, s.cfg.DefaultPolicy, req.Agent, true, s.anthropicGatewayHostPort())
 	}
 	return integ, kind, bedrockRef
+}
+
+// modelProvidersSet reports whether the model-provider block is set — or
+// cannot be read, which is answered the same way: no legacy model credential.
+func (s *Server) modelProvidersSet(ctx context.Context) bool {
+	if s.cfg.Store == nil {
+		return false
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	return err != nil || sc.ModelProviders != nil
 }
 
 // ensureLLMGrant gives a COMPOSED run for an LLM-backed agent a path to its model.

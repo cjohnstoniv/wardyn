@@ -197,6 +197,25 @@ func TestCallbackStampsTheDerivedUserType(t *testing.T) {
 	}
 }
 
+// TestCallbackOnLoginCarriesTheDerivedUserType: the login hook that re-stamps
+// a person's API tokens is handed the type the sign-in derived, the same one
+// the session carries, so a token learns its holder's type at their next
+// sign-in rather than keeping the one it was minted with.
+func TestCallbackOnLoginCarriesTheDerivedUserType(t *testing.T) {
+	env := newIdPEnv(t)
+	var got []string
+	auth := env.newRoleMappingAuth(t, map[string]string{"pm-group": "portfolio-manager"}, "", nil, nil,
+		func(c *writoidc.Config) {
+			c.UserTypes = &fakeUserTypeSource{list: orgTypes}
+			c.OnLogin = func(_ context.Context, _, _, userType string, _ []string, _ bool) { got = append(got, userType) }
+		})
+
+	_, sess := doRoleCallback(t, env, auth, "pat@corp.example", nil, []string{"pm-group"})
+	if !slices.Equal(got, []string{"portfolio-manager"}) || sess.UserType != "portfolio-manager" {
+		t.Errorf("OnLogin user types = %v, session type %q; want [portfolio-manager] for both", got, sess.UserType)
+	}
+}
+
 // TestCallbackRefusesOverTheUserType: an ambiguous or unknown type refuses the
 // sign-in with its own auth_error code, clears the cookie, and is reported to
 // the denial hook; a store error refuses it as a role check that could not run.

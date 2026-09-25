@@ -53,7 +53,7 @@ type bootFlags struct {
 	// operator authority lives elsewhere (an org IdP / MDM): it refuses to start
 	// unless that is actually true. The four member*Roots knobs bound what a
 	// member may bind into a sandbox from their own machine — parsed by
-	// runner.ParseMemberMountPolicy, which fails boot closed on a malformed value
+	// runner.ParseUserMountPolicy, which fails boot closed on a malformed value
 	// and returns the O4 posture warnings.
 	memberMode          *bool
 	memberRoots         *string
@@ -168,6 +168,7 @@ type bootFlags struct {
 	ageKey                 *string
 	platformKeyFile        *string
 	proxyImage             *string
+	driveProbeImage        *string
 
 	recordingDir       *string
 	recordingRetention *int
@@ -312,6 +313,10 @@ type bootFlags struct {
 	uiOriginTemplate *string
 	// uiSessionTTL bounds the relay session cookie — see api.Config.UISessionTTL.
 	uiSessionTTL *time.Duration
+
+	// allowUnknownMigrations is the break-glass past db.Migrate's downgrade
+	// refusal (a database a newer wardynd migrated) — see connectAndMigrate.
+	allowUnknownMigrations *bool
 }
 
 // deprecatedEnvAliases is UT-5's six WARDYN_MEMBER_* → WARDYN_USER_* renames
@@ -410,7 +415,8 @@ func parseBootFlags() *bootFlags {
 		platformKeyFile:         flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path to a second age identity that alone protects wardynd's signing, session and SSH host keys when secrets are sealed locally. Empty (default): WARDYN_AGE_KEY protects both. Set on an existing install, run wardynd -rewrap once; see docs/OPERATIONS.md"),
 		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
 
-		recordingDir: flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); used only by the "fs" recording store`),
+		driveProbeImage: flagEnv("drive-probe-image", "WARDYN_DRIVE_PROBE_IMAGE", "", "OCI image for the host_path drive-readability probe container (docker runner). Empty (default) keeps the pinned busybox-class default"),
+		recordingDir:    flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); used only by the "fs" recording store`),
 		// OFF by default (0 = keep forever): a session recording is the governance
 		// evidence this product exists to produce, so nothing deletes one unless
 		// the operator asks for a retention window.
@@ -469,7 +475,7 @@ func parseBootFlags() *bootFlags {
 		// provenance, and flipping that off by default would silently narrow
 		// egress for every existing workspace on upgrade. An operator in a
 		// higher-trust posture (repo content is reviewed, or the exfil risk
-		// inline_policy.go's filterMemberGrants comment names matters more than
+		// inline_policy.go's filterUserGrants comment names matters more than
 		// the convenience) opts in here.
 		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead"),
 		gitPATBroker:       flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),
@@ -537,8 +543,9 @@ func parseBootFlags() *bootFlags {
 		uiSessionTTL:     flagDuration("ui-sandbox-session-ttl", "WARDYN_UI_SANDBOX_SESSION_TTL", 8*time.Hour, "how long a UI-sandbox relay session cookie stays usable (duration)"),
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional per-run origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS and certificate); must contain {run}. Empty (default) shares one origin across every run`),
 
-		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn ssh" refuses`),
-		sshRoleTTL:   flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
+		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn ssh" refuses`),
+		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),
+		allowUnknownMigrations: flagBool("allow-unknown-migrations", "WARDYN_ALLOW_UNKNOWN_MIGRATIONS", false, "BREAK-GLASS: boot even though the database records migrations this wardynd does not ship (a newer wardynd migrated it). Normally refused — a downgrade is unsupported; restore the pre-upgrade dump instead"),
 	}
 	flag.Parse()
 

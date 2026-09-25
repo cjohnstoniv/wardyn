@@ -9,6 +9,7 @@ package api
 // walk driven by an ADMIN cookie carrying the flag.
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -91,7 +92,7 @@ func meBody(t *testing.T, srv *Server, cookie *http.Cookie) map[string]any {
 func TestMemberMode_RefusesAdminTokenAndLocalMode(t *testing.T) {
 	t.Run("admin token", func(t *testing.T) {
 		srv, _ := memberModeServer(t)
-		w := do(t, srv, http.MethodPost, "/api/v1/me/member-mode", adminToken, `{"enabled":true}`)
+		w := do(t, srv, http.MethodPost, "/api/v1/me/view", adminToken, `{"view":"user"}`)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
 		}
@@ -105,7 +106,7 @@ func TestMemberMode_RefusesAdminTokenAndLocalMode(t *testing.T) {
 		cfg := baseTestConfig(h, rbacStore{})
 		cfg.LocalMode = true
 		srv := New(cfg)
-		w := do(t, srv, http.MethodPost, "/api/v1/me/member-mode", "", `{"enabled":true}`)
+		w := do(t, srv, http.MethodPost, "/api/v1/me/view", "", `{"view":"user"}`)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
 		}
@@ -114,7 +115,7 @@ func TestMemberMode_RefusesAdminTokenAndLocalMode(t *testing.T) {
 	t.Run("OIDC not configured at all", func(t *testing.T) {
 		h := newHarness(t)
 		srv := New(baseTestConfig(h, rbacStore{})) // cfg.OIDC == nil
-		w := do(t, srv, http.MethodPost, "/api/v1/me/member-mode", adminToken, `{"enabled":true}`)
+		w := do(t, srv, http.MethodPost, "/api/v1/me/view", adminToken, `{"view":"user"}`)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400 (never a nil-OIDC panic): %s", w.Code, w.Body.String())
 		}
@@ -139,7 +140,7 @@ func TestMemberMode_RefusesAdminTokenAndLocalMode(t *testing.T) {
 		}, raw); err != nil {
 			t.Fatal(err)
 		}
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", strings.NewReader(`{"enabled":true}`))
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/me/view", strings.NewReader(`{"view":"user"}`))
 		r.Header.Set("Authorization", "Bearer "+raw)
 		// The trivially-forged cookie: decodeSession gets PAST its absent-cookie
 		// early return and reaches the HMAC.
@@ -158,25 +159,25 @@ func TestMemberMode_RefusesAdminTokenAndLocalMode(t *testing.T) {
 }
 
 // TestMemberMode_Toggle: the ordinary round trip. On clamps /me, off restores
-// it, an empty body decodes to enabled:false and answers 200 (which is what
+// it, an empty body decodes to the zero View (off) and answers 200 (which is what
 // routeMatrix's bodyFor sends), and a REAL member toggling on is a no-op 200.
 func TestMemberMode_Toggle(t *testing.T) {
 	srv, _ := memberModeServer(t)
 	admin := ssoSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin)
 
-	if body := meBody(t, srv, admin); body["member_mode"] != false || body["operator"] != true {
-		t.Fatalf("before the toggle: member_mode=%v operator=%v, want false/true", body["member_mode"], body["operator"])
+	if body := meBody(t, srv, admin); body["user_view"] != false || body["operator"] != true {
+		t.Fatalf("before the toggle: user_view=%v operator=%v, want false/true", body["user_view"], body["operator"])
 	}
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", admin, `{"enabled":true}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST on = %d: %s", w.Code, w.Body.String())
 	}
 	on := sessionCookieFrom(t, w.Result().Cookies())
 
 	body := meBody(t, srv, on)
-	if body["member_mode"] != true {
-		t.Errorf("member_mode = %v, want true", body["member_mode"])
+	if body["user_view"] != true {
+		t.Errorf("user_view = %v, want true", body["user_view"])
 	}
 	if body["operator"] != false || body["security_operator"] != false {
 		t.Errorf("operator/security_operator = %v/%v, want false/false", body["operator"], body["security_operator"])
@@ -188,15 +189,15 @@ func TestMemberMode_Toggle(t *testing.T) {
 		t.Errorf("principal = %v, want %q — the mode never changes who you are", body["principal"], memberModeAdminSub)
 	}
 
-	// EMPTY BODY: decodes to enabled:false, answers 200 — the shape the authz
+	// EMPTY BODY: decodes to the zero View (off), answers 200 — the shape the authz
 	// matrix probes every classMember route with.
-	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", on, "")
+	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/view", on, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST with an empty body = %d, want 200: %s", w.Code, w.Body.String())
 	}
 	off := sessionCookieFrom(t, w.Result().Cookies())
-	if body := meBody(t, srv, off); body["member_mode"] != false || body["operator"] != true {
-		t.Fatalf("after the empty-body toggle: member_mode=%v operator=%v, want false/true", body["member_mode"], body["operator"])
+	if body := meBody(t, srv, off); body["user_view"] != false || body["operator"] != true {
+		t.Fatalf("after the empty-body toggle: user_view=%v operator=%v, want false/true", body["user_view"], body["operator"])
 	}
 
 	// A REAL member toggling ON: a no-op 200, not a refusal — the route is
@@ -204,17 +205,17 @@ func TestMemberMode_Toggle(t *testing.T) {
 	// member who finds the control must not meet a 4xx for asking to be what
 	// they already are.
 	member := ssoSession(t, "sub-real-member", "member@corp.example", oidc.RoleUser)
-	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true}`)
+	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/view", member, `{"view":"user"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("a real member toggling on = %d, want 200: %s", w.Code, w.Body.String())
 	}
 
 	// R-03. A CHUNKED body reports ContentLength == -1, so a `> 0` optional-body
-	// guard skips the decode entirely and answers 200 {"member_mode":false} to a
+	// guard skips the decode entirely and answers 200 {"user_view":false} to a
 	// request that asked to ENTER the mode — the admin stays admin and the only
 	// hint is the absent banner.
 	t.Run("a chunked body is decoded, not discarded", func(t *testing.T) {
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", strings.NewReader(`{"enabled":true}`))
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/me/view", strings.NewReader(`{"view":"user"}`))
 		r.ContentLength = -1
 		r.AddCookie(admin)
 		cw := httptest.NewRecorder()
@@ -222,8 +223,8 @@ func TestMemberMode_Toggle(t *testing.T) {
 		if cw.Code != http.StatusOK {
 			t.Fatalf("chunked POST = %d, want 200: %s", cw.Code, cw.Body.String())
 		}
-		if b := meBody(t, srv, sessionCookieFrom(t, cw.Result().Cookies())); b["member_mode"] != true {
-			t.Errorf("member_mode = %v after a chunked {\"enabled\":true}, want true", b["member_mode"])
+		if b := meBody(t, srv, sessionCookieFrom(t, cw.Result().Cookies())); b["user_view"] != true {
+			t.Errorf("user_view = %v after a chunked {\"view\":\"user\"}, want true", b["user_view"])
 		}
 	})
 }
@@ -319,24 +320,24 @@ func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
 	// admin_surface twins asserted below need a real operator-owned workspace
 	// row and the secret store mounted, and this is the harness the ownership
 	// tests already build for exactly that.
-	srv, st, h := ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, h := ownerHarness(t, runner.UserMountPolicy{})
 	memberModeOperatorWS := st.put(types.Workspace{}).String() // owned_by == "" — operator-owned
 	admin := ssoSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin)
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", admin, `{"enabled":true}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST on = %d: %s", w.Code, w.Body.String())
 	}
-	ev := lastAuditEvent(t, h.audit.events, "auth.member_mode")
+	ev := lastAuditEvent(t, h.audit.events, "auth.user_view")
 	if ev.Actor != memberModeAdminSub {
-		t.Errorf("auth.member_mode actor = %q, want %q", ev.Actor, memberModeAdminSub)
+		t.Errorf("auth.user_view actor = %q, want %q", ev.Actor, memberModeAdminSub)
 	}
 	if ev.Outcome != "success" {
-		t.Errorf("auth.member_mode outcome = %q, want success", ev.Outcome)
+		t.Errorf("auth.user_view outcome = %q, want success", ev.Outcome)
 	}
 	var data map[string]any
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
-		t.Fatalf("decode auth.member_mode data: %v", err)
+		t.Fatalf("decode auth.user_view data: %v", err)
 	}
 	if data["enabled"] != true {
 		t.Errorf("data.enabled = %v, want true", data["enabled"])
@@ -359,8 +360,8 @@ func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
 	if err := json.Unmarshal(den.Data, &ddata); err != nil {
 		t.Fatalf("decode authz.denied data: %v", err)
 	}
-	if ddata["member_mode"] != true {
-		t.Errorf("authz.denied data.member_mode = %v, want true", ddata["member_mode"])
+	if ddata["user_view"] != true {
+		t.Errorf("authz.denied data.user_view = %v, want true", ddata["user_view"])
 	}
 	if ddata["reason"] != "admin_surface" {
 		t.Errorf("authz.denied reason = %v, want admin_surface", ddata["reason"])
@@ -393,8 +394,8 @@ func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
 			if data["reason"] != "admin_surface" {
 				t.Fatalf("reason = %v, want admin_surface (wrong row matched)", data["reason"])
 			}
-			if data["member_mode"] != true {
-				t.Errorf("authz.denied data = %#v, want member_mode:true", data)
+			if data["user_view"] != true {
+				t.Errorf("authz.denied data = %#v, want user_view:true", data)
 			}
 			if ev.Actor != memberModeAdminSub {
 				t.Errorf("actor = %q, want %q", ev.Actor, memberModeAdminSub)
@@ -402,7 +403,7 @@ func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
 		})
 	}
 
-	// An ORDINARY member's denial carries no member_mode key at all — the flag
+	// An ORDINARY member's denial carries no user_view key at all — the flag
 	// is a marker, not a field every row now has to answer.
 	member := ssoSession(t, "sub-plain-member", "plain@corp.example", oidc.RoleUser)
 	if d := doSSO(t, srv, http.MethodPost, "/api/v1/policies", member, "{}"); d.Code != http.StatusForbidden {
@@ -413,8 +414,8 @@ func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
 	if err := json.Unmarshal(den.Data, &ddata); err != nil {
 		t.Fatalf("decode authz.denied data: %v", err)
 	}
-	if _, present := ddata["member_mode"]; present {
-		t.Errorf("a plain member's authz.denied carries member_mode: %#v", ddata)
+	if _, present := ddata["user_view"]; present {
+		t.Errorf("a plain member's authz.denied carries user_view: %#v", ddata)
 	}
 }
 
@@ -433,8 +434,8 @@ func TestMemberMode_SecurityAdminSurfaceDeniedToo(t *testing.T) {
 	if err := json.Unmarshal(den.Data, &ddata); err != nil {
 		t.Fatalf("decode authz.denied data: %v", err)
 	}
-	if ddata["reason"] != "security_admin_surface" || ddata["member_mode"] != true {
-		t.Errorf("authz.denied data = %#v, want security_admin_surface + member_mode:true", ddata)
+	if ddata["reason"] != "security_admin_surface" || ddata["user_view"] != true {
+		t.Errorf("authz.denied data = %#v, want security_admin_surface + user_view:true", ddata)
 	}
 }
 
@@ -456,7 +457,7 @@ func TestMemberMode_RefusesTokenMint(t *testing.T) {
 			if w.Code != http.StatusConflict {
 				t.Fatalf("status = %d, want 409: %s", w.Code, w.Body.String())
 			}
-			if !strings.Contains(w.Body.String(), "Exit member mode") {
+			if !strings.Contains(w.Body.String(), "Exit the user view") {
 				t.Errorf("body = %q, want the exit-member-mode refusal", w.Body.String())
 			}
 		})
@@ -514,14 +515,14 @@ func sessionCookieFrom(t *testing.T, cookies []*http.Cookie) *http.Cookie {
 // two in-handler admin-tier refusals.
 //
 // TestMemberMode_AuditRowsNameTheAdmin above pins four sites, and the doc
-// comment on authzDeniedDatum names those four as "every admin-tier refusal".
-// Two more emitters build their own Data map: resolveAlwaysTarget's rule 6
-// (`always` is security-admin-only) and denyMemberField (the
-// `workspaces.llm_cred` arm is `admin_surface`). Both are reachable inside the
-// mode by an admin doing exactly what the member Getting Started card invites —
-// deciding their own run's held egress, creating a workspace — so without the
-// marker a reviewer filtering the denial stream reads an admin's own member walk
-// as a member incident, the one outcome the field exists to prevent.
+// comment on internal/authz.Datum names those four as "every admin-tier
+// refusal". Two more emitters are pinned here: resolveAlwaysTarget's rule 6
+// (`always` is security-admin-only) and workspaces.go's `workspaces.llm_cred`
+// arm (`admin_surface`). Both are reachable INSIDE the view by an admin doing
+// exactly what the member Getting Started card invites — deciding their own
+// run's held egress, creating a workspace — so a reviewer filtering the denial
+// stream must not read an admin's own user walk as a member incident, the one
+// outcome the marker exists to prevent.
 //
 // `method` rides along for the same reason: a marker on a row whose shape
 // differs from the middleware's is still a row the same filter cannot group.
@@ -548,19 +549,19 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 		if data["reason"] != "security_admin_surface" {
 			t.Errorf("reason = %v, want security_admin_surface", data["reason"])
 		}
-		if data["member_mode"] != true {
-			t.Errorf("data = %#v, want member_mode:true — an admin walking the member path", data)
+		if data["user_view"] != true {
+			t.Errorf("data = %#v, want user_view:true — an admin walking the member path", data)
 		}
 		if data["method"] != http.MethodPost {
 			t.Errorf("method = %v, want POST — the row is shape-identical to the middleware's", data["method"])
 		}
 	})
 
-	// denyMemberField, reached from handleCreateWorkspace's llm_cred arm:
+	// refuse, reached from handleCreateWorkspace's llm_cred arm:
 	// secretOwnerFromRequest returns the caller's principal once the role is
 	// clamped, so the member arm fires for a member-mode admin.
 	t.Run("workspace create llm_cred", func(t *testing.T) {
-		srv, _, h := ownerHarness(t, runner.MemberMountPolicy{})
+		srv, _, h := ownerHarness(t, runner.UserMountPolicy{})
 		on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", on,
 			`{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`)
@@ -571,8 +572,8 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 		if data["reason"] != "admin_surface" {
 			t.Errorf("reason = %v, want admin_surface", data["reason"])
 		}
-		if data["member_mode"] != true {
-			t.Errorf("data = %#v, want member_mode:true", data)
+		if data["user_view"] != true {
+			t.Errorf("data = %#v, want user_view:true", data)
 		}
 		if data["method"] != http.MethodPost {
 			t.Errorf("method = %v, want POST", data["method"])
@@ -594,8 +595,8 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 		if len(rows) != 1 {
 			t.Fatalf("authz.denied rows = %d, want 1", len(rows))
 		}
-		if v, present := auditData(t, rows[0])["member_mode"]; present {
-			t.Errorf("a plain member's row carries member_mode=%v", v)
+		if v, present := auditData(t, rows[0])["user_view"]; present {
+			t.Errorf("a plain member's row carries user_view=%v", v)
 		}
 	})
 }
@@ -603,9 +604,9 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 // TestMemberMode_RealMemberTogglingOnChangesNothing is other half, at
 // the layer the defect is actually felt: the mint doors and /me.
 //
-// handleSetMemberMode's only guard is "is there an SSO human", and its comment
+// handleSetUserView's only guard is "is there an SSO human", and its comment
 // calls a real member toggling ON a no-op. It was not one — the flag landed on
-// the member's cookie, so GET /me answered member_mode:true (the console then
+// the member's cookie, so GET /me answered user_view:true (the console then
 // paints a banner naming an admin role they do not hold) and POST /me/ssh-keys
 // and POST /me/tokens both 409'd "Exit member mode…", breaking the member
 // Getting Started's own "Connect your tools · Add SSH key" card and
@@ -623,7 +624,7 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 	srv := New(cfg)
 	member := ssoSession(t, "sub-w6-member", "w6-member@corp.example", oidc.RoleUser)
 
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", member, `{"view":"user"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("a real member toggling on = %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -637,8 +638,8 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 			after = c
 		}
 	}
-	if body := meBody(t, srv, after); body["member_mode"] != false {
-		t.Errorf("/me member_mode = %v, want false — the member is already what they asked to be", body["member_mode"])
+	if body := meBody(t, srv, after); body["user_view"] != false {
+		t.Errorf("/me user_view = %v, want false — the member is already what they asked to be", body["user_view"])
 	}
 	// The doors that 409 INSIDE the mode stay open. A 409 on either would break
 	// the member Getting Started's own "Connect your tools · Add SSH key" card
@@ -650,8 +651,129 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 
 	// The audit row is still written — the request WAS made and answered, and
 	// real_role records the tier it was made from.
-	ev := lastAuditEvent(t, h.audit.events, "auth.member_mode")
+	ev := lastAuditEvent(t, h.audit.events, "auth.user_view")
 	if data := auditData(t, ev); data["real_role"] != oidc.RoleUser {
 		t.Errorf("real_role = %v, want %q", data["real_role"], oidc.RoleUser)
 	}
+}
+
+// TestUserView_ViewFieldReplacesEnabled (#617) pins the 0.8 wire contract:
+// POST /me/view takes `{"view":"user"|"admin"}`, never the 0.7 boolean
+// `enabled` — a clean break, so an old caller still sending `enabled` is
+// refused 400 (decodeStrict disallows the unknown field), and an unrecognised
+// View value is refused 400 rather than silently defaulting.
+func TestUserView_ViewFieldReplacesEnabled(t *testing.T) {
+	srv, _ := memberModeServer(t)
+	admin := ssoSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin)
+
+	t.Run(`view:"user" turns it on`, func(t *testing.T) {
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user"}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+		}
+		on := sessionCookieFrom(t, w.Result().Cookies())
+		if body := meBody(t, srv, on); body["user_view"] != true {
+			t.Errorf("user_view = %v, want true", body["user_view"])
+		}
+
+		t.Run(`view:"admin" turns it back off`, func(t *testing.T) {
+			w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", on, `{"view":"admin"}`)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+			}
+			off := sessionCookieFrom(t, w.Result().Cookies())
+			if body := meBody(t, srv, off); body["user_view"] != false {
+				t.Errorf("user_view = %v, want false", body["user_view"])
+			}
+		})
+	})
+
+	t.Run("an unrecognised view value is refused 400", func(t *testing.T) {
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"member"}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("a pre-0.8 enabled:true body is refused, never silently honoured", func(t *testing.T) {
+		// Clean break, no alias (docs/OPERATIONS.md's "Renamed in 0.8"
+		// appendix): decodeStrict's DisallowUnknownFields refuses the old
+		// `enabled` key outright (400) rather than decode it as View:"" and
+		// silently answer 200 off — the fail-safe direction, same rule
+		// userViewRequest's own doc comment states for a rolling upgrade.
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"enabled":true}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 — a pre-0.8 body must never silently enter or skip the view: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// countAuditEvents returns how many recorded events carry the given action —
+// TestUserView_DualEmitsTheLegacyAuditAction uses it to pin "exactly one per
+// toggle", which lastAuditEvent (LAST match) cannot see a double-emit past.
+func countAuditEvents(events []types.AuditEvent, action string) int {
+	n := 0
+	for _, ev := range events {
+		if ev.Action == action {
+			n++
+		}
+	}
+	return n
+}
+
+// TestUserView_DualEmitsTheLegacyAuditAction (#617, OD-18) pins the one-minor
+// compat window: every toggle writes BOTH auth.user_view (the 0.8 name) and
+// auth.member_mode (the pre-0.8 name it replaces), with byte-identical Data —
+// checked as raw bytes, not a couple of hand-picked fields, so a compat row
+// that silently lost a key (e.g. no_credential) fails this test — and each
+// action exactly once, so a dashboard or SIEM rule still filtering on the old
+// action name keeps seeing rows without double-counting them. Two toggles are
+// covered: the plain one and the no-credential preview posture, since that
+// second key is the one most likely to go missing from just one of the two
+// rows. docs/AUDIT-ACTIONS.md and docs/OPERATIONS.md's "Renamed in 0.8"
+// appendix both say the compat row is removed in 0.9 — this test is the one
+// to delete then.
+func TestUserView_DualEmitsTheLegacyAuditAction(t *testing.T) {
+	assertDualEmit := func(t *testing.T, events []types.AuditEvent, wantNoCredential bool) {
+		t.Helper()
+		if got := countAuditEvents(events, "auth.user_view"); got != 1 {
+			t.Errorf("auth.user_view count = %d, want exactly 1", got)
+		}
+		if got := countAuditEvents(events, "auth.member_mode"); got != 1 {
+			t.Errorf("auth.member_mode count = %d, want exactly 1", got)
+		}
+		newRow := lastAuditEvent(t, events, "auth.user_view")
+		oldRow := lastAuditEvent(t, events, "auth.member_mode")
+		if newRow.Actor != memberModeAdminSub || oldRow.Actor != memberModeAdminSub {
+			t.Errorf("actor = %q / %q, want %q on both", newRow.Actor, oldRow.Actor, memberModeAdminSub)
+		}
+		if !bytes.Equal(newRow.Data, oldRow.Data) {
+			t.Errorf("Data = %s / %s, want byte-identical", newRow.Data, oldRow.Data)
+		}
+		if _, present := auditData(t, newRow)["no_credential"]; present != wantNoCredential {
+			t.Errorf("no_credential present = %v, want %v", present, wantNoCredential)
+		}
+	}
+
+	t.Run("plain", func(t *testing.T) {
+		srv, h := memberModeServer(t)
+		admin := ssoSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin)
+
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user"}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+		}
+		assertDualEmit(t, h.audit.events, false)
+	})
+
+	t.Run("no_credential preview", func(t *testing.T) {
+		srv, audit, _, _ := memberPreviewSrv(t)
+		admin := memberPreviewSessionAs(t, memberModeAdminSub, oidc.RoleAdmin, false, false)
+
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/me/view", admin, `{"view":"user","no_credential":true}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+		}
+		assertDualEmit(t, audit.rows, true)
+	})
 }

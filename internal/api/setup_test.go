@@ -184,7 +184,7 @@ func TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring(t *testing.T) {
 	}
 	// 0.7.8: the checklist row moves with model_access (same grading, see
 	// awsSSOCredentialRow) but must never confiscate the console over it — the
-	// grade stays warn, the gate does not. redactSetupStatusForMember zeroes
+	// grade stays warn, the gate does not. redactSetupStatusForUser zeroes
 	// `after.Checks` entirely for this member session, so the row is read the
 	// same way TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin
 	// does: straight off setupHarnessCreds, not the redacted HTTP body.
@@ -792,7 +792,7 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 		}},
 		Integrations: []SetupIntegration{{}},
 	}
-	got := redactSetupStatusForMember(full, false, false)
+	got := redactSetupStatusForUser(full, false, false)
 
 	if got.SCM != (setup.SCMPosture{}) {
 		t.Errorf("scm = %+v, want zero — host git-credential posture is not a member's business", got.SCM)

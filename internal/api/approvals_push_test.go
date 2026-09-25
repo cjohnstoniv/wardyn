@@ -130,6 +130,11 @@ func TestInternalPushContentRaise(t *testing.T) {
 	attended, unattended, other := uuid.New(), uuid.New(), uuid.New()
 	const owner = "alice@example.com" // mintRunToken's subject
 	app, ownPAT, sharedPAT, foreign := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	entra, apiKey := uuid.New(), uuid.New()
+	injScope := func(secret string) json.RawMessage {
+		return json.RawMessage(`{"host":"dev.azure.com","header":"Authorization","format":"Bearer %s","secret_name":"` +
+			secret + `","require_tls":true}`)
+	}
 	patScope := func(secret string) json.RawMessage {
 		return json.RawMessage(`{"host":"gitlab.com","secret_name":"` + secret + `"}`)
 	}
@@ -138,6 +143,8 @@ func TestInternalPushContentRaise(t *testing.T) {
 		{ID: ownPAT, RunID: attended, Spec: types.GrantSpec{Kind: types.GrantGitPAT, Scope: patScope("alice-pat")}},
 		{ID: sharedPAT, RunID: attended, Spec: types.GrantSpec{Kind: types.GrantGitPAT, Scope: patScope("team-pat")}},
 		{ID: foreign, RunID: other, Spec: types.GrantSpec{Kind: types.GrantGitHubToken}},
+		{ID: entra, RunID: attended, Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: injScope(types.ADOEntraAccessTokenSecret)}},
+		{ID: apiKey, RunID: attended, Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: injScope("openai_api_key")}},
 	}}
 	secrets := &memSecrets{m: map[string][]byte{"team-pat": []byte("x"), "alice-pat": []byte("x")}}
 	if err := secrets.For(owner).Put(context.Background(), "alice-pat", []byte("y")); err != nil {
@@ -176,6 +183,7 @@ func TestInternalPushContentRaise(t *testing.T) {
 		"github_token:" + app.String():  {types.PushActsAsGitHubApp, owner},
 		"git_pat:" + ownPAT.String():    {types.PushActsAsGitPAT, owner},
 		"git_pat:" + sharedPAT.String(): {types.PushActsAsGitPAT, types.PushActsAsOperator},
+		"api_key:" + entra.String():     {types.PushActsAsADOEntra, owner},
 	}
 	for actsAs := range want {
 		if got := raise(attended, withActsAs(t, actsAs)); got != http.StatusCreated {
@@ -194,14 +202,15 @@ func TestInternalPushContentRaise(t *testing.T) {
 		scope string
 		want  int
 	}{
-		"unattended run":      {unattended, withActsAs(t, "github_token:"+app.String()), http.StatusForbidden},
-		"unknown field":       {attended, strings.Replace(pushContentScopeJSON(t), `{`, `{"host":"x",`, 1), http.StatusBadRequest},
-		"eleven paths":        {attended, strings.Replace(pushContentScopeJSON(t), `"paths":[".github/workflows/ci.yml"]`, `"paths":["a","b","c","d","e","f","g","h","i","j","k"]`, 1), http.StatusBadRequest},
-		"not an object id":    {attended, strings.Replace(pushContentScopeJSON(t), strings.Repeat("a", 40), "HEAD", 1), http.StatusBadRequest},
-		"another run's grant": {attended, withActsAs(t, "github_token:"+foreign.String()), http.StatusBadRequest},
-		"grant kind mismatch": {attended, withActsAs(t, "git_pat:"+app.String()), http.StatusBadRequest},
-		"sidecar-sent label":  {attended, strings.Replace(withActsAs(t, "github_token:"+app.String()), `{`, `{"acts_as_label":"root@evil",`, 1), http.StatusBadRequest},
-		"sidecar-sent kind":   {attended, strings.Replace(withActsAs(t, "github_token:"+app.String()), `{`, `{"acts_as_kind":"git_pat",`, 1), http.StatusBadRequest},
+		"unattended run":        {unattended, withActsAs(t, "github_token:"+app.String()), http.StatusForbidden},
+		"unknown field":         {attended, strings.Replace(pushContentScopeJSON(t), `{`, `{"host":"x",`, 1), http.StatusBadRequest},
+		"eleven paths":          {attended, strings.Replace(pushContentScopeJSON(t), `"paths":[".github/workflows/ci.yml"]`, `"paths":["a","b","c","d","e","f","g","h","i","j","k"]`, 1), http.StatusBadRequest},
+		"not an object id":      {attended, strings.Replace(pushContentScopeJSON(t), strings.Repeat("a", 40), "HEAD", 1), http.StatusBadRequest},
+		"another run's grant":   {attended, withActsAs(t, "github_token:"+foreign.String()), http.StatusBadRequest},
+		"grant kind mismatch":   {attended, withActsAs(t, "git_pat:"+app.String()), http.StatusBadRequest},
+		"not a push credential": {attended, withActsAs(t, "api_key:"+apiKey.String()), http.StatusBadRequest},
+		"sidecar-sent label":    {attended, strings.Replace(withActsAs(t, "github_token:"+app.String()), `{`, `{"acts_as_label":"root@evil",`, 1), http.StatusBadRequest},
+		"sidecar-sent kind":     {attended, strings.Replace(withActsAs(t, "github_token:"+app.String()), `{`, `{"acts_as_kind":"git_pat",`, 1), http.StatusBadRequest},
 	} {
 		if got := raise(c.run, c.scope); got != c.want {
 			t.Errorf("%s: status = %d, want %d", name, got, c.want)

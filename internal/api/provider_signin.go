@@ -172,7 +172,7 @@ func (s *Server) signInProvider(w http.ResponseWriter, r *http.Request, sc types
 		writeError(w, http.StatusNotFound, fmt.Sprintf(mpcNotFound, id))
 		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
-	if s.denyMemberCapability(w, r, capModelProvider, p.ID, "model_provider.sign_in", fmt.Sprintf(mpsNotGranted, p.ID)) {
+	if s.denyUserCapability(w, r, capModelProvider, p.ID, "model_provider.sign_in", fmt.Sprintf(mpsNotGranted, p.ID)) {
 		return types.ModelProvider{}, harnessLogin{}, nil, false
 	}
 	login := map[types.ModelProviderKind]string{

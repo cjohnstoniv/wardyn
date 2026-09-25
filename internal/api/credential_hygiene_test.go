@@ -114,6 +114,8 @@ func TestInternalInjection_RefusedStoredKeyIsDefinitiveAndSaysSo(t *testing.T) {
 // is the transient 503, and a resolve carries the stored-key expiry.
 func TestInternalInjection_ManagedTokenIsAStoredCredential(t *testing.T) {
 	h, sec := newSecretsHarness(t)
+	h.srv.cfg.Store = &bearerGuardStore{} // no provider block: the legacy sentinels resolve (#551)
+	h.srv.router = h.srv.routes()
 	h.srv.cfg.SubscriptionPostureOK = true
 	blob, _ := json.Marshal(managedCredBlob{Token: "sk-ant-oat01-managed-token-value"})
 	sec.m[harnessCredSecretName("anthropic")] = blob

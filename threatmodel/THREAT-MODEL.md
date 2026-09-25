@@ -286,7 +286,7 @@ fail-closed gate".
 | Confused-deputy against the token broker | SVID-authenticated callers; egress allowlist and injection-rule registration are separate capabilities. | B4 |
 | Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
 | Insider exceeding own access via agent | Minted credentials are scoped to the task, not the human's full access; the agent never inherits developer credentials. PARTIAL: that ceiling is set by policy/site-config, and rewriting either is an OPERATOR act — policy CRUD and `PUT /site-config` sit behind `requireOperator`, so with `WARDYN_OIDC_OPERATOR_EMAILS` set a signed-in viewer cannot raise their own ceiling. Above that line nothing separates duties — residual #14. | B5, ID |
-| Member escalating past a capability grant | **[v0.6 shipped; two kinds added in v0.7, one in v0.7.2]** Capability grants (`capability_grants`, migration `0042`) bound what a MEMBER chose on the seven closed kinds `capabilityKinds` names, resolved deny-before-allow-before-switch by one resolver (`capAllowed`/`capGranted`). **EVERY switch ships OFF** — fail-open by design, residual #20 — and a capability never narrows what the ADMIN pre-authorized. Mechanism: §4.3 | B5, ID, AU |
+| Member escalating past a capability grant | **[v0.6 shipped; two kinds added in v0.7, one in v0.7.2, one in v0.8]** Capability grants (`capability_grants`, migration `0042`) bound what a MEMBER chose on the eight closed kinds `capabilityKinds` names, resolved deny-before-allow-before-switch by one resolver (`capAllowed`/`capGranted`). **EVERY switch ships OFF** — fail-open by design, residual #20 — and a capability never narrows what the ADMIN pre-authorized. Mechanism: §4.3 | B5, ID, AU |
 | Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source, gated additively: operator deny-list, then a canonicalized real path inside an operator/MDM-set root, then a credential-dotfile deny-list. Unset roots = no member host mounts at all. Mechanism: §4.4. Residuals #25, #26 | B1, ID |
 | Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` → `kernel.*` via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. PTY replay is tamper-EVIDENT, not tamper-proof: the upload route accepts a run-token-authenticated PUT for the run's whole lifetime and upserts on conflict, so an in-sandbox actor can overwrite its own cast before the run ends — but every upload emits its own `recording.upload` row, so the overwrite is visible even though the replaced bytes are not recoverable. Detection-only (the `ld-linux`/`mmap` bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable`); host eBPF is blind inside CC3/Kata (`kernel.sensor.blind`). | AU |
 | Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean. Detail: §4.5 | AU |
@@ -430,8 +430,8 @@ lane — is §5.1a's disclosed TOCTOU residual; the guard itself still runs ther
 
 ### 4.3 Capability grants (v0.6) — the mechanism
 
-Eight closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
-and it grew by two in v0.7, one in v0.7.2 and one in 0.8. Seven NARROW what a
+Ten closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
+and it grew by two in v0.7, one in v0.7.2 and three in 0.8. Nine NARROW what a
 member could already do:
 `egress_host` (the hosts on their inline policy, and which host they may decide an
 `egress_domain` approval for), `secret` (which secret names an inline policy may
@@ -445,8 +445,14 @@ row the repositories a member's work comes from may belong to: the row
 `admitRepoURL` resolves a derived clone URL to, checked at every one of the SIX
 doors a member can reach a clone through — `POST /runs` over both the resolved
 spec and the legacy `repo` field, workspace create and EDIT, and the two
-server-side clones, Scan and Build). The last three request-level kinds are
-enforced at `denyMemberRequest`. `workspace_provider` is deliberately a bound on
+server-side clones, Scan and Build) and — v0.8 — `feature` (whether a member may
+add an SSH key or mint an API token at all: values `ssh_key` and `api_token`, a
+closed set refused at write time otherwise, one check at each mint door; mint
+only, so an existing key or token outlives a later deny until it is removed or
+revoked) and `policy` (which stored policy a member may select, `req.PolicyID`;
+the choice only, since the selected row is still clamped to their ceiling).
+`workspace`, `agent`, `integration` and `policy` are enforced at
+`denyUserRequest`, on launch and preflight alike. `workspace_provider` is deliberately a bound on
 the PROVIDER ROW and not on the repository: admission here is URL-prefix
 matching, not a repo ACL, and the row is the unit an admin writes down (the
 traversable spellings a prefix comparison would otherwise admit are refused at the
@@ -482,9 +488,9 @@ direction, so a narrower request cannot slip under a broader deny nor a broader
 one over a narrower deny; every other kind is an exact compare, and grant values
 are shape-validated at the write boundary.
 
-Enforcement seams: `narrowMemberInlinePolicy` (a member's own `inline_policy`
-allowlist and secret refs), `denyMemberRequest` (`workspace_id`, `image`,
-`devcontainer_repo`, `agent`, `integration_id`), `authorizeMemberDecision` (which
+Enforcement seams: `narrowUserInlinePolicy` (a member's own `inline_policy`
+allowlist and secret refs), `denyUserRequest` (`workspace_id`, `image`,
+`devcontainer_repo`, `agent`, `integration_id`), `authorizeUserDecision` (which
 host a member may decide an `egress_domain` approval for) and `handleListSecrets`
 (which names `GET /secrets` lists back).
 
@@ -622,7 +628,7 @@ allocation, and `read_only: false` against a read-only one is a `422`, never a
 widening (`driveMountFor`, `internal/api/user_drives_run.go`). A governance
 profile can shut the door outright: `GovernanceLimits.DenyUserDrive`
 (`internal/types/governance.go`) refuses the mount for every member under that
-profile as an audited `403` (`denyMemberDrive` — `authz.denied`, reason
+profile as an audited `403` (`denyUserDrive` — `authz.denied`, reason
 `governance_profile`, target `runs.drive`, no new `reason` enum value).
 
 **Read-only is TOP-LEVEL on a runtime that does not declare `rro`.** A bind's
@@ -685,7 +691,7 @@ registered at all**, the posture `WARDYN_MEMBER_WORKSPACE_ROOTS` takes one level
 down. The root must exist on this host (fail-closed on any resolve error, no
 lexical fallback), must pass the same host bind-mount deny-list every authored
 source does, and must neither BE nor TRAVERSE a credential dotfile path — the
-`deniedMemberSegment` list of §4.4, applied to a drive's resolved root.
+`deniedUserSegment` list of §4.4, applied to a drive's resolved root.
 
 **And the per-person isolation this ceiling buys is only as good as the OTHER
 ceiling's disjointness.** `WARDYN_MEMBER_WORKSPACE_ROOTS` bounds a different
@@ -978,7 +984,7 @@ hiding them would repeat the failure mode we are designed to avoid.
     | Route cluster | Operator list SET | List UNSET |
     |---|---|---|
     | Policy CRUD; workspace CRUD incl. the scoped `approved-egress` / `llm-cred` / `requirements` widening writes; `GET`/`PUT /site-config` + its two connectivity probes (each launches a sandbox on the operator's behalf); the managed harness credential (`POST /setup/harness-login`, `PUT`/`DELETE /setup/harness-credential/{provider}` — the shared subscription EVERY run inherits); source-library and base-image catalog CRUD; integration writes (`PUT`/`DELETE /integrations/{id}`); the attach WebSocket's ticket-LESS fallback lane (`GET /runs/{id}/attach` falling back to session-cookie auth when no `?ticket=` is presented) | 403 for members | any signed-in human, via the one `humanOrAdminAuth` group (`internal/api/http.go`; the route registrations in `internal/api/routes.go` say so at each site) |
-    | Minting an attach ticket (`POST /runs/{id}/attach-ticket`); deciding an `egress_domain` approval on a run one owns | owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.** The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`); `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17) — and "admin tier" now means `isSecurityOperator`, which `authorizeMemberDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run | same |
+    | Minting an attach ticket (`POST /runs/{id}/attach-ticket`); deciding an `egress_domain` approval on a run one owns | owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.** The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`); `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17) — and "admin tier" now means `isSecurityOperator`, which `authorizeUserDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run | same |
     | Secret write/delete/list (`PUT`/`DELETE /secrets/{name}`, `GET /secrets`) | **self-service since v0.7** (migration `0050_secret_owned_by.sql`), so it is NOT in the 403 cluster above: any signed-in human manages their OWN row, scoped by `secretOwnerFromRequest`. A member never reaches another principal's row (the store is namespaced per owner — `Secrets.For(owner)` cannot resolve it) nor the four reserved Bedrock/SigV4 names; cross-principal reads/deletes go through `?owner=` and stay operator-only. The LIST returns names only, never values, and is capability-narrowed (`handleListSecrets`, kind `secret`) | same |
     | Capability-grant CRUD (`/permissions`) and the per-kind enforcement switches | **`securityOps`, not `operatorOnly`** (`mountPermissionRoutes`): admin OR `security_admin`. So the tier that WRITES the rows is not the tier they BOUND — grants bound members, and the resolver exempts `isOperator` only. `/access` role mappings, by contrast, stay `operatorOnly` (asset #8): the second tier governs posture and cannot mint a tier | same |
     | `POST /runs`, every read | open to any signed-in human, by design | same |
@@ -1098,7 +1104,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 
     **v0.6 narrows this, conditionally.** With `egress_host` ENFORCED (residual
     #20 — it ships off), a member may decide an `egress_domain` approval only for a
-    host they hold a grant for: `authorizeMemberDecision` resolves it through
+    host they hold a grant for: `authorizeUserDecision` resolves it through
     `capSeamAllowed` and answers `403` otherwise, audited `authz.denied` /
     `capability_egress_host`. A matching DENY bites even with the switch off. A
     blunter lever — `WARDYN_EGRESS_SECOND_HUMAN=1`, § "Four-eyes on egress
@@ -1527,7 +1533,7 @@ hiding them would repeat the failure mode we are designed to avoid.
 35. **The credential-dotfile deny-list now matches a DRIVE's real path too, and
     that is the whole of what it covers.** The list §4.4 applies to member mount
     sources (`.ssh`, `.aws`, `.claude`, `.kube`, `.config/gh`, …) runs on a
-    drive's resolved `host_root` as well (`deniedMemberSegment` inside
+    drive's resolved `host_root` as well (`deniedUserSegment` inside
     `UserDriveHostRootCheck`), so a share whose mount point is or traverses a
     credential directory — or a symlink that lands in one — is refused at
     authoring and again at bind time, and the claim residual #25 makes about
@@ -1668,6 +1674,28 @@ hiding them would repeat the failure mode we are designed to avoid.
     change made outside the People page — a chart-map edit or an IdP-side
     group removal — which still waits for that human's next login or an
     explicit revoke.
+
+    Since 0.8 a token also carries its holder's user type
+    (`api_tokens.user_type`), re-stamped at the same login, and a People-page
+    edit that changes the type a value derives revokes every live token
+    still carrying the old type that names the value or whose group snapshot
+    is unanswerable (`revokeDemotedRoleSnapshots`, the type arm). The
+    chart-remap arm of this residual is the same shape: a type change made in
+    `WARDYN_OIDC_ROLE_MAP` happens at boot with no before/after edit, so no
+    revocation fires and a token runs under its old type — wider or narrower
+    than its holder now is — until that holder's next sign-in or an explicit
+    revoke. A boot-time diff of the chart map against a persisted copy would
+    close it; none is built.
+
+    The type arm is also keyed on the edited value's own pre-edit type
+    against each token's stamp, not a per-token re-derivation the way the
+    tier arm (`tokenLosesTier`) is: a holder whose effective type shifts
+    because a DIFFERENT, higher-priority group was the one actually edited
+    keeps a stamp that never equalled the edited value's old type, so
+    nothing revokes it, and a value whose own prior derivation was empty
+    (a refused sign-in, not `standard`) revokes nothing even though the edit
+    now retypes a holder through it. Same shape as the chart-remap residual
+    above: it closes at the holder's next sign-in or an explicit revoke.
 
     **The remediation exists, is the only one, and has to be invoked
     deliberately.** `GET /api/v1/tokens` lists every live token with its owner
@@ -2543,7 +2571,7 @@ A run whose policy sets `push_rules` has its brokered git pushes inspected
 before they are forwarded: the broker buffers the receive-pack request, reads
 which paths the push would introduce, and refuses one that carries a denied
 path, that is larger than the run's inspection ceiling, or that cannot be read
-from its own bytes. Both brokered lanes enforce it, on the same trigger, and
+from its own bytes. Every brokered git lane enforces it (the GitHub App, `git_pat` and Azure DevOps Entra lanes), on the same trigger, and
 independently of branch-namespace confinement — a `git_push_any_branch`
 opt-out says where a push may land and does not switch off what it may
 contain. It governs what reaches the forge, not whether a credential is
@@ -2688,7 +2716,7 @@ residuals particular to holding:
   is not one for every destination. The sidecar's memory (`pushHolds`) is per
   process and bounded, so a restarted sidecar asks again.
 - **Members cannot decide one, not even on their own run.**
-  `authorizeMemberDecision` keeps members to `egress_domain` (and their own
+  `authorizeUserDecision` keeps members to `egress_domain` (and their own
   Azure DevOps escalations); a member approving their own run's workflow-file
   edit is the exfiltration the rule exists to stop. A security operator decides
   any kind, as today.
@@ -2707,11 +2735,55 @@ residuals particular to holding:
   scans on the run's sidecar — an LLM request body, another push — cannot
   retain theirs and fail closed (refused, never forwarded unread) until the
   hold ends.
-- **The Azure DevOps Entra lane applies no content rules.** Pushes through the
-  per-person Azure DevOps lane (`Proxy.serveADOGit`) are governed by the
-  capability gate only; neither `deny_paths` nor `require_review_paths` reads
-  them yet. A git_pat grant for Azure DevOps goes through the token lane and is
-  covered.
+- **The Azure DevOps Entra lane runs the rules before its capability gate.**
+  `Proxy.serveADOGit` inspects a push that moves a ref (`applyPushRules`) before
+  `awaitADOCapability`, so nobody is asked for `code_write` or `policy_bypass`
+  on a push the rules refuse, and a review hold is decided before any capability
+  hold. Its refusals are the plain `403` the other lanes give, not the lane's
+  receive-pack-status refusal, so git prints `HTTP 403` there as elsewhere.
+  Azure DevOps' trees cannot be read (the forge comparison reads GitHub only),
+  so what the pack does not carry keeps the strict reading on this lane, as on
+  any non-GitHub forge.
+- **The Azure DevOps REST door is governed too, and fails closed.** The same
+  per-person credential writes content through REST: Git Pushes - Create
+  carries files inline. Until this was closed a REST push adding
+  `.github/workflows/exfil.yml` under `deny_paths: [".github/**"]` answered
+  `201`, and its protected-ref escalation was one the run's owner may decide.
+  With push rules set the REST gate (`Proxy.governADOContent`, before the
+  capability check) reads a push body path by path through
+  `adoscope.ParsePush` — the same matcher, deny before review, the same
+  `push_content` hold and unattended refusal — and refuses every other route
+  `adoscope.ClassifyContent` finds putting content on a branch without naming
+  it (import, server-side commit/merge/cherry-pick/revert, fork sync, annotated
+  tag, a ref pointed at a commit, a pull-request completion or auto-complete, a
+  wiki page, a TFVC check-in), and any push body it cannot read whole. What
+  remains: a REST push's content is judged by the paths it names, and a folder
+  path is matched as though anything could lie beneath it; the list of
+  content-writing routes is closed, so a route Azure DevOps adds later is
+  outside it until someone adds it — writes the capability catalogue does not
+  recognise are already refused as unclassified. Routes are judged on the
+  EFFECTIVE method (`X-HTTP-Method-Override` applied, as the service applies
+  it), and on a content resource any write verb is content: an override can
+  turn a push into something ParsePush does not read, never into a non-write.
+- **Content-free pull-request actions still pass.** A reviewer's vote
+  (`PUT …/pullrequests/{id}/reviewers/{reviewerId}`) and a pull-request status
+  (`POST …/pullrequests/{id}/statuses`) carry no content and are left to the
+  capability gate, so a run holding the capability can satisfy the last policy
+  a pull request was waiting on and let a merge a human already set to
+  auto-complete go through. What merges is the pull request's source branch,
+  and every commit on it came in through a governed door — a git push or a REST
+  push judged by these rules — so nothing ungoverned enters; the residual is
+  WHEN an armed merge lands, not WHAT it carries. Creating or updating a pull
+  request so that it completes, or sets auto-complete, is refused while the run
+  has push rules.
+- **The GitHub App and `git_pat` lanes have no REST door.** Their brokered
+  credentials never reach the sandbox, their broker routes admit only the three
+  smart-HTTP endpoints (`validGitRest`), `api.github.com` is denied to a
+  brokered run's egress (`confineGitBrokerEgress`), and the broker's own GitHub
+  API calls are `GET`s (`forgeRepo.get`). A `github_token` grant with no
+  repository declared is not brokered at all — the helper hands its token to
+  the sandbox, and neither the git nor the REST door is governed on it, the
+  same standing ceiling as `ssh_key`.
 
 ### Hold-lane settings sources and managed permission rules
 

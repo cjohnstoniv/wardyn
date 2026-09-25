@@ -81,7 +81,7 @@ func TestPreflight_ScanRunDoesNotClaimBedrock(t *testing.T) {
 
 	access := srv.resolveRunLLMAccess(context.Background(),
 		createRunRequest{Agent: "claude-code", WorkspaceID: &wsID, Interactive: false},
-		types.RunPolicySpec{}, map[string]bool{}, nil, "")
+		types.RunPolicySpec{}, map[string]bool{}, nil, "", runProviderChoice{})
 	if access != nil && access.Provisioned && strings.Contains(access.Note, "Bedrock") {
 		t.Errorf("model-access note = %q; a scan run gets no Bedrock credential at dispatch", access.Note)
 	}
