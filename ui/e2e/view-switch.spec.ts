@@ -111,7 +111,7 @@ test.describe("the view switch", () => {
     await page.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).first().click();
     const row = page.getByTestId("provider-row-github");
     await row.locator("textarea").fill("https://github.com/acme\nhttps://git.corp.example/team");
-    await expect(page.getByText(PROVIDERS_DRAFT.UNSAVED_MARKER)).toBeVisible();
+    await expect(page.getByTestId("unsaved-marker")).toHaveText(PROVIDERS_DRAFT.UNSAVED_MARKER);
 
     await segment(page, CONSOLE_VIEW.USER).click();
     const dialog = page.getByRole("alertdialog");
