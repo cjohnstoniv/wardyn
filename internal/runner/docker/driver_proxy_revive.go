@@ -144,7 +144,8 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	// unreadable MITM key, …). Without this, CreateSandbox pressed straight on
 	// to the IP lookup, which found no IP on a dead container and reported the
 	// generic "proxy has no IP…" — never the proxy's own, named cause — and
-	// k8s already surfaces that cause (sandbox.go:163-166), so Docker was the
+	// k8s already surfaces that cause (CreateSandbox's BuildProxyConfig check
+	// in the k8s runner's sandbox.go), so Docker was the
 	// odd substrate out.
 	//
 	// On a watch failure the container is deliberately NOT removed here (F2):
