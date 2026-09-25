@@ -97,7 +97,7 @@ func (p *Proxy) serveADOGit(w http.ResponseWriter, r *http.Request, host, rest, 
 		if len(push.refs) > 0 {
 			inspected, release, ok := p.applyPushRules(w, r, body, slog.String("host", host),
 				func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
-				nil, p.adoPushTarget(host, rest))
+				nil, p.adoPushTarget(host, adoGitRepoKeys(r)))
 			defer release()
 			if !ok {
 				return
@@ -241,6 +241,26 @@ func adoGitKeys(r *http.Request) ([]string, bool) {
 		keys = append(keys, k)
 	}
 	return keys, true
+}
+
+// adoGitRepoKeys is adoGitKeys truncated to the repository itself — the org
+// and project segments, "_git", and the repository name — with the verb
+// segments after it (git-receive-pack, info/refs, …) dropped, so a held
+// push's pushTarget.repo names the same string adoRESTTarget already builds
+// from the REST route's org/project/_git/repo. serveADOGit already refused
+// any path adoGitKeys cannot read (adoGitKeys' own ok=false) before reaching
+// a push, so a missing "_git" here would be that invariant broken, not a
+// request to answer for — the empty repo it falls back to still keys as ITS
+// OWN approval rather than silently reusing another push's.
+func adoGitRepoKeys(r *http.Request) []string {
+	keys, ok := adoGitKeys(r)
+	if !ok {
+		return nil
+	}
+	if i := slices.Index(keys, "_git"); i >= 0 && i+1 < len(keys) {
+		return keys[:i+2]
+	}
+	return nil
 }
 
 // writeADOGitRefusal answers git in its own terms, never as a 401.

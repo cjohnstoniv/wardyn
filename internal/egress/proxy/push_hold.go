@@ -96,13 +96,16 @@ func patPushTarget(host, rest string, g PATGrant) pushTarget {
 	return pushTarget{repo: host + "/" + repo, actsAs: string(types.GrantGitPAT) + ":" + g.GrantID.String()}
 }
 
-// adoPushTarget is the Azure DevOps Entra lane's: the person's injected
-// credential, named by the grant their bearer resolves from ("api_key:<id>").
-// The control plane recognises that grant as the lane's and labels it with the
-// person (internal/api's pushActsAs).
-func (p *Proxy) adoPushTarget(host, rest string) pushTarget {
-	t := patPushTarget(host, rest, PATGrant{})
-	t.actsAs = ""
+// adoPushTarget is the Azure DevOps Entra lane's: the repository, keyed by
+// keys exactly as the REST door's adoRESTTarget already keys it (both read
+// through adoscope's NameKey rule), so a spelling that reaches the git door is
+// the same approval key as the same repository reaching the REST door — a
+// sticky deny or an approved push on one spelling is not reopened by another.
+// actsAs is the person's injected credential, named by the grant their bearer
+// resolves from ("api_key:<id>"); the control plane recognises that grant as
+// the lane's and labels it with the person (internal/api's pushActsAs).
+func (p *Proxy) adoPushTarget(host string, keys []string) pushTarget {
+	t := pushTarget{repo: host + "/" + strings.Join(keys, "/")}
 	if p.inject != nil {
 		if id, ok := p.inject.grantIDFor(host); ok {
 			t.actsAs = string(types.GrantAPIKey) + ":" + id.String()

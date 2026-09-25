@@ -131,5 +131,5 @@ func (p *Proxy) adoRESTTarget(host string, grant ADOGrant, repoPath string) push
 	if !strings.HasSuffix(host, ".visualstudio.com") {
 		repoPath = strings.ToLower(grant.Organization) + "/" + repoPath
 	}
-	return p.adoPushTarget(host, repoPath)
+	return p.adoPushTarget(host, strings.Split(repoPath, "/"))
 }
