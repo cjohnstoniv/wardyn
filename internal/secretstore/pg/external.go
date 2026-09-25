@@ -140,7 +140,9 @@ func (s *Store) bounded(ctx context.Context) (context.Context, context.CancelFun
 
 // lockRow takes the row's store-mode write lock (db.SecretRowLockClass) for
 // the rest of tx. owner and name are text, which holds no NUL, so the key
-// bytes are unambiguous; a crc32 collision only serialises two rows.
+// bytes are unambiguous; a crc32 collision only serialises two rows; two
+// DeleteEverywhere calls could deadlock through one, which Postgres detects
+// and one retries.
 func lockRow(ctx context.Context, tx pgx.Tx, owner, name string) error {
 	key := int32(crc32.ChecksumIEEE([]byte(owner + "\x00" + name)))
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, db.SecretRowLockClass, key); err != nil {

@@ -779,17 +779,23 @@ func TestStoreMode_DeleteRacesPutWithoutOrphan(t *testing.T) {
 type putBarrier struct {
 	secretstore.External
 	entered, resume chan struct{}
-	hit             sync.Once
+	hit, once       sync.Once
 }
 
 func (b *putBarrier) Put(ctx context.Context, owner, name, prev string, value []byte, createOnly bool) (string, error) {
 	loc, err := b.External.Put(ctx, owner, name, prev, value, createOnly)
 	if string(value) == "second" {
 		b.hit.Do(func() { close(b.entered) })
-		<-b.resume
+		select {
+		case <-b.resume:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
 	return loc, err
 }
+
+func (b *putBarrier) release() { b.once.Do(func() { close(b.resume) }) }
 
 // #1057: DeleteEverywhere waits for a Put already holding the row's advisory
 // lock, then deletes what it wrote. Locking the row before its advisory lock
@@ -799,6 +805,7 @@ func TestStoreMode_DeleteEverywhereWaitsForAPutWithoutDeadlock(t *testing.T) {
 	ctx := t.Context()
 	ext := newFakeStore(t, newFakeVault(t))
 	b := &putBarrier{External: ext, entered: make(chan struct{}), resume: make(chan struct{})}
+	t.Cleanup(b.release)
 	st := storeMode(t, pool, b, nil)
 	if err := st.For("alice").Put(ctx, "k", []byte("first")); err != nil {
 		t.Fatal(err)
@@ -815,7 +822,7 @@ func TestStoreMode_DeleteEverywhereWaitsForAPutWithoutDeadlock(t *testing.T) {
 		deDone <- err
 	}()
 	waitOnRowLock(t, pool)
-	close(b.resume)
+	b.release()
 	for what, ch := range map[string]chan error{"Put": putDone, "DeleteEverywhere": deDone} {
 		select {
 		case err := <-ch:
