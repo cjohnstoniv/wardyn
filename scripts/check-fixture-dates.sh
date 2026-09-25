@@ -86,6 +86,7 @@ declare -A ALLOWLIST=(
   ["internal/db/appclock_test.go"]=3
   ["internal/egress/egress_test.go"]=1
   ["internal/egress/proxy/llm_unavailable_detail_test.go"]=3
+  ["internal/egress/proxy/tool_rules_test.go"]=1
   ["internal/runner/k8s/drives_test.go"]=2
   ["internal/types/types_test.go"]=1
   ["pkg/client/client_more_test.go"]=2
