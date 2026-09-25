@@ -94,13 +94,13 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 	return fwd.Status, nil
 }
 
-// checkPostureAndBootHybrid is checkMemberAndHybridBootPosture then
-// bootHybrid, one call for the same reason that function is: run() sits at the
-// gocyclo cap, and hybrid boot must follow the posture check that vets its URL.
+// checkPostureAndBootHybrid is validateMemberModePosture then bootHybrid, one
+// call because run() sits at the gocyclo cap. The URL bootHybrid dials was
+// already vetted by validateHybridPosture (validateBootPosture, before
+// connectAndMigrate).
 func checkPostureAndBootHybrid(ctx, rootCtx context.Context, f *bootFlags, localMode, oidcConfigured bool,
 	secrets secretKeyStore, st federation.Store, rec audit.Recorder) (func() federation.Status, error) {
-	if err := checkMemberAndHybridBootPosture(*f.memberMode, localMode, oidcConfigured,
-		*f.orgURL, *f.orgEnrolToken, *f.allowPlaintextListen); err != nil {
+	if err := validateMemberModePosture(*f.memberMode, localMode, oidcConfigured); err != nil {
 		return nil, err
 	}
 	return bootHybrid(ctx, rootCtx, *f.orgURL, *f.orgEnrolToken, secrets, st, rec)
