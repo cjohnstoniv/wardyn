@@ -197,7 +197,7 @@ func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.Approval
 func (s *approvalService) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
 	return store.NewPG(s.pool).ListApprovals(ctx, state)
 }
-func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
+func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	return approval.CancelForRun(ctx, s.st(), runID, reason)
 }
 func (s *approvalService) ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error {

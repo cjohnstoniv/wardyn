@@ -319,8 +319,61 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string
 	return nil
 }
 
+// Tally keys for the rows one kind carries with two meanings (#151). Every
+// other row is tallied under its kind as-is: egress_domain, credential, a hook
+// tool_call as `tool_call`, and a credential_reauth of no shape below as
+// `credential_reauth`. Documented on docs/AUDIT-ACTIONS.md's
+// approval.cancelled row.
+const (
+	// TallyToolCallADO is an Azure DevOps capability escalation.
+	TallyToolCallADO = "tool_call:azure_devops"
+	// TallyReauthAWSSSO is a lapsed captured AWS SSO session's re-auth.
+	TallyReauthAWSSSO = "credential_reauth:aws_sso"
+	// TallyReauthADOSignIn is an Azure DevOps sign-in request.
+	TallyReauthADOSignIn = "credential_reauth:azure_devops_signin"
+	// TallyReauthADOConsent is an Azure DevOps consent request.
+	TallyReauthADOConsent = "credential_reauth:azure_devops_consent"
+)
+
+// TallyKey is the key CancelForRun counts ap under, read off the stored row
+// alone. It restates internal/api's own definitions — adoEscalationScope (a
+// tool_call whose grant_id column is set, which only the control plane can
+// set, and whose scope names the same grant on the azure_devops lane),
+// adoSignInScope and adoConsentScope (lane + mechanism), and the AWS raise's
+// scope (no lane, a credential_source) — and
+// TestApprovalTallyKeyAgreesWithTheLanes (internal/api) pins that they agree.
+func TallyKey(ap types.ApprovalRequest) string {
+	var sc struct {
+		Lane             string    `json:"lane"`
+		Mechanism        string    `json:"mechanism"`
+		CredentialSource string    `json:"credential_source"`
+		GrantID          uuid.UUID `json:"grant_id"`
+	}
+	if json.Unmarshal(ap.RequestedScope, &sc) != nil {
+		return string(ap.Kind)
+	}
+	switch ap.Kind {
+	case types.ApprovalToolCall:
+		if ap.GrantID != nil && *ap.GrantID != uuid.Nil && sc.Lane == "azure_devops" && sc.GrantID == *ap.GrantID {
+			return TallyToolCallADO
+		}
+	case types.ApprovalCredentialReauth:
+		switch {
+		case sc.Lane == "azure_devops" && sc.Mechanism == "entra_signin":
+			return TallyReauthADOSignIn
+		case sc.Lane == "azure_devops" && sc.Mechanism == "entra_consent":
+			return TallyReauthADOConsent
+		case sc.Lane == "" && sc.CredentialSource != "":
+			return TallyReauthAWSSSO
+		}
+	}
+	return string(ap.Kind)
+}
+
 // CancelForRun transitions every still-PENDING approval belonging to runID to
-// CANCELLED and returns how many it moved. reason is the transition that ended
+// CANCELLED and returns how many it moved, per TallyKey — counted where the
+// CAS lands, so a row a human decided first is not in it. reason is the
+// transition that ended
 // the run ("run_killed", "run_completed", "run_failed", "run_stopped"), recorded
 // on each row and on the ONE audit event this emits.
 //
@@ -331,7 +384,7 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string
 // ErrAlreadyDecided is a race, not an error. DecidedBy is "system" for the same
 // reason the sweeper's is: nobody decided this, the run ended.
 //
-// ONE audit row for the batch, carrying the count, rather than one per approval:
+// ONE audit row for the batch, carrying the count and by_kind, rather than one per approval:
 // unlike an expiry sweep (whose rows are independent events spread over days),
 // these all belong to a single run transition an operator reads as one fact, and
 // the row is keyed to the run so it lands in that run's evidence rail. A run
@@ -342,12 +395,13 @@ func ExpireOne(ctx context.Context, st Store, id uuid.UUID, actor, reason string
 // move plus the error, so a partial cancel never leaves rows durably CANCELLED
 // with nothing in the trail — the same reason ExpireStale records inside its
 // own loop rather than after it.
-func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (int, error) {
+func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (map[string]int, error) {
 	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
 	if err != nil {
-		return 0, fmt.Errorf("approval: list for cancel: %w", err)
+		return nil, fmt.Errorf("approval: list for cancel: %w", err)
 	}
 	cancelled := 0
+	byKind := map[string]int{}
 	// recordCancelled writes the ONE summary row for whatever this call actually
 	// moved. failure is nil on the clean path and the CAS error on the partial
 	// one; either way a call that moved NOTHING writes nothing, because there is
@@ -357,9 +411,10 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 			return
 		}
 		data := map[string]any{
-			"run_id": runID,
-			"reason": reason,
-			"count":  cancelled,
+			"run_id":  runID,
+			"reason":  reason,
+			"count":   cancelled,
+			"by_kind": byKind,
 		}
 		outcome := "success"
 		if failure != nil {
@@ -404,12 +459,13 @@ func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string)
 			}
 			cerr := fmt.Errorf("approval: cancel %s: %w", ap.ID, derr)
 			recordCancelled(cerr)
-			return cancelled, cerr
+			return byKind, cerr
 		}
 		cancelled++
+		byKind[TallyKey(ap)]++
 	}
 	recordCancelled(nil)
-	return cancelled, nil
+	return byKind, nil
 }
 
 // scopeHash produces a stable content hash over (runID, kind, scope) for
