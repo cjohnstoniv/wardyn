@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -469,10 +470,14 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// supersede pass, the insert, and the SECOND pass after it are independent
 	// statements, and two launches interleaving through them leave two live
 	// sandboxes each holding a captured AWS SSO session. lockLoginSupersede
-	// carries the interleaving and why the lock fails open; released on every
-	// path, including the refusals and the error returns between here and the
-	// second pass.
-	releaseLoginLock := s.lockLoginSupersede(ctx, actor)
+	// carries the interleaving and why a lock that cannot be taken refuses
+	// (errSignInBusy) before anything is superseded or created; released on
+	// every path, including the refusals and the error returns between here and
+	// the second pass.
+	releaseLoginLock, lerr := s.lockLoginSupersede(ctx, actor, runID)
+	if lerr != nil {
+		return types.AgentRun{}, harnessLoginDispatch{}, lerr
+	}
 	defer releaseLoginLock()
 	// One live sign-in sandbox per person, and it happens HERE — before
 	// newStepRun, where the concurrency quota is counted — so a member capped at
@@ -736,8 +741,7 @@ func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, p
 		return row, scope, true
 	}
 	if !perUser {
-		return types.AgentProvider{}, awsSSOScope{}, !s.denyMemberField(w, r, "setup.harness_login",
-			"harness_login_not_per_user", harnessLoginNotPerUserRefusal)
+		return types.AgentProvider{}, awsSSOScope{}, !s.refuse(w, r, authz.Deny(authz.ReasonHarnessLoginNotPerUser, "setup.harness_login", harnessLoginNotPerUserRefusal))
 	}
 	if s.denyMemberCapability(w, r, capAgent, row.ID, "setup.harness_login",
 		fmt.Sprintf(harnessLoginAgentRefusal, row.ID)) {

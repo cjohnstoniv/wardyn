@@ -389,7 +389,7 @@ func TestMemberBootWarnings_MatchWithinAnyRootReality(t *testing.T) {
 				t.Fatalf("ParseMemberMountPolicy(%q) warned about nothing", tc.root)
 			}
 			got := strings.Join(warns, "\n")
-			if !strings.Contains(got, "WARDYN_MEMBER_WORKSPACE_ROOTS") {
+			if !strings.Contains(got, "WARDYN_USER_WORKSPACE_ROOTS") {
 				t.Errorf("warning does not name the variable that is set wrong:\n  %s", got)
 			}
 

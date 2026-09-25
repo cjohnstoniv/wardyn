@@ -333,7 +333,7 @@ func TestHarnessCredentialPaste_NilMaskRegistry(t *testing.T) {
 	}
 }
 
-// ── HTTP-router-level tests (through the real mux + humanOrAdminAuth) ─────────
+// HTTP-router-level tests (through the real mux + humanOrAdminAuth)
 
 // harnessCredSrv builds a Server with the harness login/credential routes MOUNTED
 // (they mount only when cfg.Secrets != nil) over the given secret store, reusing

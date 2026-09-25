@@ -457,7 +457,7 @@ func TestRekey_LeavesPointerRowsAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	newID, _ := age.GenerateX25519Identity()
-	if n, err := secretstorepg.Rekey(ctx, pool, oldID, newID); err != nil || n != 1 {
+	if n, err := secretstorepg.Rekey(ctx, pool, oldID, newID, nil); err != nil || n != 1 {
 		t.Fatalf("Rekey = (%d, %v), want 1 local row rewrapped", n, err)
 	}
 	after, _ := secretstore.New("pg", secretstore.Deps{Pool: pool, AgeIdentity: newID, External: ext})

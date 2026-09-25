@@ -356,6 +356,9 @@ its longest job, so 19 minutes is the floor while `build` is the critical path.
 `make build-docker` as separate steps (`cover-check` already compiles and races those tag sets).
 Re-measure `cover-check`'s new time once green runs accumulate on this workflow; it should land
 below the old 537+395=932 s combined, not above it.
+`make lint` has since gained the console's ESLint (`ui/eslint.config.js`), so
+the `go (lint)` leg also sets up pnpm and node; that install and lint pass are not in the
+120 s above.
 
 **Why `ui-e2e` is one job.** In the same run its Playwright step took 492 s:
 Playwright itself 418 s, the backend and UI build plus the first seed 32 s, and
@@ -531,11 +534,12 @@ endpoint before launching.
 
 ## Images
 
-`wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` on every push to `main`
+`wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` after CI passes on `main`
 ([.github/workflows/publish-image.yml](../.github/workflows/publish-image.yml));
-every release tag publishes all five images (`wardynd`, `wardyn-proxy`,
-`agent-base`, `agent-codex-cli`, `agent-aws-sso`) cosign-signed, each with an
-attested SBOM and build provenance — see [VERIFY.md](VERIFY.md) to check them —
+every release tag publishes all seven images (`wardynd`, `wardyn-proxy`,
+`agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode`,
+`agent-novnc`) cosign-signed, each with an attested SBOM and build
+provenance — see [VERIFY.md](VERIFY.md) to check them —
 ([.github/workflows/release.yml](../.github/workflows/release.yml) — see
 [RELEASING.md](../RELEASING.md) and the Helm chart's
 [README](../deploy/helm/wardyn/README.md)). This BYOA pipeline (`ci-run.sh`)

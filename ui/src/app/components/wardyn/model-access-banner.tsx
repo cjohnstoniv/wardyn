@@ -12,7 +12,7 @@
 // notification surface, so "not signed in", "lapsed" and "lapsing" reached a
 // person only if they happened to open Getting Started — or by a run failing.
 //
-// Structure mirrors member-mode-banner.tsx deliberately: one band inside the
+// Structure mirrors user-preview.tsx deliberately: one band inside the
 // shell's `role="status"` region, `z-50` so the cockpit's focus-mode overlay
 // (z-40) cannot paint over it,
 // an underlined text button rather than a teal one (CONSOLE-RULES §6 allows one

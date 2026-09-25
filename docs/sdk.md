@@ -142,6 +142,41 @@ if errors.As(err, &apiErr) {
 }
 ```
 
+### `Reason`: branch on this, never on `Error()`'s prose
+
+A route may also send a machine-readable `reason` alongside its `error`
+sentence — `apiErr.Reason` carries it, `""` when the route sends none. Match
+on `Reason`, never on the human sentence: the sentence is free to reword
+without notice, `Reason` is not.
+
+```go
+if errors.As(err, &apiErr) && apiErr.Reason == "scope_changed" {
+    // relaunch the run — its credential was dispatched with a provider row
+    // that has since changed.
+}
+```
+
+**Coverage is being phased in route by route (#204), not uniform yet.** Today
+the per-person Azure DevOps injection resolve (`GET
+/api/v1/internal/injection/{grantID}` for an Azure DevOps grant) sends a reason
+on every refusal; most other routes, including deciding an Azure DevOps
+approval, still send `error` alone, so `apiErr.Reason == ""` does not mean "no
+error", only "this route has not been converted yet". That resolve's reasons:
+
+| Reason | Meaning |
+|---|---|
+| `missing_scope_snapshot` | The grant names the credential sentinel but carries no dispatch-time snapshot (a hand-authored grant). |
+| `owner_not_caller` | The grant's snapshot owner is not the run token's own subject. |
+| `roster_unreadable` | The site configuration could not be read; nothing is resolved from a failed read. |
+| `scope_changed` | The live provider row has drifted from the run's dispatch-time snapshot. |
+| `token_mode` / `signin_unconfigured` / `signin_unreadable` | The organisation is in token mode, has no sign-in app registration configured, or its sign-in configuration could not be read (`adoEntraConfigFor`). |
+| `host_not_organisation` | The requested host is outside the snapshot's organisation. |
+| `capability_not_grantable` / `capability_above_ceiling` / `capability_denied` / `capability_closed` / `capability_always_deny` / `capability_holds_exhausted` / `capability_review` | The capability escalation chain's refusals — see `injection_ado_capability.go`. |
+| `approval_mismatch` / `approvals_unreadable` / `once_unspendable` | The named approval does not match, could not be read, or was already spent. |
+| `signin_closed` / `signin_holds_exhausted` | The sign-in hold chain's refusals — see `injection_ado_signin.go`. |
+| `raise_failed` | The approval store itself errored while raising a capability, consent or sign-in hold. |
+| `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum (`internal/api/ado_entra_store.go`), carried through unchanged when the redemption classifies a renewal failure. |
+
 ## Local dev: principal override
 
 `X-Wardyn-Principal` overrides the server-side principal attribution:

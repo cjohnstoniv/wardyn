@@ -15,53 +15,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ReconcileWorkspaceEgressDecisions re-applies decided `always`-scoped egress
-// decisions to their run's primary workspace, healing a durability gap: the
-// post-Decide write-back (persistWorkspaceEgressDecision) is not atomic with
-// Decide, so a PG blip there dropped a permanent allow/deny behind a 200 with
-// only a failure audit row — future runs then never inherited the operator's
-// decision.
-// AddWorkspaceEgressDecision is idempotent (an upsert that also clears the mirror
-// list), so re-applying an already-persisted decision is a no-op and a dropped one
-// is recreated. Returns the count re-applied, for the boot log.
-//
-// This is the SMALLER of the two options the finding names (a boot/periodic
-// reconcile vs threading one tx through Decide + the workspace write, which spans
-// two service interfaces the api layer does not share a tx across). It runs once
+// ReconcileWorkspaceEgressDecisions re-applies decided `always` egress verdicts
+// to the run's primary workspace (persistWorkspaceEgressDecision is not atomic
+// with Decide). AddWorkspaceEgressDecision is an idempotent upsert that also
+// clears the mirror list. Returns the count re-applied. It runs once
 // at boot (cmd/wardynd). ponytail: boot-only heals on the next restart; a periodic
 // tick would heal sooner on a laptop that rarely reboots — add one if that window
 // proves too wide.
-//
-// A heal must not outrank the operator, and two ordering bugs made it do exactly
-// that. Both are about the same question — whose word is NEWEST — so both are
-// answered here rather than at the write:
-//
-//   - It walked states in the fixed order [APPROVED, DENIED], never by
-//     decided_at. An operator who denied a host and then changed their mind and
-//     approved it got the OLDER deny re-applied last on every restart, silently
-//     reversing their newest verdict with no audit event. egressDecisionsToReconcile
-//     now folds both states into ONE pass and keeps, per (workspace, host), only
-//     the decision with the latest DecidedAt — so the reversal is not merely
-//     ordered correctly, it is never written at all.
-//   - It re-applied a decision the operator had already UNDONE. resolveAlwaysTarget
-//     promises an `always` is reversible through the approved-egress/denied-egress
-//     PUTs, but the approval row still reads APPROVED/always afterwards, so the
-//     next boot put the host back — a durable, fail-OPEN re-widening of a list the
-//     operator explicitly narrowed. Those PUTs now stamp Workspace.EgressEditedAt,
-//     and a decision older than that stamp is skipped: the operator's most recent
-//     action wins whether it was a verdict or a list edit, which is one rule, not
-//     two.
-//
-// The stamp lives on the WORKSPACE rather than as a per-approval "already
-// applied" marker because the marker cannot answer this question. The undone
-// decision was applied successfully — marking it would not stop the resurrection;
-// only knowing that something NEWER happened to the list does. It also keeps the
-// heal intact: a decision made after the last manual edit is still re-applied,
-// which is the whole point of the heal.
-//
-// The scan reads all decided egress approvals; decided rows are never deleted, so
-// on a very long-lived deployment cap this with an incremental scan keyed off the
-// newest DecidedAt already reconciled.
+// The operator's newest action must win: per (workspace, host) only the latest
+// DecidedAt is kept, and a decision older than Workspace.EgressEditedAt (stamped
+// by the egress-list PUTs) is skipped — an undone `always` still reads APPROVED,
+// so a per-approval "applied" marker could not tell. Decided rows are never
+// deleted: cap this with an incremental scan if the table grows large.
 func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, error) {
 	if s.cfg.Store == nil || s.cfg.Approvals == nil {
 		return 0, nil
@@ -73,19 +38,12 @@ func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, er
 	reconciled := 0
 	for _, d := range decisions {
 		// Re-run the live path's direction-specific rejects against the CURRENT
-		// workspace row: alwaysEgressDecision itself checks only the predicates
-		// that need the approval, not the two that need the current workspace
-		// row. The heal replays a verdict recorded at t0 against a workspace as it is at
-		// boot, so the two can have diverged: mark `egress:<host>` REQUIRED after
-		// an older deny-always on that host and every restart re-wrote a deny the
-		// live API answers 400 for — "the workspace declares a need it can never
-		// satisfy" in every confined replay, re-broken on each boot with nothing
-		// saying why. The heal's only newer-action guard is EgressEditedAt, which
-		// the requirements PUT does not stamp.
-		//
-		// Skipped and audited, not skipped silently: "how did this host get onto
-		// this workspace's list" has to have an answer, and so does "why did it
-		// not".
+		// workspace row: alwaysEgressDecision checks only the predicates that need the
+		// approval. The heal replays a verdict recorded at t0 against the workspace as it
+		// is at boot, and the two can diverge (`egress:<host>` marked REQUIRED after an
+		// older deny-always, which the live API answers 400 for). EgressEditedAt does not
+		// cover this: the requirements PUT does not stamp it. Skipped and audited, not
+		// silently: "why did this host not get onto this list" needs an answer.
 		ws, werr := s.cfg.Store.GetWorkspace(ctx, d.workspace)
 		if werr != nil {
 			continue // workspace gone; nothing to persist onto (as before)

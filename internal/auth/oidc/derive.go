@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // ─── role derivation ─────────────────────────────────────────────────────────
@@ -79,11 +81,9 @@ func LegacyRoleMemberWarning(variable, entry string) string {
 // Roles is the closed set, in rank order, and it is the ONE place the set is
 // written down. ValidRole is implemented over it and the DDL parity guard
 // (internal/db's TestClosedEnumChecksMatchConstants, role_mappings.role) reads
-// it, so a fourth role cannot land on one side alone in EITHER direction. It
-// used to be typed out a third time in that guard, which left it blind in the
-// Go-widens-first direction — and that is the direction of the incident 0053
-// documents: ValidRole accepted security_admin while 0051's CHECK still refused
-// it, so POST /access/mappings passed validation and then 500'd at the database.
+// it, so a fourth role cannot land on one side alone in EITHER direction.
+// A duplicate copy could drift from this guard, silently admitting a role
+// the database still refuses.
 // The sibling user_drives enums already derive from types.DriveBackends and
 // friends for exactly this reason; this is the surface that did not.
 //
@@ -132,13 +132,15 @@ func roleRank(role string) int {
 
 // ParseRoleMap parses WARDYN_OIDC_ROLE_MAP: a comma-separated list of
 // "value=role" pairs, e.g.
-// "Wardyn.Admin=admin,eng-team=user,alice@corp.com=admin". value is matched
-// case-insensitively against an ID token's roles/groups claims or its email
-// (see deriveRole); role must satisfy ValidRole — RoleAdmin, RoleSecurityAdmin
-// or RoleUser. This map is the ONLY way a session reaches RoleSecurityAdmin
-// (see that constant's doc): the chart carries it the moment ValidRole accepts
-// it, with no other boot knob to turn. Empty/blank input
-// returns a nil map (role derivation disabled — Config.RoleMap's empty
+// "Wardyn.Admin=admin,eng-team=user,pm-group=portfolio-manager". value is
+// matched case-insensitively against an ID token's roles/groups claims or its
+// email (see deriveRole); role must satisfy ValidMappingTarget — RoleAdmin,
+// RoleSecurityAdmin, RoleUser, or a user type id (the user tier on that type).
+// Whether a named type exists is not known here: cmd/wardynd WARNs at boot,
+// and a sign-in that reaches it refuses (DenialUserTypeUnknown). This map is
+// the ONLY way a session reaches RoleSecurityAdmin (see that constant's doc):
+// the chart carries it the moment ValidRole accepts it, with no other boot
+// knob to turn. Empty/blank input returns a nil map (role derivation disabled — Config.RoleMap's empty
 // behavior) and no error; non-empty input that yields no usable entry (e.g.
 // "," or a single malformed pair) is an error, never a silent nil — nil means
 // "everyone is admin" (deriveRole), which must never be an accident.
@@ -162,8 +164,8 @@ func ParseRoleMap(csv string) (map[string]string, error) {
 			slog.Warn(LegacyRoleMemberWarning("WARDYN_OIDC_ROLE_MAP", k+"="+v))
 			v = RoleUser
 		}
-		if !ValidRole(v) {
-			return nil, fmt.Errorf("entry %q: invalid role %q (want %q, %q or %q)", pair, v, RoleAdmin, RoleSecurityAdmin, RoleUser)
+		if !ValidMappingTarget(v) {
+			return nil, fmt.Errorf("entry %q: invalid role %q (want %q, %q, %q or a user type id)", pair, v, RoleAdmin, RoleSecurityAdmin, RoleUser)
 		}
 		// A non-ASCII key can NEVER match: deriveRole skips non-ASCII claim
 		// values before lookup (ASCIIOnly, the fold-escalation guard), so
@@ -219,9 +221,12 @@ type Match struct {
 	// lowers before lookup) but Value is not lowered, so a preview can show
 	// the human the literal claim that hit. Empty for a MatchSourceDefaultRole
 	// match, which was not driven by any claim value at all.
-	Value  string      `json:"value"`
-	Role   string      `json:"role"`
-	Source MatchSource `json:"source"`
+	Value string `json:"value"`
+	// Role is the tier this value maps to; UserType the type, set only when
+	// Role is the user tier.
+	Role     string      `json:"role"`
+	UserType string      `json:"user_type,omitempty"`
+	Source   MatchSource `json:"source"`
 }
 
 // RoleMapping is one console-managed (Getting Started → People) value=>role
@@ -236,9 +241,29 @@ type Match struct {
 // changes deriveRole's arm. A canonical, valid row is still stored under
 // Value exactly as given, the same way ParseRoleMap's chart keys are already
 // lowercase by the time deriveRole looks one up.
+//
+// UserType names the row's type when Role is RoleUser ("" reads as the built-in
+// "standard", the pre-0.8 rows' type). A tier row carrying a type is
+// non-canonical and dropped like any other.
 type RoleMapping struct {
-	Value string
-	Role  string
+	Value    string
+	Role     string
+	UserType string
+}
+
+// target is the role-map value a row contributes: its tier, or its type for a
+// user row. ok is false for a row mergeRoleMaps must drop.
+func (m RoleMapping) target() (string, bool) {
+	switch {
+	case !ValidRole(m.Role):
+		return "", false
+	case m.Role != RoleUser:
+		return m.Role, m.UserType == ""
+	case m.UserType == "":
+		return RoleUser, true
+	}
+	// A type id only: "admin" here must never turn a user row into an admin.
+	return m.UserType, UserTypeIDWellFormed(m.UserType) && !UserTypeIDReserved(m.UserType)
 }
 
 // RoleMappingSource is the console's store-backed role-mapping source,
@@ -301,7 +326,8 @@ func mergeRoleMaps(chart map[string]string, legacyAdminEmails []string, rows []R
 		// empty to non-empty, moving deriveRole from its no-role-map arm
 		// (legacy allowlist alone) to its role-map-present arm — denying
 		// every login that arm 1 would have allowed, with no DefaultRole set.
-		if row.Value == "" || row.Value != strings.ToLower(strings.TrimSpace(row.Value)) || !ASCIIOnly(row.Value) || !ValidRole(row.Role) {
+		target, validTarget := row.target()
+		if row.Value == "" || row.Value != strings.ToLower(strings.TrimSpace(row.Value)) || !ASCIIOnly(row.Value) || !validTarget {
 			shadowed = append(shadowed, row.Value)
 			continue
 		}
@@ -318,7 +344,7 @@ func mergeRoleMaps(chart map[string]string, legacyAdminEmails []string, rows []R
 			shadowed = append(shadowed, row.Value)
 			continue
 		}
-		merged[row.Value] = row.Role
+		merged[row.Value] = target
 	}
 	return merged, shadowed
 }
@@ -334,17 +360,24 @@ func mergeRoleMaps(chart map[string]string, legacyAdminEmails []string, rows []R
 // roles/groups/email need no pre-normalization from the caller: deriveRole
 // does its own lowering at lookup time, and PreviewRole reuses it rather than
 // duplicating that rule here.
-func (a *Authenticator) PreviewRole(ctx context.Context, roles, groups []string, email string) (role string, matched []Match, ok bool, err error) {
+//
+// Config.UserTypes is read too, and fails the preview the same way: the type a
+// row names, its priority, and whether it exists at all decide the outcome as
+// much as the rows do.
+func (a *Authenticator) PreviewRole(ctx context.Context, roles, groups []string, email string) (Derivation, error) {
 	roleMap := a.cfg.RoleMap
 	if a.cfg.RoleMappings != nil {
 		rows, lerr := a.cfg.RoleMappings.ListRoleMappings(ctx)
 		if lerr != nil {
-			return "", nil, false, lerr
+			return Derivation{}, lerr
 		}
 		roleMap, _ = mergeRoleMaps(a.cfg.RoleMap, a.cfg.LegacyAdminEmails, rows)
 	}
-	role, matched, ok = deriveRole(roles, groups, email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
-	return role, matched, ok, nil
+	userTypes, err := a.loadUserTypes(ctx)
+	if err != nil {
+		return Derivation{}, err
+	}
+	return deriveRole(roles, groups, email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole, userTypes), nil
 }
 
 // ChartRoleMap returns a COPY of the boot-time WARDYN_OIDC_ROLE_MAP
@@ -365,6 +398,33 @@ func (a *Authenticator) ChartRoleMap() map[string]string {
 // matched. Empty means "deny", the same as an unset WARDYN_OIDC_DEFAULT_ROLE.
 func (a *Authenticator) DefaultRole() string {
 	return a.cfg.DefaultRole
+}
+
+// DefaultRoleOutcome reports what an UNMATCHED sign-in would actually derive
+// from Config.DefaultRole, validated against userTypes the same way
+// deriveRole validates a matched default (step 4's pickUserType, admin-tier
+// exemption included) — so a display surface (GET /access) never claims a
+// target that a real sign-in would refuse with DenialUserTypeUnknown. ok is
+// false when DefaultRole is unset/malformed (SplitMappingTarget) or names a
+// type the store does not hold, except on the admin tier, which falls to
+// "standard" instead of refusing, matching deriveRole.
+func (a *Authenticator) DefaultRoleOutcome(userTypes []types.UserType) (role, userType string, ok bool) {
+	role, userType, ok = SplitMappingTarget(a.cfg.DefaultRole)
+	if !ok {
+		return "", "", false
+	}
+	var named []string
+	if userType != "" {
+		named = []string{userType}
+	}
+	picked, denial, _, _ := pickUserType(named, userTypeIndex(userTypes))
+	if denial == "" {
+		return role, picked, true
+	}
+	if role != RoleAdmin {
+		return "", "", false
+	}
+	return role, types.UserTypeStandard, true
 }
 
 // HasOperatorEmails reports whether Config.LegacyAdminEmails
@@ -427,24 +487,23 @@ func (a *Authenticator) IsOperatorEmail(v string) bool {
 // without reimplementing merge/derive precedence at the API layer where it
 // could drift from what a REAL login would actually decide.
 //
-// No store read, no error return: rows is exactly what merged, this is
-// resolution over data already in hand. Compare PreviewRole, which reads
-// Config.RoleMappings itself and can fail on that read (err) — this method
-// never does, because it never reads anything.
-func (a *Authenticator) PreviewRoleAgainst(rows []RoleMapping, roles, groups []string, email string) (role string, ok bool) {
+// No store read, no error return: rows and userTypes are exactly what the
+// derivation reads, this is resolution over data already in hand. Compare
+// PreviewRole, which reads Config.RoleMappings and Config.UserTypes itself and
+// can fail on that read (err) — this method never does, because it never
+// reads anything.
+func (a *Authenticator) PreviewRoleAgainst(rows []RoleMapping, userTypes []types.UserType, roles, groups []string, email string) Derivation {
 	roleMap, _ := mergeRoleMaps(a.cfg.RoleMap, a.cfg.LegacyAdminEmails, rows)
-	role, _, ok = deriveRole(roles, groups, email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole)
-	return role, ok
+	return deriveRole(roles, groups, email, roleMap, a.cfg.LegacyAdminEmails, a.cfg.DefaultRole, userTypeIndex(userTypes))
 }
 
-// deriveRole computes the Wardyn role for a signed-in human from the ID
-// token's roles/groups claims, their email, and the derivation config
-// (Config.RoleMap / Config.LegacyAdminEmails / Config.DefaultRole). ok is
-// false only when roleMap is non-empty, nothing matched, and defaultRole is
-// empty — the caller (CallbackHandler) must then deny the login. matches
-// carries provenance for every value that contributed (see Match) — CONSUMED
-// today only for logging/preview, never for the role decision itself, which
-// stays exactly the precedence below.
+// deriveRole computes the Wardyn role and user type for a signed-in human from
+// the ID token's roles/groups claims, their email, the derivation config
+// (Config.RoleMap / Config.LegacyAdminEmails / Config.DefaultRole) and the
+// store's user types. The result's Denial is set when the caller
+// (CallbackHandler) must deny the login. Matches carries provenance for every
+// value that contributed (see Match) — CONSUMED only for logging/preview,
+// never for the decision itself, which stays exactly the precedence below.
 //
 // Precedence:
 //  1. An empty roleMap disables claim-based derivation: the role comes from the
@@ -453,45 +512,58 @@ func (a *Authenticator) PreviewRoleAgainst(rows []RoleMapping, roles, groups []s
 //     with no role map). With NEITHER a role map nor an allowlist every human is
 //     RoleAdmin (true pre-0.5) — so adopting WARDYN_OIDC_ROLE_MAP is opt-in and
 //     upgrade-safe, and so is running on only WARDYN_OIDC_OPERATOR_EMAILS.
+//     Everyone here is on the built-in "standard" type.
 //  2. Otherwise, build the case-insensitive union of rolesClaim, groupsClaim,
 //     and email, look each value up in roleMap, and keep the HIGHEST-RANKING
-//     match (roleRank: member < security_admin < admin), no matter which claim
-//     produced it. An email on legacyAdminEmails (WARDYN_OIDC_OPERATOR_EMAILS)
-//     counts as an additional top-rank RoleAdmin match — it still wins over
-//     any map entry the same email also hits, security_admin included.
-//  3. If nothing matched at all: defaultRole if set, else deny.
+//     tier (roleRank: user < security_admin < admin), no matter which claim
+//     produced it; a user type value counts as the user tier. An email on
+//     legacyAdminEmails (WARDYN_OIDC_OPERATOR_EMAILS) counts as an additional
+//     top-rank RoleAdmin match — it still wins over any map entry the same
+//     email also hits, security_admin included.
+//  3. If nothing matched at all: defaultRole if set, else deny (DenialNoRole).
+//  4. The type (pickUserType) comes from every type the matched values named,
+//     whatever the tier — it is the default of an admin's user view and bounds
+//     a security admin's runs. None named: the default role's type if it names
+//     one, else "standard". A tie or a missing type refuses the sign-in,
+//     except on the admin tier, which falls to "standard" instead.
 //
 // Arm 1 is UNTOUCHED by the security_admin tier and must stay that way: a
 // deployment with no role map has no way to express the third tier at all, so
 // nothing changes for it (the upgrade-safe absent-row doctrine). The allowlist
 // is an ADMIN allowlist; there is no security-admin twin of it.
-func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[string]string, legacyAdminEmails []string, defaultRole string) (role string, matches []Match, ok bool) {
+func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[string]string, legacyAdminEmails []string, defaultRole string, userTypes map[string]types.UserType) Derivation {
 	if len(roleMap) == 0 {
 		// No role map: claim-based derivation is disabled, but the legacy
-		// operator allowlist still splits admin from member. WARDYN_OIDC_OPERATOR_EMAILS
+		// operator allowlist still splits admin from user. WARDYN_OIDC_OPERATOR_EMAILS
 		// is the mandatory-minimum SSO config (validateOperatorPosture) and a role
 		// map is opt-in on top, so honoring the list here is what keeps main's
 		// operator/viewer split working after an upgrade — without this, a 0.4.5
 		// deployment that set only the allowlist would silently promote every
 		// signed-in human to admin. Only when NEITHER is set does every human
 		// default to admin (true pre-0.5, before the operator allowlist existed).
-		if len(legacyAdminEmails) == 0 {
-			return RoleAdmin, nil, true
+		d := Derivation{Role: RoleAdmin, UserType: types.UserTypeStandard}
+		switch {
+		case len(legacyAdminEmails) == 0:
+		case emailInList(email, legacyAdminEmails):
+			d.Matches = []Match{{Value: email, Role: RoleAdmin, Source: MatchSourceOperatorAllowlist}}
+		default:
+			d.Role = RoleUser
 		}
-		if emailInList(email, legacyAdminEmails) {
-			return RoleAdmin, []Match{{Value: email, Role: RoleAdmin, Source: MatchSourceOperatorAllowlist}}, true
-		}
-		return RoleUser, nil, true
+		return d
 	}
-	// best is the highest-ranking match found so far ("" = nothing yet). The
+	// best is the highest-ranking tier found so far ("" = nothing yet). The
 	// fold replaced a pair of booleans when the third tier landed: two bools
-	// already encoded "admin beats member", and a third would have made the
+	// already encoded "admin beats user", and a third would have made the
 	// resolution switch a hand-ordered cascade that a FOURTH tier silently gets
 	// wrong. One ordering (roleRank), one comparison, one place to change.
 	best := ""
+	var matches []Match
+	// named is every user type a matched value names, in match order, deduped
+	// — pickUserType's input.
+	var named []string
 	if emailInList(email, legacyAdminEmails) {
 		// Top rank by construction, so no later map row can outrank it — the
-		// pre-0.7 "the allowlist wins even over a member entry the same email
+		// pre-0.7 "the allowlist wins even over a user entry the same email
 		// hits" rule, unchanged and now covering security_admin entries too.
 		best = RoleAdmin
 		matches = append(matches, Match{Value: email, Role: RoleAdmin, Source: MatchSourceOperatorAllowlist})
@@ -519,35 +591,52 @@ func deriveRole(rolesClaim, groupsClaim []string, email string, roleMap map[stri
 			continue // fail closed: see ASCIIOnly
 		}
 		key := strings.ToLower(strings.TrimSpace(v))
-		mapped := roleMap[key]
-		// ValidRole, not "mapped != \"\"": an absent key and an unrecognized
-		// value must behave identically — neither contributes to the fold, and
-		// neither becomes a Match. This is the pre-0.7 switch's exhaustive-case
-		// behavior stated once instead of enumerated per tier (a value that
-		// survived ParseRoleMap/mergeRoleMaps is already valid; this is the
-		// defense-in-depth arm for a row that reached the map some other way).
-		if !ValidRole(mapped) {
+		// SplitMappingTarget, not "mapped != \"\"": an absent key and an
+		// unrecognized value must behave identically — neither contributes to
+		// the fold, and neither becomes a Match. A value that survived
+		// ParseRoleMap/mergeRoleMaps is already valid; this is the
+		// defense-in-depth arm for a row that reached the map some other way.
+		role, userType, ok := SplitMappingTarget(roleMap[key])
+		if !ok {
 			continue
 		}
-		if roleRank(mapped) > roleRank(best) {
-			best = mapped
+		if roleRank(role) > roleRank(best) {
+			best = role
+		}
+		if userType != "" && !slices.Contains(named, userType) {
+			named = append(named, userType)
 		}
 		// Provenance records EVERY contributing value at ITS OWN role, not the
 		// winning one — PreviewRole's console preview shows the human why the
 		// outcome came out this way, which needs the losing matches too.
 		if !seenMapRow[key] {
 			seenMapRow[key] = true
-			matches = append(matches, Match{Value: v, Role: mapped, Source: MatchSourceMapRow})
+			matches = append(matches, Match{Value: v, Role: role, UserType: userType, Source: MatchSourceMapRow})
 		}
 	}
-	switch {
-	case best != "":
-		return best, matches, true
-	case defaultRole != "":
-		return defaultRole, []Match{{Role: defaultRole, Source: MatchSourceDefaultRole}}, true
-	default:
-		return "", nil, false
+	defRole, defType, defOK := SplitMappingTarget(defaultRole)
+	if best == "" {
+		if !defOK {
+			return Derivation{Denial: DenialNoRole}
+		}
+		best = defRole
+		matches = []Match{{Role: defRole, UserType: defType, Source: MatchSourceDefaultRole}}
 	}
+	if len(named) == 0 && defType != "" {
+		named = []string{defType}
+	}
+	userType, denial, tied, unknown := pickUserType(named, userTypes)
+	if denial != "" {
+		if best != RoleAdmin {
+			return Derivation{Matches: matches, Denial: denial, Tied: tied, Unknown: unknown}
+		}
+		// The admin tier is exempt from everything a type decides (isOperator),
+		// so refusing it here would lock out every admin, the operator
+		// allowlist included, over a setting that grants or withholds nothing
+		// for them. Security admins stay refused: their type bounds their runs.
+		userType = types.UserTypeStandard
+	}
+	return Derivation{Role: best, UserType: userType, Matches: matches, Tied: tied, Unknown: unknown}
 }
 
 // maxSessionGroupsBytes bounds what Session.Groups may contribute to the JSON
@@ -616,7 +705,7 @@ const maxSessionGroupsBytes = 2048
 // the snapshot partial, which is what "unanswerable" already means downstream.
 //
 // A value CanonicalGroupSubject refuses is the THIRD way, and it is the one
-// that used to be invisible: the drop happens before uniq is built, so the
+// invisible to the check below: the drop happens before uniq is built, so the
 // len(out) < len(uniq) reading below cannot see it and the snapshot reported
 // COMPLETE while a group the human really holds was missing. A directory that
 // names groups in a non-English locale ("Entwickler-Büro") hits this on an

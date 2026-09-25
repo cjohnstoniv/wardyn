@@ -10,7 +10,7 @@
 // representations of the secret are NOT caught. This is intentional and
 // documented here so the limitation is visible at the implementation site.
 //
-// Stated precisely, because the wider reading is the one that bites (F155): the
+// Stated precisely, because the wider reading is the one that bites: the
 // unit of protection is a RENDERING, not a credential. Registering "Bearer
 // sk-abc" does not mask a bare "sk-abc" in the same buffer, and registering a
 // token does not mask the base64 an Authorization: Basic header carries it in.
@@ -394,9 +394,8 @@ func (r *Registry) Evict(runID uuid.UUID) {
 // The UNION, not just perRun (B11b-F8). Masker caches a derived Masker for
 // every run id that asks for one, including a run with no per-run secrets at
 // all — a scan run, a grantless run — whose corpus is the process globals.
-// Listing perRun alone made those ids invisible to the sweep, so their cached
-// clones lived for the process lifetime: the leak W12-S1-2 closed, one field
-// over. Evict already deletes from both maps, so nothing else had to change.
+// Listing perRun alone would hide those ids from the sweep, so their cached
+// clones would live for the process lifetime.
 func (r *Registry) RunIDs() []uuid.UUID {
 	if r == nil {
 		return nil

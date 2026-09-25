@@ -273,7 +273,7 @@ type AgentRun struct {
 	// live run. Migration 0073.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
-	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
+	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
 	// request opts in with ?include=recording_meta (wantsRecordingMeta,
@@ -285,7 +285,7 @@ type AgentRun struct {
 	// RecordingDurationSec is the last captured output frame's elapsed time,
 	// read from a small tail of the payload (see
 	// internal/recording.LastOutputElapsed) — the same number recordings.ts's
-	// former client-side probe used to compute by fetching the WHOLE document.
+	// former client-side probe computed by fetching the WHOLE document.
 	// HasRecording is the ONLY "no recording" signal: a zero
 	// RecordingDurationSec on a has_recording=true run is a real, header-only
 	// cast that captured no output, never "unknown" or "none".
@@ -342,7 +342,7 @@ const (
 	//
 	// It is mask-registered at dispatch, and ADMIN-ONLY by default: a member's
 	// env_secret grant is dropped unless the operator opens
-	// WARDYN_ALLOW_MEMBER_ENV_SECRET. Scope is {"name":"MY_TOKEN",
+	// WARDYN_ALLOW_USER_ENV_SECRET. Scope is {"name":"MY_TOKEN",
 	// "secret_name":"stored-name"}. See threatmodel/THREAT-MODEL.md §5.1a.
 	GrantEnvSecret GrantKind = "env_secret"
 )
@@ -500,6 +500,13 @@ const (
 	// terminal-cascade reader works unchanged — but through ResolveReauth and
 	// its own credential.reauth.resolved audit action, never approval.decide.
 	ApprovalCredentialReauth ApprovalKind = "credential_reauth"
+	// ApprovalPushContent: a brokered git push touched a path the run's
+	// push_rules.require_review_paths names, and the proxy is HOLDING it while
+	// an admin decides (internal/egress/proxy/push_hold.go). Its requested
+	// scope is a PushContentScope. Admin-decidable only: a member deciding
+	// their own run's workflow-file edit is the exfiltration the rule stops,
+	// so authorizeMemberDecision keeps members to egress_domain.
+	ApprovalPushContent ApprovalKind = "push_content"
 )
 
 // ApprovalKinds is the closed set. It exists for the same reason
@@ -510,6 +517,7 @@ const (
 // against the constants above.
 var ApprovalKinds = []ApprovalKind{
 	ApprovalCredential, ApprovalEgressDomain, ApprovalToolCall, ApprovalCredentialReauth,
+	ApprovalPushContent,
 }
 
 // ApprovalState is the approval lifecycle.
@@ -543,7 +551,7 @@ var ApprovalStates = []ApprovalState{
 
 // The approval sentinels live here, in the one package both internal/store and
 // internal/approval already import, so the FSM can errors.Is a store error
-// instead of matching its message text (which it used to do, silently breaking
+// instead of matching its message text (matching text silently breaks
 // the moment either message was reworded or wrapped). store.ErrAlreadyDecided /
 // approval.ErrAlreadyDecided and store.ErrDuplicatePending are aliases of these.
 var (
@@ -938,10 +946,16 @@ type CapabilityGrant struct {
 //
 // Value is expected already canonical (trimmed, lowercased, ASCII) by the API
 // write boundary that owns writes to this table — see the migration comment.
+//
+// UserType is the row's user type when Role is the user tier (migration
+// 0070_user_tier_rename's column, a foreign key to user_types); "" on a tier
+// row, and on a user row written before types existed, which reads as the
+// built-in "standard".
 type RoleMapping struct {
 	ID        uuid.UUID `json:"id"`
 	Value     string    `json:"value"`
 	Role      string    `json:"role"`
+	UserType  string    `json:"user_type,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	CreatedBy string    `json:"created_by,omitempty"`
 }

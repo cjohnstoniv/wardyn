@@ -874,7 +874,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
 | launching a recording session (`POST /workspaces/{id}/record`) — it sat with the egress-decision routes above until 0.7 re-tiered it, because the route does not decide a ceiling: it LAUNCHES a credentialed, host-mounting, open-egress sandbox and stamps the caller as its owner, which is reach into a run and at the host. The egress DECISION stays delegable; only the launch moved | ⛔ admin only |
 | the workspace-provider policy — `GET /workspace-providers` and `PUT /workspace-providers`: which git hosts (and which org paths on them) a run may clone from, which credential lanes it may use there, and the ephemeral/drive storage ceilings. Both verbs, because a provider's allowed addresses name the org's forge hosts and org paths — corporate topology, the same reason the `/site-config` reads above are gated. A member is told the provider KIND in a refusal, never the addresses | ⛔ admin only |
-| the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, the one model-access lane each may use, whether that credential is shared or captured per person, and the AWS access portal every person signs in against. Both verbs, for the sibling row's reason: the block names the org's model-provider choices and its identity provider. A member is served a narrower document instead — the `enabled`/`mechanism`/`credential_source` fields on `GET /setup/status`'s harness rows, which carry no portal URL | ⛔ admin only |
+| the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, the one model-access lane each may use, whether that credential is shared or captured per person, the AWS access portal every person signs in against, and (0.8) each agent's `default_provider` — the model provider a new run uses unless the person chooses another, which must be enabled for that agent and may be turned off (its runs are then refused, never moved). Both verbs, for the sibling row's reason: the block names the org's model-provider choices and its identity provider. A member is served a narrower document instead — the `enabled`/`mechanism`/`credential_source` fields on `GET /setup/status`'s harness rows, which carry no portal URL | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
 | the `/user-types` routes — listing, defining, editing and removing the org's user types (`GET`/`POST /user-types`, `PUT`/`DELETE /user-types/{id}`). Defining a type is the same duty as authoring a profile; deciding who IS a type stays with the admin-only People mappings above. A type is refused removal (`409`) while the chart's role map or default role, or a permission, profile or drive row, still names it, and the built-in `standard` type is never removable | ⛔ admin or `security_admin` |
@@ -1001,10 +1001,10 @@ migration `0050`)** are the second and third owned nouns after runs.
   `GET /workspaces` returns the caller's own rows plus the operator-owned ones,
   never another member's.
 - **A member's `local_dir` source is bounded by operator-set roots**:
-  `WARDYN_MEMBER_WORKSPACE_ROOTS` (and its per-member `_MAP`, which REPLACES the
+  `WARDYN_USER_WORKSPACE_ROOTS` (and its per-member `_MAP`, which REPLACES the
   shared list for a principal that has an entry) in [ENV.md](ENV.md). Unset = no
   member `local_dir` mounts at all (fail closed); writability needs the separate
-  `WARDYN_MEMBER_WRITABLE_ROOTS` minus `WARDYN_MEMBER_WRITABLE_DENY`.
+  `WARDYN_USER_WRITABLE_ROOTS` minus `WARDYN_USER_WRITABLE_DENY`.
 - **Offboarding is `POST /workspaces/{id}/reassign`** (admin-only): returns the
   row to the operator (`owned_by=""`) and audits `workspace.reassign` with the
   departed member in `from_owner`. Idempotent, so a sweep over a departing
@@ -1384,7 +1384,7 @@ the share mount, never holds a share credential, and never creates a volume with
 
 3. **Set the ceiling**: `WARDYN_USER_DRIVE_HOST_ROOTS=/srv/wardyn-drives`
    ([ENV.md](ENV.md)). Unset means **no `host_path` drive may be registered at
-   all** — the same fail-closed posture `WARDYN_MEMBER_WORKSPACE_ROOTS` takes,
+   all** — the same fail-closed posture `WARDYN_USER_WORKSPACE_ROOTS` takes,
    one level up: a drive's `host_root` is authored in the database by an admin
    and its subdirectories are bound into *other people's* sandboxes, so the
    allowlist over it lives where a console compromise cannot reach it. The
@@ -1432,13 +1432,13 @@ the share mount, never holds a share credential, and never creates a volume with
    the same instant can still both be stored — the gate is a read followed by an
    unconditional write, and the database-level form is 0.7.1.
 
-   **And the drive ceiling must not overlap `WARDYN_MEMBER_WORKSPACE_ROOTS` —
+   **And the drive ceiling must not overlap `WARDYN_USER_WORKSPACE_ROOTS` —
    the member ceiling defeats per-person isolation where they meet.** Per-person
    isolation is the **bind of the subdirectory**: Wardyn hands a run one home out
    of the share and refuses a source that resolved to the root. A member
    workspace is a different surface with a different rule — a member names a
-   directory under `WARDYN_MEMBER_WORKSPACE_ROOTS` and binds it **whole**,
-   writable where `WARDYN_MEMBER_WRITABLE_ROOTS` allows it, and that path
+   directory under `WARDYN_USER_WORKSPACE_ROOTS` and binds it **whole**,
+   writable where `WARDYN_USER_WRITABLE_ROOTS` allows it, and that path
    consults no drive allocation at all. Point the two ceilings at one tree and a
    member onboards the share as a workspace and mounts **every** person's home.
    Each list is valid on its own, so wardynd compares the pair at boot and
@@ -1450,12 +1450,12 @@ the share mount, never holds a share credential, and never creates a volume with
 
    | Shape | The line says |
    |---|---|
-   | The two lists name the same tree | ``WARDYN_MEMBER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name "<p>": a member can onboard that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive allocation. Point the drive ceiling at the share and the member ceiling somewhere else`` |
-   | A member root CONTAINS a drive root | ``WARDYN_MEMBER_WORKSPACE_ROOTS contains "<m>", which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": a member can onboard that share as a workspace and bind it whole, every other person's home included, without a drive allocation. Point the member ceiling at a tree that does not contain the share`` |
-   | A member root is INSIDE a drive root | ``WARDYN_MEMBER_WORKSPACE_ROOTS contains "<m>", which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": member workspaces would be authored inside a share whose directories Wardyn hands out one person at a time. Point the member ceiling outside the share`` |
+   | The two lists name the same tree | ``WARDYN_USER_WORKSPACE_ROOTS and WARDYN_USER_DRIVE_HOST_ROOTS both name "<p>": a member can onboard that directory as a workspace and bind the WHOLE share, every other person's home included, without a drive allocation. Point the drive ceiling at the share and the member ceiling somewhere else`` |
+   | A member root CONTAINS a drive root | ``WARDYN_USER_WORKSPACE_ROOTS contains "<m>", which holds the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": a member can onboard that share as a workspace and bind it whole, every other person's home included, without a drive allocation. Point the member ceiling at a tree that does not contain the share`` |
+   | A member root is INSIDE a drive root | ``WARDYN_USER_WORKSPACE_ROOTS contains "<m>", which is INSIDE the WARDYN_USER_DRIVE_HOST_ROOTS entry "<d>": member workspaces would be authored inside a share whose directories Wardyn hands out one person at a time. Point the member ceiling outside the share`` |
 
    Every member ceiling is compared, the shared list **and** each
-   `WARDYN_MEMBER_WORKSPACE_ROOTS_MAP` per-principal override — an override
+   `WARDYN_USER_WORKSPACE_ROOTS_MAP` per-principal override — an override
    *replaces* the shared list, so it is a ceiling in its own right. The
    comparison is **lexical**, on the values as configured: boot is not the place
    to touch a share that may not be mounted yet.
@@ -1484,7 +1484,7 @@ WARDYN_USER_DRIVE_HOST_ROOT=/srv/wardyn-drives    # compose binds this one, RO, 
 
 in `deploy/compose/.env` (or the environment `docker compose` is run with).
 Unset, both default to nothing exposed — the same opt-in posture
-`WARDYN_WORKSPACES_ROOT` and `WARDYN_MEMBER_WORKSPACE_ROOTS` take.
+`WARDYN_WORKSPACES_ROOT` and `WARDYN_USER_WORKSPACE_ROOTS` take.
 
 **One root on Compose.** The ceiling is a CSV and may name several roots;
 the bind is singular, because compose cannot expand a CSV into volume lines. A
@@ -1895,6 +1895,16 @@ where the operator ceiling sets `allow_all_egress` the allowlist is not the gate
 at all, so `egress_host` narrowing does nothing there — the operator's own
 posture, not a switch that failed.
 
+**What a person is offered.** The per-person lists the console's pickers read
+hold only what the caller may use, decided by the same resolver the launch doors
+refuse with: the `harnesses` (`agent`) and `integrations` (`integration`) of
+`GET /setup/status`, `GET /integrations`, and the Azure DevOps rows of
+`GET /me/scm-access` and `/setup/status`'s `scm_access` (`workspace_provider`).
+A refused row is dropped whole, so it reads exactly as a resource the deployment
+does not have. If the grant tables cannot be read, those lists come back empty
+rather than unfiltered. Admins are exempt, as at every door; a `security_admin`
+is bounded like a member.
+
 **Managing them** (the four `/permissions` rows are `securityOps` — admin or
 `security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities`
 is member-safe):
@@ -1909,7 +1919,7 @@ is member-safe):
 | `POST /access/mappings` | upsert one console role mapping on its natural key (`value`) — `201` new, `200` updated; refused on a chart/operator-allowlist collision, an unmatched-outcome flip without `acknowledge_access_change`, or a write that would remove the caller's own admin access |
 | `DELETE /access/mappings/{id}` | remove one console role mapping — same flip/lockout guards as the write above |
 | `POST /access/preview` | dry-run `roles`/`groups`/email (or the caller's own session) through the SAME derivation a real login would use — no write |
-| `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, and `groups_snapshot_stale` |
+| `GET /me/capabilities` | member-safe: the caller's OWN grants, the switches, their session groups, `groups_snapshot_stale`, and `kinds_version` (a number that goes up whenever the set of capability kinds changes) |
 
 `PUT /permissions/enforcement` replaces the **whole** map, so an omitted kind is
 an enforced kind switched off: re-fetch `GET /permissions` immediately before
@@ -2191,7 +2201,7 @@ One FIELD rides beside the reason since 0.7.4: `member_mode: true`, on every
 ADMIN-TIER `403` below — the two `requireOperator` / `requireSecurityOperator`
 chokepoints and the in-handler refusals that raise the same two reasons — when
 the refused caller is an admin exercising
-[view as member](#exercising-member-mode-as-an-admin). It is a marker, not a
+[the User view](#exercising-member-mode-as-an-admin). It is a marker, not a
 reason — the `reason`, the status code and the body are unchanged, and the key
 is absent entirely for an ordinary member. A burst of denials carrying it is an
 admin walking the member path, not an incident.
@@ -2210,10 +2220,11 @@ admin walking the member path, not an incident.
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyMemberGovernance`), since it runs at sandbox boot unattended the way exec does. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
-| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
+| `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
 | `harness_login_mechanism_principal` | 0.7.3: `POST /setup/harness-login` under a `per_user` row, reached by the shared admin bearer token WITH OIDC CONFIGURED (`refuseHarnessLoginMechanismPrincipal`) — every capture made with that token would land in one namespace and overwrite the last person's session; a real console sign-in or `wdn_` token is reachable instead. Target `setup.harness_login`. Does not fire with no OIDC configured, where the admin token is the only working capture path — see "AWS SSO per person" | ⛔ `422` |
+| `harness_login_not_per_user` | 0.7.2: `POST /setup/harness-login` by a member when the agent's model credential is NOT a `per_user` row (`authorizeHarnessLogin`, `internal/api/harnesscred.go`) — the deployment's credential is one an admin connects for everyone, so there is no personal sign-in to capture. Target `setup.harness_login`. Emitted since 0.7.2 and missing from this table until 0.8 | ⛔ `403` |
 | `run_terminal` | 0.7.4: a RUN TOKEN, not a member — the run whose token authenticated an `/internal/*` call has gone terminal (`internalAuth`'s liveness gate). Token verification cannot catch this: the revoke cascade is best-effort, so a killed run whose revocation write failed still presents a token that verifies. `actor_type` is `agent`, the target is the request path, and the terminal state the run was found in rides beside the reason as its own `run_state` datum — the reason itself stays a closed value, because that is what a SIEM rule is written against. The three tail-upload doors — `/internal/recordings/`, `/internal/scan-results/`, `/internal/sso-token/` — are exempt for five minutes after the run went terminal, because those uploads race the watcher that ends it | ⛔ `403` |
 | `run_not_found` | 0.7.4: the same gate, when the run the token names has no row at all | ⛔ `403` |
 
@@ -2227,7 +2238,7 @@ reason with the affected values beside it, not one per dropped host. A preflight
 dry-run writes no **drop** rows — a drop is not a denial, and it is recorded at
 launch. A dry run that is **refused** does audit, though: every gate preflight
 reproduces is the real gate, so a refused door writes its own `authz.denied` row
-from inside the shared path (`denyMemberField`) — one row per refused door per
+from inside the shared path (`refuse`, `internal/api/refusal.go`) — one row per refused door per
 call, with **`run_id` NULL**, because there is no run. A dry run that passes
 writes nothing at all. That is deliberate rather than suppressed: the row records
 that this principal was refused this capability, which is true whether or not
@@ -2290,14 +2301,16 @@ per-user roles or multi-org depth — not the governance itself.
 You have an admin session and you want to see what a member sees. There are two
 ways, they answer different questions, and they compose.
 
-**1. The toggle — "view as member".** The account menu (top right) offers
-**View as member** to a signed-in SSO admin. It sets a flag on your EXISTING
-session cookie; your role is never rewritten, only the *effective* role your
-requests resolve to, and only downward. The console reloads and you land
-exactly where a member lands: the member nav, the member Getting Started, a
-`GET /me` answering `operator: false`, and every operator-only route 403-ing.
-A persistent banner says so on every screen and carries the way back out
-(**Exit member mode**). Every audit row the session writes still names **your
+**1. The switch — the User view.** The **Console view** switch beside the
+wordmark offers **Admin view** | **User view** to a signed-in SSO admin. Choosing
+**User view** sets a flag on your EXISTING session cookie; your role is never
+rewritten, only the *effective* role your requests resolve to, and only downward.
+The console reloads and you land exactly where a user lands: the User-view nav,
+the user's Getting Started, a `GET /me` answering `operator: false`, and every
+operator-only route 403-ing. The pressed **User view** segment says so on every
+screen, and **Admin view** is the way back; there is no band, because the User
+view is a normal state. Other tabs follow the session into the same view. Every
+audit row the session writes still names **your
 own sub** — this is not impersonation, and there is no way to become anybody
 else. The transition itself is audited as `auth.member_mode`
 (`enabled`, `real_role`, and `no_credential` on the preview below), and each `403` an **admin-tier gate** raises while the
@@ -2308,16 +2321,17 @@ rather than as an incident. (Denials with a *different* `reason` —
 an ungranted capability, a foreign resource — are the ones a member would meet
 identically, and carry no marker.)
 
-**Both admin tiers get the control** — a `security_admin` as well as a super
+**Both admin tiers get the switch** — a `security_admin` as well as a super
 admin — and both clamp to `user`, because the clamp knows only one direction;
-exiting restores whichever tier you were actually signed in as. It is offered
-over SSO only: the admin token, local mode and a deployment with no identity
-provider are one shared credential with no per-person role to pause, so there is
-nothing to pause and the route answers those callers `400`.
+exiting restores whichever tier you were actually signed in as. The switch is
+shown on every install that has both views. On a single-operator install (local
+mode, or the admin token with no identity provider) it only changes the URL:
+that is one shared credential with no per-person role to pause, so nothing is
+clamped or POSTed, and `POST /me/member-mode` answers those callers `400` if
+called directly.
 
-**The no-credential preview — "view as a new member (not signed in)".** The
-same menu offers a second entry, **View as a new member (not signed in)**. It is
-the plain toggle plus one thing: your OWN captured AWS SSO session reads as
+**The no-credential preview — "Preview as a new user".** The Permissions page
+header offers **Preview as a new user**. It is the User view plus one thing: your OWN captured AWS SSO session reads as
 absent for the rest of the session. On a `per_user` deployment that is the state
 every new member is in before they sign in, and it is the one state the plain
 toggle structurally cannot show — it clamps your role and leaves your subject
@@ -2333,12 +2347,11 @@ and comes back the moment you exit. The transition is audited as
 Inside the preview, **signing in is refused** — `POST /setup/harness-login`
 answers `409` while the posture is on, deliberately: the preview shows a new
 member's STATE, not their flow, and a sign-in completed there would capture a
-credential against the admin's own principal. Both the banner (visibly, since
-the 0.7.5 fix wave) and its tooltip say so, and the sign-in pane offers no "Try
+credential against the admin's own principal. The preview's band says so, and the sign-in pane offers no "Try
 again" for that refusal — the way out is to exit the mode.
 
-**It appears only where the org gives each person their own sign-in.** The menu
-entry is offered, and the posture granted, only when the model-access agent's
+**It appears only where the org gives each person their own sign-in.** The
+button is offered, and the posture granted, only when the model-access agent's
 roster row is `per_user` — on a `shared` deployment there is no per-member
 sign-in to be missing, so the entry does not exist and a request for it enters
 the plain mode instead (`GET /me` publishes `member_preview_available`, and the
@@ -2399,18 +2412,15 @@ people's runs is registered outside the mode.
 > identity — recipe below. The two compose: toggle for the fast look, second
 > identity for the proof.
 >
-> **Ceiling 4, and why the tooltip stops short of naming the other item.** The
-> *second* posture — **View as a new member (not signed in)** — is what shows the
-> not-signed-in state, and it is reached from the account menu **before** entering
-> member mode: both menu items disappear while either mode is on, and the item is
-> not offered at all on a deployment whose roster row is `shared` (there is
-> nothing for the preview to hide) or against a pre-0.7.5 daemon
+> **Ceiling 4, and the other posture.** The *second* posture — **Preview as a
+> new user** — is what shows the not-signed-in state, and it is reached from the
+> Permissions header in the **Admin view**: it is not offered from inside the
+> User view, and not at all on a deployment whose roster row is `shared` (there
+> is nothing for the preview to hide) or against a pre-0.7.5 daemon
 > (`member_preview_available`, `internal/api/me.go`, is ANDed with the caller's
 > EFFECTIVE (clamped) admin tier — the same clamp that made ceiling 4 true in
-> the first place, so the entry vanishes from the menu the instant either mode
-> clamps `isOperator`/`isSecurityOperator` false).
-> So the ceiling states the limit and stops; it does not point at a control that
-> is, at that moment, not on screen. Inside that second posture the ceiling reads
+> the first place, so the button is gone the instant either posture clamps
+> `isOperator`/`isSecurityOperator` false). Inside that second posture the ceiling reads
 > the other way round: your sign-in is *hidden, not removed*, and a rolling
 > upgrade (ceiling 3) hides nothing at all.
 >
@@ -2427,11 +2437,11 @@ people's runs is registered outside the mode.
 > does not refuse harness-login — so *"sign-in is refused inside the preview"*
 > does not hold mid-upgrade. In the other direction a 0.7.5 console POSTing
 > `no_credential` to a 0.7.4 replica gets a `400` from the strict body decode
-> (`DisallowUnknownFields`), the mode is NOT entered, and the menu item says so;
-> the plain toggle keeps working throughout, because the console sends the key
+> (`DisallowUnknownFields`), the mode is NOT entered, and the button says so;
+> the switch keeps working throughout, because the console sends the key
 > only for the new posture. Finish the rollout before you rely on what you see.
 
-Note the name collision: the `WARDYN_MEMBER_MODE` environment variable
+Note the name collision: the `WARDYN_USER_DESKTOP` environment variable
 ([ENV.md](ENV.md)) is a different, unrelated thing — a boot-time assertion that
 the human running a single-workstation daemon is a member. It adds no
 middleware and has nothing to do with this toggle, which is per-session and
@@ -2724,7 +2734,7 @@ writable, though a row stored under an earlier release still loads, still sits i
 `SiteConfig`, and is still injected by `internal/api/integrations_run.go`; and
 `azure_openai` is gone as a kind.
 
-**Settings** (account menu) is the one surface for these — a Model provider card,
+**Settings** (the Admin view's sidebar) is the one surface for these — a Model provider card,
 a radio group over concrete lanes; the standalone `/integrations` page is deleted.
 **The Git host card retired in 0.7.2.** Its three git
 credential lanes (GitHub App, PAT, SSH key) now render INSIDE the provider row
@@ -4802,9 +4812,11 @@ fills an empty value.
 
 Each stored secret is an envelope (`internal/secretstore/pg`, since 0.7.12): the
 value is sealed with AES-256-GCM under its own data key, bound to the row's owner
-and name, and that data key is wrapped by the `local` key-encryption key — derived
-from `WARDYN_AGE_KEY` with HKDF-SHA256 and recorded on each row as
-`kek_id` (`local:<fingerprint of the public recipient>`). So simply changing
+and name, and that data key is wrapped by a `local` key-encryption key — derived
+from `WARDYN_AGE_KEY` with HKDF-SHA256, one per purpose, and recorded on each row as
+`kek_id` (`local/cred:<fingerprint of the public recipient>` for credentials,
+`local/platform:<fingerprint>` for wardynd's own boot keys; rows written before
+0.8 say `local:<fingerprint>`, and `wardynd -rewrap` moves them). So simply changing
 `WARDYN_AGE_KEY` migrates nothing — every row still names the old key, and a read
 refuses a row whose `kek_id` is not the configured one. Startup decrypts the persisted signing
 key through `loadOrCreateSigningKey` / `loadOrCreateSecret` and fails closed on
@@ -4903,6 +4915,50 @@ is the **only** key that reads the store. Save it before doing anything else.
 Whatever you do, **back the key up off-host.** Rotation re-encrypts what is there;
 it cannot recover a key you have already lost.
 
+With `WARDYN_PLATFORM_KEY_FILE` set (below), the rotation moves only the rows
+under the age key; the boot keys under the platform key stay as they are.
+
+## Separating the platform keys
+
+By default one age key protects everything the `secrets` table holds: people's
+credentials, and wardynd's own signing, session, UI-session and SSH host keys. A
+leak of `WARDYN_AGE_KEY` together with the database then lets someone forge run
+identities, console sessions and the SSH host, not only read credentials
+(`threatmodel/THREAT-MODEL.md` residual #49). `/setup/status` says so as the amber
+`platform_shared` row.
+
+`WARDYN_PLATFORM_KEY_FILE` names a file holding a **second** age identity. The
+boot keys are then wrapped under a key derived from it alone, and no key
+`WARDYN_AGE_KEY` derives opens one: a boot key row wrapped under the age key is
+refused, naming `wardynd -rewrap`, and boot stops rather than mint over it. The
+file stays optional; nothing requires it.
+
+```sh
+# 1. Mint the second key where only wardynd can read it (0600, off-host backup).
+umask 077
+./bin/wardynd -gen-age-key > ~/.wardyn/platform.key
+# 2. Move the boot keys onto it: one transaction, data keys only, no value is
+#    decrypted. Safe beside a serving daemon with the same WARDYN_AGE_KEY.
+WARDYN_PG_DSN='postgres://…' WARDYN_AGE_KEY="$(cat ~/.wardyn/age.key)" \
+  WARDYN_PLATFORM_KEY_FILE=~/.wardyn/platform.key ./bin/wardynd -rewrap
+# INFO wardynd: stored secrets rewrapped … secrets=4 platform_key_separate=true
+# 3. Restart every replica with WARDYN_PLATFORM_KEY_FILE set.
+```
+
+`-rewrap` also moves the rows a pre-0.8 wardynd wrote (`local:`) onto the
+per-purpose keys, with or without the platform key. It writes one
+`secret.rewrap` audit row and takes the same lock as `-rotate-age-key`. The one
+moment the age key still vouches for the boot keys is this move: run it from a
+host you trust, not after a suspected leak of the age key (then replace the boot
+keys instead: delete their rows and restart, which mints new ones — console
+sessions end and SSH clients see a new host key).
+
+Keep the platform key as carefully as the age key, and apart from it: both are
+needed to read everything, and losing the platform key loses the boot keys
+(a restart then refuses; delete their rows to mint new ones). In store mode
+there is no local key at all and the file is refused; there the boot keys live
+under `platform/` in the organisation's store (two Vault roles, below).
+
 ## Store mode: credentials in Vault
 
 With `WARDYN_SECRET_STORE=vaultkv`, every stored credential's value lives in
@@ -4913,7 +4969,7 @@ ciphertext). Wardyn does no at-rest cryptography for such a row, and holds no
 key: once every row is in Vault, `WARDYN_AGE_KEY` is unset. Every read is one
 Vault read, so it appears in your Vault audit device (with the path and the
 token's entity; values HMAC'd) as well as in Wardyn's audit log. Wardyn's own
-boot keys (signing, session, UI-session, SSH host) live there too.
+boot keys (signing, session, UI-session, SSH host, internal CA) live there too.
 
 **Paths.** Under the mount (`WARDYN_VAULT_KV_MOUNT`, default `wardyn`) and the
 install's prefix (`WARDYN_VAULT_KV_PREFIX`; the chart sets the release
@@ -4960,10 +5016,22 @@ template on: write the install's `WARDYN_VAULT_KV_PREFIX` literally, as
 `wardyn/data/<prefix>/*` and `wardyn/metadata/<prefix>/*`, and give each
 install its own policy.
 
-Until a second role for the boot keys lands (`WARDYN_VAULT_ROLE_PLATFORM`,
-CS-12b), one role writes both `platform/` and `people/`: whoever holds
-Wardyn's Vault token can create, update and delete the boot keys and every
-person's credentials alike.
+**Two Vault roles (recommended).** With one role, the policy above covers
+`platform/` and `people/` alike: the split is for your audit and filtering, and a
+leak of wardynd's Vault token reaches its signing and session keys too. Two
+Kubernetes-auth roles bound to the same service account separate the privilege:
+`wardyn-platform` with a policy over `<ns>/platform/*` only, and
+`wardyn-credentials` with a policy over `<ns>/operator/*` and `<ns>/people/*`
+(the `wardyn/config` stanza, and the two path stanzas above, each with that
+path in place of `*`, plus `list` on `metadata/<ns>/` for `-reconcile`; the
+boot check of the mount runs as this role, so the platform role needs no
+`wardyn/config`). Set `WARDYN_VAULT_ROLE=wardyn-credentials`
+and `WARDYN_VAULT_ROLE_PLATFORM=wardyn-platform` (chart:
+`secretStore.vault.role` and `secretStore.vault.rolePlatform`): wardynd logs in
+as both at boot, refuses to start if either login fails, and makes every
+`platform/` call as the platform role only. Revoking or rotating one role leaves
+the other untouched, and the platform policy can sit with fewer people. The
+second role needs Kubernetes auth.
 
 **Authentication.** There is no Vault token in an environment variable, by
 design.
@@ -5075,7 +5143,10 @@ Leave out `purge/action` to withhold purge (see "Removing a credential" below).
 `<prefix>` is `WARDYN_AZURE_KV_PREFIX` (the chart sets the release namespace).
 Each value is the base64 of the bytes (content type
 `application/octet-stream;base64`, at most 18 KiB) with tags `wardyn-owner`,
-`wardyn-name`, `wardyn-kind` and `wardyn-format`. A read derives the name from
+`wardyn-name`, `wardyn-kind` and `wardyn-format`. The kind (`platform` for
+wardynd's boot keys) is in the name and the tag, so your Key Vault logs can
+tell the two apart; Key Vault has no per-name policy, so unlike two Vault roles
+it does not separate the privilege. A read derives the name from
 the row's owner and name and refuses a row that points to any other name or
 vault, then refuses a value whose tags name another row. A replace is a new
 **version** of the same name, and every earlier version is **disabled**: Key
@@ -5356,7 +5427,8 @@ and `0070`, which adds `ssh_public_keys.capped` (`0033`'s table). `0074` does
 too: it renames the stored `member` tier to `user`, re-adding the role CHECK on
 `api_tokens` (`0045`'s table), moving the role default there and on
 `ssh_public_keys` (`0033`'s, whose `0070` cap it re-creates), and altering
-`role_mappings` (`0051`'s).
+`role_mappings` (`0051`'s). So does `0075`, which re-adds the `approvals.kind`
+CHECK (`0001`'s table) with `push_content`.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does

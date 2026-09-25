@@ -324,7 +324,7 @@ func (s *Server) raiseADOCapability(w http.ResponseWriter, r *http.Request, clai
 		ID: raisedID, RunID: claims.RunID, GrantID: &grantID, Kind: types.ApprovalToolCall, RequestedScope: raw,
 	})
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, adoCapRaiseFailedBody)
+		fail(http.StatusServiceUnavailable, "raise_failed", adoCapRaiseFailedBody, map[string]any{"capability": c})
 		return
 	}
 	if created.ID == raisedID {
@@ -397,8 +397,7 @@ func (s *Server) raiseADOConsent(w http.ResponseWriter, r *http.Request, claims 
 		ID: raisedID, RunID: claims.RunID, Kind: types.ApprovalCredentialReauth, RequestedScope: raw,
 	})
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, adoCapRaiseFailedBody)
-		return true
+		return fail(http.StatusServiceUnavailable, "raise_failed", adoCapRaiseFailedBody, nil)
 	}
 	if created.ID == raisedID {
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorSystem, "wardynd",

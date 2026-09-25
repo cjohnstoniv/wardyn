@@ -29,7 +29,8 @@ const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 // rule, for the same reason).
 test.describe.configure({ mode: "serial" });
 
-test.describe("Settings — Host card (X2-F1)", () => {
+test.describe("Settings — Host card", () => {
+  // ticket: X2-F1
   test("renders this host's deployment facts, operator-only rows included", async ({ page }) => {
     await gotoConsole(page);
     await navToRoute(page, "/admin/settings");
@@ -72,7 +73,8 @@ test.describe("Settings — Host card (X2-F1)", () => {
   });
 });
 
-test.describe("Settings — the corp-proxy landing and its BYPASS verdict (X2-F1/F23)", () => {
+test.describe("Settings — the corp-proxy landing and its BYPASS verdict", () => {
+  // ticket: X2-F1/F23
   test("the Host card's Corporate proxy & egress row lands on the Network step, and a bypassed redirect renders 'Redirect not enforced'", async ({
     page,
   }) => {
@@ -127,7 +129,8 @@ test.describe("Settings — the corp-proxy landing and its BYPASS verdict (X2-F1
   });
 });
 
-test.describe("Settings — Model provider Connect / Replace / Disconnect (X2-F3)", () => {
+test.describe("Settings — Model provider Connect / Replace / Disconnect", () => {
+  // ticket: X2-F3
   test("an API-key connect, a replace, and a disconnect all round-trip against GET /secrets", async ({
     page,
   }) => {

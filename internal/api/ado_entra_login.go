@@ -41,7 +41,6 @@ import (
 	"context"
 	"log/slog"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -104,8 +103,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 	// granted string rather than assuming the request was honoured is the whole
 	// discipline of this lane: the tenant decides, and it routinely grants a
 	// different set than was asked for.
-	granted := strings.Fields(grant.Scope)
-	usable := intersect(cfg.Scopes, granted)
+	usable := adoCaptureScopes(grant.Scope, cfg.Scopes)
 	if len(usable) == 0 {
 		// CONSENT DECLINED, or a tenant that will not issue these scopes. The
 		// login has already succeeded and stays succeeded; there is simply
@@ -149,7 +147,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		slog.ErrorContext(ctx, "wardynd: storing the Azure DevOps credential this login earned failed; the person is signed in without one",
 			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "store_error", "error": err.Error(), "source": adoEntraSourceLogin,
+			"reason": "store_error", "source": adoEntraSourceLogin,
 			"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
 		return

@@ -151,13 +151,13 @@ func TestMigrateAppliesAndIsIdempotent(t *testing.T) {
 	assertRecordedSetIsEmbeddedSet("after second Migrate")
 }
 
-// TestMigrateAdvisoryLockSerializesBoots proves N5: Migrate() takes the
-// dedicated session-level advisory lock so a second, concurrent boot BLOCKS
-// until the first finishes rather than racing the migration loop. We simulate an
-// in-flight migration on "another boot" by holding the SAME advisory lock on a
-// separate connection, then assert a concurrent Migrate() blocks (returns a
-// deadline error) instead of completing. Pre-fix (no lock) Migrate() ignored the
-// held lock and returned nil immediately here.
+// TestMigrateAdvisoryLockSerializesBoots: Migrate() takes the dedicated
+// session-level advisory lock so a second, concurrent boot blocks until the
+// first finishes rather than racing the migration loop. We simulate an
+// in-flight migration on "another boot" by holding the same advisory lock on
+// a separate connection, then assert a concurrent Migrate() blocks (returns a
+// deadline error) instead of completing; without the lock it would return nil
+// immediately.
 func TestMigrateAdvisoryLockSerializesBoots(t *testing.T) {
 	pool := pgPool(t) // fully migrated; a lone Migrate() here is a clean no-op
 	ctx := context.Background()
@@ -217,7 +217,7 @@ func insertAgentRun(t *testing.T, pool *pgxpool.Pool, state string) (uuid.UUID, 
 func TestAgentRunStateCheckEnforcedLive(t *testing.T) {
 	pool := pgPool(t)
 
-	// ACCEPT: COMPLETED must be insertable (regression for the COMPLETED fix).
+	// Accept: COMPLETED must be insertable.
 	if _, err := insertAgentRun(t, pool, "COMPLETED"); err != nil {
 		t.Fatalf("INSERT agent_runs state=COMPLETED rejected by live CHECK: %v; "+
 			"the 0003 COMPLETED fix is not in effect on this DB", err)
@@ -291,8 +291,7 @@ func TestAuditEventsAppendOnlyEnforcedLive(t *testing.T) {
 		id := insertAuditEvent(t, pool)
 
 		// Issue a REAL TRUNCATE. The 0004 statement-level BEFORE TRUNCATE trigger
-		// must raise (TRUNCATE bypasses the 0001 row trigger). This is the direct
-		// regression for the TRUNCATE append-only gap.
+		// must raise (TRUNCATE bypasses the 0001 row trigger).
 		_, err := pool.Exec(ctx, `TRUNCATE TABLE audit_events`)
 		if err == nil {
 			t.Fatal("TRUNCATE audit_events was ACCEPTED; the 0004 BEFORE TRUNCATE guard is missing — " +
@@ -365,8 +364,7 @@ func TestMigrateRestoresADisabledChainTrigger(t *testing.T) {
 // ensureAuditTriggers. The chain trigger is restored because its migrations are
 // replayable; the append-only trigger is defined by 0001 (the whole initial
 // schema), so replaying it at boot to fix one trigger is a bigger blast radius
-// than refusing — but the process must NOT continue silently either, which is
-// what it used to do.
+// than refusing — but the process must not continue silently either.
 func TestMigrateRefusesWithoutTheAppendOnlyTrigger(t *testing.T) {
 	pool := pgPool(t)
 	ctx := context.Background()
@@ -553,7 +551,7 @@ func TestMigrateDoesNotHardenATriggerNobodyHardened(t *testing.T) {
 	}
 }
 
-// ─── the 0048-0054 upgrade set, applied over NON-EMPTY data ──────────────────
+// the 0048-0054 upgrade set, applied over non-empty data
 
 // partialSchemaPool migrates a throwaway schema up to (but NOT including)
 // upTo, and returns a pool pointed at it. It is probeSchemaPool's other half:
@@ -669,7 +667,7 @@ func TestPG_MigrateAppliesTheUpgradeSetOverNonEmptyData(t *testing.T) {
 			upgradeFloor, err)
 	}
 
-	// THE ROWS SURVIVED, with the new columns taking their defaults.
+	// The rows survived, with the new columns taking their defaults.
 	var wsOwner, secretOwner, tokenRole string
 	if err := pool.QueryRow(ctx, `SELECT owned_by FROM workspaces WHERE id = $1`, wsID).Scan(&wsOwner); err != nil {
 		t.Fatalf("0048 over an existing workspace row: %v", err)

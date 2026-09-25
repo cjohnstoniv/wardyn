@@ -75,7 +75,10 @@ const (
 	// DRAFT (M2 canon pending)
 	credentialReauthApprovalsUnreadableBody = "could not read this run's approvals"
 	// DRAFT (M2 canon pending)
-	credentialReauthRaiseFailedBody = "could not raise the AWS sign-in request: "
+	// Fixed: the raise error wraps the approval store's own error (driver text,
+	// possibly), and the reader is the run's own sandbox — so the cause is
+	// logged, never answered (#173, #505).
+	credentialReauthRaiseFailedBody = "could not raise the AWS sign-in request"
 	// credentialReauthNotDecidableBody is the 409 Server.decide answers for this
 	// kind, on every tier.
 	credentialReauthNotDecidableBody = "an AWS sign-in request is resolved by signing in, not by a " +
@@ -367,7 +370,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		ID: raisedID, RunID: claims.RunID, Kind: types.ApprovalCredentialReauth, RequestedScope: reqScope,
 	})
 	if aerr != nil {
-		writeError(w, http.StatusServiceUnavailable, credentialReauthRaiseFailedBody+aerr.Error())
+		writeError(w, http.StatusServiceUnavailable, loggedMsg(ctx, credentialReauthRaiseFailedBody, aerr))
 		return true
 	}
 	if created.ID != raisedID {

@@ -775,6 +775,12 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
+	// After the carry-forward: the roster's defaults are checked against the
+	// providers this document will actually hold, whichever side was named.
+	if err := validateDefaultProviders(cfg.AgentProviders, cfg.ModelProviders); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		return
+	}
 	// Narrowing is never silent on this door either, and this is the door where
 	// it matters most: a laptop re-applies /etc/wardyn/site-config.json on EVERY
 	// boot, so an MDM-tightened base URL lands here, not on the providers page,

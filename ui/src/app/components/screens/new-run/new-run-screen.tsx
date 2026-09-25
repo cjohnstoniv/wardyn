@@ -114,6 +114,11 @@ export function NewRunScreen() {
   // confinement_class so the server's own default decides, and its audit
   // trail reads `defaulted` rather than `requested` (confinement_source).
   const [ccTouched, setCcTouched] = React.useState(!!prefill?.state.confinementClass);
+  // The clone's barrier as this form was seeded with it, read once like the
+  // useState seeds above: the top bar's New run navigates to /runs/new with no
+  // state, which keeps this screen mounted and clears `prefill`; that must not
+  // re-run the /setup/status effect below and half-reset the form.
+  const clonedCc = React.useRef(prefill?.state.confinementClass);
   const [addWsOpen, setAddWsOpen] = React.useState(false);
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
   const [savedPolicies, setSavedPolicies] = React.useState<{ id: string; name: string; spec: RunPolicySpec }[]>([]);
@@ -146,10 +151,11 @@ export function NewRunScreen() {
   // The Workspace card's drive block: this caller's allocation (nil-means-none)
   // and the door beside it ("" means open), read off the shell's ONE GET /me
   // rather than a second one of this screen's own — app-shell's useMeta already
-  // holds that body and hands it down (operator-context.tsx's UserDriveContext,
-  // the same seam member_local_dir_root rides). With no provider above, on an
-  // older daemon, or after a failed read it is null/"" — which renders as
-  // today's card, the same honest answer the server's own resolver gives.
+  // holds that body and hands it down (operator-context.tsx's
+  // MeIdentity.userDrive, the same seam member_local_dir_root rides). With no
+  // provider above, on an older daemon, or after a failed read it is null/""
+  // — which renders as today's card, the same honest answer the server's own
+  // resolver gives.
   const { drive: userDrive, deniedByProfile: driveDeniedBy, unavailable: driveUnavailable } = useUserDrive();
 
   React.useEffect(() => {
@@ -192,7 +198,7 @@ export function NewRunScreen() {
         // B4b: a CLONE's barrier is the SOURCE RUN's — kept explicit
         // (ccTouched) as long as this host can build it. A vanished tier
         // falls back like any fresh run and stops counting as explicit.
-        const cloned = prefill?.state.confinementClass;
+        const cloned = clonedCc.current;
         const cloneStillAvailable = !!cloned && classes.includes(cloned);
         const resolved = cloneStillAvailable ? cloned : strongestAvailable(classes) ?? "CC1";
         pristineCc.current = resolved;
@@ -206,7 +212,6 @@ export function NewRunScreen() {
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   React.useEffect(() => {
@@ -238,8 +243,7 @@ export function NewRunScreen() {
   // from this page in this session.
   React.useEffect(() => {
     reloadWorkspaces();
-    // run once on mount — reload is stable (useCallback([]))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; reload is stable (useCallback([]))
   }, []);
 
   // The envelope-field detach funnel retired with the controls it guarded:
@@ -324,8 +328,7 @@ export function NewRunScreen() {
   // one policy and launch another.
   const merged = React.useMemo(
     () => (parsed.ok ? mergeRunSelections(parsed.spec, state, workspaces) : null),
-    // parsed is rebuilt every render; specText is what actually changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- parsed is rebuilt every render; specText is what actually changes
     [specText, state, workspaces],
   );
   const added = merged?.added;
@@ -412,7 +415,7 @@ export function NewRunScreen() {
       // reaches window — so closing a Select or the Add-workspace dialog was also
       // leaving the screen.
       if (e.key !== "Escape" || e.defaultPrevented || dirty) return;
-      navigate("/runs");
+      void navigate("/runs");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

@@ -37,7 +37,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fakes ───────────────────────────────────────────────────────────────────
+// fakes
 
 // uiMemStore extends the package's run fake (sshMemStore) with the two things
 // the gateway needs beyond a run row: the attach-ticket table it redeems, and
@@ -347,7 +347,7 @@ func okBackend() http.Handler {
 	})
 }
 
-// ─── the gateway exists only on its own origin ───────────────────────────────
+// the gateway exists only on its own origin
 
 // TestUIGateway_OffMeansNoHandlerAndNoHealthzBlock: empty
 // WARDYN_UI_SANDBOX_LISTEN is off — no handler for cmd/wardynd to serve, and
@@ -401,7 +401,7 @@ func TestUIGateway_ConsoleOriginHasNoRelayRoutes(t *testing.T) {
 	}
 }
 
-// ─── enter: the ticket is the only way in ────────────────────────────────────
+// enter: the ticket is the only way in
 
 // TestUIGateway_EnterRejectsBadTickets covers every way a ticket can fail to
 // authorize: absent, garbage, already used, and minted for another run. All
@@ -610,7 +610,7 @@ func TestUIGateway_HostModeBindsEnterToTheRunsOrigin(t *testing.T) {
 	}
 }
 
-// ─── relay: the cookie is the only credential ────────────────────────────────
+// relay: the cookie is the only credential
 
 // TestUIGateway_RelayRequiresAValidSessionForThisRun: no cookie, a forged one,
 // an expired one, and another run's cookie all fail — and none of them fall
@@ -765,7 +765,7 @@ func TestUIGateway_RelayDropsSandboxWardynCookiesOutbound(t *testing.T) {
 	}
 }
 
-// ─── launcher ────────────────────────────────────────────────────────────────
+// launcher
 
 // TestUIGateway_MissingLauncherIs502WithTheFrozenMessage: the BYOI case an
 // operator actually hits. The body is a frozen string the console prints
@@ -836,7 +836,7 @@ func TestUIGateway_LauncherScriptShape(t *testing.T) {
 	}
 }
 
-// ─── bounds ──────────────────────────────────────────────────────────────────
+// bounds
 
 // TestUIGateway_PerRunConnectionCap: every relay connection is a live exec in
 // the sandbox, so the count is bounded per run and slots come back on close.
@@ -878,7 +878,7 @@ func TestUIGateway_RelayTouchesTheRun(t *testing.T) {
 	}
 }
 
-// ─── audit ───────────────────────────────────────────────────────────────────
+// audit
 
 // TestUIGateway_AuditsAuthAndSessionWithoutContent: the ui.* actions record
 // THAT a human opened an app, never what they did in it — and they are
@@ -903,7 +903,7 @@ func TestUIGateway_AuditsAuthAndSessionWithoutContent(t *testing.T) {
 	}
 }
 
-// ─── session cookie ──────────────────────────────────────────────────────────
+// session cookie
 
 // TestUIGateway_SessionCookieIsSignedAndBounded: the cookie is the whole
 // credential, so a flipped byte, a swapped key, or a passed expiry must all

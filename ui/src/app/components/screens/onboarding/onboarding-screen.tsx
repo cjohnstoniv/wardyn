@@ -90,7 +90,7 @@ export function GettingStarted({
       />
     );
   }
-  return <SetupScreen onDone={onDone} />;
+  return <SetupScreen onDone={onDone} initialStatus={status} />;
 }
 
 function ReadinessRow({
