@@ -366,6 +366,10 @@ type ProxyConfig struct {
 	// generic detail. Threaded to the proxy via proxy.Config's identically-named
 	// field (BuildProxyConfig below).
 	LLMUnavailableDetail string
+	// Unattended marks a run nobody is driving (a non-interactive task run):
+	// a push its push_rules would hold for review is refused instead, since
+	// there is nobody to ask. See proxy.Config.Unattended.
+	Unattended bool
 }
 
 // InjectionGrant pairs an api_key credential grant with its proxy-side

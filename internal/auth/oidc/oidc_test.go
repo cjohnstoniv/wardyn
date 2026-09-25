@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -110,7 +109,7 @@ func (e *idpEnv) buildIDTokenWithRoles(t *testing.T, sub, email string, roles, g
 }
 
 // buildIDTokenRawClaim is buildIDToken plus one arbitrary extra claim of any
-// shape — H1's tolerant-decode regression coverage: a real IdP sometimes
+// shape, for tolerant-decode coverage: a real IdP sometimes
 // sends "roles"/"groups" as a scalar string (or object) instead of the JSON
 // array deriveRole expects. Signs with roleCallbackNonce so the result works
 // directly with doCallback.
@@ -220,7 +219,7 @@ func (e *idpEnv) newRoleAuth(t *testing.T, roleMap map[string]string, defaultRol
 	return auth
 }
 
-// ─── TestLoginHandlerSetsStateCookies ────────────────────────────────────────
+// TestLoginHandlerSetsStateCookies
 
 func TestLoginHandlerSetsStateCookies(t *testing.T) {
 	env := newIdPEnv(t)
@@ -280,7 +279,7 @@ func TestLoginHandlerSetsStateCookies(t *testing.T) {
 	}
 }
 
-// ─── TestCallbackHandlerRejectsInvalidState ──────────────────────────────────
+// TestCallbackHandlerRejectsInvalidState
 
 func TestCallbackHandlerRejectsInvalidState(t *testing.T) {
 	env := newIdPEnv(t)
@@ -300,7 +299,7 @@ func TestCallbackHandlerRejectsInvalidState(t *testing.T) {
 	}
 }
 
-// ─── TestCallbackHandlerRejectsMissingStateCookie ─────────────────────────────
+// TestCallbackHandlerRejectsMissingStateCookie
 
 func TestCallbackHandlerRejectsMissingStateCookie(t *testing.T) {
 	env := newIdPEnv(t)
@@ -316,7 +315,7 @@ func TestCallbackHandlerRejectsMissingStateCookie(t *testing.T) {
 	}
 }
 
-// ─── TestFullCodeFlow ─────────────────────────────────────────────────────────
+// TestFullCodeFlow
 //
 // Full round-trip: LoginHandler → (simulate IdP redirect) → CallbackHandler.
 // The fake token endpoint returns a pre-signed ID token containing the correct
@@ -434,7 +433,7 @@ func doCallbackFlow(t *testing.T, env *idpEnv, auth *writoidc.Authenticator) *ht
 	return cbW
 }
 
-// ─── TestCallbackHandlerRetriesTransientTokenEndpointError (D12) ─────────────
+// TestCallbackHandlerRetriesTransientTokenEndpointError (D12)
 //
 // The token endpoint 503s twice, then succeeds — retryExchange must ride out
 // the blip and finish the login rather than hard-failing on the first 503.
@@ -472,7 +471,7 @@ func TestCallbackHandlerRetriesTransientTokenEndpointError(t *testing.T) {
 	}
 }
 
-// ─── TestCallbackHandlerExhaustedTransientRetriesRedirectsTransient (D12) ────
+// TestCallbackHandlerExhaustedTransientRetriesRedirectsTransient (D12)
 //
 // The token endpoint 503s on every attempt — retryExchange gives up after
 // tokenExchangeRetries and the callback must redirect with the TRANSIENT
@@ -511,7 +510,7 @@ func TestCallbackHandlerExhaustedTransientRetriesRedirectsTransient(t *testing.T
 	}
 }
 
-// ─── TestCallbackHandlerPermanentTokenErrorNotRetried (D12) ──────────────────
+// TestCallbackHandlerPermanentTokenErrorNotRetried (D12)
 //
 // invalid_grant (or any other 4xx) is the IdP actively rejecting the request
 // — the authorization code is single-use, so retrying it can only ever
@@ -549,7 +548,7 @@ func TestCallbackHandlerPermanentTokenErrorNotRetried(t *testing.T) {
 	}
 }
 
-// ─── D16: Middleware session-revocation check ─────────────────────────────────
+// D16: Middleware session-revocation check
 
 // fakeSessionRevocations is an in-memory writoidc.SessionRevocations double
 // for Middleware's revocation-check tests: it always answers `revoked`/`err`
@@ -683,7 +682,7 @@ func TestMiddlewareNilRevocationsUnsetChangesNothing(t *testing.T) {
 	}
 }
 
-// ─── TestNonceMismatchRejected ────────────────────────────────────────────────
+// TestNonceMismatchRejected
 //
 // The ID token contains nonce "correct" but the cookie carries "wrong".
 // CallbackHandler must reject with 401.
@@ -712,7 +711,7 @@ func TestNonceMismatchRejected(t *testing.T) {
 	}
 }
 
-// ─── TestCallbackRole* ────────────────────────────────────────────────────────
+// TestCallbackRole*
 //
 // Role derivation (Config.RoleMap / DefaultRole / LegacyAdminEmails, see
 // deriveRole in oidc.go): the union of the ID token's roles/groups claims and
@@ -770,7 +769,7 @@ func TestCallbackRoleNoMatchNoDefaultDenied(t *testing.T) {
 	auth := env.newRoleAuth(t, map[string]string{"eng-team": writoidc.RoleUser}, "", nil)
 
 	w, sess := doRoleCallback(t, env, auth, "dave@corp.example", nil, nil)
-	// W31-S1-5: redirects to "/?auth_error=no_role" (302) instead of a bare
+	// Redirects to "/?auth_error=no_role" (302) instead of a bare
 	// http.Error text page.
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (body: %s)", w.Code, http.StatusFound, w.Body.String())
@@ -814,12 +813,12 @@ func TestCallbackRoleMapUnsetDefaultsAdmin(t *testing.T) {
 }
 
 func TestCallbackRoleMapUnsetLegacyListStillSplitsAdminMember(t *testing.T) {
-	// Regression (silent viewer→admin escalation on upgrade): with the role map
-	// UNSET but WARDYN_OIDC_OPERATOR_EMAILS SET — the mandatory-minimum SSO config
-	// an upgrading 0.4.5 deployment runs (validateOperatorPosture refuses an empty
-	// list; a role map is opt-in on top) — the operator allowlist alone must still
-	// split admin from member. Before the fix, deriveRole's empty-map short-circuit
-	// returned RoleAdmin for EVERYONE, promoting every existing viewer to admin.
+	// Silent viewer→admin escalation on upgrade: with the role map unset but
+	// WARDYN_OIDC_OPERATOR_EMAILS set — the mandatory-minimum SSO config
+	// (validateOperatorPosture refuses an empty list; a role map is opt-in on top) —
+	// the operator allowlist alone must still split admin from member. An empty-map
+	// short-circuit in deriveRole returning RoleAdmin for everyone would promote
+	// every existing viewer to admin.
 	env := newIdPEnv(t)
 	auth := env.newRoleAuth(t, nil, "", []string{"olivia@corp.example"}) // role map unset, operator list set
 
@@ -899,7 +898,7 @@ func TestCallbackRoleNonASCIIEmailNoFoldEscalation(t *testing.T) {
 	}
 }
 
-// ─── TestCallbackScalarClaim* ─────────────────────────────────────────────────
+// TestCallbackScalarClaim*
 //
 // H1: a real IdP sometimes sends "roles"/"groups" as a scalar string (or
 // object) instead of a JSON array — e.g. a lone group as bare "eng-team"
@@ -932,7 +931,7 @@ func TestCallbackScalarGroupsClaimMapSetContributesNothing(t *testing.T) {
 
 	env.buildIDTokenRawClaim(t, "sub-scalar2", "scalar2@corp.example", "groups", "not-an-array")
 	w, sess := doCallback(t, auth)
-	// W31-S1-5: redirects (302) rather than a fatal 401/500 or a bare
+	// Redirects (302) rather than a fatal 401/500 or a bare
 	// http.Error text page.
 	if w.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d (malformed claim decodes to nothing, so nothing matches; deny via redirect, not a fatal 401/500): body: %s", w.Code, http.StatusFound, w.Body.String())
@@ -942,7 +941,7 @@ func TestCallbackScalarGroupsClaimMapSetContributesNothing(t *testing.T) {
 	}
 }
 
-// ─── TestParseRoleMap ─────────────────────────────────────────────────────────
+// TestParseRoleMap
 //
 // M2/M3/L8: non-empty input that yields no usable entry, a non-ASCII key
 // (can never match — see ASCIIOnly), and a duplicate key must all be parse
@@ -962,7 +961,9 @@ func TestParseRoleMap(t *testing.T) {
 		{"blank entries between commas are skipped", "eng-team=user,,", map[string]string{"eng-team": "user"}, false},
 		{"missing =", "eng-team", nil, true},
 		{"empty key before =", "=admin", nil, true},
-		{"bad role value", "eng-team=owner", nil, true},
+		{"bad role value", "eng-team=Owner", nil, true},
+		{"a user type id is a role value", "pm-group=portfolio-manager", map[string]string{"pm-group": "portfolio-manager"}, false},
+		{"a reserved word is not a type id", "eng-team=denied", nil, true},
 		{"duplicate key", "eng-team=user,eng-team=admin", nil, true},
 		{"duplicate key differs only by case", "Eng-Team=user,eng-team=admin", nil, true},
 		// M2: non-empty input, but every entry is blank — must error, not
@@ -1062,7 +1063,7 @@ func TestSessionRoundTripWithRole(t *testing.T) {
 	}
 }
 
-// ─── TestSessionRoundTrip ─────────────────────────────────────────────────────
+// TestSessionRoundTrip
 
 func TestSessionRoundTrip(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1087,7 +1088,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	}
 }
 
-// ─── TestMiddlewareFallsThrough ───────────────────────────────────────────────
+// TestMiddlewareFallsThrough
 
 func TestMiddlewareFallsThrough(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1117,7 +1118,7 @@ func TestMiddlewareFallsThrough(t *testing.T) {
 	}
 }
 
-// ─── TestExpiredSessionRejected ───────────────────────────────────────────────
+// TestExpiredSessionRejected
 
 func TestExpiredSessionRejected(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1158,7 +1159,7 @@ func TestExpiredSessionRejected(t *testing.T) {
 	}
 }
 
-// ─── TestTamperedCookieRejected ───────────────────────────────────────────────
+// TestTamperedCookieRejected
 
 func TestTamperedCookieRejected(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1199,7 +1200,7 @@ func TestTamperedCookieRejected(t *testing.T) {
 	}
 }
 
-// ─── TestDomainCheck* ─────────────────────────────────────────────────────────
+// TestDomainCheck*
 
 func TestDomainCheckAllowedEmail(t *testing.T) {
 	checkDomainFilter(t, "alice@example.com", []string{"example.com"}, true)
@@ -1222,7 +1223,7 @@ func TestDomainCheckMalformedEmail(t *testing.T) {
 	checkDomainFilter(t, "notanemail", []string{"example.com"}, false)
 }
 
-// ─── C1: email_verified absent vs explicitly false ───────────────────────────
+// C1: email_verified absent vs explicitly false
 //
 // Entra ID tokens typically OMIT email_verified entirely rather than sending
 // it false (Config.AllowedEmailDomains' doc). A plain bool claims field
@@ -1296,7 +1297,7 @@ func TestCallbackEmailVerifiedAbsentIsIgnoredWithoutDomains(t *testing.T) {
 	}
 }
 
-// ─── TestLogoutClearsCookie ───────────────────────────────────────────────────
+// TestLogoutClearsCookie
 
 func TestLogoutClearsCookie(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1322,7 +1323,7 @@ func TestLogoutClearsCookie(t *testing.T) {
 	// Cookie absent is also acceptable (browser would drop it).
 }
 
-// ─── TestSecureCookieAttribute ────────────────────────────────────────────────
+// TestSecureCookieAttribute
 //
 // The session cookie's Secure attribute must follow Config.SecureCookies:
 // false over plain HTTP (else the browser drops the cookie and login breaks),
@@ -1373,7 +1374,7 @@ func TestSecureCookieAttribute(t *testing.T) {
 	}
 }
 
-// ─── TestNewRejectsMissingConfig ──────────────────────────────────────────────
+// TestNewRejectsMissingConfig
 
 // TestNewRejectsMissingConfig is C2-reshaped: ClientSecret is no longer in
 // this table at all — see TestNewAcceptsPublicClientWithNoSecret below for
@@ -1419,8 +1420,8 @@ func TestNewAcceptsPublicClientWithNoSecret(t *testing.T) {
 	}
 }
 
-// TestCallbackPublicClientCompletesWithoutASecret is C2's end-to-end
-// regression: a full login (LoginHandler's PKCE state through
+// TestCallbackPublicClientCompletesWithoutASecret is the end-to-end pin: a
+// full login (LoginHandler's PKCE state through
 // CallbackHandler's token exchange and session issuance) against a public
 // client — no ClientSecret configured at all — must complete exactly like a
 // confidential client's does. The fake token endpoint (idpEnv.tokenSrv)
@@ -1446,7 +1447,7 @@ func TestCallbackPublicClientCompletesWithoutASecret(t *testing.T) {
 	}
 }
 
-// ─── TestNewRejectsShortHMACKey ───────────────────────────────────────────────
+// TestNewRejectsShortHMACKey
 
 func TestNewRejectsShortHMACKey(t *testing.T) {
 	env := newIdPEnv(t)
@@ -1463,7 +1464,7 @@ func TestNewRejectsShortHMACKey(t *testing.T) {
 	}
 }
 
-// ─── TestWrongHMACKeyRejected ─────────────────────────────────────────────────
+// TestWrongHMACKeyRejected
 //
 // A session cookie signed with key A must be rejected when decoded with key B.
 
@@ -1505,7 +1506,7 @@ func TestWrongHMACKeyRejected(t *testing.T) {
 	}
 }
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// helpers
 
 // buildSession creates a signed session cookie via the exported test helper.
 func buildSession(t *testing.T, auth *writoidc.Authenticator, sub, email, role string, expiry time.Time) *http.Cookie {
@@ -1550,7 +1551,7 @@ func checkDomainFilter(t *testing.T, email string, allowedDomains []string, want
 				email, resp.StatusCode, http.StatusFound, w.Body.String())
 		}
 	} else {
-		// W31-S1-5: a domain-check denial redirects to "/?auth_error=..."
+		// A domain-check denial redirects to "/?auth_error=..."
 		// (302) rather than a bare http.Error text page — a real page the
 		// browser can act on instead of a dead end with no way back.
 		if resp.StatusCode != http.StatusFound {
@@ -1580,13 +1581,20 @@ const roleCallbackNonce = "nonce-role"
 // when no cookie was issued, e.g. a denied login).
 func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseRecorder, writoidc.Session) {
 	t.Helper()
+	return doCallbackVia(t, auth, auth.CallbackHandler)
+}
+
+// doCallbackVia is doCallback through a given callback handler (e.g. one
+// built by CallbackHandlerWithDenials).
+func doCallbackVia(t *testing.T, auth *writoidc.Authenticator, callback http.HandlerFunc) (*httptest.ResponseRecorder, writoidc.Session) {
+	t.Helper()
 	const stateVal, verifierVal = "state-role", "verifier-role"
 	r := httptest.NewRequest(http.MethodGet, "/auth/callback?state="+stateVal+"&code=testcode", nil)
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_state", Value: stateVal})
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_nonce", Value: roleCallbackNonce})
 	r.AddCookie(&http.Cookie{Name: "wardyn_oidc_pkce", Value: verifierVal})
 	w := httptest.NewRecorder()
-	auth.CallbackHandler(w, r)
+	callback(w, r)
 
 	var sessCookie *http.Cookie
 	for _, c := range w.Result().Cookies() {
@@ -1604,7 +1612,7 @@ func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseR
 			Sub:      writoidc.PrincipalFromContext(r.Context()),
 			Email:    writoidc.EmailFromContext(r.Context()),
 			Role:     writoidc.RoleFromContext(r.Context()),
-			UserType: cookieUserType(t, sessCookie),
+			UserType: writoidc.UserTypeFromContext(r.Context()),
 			Groups:   writoidc.GroupsFromContext(r.Context()),
 		}
 	})
@@ -1612,27 +1620,6 @@ func doCallback(t *testing.T, auth *writoidc.Authenticator) (*httptest.ResponseR
 	checkReq.AddCookie(sessCookie)
 	auth.Middleware(next).ServeHTTP(httptest.NewRecorder(), checkReq)
 	return w, got
-}
-
-// cookieUserType reads the "ut" key straight out of a session cookie's signed
-// payload: nothing publishes the type on the request context yet.
-func cookieUserType(t *testing.T, c *http.Cookie) string {
-	t.Helper()
-	payload, _, _ := strings.Cut(c.Value, ".")
-	if payload == "" {
-		return "" // a denied login's cleared cookie
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(payload)
-	if err != nil {
-		t.Fatalf("session cookie payload: %v", err)
-	}
-	var v struct {
-		UserType string `json:"ut"`
-	}
-	if err := json.Unmarshal(raw, &v); err != nil {
-		t.Fatalf("session cookie payload: %v", err)
-	}
-	return v.UserType
 }
 
 // doRoleCallback signs an ID token carrying the given roles/groups/email,
@@ -1748,7 +1735,7 @@ func (e *idpEnv) newAuthWithOnLogin(t *testing.T, onLogin func(context.Context, 
 	return auth
 }
 
-// ─── TestCallbackInvokesOnLoginWithSubAndRole ─────────────────────────────────
+// TestCallbackInvokesOnLoginWithSubAndRole
 //
 // Migration 0046's refresh hook: a successful login must call Config.OnLogin
 // exactly once, with the ID token's sub and the role CallbackHandler just

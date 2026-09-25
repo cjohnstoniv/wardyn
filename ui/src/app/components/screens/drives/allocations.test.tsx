@@ -275,7 +275,8 @@ describe("DrivesScreen — allocations", () => {
 //
 // The affordance is the console's existing one (TruncatedNote, states.tsx, on
 // Runs / Workspaces / Policies / Audit / run-detail); no new copy.
-describe("DrivesScreen — a bounded allocations page says so (R4/F092)", () => {
+describe("DrivesScreen — a bounded allocations page says so", () => {
+  // ticket: R4/F092
   const TRUNCATED = /Showing the first 1000 \(truncated\)/;
 
   it("shows the truncation note when more allocations exist than this page carries", async () => {

@@ -498,6 +498,22 @@ func secretStoreCheck(external string, durable bool) SetupCheck {
 	}
 }
 
+// secretStoreRows is secretStoreCheck's row, then platform_shared in local
+// mode while no WARDYN_PLATFORM_KEY_FILE is set (design §3, §2.13 c): the age
+// key then protects wardynd's own signing and session keys and people's
+// credentials alike, so one leak of it forges run identities and sessions.
+func secretStoreRows(external string, durable, platformSeparate bool) []SetupCheck {
+	rows := []SetupCheck{secretStoreCheck(external, durable)}
+	if external == "" && !platformSeparate {
+		rows = append(rows, SetupCheck{
+			ID: "platform_shared", Label: "Platform key separation", Status: "warn",
+			Detail: "Wardyn's own signing and session keys are protected by the same key as people's credentials.",
+			Fix:    "Mint a second key with `wardynd -gen-age-key`, point WARDYN_PLATFORM_KEY_FILE at it, run `wardynd -rewrap` once, then restart wardynd with it set.",
+		})
+	}
+	return rows
+}
+
 // siteConfigCheck reports whether an operator-wide corporate baseline (upstream
 // proxy, egress redirects, default SCM hosts) has been authored yet. "info" for
 // the unconfigured/fully-configured cases — it is optional and skippable, never

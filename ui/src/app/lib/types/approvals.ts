@@ -126,22 +126,6 @@ export function decisionArgs(scope: ApprovalScope, until?: string): [] | [Decisi
 
 const HOLD_TIMEOUT_MS = 30_000;
 
-// #160 — the ceiling for the two UNCONDITIONAL arms below (tool_call,
-// credential_reauth), a different arm from HOLD_TIMEOUT_MS above: that one
-// bounds an egress wait_for_review connection that fails closed in seconds.
-// A tool call a human answers can legitimately sit for a long time, so a
-// short ceiling would hide a genuine hold — which matters more here than
-// forgiving a truly abandoned one. 60 minutes, per the issue's own call.
-const STALE_HOLD_CEILING_MS = 60 * 60 * 1000;
-
-// True once `requestedAt` is old enough to cross `ceilingMs` — and only once:
-// an unparseable timestamp fails TOWARD showing the hold (not stale), the same
-// direction isHeld's own unparseable case below takes.
-function isStale(requestedAt: string, ceilingMs: number): boolean {
-  const t = Date.parse(requestedAt);
-  return !Number.isNaN(t) && Date.now() - t >= ceilingMs;
-}
-
 // A held request is one the sandbox is still parked on. TWO shapes reach that
 // state and only one of them carries a mode:
 //
@@ -152,9 +136,14 @@ function isStale(requestedAt: string, ceilingMs: number): boolean {
 //    the scope it raises is {tool,cmd,env} with no
 //    mode at all (internal/egress/proxy/local_routes.go). PENDING alone IS the
 //    hold here, so nothing client-side bounds it the way HOLD_TIMEOUT_MS
-//    bounds the egress case — the row's own server-side expiry ends it. It
-//    IS bounded by STALE_HOLD_CEILING_MS below, a much longer window: a row
-//    a human hasn't answered in an hour reads as abandoned, not live.
+//    bounds the egress case — the row's own server-side expiry ends it, and
+//    only that ends it: #509 — a client-side stale-hold ceiling (60 minutes,
+//    #160) was declaring a row dead while the server kept the agent parked on
+//    it for up to WARDYN_APPROVAL_EXPIRY_AFTER (24h default,
+//    cmd/wardynd/boot_flags.go), which a returning operator's own inbox never
+//    agreed with. A PENDING row is live and still decidable until the
+//    approval.ExpireStale sweeper actually moves it to EXPIRED — no client
+//    constant can know better than the row's own state.
 //  - egress wait_for_review — the proxy carries the mode in the approval's
 //    requested_scope so the UI can flag it, but PENDING alone doesn't mean
 //    "still holding the sandbox": the connection fails closed at
@@ -237,25 +226,17 @@ export function canDecideAdoCapability(securityOperator: boolean, isRunOwner: bo
 }
 
 export function isHeld(a: ApprovalRequest): boolean {
-  if (a.kind === "tool_call") return !isStale(a.requested_at, STALE_HOLD_CEILING_MS);
+  // #509 — PENDING alone is live for both of these, at any age: see the
+  // tool_call bullet above for why no client ceiling belongs here.
+  if (a.kind === "tool_call") return a.state === "PENDING";
   // A credential_reauth row is raised BECAUSE the proxy is holding a request.
   // It carries no first_use mode of its own — the mode vocabulary belongs to
   // the egress lane — so without this it would read as a passive pending and
   // the run would show no hold while a model call was parked.
-  if (a.kind === "credential_reauth") return !isStale(a.requested_at, STALE_HOLD_CEILING_MS);
+  if (a.kind === "credential_reauth") return a.state === "PENDING";
   if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
   const requestedAt = Date.parse(a.requested_at);
   if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
   return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
 }
 
-// A tool_call/credential_reauth row old enough that isHeld no longer counts
-// it live — distinguishes "was held, now stale" from "never held at all" for
-// a caller that has to say something different for the two (the runs board's
-// group chip and card, #160). Egress wait_for_review is not this arm: past its
-// own HOLD_TIMEOUT_MS it is a passive pending, not a stale hold, because
-// nothing ever promised the connection would still be parked.
-export function isStaleHold(a: ApprovalRequest): boolean {
-  if (a.kind !== "tool_call" && a.kind !== "credential_reauth") return false;
-  return isStale(a.requested_at, STALE_HOLD_CEILING_MS);
-}

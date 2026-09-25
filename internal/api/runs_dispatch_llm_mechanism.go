@@ -531,6 +531,9 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	selected, ok := s.selectedMechanism(req.Agent, lanes.subscription, lanes.bedrock, lanes.managed, lanes.apiKey)
 	if out != nil {
 		*out = gradeModelCredential(row, declared, lanes, selected, ok, s.subscriptionInjectEnabled())
+		if ok && selected.ProviderType() == types.AgentProviderTypeBedrock {
+			out.bedrockHost = lanes.bedrock.runtimeHost
+		}
 	}
 	if !declared {
 		return true

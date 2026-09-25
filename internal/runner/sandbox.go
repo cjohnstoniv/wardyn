@@ -238,6 +238,7 @@ func BuildProxyConfig(runID uuid.UUID, pc ProxyConfig, port int) ([]byte, error)
 		UpstreamProxyNoProxy: pc.UpstreamProxyNoProxy,
 		LLMUpstreams:         pc.LLMUpstreams,
 		LLMUnavailableDetail: pc.LLMUnavailableDetail,
+		Unattended:           pc.Unattended,
 	}
 	return json.Marshal(cfg)
 }

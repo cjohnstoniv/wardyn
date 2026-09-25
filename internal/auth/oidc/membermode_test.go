@@ -4,7 +4,7 @@
 package oidc_test
 
 // The four invariants that keep "view as member" from becoming a privilege
-// primitive (P2, v0.7.4). Driven through the REAL cookie round trip — encode,
+// primitive. Driven through the real cookie round trip — encode,
 // SetMemberMode, Middleware — rather than against the struct, because the whole
 // design rests on what survives a re-encode: the clamp is applied at
 // contextWithPrincipal and the stamped Role is never rewritten, so a test that
@@ -243,14 +243,15 @@ func (f *memberModeRevocations) IsSessionRevoked(context.Context, string, string
 func (f *memberModeRevocations) RevokeSub(context.Context, string) error { return nil }
 func (f *memberModeRevocations) RevokeAll(context.Context) error         { return nil }
 
-// TestMemberMode_RealMemberTurningItOnWritesNoCookie is W6-4. The handler's own
+// TestMemberMode_RealMemberTurningItOnWritesNoCookie: the handler's own
 // comment calls a real member toggling ON "a no-op 200 … they are already what
-// they asked to be". It was not a no-op: it stamped mm:1 onto the member's
-// cookie, after which /me answers member_mode:true, the console paints a banner
+// they asked to be", and it must be one. Stamping mm:1 onto the member's
+// cookie would make /me answer member_mode:true, the console paint a banner
 // naming an admin role they do not hold, and BOTH mint doors — which key on
 // MemberModeFromContext, not on the stamped tier — 409 their own SSH key and
-// API token. The member Getting Started's "Connect your tools · Add SSH key"
-// card and docs/MEMBERS.md's SSH path both break until they find the Exit.
+// API token; the member Getting Started's "Connect your tools · Add SSH key"
+// card and docs/MEMBERS.md's SSH path would both break until they found the
+// Exit.
 //
 // No cookie at all, rather than a cookie with the flag cleared: re-signing a
 // member's session to record a decision not to change it is a Set-Cookie
