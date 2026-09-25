@@ -141,7 +141,7 @@ func TestToolRulesAtTheLocalRoute(t *testing.T) {
 					Kind:           types.ApprovalToolCall,
 					RequestedScope: json.RawMessage(`{"tool":"Bash","cmd":"make test"}`),
 					State:          types.ApprovalPending,
-					RequestedAt:    time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC),
+					RequestedAt:    time.Now(),
 				})
 			}))
 			defer cp.Close()
