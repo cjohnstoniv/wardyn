@@ -47,8 +47,9 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
 vi.mock("../../../lib/hooks/use-ado-connect", () => ({
   useAdoConnect: () => ({ connecting: false, connect: vi.fn(), connectFallback: vi.fn(), cancel: vi.fn(), blockedUrl: null }),
 }));
+const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
-  workspaces: { listWorkspaces: () => Promise.resolve([]) },
+  workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
 }));
 vi.mock("../../../lib/capabilities", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/capabilities")>("../../../lib/capabilities");
@@ -87,11 +88,29 @@ function renderScreen() {
   );
 }
 
+// F2 (#612) — seeds state.workspaces the same way B4b's clone door does
+// (navigate("/runs/new", { state: { prefill } })), the shortest path to an
+// attached workspace without driving the Add-workspace dialog through the UI.
+function renderScreenWithWorkspace(workspaceId: string) {
+  return render(
+    <MemoryRouter
+      initialEntries={[
+        { pathname: "/runs/new", state: { prefill: { inlinePolicy: false, state: { workspaces: [{ workspaceId }] } } } },
+      ]}
+    >
+      <OperatorProvider operator>
+        <NewRunScreen />
+      </OperatorProvider>
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
   railProps.length = 0;
   navigateMock.mockReset();
   createRunMock.mockReset().mockResolvedValue({ id: "run_1" });
   getSetupStatusMock.mockReset().mockResolvedValue(baseStatus());
+  listWorkspacesMock.mockReset().mockResolvedValue([]);
 });
 
 describe("NewRunScreen — R1: the sole candidate is sent even with no picker", () => {
@@ -120,6 +139,33 @@ describe("NewRunScreen — R2: the admin default is preselected among several ca
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].model_provider).toBe(gateway.id);
+  });
+});
+
+describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the roster default", () => {
+  it("sends the pinned provider's id on the wire, not the admin default's", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      providerStatus([
+        { provider: gateway, defaultFor: ["claude-code"], state: "live" },
+        { provider: claude, state: "live" },
+      ]),
+    );
+    listWorkspacesMock.mockResolvedValue([
+      {
+        id: "ws1",
+        name: "repo-a",
+        kind: "local_dir",
+        source: "/home/agent/repo-a",
+        status: "scanned",
+        llm_cred: { provider_ref: claude.id },
+      },
+    ]);
+    renderScreenWithWorkspace("ws1");
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(claude.id));
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    expect(createRunMock.mock.calls[0][0].model_provider).toBe(claude.id);
   });
 });
 

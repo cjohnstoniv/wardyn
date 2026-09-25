@@ -64,10 +64,8 @@ test.describe("New Run rail — the provider picker (#542)", () => {
       { provider: BEDROCK, state: "live" },
       { provider: GATEWAY, state: "live" },
     ]);
-    let sent: Record<string, unknown> | null = null;
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
-      sent = route.request().postDataJSON() as Record<string, unknown>;
       await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ id: "e2e-provider-run" }) });
     });
 
@@ -85,18 +83,17 @@ test.describe("New Run rail — the provider picker (#542)", () => {
     await page.getByRole("option", { name: RAIL_PROVIDER.OPTION("Corp gateway", "token", "added") }).click();
 
     await expect(page.getByRole("button", { name: "Launch run" })).toBeEnabled();
+    const sentReq = page.waitForRequest((r) => r.url().endsWith("/api/v1/runs") && r.method() === "POST");
     await page.getByRole("button", { name: "Launch run" }).click();
 
     await expect(page).toHaveURL(/\/runs\/e2e-provider-run/);
-    expect(sent?.model_provider).toBe(GATEWAY.id);
+    expect((await sentReq).postDataJSON().model_provider).toBe(GATEWAY.id);
   });
 
   test("R1: a sole candidate needs no picker, and its id still reaches the wire", async ({ page }) => {
     await mockProviders(page, [{ provider: BEDROCK, defaultFor: ["claude-code"], state: "live" }]);
-    let sent: Record<string, unknown> | null = null;
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
-      sent = route.request().postDataJSON() as Record<string, unknown>;
       await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ id: "e2e-provider-run-solo" }) });
     });
 
@@ -107,8 +104,9 @@ test.describe("New Run rail — the provider picker (#542)", () => {
     await expect(page.getByText(RAIL_PROVIDER.STATIC("Bedrock (prod)"))).toBeVisible();
     await expect(page.getByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toHaveCount(0);
 
+    const sentReq = page.waitForRequest((r) => r.url().endsWith("/api/v1/runs") && r.method() === "POST");
     await page.getByRole("button", { name: "Launch run" }).click();
     await expect(page).toHaveURL(/\/runs\/e2e-provider-run-solo/);
-    expect(sent?.model_provider).toBe(BEDROCK.id);
+    expect((await sentReq).postDataJSON().model_provider).toBe(BEDROCK.id);
   });
 });

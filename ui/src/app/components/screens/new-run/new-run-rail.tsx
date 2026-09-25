@@ -41,7 +41,13 @@ import { CONNECTIONS } from "../../wardyn/copy/door";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
 import { MODEL_ACCESS_AGENT } from "../../../lib/model-access";
-import { accessStateFor, providerConnected, providerOptionLabel, providerResidency } from "./model-provider-lane";
+import {
+  accessStateFor,
+  providerConnected,
+  providerOptionLabel,
+  providerResidency,
+  type ProviderGate,
+} from "./model-provider-lane";
 import { absoluteTime, relativeTime } from "../../../lib/format";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import {
@@ -142,6 +148,13 @@ interface RunRailProps {
     /** R7's info line, naming what the last agent switch changed; null every
      *  other state (R1/R2/R6/R8 stay silent — see resolveProviderSelection). */
     changeNote: string | null;
+    /** R5b/R5c (#542 rail-gap packet) — model-provider-lane.ts's providerGate,
+     *  undefined for the ordinary R1-R4/R6-R8 shapes and R9. */
+    gate?: ProviderGate;
+    /** The picked agent's human label (wizard-types.ts's agentLabel), for
+     *  NOT_GRANTED/DEFAULT_OFF/DEFAULT_OFF_ONLY — the same label CHANGED
+     *  already names in changeNote. */
+    harnessLabel: string;
   };
   /** The Connect Azure DevOps launch-door dialog (§2.4, #386): owned by the
    *  screen (use-ado-launch-door.ts), rendered here. `org` comes from the
@@ -274,11 +287,14 @@ function ProviderResidencyLine({ provider }: { provider: SetupModelProvider }) {
 
 // R3 — the selected candidate isn't connected yet: Launch stays enabled (a
 // 422 opens this same door and relaunches, #543), but the person is told
-// before pressing it rather than only after. Drawn for exactly the two kinds
-// packet C shows an example of (bedrock_sso, custom_endpoint) — a key kind or
-// a Claude subscription not yet connected has no canon sentence of its own
-// yet (flagged in the #542 report; the option's own "not added"/"not signed
-// in" trailer still says so).
+// before pressing it rather than only after. Drawn for all five provider
+// kinds providerWhatWord knows (bedrock_sso, custom_endpoint were PR #1036's;
+// anthropic_api_key/openai_api_key/anthropic_subscription are the #542
+// rail-gap packet's, canon.md's "R3 — selected, not connected"). `state`
+// "not_applicable" (the shared admin token — provider_access.go's
+// providerAccessMechanism) is not "connected" but is also not a person who
+// could ever sign in or add a key, so it renders nothing rather than a door
+// that can never work (#542 review finding F3).
 function ProviderNotConnectedLine({
   provider,
   access,
@@ -288,7 +304,8 @@ function ProviderNotConnectedLine({
   access: SetupProviderAccess[] | undefined;
   onSignIn: () => void;
 }) {
-  if (providerConnected(accessStateFor(access, provider.id))) return null;
+  const state = accessStateFor(access, provider.id);
+  if (providerConnected(state) || state === "not_applicable") return null;
   const name = provider.name ?? provider.id;
   if (provider.kind === "bedrock_sso") {
     return (
@@ -310,15 +327,36 @@ function ProviderNotConnectedLine({
       </div>
     );
   }
+  if (provider.kind === "anthropic_api_key" || provider.kind === "openai_api_key") {
+    return (
+      <div className="mt-1.5">
+        <p className="text-xs text-warning">{RAIL_PROVIDER.NO_KEY(name)}</p>
+        <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={onSignIn}>
+          {CONNECTIONS.ADD_KEY}
+        </Button>
+      </div>
+    );
+  }
+  if (provider.kind === "anthropic_subscription") {
+    return (
+      <div className="mt-1.5">
+        <p className="text-xs text-warning">{RAIL_PROVIDER.NOT_SIGNED_IN_CLAUDE(name)}</p>
+        <Button type="button" variant="outline" size="sm" className="mt-1.5" onClick={onSignIn}>
+          {CONNECTIONS.SIGN_IN_CLAUDE}
+        </Button>
+      </div>
+    );
+  }
   return null;
 }
 
 // #542 — the Credentials section's provider half: R1 (one candidate, no
 // picker — QC-1) through R3/R6/R7/R8 (a select, each option stating what the
-// person provides and whether theirs is connected — QC-2). Rendered instead
-// of CredentialFacts whenever the picked agent has at least one candidate;
-// RunRail falls back to CredentialFacts/showModelWarning for everything else
-// (no provider block, or none serving this agent — R9).
+// person provides and whether theirs is connected — QC-2), plus the rail-gap
+// packet's R5b/R5c (`gate`, owner-approved 2026-09-25). Rendered instead of
+// CredentialFacts whenever the picked agent has at least one candidate OR a
+// gate to name; RunRail falls back to CredentialFacts/showModelWarning for
+// everything else (no provider block, or none serving this agent at all — R9).
 function ModelProviderSection({
   candidates,
   access,
@@ -326,6 +364,8 @@ function ModelProviderSection({
   onChange,
   changeNote,
   onSignIn,
+  gate,
+  harnessLabel,
 }: {
   candidates: SetupModelProvider[];
   access: SetupProviderAccess[] | undefined;
@@ -333,9 +373,25 @@ function ModelProviderSection({
   onChange: (id: string) => void;
   changeNote: string | null;
   onSignIn: (provider: SetupModelProvider) => void;
+  /** R5b/R5c — model-provider-lane.ts's providerGate. */
+  gate?: ProviderGate;
+  harnessLabel: string;
 }) {
-  // R1 — QC-1: one candidate needs no question with only one answer.
-  if (candidates.length === 1) {
+  // R5b — QC-4's sibling for zero survivors: nothing to choose among, so no
+  // select renders at all and Launch stays refused (RunRail's `problem`).
+  if (gate?.kind === "not_granted") {
+    return <p className="text-xs text-warning">{RAIL_PROVIDER.NOT_GRANTED(harnessLabel)}</p>;
+  }
+  // R5c, no other candidate: same shape as R5b, naming the disabled default
+  // instead of reading generically.
+  if (gate?.kind === "default_off" && candidates.length === 0) {
+    const name = gate.provider.name ?? gate.provider.id;
+    return <p className="text-xs text-warning">{RAIL_PROVIDER.DEFAULT_OFF_ONLY(name, harnessLabel)}</p>;
+  }
+  // R1 — QC-1: one candidate needs no question with only one answer. Skipped
+  // under R5c-with-others (gate set): the sole survivor is NOT the admin's
+  // intended default, so it still gets an explicit ask, never a silent STATIC.
+  if (!gate && candidates.length === 1) {
     const p = candidates[0];
     return (
       <>
@@ -362,6 +418,13 @@ function ModelProviderSection({
           ))}
         </SelectContent>
       </Select>
+      {/* R5c, other candidates remain: named until an explicit pick lands —
+          selected clears it the same way it clears R7's changeNote below. */}
+      {gate?.kind === "default_off" && !selected && (
+        <p className="mt-1.5 text-xs text-warning">
+          {RAIL_PROVIDER.DEFAULT_OFF(gate.provider.name ?? gate.provider.id, harnessLabel)}
+        </p>
+      )}
       {/* R7 — QC-3: a change the person didn't make is said once, and clears
           on the next one (the screen drops it as soon as the selection changes). */}
       {changeNote && (
@@ -528,11 +591,11 @@ export function RunRail({
   // makes it the captured opener directly.
   const launchRef = React.useRef<HTMLButtonElement>(null);
 
-  // #542 — a provider block with at least one candidate for the picked agent
-  // supersedes CredentialFacts/showModelWarning entirely (R1–R4, R6–R8); with
-  // none (no block, or none serving this agent — R9) that legacy path is
-  // unchanged below.
-  const hasProviderCandidates = !!modelProvider && modelProvider.candidates.length > 0;
+  // #542 — a provider block with at least one candidate for the picked agent,
+  // OR a gate to name (R5b/R5c — the rail-gap packet), supersedes
+  // CredentialFacts/showModelWarning entirely; with neither (no block, or none
+  // serving this agent — R9) that legacy path is unchanged below.
+  const hasProviderCandidates = !!modelProvider && (modelProvider.candidates.length > 0 || !!modelProvider.gate);
   const onProviderSignIn = (p: SetupModelProvider) => door.openDoor({ for: { provider: p.id }, returnTo: launchRef.current });
 
   // The server refused this click for the person's own model credential (422,
@@ -714,6 +777,8 @@ export function RunRail({
               onChange={modelProvider.onChange}
               changeNote={modelProvider.changeNote}
               onSignIn={onProviderSignIn}
+              gate={modelProvider.gate}
+              harnessLabel={modelProvider.harnessLabel}
             />
           )}
           {!hasProviderCandidates && showModelWarning && !showModelAccess && (
@@ -835,8 +900,11 @@ export function RunRail({
       </div>
       {/* A disabled button that doesn't say why is a dead end: without
           client-side validation, an empty form would launch and the server's
-          rejection would arrive after the fact. */}
-      {launch.problem && !launch.inFlight && (
+          rejection would arrive after the fact. Suppressed under a gate
+          (R5b/R5c): ModelProviderSection above already names the same fact
+          inline, beside the (missing, or placeholder) select itself — a
+          second copy of the same sentence below Launch would only repeat it. */}
+      {launch.problem && !launch.inFlight && !modelProvider?.gate && (
         <p className="mt-2 text-center text-xs text-muted-foreground">{launch.problem}</p>
       )}
 

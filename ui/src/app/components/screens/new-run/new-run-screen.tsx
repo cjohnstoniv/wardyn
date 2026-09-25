@@ -64,10 +64,11 @@ import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
 import { barrierReasons, clearedSpecOnCustomSwitch, defaultSpecText, savedPolicyGone } from "./policy-lane";
 import { mergeRunSelections } from "./wizard-spec";
-import { agentLabel, initialWizardState, type RunPrefill, type WizardState } from "./wizard-types";
+import { agentLabel, initialWizardState, primaryWorkspaceId, type RunPrefill, type WizardState } from "./wizard-types";
 import { useLaunch } from "./use-launch";
 import {
   providerCandidates as candidatesForAgent,
+  providerGate,
   resolveProviderSelection,
 } from "./model-provider-lane";
 import { RAIL_PROVIDER } from "../../wardyn/copy";
@@ -298,6 +299,21 @@ export function NewRunScreen() {
   // serves this agent" (R9's shape, which is for a REAL empty answer).
   const providerCandidates = isAgent && modelProviders ? candidatesForAgent(modelProviders, state.agent) : [];
 
+  // F2 (#612) — the primary workspace's own pinned provider: its
+  // llm_cred.provider_ref (internal/types.WorkspaceLLMCred), the SAME "pin"
+  // the server falls back to when nothing was explicitly requested
+  // (cmp.Or(requested, pin), internal/api/run_model_provider.go). Read the
+  // primary the same way the server does — wizard-types.ts's
+  // primaryWorkspaceId — so this rail can never pin a different workspace's
+  // credential than the run actually inherits.
+  const primaryWsId = primaryWorkspaceId(state.workspaces, workspaces);
+  const pin = workspaces.find((w) => w.id === primaryWsId)?.llm_cred?.provider_ref;
+
+  // #542 rail-gap packet (owner-approved 2026-09-25) — R5b/R5c: undefined for
+  // the ordinary R1-R4/R6-R8 shapes and for R9 (model-provider-lane.ts's
+  // providerGate).
+  const providerGateState = isAgent && modelProviders ? providerGate(modelProviders, state.agent) : undefined;
+
   // Which provider (if any) is preselected for the CURRENT agent — R1/R2's
   // silent default, R6's silent non-default, R7/R8's agent-switch rule. Runs
   // whenever the candidate set for this agent could have changed: the
@@ -318,11 +334,13 @@ export function NewRunScreen() {
       previousId: state.modelProviderId,
       previousName: previous?.name ?? previous?.id,
       agentChanged,
+      pin,
+      defaultDisabled: providerGateState?.kind === "default_off",
     });
     setProviderChangeNote(result.changeNote);
     if (result.selectedId !== state.modelProviderId) patch({ modelProviderId: result.selectedId });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- state.modelProviderId deliberately excluded (see comment above); patch is stable
-  }, [isAgent, modelProviders, providerAccess, state.agent]);
+  }, [isAgent, modelProviders, providerAccess, state.agent, pin, providerGateState?.kind]);
 
   // The person's OWN pick always wins outright and clears R7's note — a
   // choice they just made is never something to explain to them.
@@ -354,12 +372,33 @@ export function NewRunScreen() {
           ? RUN.POLICY_GONE
           : useSaved && !state.selectedPolicyId
             ? "Pick a saved policy, or write a custom one."
-            : // R6 (QC-4): several candidates, none granted as this agent's
-              // default (or the default isn't one of them) — Wardyn never
-              // silently substitutes, so Launch waits for an explicit pick.
-              providerCandidates.length > 1 && !state.modelProviderId
-              ? RAIL_PROVIDER.LAUNCH_HINT
-              : null;
+            : // R5b (#542 rail-gap packet) — nothing serves this agent for this
+              // person at all: Launch is refused, and ModelProviderSection
+              // already names it inline (this caption is suppressed there).
+              providerGateState?.kind === "not_granted"
+              ? RAIL_PROVIDER.NOT_GRANTED(agentName)
+              : // R5c — the admin's own default is disabled. Named regardless
+                // of how many other candidates remain, until an explicit pick
+                // lands (same "silent once chosen" rule as R7's changeNote).
+                providerGateState?.kind === "default_off" && !state.modelProviderId
+                ? providerCandidates.length > 0
+                  ? RAIL_PROVIDER.DEFAULT_OFF(
+                      providerGateState.provider.name ?? providerGateState.provider.id,
+                      agentName,
+                    )
+                  : RAIL_PROVIDER.DEFAULT_OFF_ONLY(
+                      providerGateState.provider.name ?? providerGateState.provider.id,
+                      agentName,
+                    )
+                : // R6 (QC-4): several candidates, none granted as this agent's
+                  // default (or the default isn't one of them) — Wardyn never
+                  // silently substitutes, so Launch waits for an explicit pick.
+                  // Rule (3): a workspace pin already answers "why wait" its own
+                  // way (the server's own named refusal on launch), so this
+                  // generic hint stays silent whenever one is set.
+                  providerCandidates.length > 1 && !state.modelProviderId && !pin
+                  ? RAIL_PROVIDER.LAUNCH_HINT
+                  : null;
 
   // Every successful parse re-reads the floor the document authors; a FAILED
   // parse changes nothing (parsedFloor stays whatever last parsed).
@@ -811,6 +850,8 @@ export function NewRunScreen() {
                   selectedId: state.modelProviderId,
                   onChange: onModelProviderChange,
                   changeNote: providerChangeNote,
+                  gate: providerGateState,
+                  harnessLabel: agentName,
                 }
               : undefined
           }

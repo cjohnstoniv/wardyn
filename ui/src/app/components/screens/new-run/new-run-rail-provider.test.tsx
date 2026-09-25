@@ -5,10 +5,12 @@
 
 // #542 (design §5.6, packet MP-C) — the New Run rail's provider picker.
 // States R1 (one candidate), R2/R6 (several, preselected or not), R3
-// (selected, not connected — its own door), R4 (residency by kind), R7 (an
-// agent switch's change note), and R9 (no candidate: today's shape,
-// unchanged) — the acceptance list packet C draws (R5's states are excluded
-// by owner ruling; see model-provider-lane.ts's header comment).
+// (selected, not connected — its own door, now all five kinds), R4
+// (residency by kind), R7 (an agent switch's change note), and R9 (no
+// candidate: today's shape, unchanged) — the acceptance list packet C draws.
+// R5b/R5c below are the rail-gap packet's addition (owner-approved
+// 2026-09-25, docs/design/542-rail-gaps-mock/canon.md) — see
+// model-provider-lane.ts's providerGate.
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -33,7 +35,7 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { MODEL_PROVIDERS, providerStatus } from "../../../lib/test-fixtures";
 import { WithDoor } from "../../../../test/door-harness";
 
-const { bedrock, claude, gateway } = MODEL_PROVIDERS;
+const { bedrock, claude, gateway, anthropicKey } = MODEL_PROVIDERS;
 
 function baseLaunch(overrides: Partial<ComponentProps<typeof RunRail>["launch"]> = {}) {
   return {
@@ -86,7 +88,7 @@ describe("R1 — one candidate: a static line, no picker (QC-1)", () => {
     const status = providerStatus([{ provider: bedrock, state: "live" }]);
     renderRail({
       status,
-      modelProvider: { candidates: [bedrock], access: status.provider_access, selectedId: bedrock.id, onChange: () => {}, changeNote: null },
+      modelProvider: { candidates: [bedrock], access: status.provider_access, selectedId: bedrock.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
     });
     expect(await screen.findByText(RAIL_PROVIDER.STATIC("Bedrock (prod)"))).toBeInTheDocument();
     expect(screen.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeInTheDocument();
@@ -97,7 +99,7 @@ describe("R1 — one candidate: a static line, no picker (QC-1)", () => {
     const status = providerStatus([{ provider: gateway, state: "live" }]);
     renderRail({
       status,
-      modelProvider: { candidates: [gateway], access: status.provider_access, selectedId: gateway.id, onChange: () => {}, changeNote: null },
+      modelProvider: { candidates: [gateway], access: status.provider_access, selectedId: gateway.id, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
     });
     expect(await screen.findByText(RAIL_PROVIDER.STATIC("Corp gateway"))).toBeInTheDocument();
     expect(screen.getByText(RAIL_CREDENTIAL.PROXY)).toBeInTheDocument();
@@ -118,6 +120,7 @@ describe("R2/R6 — several candidates: a Select, each option stating what you p
         selectedId: gateway.id,
         onChange: () => {},
         changeNote: null,
+        harnessLabel: "Claude Code",
       },
     });
     expect(await screen.findByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toHaveTextContent(
@@ -133,7 +136,7 @@ describe("R2/R6 — several candidates: a Select, each option stating what you p
     const onChange = vi.fn();
     renderRail({
       status,
-      modelProvider: { candidates: [gateway, claude], access: status.provider_access, selectedId: undefined, onChange, changeNote: null },
+      modelProvider: { candidates: [gateway, claude], access: status.provider_access, selectedId: undefined, onChange, changeNote: null, harnessLabel: "Claude Code" },
     });
     const trigger = await screen.findByRole("combobox", { name: RAIL_PROVIDER.LABEL });
     expect(trigger).toHaveTextContent(RAIL_PROVIDER.PLACEHOLDER);
@@ -149,7 +152,7 @@ describe("R7 — an agent switch that invalidated the selection names the change
     const note = RAIL_PROVIDER.CHANGED("Claude subscription", "Corp gateway", "Claude Code");
     renderRail({
       status,
-      modelProvider: { candidates: [claude, MODEL_PROVIDERS.anthropicKey], access: status.provider_access, selectedId: claude.id, onChange: () => {}, changeNote: note },
+      modelProvider: { candidates: [claude, MODEL_PROVIDERS.anthropicKey], access: status.provider_access, selectedId: claude.id, onChange: () => {}, changeNote: note, harnessLabel: "Claude Code" },
     });
     expect(await screen.findByText(note)).toBeInTheDocument();
   });
@@ -169,6 +172,7 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
         selectedId: bedrock.id,
         onChange: () => {},
         changeNote: null,
+        harnessLabel: "Claude Code",
       },
     });
     expect(await screen.findByText(RAIL_PROVIDER.NOT_SIGNED_IN("Bedrock (prod)"))).toBeInTheDocument();
@@ -190,11 +194,38 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
         selectedId: gateway.id,
         onChange: () => {},
         changeNote: null,
+        harnessLabel: "Claude Code",
       },
     });
     expect(await screen.findByText(RAIL_PROVIDER.NO_TOKEN("Corp gateway"))).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.ADD_TOKEN }));
     expect(await screen.findByRole("dialog", { name: KEY_DOOR.TITLE(true, "Corp gateway") })).toBeInTheDocument();
+  });
+
+  // #542 review finding F3 — the shared admin token grades every provider
+  // "not_applicable" (provider_access.go's providerAccessMechanism: no
+  // credential of its own to grade for ANY kind). Not "connected" either, but
+  // rendering NOT_SIGNED_IN here would be a false warning over a door that can
+  // never work — there is no person behind this principal to sign in.
+  it("not_applicable (the shared admin token) shows no warning and no door button", async () => {
+    const status = providerStatus([
+      { provider: bedrock, state: "not_applicable" },
+      { provider: claude, state: "live" },
+    ]);
+    renderRail({
+      status,
+      modelProvider: {
+        candidates: [bedrock, claude],
+        access: status.provider_access,
+        selectedId: bedrock.id,
+        onChange: () => {},
+        changeNote: null,
+        harnessLabel: "Claude Code",
+      },
+    });
+    await screen.findByRole("combobox", { name: RAIL_PROVIDER.LABEL });
+    expect(screen.queryByText(RAIL_PROVIDER.NOT_SIGNED_IN("Bedrock (prod)"))).toBeNull();
+    expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
   });
 
   it("a connected selection shows no warning and no door button", async () => {
@@ -210,11 +241,56 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
         selectedId: bedrock.id,
         onChange: () => {},
         changeNote: null,
+        harnessLabel: "Claude Code",
       },
     });
     await screen.findByRole("combobox", { name: RAIL_PROVIDER.LABEL });
     expect(screen.queryByText(RAIL_PROVIDER.NOT_SIGNED_IN("Bedrock (prod)"))).toBeNull();
     expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
+  });
+
+  // #542 rail-gap packet — the three provider kinds the original build had no
+  // door for: a stored key (anthropic_api_key/openai_api_key share one
+  // sentence, D2) and the non-Bedrock sign-in kind (anthropic_subscription).
+  it("R3 key: anthropic_api_key names the key, and its button opens the key door", async () => {
+    const status = providerStatus([
+      { provider: anthropicKey, state: "not_configured" },
+      { provider: claude, state: "live" },
+    ]);
+    renderRail({
+      status,
+      modelProvider: {
+        candidates: [anthropicKey, claude],
+        access: status.provider_access,
+        selectedId: anthropicKey.id,
+        onChange: () => {},
+        changeNote: null,
+        harnessLabel: "Claude Code",
+      },
+    });
+    expect(await screen.findByText(RAIL_PROVIDER.NO_KEY("Anthropic API key"))).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.ADD_KEY }));
+    expect(await screen.findByRole("dialog", { name: KEY_DOOR.TITLE(false, "Anthropic API key") })).toBeInTheDocument();
+  });
+
+  it("R3 subscription: anthropic_subscription names Claude, and its button opens the sign-in door", async () => {
+    const status = providerStatus([
+      { provider: claude, state: "not_configured" },
+      { provider: anthropicKey, state: "live" },
+    ]);
+    renderRail({
+      status,
+      modelProvider: {
+        candidates: [claude, anthropicKey],
+        access: status.provider_access,
+        selectedId: claude.id,
+        onChange: () => {},
+        changeNote: null,
+        harnessLabel: "Claude Code",
+      },
+    });
+    expect(await screen.findByText(RAIL_PROVIDER.NOT_SIGNED_IN_CLAUDE("Claude subscription"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CONNECTIONS.SIGN_IN_CLAUDE })).toBeInTheDocument();
   });
 });
 
@@ -224,10 +300,75 @@ describe("R9 — no candidate for this agent: today's shape, unchanged", () => {
     renderRail({
       status,
       showModelWarning: true,
-      modelProvider: { candidates: [], access: [], selectedId: undefined, onChange: () => {}, changeNote: null },
+      modelProvider: { candidates: [], access: [], selectedId: undefined, onChange: () => {}, changeNote: null, harnessLabel: "Claude Code" },
     });
     expect(screen.queryByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeNull();
     expect(screen.queryByText(RAIL_PROVIDER.PLACEHOLDER)).toBeNull();
     expect(await screen.findByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toBeInTheDocument();
+  });
+});
+
+// #542 rail-gap packet (owner-approved 2026-09-25) — R5b/R5c, distinct from
+// R9's "nothing serves this agent at all": something does, but nobody may
+// launch on it yet, and this rail names WHY instead of falling through to R9's
+// generic deployment warning.
+describe("R5b — granted none: no select, Launch refused, naming the harness", () => {
+  it("renders NOT_GRANTED with no picker at all", async () => {
+    const status = providerStatus([{ provider: gateway, state: "not_configured" }]);
+    renderRail({
+      status,
+      modelProvider: {
+        candidates: [],
+        access: status.provider_access,
+        selectedId: undefined,
+        onChange: () => {},
+        changeNote: null,
+        gate: { kind: "not_granted" },
+        harnessLabel: "Claude Code",
+      },
+    });
+    expect(await screen.findByText(RAIL_PROVIDER.NOT_GRANTED("Claude Code"))).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeNull();
+  });
+});
+
+describe("R5c — the default is turned off: never auto-picked, even alone", () => {
+  it("with another candidate: a Select with the placeholder, nothing preselected, naming the disabled default", async () => {
+    const status = providerStatus([{ provider: claude, state: "live" }]);
+    renderRail({
+      status,
+      modelProvider: {
+        candidates: [claude],
+        access: status.provider_access,
+        selectedId: undefined,
+        onChange: () => {},
+        changeNote: null,
+        gate: { kind: "default_off", provider: gateway },
+        harnessLabel: "Claude Code",
+      },
+    });
+    // Even though exactly one candidate remains, R1's STATIC shortcut must
+    // not fire — the person still gets an explicit ask.
+    const trigger = await screen.findByRole("combobox", { name: RAIL_PROVIDER.LABEL });
+    expect(trigger).toHaveTextContent(RAIL_PROVIDER.PLACEHOLDER);
+    expect(screen.getByText(RAIL_PROVIDER.DEFAULT_OFF("Corp gateway", "Claude Code"))).toBeInTheDocument();
+  });
+
+  it("with no other candidate: no Select at all, naming the disabled default", async () => {
+    const status = providerStatus([]);
+    renderRail({
+      status,
+      modelProvider: {
+        candidates: [],
+        access: [],
+        selectedId: undefined,
+        onChange: () => {},
+        changeNote: null,
+        gate: { kind: "default_off", provider: gateway },
+        harnessLabel: "Claude Code",
+      },
+    });
+    expect(await screen.findByText(RAIL_PROVIDER.DEFAULT_OFF_ONLY("Corp gateway", "Claude Code"))).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeNull();
   });
 });

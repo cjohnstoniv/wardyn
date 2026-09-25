@@ -13,6 +13,7 @@ import {
   defaultCandidate,
   providerCandidates,
   providerConnected,
+  providerGate,
   providerOptionLabel,
   providerResidency,
   providerStateWord,
@@ -188,5 +189,88 @@ describe("resolveProviderSelection — R2/R6/R7/R8", () => {
       agentChanged: true, // the initial mount's ref-equal guard is the caller's job; this only checks the note rule
     });
     expect(result.changeNote).toBeNull();
+  });
+
+  // F2 (#612) — the workspace pin: checked ahead of the roster default,
+  // silently, and never papered over by a fallback substitution.
+  it("pin beats default", () => {
+    const candidates = [gateway, { ...anthropicKey, default_for: [CLAUDE_CODE] }];
+    const result = resolveProviderSelection({
+      candidates,
+      agent: CLAUDE_CODE,
+      agentLabel: "Claude Code",
+      previousId: undefined,
+      previousName: undefined,
+      agentChanged: false,
+      pin: gateway.id,
+    });
+    expect(result).toEqual({ selectedId: gateway.id, changeNote: null });
+  });
+
+  it("pin not a candidate → undefined", () => {
+    const candidates = [gateway, { ...anthropicKey, default_for: [CLAUDE_CODE] }];
+    const result = resolveProviderSelection({
+      candidates,
+      agent: CLAUDE_CODE,
+      agentLabel: "Claude Code",
+      previousId: undefined,
+      previousName: undefined,
+      agentChanged: false,
+      pin: bedrock.id, // bedrock doesn't serve this agent's candidate set here
+    });
+    expect(result).toEqual({ selectedId: undefined, changeNote: null });
+  });
+
+  // #542 rail-gap packet — R5c: a disabled default must never be replaced by
+  // whichever OTHER candidate happened to survive the disabled filter.
+  it("disabled default is not replaced", () => {
+    const result = resolveProviderSelection({
+      candidates: [claude], // the sole SURVIVING candidate — NOT the roster default
+      agent: CLAUDE_CODE,
+      agentLabel: "Claude Code",
+      previousId: undefined,
+      previousName: undefined,
+      agentChanged: false,
+      defaultDisabled: true, // gateway, the real default, is off — excluded from `candidates` already
+    });
+    expect(result).toEqual({ selectedId: undefined, changeNote: null });
+  });
+
+  it("with no disabled default, the ordinary sole-survivor rule still applies", () => {
+    const result = resolveProviderSelection({
+      candidates: [claude],
+      agent: CLAUDE_CODE,
+      agentLabel: "Claude Code",
+      previousId: undefined,
+      previousName: undefined,
+      agentChanged: false,
+      defaultDisabled: false,
+    });
+    expect(result).toEqual({ selectedId: claude.id, changeNote: null });
+  });
+});
+
+describe("providerGate — R5b/R5c (#542 rail-gap packet)", () => {
+  const CLAUDE_CODE = "claude-code";
+
+  it("is undefined when nothing serves this agent at all (R9)", () => {
+    expect(providerGate([], CLAUDE_CODE)).toBeUndefined();
+    expect(providerGate([{ ...gateway, harnesses: ["codex-cli"] }], CLAUDE_CODE)).toBeUndefined();
+  });
+
+  it("is undefined with an ordinary, non-disabled candidate set", () => {
+    expect(providerGate([gateway, claude], CLAUDE_CODE)).toBeUndefined();
+  });
+
+  it("names the disabled default (R5c), even with other candidates surviving", () => {
+    const disabledDefault = { ...gateway, disabled: true, default_for: [CLAUDE_CODE] };
+    expect(providerGate([disabledDefault, claude], CLAUDE_CODE)).toEqual({
+      kind: "default_off",
+      provider: disabledDefault,
+    });
+  });
+
+  it("reads generically (R5b) when every serving row is disabled and none is a named default", () => {
+    expect(providerGate([{ ...gateway, disabled: true }], CLAUDE_CODE)).toEqual({ kind: "not_granted" });
   });
 });
