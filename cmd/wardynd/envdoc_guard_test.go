@@ -194,6 +194,7 @@ var envDocShellOnly = map[string]bool{
 	// The chart render ui/e2e/live/sso-roles.spec.ts runs on, set per leg by
 	// the walk — another walk output, read only via process.env.
 	"WARDYN_LIVE_ROLES_RENDER": true,
+	"WARDYN_LIVE_ADO_MEMBER_EMAIL": true, "WARDYN_LIVE_ADO_PROXY_URL": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
