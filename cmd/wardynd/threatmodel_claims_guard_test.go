@@ -107,17 +107,32 @@ func TestThreatModelDocCapabilityKindsMatchCode(t *testing.T) {
 // fail-closed override field. These are the knobs that let a deployment boot
 // PAST a gate the threat model describes as unconditional, so each one is a
 // residual the published document has to carry.
-var overrideEnv = regexp.MustCompile(`(?:AllowUnenforced\w*|AllowUnenforceable\w*|AckAmbient\w*):\s*os\.Getenv\("(WARDYN_[A-Z0-9_]+)"\)`)
+//
+// Matches cliutil.EnvBool("WARDYN_X", false), the shared boolean parser (#202);
+// before that these three compared os.Getenv("WARDYN_X") against the literal
+// "1", which is the shape this regex matched until then.
+var overrideEnv = regexp.MustCompile(`(?:AllowUnenforced\w*|AllowUnenforceable\w*|AckAmbient\w*):\s*cliutil\.EnvBool\("(WARDYN_[A-Z0-9_]+)"`)
+
+// overrideField counts the same override fields however they are read, so an
+// override whose read drifts off cliutil.EnvBool fails the count below instead
+// of silently dropping out of overrideEnv's matches.
+var overrideField = regexp.MustCompile(`(?:AllowUnenforced\w*|AllowUnenforceable\w*|AckAmbient\w*):`)
 
 func TestThreatModelDocNamesFailClosedOverrides(t *testing.T) {
 	var envs []string
+	fields := 0
 	for _, rel := range []string{"internal/runner/k8s/register.go", "internal/runner/docker/register.go"} {
-		for _, m := range overrideEnv.FindAllStringSubmatch(readRepoFile(t, rel), -1) {
+		src := readRepoFile(t, rel)
+		fields += len(overrideField.FindAllString(src, -1))
+		for _, m := range overrideEnv.FindAllStringSubmatch(src, -1) {
 			envs = append(envs, m[1])
 		}
 	}
 	if len(envs) == 0 {
 		t.Fatal("found no fail-closed override env vars in the substrate register.go files — the pattern moved")
+	}
+	if len(envs) != fields {
+		t.Fatalf("%d fail-closed override fields in the substrate register.go files, but only %d read through cliutil.EnvBool (%v)", fields, len(envs), envs)
 	}
 	doc := readRepoFile(t, "threatmodel/THREAT-MODEL.md")
 	for _, env := range envs {

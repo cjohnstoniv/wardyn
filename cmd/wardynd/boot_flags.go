@@ -545,6 +545,10 @@ func parseBootFlags() *bootFlags {
 	}
 	flag.Parse()
 
+	// internal/api reads its env toggles per request; a garbage value in one
+	// exits 2 here, in every auth mode, rather than on the first request.
+	api.ValidateEnvToggles()
+
 	// An empty -listen/WARDYN_LISTEN is not a bind — see normalizeListenAddr.
 	// Done HERE, once, so every listen classifier and the http.Server itself
 	// read the same real address instead of net/http's implicit 0.0.0.0:80.

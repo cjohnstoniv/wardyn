@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"os"
 	"slices"
 
 	"github.com/google/uuid"
@@ -370,7 +369,7 @@ func capEphemeralDiskPreview(spec *types.RunPolicySpec, maxEphemeralDiskMiB int)
 // operator's raw secret value reached their sandbox env at
 // resolveEnvSecretGrants. A ceiling-scoped gate must never carry a rule that is
 // not about the ceiling.
-func memberEnvSecretIsAdminOnly() bool { return !envEnabled(os.Getenv(envAllowMemberEnvSecret)) }
+func memberEnvSecretIsAdminOnly() bool { return !envEnabled(envAllowMemberEnvSecret) }
 
 // envSecretAdminOnlyWarning is the one message both drop sites use, so the
 // member sees the same sentence in Review whichever path bounded their run.

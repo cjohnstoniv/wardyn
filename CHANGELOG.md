@@ -337,6 +337,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   capability question: `capAllowed`, `capGranted`, `capSeamAllowed` and `capScan` are one-value doors
   onto one seven-step rule order, direction comes from a `capKinds` table, and one resolution shares one
   snapshot through a context memo. A build with no store now refuses a widening kind at every door.
+- **`WARDYN_ALLOW_UNENFORCEABLE_CAPS`, `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` and
+  `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` now parse through the shared `cliutil.EnvBool`
+  that `wardynd`'s other booleans use, instead of comparing against the literal string
+  `1`.** `true`/`yes`/`on` now enable each switch (previously silently ignored — only
+  `1` worked), and a value that is neither truthy nor falsey now fails boot with an
+  error naming the variable, instead of being silently treated as off. A deployment
+  that set one of these to `true` and got no effect was hitting this bug, not a
+  disabled feature (#202).
+- **`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_ALLOW_MEMBER_ENV_SECRET` and
+  `WARDYN_ALLOW_AGENT_TELEMETRY` now refuse a bad value at boot.** A value that is
+  neither truthy nor falsey (`treu`, say) used to be read silently as off; `wardynd` now
+  exits 2 at startup naming the variable, in every auth mode. Accepted values are
+  unchanged (#202).
 - **Every authorization refusal goes through one emitter and one registry (#736).** `internal/authz` holds the
   closed `authz.denied` reason set, each reason's effect and status, and the serializable `Decision`
   (schema `authz/v1`); every door refuses through one `refuse`, and a guard test fails on an
