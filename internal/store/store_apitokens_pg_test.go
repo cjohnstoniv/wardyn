@@ -35,7 +35,7 @@ func seedToken(t *testing.T, st store.PG, principal, raw string, groups []string
 		ID:        uuid.New(),
 		Principal: principal,
 		Email:     principal + "@example.com",
-		Role:      "member",
+		Role:      "user",
 		Groups:    groups,
 		Name:      "ci",
 		CreatedAt: time.Now().UTC(),
@@ -57,7 +57,7 @@ func TestPG_APITokens_LookupTouchRevoke(t *testing.T) {
 		t.Errorf("created = %+v, want last_used_at and revoked_at NULL", created)
 	}
 
-	// HASH AT REST. Read the column back raw, because a Create/Get round trip
+	// Hash at rest. Read the column back raw, because a Create/Get round trip
 	// stays green even if hashToken (store_ephemeral.go) becomes the identity
 	// function and the table starts holding usable bearer credentials. This is
 	// the only assertion that looks at the stored bytes, and it pins the helper
@@ -76,7 +76,7 @@ func TestPG_APITokens_LookupTouchRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lookup by raw: %v", err)
 	}
-	if got.ID != created.ID || got.Email != created.Email || got.Role != "member" {
+	if got.ID != created.ID || got.Email != created.Email || got.Role != "user" {
 		t.Errorf("lookup = %+v, want the seeded row", got)
 	}
 	// The identity snapshot has to survive the JSONB round trip — a group grant
@@ -109,7 +109,7 @@ func TestPG_APITokens_LookupTouchRevoke(t *testing.T) {
 		t.Fatalf("revoked = %+v, want revoked_at set", revoked)
 	}
 	// A revoked token authenticates nothing, and its refusal is the SAME
-	// ErrNotFound an unknown token gets — no oracle for "this used to exist".
+	// ErrNotFound an unknown token gets — no oracle for "this once existed".
 	if _, err := st.GetAPITokenByRaw(ctx, raw); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("lookup of a revoked token: err = %v, want ErrNotFound", err)
 	}
@@ -188,15 +188,14 @@ func TestPG_APITokens_NilGroupsStayNull(t *testing.T) {
 	}
 }
 
-// TestPG_APITokens_RefreshIdentityAtLogin pins the bound the token lane did not
-// have. The role and groups are stamped at mint and only two statements ever
-// touched this table — last_used_at and revoked_at — so demoting a human from
-// admin, or a group membership change, left every outstanding wdn_ token of
-// theirs authenticating as who they used to be until someone separately
-// remembered to revoke it, and 0.7 widened that stamp to carry security_admin.
-// The sibling credential got exactly this bound in migration 0046
-// (RefreshSSHKeyRoles, fired from the same OnLogin hook); this is its twin,
-// widened by #152 from role-only to role+groups+groups_truncated together.
+// TestPG_APITokens_RefreshIdentityAtLogin pins the login bound on the token
+// lane. The role and groups are stamped at mint, so without a re-stamp,
+// demoting a human from admin or changing a group membership would leave
+// every outstanding wdn_ token of theirs authenticating as who they were
+// until someone separately remembered to revoke it — and the stamp carries
+// security_admin. The sibling credential has exactly this bound (migration
+// 0046, RefreshSSHKeyRoles, fired from the same OnLogin hook); this is its
+// twin, re-stamping role+groups+groups_truncated together.
 //
 // Four properties, each a way the UPDATE could be wrong:
 //   - it re-stamps EVERY token the principal holds, not just one;
@@ -251,7 +250,7 @@ func TestPG_APITokens_RefreshIdentityAtLogin(t *testing.T) {
 	if got := roleOf(a2.ID); got != "admin" {
 		t.Errorf("a2 role = %q, want admin — the refresh stopped at the first row", got)
 	}
-	if got := roleOf(b1.ID); got != "member" {
+	if got := roleOf(b1.ID); got != "user" {
 		t.Errorf("bob's role = %q, want member — one human's login re-stamped ANOTHER human's token", got)
 	}
 	if got := groupsOf(a1.ID); len(got) != 2 || got[0] != "eng" || got[1] != "oncall" {
@@ -265,10 +264,10 @@ func TestPG_APITokens_RefreshIdentityAtLogin(t *testing.T) {
 	if _, err := st.RevokeAPIToken(ctx, gone.ID, "", time.Now().UTC()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if err := st.RefreshAPITokenIdentity(ctx, alice, "member", []string{"eng"}, true); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, alice, "user", []string{"eng"}, true); err != nil {
 		t.Fatalf("RefreshAPITokenIdentity (demote): %v", err)
 	}
-	if got := roleOf(a1.ID); got != "member" {
+	if got := roleOf(a1.ID); got != "user" {
 		t.Errorf("a1 role = %q after demotion, want member — a demoted human kept admin on an outstanding token", got)
 	}
 	// gone was promoted with the rest while it was still live, THEN revoked,
@@ -314,7 +313,7 @@ func TestPG_APITokens_RefreshIdentityCarriesGroupsAndTruncated(t *testing.T) {
 	// exactly the shape sessionGroups (internal/auth/oidc/derive.go) reports
 	// for a human who fell off the snapshot cap or hit an IdP-side overage.
 	sessionBGroups := []string{"team-c"}
-	if err := st.RefreshAPITokenIdentity(ctx, principal, "member", sessionBGroups, true); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, principal, "user", sessionBGroups, true); err != nil {
 		t.Fatalf("RefreshAPITokenIdentity: %v", err)
 	}
 
@@ -335,7 +334,7 @@ func TestPG_APITokens_RefreshIdentityCarriesGroupsAndTruncated(t *testing.T) {
 	// A THIRD login with a complete snapshot must be able to clear the bit —
 	// proving it is not a one-way ratchet, i.e. RefreshAPITokenIdentity binds
 	// truncated EXACTLY as given, not OR'd with whatever was there before.
-	if err := st.RefreshAPITokenIdentity(ctx, principal, "member", []string{"team-c", "team-d"}, false); err != nil {
+	if err := st.RefreshAPITokenIdentity(ctx, principal, "user", []string{"team-c", "team-d"}, false); err != nil {
 		t.Fatalf("RefreshAPITokenIdentity (session C): %v", err)
 	}
 	got, err = st.GetAPITokenByRaw(ctx, raw)

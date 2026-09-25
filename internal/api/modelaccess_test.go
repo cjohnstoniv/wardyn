@@ -24,7 +24,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ── the per_user credential scope ────────────────────────────────────────────
+// the per_user credential scope
 
 // scopedSecrets is memSecrets plus a READ LOG KEYED BY OWNER, which is the only
 // way to assert the property that matters here: a per_user resolve must make NO
@@ -325,7 +325,7 @@ func TestResolveRunLLMAccess_AdminsOwnPerUserCaptureResolvesAtCreate(t *testing.
 	}
 }
 
-// ── the five lifecycle states ────────────────────────────────────────────────
+// the five lifecycle states
 
 // TestAWSSSOCredentialState_TheFiveStates walks the vocabulary, REGISTRATION
 // first. The ordering is the point: the access token lives an hour on the
@@ -407,14 +407,14 @@ func TestAWSSSOCredentialState_TheFiveStates(t *testing.T) {
 	}
 }
 
-// TestAWSSSOCredentialState_SpentBoundary is Finding 5's regression: a SPENT
-// refresh token must grade DEAD once the access token is inside the refresh
-// skew (dispatch would already refuse this run), and `expiring` — never
-// `live` — while it is still comfortably outside it. Before this a spent
-// token graded `live` until the CLIENT REGISTRATION lapsed, days later, while
-// every dispatch refused the person's runs. Round-1 general S4 / Codex #6:
-// grading `expiring` INSIDE the skew would promise a launch dispatch does not
-// honour, so the boundary is needsRefresh(now), not the registration.
+// TestAWSSSOCredentialState_SpentBoundary: a spent refresh token must grade
+// dead once the access token is inside the refresh skew (dispatch would
+// already refuse this run), and `expiring` — never `live` — while it is still
+// comfortably outside it. Grading it `live` until the client registration
+// lapses would show a live session for days while every dispatch refuses the
+// person's runs, and grading `expiring` inside the skew would promise a
+// launch dispatch does not honour, so the boundary is needsRefresh(now), not
+// the registration.
 func TestAWSSSOCredentialState_SpentBoundary(t *testing.T) {
 	now := awsSSOTestFixedNow
 	base := func(mut func(*awsSSOBlob)) awsSSOBlob {
@@ -653,7 +653,7 @@ func TestMemberModelAccess_NotApplicablePassesThrough(t *testing.T) {
 // would land in the SAME namespace (owner == "admin-token") and overwrite the
 // last person's session. A shared row is unaffected: the admin token still
 // may connect it. S-07: the refusal is an authz.denied row — the sibling
-// refusals in authorizeHarnessLogin (denyMemberField/denyMemberCapability)
+// refusals in authorizeHarnessLogin (refuse/denyMemberCapability)
 // both audit, and this is the one refusal on the credential-capture route an
 // operator's own CI job hits with no error budget to notice it by otherwise.
 func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
@@ -694,15 +694,14 @@ func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
 	}
 }
 
-// TestHandleHarnessLogin_NoOIDCAdminTokenStillAdmitted is S-01 (HIGH), red on
-// 6a33a36e: with NO OIDC configured, neither remedy the refusal sentence
-// names ("Sign in to the console" — there is no console session without
-// OIDC; "use your own wdn_ API token" — handleCreateAPIToken refuses to mint
-// one without a verified human) can exist, and the admin-token lane is the
-// deployment's ONLY working per_user capture path. It must keep working
-// exactly as it did before this lane's first commit — sshkeys.go's
-// handleAddSSHKey guards its own identical admin-token refusal on
-// `s.cfg.OIDC != nil` for this exact reason.
+// TestHandleHarnessLogin_NoOIDCAdminTokenStillAdmitted: with no OIDC
+// configured, neither remedy the refusal sentence names ("Sign in to the
+// console" — there is no console session without OIDC; "use your own wdn_ API
+// token" — handleCreateAPIToken refuses to mint one without a verified human)
+// can exist, and the admin-token lane is the deployment's only working
+// per_user capture path, so it must stay admitted — sshkeys.go's
+// handleAddSSHKey guards its own identical admin-token refusal on `s.cfg.OIDC
+// != nil` for this exact reason.
 func TestHandleHarnessLogin_NoOIDCAdminTokenStillAdmitted(t *testing.T) {
 	srv, _ := perUserLoginSrv(t)
 	cfg := srv.cfg
@@ -789,7 +788,7 @@ func TestRedactSetupStatusForMember_KeepsModelAccess(t *testing.T) {
 	}
 }
 
-// ── the member's sign-in door ────────────────────────────────────────────────
+// the member's sign-in door
 
 const perUserPortal = "https://org-portal.awsapps.com/start"
 
@@ -859,7 +858,7 @@ func loginStartURL(t *testing.T, audit *memAudit) string {
 // choosing and have Wardyn bake it into every later Bedrock run's ~/.aws/config.
 func TestHandleHarnessLogin_PerUserUsesTheRowsStartURL(t *testing.T) {
 	for who, sess := range map[string]*http.Cookie{
-		"member": ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember),
+		"member": ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser),
 		"admin":  ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin),
 	} {
 		t.Run(who, func(t *testing.T) {
@@ -882,7 +881,7 @@ func TestHandleHarnessLogin_PerUserUsesTheRowsStartURL(t *testing.T) {
 // all — still answers a member 403, and the operator still passes.
 func TestHandleHarnessLogin_MemberRefusedWithoutPerUserRow(t *testing.T) {
 	shared := types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO}
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	for name, rows := range map[string][]types.AgentProvider{
 		"a shared row":   {shared},
 		"a disabled row": {{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal, Disabled: true}},
@@ -942,14 +941,15 @@ func TestHarnessLoginGovernance_ExemptsDenyInteractiveOnly(t *testing.T) {
 }
 
 // TestUploadSSOToken_PerUserCaptureIsOwnerScopedAndOnceOnly is the capture half
-// of the lane, and the once-only guard is the part that had to move with it.
+// of the lane, and the once-only guard is scoped with it.
 //
-// The guard used to read the OPERATOR-wide blob. Under a per_user roster that is
-// not the blob the run is about: `prev` would be the ADMIN's capture, its
-// SourceRunID would never equal this run's, and the member's own login sandbox
-// could PUT over its own genuine capture as often as it liked — reopening
-// exactly the overwrite the guard exists to refuse (same start_url/region, the
-// attacker's access_token/account/role), by reading the wrong namespace.
+// The guard reads the capturing principal's own blob, not the operator-wide one.
+// Under a per_user roster the operator-wide blob is not the blob the run is
+// about: `prev` would be the admin's capture, its SourceRunID would never equal
+// this run's, and the member's own login sandbox could PUT over its own genuine
+// capture as often as it liked — reopening exactly the overwrite the guard
+// exists to refuse (same start_url/region, the attacker's
+// access_token/account/role), by reading the wrong namespace.
 func TestUploadSSOToken_PerUserCaptureIsOwnerScopedAndOnceOnly(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
@@ -1124,7 +1124,7 @@ func TestPerUserLoginRow_IsKeyedByAgentNotOnlyMechanism(t *testing.T) {
 		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
 	})
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
-		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), `{"provider":"aws"}`)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("member status = %d, want 403; body=%s", w.Code, w.Body.String())
 	}

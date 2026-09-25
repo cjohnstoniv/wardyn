@@ -101,7 +101,7 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/drives/grants/{id}", "`DELETE /drives/grants/{id}`"},
 	{"POST /api/v1/drives/preview", "`POST /drives/preview`"},
 
-	// ─── the rest of the gated surface (R1 F316) ─────────────────────────────
+	// the rest of the gated surface (R1 F316)
 	//
 	// Through 0.7 this list was 22 hand-picked representatives out of 59 gated
 	// routes, and nothing bounded it: the guard checked that the rows we had
@@ -139,11 +139,15 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/governance/assignments", "`/governance` profile and assignment routes"},
 	{"DELETE /api/v1/governance/assignments/{id}", "`/governance` profile and assignment routes"},
 	{"POST /api/v1/governance/preview", "`/governance` profile and assignment routes"},
+	{"GET /api/v1/user-types", "the `/user-types` routes"},
+	{"POST /api/v1/user-types", "the `/user-types` routes"},
+	{"PUT /api/v1/user-types/{id}", "the `/user-types` routes"},
+	{"DELETE /api/v1/user-types/{id}", "the `/user-types` routes"},
 	{"POST /api/v1/permissions/grants", "the `/permissions` routes below"},
 	{"DELETE /api/v1/permissions/grants/{id}", "the `/permissions` routes below"},
 
-	// F316's ten previously-undocumented gated routes (below), rowed in this
-	// docs pass. Moved OUT of docTierUndocumented, which is now empty.
+	// The gated routes below are rowed in docs/OPERATIONS.md like the rest;
+	// none remain in docTierUndocumented.
 	{"POST /api/v1/sources", "the `/sources` writes"},
 	{"POST /api/v1/sources/{id}/scan", "the `/sources` writes"},
 	{"DELETE /api/v1/sources/{id}", "the `/sources` writes"},
@@ -159,27 +163,19 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/admin/devices/enrolment-tokens", "`POST /admin/devices/enrolment-tokens`"},
 	{"GET /api/v1/admin/devices", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
 	{"DELETE /api/v1/admin/devices/{id}", "`GET /admin/devices` and `DELETE /admin/devices/{id}`"},
+	{"GET /api/v1/admin/devices/enrolment-tokens", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
+	{"DELETE /api/v1/admin/devices/enrolment-tokens/{id}", "`GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}`"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each
 // with the reason it is not covered yet. It is a RATCHET, not an exemption list:
 // a route here is admitted debt, and a NEW gated route that lands in neither
-// list fails the completeness check below rather than joining the 37 nobody
-// noticed.
+// list fails the completeness check below rather than going unnoticed.
 //
-// R1 F316's own four operator-topology reads used to sit here as FILED entries:
-// this wave re-tiered them to admin and the table never gained a row, so an
-// operator reading it to decide what to delegate could not learn that these
-// reads are gated at all. The docs pass landed the replacement row ("the
-// operator-topology READS") and moved all four into docTierRows above.
-//
-// The remaining ten pre-existing gaps the completeness check surfaced (the
-// `/sources` and `/base-images` writes, the two `/integrations/{id}` writes,
-// the admin sandbox sweep, onboarding-complete, and the attach socket) were
-// filed here as a second, lower-priority doc item; this docs pass rowed all
-// ten in docs/OPERATIONS.md and moved them into docTierRows above too, so the
-// map is empty. It stays declared, empty, as the ratchet's landing spot for
-// the next gap a completeness failure surfaces.
+// The map is empty: every gated route the completeness check has surfaced is
+// rowed in docs/OPERATIONS.md and listed in docTierRows above. It stays
+// declared, empty, as the ratchet's landing spot for the next gap a
+// completeness failure surfaces.
 var docTierUndocumented = map[string]string{}
 
 // TestOperationsTierTableMatchesRouteMatrix pins docs/OPERATIONS.md's "What
@@ -227,7 +223,7 @@ func TestOperationsTierTableMatchesRouteMatrix(t *testing.T) {
 		}
 	}
 
-	// THE REVERSE DIRECTION, which is what makes this a guard rather than a
+	// The reverse direction, which is what makes this a guard rather than a
 	// spot-check (R1 F316). Everything above asks "are the rows we listed
 	// right"; this asks "is every gated route listed", which is what the
 	// section claims to be. Without it the list was 22 of 59 and a re-tiering
@@ -311,7 +307,7 @@ func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
 	doc := unwrapped(operationsDoc(t))
 
 	// deriveRole can return three roles, so the manual cannot describe two.
-	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleMember} {
+	for _, role := range []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser} {
 		if !oidc.ValidRole(role) {
 			t.Fatalf("%q is no longer a role — revisit this guard, not the doc", role)
 		}
@@ -323,7 +319,7 @@ func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
 		{"a real two-role model",
 			"deriveRole derives three roles (oidc.ValidRole)"},
 		{"**Any match resolving to `admin` wins** over one resolving to `member`",
-			"the fold is roleRank's three ranks: member < security_admin < admin"},
+			"the fold is roleRank's three ranks: user < security_admin < admin"},
 		{"both already `operatorOnly`",
 			"approved-egress and denied-egress are registered on securityOps (routes.go)"},
 		{"(all `operatorOnly` except the last)",
@@ -334,8 +330,8 @@ func TestOperationsDocDescribesThreeRoleAuthz(t *testing.T) {
 		}
 	}
 	// And it must say what the fold actually is, not merely stop being wrong.
-	if !strings.Contains(doc, "`member` < `security_admin` < `admin`") {
-		t.Error(`OPERATIONS.md's "Deriving the role" never states roleRank's order (member < security_admin < admin)`)
+	if !strings.Contains(doc, "`user` < `security_admin` < `admin`") {
+		t.Error(`OPERATIONS.md's "Deriving the role" never states roleRank's order (user < security_admin < admin)`)
 	}
 }
 

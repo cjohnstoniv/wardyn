@@ -163,15 +163,21 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
 			return
 		}
+		if errors.Is(err, errSignInBusy) {
+			writeError(w, http.StatusServiceUnavailable, signInBusyRefusal)
+			return
+		}
 		writeServerError(w, r, "launch login sandbox", err)
 		return
 	}
 	// Answer first, then finish the launch. WithoutCancel keeps the request's
 	// values — the ceiling memo above all, so the dispatch axis resolves exactly
 	// the ceiling the Limits axis already bound — while dropping the deadline
-	// that dies with this response.
+	// that dies with this response. goBackground (server.go), not a bare `go`,
+	// so an orderly shutdown waits for this instead of cutting it off mid-dispatch.
 	writeJSON(w, http.StatusOK, harnessLoginResponse{RunID: run.ID.String(), State: string(run.State)})
-	go s.finishHarnessLoginLaunch(context.WithoutCancel(r.Context()), run, dispatch)
+	ctx := context.WithoutCancel(r.Context())
+	s.goBackground(func() { s.finishHarnessLoginLaunch(ctx, run, dispatch) })
 }
 
 // finishHarnessLoginLaunch is the part of the launch that can block: resolve the

@@ -47,7 +47,7 @@ func mpDispatch(t *testing.T, h *harness, st *bearerGuardStore, policy *types.Ru
 	defer func() { h.srv.cfg.Store = st }()
 	env := map[string]string{}
 	plan, ok := h.srv.resolveLLMInjections(context.Background(), st.run, dispatchParams{},
-		policy, env, injections, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, st.site, true, false)
+		policy, env, injections, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, st.site, true, false, bedrockCredUngraded())
 	st.grants = append(st.grants, captured.grants...)
 	return plan, env, captured.grants, ok
 }
@@ -277,7 +277,7 @@ func TestProviderDispatch_RefusesNamingTheProvider(t *testing.T) {
 			policy := types.RunPolicySpec{}
 			legacy := []runner.InjectionGrant{mpInjection("api.anthropic.com", "anthropic-api-key")}
 			if plan, ok := srv.resolveLLMInjections(ctx, run, dispatchParams{}, &policy, map[string]string{}, legacy, "",
-				artifactRedirectPlan{}, false, tc.site, tc.siteOK, false); ok || len(plan.injections) != 0 {
+				artifactRedirectPlan{}, false, tc.site, tc.siteOK, false, bedrockCredUngraded()); ok || len(plan.injections) != 0 {
 				t.Fatalf("dispatch admitted the run (ok=%v) or handed over %v", ok, plan.injections)
 			}
 			got, _ := srv.cfg.Store.GetRun(ctx, run.ID)

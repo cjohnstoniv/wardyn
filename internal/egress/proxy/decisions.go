@@ -46,9 +46,6 @@ type decisionSink struct {
 }
 
 func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
 	s := &decisionSink{
 		endpoint: controlPlaneURL + "/api/v1/internal/decisions",
 		token:    token,
@@ -146,7 +143,7 @@ func (s *decisionSink) run() {
 			// Individual decision: best-effort, must never block egress — but a
 			// decision the control plane REFUSED is a decision that was not
 			// individually recorded, which is exactly what s.dropped counts and
-			// reportDropped summarizes (F075 fix-up). Discarding the error would
+			// reportDropped summarizes. Discarding the error would
 			// let an over-large or rejected decision vanish from the audit trail
 			// with nothing anywhere saying so: internal/api's MaxBytesReader
 			// 413s a body over maxJSONBody, and that 413 must not be silent.

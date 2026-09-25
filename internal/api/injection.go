@@ -5,10 +5,16 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -115,6 +121,16 @@ func (s *Server) oauthProviderForSentinel(secretName string) (provider subscript
 // both sides agree — see types.ResolvedInjection for why.
 type injectionResponse = types.ResolvedInjection
 
+// withStoreRow adds the row a SiteAudited read reported — its store, ref and
+// owner (secretstore.Row.AuditData) — to a site's secret.read data. A read that
+// found no row adds nothing.
+func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
+	for k, v := range row.AuditData() {
+		data[k] = v
+	}
+	return data
+}
+
 // handleInternalInjection resolves an api_key grant to its injectable header
 // value for the run's wardyn-proxy sidecar (startup mint).
 //
@@ -154,107 +170,9 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// SUBSCRIPTION / MANAGED path: the sentinel secret name resolves to a LIVE
-	// Anthropic OAuth access token (the resident host token, or the Wardyn-managed
-	// captured setup-token) rather than a stored secret. The token lives only in
-	// proxy memory (masked from streams); the sandbox holds an inert sentinel.
-	if provider, source, isSentinel := s.oauthProviderForSentinel(minted.Injection.SecretName); isSentinel {
-		sentinel := minted.Injection.SecretName
-		// Record pin: once model providers are configured, a subscription
-		// token reaches a run only through its provider's record, as that run
-		// owner's own sign-in. These two sentinels name no record and back the
-		// operator's token, so they resolve only while no provider block is
-		// set — never under one, and never when it cannot be read. Precedes
-		// the host pin, whose second host is the boot gateway
-		// (Config.LLMGateways), not a record.
-		if status, reason, body := s.legacySubscriptionSentinelRefusal(r.Context()); status != 0 {
-			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-				"secret.read", sentinel, "failure",
-				mustJSON(map[string]any{"reason": reason, "grant_id": grantID, "source": source})))
-			writeError(w, status, body)
-			return
-		}
-		// Host pin: fail closed unless the grant targets Anthropic. An
-		// authored/inline/recorded grant could set this sentinel's host to any
-		// egress-allowlisted host; because we force Authorization: Bearer <token>
-		// below with a LIVE OAuth token, a non-Anthropic host would exfiltrate that
-		// token (in cleartext on a plain-HTTP allowlist entry). This is the single
-		// sink chokepoint that protects every caller; the policy validator rejects a
-		// mis-authored host earlier as defense-in-depth.
-		if !s.subscriptionInjectionHostAllowed(minted.Injection.Host) {
-			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-				"secret.read", sentinel, "failure",
-				mustJSON(map[string]any{"reason": "oauth-host-not-anthropic", "host": minted.Injection.Host, "grant_id": grantID, "source": source})))
-			writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+s.subscriptionInjectionHostDesc())
-			return
-		}
-		// Posture pin: refuse to resolve a SHARED subscription credential unless this
-		// deployment is single-user (subscriptionInjectPosture, cmd/wardynd). Sits on
-		// the same chokepoint as the host pin above and for the same reason — this is
-		// the ONE place every producer of a sentinel grant converges. Dispatch-time
-		// gating alone would miss four of them: a stored policy naming the sentinel,
-		// a member-supplied integration_id, a Record Mode profile that captured the
-		// grant, and the managed lane's default fallback. It also misses the drift
-		// case entirely: a grant authored while the daemon was single-user is
-		// re-resolved by the still-running proxy after a restart into a multi-user
-		// posture, because resident tokens carry an expiry and the injector refreshes.
-		//
-		// MUST precede provider.Current() below: Current() shells out to the resident
-		// `claude` and ROTATES the operator's own ~/.claude/.credentials.json. Refusing
-		// after it would still mutate their personal credential on behalf of a run we
-		// just decided was not entitled to it.
-		if !s.cfg.SubscriptionPostureOK {
-			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-				"secret.read", sentinel, "failure",
-				mustJSON(map[string]any{"reason": "shared-subscription-posture", "grant_id": grantID, "source": source, "detail": s.cfg.SubscriptionPostureReason})))
-			writeError(w, http.StatusForbidden, "shared subscription credentials are not available in this deployment: "+s.cfg.SubscriptionPostureReason)
-			return
-		}
-		if provider == nil {
-			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-				"secret.read", sentinel, "failure",
-				mustJSON(map[string]any{"reason": "no-oauth-provider", "grant_id": grantID, "source": source})))
-			writeError(w, http.StatusFailedDependency, source+" token provider is not configured")
-			return
-		}
-		tok, terr := provider.Current(r.Context())
-		if terr != nil {
-			// Fail closed: never inject an expired/absent token.
-			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-				"secret.read", sentinel, "failure",
-				mustJSON(map[string]any{"reason": "resolve-failed", "grant_id": grantID, "source": source})))
-			writeError(w, http.StatusFailedDependency, "resolve "+source+" token: "+terr.Error())
-			return
-		}
-		// The OAuth token has exactly ONE correct wire shape: Authorization: Bearer
-		// <token>. Force it here regardless of the grant's authored header/format — a
-		// recorded profile can carry a crossed-wire sentinel grant (x-api-key/%s)
-		// that would otherwise inject the token in the wrong header. Host stays the
-		// grant's (api.anthropic.com).
-		const subHeader, subFormat = "Authorization", "Bearer %s"
-		formatted := formatInjectionValue(subFormat, []byte(tok.Value))
-		if s.cfg.MaskRegistry != nil {
-			s.cfg.MaskRegistry.Add(claims.RunID, []byte(tok.Value))
-			if formatted != tok.Value {
-				s.cfg.MaskRegistry.Add(claims.RunID, []byte(formatted))
-			}
-		}
-		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", sentinel, "success",
-			mustJSON(map[string]any{"purpose": "proxy-injection-subscription", "grant_id": grantID, "jti": minted.JTI, "source": source})))
-		resp := injectionResponse{
-			Host:   minted.Injection.Host,
-			Header: subHeader,
-			Value:  formatted,
-			JTI:    minted.JTI,
-		}
-		// Only advertise an expiry when the provider has a machine-readable one
-		// (resident subscription token). The managed setup-token has none (zero
-		// time), so the proxy treats it as static — no re-resolve churn.
-		if !tok.ExpiresAt.IsZero() {
-			resp.ExpiresAt = tok.ExpiresAt.UnixMilli()
-		}
-		writeJSON(w, http.StatusOK, resp)
+	// SUBSCRIPTION / MANAGED path: the two Anthropic OAuth sentinels — see
+	// resolveSubscriptionSentinelInjection.
+	if s.resolveSubscriptionSentinelInjection(w, r, claims, minted, grantID) {
 		return
 	}
 
@@ -306,17 +224,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// A person's own model-provider key resolves from the namespace dispatch
-	// recorded on its own grant, strictly — see resolveProviderKeyInjection.
-	if s.resolveProviderKeyInjection(w, r, claims, minted, grantID) {
-		return
-	}
-
-	// bedrock-api-key is the ONE stored name whose namespace the ROSTER decides,
-	// so the owner-fallback read below never resolves it: it resolves from the
-	// namespace dispatch recorded on its own grant, or not at all — see
+	// A person's own model-provider key, and bedrock-api-key (the ONE stored
+	// name whose namespace the ROSTER decides), never take the owner-fallback
+	// read below: each resolves from the namespace dispatch recorded on its own
+	// grant, or not at all — see resolveProviderKeyInjection and
 	// resolveBedrockBearerInjection.
-	if s.resolveBedrockBearerInjection(w, r, claims, minted, grantID) {
+	if s.resolveProviderKeyInjection(w, r, claims, minted, grantID) ||
+		s.resolveBedrockBearerInjection(w, r, claims, minted, grantID) {
 		return
 	}
 
@@ -330,18 +244,38 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// operator's writes under "" only, so no row ever exists under those
 	// strings and the lookup falls back to the operator row: today's single
 	// namespace, unchanged, for every pre-0.7 deployment.
-	secret, err := s.cfg.Secrets.For(claims.Sub).Get(r.Context(), minted.Injection.SecretName)
+	rctx, row := secretstore.SiteAudited(r.Context())
+	secret, err := s.cfg.Secrets.For(claims.Sub).Get(rctx, minted.Injection.SecretName)
 	if err != nil {
-		// Fail closed; the proxy refuses to start without its injections.
+		// Fail closed; the proxy refuses to start without its injections. The
+		// reason tells a store outage from a credential that is gone or refused.
+		reason := "refused"
+		switch {
+		case errors.Is(err, secretstore.ErrUnavailable):
+			reason = "store-unavailable"
+		case errors.Is(err, secretstore.ErrNotFound):
+			reason = "not-found"
+		}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", minted.Injection.SecretName, "failure", nil))
-		writeError(w, http.StatusFailedDependency,
-			"secret "+minted.Injection.SecretName+" is not in the store (set it with `wardyn secret set`)")
+			"secret.read", minted.Injection.SecretName, "failure",
+			mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}, row))))
+		if reason == "store-unavailable" {
+			// Transient: the organisation's store did not answer. A distinct
+			// status, so it is never mistaken for a credential that is gone.
+			writeError(w, http.StatusServiceUnavailable,
+				"Wardyn couldn't reach the service that holds this run's credential, so it couldn't unlock it. Nothing was substituted. Try again in a moment.")
+			return
+		}
+		msg := "secret " + minted.Injection.SecretName + " is not in the store (set it with `wardyn secret set`)"
+		if reason == "refused" { // the row exists: re-setting it would overwrite what an operator may need to inspect
+			msg = "secret " + minted.Injection.SecretName + " exists but could not be used: the store refused it (its value is gone, or bound to another row). Nothing was substituted; ask an admin to check it."
+		}
+		writeError(w, http.StatusFailedDependency, msg)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", minted.Injection.SecretName, "success",
-		mustJSON(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub})))
+		mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}, row))))
 
 	formattedValue := formatInjectionValue(minted.Injection.Format, secret)
 
@@ -362,4 +296,117 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		Value:  formattedValue,
 		JTI:    minted.JTI,
 	})
+}
+
+// resolveSubscriptionSentinelInjection is the subscription/managed arm of
+// handleInternalInjection. handled=false means the grant names another secret.
+//
+// SUBSCRIPTION / MANAGED path: the sentinel secret name resolves to a LIVE
+// Anthropic OAuth access token (the resident host token, or the Wardyn-managed
+// captured setup-token) rather than a stored secret. The token lives only in
+// proxy memory (masked from streams); the sandbox holds an inert sentinel.
+func (s *Server) resolveSubscriptionSentinelInjection(w http.ResponseWriter, r *http.Request,
+	claims *identity.Claims, minted broker.Minted, grantID uuid.UUID,
+) bool {
+	provider, source, isSentinel := s.oauthProviderForSentinel(minted.Injection.SecretName)
+	if !isSentinel {
+		return false
+	}
+	sentinel := minted.Injection.SecretName
+	// Record pin: once model providers are configured, a subscription
+	// token reaches a run only through its provider's record, as that run
+	// owner's own sign-in. These two sentinels name no record and back the
+	// operator's token, so they resolve only while no provider block is
+	// set — never under one, and never when it cannot be read. Precedes
+	// the host pin, whose second host is the boot gateway
+	// (Config.LLMGateways), not a record.
+	if status, reason, body := s.legacySubscriptionSentinelRefusal(r.Context()); status != 0 {
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"secret.read", sentinel, "failure",
+			mustJSON(map[string]any{"reason": reason, "grant_id": grantID, "source": source})))
+		writeError(w, status, body)
+		return true
+	}
+	// Host pin: fail closed unless the grant targets Anthropic. An
+	// authored/inline/recorded grant could set this sentinel's host to any
+	// egress-allowlisted host; because we force Authorization: Bearer <token>
+	// below with a LIVE OAuth token, a non-Anthropic host would exfiltrate that
+	// token (in cleartext on a plain-HTTP allowlist entry). This is the single
+	// sink chokepoint that protects every caller; the policy validator rejects a
+	// mis-authored host earlier as defense-in-depth.
+	if !s.subscriptionInjectionHostAllowed(minted.Injection.Host) {
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"secret.read", sentinel, "failure",
+			mustJSON(map[string]any{"reason": "oauth-host-not-anthropic", "host": minted.Injection.Host, "grant_id": grantID, "source": source})))
+		writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+s.subscriptionInjectionHostDesc())
+		return true
+	}
+	// Posture pin: refuse to resolve a SHARED subscription credential unless this
+	// deployment is single-user (subscriptionInjectPosture, cmd/wardynd). Sits on
+	// the same chokepoint as the host pin above and for the same reason — this is
+	// the ONE place every producer of a sentinel grant converges. Dispatch-time
+	// gating alone would miss four of them: a stored policy naming the sentinel,
+	// a member-supplied integration_id, a Record Mode profile that captured the
+	// grant, and the managed lane's default fallback. It also misses the drift
+	// case entirely: a grant authored while the daemon was single-user is
+	// re-resolved by the still-running proxy after a restart into a multi-user
+	// posture, because resident tokens carry an expiry and the injector refreshes.
+	//
+	// MUST precede provider.Current() below: Current() shells out to the resident
+	// `claude` and ROTATES the operator's own ~/.claude/.credentials.json. Refusing
+	// after it would still mutate their personal credential on behalf of a run we
+	// just decided was not entitled to it.
+	if !s.cfg.SubscriptionPostureOK {
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"secret.read", sentinel, "failure",
+			mustJSON(map[string]any{"reason": "shared-subscription-posture", "grant_id": grantID, "source": source, "detail": s.cfg.SubscriptionPostureReason})))
+		writeError(w, http.StatusForbidden, "shared subscription credentials are not available in this deployment: "+s.cfg.SubscriptionPostureReason)
+		return true
+	}
+	if provider == nil {
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"secret.read", sentinel, "failure",
+			mustJSON(map[string]any{"reason": "no-oauth-provider", "grant_id": grantID, "source": source})))
+		writeError(w, http.StatusFailedDependency, source+" token provider is not configured")
+		return true
+	}
+	tok, terr := provider.Current(r.Context())
+	if terr != nil {
+		// Fail closed: never inject an expired/absent token.
+		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+			"secret.read", sentinel, "failure",
+			mustJSON(map[string]any{"reason": "resolve-failed", "grant_id": grantID, "source": source})))
+		writeError(w, http.StatusFailedDependency, "resolve "+source+" token: "+terr.Error())
+		return true
+	}
+	// The OAuth token has exactly ONE correct wire shape: Authorization: Bearer
+	// <token>. Force it here regardless of the grant's authored header/format — a
+	// recorded profile can carry a crossed-wire sentinel grant (x-api-key/%s)
+	// that would otherwise inject the token in the wrong header. Host stays the
+	// grant's (api.anthropic.com).
+	const subHeader, subFormat = "Authorization", "Bearer %s"
+	formatted := formatInjectionValue(subFormat, []byte(tok.Value))
+	if s.cfg.MaskRegistry != nil {
+		s.cfg.MaskRegistry.Add(claims.RunID, []byte(tok.Value))
+		if formatted != tok.Value {
+			s.cfg.MaskRegistry.Add(claims.RunID, []byte(formatted))
+		}
+	}
+	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
+		"secret.read", sentinel, "success",
+		mustJSON(map[string]any{"purpose": "proxy-injection-subscription", "grant_id": grantID, "jti": minted.JTI, "source": source})))
+	resp := injectionResponse{
+		Host:   minted.Injection.Host,
+		Header: subHeader,
+		Value:  formatted,
+		JTI:    minted.JTI,
+	}
+	// Only advertise an expiry when the provider has a machine-readable one
+	// (resident subscription token). The managed setup-token has none (zero
+	// time), so the proxy treats it as static — no re-resolve churn.
+	if !tok.ExpiresAt.IsZero() {
+		resp.ExpiresAt = tok.ExpiresAt.UnixMilli()
+	}
+	writeJSON(w, http.StatusOK, resp)
+	return true
 }

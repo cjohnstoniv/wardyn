@@ -38,6 +38,7 @@ import type { AccessLoadState } from "./access-panel";
 import { resolveDefaultCc } from "../../wardyn/default-confinement";
 import { deploymentMode, deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
+import { useShellSetupStatus } from "../../wardyn/model-access-context";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
@@ -51,6 +52,7 @@ import { IntegrationsStep } from "./integrations-step";
 import { ProvidersCard } from "./providers-card";
 import { providers as providersApi } from "../../../lib/api/providers";
 import { PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
+import { SITE } from "../../wardyn/copy";
 import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
   DEMO_STEP_IDS,
@@ -88,7 +90,13 @@ import {
 // demo catalog + launched-set reader are imported eagerly above (xterm-free).
 const DemoDetail = React.lazy(() => import("./demos-step"));
 
-export function SetupScreen({ onDone }: { onDone: () => void }) {
+export function SetupScreen({
+  onDone,
+  initialStatus = null,
+}: {
+  onDone: () => void;
+  initialStatus?: SetupStatus | null;
+}) {
   const operator = useOperator();
   // Defence in depth: this screen only ever mounts once App.tsx's SetupRoute
   // has let roleResolved through AND role === "admin" (onboarding-screen.tsx),
@@ -117,7 +125,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       ? (want as SetupStepId)
       : "environment";
   });
-  const [status, setStatus] = React.useState<SetupStatus | null>(null);
+  // #806: seeded from the status the console already holds (App.tsx's poll —
+  // the very read that sent a gated install here), so the rail paints on the
+  // chunk alone instead of waiting on a second /setup/status round trip behind
+  // "Checking Wardyn's setup…". The mount recheck below still replaces it.
+  const [status, setStatus] = React.useState<SetupStatus | null>(initialStatus);
   const [rechecking, setRechecking] = React.useState(false);
   const [lastCheckedAt, setLastCheckedAt] = React.useState<Date | null>(null);
   // Bumped whenever a host re-check COMPLETES — EnvironmentStep reads it as
@@ -196,6 +208,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // from the funnel; they're embedded in the Integrations "Add integration"
   // dialog instead, which owns its own local copy for editing.
   const [siteConfig, setSiteConfig] = React.useState<SiteConfig | null>(null);
+  // #492: the last GET's (or the last successful PUT's) ETag — sent back as
+  // If-Match on the one write path below, the same discipline
+  // sign-in-help-card.tsx already applies to its own two site-config fields.
+  // Without this, saveSiteConfig PUT the whole document from a GET that could
+  // already be stale (another tab's scm_hosts/egress_redirects save, or that
+  // card's own sign_in_help_* save) and silently reverted it.
+  const [siteConfigEtag, setSiteConfigEtag] = React.useState<string | null>(null);
   // Role-mappings acting surface (0.7 SSO Phase 3) — People's multi-user
   // branch. Owned here, same split every other status-derived fetch on this
   // screen follows (siteConfig, secrets): DeploymentStep only renders it.
@@ -220,6 +239,14 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         setAccessState(e instanceof HttpError && e.status === 503 ? "sso_unavailable" : "fetch_failed");
       });
   }, []);
+  // A role-mapping write can end the everyone-is-an-admin state, and the
+  // shell's banner reads the SHELL's /setup/status (polled every few minutes),
+  // not this screen's — so every access reload re-reads that one too.
+  const { refresh: refreshShellStatus } = useShellSetupStatus();
+  const reloadAccessAndShell = React.useCallback(() => {
+    void loadAccess();
+    void refreshShellStatus();
+  }, [loadAccess, refreshShellStatus]);
   // Default-barrier pick (E3), IN-SESSION only (0.7.8: the default is a
   // server fact — the strongest installed class at or above the policy floor
   // — so there is nothing left to persist here). Null until an explicit
@@ -336,12 +363,18 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // Read-only fetch — the orchestrator only needs SiteConfig to derive the
   // Integrations badge count; every WRITE to it now happens inside the
   // embedded Integrations step's own "Add integration" dialog, which keeps
-  // its own local copy (see integrations/add-integration-dialog.tsx).
+  // its own local copy (see integrations/add-integration-dialog.tsx). Uses
+  // the ETag-carrying snapshot (not plain getSiteConfig) so the write path
+  // below always has the CURRENT document's ETag to send as If-Match, even
+  // though most callers of reloadSiteConfig never write anything themselves.
   const reloadSiteConfig = React.useCallback(() => {
     if (!adminReads) return Promise.resolve();
     return healthApi
-      .getSiteConfig()
-      .then(setSiteConfig)
+      .getSiteConfigSnapshot()
+      .then(({ siteConfig, etag }) => {
+        setSiteConfig(siteConfig);
+        setSiteConfigEtag(etag);
+      })
       .catch(() => {});
   }, [adminReads]);
 
@@ -357,21 +390,41 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // saving step itself already shows (corp-network-proxy.tsx /
   // corp-network-egress.tsx) — never a replacement for it, so a clean save's
   // plain success is untouched.
+  //
+  // #492: sends the last reload's ETag as If-Match (sign-in-help-card.tsx's
+  // own discipline, applied here) — a PUT built from a document that changed
+  // underneath since that reload is refused 412, not silently accepted. On a
+  // 412, reloadSiteConfig() refreshes this orchestrator's copy (and its ETag,
+  // for a retry) but the step's own draft is left exactly where the operator
+  // left it: the Host proxy fields seed from the `siteConfig` PROP once (their
+  // seededRef guard), and the Egress add form / edit row clear or collapse
+  // only when mutate() reports the save landed. mutate() (step-bodies.tsx's
+  // useSiteConfigStep) still shows its own toast for the failure — thrown as
+  // a plain Error here only so its description is the human sentence, not the
+  // server's raw If-Match refusal text.
   const saveSiteConfig = React.useCallback(
     async (next: SiteConfig) => {
-      const result = await healthApi.putSiteConfig(next);
-      await reloadSiteConfig();
-      if (result.danglingSecretRefs.length > 0) {
-        toast.warning(PROVIDERS_DRAFT.SAVED_DANGLING_REFS(result.danglingSecretRefs));
-      }
-      // A POINTER on the wire: only a PRESENT positive number is a narrowed-
-      // sources warning — never `?? 0`, which would claim "narrowed nothing"
-      // for a save (this screen's own) that named no provider block at all.
-      if (typeof result.sourcesNoLongerAdmitted === "number" && result.sourcesNoLongerAdmitted > 0) {
-        toast.warning(PROVIDERS.SAVED_NARROWED(result.sourcesNoLongerAdmitted));
+      try {
+        const result = await healthApi.putSiteConfig(next, siteConfigEtag);
+        await reloadSiteConfig();
+        if (result.danglingSecretRefs.length > 0) {
+          toast.warning(PROVIDERS_DRAFT.SAVED_DANGLING_REFS(result.danglingSecretRefs));
+        }
+        // A POINTER on the wire: only a PRESENT positive number is a narrowed-
+        // sources warning — never `?? 0`, which would claim "narrowed nothing"
+        // for a save (this screen's own) that named no provider block at all.
+        if (typeof result.sourcesNoLongerAdmitted === "number" && result.sourcesNoLongerAdmitted > 0) {
+          toast.warning(PROVIDERS.SAVED_NARROWED(result.sourcesNoLongerAdmitted));
+        }
+      } catch (e) {
+        if (e instanceof HttpError && e.status === 412) {
+          await reloadSiteConfig();
+          throw new Error(SITE.SAVED_ELSEWHERE);
+        }
+        throw e;
       }
     },
-    [reloadSiteConfig],
+    [reloadSiteConfig, siteConfigEtag],
   );
 
   const loadSecrets = React.useCallback(() => {
@@ -409,13 +462,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     // and every manual Re-check pull it — a failure leaves the last-known
     // config (or the initial null) in place, never clobbers it. This is the
     // ORCHESTRATOR'S sole GET path.
-    reloadSiteConfig();
+    void reloadSiteConfig();
     // Secret names feed the SAME Integrations badge (deriveIntegrations) —
     // without this, adding/deleting a secret-backed integration inside the
     // embedded step never reaches the rail, which keeps reading the
     // mount-time snapshot until a full page reload.
-    loadSecrets();
-    loadProviderCount();
+    void loadSecrets();
+    void loadProviderCount();
     return setupApi
       .getSetupStatus({ recheck: opts?.force })
       .then((s) => {
@@ -456,6 +509,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         // single-user deployment never needs this fetch at all.
         if (deploymentMode(s) === "multi-user") void loadAccess();
       })
+      // getSetupStatus only ever rejects on a 401 (see its own doc comment) —
+      // wfetch has already routed that to the module-level onUnauthorized
+      // handler (core.ts) before this rejection reaches here, so there is
+      // nothing left for a caller to do with it. Caught here, once, so none of
+      // recheck()'s five call sites (mount, the Re-check button, three
+      // onRecheck props) leaves an unhandled rejection.
+      .catch(() => {})
       .finally(() => setRechecking(false));
   }, [reloadSiteConfig, loadSecrets, loadProviderCount, loadAccess]);
 
@@ -469,7 +529,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   const forceRecheck = React.useCallback(() => recheck({ force: true }), [recheck]);
 
   React.useEffect(() => {
-    recheck(); // also performs the initial SiteConfig + secrets GET (see recheck)
+    void recheck(); // also performs the initial SiteConfig + secrets GET (see recheck)
     loadWorkspaces();
     // run once on mount — recheck/loadWorkspaces are no longer identity-stable
     // ([adminReads] now rides through recheck's own dep chain), but adminReads
@@ -478,7 +538,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     // (app-shell.tsx's OperatorProvider/RoleProvider both flip from the same
     // settled /me read), so there is no later tick where a fresh recheck()
     // would need to fire on adminReads' account.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once; adminReads is invariant for this mount's life (see comment above)
   }, []);
 
   // A `?step=` deep link is read once at mount (the initializer
@@ -498,7 +558,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     if (initialDeepLinkCheckedRef.current || !status) return;
     initialDeepLinkCheckedRef.current = true;
     if (refuseSelect(stepId, "environment")) setStepId("corp_network");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the ref latch fires this once, off status becoming known, not off stepId changing (see comment above)
   }, [status]);
 
   // Once per PAGE LOAD (clearStaleVisitFlagsOnce's own module latch —
@@ -516,7 +576,6 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       setSkippedIntegrations(false);
       setVisitedSteps(new Set());
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
   // …and the OTHER correction, deliberately its own effect and deliberately
@@ -777,7 +836,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           />
         )}
         {stepId === "people" && (
-          <DeploymentStep status={status} access={access} accessState={accessState} onReloadAccess={loadAccess} />
+          <DeploymentStep status={status} access={access} accessState={accessState} onReloadAccess={reloadAccessAndShell} />
         )}
         {stepId === "corp_network" && (
           <CorpNetworkStep

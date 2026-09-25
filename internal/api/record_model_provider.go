@@ -100,7 +100,7 @@ func (s *Server) recordSessionModelAccess(ctx context.Context, runID uuid.UUID, 
 		// No workspace/operator integration bound: fall back to the operator
 		// ceiling's convention subscription mount, else a brokered api-key grant
 		// (today's behavior for an unbound workspace).
-		if m, _ := applyLLMCredMount(policy, s.cfg.DefaultPolicy, "claude-code", true, s.anthropicGatewayHost()); m {
+		if m, _ := applyLLMCredMount(policy, s.cfg.DefaultPolicy, "claude-code", true, s.anthropicGatewayHostPort()); m {
 			subMounted = true
 		} else {
 			s.ensureLLMGrant(policy, "claude-code", s.presentSecretNames(ctx), false)
