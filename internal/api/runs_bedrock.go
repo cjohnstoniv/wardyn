@@ -822,7 +822,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			// captured (Registry.MinLen). Merge, not AddGlobal: this blob may predate
 			// a refresh that ran concurrently outside our read, and replacing the
 			// credential's set with it would retire the refresh's live tokens.
-			s.cfg.MaskRegistry.MergeGlobal(sso.rowOwner(), harnessCredSecretName(awsSSOProvider),
+			s.cfg.MaskRegistry.MergeGlobalUntil(sso.rowOwner(), harnessCredSecretName(awsSSOProvider), blob.ExpiresAt,
 				[]byte(blob.AccessToken), []byte(blob.RefreshToken), []byte(blob.ClientSecret))
 			// The POST-refresh blob's own pair: a refresh=true pass is the one allowed
 			// to redeem the rotating refresh token, and the identity the gate

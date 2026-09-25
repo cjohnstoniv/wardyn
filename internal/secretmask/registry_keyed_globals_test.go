@@ -123,3 +123,52 @@ func TestAddGlobal_NoUsableValueRetiresNothing(t *testing.T) {
 		t.Error("the held value was swept after an AddGlobal that carried nothing")
 	}
 }
+
+// #151: a current access token nobody replaces used to stay masked for the
+// daemon's life. AddGlobalUntil lets it go once its expiry is past the sweep's
+// cutoff, and never the lasting values beside it.
+func TestAddGlobalUntil_TheExpiringValueIsSweptAfterItsExpiry(t *testing.T) {
+	r := NewRegistry()
+	expiry := time.Now().Add(time.Hour)
+	const access, refresh = "access-token-with-an-expiry", "refresh-token-without-one"
+	r.AddGlobalUntil("alice", "ado", expiry, []byte(access), []byte(refresh))
+	masked := func(v string) bool { return !bytes.Contains(r.Masker(uuid.Nil).Mask([]byte(v)), []byte(v)) }
+
+	if n := r.SweepGlobals(expiry); n != 0 {
+		t.Fatalf("a sweep whose cutoff is the expiry itself dropped %d values, want 0", n)
+	}
+	if n := r.SweepGlobals(expiry.Add(time.Second)); n != 1 {
+		t.Fatalf("the sweep past the expiry dropped %d values, want 1 (the access token)", n)
+	}
+	if masked(access) {
+		t.Error("the expired access token is still held after the sweep")
+	}
+	if !masked(refresh) {
+		t.Error("the refresh token, which has no expiry, was swept with the access token")
+	}
+
+	// A refresh the sweep never saw coming: the value is current again, bounded
+	// by its new expiry, and a plain AddGlobal of the same value lifts the bound.
+	r.AddGlobalUntil("alice", "ado", expiry.Add(time.Hour), []byte(access), []byte(refresh))
+	r.AddGlobal("alice", "ado", []byte(access), []byte(refresh))
+	if n := r.SweepGlobals(expiry.Add(2 * time.Hour)); n != 0 {
+		t.Errorf("a value re-registered with no expiry was swept (%d dropped)", n)
+	}
+}
+
+// A dispatch that read the blob before a renewal merges its stale view; it must
+// never shorten a value's expiry, nor put one on a value that had none.
+func TestMergeGlobalUntil_KeepsTheLaterExpiry(t *testing.T) {
+	r := NewRegistry()
+	t0 := time.Now().Add(time.Hour)
+	const access, refresh = "access-token-with-an-expiry", "refresh-token-without-one"
+	r.AddGlobalUntil("alice", "aws", t0.Add(time.Hour), []byte(access), []byte(refresh))
+	r.MergeGlobalUntil("alice", "aws", t0, []byte(access), []byte(refresh))
+	if n := r.SweepGlobals(t0.Add(time.Minute)); n != 0 {
+		t.Fatalf("a stale merge shortened the access token's expiry: the sweep dropped %d values", n)
+	}
+	r.MergeGlobalUntil("alice", "aws", t0, []byte(refresh))
+	if n := r.SweepGlobals(t0.Add(2 * time.Hour)); n != 1 {
+		t.Errorf("the sweep past the access token's expiry dropped %d values, want 1 (a merge must not bound the refresh token)", n)
+	}
+}

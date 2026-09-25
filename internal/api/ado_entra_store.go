@@ -431,11 +431,13 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	// across every run that selects this lane. Register the refresh token the
 	// blob will hold: one the response left out is still in use, and leaving it
 	// out of this call would retire it (and sweep it an hour later) while live.
+	// The access token is let go one grace after its expiry (#151).
 	keep := blob.RefreshToken
 	if resp.RefreshToken != "" {
 		keep = resp.RefreshToken
 	}
-	s.cfg.MaskRegistry.AddGlobal(owner, adoEntraSecretName(cfg.RowID), []byte(resp.AccessToken), []byte(keep))
+	accessExpiry := s.cfg.Now().Add(time.Duration(resp.ExpiresIn) * time.Second).UTC()
+	s.cfg.MaskRegistry.AddGlobalUntil(owner, adoEntraSecretName(cfg.RowID), accessExpiry, []byte(resp.AccessToken), []byte(keep))
 
 	granted := strings.Fields(resp.Scope)
 	if len(granted) == 0 {
@@ -449,7 +451,7 @@ func (s *Server) RedeemADOEntraAccess(ctx context.Context, cfg ADOEntraConfig, o
 	access := ADOEntraAccess{
 		AccessToken: resp.AccessToken,
 		Scopes:      granted,
-		ExpiresAt:   s.cfg.Now().Add(time.Duration(resp.ExpiresIn) * time.Second).UTC(),
+		ExpiresAt:   accessExpiry,
 	}
 
 	// Persist the ROTATION. An absent refresh token in the response means keep

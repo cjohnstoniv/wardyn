@@ -58,7 +58,7 @@ type Registry struct {
 	// current holds each credential's live values by (owner, name), so a
 	// refreshed or deleted credential's old values can be let go (CS-4, F5)
 	// instead of living for the daemon's whole life.
-	current map[globalKey][][]byte
+	current map[globalKey][]globalValue
 	// retired holds values that are no longer current. They stay masked until
 	// SweepGlobals drops them: masking fails open, and an event quoting the old
 	// value can still arrive after the credential moved on.
@@ -78,6 +78,15 @@ type Registry struct {
 
 type globalKey struct{ owner, name string }
 
+// globalValue is one current value of a credential. until, when set, is the
+// value's own expiry (a short-lived access token's): from then on SweepGlobals
+// treats it as retired at until, so a credential nobody refreshes again still
+// lets go of it (#151).
+type globalValue struct {
+	value []byte
+	until time.Time
+}
+
 type retiredValue struct {
 	value []byte
 	at    time.Time
@@ -96,7 +105,7 @@ type runMaskers struct {
 
 // NewRegistry returns an empty, ready-to-use Registry.
 func NewRegistry() *Registry {
-	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}, current: map[globalKey][][]byte{}}
+	return &Registry{perRun: make(map[uuid.UUID][][]byte), cached: map[uuid.UUID]*runMaskers{}, current: map[globalKey][]globalValue{}}
 }
 
 // Add registers value as a secret for runID. Values shorter than MinLen are
@@ -142,7 +151,18 @@ func (r *Registry) Add(runID uuid.UUID, value []byte) {
 // A call with no usable value (every one empty or below MinLen) changes
 // nothing; EvictGlobal is the one way to retire a credential's whole set.
 func (r *Registry) AddGlobal(owner, name string, values ...[]byte) {
-	r.setGlobal(owner, name, false, values)
+	r.setGlobal(owner, name, false, time.Time{}, nil, values)
+}
+
+// AddGlobalUntil is AddGlobal for a credential whose expiring value (a
+// short-lived access token) stops working at until, its expiry. That value is
+// let go even if nothing ever replaces it: SweepGlobals drops it once until is
+// older than the sweep's grace, so it stays masked for expiry plus grace, the
+// floor a recording uploaded after the token's last use needs. The lasting
+// values (a refresh token, a client secret) carry no expiry of their own and
+// stay until they are replaced or evicted.
+func (r *Registry) AddGlobalUntil(owner, name string, until time.Time, expiring []byte, lasting ...[]byte) {
+	r.setGlobal(owner, name, false, until, expiring, lasting)
 }
 
 // MergeGlobal is AddGlobal that retires nothing: values join the credential's
@@ -152,24 +172,43 @@ func (r *Registry) AddGlobal(owner, name string, values ...[]byte) {
 // paths that know the credential's full new set (capture, refresh) use
 // AddGlobal.
 func (r *Registry) MergeGlobal(owner, name string, values ...[]byte) {
-	r.setGlobal(owner, name, true, values)
+	r.setGlobal(owner, name, true, time.Time{}, nil, values)
 }
 
-func (r *Registry) setGlobal(owner, name string, merge bool, values [][]byte) {
+// MergeGlobalUntil is MergeGlobal with AddGlobalUntil's expiring value. An
+// expiring value already current keeps the later of its two expiries.
+func (r *Registry) MergeGlobalUntil(owner, name string, until time.Time, expiring []byte, lasting ...[]byte) {
+	r.setGlobal(owner, name, true, until, expiring, lasting)
+}
+
+func (r *Registry) setGlobal(owner, name string, merge bool, until time.Time, expiring []byte, lasting [][]byte) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := globalKey{owner, name}
-	var keep [][]byte
+	var keep []globalValue
 	if merge {
 		keep = slices.Clone(r.current[k])
 	}
-	for _, v := range values {
-		if len(v) >= MinLen && !containsSlice(keep, v) {
-			keep = append(keep, bytes.Clone(v))
+	add := func(v []byte, until time.Time) {
+		if len(v) < MinLen {
+			return
 		}
+		i := slices.IndexFunc(keep, func(gv globalValue) bool { return bytes.Equal(gv.value, v) })
+		switch {
+		case i < 0:
+			keep = append(keep, globalValue{value: bytes.Clone(v), until: until})
+		case merge:
+			keep[i].until = laterExpiry(keep[i].until, until)
+		default:
+			keep[i].until = until
+		}
+	}
+	add(expiring, until)
+	for _, v := range lasting {
+		add(v, time.Time{})
 	}
 	if len(keep) == 0 {
 		return
@@ -177,8 +216,23 @@ func (r *Registry) setGlobal(owner, name string, merge bool, values [][]byte) {
 	r.retireLocked(k, keep)
 	r.current[k] = keep
 	// A value that comes back is current again, not waiting to be swept.
-	r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return containsSlice(keep, rv.value) })
+	r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return containsValue(keep, rv.value) })
 	r.reflattenLocked()
+}
+
+// laterExpiry returns the later of two expiries, where zero means none.
+func laterExpiry(a, b time.Time) time.Time {
+	if a.IsZero() || b.IsZero() {
+		return time.Time{}
+	}
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+func containsValue(set []globalValue, v []byte) bool {
+	return slices.ContainsFunc(set, func(gv globalValue) bool { return bytes.Equal(gv.value, v) })
 }
 
 // EvictGlobal retires every current value of the credential (owner, name): the
@@ -194,7 +248,8 @@ func (r *Registry) EvictGlobal(owner, name string) {
 	r.reflattenLocked()
 }
 
-// SweepGlobals drops the values retired before cutoff and reports how many it
+// SweepGlobals drops the values retired before cutoff, and the current values
+// whose expiry (AddGlobalUntil) is before cutoff, and reports how many it
 // dropped. The production caller is api.Server.SweepRunSecrets, with the same
 // grace a finished run's corpus gets.
 func (r *Registry) SweepGlobals(cutoff time.Time) int {
@@ -203,19 +258,30 @@ func (r *Registry) SweepGlobals(cutoff time.Time) int {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	before := len(r.retired)
+	dropped := len(r.retired)
 	r.retired = slices.DeleteFunc(r.retired, func(rv retiredValue) bool { return rv.at.Before(cutoff) })
+	dropped -= len(r.retired)
+	for k, vs := range r.current {
+		n := len(vs)
+		vs = slices.DeleteFunc(vs, func(gv globalValue) bool { return !gv.until.IsZero() && gv.until.Before(cutoff) })
+		dropped += n - len(vs)
+		if len(vs) == 0 {
+			delete(r.current, k)
+		} else {
+			r.current[k] = vs
+		}
+	}
 	r.reflattenLocked()
-	return before - len(r.retired)
+	return dropped
 }
 
 // retireLocked moves k's current values that are not in keep to retired and
 // forgets k. The caller holds r.mu.
-func (r *Registry) retireLocked(k globalKey, keep [][]byte) {
+func (r *Registry) retireLocked(k globalKey, keep []globalValue) {
 	now := time.Now()
-	for _, v := range r.current[k] {
-		if !containsSlice(keep, v) {
-			r.retired = append(r.retired, retiredValue{value: v, at: now})
+	for _, gv := range r.current[k] {
+		if !containsValue(keep, gv.value) {
+			r.retired = append(r.retired, retiredValue{value: gv.value, at: now})
 		}
 	}
 	delete(r.current, k)
@@ -235,8 +301,8 @@ func (r *Registry) reflattenLocked() {
 		}
 	}
 	for _, vs := range r.current {
-		for _, v := range vs {
-			add(v)
+		for _, gv := range vs {
+			add(gv.value)
 		}
 	}
 	for _, rv := range r.retired {

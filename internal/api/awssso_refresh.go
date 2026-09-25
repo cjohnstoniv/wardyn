@@ -529,8 +529,9 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	}
 	// Mask BEFORE anything can persist or log the new values, and globally for
 	// the same reason the capture path masks globally: one credential is reused
-	// across every run that selects this lane.
-	s.cfg.MaskRegistry.AddGlobal(scope.rowOwner(), harnessCredSecretName(awsSSOProvider),
+	// across every run that selects this lane. The access token is let go one
+	// grace after its expiry even if no later refresh replaces it (#151).
+	s.cfg.MaskRegistry.AddGlobalUntil(scope.rowOwner(), harnessCredSecretName(awsSSOProvider), next.ExpiresAt,
 		[]byte(next.AccessToken), []byte(next.RefreshToken), []byte(next.ClientSecret))
 
 	data := map[string]any{

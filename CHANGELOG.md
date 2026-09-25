@@ -523,7 +523,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   resolve, and a capture or disconnect empties the cache. Process-wide mask copies of a
   person's tokens (AWS SSO, Azure DevOps, the managed Claude token) are kept per credential:
   a refresh or a disconnect retires the old values, which stay masked for an hour and are then
-  dropped instead of living for the daemon's life. wardynd and wardyn-proxy set `RLIMIT_CORE` to
+  dropped instead of living for the daemon's life; an AWS SSO or Azure DevOps access token nothing
+  replaces is dropped an hour after its own expiry (#151). wardynd and wardyn-proxy set `RLIMIT_CORE` to
   0 and mark themselves non-dumpable at start, so a crash writes no core file and another
   process of the same user cannot read their memory or environment.
 - **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
