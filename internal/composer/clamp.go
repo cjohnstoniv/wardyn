@@ -362,6 +362,7 @@ func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 		warns = append(warns, "push_rules inherited from the operator's policy")
 		cp := *ceiling.PushRules
 		cp.DenyPaths = append([]string(nil), ceiling.PushRules.DenyPaths...)
+		cp.RequireReviewPaths = append([]string(nil), ceiling.PushRules.RequireReviewPaths...)
 		out.PushRules = &cp
 		return warns
 	}
@@ -369,9 +370,15 @@ func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 	if len(ceiling.PushRules.DenyPaths) > 0 {
 		merged.DenyPaths = unionPaths(merged.DenyPaths, ceiling.PushRules.DenyPaths)
 	}
+	if len(ceiling.PushRules.RequireReviewPaths) > 0 {
+		merged.RequireReviewPaths = unionPaths(merged.RequireReviewPaths, ceiling.PushRules.RequireReviewPaths)
+	}
 	if ceil := ceiling.PushRules.MaxInspectPackMiB; ceil > 0 && (merged.MaxInspectPackMiB <= 0 || merged.MaxInspectPackMiB > ceil) {
 		warns = append(warns, fmt.Sprintf("push_rules.max_inspect_pack_mib capped to operator maximum %d", ceil))
 		merged.MaxInspectPackMiB = ceil
+	}
+	if ceil := ceiling.PushRules.HoldSeconds; ceil > 0 && (merged.HoldSeconds <= 0 || merged.HoldSeconds > ceil) {
+		merged.HoldSeconds = ceil // the shorter of two authored holds, silently: it widens nothing
 	}
 	out.PushRules = &merged
 	return warns
@@ -466,6 +473,7 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 	if s.PushRules != nil {
 		pr := *s.PushRules
 		pr.DenyPaths = slices.Clone(s.PushRules.DenyPaths)
+		pr.RequireReviewPaths = slices.Clone(s.PushRules.RequireReviewPaths)
 		out.PushRules = &pr
 	}
 	return out

@@ -498,6 +498,13 @@ const (
 	// terminal-cascade reader works unchanged — but through ResolveReauth and
 	// its own credential.reauth.resolved audit action, never approval.decide.
 	ApprovalCredentialReauth ApprovalKind = "credential_reauth"
+	// ApprovalPushContent: a brokered git push touched a path the run's
+	// push_rules.require_review_paths names, and the proxy is HOLDING it while
+	// an admin decides (internal/egress/proxy/push_hold.go). Its requested
+	// scope is a PushContentScope. Admin-decidable only: a member deciding
+	// their own run's workflow-file edit is the exfiltration the rule stops,
+	// so authorizeMemberDecision keeps members to egress_domain.
+	ApprovalPushContent ApprovalKind = "push_content"
 )
 
 // ApprovalKinds is the closed set. It exists for the same reason
@@ -508,6 +515,7 @@ const (
 // against the constants above.
 var ApprovalKinds = []ApprovalKind{
 	ApprovalCredential, ApprovalEgressDomain, ApprovalToolCall, ApprovalCredentialReauth,
+	ApprovalPushContent,
 }
 
 // ApprovalState is the approval lifecycle.

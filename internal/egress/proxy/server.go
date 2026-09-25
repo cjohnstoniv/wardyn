@@ -249,6 +249,7 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		InternalHosts:        cfg.InternalHosts,
 		LLMUpstreams:         cfg.LLMUpstreams,
 		LLMUnavailableDetail: cfg.LLMUnavailableDetail,
+		Unattended:           cfg.Unattended,
 		LocalSubnets:         localSubnets,
 		ControlPlaneIPs:      cpIPs,
 		ExclusionUnknown:     exclusionUnknown,

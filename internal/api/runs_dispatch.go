@@ -518,6 +518,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// with nothing behind it — compiled at dispatch because the sidecar
 			// knows only that no injection matched (see llmUnavailableDetail).
 			LLMUnavailableDetail: plan.llmUnavailableDetail,
+			// Nobody drives a task run, so a push its push_rules would hold
+			// for review is refused instead (push_hold.go).
+			Unattended: !p.Interactive,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/

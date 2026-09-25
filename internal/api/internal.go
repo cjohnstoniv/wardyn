@@ -415,9 +415,10 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	switch body.Kind {
-	case types.ApprovalEgressDomain, types.ApprovalToolCall:
-		// Sidecars may only raise egress/tool approvals. credential approvals are
-		// created by the broker mint path, never by an untrusted sidecar.
+	case types.ApprovalEgressDomain, types.ApprovalToolCall, types.ApprovalPushContent:
+		// Sidecars may only raise egress/tool/held-push approvals. credential
+		// approvals are created by the broker mint path, never by an untrusted
+		// sidecar.
 	default:
 		// Recorded: this refusal is the forgery the case above exists to
 		// stop — a sidecar asking Wardyn to raise a `credential` approval. Same
@@ -441,6 +442,12 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		s.auditAuthFailedAs(r, internalApprovalActor, "reserved_scope_key")
 		writeError(w, http.StatusBadRequest, "requested_scope may not name a lane")
 		return
+	}
+	if body.Kind == types.ApprovalPushContent {
+		var ok bool
+		if body.RequestedScope, ok = s.admitPushContentRaise(w, r, claims, body.RequestedScope); !ok {
+			return
+		}
 	}
 
 	// Per-run cap, checked BEFORE the raise. Fail CLOSED on a count

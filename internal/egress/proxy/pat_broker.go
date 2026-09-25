@@ -213,7 +213,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	if verb == "git-receive-pack" {
 		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("host", host),
 			func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) },
-			p.patForge(host, rest, grant))
+			p.patForge(host, rest, grant), patPushTarget(host, rest, grant))
 		defer release()
 		if !ok {
 			return

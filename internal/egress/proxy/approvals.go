@@ -650,6 +650,12 @@ func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, err
 	if err != nil {
 		return uuid.Nil, err
 	}
+	return a.raiseBytes(ctx, body)
+}
+
+// raiseBytes POSTs one marshalled raise body and returns the approval's id —
+// a new row, or the PENDING one the control plane deduplicated it to.
+func (a *approvalClient) raiseBytes(ctx context.Context, body []byte) (uuid.UUID, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		a.base+"/api/v1/internal/approvals", bytes.NewReader(body))
 	if err != nil {
@@ -689,22 +695,8 @@ func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, err
 // transient error can never overwrite a good scope with a blank one — and callers
 // gate the store on `decided` anyway.
 func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, newState approvalState, scope types.ApprovalScope, expiresAt time.Time) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		a.base+"/api/v1/internal/approvals/"+id.String(), nil)
-	if err != nil {
-		return false, apPending, "", time.Time{}
-	}
-	req.Header.Set("Authorization", "Bearer "+a.token.Get())
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return false, apPending, "", time.Time{}
-	}
-	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return false, apPending, "", time.Time{}
-	}
-	var ar types.ApprovalRequest
-	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
+	ar, ok := a.fetch(ctx, id)
+	if !ok {
 		return false, apPending, "", time.Time{}
 	}
 	// Nullable on the wire (it is set only for scope=until), so a nil pointer
@@ -728,4 +720,28 @@ func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, 
 	default:
 		return false, apPending, "", time.Time{}
 	}
+}
+
+// fetch reads one approval this run raised; ok=false on any failure, which
+// every caller reads as "still pending".
+func (a *approvalClient) fetch(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		a.base+"/api/v1/internal/approvals/"+id.String(), nil)
+	if err != nil {
+		return types.ApprovalRequest{}, false
+	}
+	req.Header.Set("Authorization", "Bearer "+a.token.Get())
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return types.ApprovalRequest{}, false
+	}
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return types.ApprovalRequest{}, false
+	}
+	var ar types.ApprovalRequest
+	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
+		return types.ApprovalRequest{}, false
+	}
+	return ar, true
 }

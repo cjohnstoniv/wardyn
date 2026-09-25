@@ -198,6 +198,8 @@ type Proxy struct {
 	// LLMUnavailableDetail). Empty == the generic route sentence; the
 	// below-policy clause is appended either way. See llm404Detail.
 	llmUnavailableDetail string
+	// pushHolds is the held-push state (push_hold.go).
+	pushHolds pushHolds
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
 	// public host), feeding isLLMHost/channelForHost so gateway traffic is
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
@@ -295,6 +297,8 @@ type Options struct {
 	// gives when no credential is behind the route (Config.LLMUnavailableDetail,
 	// forwarded verbatim). Empty == the generic route sentence. See llm404Detail.
 	LLMUnavailableDetail string
+	// Unattended is Config.Unattended: a review-path push is refused, not held.
+	Unattended bool
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -439,6 +443,7 @@ func newProxy(opts Options) *Proxy {
 		exclusionUnknown:     opts.ExclusionUnknown,
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
+		pushHolds:            pushHolds{unattended: opts.Unattended},
 		gatewayVendor:        gatewayVendor,
 		dial:                 dial,
 		now:                  now,

@@ -279,9 +279,8 @@ type RunPolicySpec struct {
 // counterpart to GitPushAnyBranch's branch-namespace confinement: this type
 // says WHAT a push may touch, not WHERE it may land (issue #57).
 //
-// Phase two (RequireReviewPaths, DenyNewExecutables, MaxFileSizeMiB,
-// HoldSeconds) is reserved for a later change — adding them here would be new
-// fields, not this one's plumbing.
+// DenyNewExecutables and MaxFileSizeMiB are reserved for a later change —
+// adding them here would be new fields, not this one's plumbing.
 //
 // A closed struct, deliberately not a free-form rules map: an open map cannot
 // be policed by the strict-field JSON decoder (DisallowUnknownFields) or by
@@ -304,6 +303,15 @@ type PushRulesSpec struct {
 	// which sits below the authored maximum so that raising this is a real
 	// remedy; the authored value is bounded 0..64 by validatePolicySpec.
 	MaxInspectPackMiB int `json:"max_inspect_pack_mib,omitempty"`
+	// RequireReviewPaths are patterns in DenyPaths' language whose match HOLDS
+	// a push for an admin's decision (an ApprovalPushContent row) instead of
+	// refusing it. A deny match wins over a review match; an unattended run
+	// refuses rather than holding, since nobody is there to be asked.
+	RequireReviewPaths []string `json:"require_review_paths,omitempty"`
+	// HoldSeconds is how long a held push waits for that decision before it
+	// is refused. 0/absent means 120; bounded 0..600, the proxy's own hold
+	// ceiling, by validatePolicySpec.
+	HoldSeconds int `json:"hold_seconds,omitempty"`
 }
 
 // IsSet reports whether this spec carries an actual rule, which is what every
@@ -315,7 +323,7 @@ type PushRulesSpec struct {
 // enforcement step (internal/egress/proxy). One method so those readers cannot
 // drift into disagreeing about whether a run has content rules at all.
 func (s *PushRulesSpec) IsSet() bool {
-	return s != nil && (len(s.DenyPaths) > 0 || s.MaxInspectPackMiB > 0)
+	return s != nil && (len(s.DenyPaths) > 0 || len(s.RequireReviewPaths) > 0 || s.MaxInspectPackMiB > 0)
 }
 
 // DenyPathSegments is the one reading of a push_rules.deny_paths entry, shared
@@ -424,6 +432,7 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	if s.PushRules != nil {
 		pr := *s.PushRules
 		pr.DenyPaths = append([]string(nil), s.PushRules.DenyPaths...)
+		pr.RequireReviewPaths = append([]string(nil), s.PushRules.RequireReviewPaths...)
 		out.PushRules = &pr
 	}
 	return out

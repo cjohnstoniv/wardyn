@@ -4,6 +4,7 @@
 package composer
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -146,5 +147,66 @@ func TestClamp_PushRulesEmptyCeilingSpecReadsAsAbsent(t *testing.T) {
 	}
 	if hasWarn(warns, "push_rules") {
 		t.Errorf("unexpected push_rules warning from an all-zero ceiling spec: %v", warns)
+	}
+}
+
+// TestClamp_PushRulesReviewPathsAndHold pins phase two's clamp: the review
+// list unions like deny_paths (exact string), hold_seconds takes the shorter
+// of two authored holds, and a ceiling carrying only review paths is a floor.
+func TestClamp_PushRulesReviewPathsAndHold(t *testing.T) {
+	cases := []struct {
+		name              string
+		ceiling, proposal *types.PushRulesSpec
+		wantReview        []string
+		wantHold          int
+	}{
+		{"ceiling review paths inherited by an unset proposal",
+			&types.PushRulesSpec{RequireReviewPaths: []string{".github/workflows/**"}, HoldSeconds: 60}, nil,
+			[]string{".github/workflows/**"}, 60},
+		{"review paths unioned exact-string",
+			&types.PushRulesSpec{RequireReviewPaths: []string{".github/workflows/**"}},
+			&types.PushRulesSpec{RequireReviewPaths: []string{".GitHub/workflows/**", "infra/**"}},
+			[]string{".GitHub/workflows/**", ".github/workflows/**", "infra/**"}, 0},
+		{"both holds set: the shorter wins",
+			&types.PushRulesSpec{RequireReviewPaths: []string{"a/**"}, HoldSeconds: 300},
+			&types.PushRulesSpec{RequireReviewPaths: []string{"a/**"}, HoldSeconds: 90},
+			[]string{"a/**"}, 90},
+		{"both holds set: the ceiling's shorter one wins",
+			&types.PushRulesSpec{RequireReviewPaths: []string{"a/**"}, HoldSeconds: 30},
+			&types.PushRulesSpec{RequireReviewPaths: []string{"a/**"}, HoldSeconds: 600},
+			[]string{"a/**"}, 30},
+		{"only the ceiling sets a hold",
+			&types.PushRulesSpec{DenyPaths: []string{"x/**"}, HoldSeconds: 45},
+			&types.PushRulesSpec{RequireReviewPaths: []string{"a/**"}},
+			[]string{"a/**"}, 45},
+		{"only the proposal sets a hold",
+			&types.PushRulesSpec{DenyPaths: []string{"x/**"}},
+			&types.PushRulesSpec{RequireReviewPaths: []string{"a/**"}, HoldSeconds: 200},
+			[]string{"a/**"}, 200},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ceiling := operatorCeiling(t)
+			ceiling.PushRules = c.ceiling
+			got, _ := Clamp(types.RunPolicySpec{PushRules: c.proposal}, ceiling, 0)
+			if got.PushRules == nil {
+				t.Fatal("push_rules = nil, want the clamped spec")
+			}
+			if !slices.Equal(got.PushRules.RequireReviewPaths, c.wantReview) {
+				t.Errorf("require_review_paths = %v, want %v", got.PushRules.RequireReviewPaths, c.wantReview)
+			}
+			if got.PushRules.HoldSeconds != c.wantHold {
+				t.Errorf("hold_seconds = %d, want %d", got.PushRules.HoldSeconds, c.wantHold)
+			}
+		})
+	}
+
+	// The inherited copy must not alias the ceiling's review list.
+	ceiling := operatorCeiling(t)
+	ceiling.PushRules = &types.PushRulesSpec{RequireReviewPaths: []string{"a/**"}}
+	got, _ := Clamp(types.RunPolicySpec{}, ceiling, 0)
+	got.PushRules.RequireReviewPaths[0] = "mutated"
+	if ceiling.PushRules.RequireReviewPaths[0] != "a/**" {
+		t.Error("clamp aliased the ceiling's own PushRules.RequireReviewPaths backing array")
 	}
 }
