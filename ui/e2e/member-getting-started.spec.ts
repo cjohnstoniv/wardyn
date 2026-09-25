@@ -4,8 +4,8 @@
  */
 
 import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navToRoute } from "./fixtures";
-import { AGENTS, MODEL_ACCESS_CHIP_LABEL } from "../src/app/lib/workspace-providers-copy";
-import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../src/app/components/wardyn/copy";
+import { MEMBER_GETTING_STARTED } from "../src/app/components/wardyn/copy";
+import { CONNECTIONS } from "../src/app/components/wardyn/copy/door";
 
 // Member Getting Started (Phase 5) — same mockMemberRole splice
 // member-console.spec.ts uses (the seeded backend always authenticates as
@@ -19,7 +19,6 @@ import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../src/app/components/wa
 const MEMBER_SECTION_TITLES = [
   "What's set up for you",
   "Add your workspace",
-  "Your model key",
   "Your first run",
   "Approvals you can decide",
   "Connect your tools",
@@ -116,63 +115,22 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect.poll(() => mp4Requests, { timeout: 5000 }).toBeGreaterThanOrEqual(1);
   });
 
-  // Appendix A finding 5: not_applicable is the admin-token principal's own
-  // answer, not a member's — it must never dangle a "Sign in to AWS" button
-  // in front of a caller with no person to sign in as, whatever the
-  // deployment-wide llm_ready fallback renders instead (this e2e daemon
-  // declares a Bedrock lane via scripts/e2e-backend.sh's WARDYN_BEDROCK_*
-  // env, so llm_ready is deterministically true here, on any host — the
-  // fallback chip legitimately shows — the CTA is the thing that must never
-  // appear).
-  test("a member under not_applicable is not offered a sign-in they cannot complete", async ({ page }) => {
-    let cached: Record<string, unknown> | null = null;
-    await page.route("**/api/v1/setup/status*", async (route) => {
-      if (!cached) {
-        const response = await route.fetch();
-        const body = await response.json();
-        body.model_access = { state: "not_applicable" };
-        cached = body;
-      }
-      // TS can't narrow a `let` captured by this closure across the `await`
-      // above — the `if` guarantees it non-null by here.
-      await route.fulfill({ json: cached! });
-    });
-    await gotoConsole(page);
-    await navToRoute(page, "/setup");
-    await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
-  });
-
-  // U-1 (W6 blind lens) — a SHARED bedrock_sso roster row with model_access
-  // `live`: the wire shape every member of such a deployment gets
-  // (userModelAccess projects the ADMIN's credential for them). The chip row
-  // used to read "Model access · Your AWS sign-in" over a card saying "Provided
-  // by your admin" — a sign-in this member has never done. One owner, one chip.
-  test("a shared bedrock row's live credential is the ADMIN's on the chip row too", async ({ page }) => {
+  // #541: Getting Started never offers an in-page sign-in any more — every
+  // provider's own button lives on Your model connections (Your account),
+  // reached through the link below the summary chip. Regression pins for the
+  // retired card's own bugs (Appendix A finding 5's not_applicable guard, U-1's
+  // shared-row chip owner, U-13's duplicate accessible name, the codex-only
+  // roster's key name, and the P1 ticket-mint fix) moved with the sign-in
+  // surface itself: sso-member.spec.ts / sso-member-recovery.spec.ts (the live
+  // per-user AWS walk) now open it from /account instead of /setup, and
+  // one-door.spec.ts's "Your model connections and the strip open the same
+  // provider door" pins the provider-mode door entrance this page used to
+  // carry.
+  test("no sign-in button ever renders on Getting Started, whatever the model-access state", async ({ page }) => {
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
-      body.llm_ready = true;
-      body.model_access = { state: "live" };
-      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
-        h.id === "claude-code" ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "shared" } : h,
-      );
-      await route.fulfill({ response, json: body });
-    });
-    await gotoConsole(page);
-    await navToRoute(page, "/setup");
-    await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
-    await expect(page.getByText(MODEL_ACCESS_CHIP_LABEL.live)).toHaveCount(0);
-    await expect(page.getByText(MEMBER_GETTING_STARTED.MODEL_ACCESS_PROVIDED_CHIP).first()).toBeVisible();
-  });
-
-  // U-13 (a11y) — the page's two "Sign in to AWS" buttons had the same
-  // accessible name. The visible text is unchanged; the names are not.
-  test("the two Sign in to AWS buttons are distinguishable to a screen reader", async ({ page }) => {
-    await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      body.model_access = { state: "not_configured" };
+      body.model_access = { state: "not_configured", mechanism: "bedrock_sso", action: "Sign in to AWS" };
       body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
         h.id === "claude-code"
           ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
@@ -182,89 +140,38 @@ test.describe("member Getting Started (mocked /me role)", () => {
     });
     await gotoConsole(page);
     await navToRoute(page, "/setup");
-    await expect(
-      page.getByRole("button", { name: MEMBER_GETTING_STARTED.SIGN_IN_AWS_ARIA_SUMMARY, exact: true }),
-    ).toBeVisible();
-    const cardButton = page.getByRole("button", { name: YOUR_MODEL_KEY.SIGN_IN_AWS_ARIA_CARD, exact: true });
-    await expect(cardButton).toBeVisible();
-    // Both still SAY the frozen visible text.
-    await expect(cardButton).toHaveText(AGENTS.SIGN_IN_AWS);
-    // …and opening the one door (a modal, #544) takes the card's duplicate
-    // out of reach.
-    await page
-      .getByRole("button", { name: MEMBER_GETTING_STARTED.SIGN_IN_AWS_ARIA_SUMMARY, exact: true })
-      .click();
-    await expect(page.getByTestId("harness-login-pane")).toBeVisible();
-    await expect(cardButton).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
+    // No model-providers block on this fixture: the connections-summary chip
+    // reads its own no-providers state (a real gap for a per_user-only
+    // install with no provider record — flagged, not invented, in #541's
+    // report).
+    await expect(page.getByText(CONNECTIONS.SUMMARY_NOT_SET_UP)).toBeVisible();
   });
 
-  // X3-F3 — the one write path a member has named the wrong secret. The roster
-  // (SetupStatus.harnesses, the org's answer to "which coding agents may a run
-  // name") is spliced to a codex-only deployment: an anthropic key is
-  // impossible for that harness, so asking for one stored a key nothing would
-  // ever read.
-  test("a codex-only roster asks for the codex provider's key, not anthropic's", async ({ page }) => {
-    await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.llm_ready = false;
-      json.harnesses = [
-        { id: "codex-cli", display: "Codex CLI", has_gateway: true, has_login: true, enabled: true },
-      ];
-      await route.fulfill({ response, json });
-    });
-    await gotoConsole(page);
-    await navToRoute(page, "/setup");
-
-    await expect(page.getByRole("heading", { name: "Your model key" })).toBeVisible();
-    await expect(page.getByText("openai-api-key")).toBeVisible();
-    await expect(page.getByText("anthropic-api-key")).toHaveCount(0);
-  });
-
-  // P1 (0.7.3 field report), the defect itself: a member's "Sign in to AWS"
-  // never reached its terminal. The pane mounts AttachTerminal on a run the
-  // member created one round trip earlier and passes no createdBy — there is no
-  // run object to read one from — so the client gate read that absence as "not
-  // yours" and refused before any POST. Unknown ownership now takes the ticket
-  // lane, which is owner-or-admin SERVER-side (mintAttachTicket ->
-  // getRunAuthorizedBy) and is the enforcement point.
-  //
-  // The launch itself is spliced: this daemon runs `-runner none`
-  // (scripts/e2e-backend.sh), so a real POST /setup/harness-login has no runner
-  // to answer with. What is REAL here is the console's own decision — whether it
-  // asks the server for a ticket or refuses on its own authority.
-  test("a member's own sign-in reaches the terminal by asking the server for a ticket", async ({ page }) => {
-    const loginRunId = "3f1b7c26-0000-4000-8000-00000000f001";
+  // The provider-mode chip: Ready when the granted harness's default provider
+  // is connected — computed by the SAME predicate Your account's own header
+  // chip reads (lib/model-connections.ts's connectionsSummary).
+  test("the summary chip reads Ready with a connected default provider", async ({ page }) => {
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
-      body.model_access = { state: "not_configured", mechanism: "bedrock_sso", action: "Sign in to AWS" };
+      body.model_providers = [
+        {
+          id: "bedrock-prod",
+          name: "Bedrock (prod)",
+          kind: "bedrock_sso",
+          harnesses: ["claude-code"],
+          default_for: ["claude-code"],
+          host: "bedrock-runtime.us-east-1.amazonaws.com",
+        },
+      ];
+      body.provider_access = [{ provider: "bedrock-prod", state: "live" }];
       await route.fulfill({ response, json: body });
     });
-    await page.route("**/api/v1/setup/harness-login", async (route) =>
-      route.fulfill({ json: { run_id: loginRunId, state: "PENDING" } }),
-    );
-    await page.route(`**/api/v1/runs/${loginRunId}`, async (route) =>
-      route.fulfill({ json: { id: loginRunId, task: "harness login", state: "RUNNING", interactive: true } }),
-    );
-    // Registered LAST so it wins over the run read above (Playwright matches the
-    // most recently registered route first).
-    let ticketPosts = 0;
-    await page.route(`**/api/v1/runs/${loginRunId}/attach-ticket`, async (route) => {
-      ticketPosts++;
-      await route.fulfill({ json: { ticket: "e2e-ticket" } });
-    });
-
     await gotoConsole(page);
     await navToRoute(page, "/setup");
-    await page.getByRole("button", { name: "Sign in to AWS" }).click();
-    await expect(page.getByTestId("harness-login-pane")).toBeVisible();
-    await page.getByRole("button", { name: /start login/i }).click();
-
-    // THE assertion: a ticket POST happened. Before the fix there was none —
-    // no POST, no socket, no audit row, just the admin-role sentence.
-    await expect.poll(() => ticketPosts, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
-    await expect(page.getByText(/requires the admin role/i)).toHaveCount(0);
+    await expect(page.getByText(CONNECTIONS.SUMMARY_READY)).toBeVisible();
   });
 
   // member-cold-load lane (plan P3, absorbs F3-F7): a COLD document load of

@@ -152,6 +152,15 @@ export function modelAccessDoor(
   };
 }
 
+/** "Claude Code" / "Claude Code and Codex CLI" — the display names of the
+ *  given harness ids, off the roster's own names. Shared by the strip (B1,
+ *  B4, B5) and Your model connections' own "For …" line (§5.4): one join, not
+ *  two independently-typed copies. Falls back to the id when the roster
+ *  doesn't carry it (an older daemon, or an id gone stale). */
+export function harnessDisplayNames(status: SetupStatus | null | undefined, ids: string[]): string {
+  return ids.map((id) => status?.harnesses?.find((h) => h.id === id)?.display || id).join(" and ");
+}
+
 /** One provider the strip speaks for (design §5.5, packet MP-D). */
 export interface ProviderAttention {
   provider: SetupModelProvider;

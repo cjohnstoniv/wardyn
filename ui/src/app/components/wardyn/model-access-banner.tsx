@@ -34,12 +34,12 @@ import { toast } from "sonner";
 import { relativeTime, absoluteTime } from "../../lib/format";
 import {
   MODEL_ACCESS_AGENT,
+  harnessDisplayNames,
   isPerUserSsoRow,
   providerAttention,
   type ModelAccessDoor,
   type ProviderAttention,
 } from "../../lib/model-access";
-import type { SetupStatus } from "../../lib/types";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useModelAccessDoor, useShellSetupStatus } from "./model-access-context";
@@ -247,11 +247,6 @@ export function providerStripLine(
   }
 }
 
-/** "Claude Code" / "Claude Code and Codex CLI", from the roster's own names. */
-function harnessNames(status: SetupStatus | null, ids: string[]): string {
-  return ids.map((id) => status?.harnesses?.find((h) => h.id === id)?.display || id).join(" and ");
-}
-
 /** "Not now", per provider (packet MP-D QD-3): dismissing one provider must not
  *  hide another that needs the person later. Same keying and storage rules as
  *  useSessionDismissal above. */
@@ -355,7 +350,7 @@ export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}
   const lines =
     providerMode && userView && resolved && !under("/setup")
       ? providerAttention(status).flatMap((a) => {
-          const line = providerStripLine(a, harnessNames(status, a.defaultFor));
+          const line = providerStripLine(a, harnessDisplayNames(status, a.defaultFor));
           return line && !(line.dismissible && providerDismissed(a.provider.id)) ? [{ a, line }] : [];
         })
       : [];

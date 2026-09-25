@@ -337,13 +337,15 @@ export async function makeMemberActionable(request: APIRequestContext): Promise<
 }
 
 /**
- * Open the member's sign-in pane from Getting Started and wait for its terminal.
+ * Open the member's sign-in pane from Your account and wait for its terminal.
  *
- * The member-getting-started page renders TWO "Sign in to AWS" buttons when the
- * state is actionable (the chip row's and the "Your model key" card's, lane
- * ui-member-model-key's handoff says so in as many words) and BOTH open the same
- * HarnessLoginPane — so `.first()` under Playwright's strict mode, never a bare
- * getByRole.
+ * #541 moved this off Getting Started: that page's own "Your model key" card
+ * (and its duplicate "Sign in to AWS" button) is retired, so the one button
+ * left for a per_user, non-provider member is the shell strip's — not
+ * suppressed on /account for a non-operator (model-access-banner.tsx's
+ * `suppressed` gates the /account branch on `operator` alone). `.first()`
+ * stays defensive under Playwright's strict mode rather than a bare
+ * getByRole, in case a future state ever draws a second one there.
  *
  * The pane launches the login sandbox on open. The start URL is roster-managed
  * here (the admin set sso_start_url), so the pane goes straight to "Start login"
@@ -356,7 +358,7 @@ export async function makeMemberActionable(request: APIRequestContext): Promise<
  * no page — least of all an about:blank placeholder — opened on the click.
  */
 export async function openLoginPane(page: Page): Promise<void> {
-  await page.goto("/setup");
+  await page.goto("/account");
   const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
   await expect(cta).toBeVisible({ timeout: 60_000 });
   await cta.click();

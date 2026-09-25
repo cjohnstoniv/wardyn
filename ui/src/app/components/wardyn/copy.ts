@@ -155,7 +155,6 @@ export type { CredentialKind } from "./copy/approvals";
 export { credentialKind } from "./copy/approvals";
 export { RUN_COCKPIT } from "./copy/run-cockpit";
 export { UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX, POLICY_UI_APPS } from "./copy/ui-apps";
-export { YOUR_MODEL_KEY } from "./copy/model-key";
 export { MEMBER_GETTING_STARTED, RUNS_MEMBER_EMPTY, RUNS_WAIT } from "./copy/getting-started";
 export { EPISODES_COPY, FIRST_RUN_DEMOS_SUBTITLE } from "./copy/episodes";
 export { PEOPLE_STEP, SETUP, SITE } from "./copy/setup-steps";
