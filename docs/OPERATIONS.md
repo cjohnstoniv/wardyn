@@ -6159,9 +6159,10 @@ Two supported wirings, and the chart refuses both ways of getting it wrong
 `secrets.ageKey` defaults to empty and `ageKeyFromSecret` to `false`, so an
 external-DSN install wiring neither would get **no** stable identity: wardynd
 mints an ephemeral one per boot. That install works perfectly once; its second
-boot cannot decrypt what its first wrote, and because the control plane loads its
-own keys during startup (`loadOrCreateSecret`, `cmd/wardynd/main.go`) it fails
-closed there, before serving — a `CrashLoopBackOff`, not a degraded pod. Hence the
+boot cannot decrypt what its first wrote, and because the control plane readies
+its stored secrets during startup, before it loads its own keys
+(`convertSecretStore`, `cmd/wardynd/secret_store.go`), it fails closed there,
+before serving — a `CrashLoopBackOff`, not a degraded pod. Hence the
 fourth row: the chart stops the install at render.
 
 ```console
@@ -6201,6 +6202,10 @@ again:
 ```sh
 psql "$WARDYN_PG_DSN" -c "DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'"
 ```
+
+If `WARDYN_PLATFORM_KEY_FILE` was set, keep that file: the boot-key rows under it
+are not lost — change `OR kek_id LIKE 'local/%'` to `OR kek_id LIKE 'local/cred:%'`
+in the statement, so it keeps the `local/platform:` rows.
 
 **Rotating it on k8s** uses the same runbook
 ([Rotating the age key](#rotating-the-age-key)), with two differences.

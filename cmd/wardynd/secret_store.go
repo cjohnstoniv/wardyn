@@ -169,9 +169,11 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 	return s, nil
 }
 
-// ephemeralKeyRecoverySQL deletes every row only an age key opens: the way out
-// when the key they were written under was ephemeral and is gone. The refusal
-// below names it, and docs/OPERATIONS.md carries it verbatim.
+// ephemeralKeyRecoverySQL deletes every row sealed under a local key: the way
+// out when the age key they were written under was ephemeral and is gone. Its
+// local/platform: rows under a separate WARDYN_PLATFORM_KEY_FILE key are still
+// recoverable with that file (docs/OPERATIONS.md says how to keep them). The
+// refusal below names it, and docs/OPERATIONS.md carries it verbatim.
 const ephemeralKeyRecoverySQL = "DELETE FROM secrets WHERE enc_version=0 OR kek_id LIKE 'local:%' OR kek_id LIKE 'local/%'"
 
 // convertSecretStore readies the pg store's rows before anything reads them —
