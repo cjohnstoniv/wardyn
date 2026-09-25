@@ -25,6 +25,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `"state":"PENDING"`; `wardyn-toolgate` read any `state` as a `tool_rules` decision and denied
   the call as an unrecognised state. It now polls whenever an `id` is present and reads a state
   with no `id` as the run's own `tool_rules` answer (anything but `APPROVED` still denies).
+- **`scripts/up.sh` no longer just warns when the Claude sign-in image fails to build (#802).**
+  `agent-claude-code` is the checked prerequisite for Claude subscriptions (`claude_signin_image`
+  on `/setup/status`, and adding a subscription is refused without it, #524); a failed build now
+  stops `up.sh` with the rebuild command instead of leaving a silent warning behind. The stack
+  stays up and other agent images stay warn-only. Setting `WARDYN_UP_SKIP_RUN_IMAGES=1` now says
+  explicitly that adding a Claude subscription is refused and claude-code runs fail until the
+  sign-in image is built.
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
