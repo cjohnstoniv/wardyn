@@ -77,7 +77,7 @@ export function ViewSwitch({
     requestLeave(() => {
       // A single-operator install has one authority in both views (D1).
       if (access === "url") {
-        navigate(viewHome(to));
+        void navigate(viewHome(to));
         onNavigate?.();
         return;
       }
