@@ -125,6 +125,8 @@ ds-bundle/
 !/docs/design/governance-mock/
 !/docs/design/workspace-providers-prompt.md
 !/docs/design/workspace-providers-mock/
+!/docs/design/available-to-prompt.md
+!/docs/design/available-to-mock/
 # model-access-prompt.md records the 0.7.6/0.7.7 model-access surfaces as shipped —
 # no mock round, no proposal, so no accompanying mock/ directory.
 !/docs/design/model-access-prompt.md
