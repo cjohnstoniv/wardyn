@@ -230,10 +230,10 @@ func TestBrokeredRunSSHLaneEvaluatesDeny(t *testing.T) {
 	probe(t, brokered, "ssh.github.com", 443, egress.VerdictDeny)
 	probe(t, brokered, "api.anthropic.com", 443, egress.VerdictAllow)
 
-	// THE PROBE THE BARE-HOST DENY EXISTS FOR — and the only one that fails if the
+	// The probe the bare-host deny exists for — and the only one that fails if the
 	// deny is spelled ":443". Two things have to be true at once: allow_all_egress
 	// (so the allowlist subtraction is worth nothing — everything not denied is
-	// allowed, and the deny is the ONLY remaining half) and port 22 (plain
+	// allowed, and the deny is the only remaining half) and port 22 (plain
 	// git-over-SSH, which no ":443" entry matches). Measured on this evaluator:
 	// a ":443"-spelled deny gives ssh.github.com:22 = ALLOW, a bare-host deny gives
 	// deny. Without this case the confineGitBrokerEgress deviation is pinned only
@@ -322,7 +322,7 @@ func TestDispatch_BrokeredSSHDropIsAuditedAndNeverReachesTheSandbox(t *testing.T
 	srv, _, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // no agent exec / completion watcher; this test is about dispatch
 
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		Policy:    types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC1},
 		GitGrants: map[string]uuid.UUID{"acme/widgets": uuid.New()},

@@ -15,9 +15,9 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -27,7 +27,7 @@ func (m hybridSecrets) Get(_ context.Context, name string) ([]byte, error) {
 	if v, ok := m[name]; ok {
 		return v, nil
 	}
-	return nil, fmt.Errorf("secret %q not found: %w", name, pgx.ErrNoRows)
+	return nil, fmt.Errorf("secret %q not found: %w", name, secretstore.ErrNotFound)
 }
 
 func (m hybridSecrets) Put(_ context.Context, name string, v []byte) error {

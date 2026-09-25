@@ -6,9 +6,14 @@ package runner
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 )
 
 func TestIsKnownNonVaultRuntime(t *testing.T) {
@@ -162,5 +167,52 @@ func TestBuildProxyConfig_TrustedCAPEM(t *testing.T) {
 	}
 	if _, present := raw["trusted_ca_pem"]; present {
 		t.Errorf("trusted_ca_pem key present with an empty ProxyConfig.TrustedCAPEM, want absent (omitempty)")
+	}
+}
+
+// TestBuildProxyConfig_Unattended: the flag reaches the sidecar's "unattended"
+// key, and a false one is omitted so an attended run's config is unchanged.
+func TestBuildProxyConfig_Unattended(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		b, err := BuildProxyConfig(uuid.New(), ProxyConfig{Unattended: want}, ProxyListenPort)
+		if err != nil {
+			t.Fatalf("BuildProxyConfig: %v", err)
+		}
+		if got := strings.Contains(string(b), `"unattended":true`); got != want {
+			t.Errorf("Unattended=%v marshals to %s", want, b)
+		}
+		if !want && strings.Contains(string(b), "unattended") {
+			t.Errorf("an attended run's config names the key: %s", b)
+		}
+	}
+}
+
+// TestBuildProxyConfig_CarriesControlPlaneCA: the ONE sealed config both
+// substrates deliver (docker env, k8s Secret) carries wardynd's internal CA, and
+// the sidecar's strict decoder accepts it with an https control plane — the
+// shape dispatch produces on every non-local install.
+func TestBuildProxyConfig_CarriesControlPlaneCA(t *testing.T) {
+	blob, err := hoptls.NewCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := hoptls.ParseCA(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := BuildProxyConfig(uuid.New(), ProxyConfig{
+		RunToken:          "tok",
+		ControlPlaneURL:   "https://wardynd:8443",
+		ControlPlaneCAPEM: string(ca.CertPEM),
+	}, ProxyListenPort)
+	if err != nil {
+		t.Fatalf("BuildProxyConfig: %v", err)
+	}
+	cfg, err := proxy.LoadConfigBytes(b)
+	if err != nil {
+		t.Fatalf("the sidecar must load dispatch's own config: %v", err)
+	}
+	if cfg.ControlPlaneCAPEM != string(ca.CertPEM) {
+		t.Fatal("control_plane_ca_pem did not reach the sidecar verbatim")
 	}
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the walled-dispatch harness ──────────────────────────────────────────────
+// the walled-dispatch harness
 
 // govCeilingSecret is the operator-stored artifact-registry token the corp
 // mirror's redirect injects, and govCorpDeny the wildcard an assigned profile
@@ -83,12 +83,12 @@ func runWalledDispatch(t *testing.T, d walledDispatch) (types.RunPolicySpec, run
 		firstGitHub = &gid
 		break
 	}
-	ceiling := ceilingForDispatch(governanceCeiling{})
+	ceiling := ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded())
 	if len(d.deny) > 0 {
 		ceiling = ceilingForDispatch(governanceCeiling{
 			Spec:    types.RunPolicySpec{DeniedDomains: d.deny},
 			Profile: &types.GovernanceProfile{Name: "walled"},
-		})
+		}, adoEntraUngraded(), bedrockCredUngraded())
 	}
 	srv.dispatchRun(context.Background(), run, ceiling, dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
@@ -134,7 +134,7 @@ func injectionHosts(spec runner.SandboxSpec) []string {
 	return out
 }
 
-// ─── the ordering argument, as a test ─────────────────────────────────────────
+// the ordering argument, as a test
 
 // TestCeilingReassertion_RunsBelowEveryWideningPhase is the placement proof.
 //
@@ -204,7 +204,7 @@ func auditStrings(t *testing.T, data json.RawMessage, field string) []string {
 	return out
 }
 
-// ─── the absent-row doctrine ──────────────────────────────────────────────────
+// the absent-row doctrine
 
 // TestCeilingReassertion_UnassignedIsAProvableNoOp is the other half of the
 // feature, and the one that decides whether it can ship: a deployment that has
@@ -252,7 +252,7 @@ func TestCeilingReassertion_UnassignedIsAProvableNoOp(t *testing.T) {
 	}
 }
 
-// ─── the meet, and the matcher ────────────────────────────────────────────────
+// the meet, and the matcher
 
 // TestUnionCeilingDeniesIsAMeet pins the two properties the union has to have:
 // the run's OWN denies survive (it narrows, it never replaces), and a ceiling
@@ -299,7 +299,7 @@ func TestCeilingDenies(t *testing.T) {
 	}
 }
 
-// ─── the record lane (PF-24) ──────────────────────────────────────────────────
+// the record lane (PF-24)
 
 // ceilingRecordStore is recordLLMModeStore that also answers the governance
 // resolver — the reads a MEMBER-or-security-admin principal reaches (an
@@ -328,7 +328,7 @@ func (s ceilingRecordStore) HasGroupTierAssignments(context.Context) (bool, erro
 // ceiling's denies have to ride into dispatch, where deny beats allow_all at
 // the proxy.
 //
-// Counterfactual: pass ceilingForDispatch(governanceCeiling{}) instead of the record
+// Counterfactual: pass ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()) instead of the record
 // lane's dispatchParams and the run comes up allow-all with the walled host
 // wide open — a create-time clamp cannot help, because this lane never passes
 // through one.

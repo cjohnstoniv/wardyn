@@ -34,7 +34,7 @@ func ephemeralDispatch(t *testing.T, policy types.RunPolicySpec, site types.Site
 	srv, st, audit, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	srv.cfg.Store = ceilingDispatchStore{dispatchTestStore: st, site: site}
 	run.Task = "" // no agent exec / completion watcher: this is about composition
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policy,
 	})
 	return fr.lastSpec.Resources, audit.events, run.ID
@@ -119,7 +119,7 @@ func TestDispatchEphemeralDisk_Precedence(t *testing.T) {
 		ceiling: governanceCeiling{Limits: types.GovernanceLimits{MaxEphemeralDiskMiB: 2048}},
 		want:    4096,
 	}, {
-		// PROVENANCE STOPS AT THIS SITE. composer.Clamp's capField already fills a
+		// Provenance stops at this site. composer.Clamp's capField already fills a
 		// zero request UP TO a profile SPEC's resources.disk_mib at create, so a
 		// non-zero size can reach dispatch without the member typing it — and it is
 		// still REQUESTED, not filled: an admin wrote that number on a policy, which

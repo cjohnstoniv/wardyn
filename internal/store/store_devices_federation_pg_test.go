@@ -56,7 +56,7 @@ func TestPG_Devices_IngestRefusesARowUnderAnOrgRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, g := range got {
-		if g.Actor == "ceo@corp.example" {
+		if strings.HasSuffix(g.Actor, "ceo@corp.example") {
 			t.Errorf("a device-forwarded row sits under org run %s as %s %q, action %q, source_ip %q", run.ID, g.ActorType, g.Actor, g.Action, g.SourceIP)
 		}
 	}
@@ -251,7 +251,7 @@ func TestPG_Devices_IngestForARevokedDeviceIsErrDeviceRevoked(t *testing.T) {
 	}
 }
 
-// ─── every accepted row re-checks; everything else is refused ────────────────
+// every accepted row re-checks; everything else is refused
 
 // storedFederation is one stored federated row as a verifier sees it: the
 // device's claim recomputed with store.FederatedClaimHashSQL, and the
@@ -272,7 +272,7 @@ func storedFederated(t *testing.T, pool *pgxpool.Pool, deviceID uuid.UUID) []sto
 		       COALESCE(e.prev_hash, '') = COALESCE((SELECT p.row_hash FROM audit_events p
 		                                             WHERE p.seq < e.seq AND p.row_hash IS NOT NULL ORDER BY p.seq DESC LIMIT 1), '')
 		FROM audit_events e WHERE e.actor = $1 ORDER BY e.seq`
-	rows, err := pool.Query(context.Background(), q, "federation:"+deviceID.String())
+	rows, err := pool.Query(context.Background(), q, store.FederatedActor(deviceID, "federation:"+deviceID.String()))
 	if err != nil {
 		t.Fatal(err)
 	}

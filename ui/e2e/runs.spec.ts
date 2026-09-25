@@ -10,6 +10,7 @@ import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/log
 import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
+import { STATES } from "../src/app/components/wardyn/states";
 import {
   CHIP_IMAGE_PULL_FAILED,
   CHIP_SETTING_UP,
@@ -159,19 +160,31 @@ test.describe("Runs board (default view)", () => {
     await openRuns(page);
 
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
-    await search.fill("e2e fixture 4");
 
-    // Only the COMPLETED fixture-4 run should remain. The filter itself is
-    // synchronous client-side state (runs.tsx's `filtered` is re-derived from
-    // `runs` + `query` on every render — nothing async sits between the fill
-    // and the board reflecting it, so a longer timeout buys nothing a real
-    // stall wouldn't also blow through). The structural card count is the
-    // stronger signal: `getByText("e2e fixture 0")` without `exact` is a
-    // substring match, so it is provably watching the SAME "is fixture 0
-    // gone" fact as `run-card` count 1 — asserting both pins the invariant
-    // two independent ways instead of leaning on one text query alone.
+    // #806: the filter itself is synchronous client-side state (runs.tsx's
+    // `filtered` is re-derived from `runs` + `query` on every render), so a
+    // slow render was never the failure — the recorded failure was "run-card
+    // count: Received 9", the fill never reaching React at all. The likely
+    // mechanism: openRuns' navTo("Runs") changes location.key, which re-runs
+    // load() (runs.tsx), and load() flips status to "loading", which unmounts
+    // the toolbar input. "e2e fixture 0" can already be visible from the
+    // FIRST load, so the fill can land on the input that reload is about to
+    // detach, and its input event never reaches React's root listener. A
+    // longer wait only re-checks the same lost fill. Retrying the fill itself
+    // converges: each attempt either lands or it doesn't, and `toHaveValue`
+    // inside the loop tells them apart.
+    await expect(async () => {
+      await search.fill("e2e fixture 4");
+      await expect(search).toHaveValue("e2e fixture 4");
+      await expect(page.getByTestId("run-card")).toHaveCount(1, { timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
+
+    // The structural card count above is the stronger signal:
+    // `getByText("e2e fixture 0")` without `exact` is a substring match, so
+    // it is provably watching the SAME "is fixture 0 gone" fact as
+    // `run-card` count 1 — asserting both pins the invariant two independent
+    // ways instead of leaning on one text query alone.
     await expect(page.getByText("e2e fixture 4")).toBeVisible();
-    await expect(page.getByTestId("run-card")).toHaveCount(1);
     await expect(page.getByText("e2e fixture 0", { exact: true })).toHaveCount(0);
   });
 
@@ -179,10 +192,15 @@ test.describe("Runs board (default view)", () => {
     await openRuns(page);
 
     const search = page.getByPlaceholder("Search runs, repos, IDs…");
-    await search.fill("zzz-no-such-run-zzz");
 
-    // EmptyState for a query renders this copy (runs.tsx).
-    await expect(page.getByText("No runs match these filters.")).toBeVisible();
+    // Same dropped-fill non-determinism as the test above — same input, same
+    // fix: retry the fill itself, not just the assertion after it.
+    await expect(async () => {
+      await search.fill("zzz-no-such-run-zzz");
+      await expect(search).toHaveValue("zzz-no-such-run-zzz");
+      // EmptyState for a query renders this copy (runs.tsx).
+      await expect(page.getByText("No runs match these filters.")).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 15_000 });
     await expect(page.getByText("Try a different search term or facet.")).toBeVisible();
 
     // Clearing the filters restores the full board. The board's own 3s poll
@@ -476,7 +494,8 @@ test.describe("Run header — the autonomy chip (#93/#97)", () => {
 // truncate), not the raised finding's `hidden … 2xl:inline-flex`. 420px is
 // well below the bar's floor (~1300px on a single-line row before the fix),
 // stressing the truncate/overflow-hidden path harder than the width loop above.
-test.describe("Run header — the failure-hint chip survives a narrow viewport (F1-F4)", () => {
+test.describe("Run header — the failure-hint chip survives a narrow viewport", () => {
+  // ticket: F1-F4
   // 0.7.6 finding 6: a STARTING run says what it is waiting ON. The seeded
   // backend has no real substrate behind fixture 1, so the reason is injected on
   // the read the console actually makes — the same route-intercept shape the
@@ -908,7 +927,7 @@ test.describe("Run detail — a failing side fetch is not an outage", () => {
     await expect(page).toHaveURL(/\/runs\/.+/);
 
     await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
-    await expect(page.getByText("We couldn't reach the Wardyn control plane. Please try again.")).toHaveCount(0);
+    await expect(page.getByText(STATES.ERROR_DEFAULT)).toHaveCount(0);
     // The one control that ends a runaway run is still reachable.
     await expect(page.getByRole("button", { name: "Kill" })).toBeVisible();
 
@@ -1005,7 +1024,8 @@ test.describe("Attach card — a failing /healthz claims nothing about the deplo
 // pressing Escape, close only the dialog (fine) or also exit focus mode
 // (remounts the terminal pane, dropping the live attach socket on an
 // interactive run — R1-F1's F1-F3 finding).
-test.describe("Focus mode — Escape inside a Deny confirm (F1-F3 repro)", () => {
+test.describe("Focus mode — Escape inside a Deny confirm", () => {
+  // ticket: F1-F3
   test("Escape closes the Deny dialog without also exiting focus mode", async ({ page }) => {
     const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
     sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${runId}'`);
@@ -1059,15 +1079,17 @@ test.describe("Focus mode — Escape inside a Deny confirm (F1-F3 repro)", () =>
 // attentionFor (run-state-glyph.tsx) grades it "permission", runs.tsx's
 // existing needsYou split (predates #160, untouched) pins every "permission"
 // run to the "Needs you" lane BEFORE grouping, and a TitleGroup only ever
-// receives what's left. The counted held/reauth chip vocabulary itself is
-// pinned directly against TitleGroup in runs/title-group.test.tsx (which
-// renders it with its own run list, independent of that split); board-groups
-// .test.ts and run-card.test.tsx pin the same predicate isHeld/isStaleHold
-// drive. What's reachable live, and pinned below: the STARTING chip (a
-// run.state fact, not an approval one), the "Checking…" pre-resolve window,
-// a STALE credential_reauth (which drops out of "permission" once stale and
-// so stays grouped), and a stale TOOL_CALL hold's card degrading to Open in
-// the lane it's still pinned to (RunCard is the same component either way).
+// receives what's left. #509 — a PENDING tool_call/credential_reauth row is
+// now ALWAYS held (no client-side ceiling can drop it), so a live PENDING row
+// of either kind is ALWAYS pinned to the Needs-you lane, never left grouped —
+// there is no more live "stale but still counted in the group" case to prove
+// here; the counted held/reauth chip vocabulary itself stays pinned directly
+// against TitleGroup's own signals in runs/title-group.test.tsx, board-groups
+// .test.ts and run-card.test.tsx. What's reachable live, and pinned below:
+// the STARTING chip (a run.state fact, not an approval one), the
+// "Checking…" pre-resolve window, and a long-PENDING TOOL_CALL/
+// credential_reauth hold that STAYS live (Review, not Open; the Needs-you
+// lane, not a "was held" demotion) no matter how old it is.
 async function createGroupRun(page: Page, title: string, task: string): Promise<string> {
   const res = await page.request.post("/api/v1/runs", {
     headers: auth,
@@ -1078,30 +1100,20 @@ async function createGroupRun(page: Page, title: string, task: string): Promise<
 }
 
 test.describe("Runs board — group wait row (#160) and run links (#215)", () => {
-  test("the group header counts waiting-to-start and a stale hold — its own runs, not the ones pinned to the Needs-you lane — and its title opens from a real, keyboard-reachable link", async ({
+  test("the group header counts waiting-to-start — its own run, not the ones pinned to the Needs-you lane — and its title opens from a real, keyboard-reachable link", async ({
     page,
   }) => {
     const title = "e2e wait row";
     const starting = await createGroupRun(page, title, "wait starting");
     const clean = await createGroupRun(page, title, "wait clean");
-    const staleReauth = await createGroupRun(page, title, "wait stale reauth");
-    const ids = [starting, clean, staleReauth];
+    const ids = [starting, clean];
 
-    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id IN ('${clean}','${staleReauth}')`);
+    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${clean}'`);
     // status_reason is derived server-side from status_detail, never stored
     // (lib/types/runs.ts's own note) — the stored column is status_detail,
     // in the substrate's own "<component>: <Reason>[: <message>]" shape.
     sql(
       `UPDATE agent_runs SET state = 'STARTING', status_detail = 'pod: ImagePullBackOff: rpc error: image not found' WHERE id = '${starting}'`,
-    );
-    // credential_reauth past the 60-minute ceiling: isHeld no longer counts
-    // it live, and (unlike a WAITING_FOR_CONFIRMATION tool_call) its run
-    // state alone does not force "permission" either — it stays in the
-    // group instead of the lane, which is what makes it the one live way to
-    // see the header's stale-hold chip.
-    sql(
-      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
-       ('${randomUUID()}','${staleReauth}','credential_reauth','{}'::jsonb,'PENDING',now() - interval '90 minutes')`,
     );
 
     try {
@@ -1110,18 +1122,9 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
       await expect(group).toBeVisible();
       const waitRow = group.getByLabel("What this group is waiting on");
       await expect(waitRow.getByText(RUNS_WAIT.STARTING(1))).toBeVisible();
-      await expect(waitRow.getByText(RUNS_WAIT.STALE_GROUP(1))).toBeVisible();
       await expect(waitRow.getByText(RUNS_WAIT.NONE)).toHaveCount(0);
-      // Exactly two chips here — no third.
-      await expect(waitRow.locator(":scope > *")).toHaveCount(2);
-
-      // The stale-hold card itself: the neutral sentence, no Review/Open
-      // button (credential_reauth never had one), RunStateBadge untouched.
-      const staleCard = page.getByTestId("run-card").filter({ hasText: "wait stale reauth" });
-      await expect(staleCard.getByText(RUNS_WAIT.STALE_CARD)).toBeVisible();
-      await expect(staleCard.getByRole("button", { name: "Review" })).toHaveCount(0);
-      await expect(staleCard.getByRole("button", { name: "Open" })).toHaveCount(0);
-      await expect(staleCard.getByText("Running", { exact: true })).toBeVisible();
+      // Exactly one chip here — no second.
+      await expect(waitRow.locator(":scope > *")).toHaveCount(1);
 
       // #215 — the clean run's own title is a real, keyboard-reachable link,
       // not a div with onClick.
@@ -1177,14 +1180,20 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
     }
   });
 
-  test("a stale tool_call hold, still pinned to the Needs-you lane by its own wire state, offers Open instead of Review — RunStateBadge unchanged", async ({
+  // #509 — a PENDING tool_call/credential_reauth row is live until the
+  // SERVER says otherwise: the sandbox stays parked on it for up to
+  // WARDYN_APPROVAL_EXPIRY_AFTER (24h default), so the board must never call
+  // it dead sooner. 23 hours — far past the old 60-minute client ceiling
+  // and just inside the server's own 24h expiry — still reads Review/held on the board
+  // card, never "Open"/"was held".
+  test("a tool_call PENDING for 23 hours still offers Review and states 'sandbox held' — RunStateBadge unchanged", async ({
     page,
   }) => {
-    const solo = await createGroupRun(page, "e2e stale solo", "stale solo run");
+    const solo = await createGroupRun(page, "e2e long-held solo", "long-held solo run");
     sql(`UPDATE agent_runs SET state = 'WAITING_FOR_CONFIRMATION' WHERE id = '${solo}'`);
     sql(
       `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
-       ('${randomUUID()}','${solo}','tool_call','{"tool":"Bash","cmd":"rm -rf build"}'::jsonb,'PENDING',now() - interval '90 minutes')`,
+       ('${randomUUID()}','${solo}','tool_call','{"tool":"Bash","cmd":"rm -rf build"}'::jsonb,'PENDING',now() - interval '23 hours')`,
     );
 
     try {
@@ -1192,14 +1201,39 @@ test.describe("Runs board — group wait row (#160) and run links (#215)", () =>
       const lane = page.getByRole("region", { name: "Needs you" });
       // Ungrouped (ONE run holds this title): the card names itself by the
       // title, not the task — rowHeadline's `grouped` fallback chain.
-      const card = lane.getByTestId("run-card").filter({ hasText: "e2e stale solo" });
+      const card = lane.getByTestId("run-card").filter({ hasText: "e2e long-held solo" });
       await expect(card).toBeVisible();
-      await expect(card.getByRole("button", { name: "Open" })).toBeVisible();
-      await expect(card.getByRole("button", { name: "Review" })).toHaveCount(0);
-      await expect(card.getByText(RUNS_WAIT.STALE_CARD)).toBeVisible();
-      // The DELIBERATE LIMIT: the run's own wire state, via RunStateBadge,
-      // still reads exactly what it is.
+      await expect(card.getByRole("button", { name: "Review" })).toBeVisible();
+      await expect(card.getByRole("button", { name: "Open" })).toHaveCount(0);
+      await expect(card.getByText(RUN_COCKPIT.waitingHeld(1))).toBeVisible();
+      // The run's own wire state, via RunStateBadge, reads exactly what it is.
       await expect(card.getByText("Awaiting confirmation")).toBeVisible();
+    } finally {
+      sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
+    }
+  });
+
+  // The credential_reauth twin: it carries no Review/Open button of its own
+  // (canDecideApproval refuses everyone), but it must stay pinned to the
+  // Needs-you lane and keep stating the live "AWS sign-in" sentence — never
+  // demoted to a "was held" claim — at the same 25-hour age.
+  test("a credential_reauth PENDING for 23 hours stays pinned to Needs-you and keeps stating the live AWS sign-in wait", async ({
+    page,
+  }) => {
+    const solo = await createGroupRun(page, "e2e long-held reauth", "long-held reauth run");
+    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${solo}'`);
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at) VALUES
+       ('${randomUUID()}','${solo}','credential_reauth','{}'::jsonb,'PENDING',now() - interval '23 hours')`,
+    );
+
+    try {
+      await openRuns(page);
+      const lane = page.getByRole("region", { name: "Needs you" });
+      const card = lane.getByTestId("run-card").filter({ hasText: "e2e long-held reauth" });
+      await expect(card).toBeVisible();
+      await expect(card.getByText(/AWS sign-in/)).toBeVisible();
+      await expect(card.getByText(/was held/)).toHaveCount(0);
     } finally {
       sql(`DELETE FROM agent_runs WHERE id = '${solo}'`);
     }

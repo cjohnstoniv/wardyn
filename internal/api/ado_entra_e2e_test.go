@@ -88,40 +88,17 @@ func TestADOEntraLane_EndToEnd(t *testing.T) {
 	policy := types.RunPolicySpec{}
 	runID := uuid.New()
 	lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: runID}, adoTestRun(t), true,
-		dispatchLLMPlan{mitmCACertPEM: string(caCert), mitmCAKeyPEM: string(caKey)}, &policy, map[string]string{}, nil)
-	if !ok || len(lane.gate) != 1 {
+		adoEntraUngraded(), dispatchLLMPlan{mitmCACertPEM: string(caCert), mitmCAKeyPEM: string(caKey)}, &policy, map[string]string{}, nil)
+	if !ok || lane.gate == nil {
 		t.Fatalf("dispatch: ok=%v gate=%+v", ok, lane.gate)
 	}
 
-	port := freeLoopbackPort(t)
-	raw, err := runner.BuildProxyConfig(runID, runner.ProxyConfig{
-		RunToken: "run-token", ControlPlaneURL: cp.URL, Policy: policy, Injection: lane.injections,
-		MITMCACertPEM: string(caCert), MITMCAKeyPEM: string(caKey), MITMHosts: lane.mitmHosts,
-		ADOGrants: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCA.caPEM,
-	}, port)
-	if err != nil {
-		t.Fatalf("BuildProxyConfig: %v", err)
-	}
-	cfg, err := proxy.LoadConfigBytes(raw)
-	if err != nil {
-		t.Fatalf("LoadConfigBytes: %v", err)
-	}
-	cfg.Listen = "127.0.0.1:" + strconv.Itoa(port)
-	psrv, err := proxy.NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, io.Discard)
-	if err != nil {
-		t.Fatalf("sidecar boot: %v", err)
-	}
-	go func() { _ = psrv.ListenAndServe() }()
-	t.Cleanup(func() {
-		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = psrv.Shutdown(sctx)
-	})
+	listen := startADOLaneSidecar(t, runID, lane, policy, string(caCert), string(caKey), cp.URL, corp, upstreamCA.caPEM)
 
 	// THE SANDBOX: trusts only the run's CA and holds only the placeholder.
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(caCert)
-	proxyURL, _ := url.Parse("http://" + cfg.Listen)
+	proxyURL, _ := url.Parse("http://" + listen)
 	sandbox := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
 		Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 	}}
@@ -175,7 +152,42 @@ func TestADOEntraLane_EndToEnd(t *testing.T) {
 	}
 	// 4. The plain forward lane: the same requests as absolute-form https://
 	// request-lines with no CONNECT are refused before any byte leaves.
-	assertADOPlainLaneRefused(t, cfg.Listen, seen)
+	assertADOPlainLaneRefused(t, listen, seen)
+}
+
+// startADOLaneSidecar boots the REAL proxy sidecar from the configuration
+// dispatch authors for lane — runner.BuildProxyConfig, proxy.LoadConfigBytes,
+// proxy.NewServer — with its upstream leg routed through corp, and returns its
+// listen address.
+func startADOLaneSidecar(t *testing.T, runID uuid.UUID, lane adoEntraLane, policy types.RunPolicySpec,
+	caCert, caKey, cpURL, corp, upstreamCAPEM string,
+) string {
+	t.Helper()
+	port := freeLoopbackPort(t)
+	raw, err := runner.BuildProxyConfig(runID, runner.ProxyConfig{
+		RunToken: "run-token", ControlPlaneURL: cpURL, Policy: policy, Injection: lane.injections,
+		MITMCACertPEM: caCert, MITMCAKeyPEM: caKey, MITMHosts: lane.mitmHosts,
+		ADOGrant: lane.gate, UpstreamProxyURL: "http://" + corp, TrustedCAPEM: upstreamCAPEM,
+	}, port)
+	if err != nil {
+		t.Fatalf("BuildProxyConfig: %v", err)
+	}
+	cfg, err := proxy.LoadConfigBytes(raw)
+	if err != nil {
+		t.Fatalf("LoadConfigBytes: %v", err)
+	}
+	cfg.Listen = "127.0.0.1:" + strconv.Itoa(port)
+	psrv, err := proxy.NewServer(context.Background(), cfg, &http.Client{Timeout: 5 * time.Second}, io.Discard)
+	if err != nil {
+		t.Fatalf("sidecar boot: %v", err)
+	}
+	go func() { _ = psrv.ListenAndServe() }()
+	t.Cleanup(func() {
+		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = psrv.Shutdown(sctx)
+	})
+	return cfg.Listen
 }
 
 // adoPlainLaneCases are absolute-form `https://` requests written straight to

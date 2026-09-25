@@ -253,11 +253,15 @@ services:
       # (deploy/desktop/wardyn.env.m-prime.example) sets all of these, and an MDM
       # copies that file to every laptop — so a key this block does not forward
       # is a governance posture the envelope CLAIMS and the daemon never sees.
-      # WARDYN_MEMBER_MODE unforwarded left every m' device booting as the
+      # WARDYN_USER_DESKTOP unforwarded left every m' device booting as the
       # ordinary admin-token tier; the roots unforwarded left every member host
       # mount REFUSED (unset = "members may not mount host directories"), which
       # is the one power m' exists to add. Defaults here are docs/ENV.md's own:
-      # member mode off, and every root list unset = fail closed.
+      # member mode off, and every root list unset = fail closed. Every default
+      # is EMPTY, never "false": wardynd reads empty as unset, and a non-empty
+      # new name would win over an envelope still setting the deprecated
+      # WARDYN_MEMBER_MODE=true, booting that laptop with member mode off and no
+      # WARN (`make compose-config` renders exactly that envelope).
       #
       # The roots are HOST paths and this wardynd resolves symlinks in its OWN
       # process, so the tree has to be visible inside this container too — same
@@ -270,7 +274,7 @@ services:
       # CORRECTED (#135): that bind's `:ro` does NOT gate whether a member mount
       # ends up writable. It only bounds what THIS wardynd container can itself
       # see (EvalSymlinks + the credential dotfile deny-list, both reads) —
-      # WARDYN_MEMBER_WRITABLE_ROOTS alone (checked in
+      # WARDYN_USER_WRITABLE_ROOTS alone (checked in
       # internal/runner/member_mount.go's ValidateMemberMount /
       # ValidateMemberMountSource) decides writability, purely by root/deny-list
       # match; neither function opens or stat-for-write-checks the source. The
@@ -283,7 +287,17 @@ services:
       # proves this: a writable member mount still binds writable even when the
       # source itself is unwritable. This block's own env line below is the
       # real gate.
-      WARDYN_MEMBER_MODE: "${WARDYN_MEMBER_MODE:-false}"
+      WARDYN_USER_DESKTOP: "${WARDYN_USER_DESKTOP:-}"
+      WARDYN_USER_WORKSPACE_ROOTS: "${WARDYN_USER_WORKSPACE_ROOTS:-}"
+      WARDYN_USER_WORKSPACE_ROOTS_MAP: "${WARDYN_USER_WORKSPACE_ROOTS_MAP:-}"
+      WARDYN_USER_WRITABLE_ROOTS: "${WARDYN_USER_WRITABLE_ROOTS:-}"
+      WARDYN_USER_WRITABLE_DENY: "${WARDYN_USER_WRITABLE_DENY:-}"
+      # Deprecated names (UT-5, user-types-design.md rev 4 §6; removed in 0.9):
+      # forwarded too, unset by default, so a shell or .env still exporting the
+      # WARDYN_MEMBER_* spelling keeps working — wardynd's own boot-time alias
+      # (cmd/wardynd/boot_flags.go's resolveDeprecatedEnvAliases) picks whichever
+      # one is set and WARNs when it is the deprecated one.
+      WARDYN_MEMBER_MODE: "${WARDYN_MEMBER_MODE:-}"
       WARDYN_MEMBER_WORKSPACE_ROOTS: "${WARDYN_MEMBER_WORKSPACE_ROOTS:-}"
       WARDYN_MEMBER_WORKSPACE_ROOTS_MAP: "${WARDYN_MEMBER_WORKSPACE_ROOTS_MAP:-}"
       WARDYN_MEMBER_WRITABLE_ROOTS: "${WARDYN_MEMBER_WRITABLE_ROOTS:-}"
@@ -326,7 +340,10 @@ services:
       # default lands on flagEnv's own compiled default ("on") like every
       # other empty passthrough above.
       WARDYN_AWS_SSO_PROXY_INJECT: "${WARDYN_AWS_SSO_PROXY_INJECT:-}"
-      WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
+      # Every run's proxy reaches wardynd on its internal TLS listener
+      # (WARDYN_INTERNAL_LISTEN, :8443 — never published to the host), pinned
+      # to wardynd's own internal CA. http:// here is refused at boot.
+      WARDYN_CONTROL_PLANE_URL: "https://wardynd:8443"
       # Devcontainer image builds — ON by default on the compose stack: the
       # wizard's DEFAULT card is "Recommended — built for this workspace", and a
       # default the deployment can't honor reads as "command not found" inside
@@ -459,7 +476,7 @@ services:
       # WARDYN_OIDC_DEFAULT_ROLE (empty by default) denies their login outright
       # — and a WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true deployment (today: every
       # human admin) would have EVERY login denied. The demo@wardyn.local=admin,
-      # member@wardyn.local=member pair a FRESH stack wants lives in
+      # member@wardyn.local=user pair a FRESH stack wants lives in
       # deploy/compose/.env.example instead (ensure_env_file copies the example only when no .env exists, and nothing in scripts/ ever writes this key into an existing .env), so it seeds a new .env and never touches an
       # upgraded one.
       WARDYN_OIDC_ROLE_MAP: "${WARDYN_OIDC_ROLE_MAP:-}"
@@ -581,9 +598,9 @@ services:
       - ${WARDYN_WORKSPACES_ROOT:-/var/empty/wardyn-no-workspaces-root}:${WARDYN_WORKSPACES_ROOT:-/var/empty/wardyn-no-workspaces-root}:ro
       # SINGULAR, same limit as WARDYN_USER_DRIVE_HOST_ROOT below: compose cannot
       # expand a CSV into volume lines, so a deployment whose
-      # WARDYN_MEMBER_WORKSPACE_ROOTS names more than one tree needs one more
+      # WARDYN_USER_WORKSPACE_ROOTS names more than one tree needs one more
       # same-path READ-ONLY line here per extra root. deploy/desktop/wardyn.env.m-prime.example
-      # is the case in point — its WARDYN_MEMBER_WORKSPACE_ROOTS names BOTH
+      # is the case in point — its WARDYN_USER_WORKSPACE_ROOTS names BOTH
       # /Users/Shared/src (macOS) and /srv/src (Linux), but only one of the two
       # can ever be WARDYN_WORKSPACES_ROOT, so the other has no bind here and
       # local-directory onboarding under it fails with "not found on this host"

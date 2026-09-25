@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -64,7 +65,7 @@ const defaultEphemeralTarget = "/home/agent/work"
 // source, never an error (a workspace always has at least one source).
 // Each source is then validated by type (validateWorkspaceSource), and
 // base_image is shape-guarded (validateWorkspaceBaseImage).
-func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRequest, string) {
+func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHostsLoader) (workspaceRequest, string) {
 	var req workspaceRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
 		return workspaceRequest{}, msg
@@ -95,8 +96,18 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRe
 	// body carrying it is dropped rather than stored: a client round-tripping a GET
 	// must not be able to persist a provider verdict, and the read path recomputes
 	// it on every response anyway.
+	var repos []string
+	for _, src := range req.Sources {
+		if src.Type == types.WorkspaceSourceTypeRepo {
+			repos = append(repos, src.Source)
+		}
+	}
+	adoServerHosts := ado.forAddresses(repos...)
 	for i := range req.Sources {
 		req.Sources[i].Admitted = nil
+		if req.Sources[i].Type == types.WorkspaceSourceTypeRepo {
+			req.Sources[i].Source = canonicalRepoAddress(req.Sources[i].Source, adoServerHosts)
+		}
 	}
 
 	if len(req.Sources) > maxWorkspaceSources {
@@ -105,7 +116,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRe
 
 	seenTargets := make(map[string]int, len(req.Sources))
 	for i, src := range req.Sources {
-		if msg := validateWorkspaceSource(src); msg != "" {
+		if msg := validateWorkspaceSource(src, adoServerHosts); msg != "" {
 			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, msg)
 		}
 		// (Mirrors validatePolicyWorkspaces' own unique-target
@@ -174,7 +185,7 @@ func legacyWorkspaceSource(req workspaceRequest) (types.WorkspaceSource, *types.
 // in-container mount/clone/scratch-dir path once a run attaches this workspace
 // — the AUTHORED variant, so a source can no more name the reserved user-drive
 // target than a policy mount can.
-func validateWorkspaceSource(src types.WorkspaceSource) string {
+func validateWorkspaceSource(src types.WorkspaceSource, adoServerHosts []string) string {
 	switch src.Type {
 	case types.WorkspaceSourceTypeLocalDir:
 		if strings.TrimSpace(src.Path) == "" {
@@ -199,7 +210,7 @@ func validateWorkspaceSource(src types.WorkspaceSource) string {
 			return fmt.Sprintf(repoField400Charset, "ref")
 		}
 		// Write-door half of the traversal guard — see validateSourceWrite.
-		if !repoLocatorPathSafe(src.Source) {
+		if !repoLocatorPathSafe(src.Source, adoServerHosts) {
 			return fmt.Sprintf(repo400LocatorShape, "source")
 		}
 		if repoCloneURL(src.Source) == "" {
@@ -430,7 +441,7 @@ func (s *Server) sshWorkspaceSourcesReady(ctx context.Context, sources []types.W
 // scanned/scanning/error) happens via the separate POST /workspaces/{id}/scan
 // endpoint (see handleScanWorkspace) — creation never scans inline.
 func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
-	req, msg := decodeWorkspaceRequest(w, r)
+	req, msg := decodeWorkspaceRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -470,9 +481,9 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// owner != "" IS the member test (secretOwnerFromRequest is "" for an
 	// operator), so this is the same ownership stamp the line above reads.
 	if owner != "" && req.LLMCred != nil && req.LLMCred.IntegrationRef != "" {
-		s.denyMemberField(w, r, "workspaces.llm_cred", "admin_surface",
+		s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, "workspaces.llm_cred",
 			"llm_cred is operator-only — an admin binds a workspace's model/harness credential "+
-				"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding")
+				"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding"))
 		return
 	}
 	// A member's own local_dir sources must clear the member-safe mount gate
@@ -584,7 +595,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, msg := decodeWorkspaceRequest(w, r)
+	req, msg := decodeWorkspaceRequest(w, r, s.adoHostsLoader(r.Context()))
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
