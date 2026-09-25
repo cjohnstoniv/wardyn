@@ -296,6 +296,18 @@ func adoEntraHosts(org string) []string {
 	return hosts
 }
 
+// isADOEntraHost reports whether host is one adoEntraHosts (any org) can
+// return: dev.azure.com, a service subdomain of it (vssps./vsrm./feeds./
+// pkgs./almsearch..., adoEntraServices), or any *.visualstudio.com. Not
+// adoEgressDomains, which answers a narrower question (the two-host egress
+// bundle to open for a git_pat/ssh_key grant) and misses the *.dev.azure.com
+// service subdomains the Entra lane's own credential hold also gates and
+// times out on.
+func isADOEntraHost(host string) bool {
+	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	return h == "dev.azure.com" || strings.HasSuffix(h, ".dev.azure.com") || strings.HasSuffix(h, ".visualstudio.com")
+}
+
 // adoEntraGitHosts are the broker entries for the hosts git is served from in
 // both naming schemes, plus `<org>@dev.azure.com`: the URL Azure DevOps' own
 // Clone button hands out carries the organisation as a user name.
