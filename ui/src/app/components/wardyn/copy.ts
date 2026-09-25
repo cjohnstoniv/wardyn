@@ -172,5 +172,6 @@ export {
   RECORDING_DISABLED_DESC,
   RAIL,
   RAIL_CREDENTIAL,
+  RAIL_PROVIDER,
   RAIL_RECORDING_ON,
 } from "./copy/new-run-rail";

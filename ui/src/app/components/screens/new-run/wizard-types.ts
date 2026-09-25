@@ -223,6 +223,14 @@ export interface WizardState {
   // server default — see step-access.tsx's "Override for this run…" peek and
   // CreateRunRequest.IntegrationID. Unset => resolves normally.
   integrationId?: string;
+  // #542 — this run's own model-provider pick (CreateRunRequest.ModelProvider,
+  // #526): the id new-run-screen.tsx's provider picker resolved for the
+  // current agent (model-provider-lane.ts's resolveProviderSelection), or
+  // undefined with no provider block, no provider serving this agent, or no
+  // choice made yet. Sent whenever set — see buildSpec — so the launched run
+  // always chooses exactly the provider the rail showed, never whatever the
+  // server's own default resolution would have picked instead.
+  modelProviderId?: string;
 
   // --- Step 3: egress ---
   allowedDomains: string[]; // selected preset + custom domains
@@ -718,6 +726,10 @@ export type CreateRunInputWithComposition = CreateRunInput & {
   // The member's user-drive request — pkg/client.DriveSelection 1:1. Absent
   // (the overwhelmingly common case) mounts nothing.
   drive?: { enabled: boolean; read_only?: boolean };
+  // #542/#526 — this run's chosen model provider (pkg/client.CreateRunRequest.
+  // ModelProvider 1:1). Absent under no provider block, same wire default as
+  // every install before providers existed.
+  model_provider?: string;
 };
 
 // buildSpec (the state -> canonical wire-contract composer) and
