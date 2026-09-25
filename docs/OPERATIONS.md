@@ -5001,8 +5001,9 @@ them:
 # 2. Rewrap the rest, with the same settings:
 wardynd -rewrap
 #    every sealed secret is wrapped under transit:transit/wardyn version 1; …
-# 3. Unset WARDYN_AGE_KEY and restart. Boot refuses, naming -rewrap, while any
-#    row is still sealed under the age key.
+# 3. Unset WARDYN_AGE_KEY and restart. wardynd refuses to start until you do
+#    (and, the other way, refuses without it, naming -rewrap, while any row is
+#    still sealed under it).
 ```
 
 Back: set `WARDYN_KEK=local` and `WARDYN_AGE_KEY`, keep
@@ -5065,7 +5066,11 @@ only with `WARDYN_KEK=transit`, once no row is under it). Properties:
   `-rotate-age-key`, so the two never run at once.
 - **Pointer rows** (store mode) hold no data key and are never touched.
 
-Restart every replica with the settings it ran with afterwards.
+Restart every replica with the settings it ran with afterwards. After a move
+onto Transit, the last step is: **unset `WARDYN_AGE_KEY`; wardynd refuses to
+start until you do.** With `WARDYN_KEK=transit` and no stored row left under the
+age key, the key could only let whoever also holds the database forge a row
+wardynd still reads under it, its own boot keys among them.
 
 ## Store mode: credentials in Vault
 

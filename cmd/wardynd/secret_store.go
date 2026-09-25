@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -173,7 +174,9 @@ func newSecretStore(ctx context.Context, pool *pgxpool.Pool, ageKey string, plat
 // converts every legacy (v0) row to envelope v1, aborting boot on one that will
 // not decrypt; and it refuses an ephemeral age key while rows sealed under an
 // age key exist, rather than let a fresh key strand them. In store mode with
-// no age key (id nil) it refuses while any local row remains. An alternate
+// no age key (id nil) it refuses while any local row remains; with a key
+// service that wraps every write, it refuses an age key no row is sealed
+// under any more (refuseIdleAgeKey). An alternate
 // backend keeps its own format and is left alone. Each converted row was a
 // read of its value, recorded as a secret.read with purpose migrate.
 func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519Identity, ephemeral bool, rec audit.Recorder) error {
@@ -217,6 +220,24 @@ func convertSecretStore(ctx context.Context, s secretstore.Store, id *age.X25519
 	}
 	if len(converted) > 0 {
 		slog.Info("wardynd: converted stored secrets to envelope v1; an older wardynd can no longer read them", slog.Int("secrets", len(converted)))
+	}
+	return refuseIdleAgeKey(ctx, ps)
+}
+
+// refuseIdleAgeKey refuses boot when a key service wraps every write
+// (WARDYN_KEK=transit) and WARDYN_AGE_KEY is set with no stored row left under
+// it: the key then only lets whoever also holds the database forge a row the
+// store still reads under it — Wardyn's boot keys among them.
+func refuseIdleAgeKey(ctx context.Context, ps *secretstorepg.Store) error {
+	if ps.KeyService() == "" {
+		return nil
+	}
+	n, err := ps.LocalRows(ctx)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return errors.New("refusing to start: WARDYN_KEK=transit and no stored secret is sealed under WARDYN_AGE_KEY — unset it; while it is set, whoever holds it and the database can forge Wardyn's boot keys")
 	}
 	return nil
 }

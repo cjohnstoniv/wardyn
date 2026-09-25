@@ -82,6 +82,41 @@ func TestBuildSecretStore_KeyServiceNeedsNoAgeKey(t *testing.T) {
 	}
 }
 
+// TestBuildSecretStore_TransitRefusesAnIdleAgeKey: with WARDYN_KEK=transit, a
+// WARDYN_AGE_KEY no stored row is sealed under refuses boot — it could only
+// forge rows the store still reads under it. The migration window (local rows
+// left), no age key, and WARDYN_KEK=local (the key service read-only) all
+// boot.
+func TestBuildSecretStore_TransitRefusesAnIdleAgeKey(t *testing.T) {
+	const want = "refusing to start: WARDYN_KEK=transit and no stored secret is sealed under WARDYN_AGE_KEY — unset it; while it is set, whoever holds it and the database can forge Wardyn's boot keys"
+	id, _ := age.GenerateX25519Identity()
+	k := newMemKEK()
+	transit := storeClients{kek: k, kekWrites: true}
+
+	pool := envelopeDB(t)
+	if _, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", transit, &capturingRecorder{}); err == nil || err.Error() != want {
+		t.Fatalf("transit boot with an age key over no local row = %v; want %q", err, want)
+	}
+	if _, err := buildSecretStore(t.Context(), pool, "", nil, "", transit, &capturingRecorder{}); err != nil {
+		t.Fatalf("transit boot with the age key unset: %v", err)
+	}
+	if _, err := buildSecretStore(t.Context(), pool, id.String(), nil, "", storeClients{kek: k}, &capturingRecorder{}); err != nil {
+		t.Fatalf("WARDYN_KEK=local boot with the age key over no local row: %v", err)
+	}
+
+	migrating := envelopeDB(t)
+	local, err := buildSecretStore(t.Context(), migrating, id.String(), nil, "", storeClients{}, &capturingRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Put(t.Context(), "k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buildSecretStore(t.Context(), migrating, id.String(), nil, "", transit, &capturingRecorder{}); err != nil {
+		t.Fatalf("transit boot with the age key while a local row remains: %v", err)
+	}
+}
+
 func TestBuildSecretStore_KeyServiceRefusesWhileLocalRowsRemain(t *testing.T) {
 	pool := envelopeDB(t)
 	id, _ := age.GenerateX25519Identity()
