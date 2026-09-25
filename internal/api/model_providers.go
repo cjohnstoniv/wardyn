@@ -239,6 +239,7 @@ func validateModelProviders(p *types.ModelProviders) error {
 // answer, which each door takes itself (Server.claudeSignInImageOK).
 func validateModelProviderImagePrereqs(block, stored *types.ModelProviders, imageResolves bool) error {
 	if id := introducedSubscription(block, stored); id != "" && !imageResolves {
+		//lint:ignore ST1005 E4's member-facing sentence, pointing at the Operations section; it ends the way the doc writes it
 		return fmt.Errorf(mp400SignInImage, id)
 	}
 	return nil
