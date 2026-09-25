@@ -700,7 +700,13 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await link.fill("https://corp.service-now.com/sp?id=sc_cat_item&sys_id=abc");
     await expect(page.getByText("33 / 1000")).toBeVisible();
     await expect(page.getByTestId("sign-in-help").getByRole("link", { name: SIGNIN_HELP.LINK_LABEL })).toBeVisible();
+    // Wait on the real PUT settling, not "Save" going disabled — the button's
+    // disabled expression (sign-in-help-card.tsx) includes `saving`, which
+    // flips true SYNCHRONOUSLY on click, before the request resolves. Reading
+    // /healthz right after toBeDisabled() races the write on the wire.
+    const savePut = page.waitForResponse((r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT");
     await save.click();
+    expect((await savePut).ok()).toBe(true);
     await expect(save).toBeDisabled();
 
     const published = await (await page.request.get("/healthz")).json();
@@ -711,7 +717,9 @@ test.describe("People step — role mappings editor (0.7 SSO Phase 3)", () => {
     await expect(text).toHaveValue(`Ask in #it-helpdesk — it's quick.`);
     await text.fill("");
     await link.fill("");
+    const clearPut = page.waitForResponse((r) => r.url().includes("/api/v1/site-config") && r.request().method() === "PUT");
     await save.click();
+    expect((await clearPut).ok()).toBe(true);
     await expect(page.getByText(SIGNIN_HELP.EMPTY_NOTE)).toBeVisible();
     await expect(save).toBeDisabled();
     const cleared = await (await page.request.get("/healthz")).json();
