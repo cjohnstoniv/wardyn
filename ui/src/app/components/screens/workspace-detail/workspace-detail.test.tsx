@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
@@ -108,6 +108,16 @@ function renderDetail(id = "ws-1", operator = true, securityOperator = operator)
 beforeEach(() => {
   vi.clearAllMocks();
   getSetupStatusMock.mockResolvedValue(setupStatus());
+});
+
+// The F031 case below queues two mockResolvedValueOnce answers on
+// getWorkspaceMock. vi.clearAllMocks() above clears calls/results, not a
+// queued ONCE implementation, so a failure before both are consumed (e.g. the
+// first findByTestId times out) would otherwise leave the second queued and
+// leak it into the very next test's first getWorkspace() call, failing it for
+// an unrelated reason. Reset it every time, pass or fail.
+afterEach(() => {
+  getWorkspaceMock.mockReset();
 });
 
 describe("WorkspaceDetailScreen — not found", () => {
@@ -344,6 +354,58 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
     await waitFor(() =>
       expect(promoteRecordEgressMock).toHaveBeenCalledWith("ws-1", "build-test", ["nexus.corp.internal"]),
     );
+  });
+});
+
+// T-68 / F031 (workspace-detail.tsx:238-254) — approveHosts re-fetches the
+// workspace at CLICK time and merges onto THAT overlay, not the `ws` this
+// screen mounted with. The confirm dialog can sit open for minutes, and the
+// PUT is a full replacement, so approving a caught host while a concurrent
+// write has landed elsewhere must not silently revert it.
+describe("WorkspaceDetailScreen — approveHosts merges onto the freshest overlay, not a stale one (F031)", () => {
+  it("re-fetches the workspace right before the PUT, so a write that landed while the confirm dialog was open survives", async () => {
+    const learning: RecordResult = { run_id: "o1", label: "build & test", mode: "interactive", status: "recorded" };
+    // A settled confined replay with ONE off-policy, blocked host — the same
+    // shape record-pane.test.tsx's "confined replay" fixture uses to reach
+    // CaughtHosts' single-host Approve button.
+    const confinedRR: RecordResult = {
+      run_id: "vr1",
+      label: "build & test",
+      mode: "interactive",
+      confined: true,
+      status: "recorded",
+      observations: {
+        domains: [{ host: "evil.example.com", allow_count: 0, deny_count: 2, pending_count: 0 }],
+        minted_grant_ids: [],
+      } as unknown as RecordResult["observations"],
+    };
+    const recordResults = { "build-test": learning, "verify:build-test": confinedRR };
+    const mounted = ws({ record_results: recordResults, requirements: {} });
+    // The CONCURRENT write: a different operator approved a different host
+    // between this screen's mount and the click below. approveHosts' own
+    // fresh fetch (its second call to getWorkspace) must return this, and its
+    // key must survive into the PUT.
+    const concurrent = ws({
+      record_results: recordResults,
+      requirements: { "egress:concurrent.example.com": { level: "required", provenance: "operator_set" } },
+    });
+    getWorkspaceMock.mockResolvedValueOnce(mounted).mockResolvedValueOnce(concurrent);
+    setRequirementsMock.mockResolvedValue(ws({}));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+
+    const blocked = await screen.findByTestId("verify-session-blocked");
+    await user.click(within(blocked).getByRole("button", { name: /^approve$/i }));
+    await user.click(await screen.findByRole("button", { name: /approve host/i }));
+
+    await waitFor(() => expect(setRequirementsMock).toHaveBeenCalledTimes(1));
+    // Both the concurrent write's own key (proving the merge read the FRESH
+    // fetch, not the empty requirements map this screen mounted with) and the
+    // just-approved host are in the one PUT.
+    expect(setRequirementsMock).toHaveBeenCalledWith("ws-1", {
+      "egress:concurrent.example.com": { level: "required", provenance: "operator_set" },
+      "egress:evil.example.com": { level: "required", provenance: "operator_set" },
+    });
   });
 });
 

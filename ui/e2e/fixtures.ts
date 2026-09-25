@@ -4,6 +4,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { basename } from "node:path";
 import {
   test as base,
   expect,
@@ -22,11 +23,39 @@ import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 export const ADMIN_TOKEN = process.env.WARDYN_E2E_TOKEN || "wardyn-e2e-token";
 const TOKEN_KEY = "wardyn_admin_token";
 
+// T-68 — page-health teardown gate. A spec whose page threw an uncaught JS
+// error or tripped the CSP fails silently everywhere else: the click that
+// caused it still "worked" (React error boundaries and the browser both eat
+// it), so nothing but the browser's own devtools console would ever have
+// shown it. Every spec importing `test` from here gets it collected and
+// checked for free.
+//
+// Named by spec basename (no extension) — a debt list, not a convenience: a
+// spec joins it only when it has no narrower way to explain ITS OWN noise.
+// A spec that already asserts on the same CSP/console noise itself does NOT
+// belong here even though it trips the same page-health signal — adding this
+// file-wide gate on top would just double-report the same finding. That is
+// why the set below does NOT include recording.spec.ts: its WASM-player test
+// already asserts on a filtered CSP/WASM pattern of its own, so the finding
+// stays scoped to that one assertion instead of failing every check in the
+// spec.
+//
+// episode-catalog: its "configured video source" describe block DELIBERATELY
+// drives an unadmitted media-src host so the browser's own CSP blocks it —
+// the spec's own comment calls this out, and its assertions are that the
+// configured-source error copy renders and the mirror host never leaks into
+// text (Q145-2). The violation this trips IS the thing under test.
+const PAGE_HEALTH_ALLOWLIST = new Set<string>(["episode-catalog"]);
+
+function pageHealthAllowed(testFile: string): boolean {
+  return PAGE_HEALTH_ALLOWLIST.has(basename(testFile).replace(/\.spec\.ts$/, ""));
+}
+
 // `test` boots the app pre-authenticated so each spec lands directly in the
 // console. Auth-flow specs that exercise sign-in/sign-out should import the raw
 // `test` from "@playwright/test" instead and manage storage themselves.
 export const test = base.extend({
-  page: async ({ page }, use) => {
+  page: async ({ page }, use, testInfo) => {
     await page.addInitScript(
       ([key, tok]) => {
         try {
@@ -37,7 +66,38 @@ export const test = base.extend({
       },
       [TOKEN_KEY, ADMIN_TOKEN],
     );
+
+    // pageerror: a real, Playwright-native page event — no init script needed.
+    const pageErrors: string[] = [];
+    page.on("pageerror", (err) => pageErrors.push(err.stack || err.message));
+
+    // securitypolicyviolation is a DOM event, not a Playwright page event, so
+    // the only channel back to this Node-side collector is a page-JS listener
+    // reporting through an exposed binding. addInitScript re-installs it on
+    // every document the page navigates to (a fresh document has no listeners
+    // of its own), and exposeBinding must be wired before that script can call
+    // it — order below matters.
+    const cspViolations: string[] = [];
+    await page.exposeBinding("__wardynReportCSPViolation", (_source, detail: string) => {
+      cspViolations.push(detail);
+    });
+    await page.addInitScript(() => {
+      document.addEventListener("securitypolicyviolation", (e) => {
+        (window as unknown as { __wardynReportCSPViolation: (d: string) => void }).__wardynReportCSPViolation(
+          `${e.violatedDirective} blocked ${e.blockedURI} (${e.sourceFile}:${e.lineNumber})`,
+        );
+      });
+    });
+
     await use(page);
+
+    if (pageHealthAllowed(testInfo.file)) return;
+    if (pageErrors.length > 0) {
+      throw new Error(`uncaught page error(s) during "${testInfo.title}":\n${pageErrors.join("\n---\n")}`);
+    }
+    if (cspViolations.length > 0) {
+      throw new Error(`CSP violation(s) during "${testInfo.title}":\n${cspViolations.join("\n---\n")}`);
+    }
   },
 });
 

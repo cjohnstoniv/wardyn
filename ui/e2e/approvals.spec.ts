@@ -8,6 +8,7 @@ import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, sql } from "./fixtures";
 import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import { APPROVALS } from "../src/app/lib/approvals-copy";
+import { REAUTH_ROW, REAUTH_TITLE } from "../src/app/components/wardyn/model-access-copy";
 
 // ---------------------------------------------------------------------------
 // Approvals screen e2e (lane: approvals, port 8088, db wardyn_e2e).
@@ -644,6 +645,70 @@ test.describe("killing a run cancels its still-PENDING approvals", () => {
       await expect(page.getByRole("link", { name: "Approvals", exact: true })).toBeVisible({ timeout: 10_000 });
     } finally {
       deleteApproval(heldId);
+    }
+  });
+});
+
+// T-68 — a mid-run AWS re-auth request, seeded directly (the live version of
+// this same story is sso-reauth-hold.spec.ts:781, against a real kind SSO
+// cluster; this proves the same card/kill contract against the hermetic
+// seeded backend, which every PR actually runs).
+test.describe("T-68 — a seeded PENDING credential_reauth row on /approvals", () => {
+  test("shows the reauth title and its one sign-in door, never Approve/Deny — and killing the run cancels it", async ({
+    page,
+  }) => {
+    clearPending();
+    const runId = runningRunId();
+    // credential_source: "shared" — reauthAudience grants the SHARED lane to
+    // any operator (model-access-copy.ts), and this harness's bearer token is
+    // always an operator server-side (fixtures.ts's mockMemberRole doc),
+    // so the door renders for this viewer without a second, per_user fixture.
+    const reauthId = randomUUID();
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at)
+       VALUES ('${reauthId}','${runId}','credential_reauth','{"credential_source":"shared"}'::jsonb,'PENDING',now())`,
+    );
+
+    try {
+      await gotoConsole(page);
+      await gotoApprovals(page);
+      // The reauth title (B3 ruling: a sign-in request is not a mint, so it
+      // is never titled "Mint a scoped credential"), its own single-button
+      // door — and never the ordinary Approve/Deny pair: the server answers
+      // 409 to either verb for this kind, so a disabled pair would still
+      // claim a decision some tier could make.
+      await expect(page.getByText(REAUTH_TITLE)).toBeVisible();
+      await expect(page.getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Deny" })).toHaveCount(0);
+
+      await page.goto(`/runs/${runId}`);
+      await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
+      const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+      await expect(killBtn).toBeEnabled();
+      await killBtn.click();
+      const confirm = page.getByRole("alertdialog");
+      await expect(confirm).toBeVisible();
+      await confirm.getByRole("button", { name: "Kill run" }).click();
+      await expect(page.getByText(/Kill requested for|Failed to kill/).first()).toBeVisible({ timeout: 10_000 });
+
+      // Killing the run cancels the still-open sign-in request — the same
+      // fact the live walk proves (a PENDING reauth on a dead run repairs
+      // nothing) — and its door is gone, not disabled. Terminal rows live
+      // under the Decided tab, not Pending.
+      await gotoApprovals(page);
+      await page.getByRole("tab", { name: "Decided" }).click();
+      // Scoped to THIS reauth's own row — the Decided tab can hold rows from
+      // other kinds/runs, and an unscoped STATE_CANCELLED text match or an
+      // unscoped ariaLabel toHaveCount(0) would pass even if this row still
+      // showed a live control (the ariaLabel is only ever rendered by
+      // ReauthAction, which never renders for a Decided row anyway, so an
+      // unscoped check there passes for a reason unrelated to this assertion).
+      const reauthCard = page.getByText(REAUTH_TITLE, { exact: true }).locator("xpath=..");
+      await expect(reauthCard.getByText(APPROVAL.STATE_CANCELLED, { exact: true })).toBeVisible({ timeout: 15_000 });
+      await expect(reauthCard.getByRole("button", { name: REAUTH_ROW.ariaLabel })).toHaveCount(0);
+    } finally {
+      deleteApproval(reauthId);
     }
   });
 });

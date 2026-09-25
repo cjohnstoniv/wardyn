@@ -407,6 +407,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Console e2e suite hardening (#728).** Every spec built on `fixtures.ts`'s shared `test` now
+  fails if its page throws an uncaught JS error or trips the Content-Security-Policy, not only
+  when a spec happened to assert on one — a per-spec allowlist covers the rare case where that
+  noise is the thing under test. `approvals.spec.ts` gained a seeded PENDING `credential_reauth`
+  row covering the reauth title, its one sign-in door, and no Approve/Deny — and that killing its
+  run cancels it, on the hermetic backend every PR runs (mirroring the live kind-SSO walk's own
+  case). `workspace-detail.tsx`'s `approveHosts` re-fetch-before-merge is now covered: a write
+  landing while its confirm dialog sits open survives instead of being silently reverted by a
+  stale-`ws` PUT. `make ui-typecheck` now also loads the `demo` and `screenshots` Playwright
+  projects' spec files (`--list`), the same cheap "does it even load" check it already ran for
+  `live`.
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away
