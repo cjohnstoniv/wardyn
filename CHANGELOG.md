@@ -407,6 +407,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Settings → Model providers lists the org's model providers (#536).** In the Admin view,
+  `/admin/settings` shows one row per provider: its name, its kind, what each person provides,
+  which agents use it, "Default for …" where an agent has several to choose from, and how many
+  people have connected ("Connected by {n} people", a count and never who, from the new
+  `connected_people` on `GET /model-providers`, #970). It also shows an off provider, one no
+  agent uses, and an agent that is turned on with no provider. "Add model provider" opens a
+  placeholder page until the editor lands (#537). The Model provider card stays until the old
+  model is retired.
+
 - **A run chooses its model provider (#526).** `model_provider` on `POST /runs` and
   `/runs/preflight`, and `wardyn run --model-provider`, name the provider a run uses; unset, it is
   the primary workspace's pin (`llm_cred.provider_ref`, new beside `integration_ref`), else the
