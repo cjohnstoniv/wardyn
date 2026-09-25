@@ -128,6 +128,32 @@ func TestADOSignIn_MidRunHoldIsResolvedByACapture(t *testing.T) {
 	}
 }
 
+// wardyn_credential_reauth_total{outcome="requested"} is the AWS SSO re-auth
+// population alone (#971's HELP), so raising an Azure DevOps sign-in request —
+// credential_reauth too, but not that population — must not move it, even
+// though the audit trail still gets its credential.reauth.request row.
+func TestADOSignIn_DoesNotMoveTheAWSSSOReauthRequestedMetric(t *testing.T) {
+	f := newADOSignInFixture(t)
+	if w := f.resolveQ(t, "?phase=boot"); w.Code != http.StatusOK {
+		t.Fatalf("boot resolve: %d %s", w.Code, w.Body.String())
+	}
+	before := reauthCount(t, f.srv, "requested")
+
+	f.fake.SetInvalidGrant(true)
+	f.at(time.Now().Add(time.Minute))
+	if w := f.resolveQ(t, ""); w.Code != http.StatusLocked {
+		t.Fatalf("resolve: %d %s", w.Code, w.Body.String())
+	}
+	if req := f.audit.find("credential.reauth.request"); len(req) != 1 {
+		t.Fatalf("credential.reauth.request rows = %d, want 1 — the audit trail is unaffected", len(req))
+	}
+
+	if after := reauthCount(t, f.srv, "requested"); after != before {
+		t.Errorf("an Azure DevOps sign-in raise moved the requested label (%s -> %s) — "+
+			"the series is the AWS SSO re-auth population alone", before, after)
+	}
+}
+
 // The per-run budget is maxReauthHolds, shared with every other
 // credential_reauth workflow the run has opened.
 func TestADOSignIn_CountsTowardMaxReauthHolds(t *testing.T) {

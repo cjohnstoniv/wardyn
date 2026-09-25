@@ -17,6 +17,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (the kind), `per_user`, and `sandbox` for `bedrock_sso` or `proxy` for every other kind. A
   `bedrock_sso` provider run below CC3 now carries the advisory warning and the `run.create` row's
   `credential_confinement: below_floor`, as the legacy AWS SSO lane already did.
+- **`wardyn_credential_reauth_total` counted Azure DevOps sign-in/consent requests too (#971).**
+  The metric's HELP promises the AWS SSO re-auth population alone, but its `requested`,
+  `resolved`, `expired` and `timeout` outcomes all folded in the per-person Azure DevOps lane's
+  own credential_reauth rows. Each is now scoped to the AWS SSO lane, the same split `cancelled`
+  already used (#968).
 - **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
   map being set was previously enough to hide the "Who is an admin" setup row and the shell
   banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
