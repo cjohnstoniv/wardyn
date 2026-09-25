@@ -121,7 +121,6 @@ func TestEveryRegisteredReasonIsEmitted(t *testing.T) {
 // this package's code as some other vocabulary's value. May only shrink.
 var adHocReasonLiterals = map[string]string{
 	"internal.go:run_not_found":                    "identity.renew's own reason, not an authz.denied row",
-	"signin_denied.go:user_type_unknown":           "the sign-in callback's auth.failed reason, not an authz.denied row",
 	"user_drives_resolve.go:governance_profile":    "a drive's bound_by value on /me",
 	"user_drives_resolve.go:groups_snapshot_stale": "a drive's unavailable reason on /me",
 	"user_drives_resolve.go:user_type_unknown":     "a drive's unavailable reason on /me",
