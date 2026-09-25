@@ -65,7 +65,7 @@ func reassignHarness(t *testing.T) (srv *Server, st *ownerStore, h *harness, adm
 	t.Helper()
 	srv, st, h = ownerHarness(t, runner.MemberMountPolicy{})
 	admin = ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin)
-	member = ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member = ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	owned = st.put(types.Workspace{OwnedBy: ownerMemberSub})
 	return srv, st, h, admin, member, owned
 }
@@ -248,8 +248,8 @@ func TestWorkspaceReassign_UnknownWorkspaceIsNotFound(t *testing.T) {
 //
 // Swept across the workspace-scoped write surface rather than one route: the
 // generic scopedWorkspaceWrite chokepoint, two handlers that audit directly,
-// and the reassign added by O6. A new workspace write that forgets the marker
-// is the regression this exists to catch.
+// and the workspace reassign. A new workspace write that forgets the marker
+// fails here.
 func TestWorkspaceOwner_NoImpersonation(t *testing.T) {
 	const adminSub = "sub-owner-admin"
 	srv, st, h, admin, _, _ := reassignHarness(t)

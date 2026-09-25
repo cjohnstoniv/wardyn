@@ -143,7 +143,8 @@ describe("demoAuditRows", () => {
 // fetch (?run_id=&action=session.recording) so the recording picker's index
 // doesn't compete with every other action for the shared 1000-row cap on a
 // chatty run's (oldest-first) audit trail.
-describe("listAudit — action filter reaches the wire (W21-S1-5)", () => {
+describe("listAudit — action filter reaches the wire", () => {
+  // ticket: W21-S1-5
   afterEach(() => vi.unstubAllGlobals());
 
   it("sends ?run_id=&action= together, and omits action entirely when unset", async () => {

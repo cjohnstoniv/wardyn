@@ -232,7 +232,7 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 		{
-			// THE INTEGRATION IS READ FIRST (the wizard-completes-but-needs_setup
+			// The integration is read first (the wizard-completes-but-needs_setup
 			// bug): resolveBedrockAuth resolves the row's own region/model over
 			// the boot config, so a deployment that never set WARDYN_BEDROCK_*
 			// must NOT report needs_setup for a row that carries both.
@@ -285,12 +285,11 @@ func TestCapabilitiesFor(t *testing.T) {
 			},
 		},
 		{
-			// W5-S1-1 regression: region+model set but NO credential anywhere in
-			// resolveBedrockAuth's ladder (bearer / SSO / mount / resident keys) —
-			// the matrix must not read "available" off region+model alone. On the
-			// pre-fix code this returned CapAvailable for every cell (the bug: three
-			// readiness surfaces believing a run that would silently get no Bedrock
-			// transport at all).
+			// Region+model set but no credential anywhere in resolveBedrockAuth's
+			// ladder (bearer / SSO / mount / resident keys): the matrix must not
+			// read "available" off region+model alone — three readiness surfaces
+			// would then believe in a run that silently gets no Bedrock transport at
+			// all.
 			name: "bedrock: region+model set, ZERO credentials — needs setup, not available",
 			in:   types.Integration{Kind: "bedrock", Config: map[string]any{"auth_lane": "static"}},
 			env:  capEnv{BedrockRegionSet: true, BedrockModelSet: true, BedrockCredentialPresent: false},
@@ -476,7 +475,7 @@ func TestCapabilitiesFor(t *testing.T) {
 	}
 }
 
-// ─── effectiveIntegrations ───────────────────────────────────────────────────
+// effectiveIntegrations
 
 // integrationsTestConfig builds the Config preamble for effectiveIntegrations
 // tests: admin/identity/audit wiring from newHarness, a fakeSiteConfigStore

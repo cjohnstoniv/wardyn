@@ -36,11 +36,10 @@ func stubListenLookup(t *testing.T, byHost map[string][]string) {
 // refusals depend on: -local-trust-forwarder (which DISABLES the unspoofable
 // loopback-peer gate on the unauthenticated local surface) and the
 // plaintext-listen refusal (which stops cookies travelling in cleartext to LAN
-// peers). Both ask one question — does this address bind a specific non-loopback
-// interface a LAN peer can reach — and both used to answer "no" for ANY
-// hostname, on the reasoning "a hostname we can't classify — don't refuse". So
-// naming the LAN interface instead of numbering it skipped the refusal:
-// WARDYN_LISTEN=lan-host.corp:8080 booted with the peer gate off.
+// interface a LAN peer can reach — and both must answer it for a hostname too,
+// not wave it through as "a hostname we can't classify — don't refuse".
+// Otherwise naming the LAN interface instead of numbering it skips the refusal:
+// WARDYN_LISTEN=lan-host.corp:8080 would boot with the peer gate off.
 //
 // The table is the whole rule, and the SILENT rows matter as much as the loud
 // one: a boot guard that fires on a merely unusual configuration gets filtered
@@ -151,7 +150,7 @@ func testLocalModeFlags(listen string, trustFwd bool) *bootFlags {
 // refuses outright with a 503 per decision), and an operator who set both would
 // otherwise discover it when their first approval hangs.
 //
-// THE SILENT ROWS ARE THE TEST. A boot warning that fires on a merely unusual
+// The silent rows are the test. A boot warning that fires on a merely unusual
 // configuration gets filtered out of the logs within a week, and is then missing
 // for the deployment that needed it — so this asserts the two half-configurations
 // stay quiet as hard as it asserts the broken one speaks.
@@ -249,13 +248,13 @@ func TestListenIsRoutablePublicResolvesHostnames(t *testing.T) {
 	}
 }
 
-// TestEmptyListenNeverReachesTheClassifiers closes F011. WARDYN_LISTEN="" (a
-// `docker run -e WARDYN_LISTEN` with no value, a compose `WARDYN_LISTEN=`
-// passthrough, or `-listen=`) used to survive all the way to net/http, whose
-// Server.Addr == "" means ":http" — 0.0.0.0:80. Every classifier read "" as
-// "cannot classify" and skipped ALL THREE listen-based boot refusals on the
-// way there. An empty bind states no intent, so it falls back to the same
-// default the -listen usage string advertises.
+// TestEmptyListenNeverReachesTheClassifiers: WARDYN_LISTEN="" (a `docker run
+// -e WARDYN_LISTEN` with no value, a compose `WARDYN_LISTEN=` passthrough,
+// or `-listen=`) must not survive to net/http, whose Server.Addr == "" means
+// ":http" — 0.0.0.0:80 — and every classifier reads "" as "cannot classify",
+// which would skip all three listen-based boot refusals on the way there. An
+// empty bind states no intent, so it falls back to the same default the
+// -listen usage string advertises.
 func TestEmptyListenNeverReachesTheClassifiers(t *testing.T) {
 	for _, raw := range []string{"", "   ", "\t"} {
 		got := normalizeListenAddr(raw)

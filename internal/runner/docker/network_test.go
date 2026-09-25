@@ -269,7 +269,7 @@ func TestL0_ProxyIsSoleEgressPath(t *testing.T) {
 	// handshake and gets an HTTP reply (404 is fine — busybox httpd has no
 	// docroot) proves L4 reachability on the per-run net. A "Network is
 	// unreachable"/"can't connect" here would mean the agent cannot even reach
-	// its own segment, which would be a regression.
+	// its own segment.
 	peer := execInSandbox(ctx, t, d, sb.Ref, []string{
 		"sh", "-c",
 		"wget -q -T 5 -O - http://" + peerAlias + ":3128/ 2>&1; echo RC=$?",

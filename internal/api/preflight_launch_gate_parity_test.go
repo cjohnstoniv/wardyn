@@ -40,11 +40,10 @@ import (
 // in its own right, so each one is either previewed by preflight or named in
 // preflightGateExceptions with its own reason.
 //
-// This is B1-F3's NARROWING. `decodeAndValidateCreateRun` used to be one blanket
-// entry in the exception map, which licensed the WHOLE wrapper — and so licensed
-// exactly the gap B1-F3 turned out to be: requestRepoProviderRefusals lives
-// inside it, preflight never called it, and this guard was structurally unable
-// to say so. One exception per real gap, never one per wrapper.
+// This is deliberately narrow: one exception per real gap, never one per
+// wrapper. A blanket entry for `decodeAndValidateCreateRun` would license the
+// whole wrapper — including requestRepoProviderRefusals, which lives inside it —
+// and leave this guard structurally unable to say that preflight never calls it.
 //
 // The value is the file the wrapper is declared in, so a move reds here naming
 // the file rather than as a bare parse failure.
@@ -65,6 +64,11 @@ var preflightGateExceptions = map[string]string{
 	// that blanks the Review panel.
 	"resolveEnforcedConfinement": "preflight calls enforcedConfinement directly; the runner-capability + cloud_sts tail gates are reported by the checklist instead (doc comment)",
 }
+
+// preflightGateExceptionsMax caps preflightGateExceptions, which may only
+// shrink or stay (authorization-kernel design G3). Lower it when an entry
+// goes; raising it needs a reviewed reason.
+const preflightGateExceptionsMax = 2
 
 func TestPreflightMirrorsLaunchGates(t *testing.T) {
 	fset := token.NewFileSet()
@@ -109,6 +113,11 @@ func TestPreflightMirrorsLaunchGates(t *testing.T) {
 		t.Errorf("handleCreateRun gates handlePreflightRun does not reproduce: %v\n"+
 			"Either call them from handlePreflightRun (preferred — a shared helper both call is better still), "+
 			"or add each to preflightGateExceptions with the reason Review is allowed to skip it.", missing)
+	}
+
+	if len(preflightGateExceptions) > preflightGateExceptionsMax {
+		t.Errorf("preflightGateExceptions has %d entries, the cap is %d — reproduce the new gate in preflight instead of exempting it",
+			len(preflightGateExceptions), preflightGateExceptionsMax)
 	}
 
 	// The exception list must not rot: an entry naming a helper launch no longer
