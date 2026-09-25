@@ -745,12 +745,22 @@ func TestResolveLLMInjections_AuditsBedrockOnlyOnceBothGatesHold(t *testing.T) {
 		name     string
 		sc       types.SiteConfig
 		grade    bedrockCredGrade
+		policy   *types.RunPolicySpec
 		wantRows int
 	}{
-		{"both gates hold", types.SiteConfig{}, bedrockCredUngraded(), 1},
-		{"graded without a Bedrock credential (autonomy_grade_drift)", types.SiteConfig{}, bedrockCredGrade{graded: true}, 0},
+		{"both gates hold", types.SiteConfig{}, bedrockCredUngraded(), nil, 1},
+		{"graded without a Bedrock credential (autonomy_grade_drift)", types.SiteConfig{}, bedrockCredGrade{graded: true}, nil, 0},
 		{"declared mechanism is not Bedrock", agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey}),
-			bedrockCredUngraded(), 0},
+			bedrockCredUngraded(), nil, 0},
+		// #518 follow-up: both dispatch gates hold (mechanism + autonomy grade),
+		// but a LATER refusal — enforceInspectableLLM, past where the audit row
+		// used to be recorded — still fails the run closed. Bedrock is always
+		// opaque (enforceInspectableLLM's own doc comment), so
+		// require_inspectable_llm refuses it regardless of intercept_tls. Proves
+		// the row moved past this gate too, not just the two named in the test's
+		// own name.
+		{"a later refusal (enforceInspectableLLM) fires after both gates hold", types.SiteConfig{}, bedrockCredUngraded(),
+			&types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{Mode: "alert", RequireInspectableLLM: true}}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -759,8 +769,12 @@ func TestResolveLLMInjections_AuditsBedrockOnlyOnceBothGatesHold(t *testing.T) {
 			cfg.Identity, cfg.Audit, cfg.Store = h.idp, h.audit, st
 			srv := New(cfg)
 			run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", Task: "t", State: types.RunStarting}
+			policy := tc.policy
+			if policy == nil {
+				policy = &types.RunPolicySpec{}
+			}
 
-			_, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, &types.RunPolicySpec{}, map[string]string{},
+			_, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, map[string]string{},
 				nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, tc.sc, true, false, tc.grade)
 			if ok != (tc.wantRows == 1) || st.failed == ok {
 				t.Fatalf("admitted = %v, run failed = %v; want admitted = %v", ok, st.failed, tc.wantRows == 1)

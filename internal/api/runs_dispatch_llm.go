@@ -70,10 +70,12 @@ type llmTransport struct {
 	// so a substrate does not have to publish them in a readable pod spec.
 	secretEnvKeys []string
 	// bedrockAudit is the run.llm.bedrock row applyBedrockTransport computed but
-	// did NOT record — recording it is deferred to resolveLLMInjections, after
-	// enforceConfiguredLLMMechanism and bedrockCredGradeHolds both hold, so a run
-	// those gates refuse never gets a "success" injection row for a credential it
-	// was never handed (#518). Zero value unless bedrockReady.
+	// did NOT record — recording it is deferred to resolveLLMInjections, past
+	// every gate that can still refuse the run (enforceConfiguredLLMMechanism,
+	// bedrockCredGradeHolds, MITM CA provisioning, grant authoring,
+	// enforceInspectableLLM), so a run any of them refuses never gets a
+	// "success" injection row for a credential it was never handed (#518).
+	// Zero value unless bedrockReady.
 	bedrockAudit bedrockTransportAudit
 }
 
@@ -789,20 +791,6 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	if !s.bedrockCredGradeHolds(ctx, run, bedrockGrade, llm) {
 		return dispatchLLMPlan{}, false
 	}
-	// Only NOW — both gates above held — is it true that this run actually gets
-	// the Bedrock credential applyBedrockTransport resolved. Recording the
-	// run.llm.bedrock row here, instead of inside applyBedrockTransport itself,
-	// is what keeps a run either gate above refuses from showing a "success"
-	// injection row for a credential it was never handed (#518).
-	if llm.bedrockReady {
-		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
-			run.ID.String(), "success", mustJSON(map[string]any{
-				"region": llm.bedrockAudit.region, "model": llm.bedrockAudit.model, "hosts": llm.bedrockAudit.hosts,
-				"endpoint": llm.bedrockAudit.endpoint,
-				"mode":     llm.bedrockAudit.mode, "detail": llm.bedrockAudit.detail,
-			})))
-	}
-
 	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
 	// when ANY consumer needs one — intercept_tls content inspection,
 	// subscription/managed credential injection, artifact-token injection, or
@@ -878,6 +866,23 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// LLM transport is OPAQUE — see enforceInspectableLLM.
 	if !s.enforceInspectableLLM(ctx, run, policy, llm) {
 		return dispatchLLMPlan{}, false
+	}
+
+	// Only NOW — every gate above held, including the MITM CA provisioning and
+	// grant-authoring steps between here and bedrockCredGradeHolds, any one of
+	// which can still fail closed — is it true that this run actually gets the
+	// Bedrock credential applyBedrockTransport resolved. Recording the
+	// run.llm.bedrock row here, instead of right after bedrockCredGradeHolds
+	// (or inside applyBedrockTransport itself), is what keeps a run ANY later
+	// refusal takes from showing a "success" injection row for a credential it
+	// was never handed (#518).
+	if llm.bedrockReady {
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.llm.bedrock",
+			run.ID.String(), "success", mustJSON(map[string]any{
+				"region": llm.bedrockAudit.region, "model": llm.bedrockAudit.model, "hosts": llm.bedrockAudit.hosts,
+				"endpoint": llm.bedrockAudit.endpoint,
+				"mode":     llm.bedrockAudit.mode, "detail": llm.bedrockAudit.detail,
+			})))
 	}
 
 	return dispatchLLMPlan{
