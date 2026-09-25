@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApprovalRequest } from "../../lib/types";
+import { makeApproval } from "../../../test/factories";
 import { OperatorProvider } from "./operator-context";
 import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "./copy";
 
@@ -25,7 +26,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.f
 import { LiveApprovals } from "./live-approvals";
 
 function pending(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
-  return {
+  return makeApproval({
     id: "a1",
     run_id: "r1",
     kind: "egress_domain",
@@ -33,7 +34,7 @@ function pending(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
     state: "PENDING",
     requested_at: "",
     ...over,
-  } as ApprovalRequest;
+  });
 }
 
 describe("LiveApprovals", () => {
@@ -306,6 +307,25 @@ describe("LiveApprovals", () => {
       expect(screen.getByText(/needs a workspace/i)).toBeInTheDocument();
     });
 
+    // #481: pressing Enter on "Until…" swaps the popover's content but left
+    // focus behind on the (now-unmounted) "Until…" button, so it fell to the
+    // page body. "← Back" is the sub-view's first control — Enter should
+    // land focus there.
+    it("#481: choosing Until… moves focus to the sub-view's '← Back' control", async () => {
+      listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      const user = userEvent.setup();
+
+      const caret = within(panel).getAllByRole("button", { name: /more options/i })[0];
+      await user.click(caret);
+      const until = await screen.findByText("Until…");
+      until.closest("button")!.focus();
+      await user.keyboard("{Enter}");
+
+      expect(await screen.findByRole("button", { name: /back/i })).toHaveFocus();
+    });
+
     it("picking Once from the approve caret decides immediately with scope once", async () => {
       listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
       render(<LiveApprovals runId="r1" />);
@@ -315,6 +335,36 @@ describe("LiveApprovals", () => {
       await user.click(within(panel).getAllByRole("button", { name: /more options/i })[0]);
       await user.click(await screen.findByText("Once"));
 
+      expect(approveMock).toHaveBeenCalledWith("held", expect.any(String), { scope: "once", until: undefined });
+    });
+
+    // review finding F3: these options were plain <button>s inside a Radix
+    // DropdownMenuContent, whose own keydown handler swallows Tab and whose
+    // roving-focus manager only ever registers DropdownMenuItems — never
+    // these buttons. A keyboard-only operator could open the menu but never
+    // move focus onto "Once". Driven with the keyboard alone: no user.click
+    // ever lands on a scope option.
+    it("the scope caret is reachable with the keyboard alone — Tab reaches Once, Enter decides", async () => {
+      // ticket: F3
+      listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
+      render(<LiveApprovals runId="r1" />);
+      const panel = await screen.findByTestId("live-approvals");
+      const user = userEvent.setup();
+
+      const caret = within(panel).getAllByRole("button", { name: /more options/i })[0];
+      caret.focus();
+      await user.keyboard("{Enter}");
+
+      const isOnceButton = () =>
+        document.activeElement?.tagName === "BUTTON" && !!document.activeElement.textContent?.includes("Once");
+      let reached = isOnceButton();
+      for (let i = 0; i < 6 && !reached; i++) {
+        await user.tab();
+        reached = isOnceButton();
+      }
+      expect(reached).toBe(true);
+
+      await user.keyboard("{Enter}");
       expect(approveMock).toHaveBeenCalledWith("held", expect.any(String), { scope: "once", until: undefined });
     });
 
@@ -474,7 +524,7 @@ describe("LiveApprovals", () => {
         pending({ id: "e1", requested_scope: { host: "unlisted.example" } }),
         pending({ id: "t1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
       ]);
-      render(<LiveApprovals runId="r1" />); // default OperatorContext is TRUE
+      render(<LiveApprovals runId="r1" />); // useOperator()'s unwrapped default is TRUE
       const panel = await screen.findByTestId("live-approvals");
       for (const btn of within(panel).getAllByRole("button", { name: /^Approve$/ })) {
         expect(btn).not.toBeDisabled();
@@ -488,7 +538,8 @@ describe("LiveApprovals", () => {
   // so a refused member must read SECURITY_ONLY_REASON, never the plainer
   // OPERATOR_ONLY_REASON that would send a security_admin looking for a role
   // they already hold.
-  describe("X3-F6 — securityOperator gates read SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON", () => {
+  describe("securityOperator gates read SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON", () => {
+    // ticket: X3-F6
     it("panel hint (undecidable row for a member): SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON", async () => {
       listApprovalsMock.mockResolvedValue([
         pending({ id: "t1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
@@ -522,7 +573,8 @@ describe("LiveApprovals", () => {
 
   // D7: a pending row whose host is the agent CLI's known telemetry endpoint
   // gets an identification tag; an ordinary off-policy host does not.
-  describe("D7 — known-telemetry tag", () => {
+  describe("known-telemetry tag", () => {
+    // ticket: D7
     it("tags a row matching the known telemetry host, and only that row", async () => {
       listApprovalsMock.mockResolvedValue([
         pending({ id: "telemetry", requested_scope: { host: "http-intake.logs.us5.datadoghq.com" } }),

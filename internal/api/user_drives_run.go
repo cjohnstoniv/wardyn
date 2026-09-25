@@ -15,7 +15,7 @@
 // The whole design of this seam is one table, and each row is a decision that
 // could have gone the other way:
 //
-//	the profile's door is shut       403 + authz.denied   denyMemberField
+//	the profile's door is shut       403 + authz.denied   refuse
 //	the group snapshot is unreadable 403 groups_snapshot_stale
 //	everything else                  422, NO audit        denyMemberRunQuota
 //
@@ -42,11 +42,13 @@
 // and there is no migration for it. Three facts decide that, and the third is
 // the one that closes the question:
 //
-//  1. There is no create-then-dispatch WINDOW. handleCreateRun calls
-//     dispatchRun inline, in the same request, a few statements after this
-//     function runs; nothing in the tree re-dispatches a run later (reconcile
+//  1. The create-then-dispatch window belongs to ONE launch. handleCreateRun
+//     answers 201 once the run row exists and hands this mount to the detached
+//     finishCreateRunLaunch (runs_create_launch.go), which builds the image and
+//     dispatches; nothing in the tree re-dispatches a run later (reconcile
 //     FAILS in-flight pre-dispatch runs, it never resumes one). So the grant
-//     that resolved here is the grant in force at bind time.
+//     that resolved here is the grant that launch binds — a revocation landing
+//     during the build does not reach it, as below.
 //  2. Re-resolving at dispatch is IMPOSSIBLE anyway, which is why the ceiling
 //     does not do it either. Resolution keys on capabilitySubjects — the
 //     caller's OIDC sub, email and group snapshot — and the run row carries
@@ -72,6 +74,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -187,7 +190,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 	// silently, while a 500 tells them to try again.
 	resolved, err := s.resolveUserDrive(r.Context(), ceiling.Limits.MaxDriveSizeMiB)
 	if err != nil {
-		writeDriveError(w, err)
+		writeDriveError(w, r, err)
 		return nil, false
 	}
 	if resolved == nil {
@@ -261,7 +264,7 @@ func driveDeniedByProfileMsg(profile string) string {
 }
 
 // denyMemberDrive is the DOOR at the enforcement site: 403 with an authz.denied
-// row, target `runs.drive`, reason `governance_profile` — the denyMemberField
+// row, target `runs.drive`, reason `governance_profile` — the refuse
 // shape the two other profile refusals take, and no new value in the closed
 // reason enum.
 func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling governanceCeiling) bool {
@@ -271,7 +274,7 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 	}
 	// The mock round's frozen member copy, reproduced byte-exact: the console
 	// never rewords a server refusal, so this line is where that string ships.
-	return s.denyMemberField(w, r, "runs.drive", "governance_profile", driveDeniedByProfileMsg(profile))
+	return s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.drive", driveDeniedByProfileMsg(profile)))
 }
 
 // driveIsMountableHere is the pair of refusals that are about the DEPLOYMENT
@@ -384,7 +387,7 @@ func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.Resolv
 		caps, cerr := s.cfg.Runner.Capabilities(ctx)
 		if cerr != nil {
 			return &driveBindFailure{status: http.StatusServiceUnavailable,
-				member: "runner capabilities unavailable: " + cerr.Error()}
+				member: loggedMsg(ctx, "runner capabilities unavailable", cerr)}
 		}
 		if !caps.UserDrives {
 			return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalRunnerCannotMount,
@@ -742,10 +745,17 @@ func (s *Server) driveShareProbe(ctx context.Context, key string, check func() e
 		// FIRST probe's mark while that probe is still outstanding, and if that
 		// one then strands, the map has forgotten it and the next reader starts
 		// a syscall behind it — the exact stacking this exists to stop.
+		//
+		// CLEARED BEFORE THE SEND, not after via defer: the send on done is what
+		// wakes the select below, so ordering the delete first makes it
+		// happen-before that wakeup. A caller that receives an ANSWER is then
+		// guaranteed to see the mark already gone — no window where the probe
+		// has answered but the map still calls it outstanding.
+		result := check()
 		if !loaded {
-			defer driveShareProbes.Delete(key)
+			driveShareProbes.Delete(key)
 		}
-		done <- check()
+		done <- result
 	}()
 	timer := time.NewTimer(driveShareProbeTimeout)
 	defer timer.Stop()

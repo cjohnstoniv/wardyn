@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.8)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.12)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -132,6 +132,30 @@ invitation, not an embarrassment.
    classic branch protection (a different API) does not surface in the rules
    endpoint this reads, so a repo protected that way still grades unconfined.
 
+   **Push content, not only push location, since 0.8.** Branch-namespace
+   confinement bounds WHERE a push lands; it says nothing about WHAT the push
+   changes there. `push_rules` (`deny_paths`, `max_inspect_pack_mib`) closes
+   that gap on both brokered lanes — `github_token` and `git_pat` alike,
+   read independently of either lane's branch-namespace switch — by buffering
+   the receive-pack request up to an inspection ceiling and refusing a push
+   that introduces a denied path, is too large to inspect, or cannot be read
+   from its own bytes (`internal/egress/proxy/push_rules.go`; rule sources
+   `brokered:git:push-rules`, `brokered:git:push-too-large`,
+   `brokered:git:push-uninspectable`; see `docs/POLICIES.md`). No new
+   invariant: this is invariant 5, "fail closed; never overclaim"
+   (`ARCHITECTURE.md`), applied to a request the broker cannot fully read —
+   an uninspectable push is refused rather than forwarded on the assumption
+   it is clean — and it keeps the broker's own "no widening" and "fail
+   closed" invariants (`internal/broker/broker.go`) intact by adding a
+   proxy-side gate ahead of forwarding rather than changing what is minted.
+   It decides what reaches the forge, not whether a credential is issued,
+   because the push's own discovery request has already minted it.
+   Same structural bound as branch-namespace confinement: unenforceable on an
+   `ssh_key` push (no receive-pack parser sits on git's SSH transport), and
+   enforced on `git_pat` regardless of `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`
+   — that switch is WHERE-only and never gates WHAT a `git_pat` push may
+   touch.
+
 5. **Audit integrity** — the append-only control-plane log, eBPF ground truth,
    PTY recordings. Tampering defeats incident response. Append-only protects what
    IS written; it does not yet guarantee every control-plane action produces an
@@ -177,7 +201,7 @@ invitation, not an embarrassment.
 | **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | Separate enforcement plane from B2 — a prior agent egress firewall was blind to MCP traffic, so tool egress is a first-class boundary. **Shipped half (v0.7):** a per-tool-call DECISION plane. `cmd/wardyn-toolgate` — an in-sandbox stdio MCP relay built into the agent images — is wired as claude's `--permission-prompt-tool` on a run dispatched with `tool_approvals=hold`; it raises each call through the proxy's brokered `POST /wardyn/v1/approvals`, and the run's OPERATOR-authored `tool_rules` are resolved PROXY-SIDE (`decideByToolRules`, outside the sandbox, on the policy the control plane resolved): `allow`/`deny` answer immediately with no human, `hold` raises the approval, and all three write a decision-log row. **Bypass class, and it is the whole boundary question:** the gate is IN-SANDBOX and COOPERATIVE — an agent that does not call it is not gated, the harness auto-approves its own read-only-safe command class without consulting it, and it covers one harness. A decision plane, not a containment one. Note also that `ToolAllow` is WIDENING authority evaluated outside the sandbox: an operator writing `tool_rules` is pre-approving calls no human will see. **Planned half:** interception of MCP tool-call EGRESS, which is what would make this a boundary rather than a protocol both sides have to honour. |
 | **B4 — Agent-run identity vs. token broker** | 🟢 shipped | SVID-authenticated; the broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | 🟢 shipped | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in §4. |
-| **B6 — Runner data plane vs. control plane** | 🟡 partial | mTLS via X.509-SVID **[planned, arrives with SPIRE]**. Today a per-run bearer token (minted by the embedded identity provider, verified via `internalAuth`) authenticates runner/sidecar callbacks over the operator's network — not mTLS. A compromised runner is assumed; the control plane never trusts runner-asserted identity claims. |
+| **B6 — Runner data plane vs. control plane** | 🟡 partial | **Transport: TLS with a pinned CA [v0.7.12 shipped].** Every proxy→control-plane call — the credential resolve (`GET /api/v1/internal/injection/{grant}`, the one API that returns a secret VALUE), mints, token renewal, decisions, approvals, uploads — rides wardynd's proxy-facing TLS listener (`WARDYN_INTERNAL_LISTEN`), and the proxy trusts only wardynd's own internal CA for it (`internal/hoptls`: minted on first boot into the secret store as `wardyn-internal-ca`, handed to each proxy in its sealed config; never the system roots, never `WARDYN_TRUSTED_CA_FILE`). `http://` is refused at wardynd boot and at proxy start unless the URL's host is loopback (`hoptls.CheckURL`). **Authentication: bearer, not mTLS.** A per-run token (minted by the embedded identity provider, verified via `internalAuth`) authenticates the proxy; mTLS via X.509-SVID is **[planned, arrives with SPIRE]**. So the pinned CA authenticates the server to the proxy, and the bearer the proxy to the server. **Residuals:** the console listener still answers `/api/v1/internal/*` in plaintext for callers that are not a proxy and for runs dispatched before an upgrade to 0.7.12. The standing one is `wardyn-tetragon-ingest`, whose audit-write-only bearer (`aud=wardyn-groundtruth`) still crosses in plaintext: that is an integrity exposure, not a confidentiality one — a captured token can forge ground-truth events until it rotates, and cannot read or mint a credential (#606). Test harnesses are the other caller; whoever can read wardynd's secret store with its age key holds the CA key, the same custody as the signing key. A compromised runner is assumed; the control plane never trusts runner-asserted identity claims. |
 | **B7 — Control plane vs. SIEM/customer** | 🟢 shipped | Outbound-only export (OTLP/HEC/syslog); no inbound trust. |
 | **B8 — Untrusted build container vs. host daemon + registry** | 🟢 shipped | The devcontainer build / BYOI wrap (`internal/envbuild`) runs on the HOST Docker daemon, before any confinement tier exists. Capped (CapDrop ALL, resource limits) but not sandboxed by a Confinement Class and not behind `wardyn-proxy`; reaches only `WARDYN_ENVBUILD_BUILD_NETWORK` (compose default: the sandboxes' own bridge, never `host`) plus the layer-cache registry. Residual #13. |
 | **B9 — SSH gateway pre-auth listener vs. everything else** | 🟢 **[v0.5+ shipped]** | An anonymous-until-authenticated TCP listener (`WARDYN_SSH_LISTEN`). The DAEMON default is off — no var set, no listener, no host key generated — but **two shipped deployments turn it on for every install**: the one-line installer writes `WARDYN_SSH_LISTEN=:2222` into every `.env` it creates *and backfills it on upgrade*, and the desktop envelope ships it on. So this boundary is live on every managed laptop and every `curl … | sh` box, bound to loopback by the compose host-port publish (`127.0.0.1:2222`) rather than left unexposed. Registered-public-key-only auth; the trust root is the `ssh_public_keys` registry a human writes via self-service `/api/v1/me/ssh-keys`, so this boundary is exactly as strong as that registration step and the pre-auth DoS bounds (§4). Once authenticated, a session is bounded by owner-or-admin authorization (residual #15) and runs entirely inside B1: shell/exec/sftp/`-L` are bridged into the EXISTING sandbox via the same `Runner.Attach`/`ExecStream` calls the browser terminal uses. A new front door, not a new back door. |
@@ -266,6 +290,7 @@ fail-closed gate".
 | Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source, gated additively: operator deny-list, then a canonicalized real path inside an operator/MDM-set root, then a credential-dotfile deny-list. Unset roots = no member host mounts at all. Mechanism: §4.4. Residuals #25, #26 | B1, ID |
 | Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` → `kernel.*` via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. PTY replay is tamper-EVIDENT, not tamper-proof: the upload route accepts a run-token-authenticated PUT for the run's whole lifetime and upserts on conflict, so an in-sandbox actor can overwrite its own cast before the run ends — but every upload emits its own `recording.upload` row, so the overwrite is visible even though the replaced bytes are not recoverable. Detection-only (the `ld-linux`/`mmap` bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable`); host eBPF is blind inside CC3/Kata (`kernel.sensor.blind`). | AU |
 | Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean. Detail: §4.5 | AU |
+| Stored credential moved or forged by a DATABASE writer | **[v0.7.12 shipped]** Every `secrets` row is envelope v1 (`0069_secret_envelope_v1.sql`, `internal/secretstore/pg`): a fresh 32-byte data key per save seals the value with AES-256-GCM, bound as associated data to the row's own `(owned_by, name)`, and the data key is wrapped by a key-encryption key bound to the same pair and its `kek_id` (`internal/secretstore/kek`). A ciphertext moved to another person, another name, or into the operator's slot fails that check; the `local` KEK is derived from `WARDYN_AGE_KEY` with HKDF-SHA256 and is symmetric, so the public age recipient no longer lets anyone write a row that opens. Every refusal names the row, never the value, and is never read as "not found" — so `loadOrCreateSecret` fails boot rather than minting a fresh signing key over a tampered one. Pre-envelope rows are converted once at boot and never read again. After that, an older wardynd still running is refused by name ("an older wardynd is still writing"): a new name it inserts lands as v0 and the next boot converts it; a name it replaces keeps its v1 columns around an age payload and must be set again | Swapping a credential between people or names (F1); forging a credential from the public recipient (F2). NOT a restored old row — residual 48 |
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | Docker: a separate per-run `Internal:true` network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Kubernetes: default-deny east-west NetworkPolicy **[shipped]** (empty-ingress + own-proxy-only egress per sandbox pod, `internal/runner/k8s/sandbox.go`). | B1, L0 (L1), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) 🟡 **[planned]**. | AU |
@@ -1163,7 +1188,7 @@ hiding them would repeat the failure mode we are designed to avoid.
       hiding a group DENY, and a deny beats an allow. The refusal is SCOPED to
       deployments that actually hold a group deny row of that kind, so an upgrade
       with no such rows still changes nothing, and it sits ABOVE the enforcement
-      switch (`capAllowed` evaluates deny before `capEnforced`), so an unenforced
+      switch (`capAllowed` evaluates deny before `capBatch.enforced`), so an unenforced
       kind no longer rescues the request. **What remains open** is the reachability,
       not the resolution: the caller still cannot USE their group grants until they
       sign in again or re-mint, the condition reports distinctly as
@@ -1542,6 +1567,17 @@ hiding them would repeat the failure mode we are designed to avoid.
     real mitigations are the storage class (block, not network-share), the
     share's own quota, and a namespace `ResourceQuota`.
 
+    **Accepted with a recipe, on Docker.** `CAP_SYS_ADMIN` is what the control
+    plane must not hold, not a statement that a `docker_volume` drive's bytes
+    cannot be bound at all — `docs/OPERATIONS.md` ("User drives on Docker") now
+    carries the XFS project-quota recipe an OPERATOR runs on the host, outside
+    the control plane, the case `types.StorageEnforcementFilesystem` was
+    reserved for. Wardyn still reports `enforcement: none` on the wire (v1 does
+    not detect an operator-applied quota), and the recipe is opt-in per
+    deployment, not a default — the residual is that byte enforcement remains
+    something an operator must choose to set up, never something Wardyn
+    verifies is in place.
+
 37. **Renaming a drive orphans every object already provisioned under it, on
     BOTH substrates, and the console still warns nobody at the write.** A managed claim's name folds the
     drive's slug, so a rename changes the name every FUTURE claim is created
@@ -1578,44 +1614,54 @@ hiding them would repeat the failure mode we are designed to avoid.
     covers all four columns, so the gap that remains is the console's, not the
     API's.
 
-38. **A per-user API token's GROUP SNAPSHOT is frozen at mint, with no expiry
-    — so for a group-derived power the demoted-admin window is UNBOUNDED, where
-    the SSH analogue's (#15) is merely long.** NARROWED, NOT CLOSED, and the
-    half that moved is worth stating exactly. `0045_api_tokens.sql` stamps
+38. **A per-user API token's role AND group snapshot are bounded-stale, not
+    frozen — the residual narrows to a human who never signs in again, the
+    same shape as the SSH analogue (#15).** `0045_api_tokens.sql` stamps
     `role` and `groups` from the minting session
     (`internal/api/apitokens.go`), and every request the token authenticates
     republishes them through `withHumanIdentity`, so downstream the bearer is
-    that human as they were at mint time.
+    that human as they were at mint time, or at their most recent sign-in
+    since, whichever is later.
 
-    Since the token lane gained the login hook the key lane had since `0046`,
-    the ROLE half is now bounded the same way: `oidc.Config.OnLogin` fires
-    `store.RefreshAPITokenRoles` beside `store.RefreshSSHKeyRoles`, so the
-    demoted human's own next sign-in re-stamps `role` on every unrevoked token
-    they hold. What did NOT move: `groups` is never refreshed by that hook or
-    anything else, the table still carries `created_at`, `last_used_at` and
-    `revoked_at` and **no expiry column**, there is no TTL the way
+    The token lane gained the login hook the key lane had since `0046` in two
+    steps: first ROLE only, then #152 widened it to the group half too.
+    `oidc.Config.OnLogin` now fires `store.RefreshAPITokenIdentity` beside
+    `store.RefreshSSHKeyRoles`, and it re-stamps `role`, `groups` AND
+    `groups_truncated` together in one UPDATE — never role alone — so the
+    demoted human's own next sign-in reaches every unrevoked token they hold on
+    BOTH halves at once. `groups_truncated` is bound from the exact same
+    session-completeness signal the new session cookie carries (`sessionGroups`,
+    `internal/auth/oidc/derive.go`), never defaulted or inferred: a `NULL` or a
+    genuinely incomplete snapshot still reads as truncated downstream, never
+    silently flipped to complete by the refresh itself.
+
+    What did NOT move: the table still carries `created_at`, `last_used_at`
+    and `revoked_at` and **no expiry column**, there is no TTL the way
     `WARDYN_SSH_ROLE_TTL` bounds a key, and a human who never signs in again is
-    re-stamped never. So a power that derives from the frozen GROUP snapshot —
-    a capability grant or governance profile bound to a group they have left —
-    survives indefinitely, and a demotion in the IdP still never reaches the
-    row on its own. Since 0.7 stamps `security_admin` verbatim, a human
-    demoted out of that tier keeps — through any token minted while they held it
-    — profile authoring and assignment, capability-grant writes, session and
-    token revocation, escalated approval decisions on anyone's run, workspace
-    `approved_egress`/`denied_egress` writes, and audit-chain verify. It gains
-    nothing the tier itself lacks: a token is never a shell, never an attach
-    ticket on a foreign run, and no capability grant widens it to admin
-    (`TestCapabilityGrantsNeverReachTheAdminTier`).
+    re-stamped never. So a power that derives from a stale group snapshot — a
+    capability grant or governance profile bound to a group they have left, or
+    an admin/`security_admin` role they were demoted out of — survives exactly
+    until that human's next login, and for someone who has left the
+    organization and will never sign in again, that is indefinitely. Since 0.7
+    stamps `security_admin` verbatim, a human demoted out of that tier keeps —
+    through any token minted while they held it, until their next sign-in or an
+    explicit revoke — profile authoring and assignment, capability-grant
+    writes, session and token revocation, escalated approval decisions on
+    anyone's run, workspace `approved_egress`/`denied_egress` writes, and
+    audit-chain verify. It gains nothing the tier itself lacks: a token is
+    never a shell, never an attach ticket on a foreign run, and no capability
+    grant widens it to admin (`TestCapabilityGrantsNeverReachTheAdminTier`).
 
-    Since 0.7 the demotion itself also ends it: a People-page role-mapping
-    write or delete that takes a tier away from a value revokes the affected
-    principals' unrevoked tokens in the same call (`internal/api/apitokens.go`,
-    `revokeDemotedRoleSnapshots`), so the window for a demotion performed
-    through that surface closes at the edit rather than at the demoted
-    human's next sign-in. The residual that remains is a stamp that goes
-    stale for a reason no role-mapping edit expresses — a chart-map change or
-    an IdP-side group removal — which still waits for that human's next login
-    or an explicit revoke.
+    Since 0.7 the demotion itself also ends it early: a People-page
+    role-mapping write or delete that takes a tier away from a value revokes
+    the affected principals' unrevoked tokens in the same call
+    (`internal/api/apitokens.go`, `revokeDemotedRoleSnapshots`), so the window
+    for a demotion performed through that surface closes at the edit rather
+    than at the demoted human's next sign-in. The residual that remains is the
+    same shape #15 already has: a human who never signs in again, and any
+    change made outside the People page — a chart-map edit or an IdP-side
+    group removal — which still waits for that human's next login or an
+    explicit revoke.
 
     **The remediation exists, is the only one, and has to be invoked
     deliberately.** `GET /api/v1/tokens` lists every live token with its owner
@@ -1627,10 +1673,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     `session.revoke` row's `tokens_revoked` count is the receipt that the
     identifier matched a person: sessions are stateless and cannot be counted, so
     a zero there against someone you believe holds tokens means you named them
-    wrong. Nothing ages a token out, so offboarding must revoke explicitly
-    (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this means re-deriving
-    the role at auth time, or revoking a principal's live tokens from the
-    role-mapping write path; neither is built.
+    wrong. Nothing ages a token out short of a sign-in, so offboarding — or any
+    change that must take effect before that human's next login — must revoke
+    explicitly (`docs/OPERATIONS.md`, "Per-user API tokens"). Closing this fully
+    means a TTL on the stamp itself, the same open half `WARDYN_SSH_ROLE_TTL`
+    narrows for the SSH lane; none is built for tokens.
 
 39. **A group claim the IdP FILTERS is indistinguishable from a complete one, so
     a shrink-the-claim workaround loses grants silently.** Wardyn marks a group
@@ -1652,16 +1699,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     `groups_snapshot_stale`. The token carries no signal that anything was filtered,
     so there is nothing Wardyn could check.
 
-    Accepted for 0.7 because the remedy is procedural and the burden is the
-    operator's: re-key group-subject grants and group-tier assignments onto a
-    directly-assigned group or onto the user BEFORE changing the claim
-    configuration, then verify against a real login's `session_groups`
-    (`GET /me/capabilities`) rather than against the IdP's UI —
-    `docs/OPERATIONS.md`, "A third cause of a partial snapshot", carries the
-    procedure. User-subject rows are the only shape a claim-configuration change
-    cannot silently break. Closing this needs a signal the IdP does not send;
-    the nearest approximation is warning when a group-subject row stops matching
-    anyone, which is not built.
+    **STILL OPEN AT 0.8 — a stated ceiling, not a gap awaiting a fix.** The
+    remedy is procedural and the burden is the operator's: re-key group-subject
+    grants and group-tier assignments onto a directly-assigned group or onto the
+    user BEFORE changing the claim configuration, then verify against a real
+    login's `session_groups` (`GET /me/capabilities`) rather than against the
+    IdP's UI — `docs/OPERATIONS.md`, "A third cause of a partial snapshot",
+    carries the procedure. User-subject rows are the only shape a
+    claim-configuration change cannot silently break. Closing this needs a
+    signal the IdP does not send; the nearest approximation is warning when a
+    group-subject row stops matching anyone, which is not built.
 
 40. **Workspace-provider admission is URL-PREFIX matching over a clone URL, not
     a repository ACL.** 0.7.2's provider policy bounds which repositories a run
@@ -1854,6 +1901,76 @@ hiding them would repeat the failure mode we are designed to avoid.
     (`requested`/`defaulted`): it is the one place that distinguishes "the caller
     asked for CC1" from "CC1 is what today's runner had to offer," which an
     `enforced` value of CC1 alone cannot say on its own.
+
+48. **A database writer can put a stored credential BACK, and the local key sits
+    beside the data (0.7.12, envelope v1).** Envelope v1 binds each row to its own
+    `(owned_by, name)` and makes forgery need the key-encryption key (§4), but
+    three things stay open. (a) **A restored row still opens:** a superseded or
+    deleted row copied back — from WAL, a replica or a backup — into the SAME
+    `(owned_by, name)` passes its binding and unwraps while that key-encryption
+    key lives, so a Replace, a delete and every future erase are reversible by a
+    database writer until the key is rotated past the old wrap
+    (`wardynd -rotate-age-key`). A database writer is already super-admin
+    equivalent (`role_mappings`, asset 8), so this is disclosed, not engineered
+    around. (b) **The `local` KEK is the only one so far:** whoever
+    holds both the database (or a backup) and `WARDYN_AGE_KEY` reads every value,
+    offline and unlogged; a deleted credential still decrypts from any earlier
+    backup while both exist — the erasure horizon is the deployment's backup
+    retention. A key service (Vault/OpenBao Transit, Azure Key Vault) that keeps
+    the KEK away from the database is the next lane, not this one. (c)
+    **Metadata stays in the clear:** who holds which named credential, and since
+    when, is readable to anyone who can read the table.
+
+49. **One age key guards every stored credential AND the daemon's own
+    signing keys: one key, one shared blast radius.** `WARDYN_AGE_KEY` (or
+    `WARDYN_AGE_KEY_FILE`) is the root of all Postgres secret-store encryption
+    (`internal/secretstore/pg`): the age identity rows are encrypted under, or,
+    with envelope encryption, the input the local KEK is HKDF-derived from.
+    Two things are stored under it in the same table. First, every credential
+    kept in the secret store: model API keys, forge tokens, SSH keys, captured
+    AWS SSO sessions. Second, up to four process-global keys that
+    `loadOrCreateSecret` (`cmd/wardynd/main.go`) mints on first use:
+    - the embedded-identity ES256 signing key (`wardyn-signing-key`), always
+      present, which signs every run-identity token (SVID) and the ground-truth
+      sensor token;
+    - the OIDC session-cookie HMAC key (`wardyn-session-key`), only when an
+      OIDC issuer is configured;
+    - the SSH gateway host key (`wardyn-ssh-host-key`), only when
+      `WARDYN_SSH_LISTEN` is set;
+    - the UI-sandbox relay-cookie HMAC key (`wardyn-ui-session-key`), only when
+      `WARDYN_UI_SANDBOX_LISTEN` is set.
+
+    An attacker who holds the age key and a read of that table (the DSN, a
+    backup or a replica) therefore holds all of it at once. That means every
+    stored credential in cleartext and run-identity tokens the broker accepts.
+    Wherever those features are on, it also means a console session forged for
+    any human (admin included), forged UI relay cookies and the SSH gateway's
+    identity. The age key alone, without the ciphertext, decrypts nothing.
+
+    **Not under the age key:** the admin token, the OIDC and directory client
+    secrets, and the DSN. These boot secrets are read from env or their
+    `_FILE` twin, and each is its own blast radius (the admin token is full
+    API admin by itself).
+
+    `-rotate-age-key` re-encrypts every row, or rewraps every row's data key,
+    under a new identity. It does not re-key the boot keys: their plaintext
+    survives a rotation, so a compromise that happened before the rotation
+    still covers them.
+
+    **What narrows it:** (a) **local mode:** `WARDYN_PLATFORM_KEY_FILE` supplies
+    a second age identity from which alone the boot keys' key-encryption key is
+    derived (`local/platform:` vs `local/cred:` on each row); once it is set, no
+    key the age key derives opens a boot key row, so a stolen age key forges
+    nothing. It is optional, the move onto it is `wardynd -rewrap`, and that
+    move is the one moment the age key still vouches for the boot keys. Unset,
+    the residual stands and `/setup/status` shows `platform_shared`. (b) **store
+    mode:** the boot keys live under `platform/` in the organisation's store;
+    with ONE Vault role that separates audit and filtering only (the one token
+    reaches both), and the recommended second role
+    (`WARDYN_VAULT_ROLE_PLATFORM`) separates the privilege. Azure Key Vault has
+    no per-name policy, so there the split is tags and audit only. In store mode
+    the organisation's vault operators hold the boot keys too (design K11), and
+    can forge what this residual lists.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
@@ -2275,7 +2392,7 @@ opaque tunnel and is never offered the operator's bearer.
   by an in-process test, and the full container path by `TestLive_SubscriptionInject`
   (`test/e2e/live/subscription_test.go`; Docker-gated, not in default CI).
   **Interactive** runs install the per-run CA too: the container's main process is
-  `agent-run --idle` (`idleCmd`, `internal/runner/docker/driver.go`), which calls
+  `agent-run --idle` (`idleCmd`, `internal/runner/docker/driver_network.go`), which calls
   the same `install_mitm_ca` batch runs use (`deploy/images/claude-code/agent-run`,
   `deploy/images/common/agent-run-lib.sh`), so a human driving `claude` in the
   attach shell trusts the proxy's TLS termination exactly as a batch run does. SDK
@@ -2325,24 +2442,26 @@ why this switch is not one to turn on for a single-dev machine.
 ### Coalesced `auth.failed` rows: the peer address is not the bound
 
 Since 0.7.2 the control plane folds IDENTICAL consecutive `auth.failed` audit rows
-— same refusing boundary, same `reason`, same request path, same peer IP — into
-the first row plus one **new** summary row carrying `count`/`first_seen`/
-`last_seen` (`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off). The key
-holds the peer IP WITHOUT the ephemeral port: keying on the port meant a client
-that opens a connection per request — a scanner, or anything without keep-alive —
-folded nothing at all, which made the instrument a no-op on exactly the estates
-this section is about. It exists
+— same refusing boundary, same `reason`, same request path — into the first row
+plus one **new** summary row carrying `count`/`peers`/`first_seen`/`last_seen`
+(`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off). The peer is NOT in the
+key: until 0.8 it was, and a caller that rotated its source address (or its
+ephemeral port, before that) opened a new streak and wrote a new row on every
+request, up to the rate limit. The summary carries the opening peer as
+`SourceIP`, `peers`, the number of distinct peer IPs folded (saturating at
+100, so the set a streak holds is bounded), `peer_ips`, those addresses (capped
+at 100), and `peers_truncated`. It exists
 because a self-inflicted drip evicted everything else: one sidecar retrying a
 renew the control plane would never grant wrote one row a minute, forever, past a
 rate limiter set at 1/sec, and pushed every real security event out of the
 console's 1000-row window mid-investigation.
 
-**`SourceIP` being in that key does NOT separate principals on a Kubernetes
-deployment.** Wardyn deliberately does not install a `RealIP` middleware (an
-`X-Forwarded-For` a client can set is not an identity), so behind an ingress or a
-load balancer `SourceIP` is the proxy's address and every caller shares it. A
-credential-stuffing run against the public lane therefore arrives under ONE
-coalescing key, and the fold is what a defender is reading.
+**`SourceIP` does not separate principals on a Kubernetes deployment either.**
+Wardyn deliberately does not install a `RealIP` middleware (an `X-Forwarded-For` a
+client can set is not an identity), so behind an ingress or a load balancer
+`SourceIP` is the proxy's address and every caller shares it. A
+credential-stuffing run against one path and reason therefore arrives as ONE
+streak on any deployment, and the fold is what a defender is reading.
 
 What bounds that is the window, the count and the rate limiter, not the key: a
 streak closes after `WARDYN_AUDIT_COALESCE_WINDOW` of silence AND at 1000 rows, so
@@ -2388,12 +2507,13 @@ on the row that means "this install cannot tell you about its network".
 **On a healthy Helm install, none of the three blocking rows is ever set — the gate is
 effectively inert there.** `runner` fails only with no live confinement class at all;
 `confinement_floor` warns only when the configured floor is a class the runner does
-not advertise; `sso_rbac` warns only with OIDC configured and no role mapping — though that
-last one is not merely a misconfiguration: a single-operator deployment, or one whose
-operator allowlist already separates admins from members, is a perfectly fine install
-that this row still holds in the funnel until onboarding completes. A correctly
+not advertise; `sso_rbac` warns only with OIDC configured and neither a role mapping nor an
+operator allowlist (#484) — though that last one is not merely a misconfiguration: a
+single-operator deployment is a perfectly fine install that this row still holds in the
+funnel until onboarding completes. A correctly
 configured multi-user Kubernetes deployment (a registered RuntimeClass, a floor the
-chart's values actually advertise, `WARDYN_OIDC_ROLE_MAP` or a People-step mapping set)
+chart's values actually advertise, `WARDYN_OIDC_ROLE_MAP`, a People-step mapping or an
+operator allowlist set)
 never trips any of the three, so the funnel exists for the FIRST-run and
 misconfiguration cases this gate was built for, and simply never fires again once an
 install is healthy — which is the intended shape (the same "a place you go, not a wall
@@ -2401,6 +2521,205 @@ you are trapped behind" principle `setup-gate.ts` already documents), stated her
 residual because it means the gate's absence is not, by itself, evidence the install
 is fine: an operator who wants that assurance still reads the checklist, not just
 whether the funnel opened.
+
+### Push content rules read the pack, and the forge for what it leaves out
+
+A run whose policy sets `push_rules` has its brokered git pushes inspected
+before they are forwarded: the broker buffers the receive-pack request, reads
+which paths the push would introduce, and refuses one that carries a denied
+path, that is larger than the run's inspection ceiling, or that cannot be read
+from its own bytes. Both brokered lanes enforce it, on the same trigger, and
+independently of branch-namespace confinement — a `git_push_any_branch`
+opt-out says where a push may land and does not switch off what it may
+contain. It governs what reaches the forge, not whether a credential is
+issued: git's `GET info/refs?service=git-receive-pack` precedes every push and
+mints (or reuses) the lane's credential, so an approval-gated single-use grant
+is spent there even when the push that follows is refused.
+
+What the pack can and cannot show, and why every gap is closed toward refusal:
+
+- **A pack does not say where a tree it leaves out used to stand.** It carries
+  only the objects the forge lacks, wherever the new tree puts them, and under
+  branch-namespace confinement the pushed commit's parent stays on the forge,
+  so the pack holds no pre-image to diff against. A directory the forge already
+  stores therefore looks the same whether the push left it alone, moved it
+  there (`git mv docs/ci infra` with `pack.useSparse=false`), staged it under an
+  allowed name in an earlier push of the same run and renamed it onto a denied
+  one, or restored it — or the whole root tree — from an older revision. Until
+  this was closed, the inspector skipped such a directory, so each of those
+  placed arbitrary content at a denied path unread; all three were reproduced
+  with a stock git client. Now a directory the pack does not carry is reported
+  as one opaque entry (`internal/gitpack`'s `Change.Opaque`), matched when a
+  deny pattern could match beneath it (`internal/egress/proxy/push_rules.go`'s
+  `matchesBeneath`), and compared with the same path in the commit the push
+  builds on, read from GitHub's REST API with the run's own credential
+  (`internal/egress/proxy/push_forge.go`): trees only, one level per request,
+  never file contents. The same mode and object id there — a content address —
+  means the push left it unchanged, and it passes; anything else refuses. A
+  moved, staged-and-renamed or restored directory is not what the commit the
+  push builds on held at that path, so all three reproductions stay refused.
+- **The forge holding an object is not the repository vouching for it.** A
+  commit may name any object id as its parent, and GitHub serves every fork's
+  objects through each repository in the network, so a commit pushed only to a
+  fork could otherwise vouch for its own content at a denied path. A parent
+  counts only when GitHub's compare API reports it inside the current history
+  of the default branch or of a branch the push updates; the forge resolves
+  those names, so nothing the pack asserts is taken on trust. A merge passes an
+  entry that matches any counted parent: demanding all would refuse merging the
+  default branch in after it changed a denied path, and closes nothing a
+  single-parent commit on the same base could not already do.
+- **History a push re-sends is taken out the same way.** A clone whose base is
+  no longer a tip the forge advertises re-sends its history, and the first
+  commit of that history reads as though the push added every file the
+  repository has. The carried commits GitHub places in that same current
+  history are taken out (`internal/gitpack`'s `Result.Settle`) and the push is
+  judged against them; a commit once found new is never taken as held.
+- **Building on an older commit of the default branch keeps what that commit
+  held at a denied path.** This is the stated residual of comparing with the
+  commit a push builds on: a run that checks out an older commit of the default
+  branch, or never pulls after a workflow changed there, can push a branch
+  whose workflows are the older ones. The rule is that a push does not change a
+  denied path relative to the commit it builds on, not that every branch
+  carries the newest version of it. That includes a workflow the default branch
+  has since changed or fixed, and GitHub runs an `on: push` workflow from the
+  pushed commit's own copy.
+- **When the comparison cannot be made, the strict reading stands.** A forge
+  other than GitHub, a push that builds on no counted commit, a read that fails,
+  answers other than `200` or comes back truncated, and a comparison needing
+  more than 64 reads or 20 seconds all refuse the push, and the refusal names
+  the reason. The reads happen only for a push the pack alone would refuse,
+  while it holds the sidecar's inspection slot.
+- **A symlink or submodule is opaque the same way.** It is a leaf in the pushed
+  tree, but a checkout resolves paths beneath it to content no tree entry
+  names — `infra -> stage` makes `stage/prod/main.tf` readable as
+  `infra/prod/main.tf`, and a submodule's contents come from another
+  repository. One at or above a path a deny pattern could match refuses the
+  push. Every mode git does not check out as a regular file counts.
+- **Removals are invisible.** These rules judge what a push introduces. A push
+  that deletes a denied path is not a rule match.
+- **Root-level files are always reported.** The root tree is always in the
+  pack, so every file at the repository root is named whether or not the push
+  touched it. One the pack does not carry is compared with the commit the push
+  builds on like any other entry, so a pattern naming a root-level file refuses
+  only a push that changes it — including a blob the forge already stores,
+  re-introduced at that path by a rename, which is not what the base held there.
+- **A pattern that would match nothing is refused, not stored.** An entry with
+  an empty, `.` or `..` segment is refused at write time, a trailing `/` reads
+  as `/**`, and an entry that reaches the broker unvalidated refuses every push
+  rather than being ignored (`types.DenyPathSegments` is the one reading both
+  sides use).
+- **Inspection is memory-bounded as well as size-bounded.** A push is a small
+  body the agent chooses that inflates to what `internal/gitpack`'s ceilings
+  allow — four compressed 31 MiB blobs are a 34 KB request — and the proxy
+  sidecar has a hard 256 MiB cap. Inspection takes the same process-wide slot
+  and retained-bytes budget as LLM request scanning, and a push that cannot get
+  them in time is refused, never forwarded unread. The slot is one wide
+  (`internal/egress/proxy`'s `maxConcurrentScans`), so inspections run one at a
+  time. One inspection is bounded beyond its body at about 232 MiB, as
+  `internal/gitpack`'s package comment breaks down: `maxInflatedBytes` (128 MiB)
+  of inflated objects, per-object bookkeeping held under 160 bytes an object by
+  `maxObjects` (200,000; about 30 MiB), and a change set of at most
+  `maxChanges` entries, plus one delta result (up to `maxObjectBytes`) that is
+  built before it is charged. Before #250 the object ceiling was 1,048,576, and a
+  legal 16.8 MB pack of that many near-empty blobs was inspected while holding
+  656 MiB; it is now refused as uninspectable. The residual is that the
+  ceilings are not sized jointly to the sidecar: a 64 MiB body (the most
+  `max_inspect_pack_mib` admits) inflating to every ceiling at once, beside a
+  full 64 MiB retained-bytes budget, would pass 256 MiB, and the inflation
+  ceiling is the term to lower if that shape matters.
+- **The key lane is not covered at all.** An `ssh_key` grant is an opaque
+  tunnel with no broker seam, so a policy that sets `push_rules` while
+  `ssh_key` is the run's only git-capable grant is graded a medium-risk warning
+  (`internal/composer/risk.go`) rather than enforced. A name-based deny does
+  not bind an IP literal, the same standing caveat branch-namespace confinement
+  carries.
+- **What is unreadable is refused, not waved through.** A thin pack, a body in
+  a content-coding, a malformed pack, a pack past one of `internal/gitpack`'s
+  ceilings, and a `deny_paths` list too long to evaluate in bounded time all
+  answer the same refusal. An unevaluated rule never reads as a pass; the cost
+  is that a client which ignores the `no-thin` the broker advertises cannot
+  push at all while rules are set.
+
+### A push held for review is decided by an admin, on what the broker could read
+
+`push_rules.require_review_paths` turns a matching push into a held request
+and a `push_content` approval (`internal/egress/proxy/push_hold.go`,
+`Proxy.holdPush`) instead of a refusal. It inherits every reading the deny
+rules have — the same matcher, the same forge comparison, the same
+fail-toward-matched handling of what cannot be compared — so a directory the
+push does not carry and the forge cannot clear is held, not waved through. The
+residuals particular to holding:
+
+- **The admin decides on paths, not content.** The card names the repository,
+  the ref, the credential, up to ten matched paths, the count and the commit
+  ids; it does not show a diff. Who the credential belongs to (`acts_as_kind`,
+  `acts_as_label`) is resolved by the control plane from the run's own grants
+  (`Server.pushActsAs`) and a raise that carries its own is refused, so a
+  sidecar cannot put a different name on the card. An admin who approves without reading the
+  commits on the forge approves whatever they carry at those paths.
+- **Deny beats review, and oversize or unreadable never holds.** A path both
+  lists match is refused (`inspectPush` evaluates the review list only when no
+  deny path matched), and a push the inspector could not read is refused
+  before either list is consulted: holding it would ask a person to approve a
+  push nobody inspected.
+- **An approval covers commits, for the repository and branch it named, and
+  sticks for the run.** The dedup key is the whole scope — repository, refs,
+  sorted commit ids and a digest of every matched path
+  (`types.PushContentScope`; the sidecar's `pushScope` keys its memory the same
+  way) — so a repacked retry of the same push is forwarded on an approval
+  already given and a denial refuses the same push again without asking. The
+  same commits pushed to another repository or branch the run can reach are a
+  new question and are held again: an approval of content for one destination
+  is not one for every destination. The sidecar's memory (`pushHolds`) is per
+  process and bounded, so a restarted sidecar asks again.
+- **Members cannot decide one, not even on their own run.**
+  `authorizeMemberDecision` keeps members to `egress_domain` (and their own
+  Azure DevOps escalations); a member approving their own run's workflow-file
+  edit is the exfiltration the rule exists to stop. A security operator decides
+  any kind, as today.
+- **Unattended runs refuse instead of holding.** A non-interactive run
+  (`proxy.Config.Unattended`, stamped at dispatch from the run's own flag) has
+  nobody to ask, so a review match is refused with no approval raised, and the
+  control plane refuses such a raise too (`admitPushContentRaise`). The flag is
+  control-plane-authored; the sandbox cannot set it.
+- **A hold costs the sidecar a connection and its buffer.** The buffer stays
+  charged to the process-wide retained-bytes budget for the whole hold (at most
+  600 seconds), and at most `maxPushHoldsActive` pushes are held at once; past
+  that a push is refused, never forwarded. The hold is taken after the
+  inspection slot is given back, so it does not hold the slot — but the held
+  pack stays charged to the retained-scan budget (`scanRetained`) for the whole
+  hold, up to 600 seconds, so while held packs fill that budget other buffered
+  scans on the run's sidecar — an LLM request body, another push — cannot
+  retain theirs and fail closed (refused, never forwarded unread) until the
+  hold ends.
+- **The Azure DevOps Entra lane applies no content rules.** Pushes through the
+  per-person Azure DevOps lane (`Proxy.serveADOGit`) are governed by the
+  capability gate only; neither `deny_paths` nor `require_review_paths` reads
+  them yet. A git_pat grant for Azure DevOps goes through the token lane and is
+  covered.
+
+### Hold-lane settings sources: user scope is still agent-writable
+
+Claude Code resolves `permissions.allow` rules before it asks the
+`--permission-prompt-tool`, so on a `tool_approvals=hold` run a matching rule runs
+the tool and `wardyn-toolgate` is never consulted (#358). Since 0.8 the hold lane
+in `deploy/images/claude-code/agent-run` passes `--setting-sources user`, which
+keeps the workspace's `.claude/settings.json` and `.claude/settings.local.json`
+out. Managed settings (`/etc/claude-code/managed-settings.json`) are not a
+selectable source and still load.
+
+**What the flag does NOT cover:** user scope, `~/.claude/settings.json` inside
+the sandbox, is still loaded, and the agent runs as the uid that owns it. An agent
+that writes its own `permissions.allow` rule there is un-gated for every later
+`claude` process that reads it, such as a child `claude` it starts, exactly as a
+repository rule was. The flag narrows
+the route to a file the agent must write itself, rather than one a cloned
+repository can ship. What closes it is #333's root-owned managed settings with
+`allowManagedPermissionRulesOnly: true`, which applies only to runs with a resolved
+autonomy level. The flag is on the hold lane only: the autonomous lane already runs
+every tool (`--dangerously-skip-permissions`), and the interactive lanes have no
+Wardyn gate in the path. The approver there is the human in the pane. codex-cli has
+no hold lane, so there is no gate for a repository config to pre-empt.
 
 ### Known latent vulnerabilities
 
@@ -2819,7 +3138,7 @@ six of nine had rotted onto unrelated code (one past EOF) once the files split.
 The mechanism is structural and tier-independent: (1) the per-run Docker network
 is created with `Internal: true` (no gateway), so the agent container has no
 default route regardless of confinement class — the `NetworkCreate` in
-`CreateSandbox` (`internal/runner/docker/driver.go`); (2) the agent joins ONLY that
+`CreateSandbox` (`internal/runner/docker/driver_network.go`); (2) the agent joins ONLY that
 network — `CreateSandbox` step (3) attaches it at create time via `NetworkMode` +
 `NetworkingConfig`, never the host bridge, and `HTTP_PROXY`/`HTTPS_PROXY`
 (`buildBaseSandboxEnv`, `internal/api/runs_dispatch_mounts.go`) are a convenience

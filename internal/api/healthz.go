@@ -79,7 +79,23 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// (cmd/wardynd: "Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode").
 		// One bit, no configuration detail: it discloses nothing /auth/login's own
 		// presence does not.
-		"sso":               s.cfg.OIDC != nil,
+		"sso": s.cfg.OIDC != nil,
+		// token_login (#378/#379) is whether the sign-in screen should offer the
+		// admin-token form at all: a token is actually configured, and neither
+		// sso_only nor member mode is set. Member mode's admin token is a PROCESS
+		// credential (deploy/desktop/wardyn.env.m-prime.example), not a human
+		// sign-in path, and sso_only's whole point is that the token is not a
+		// second way in — either one makes the form something that cannot work,
+		// which is exactly the disclosure this bit exists to prevent (no store
+		// read, like every other field here).
+		"token_login": s.cfg.AdminToken != "" && !s.cfg.SSOOnly && !s.cfg.MemberMode,
+		// sso_only mirrors WARDYN_SSO_ONLY, enforced at boot by
+		// validateSSOOnlyPosture (cmd/wardynd/boot_posture.go) — true here only
+		// when OIDC is configured and every other way in (admin token, local
+		// mode, member mode, the no-operator-list override) was refused, so the
+		// sign-in screen can safely drop SIGNIN.ROLE_SOURCE's "everyone is an
+		// admin" caveat: that branch of role derivation is unreachable here.
+		"sso_only":          s.cfg.SSOOnly,
 		"identity_provider": idp,
 		"trust_domain":      s.cfg.TrustDomain,
 		"runner":            runnerName,
@@ -125,6 +141,20 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// (JSON null) when the gateway is off, the same "a deployment without
 		// it simply omits the block" shape as ssh above.
 		"ui_sandbox": s.uiSandboxHealthz(),
+		// demo_video_base_url is WARDYN_DEMO_VIDEO_BASE_URL — already validated
+		// at boot by ValidateDemoVideoBaseURL — beside the ui_sandbox advisory
+		// block above: the console's episodeUrl (demo-videos.ts) reads it off
+		// this same /healthz poll to build the Getting Started episode
+		// download URL, instead of the hardcoded github.com it falls back to.
+		// "" (the default, unset) is the honest "no mirror configured" answer,
+		// not an omitted key — unlike ssh/ui_sandbox, there is no second field
+		// this one would need to appear alongside, so there is nothing an
+		// absent key would need to hide.
+		"demo_video_base_url": s.cfg.DemoVideoBaseURL,
+		// proxy_hop_tls: every run's proxy reaches this daemon over TLS pinned to
+		// its internal CA (internal/hoptls). false only on a local install whose
+		// control-plane URL is loopback http. One bit, no address or cert detail.
+		"proxy_hop_tls": s.cfg.ControlPlaneCAPEM != "",
 	}
 	// network_policy is k8sNetpolVerdict's "enforced"/"unenforced"/"acknowledged"
 	// grade, present ONLY on a k8s substrate — omitted from the map entirely
@@ -132,6 +162,21 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	// deployment's /healthz shape never sprouts a k8s-only field.
 	if netpolVerdict != "" {
 		body["network_policy"] = netpolVerdict
+	}
+	// sign_in_help_text / sign_in_help_url are the admin's own "what to do
+	// next" for the four sign-in refusals a person cannot clear alone. PUBLIC
+	// by design — the reader has, by definition, not signed in — and written
+	// as such (validateSignInHelp). Each value is re-checked here and dropped
+	// if it no longer passes; an unreadable store omits both, like a store
+	// with none set.
+	if sc, ok := s.siteConfigSnapshot(r.Context()); ok {
+		text, link := signInHelpPublic(sc)
+		if text != "" {
+			body["sign_in_help_text"] = text
+		}
+		if link != "" {
+			body["sign_in_help_url"] = link
+		}
 	}
 	writeJSON(w, http.StatusOK, body)
 }

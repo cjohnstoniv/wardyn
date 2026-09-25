@@ -9,6 +9,7 @@ import {
   INTERACTIVE_HEADLINE,
   NO_REPO,
   approvalSignals,
+  groupWaitBreakdown,
   needsAttention,
   needsYou,
   repoLabel,
@@ -90,6 +91,101 @@ describe("approvalSignals — held vs passive", () => {
       approval({ requested_scope: { host: "h", mode: "wait_for_review" }, requested_at: stale }),
     ]);
     expect(s.get("run-1")).toEqual({ pending: 1, passiveHold: true });
+  });
+
+  // S10 round 2 (F13): an Azure DevOps consent row is credential_reauth too,
+  // but a DIFFERENT provider — it must set adoConsent, never reauth, so the
+  // board chip never says "AWS" for it.
+  it("marks an Azure DevOps consent row as adoConsent, not reauth", () => {
+    const s = approvalSignals([
+      approval({
+        kind: "credential_reauth",
+        requested_scope: { lane: "azure_devops", mechanism: "entra_consent", owner: "dana", provider_id: "row_1", scopes: [] },
+      }),
+    ]);
+    expect(s.get("run-1")?.adoConsent).toBe(true);
+    expect(s.get("run-1")?.reauth).toBeUndefined();
+  });
+
+  it("still marks a plain AWS credential_reauth row as reauth, not adoConsent", () => {
+    const s = approvalSignals([
+      approval({ kind: "credential_reauth", requested_scope: { mechanism: "bedrock_sso", owner: "dana" } }),
+    ]);
+    expect(s.get("run-1")?.reauth).toBe(true);
+    expect(s.get("run-1")?.adoConsent).toBeUndefined();
+  });
+
+  // #509 — a PENDING tool_call/credential_reauth row is live until the
+  // SERVER says otherwise; approvalSignals only ever joins PENDING rows (the
+  // `state !== "PENDING"` guard above), so there is no client elapsed-time
+  // ceiling left to cross here — both stay held at any age.
+  it("a tool_call 2 hours old — well past the old 60-minute ceiling — is still held, not staleHeld", () => {
+    const old = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    const s = approvalSignals([
+      approval({ kind: "tool_call", requested_scope: { tool: "Bash", cmd: "rm -rf build" }, requested_at: old }),
+    ]);
+    expect(s.get("run-1")).toEqual({ pending: 1, held: true });
+  });
+
+  it("a credential_reauth 25 hours old — past the server's own 24h default — is still held AND reauth", () => {
+    const old = new Date(Date.now() - 25 * 60 * 60_000).toISOString();
+    const s = approvalSignals([
+      approval({ kind: "credential_reauth", requested_scope: {}, requested_at: old }),
+    ]);
+    expect(s.get("run-1")).toEqual({ pending: 1, held: true, reauth: true });
+  });
+
+  it("a credential_reauth well inside the ceiling is both held AND reauth", () => {
+    const s = approvalSignals([approval({ kind: "credential_reauth", requested_scope: {} })]);
+    expect(s.get("run-1")).toEqual({ pending: 1, held: true, reauth: true });
+  });
+
+  // A row the server has actually moved off PENDING (decided or expired) is
+  // filtered before isHeld even runs — it produces no signal at
+  // all, the same as any other decided approval.
+  it("an EXPIRED tool_call produces no signal for its run", () => {
+    const s = approvalSignals([approval({ kind: "tool_call", state: "EXPIRED" })]);
+    expect(s.get("run-1")).toBeUndefined();
+  });
+});
+
+// #160 — the group header's second chip row is built from this pure count,
+// exclusive per run so no run is ever double-counted across reasons.
+describe("groupWaitBreakdown", () => {
+  it("the five-run acceptance shape: two held, one reauth, one starting, one clean", () => {
+    const signals = approvalSignals([
+      approval({ id: "a1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
+      approval({ id: "a2", run_id: "r2", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "rm -rf x" } }),
+      approval({ id: "a3", run_id: "r3", kind: "credential_reauth", requested_scope: {} }),
+    ]);
+    const runs = [
+      run({ id: "r1", state: "WAITING_FOR_CONFIRMATION" }),
+      run({ id: "r2", state: "WAITING_FOR_CONFIRMATION" }),
+      run({ id: "r3", state: "RUNNING" }),
+      run({ id: "r4", state: "STARTING" }),
+      run({ id: "r5", state: "RUNNING" }), // clean — counted nowhere
+    ];
+    expect(groupWaitBreakdown(runs, signals)).toEqual({ held: 2, reauth: 1, starting: 1 });
+  });
+
+  // #509 — a PENDING tool_call stays held at any age (no client ceiling), so
+  // a group's counted claim no longer shrinks as its holds age.
+  it("a tool_call held for hours still counts as held in the header's breakdown", () => {
+    const old = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    const signals = approvalSignals([
+      approval({ id: "a1", run_id: "r1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
+      approval({ id: "a2", run_id: "r2", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" }, requested_at: old }),
+    ]);
+    const runs = [
+      run({ id: "r1", state: "WAITING_FOR_CONFIRMATION" }),
+      run({ id: "r2", state: "WAITING_FOR_CONFIRMATION" }),
+    ];
+    expect(groupWaitBreakdown(runs, signals)).toEqual({ held: 2, reauth: 0, starting: 0 });
+  });
+
+  it("no signals and no STARTING runs counts nothing — the caller renders the uncounted 'Nothing waiting' chip itself", () => {
+    const runs = [run({ id: "r1", state: "RUNNING" }), run({ id: "r2", state: "COMPLETED" })];
+    expect(groupWaitBreakdown(runs, new Map())).toEqual({ held: 0, reauth: 0, starting: 0 });
   });
 });
 

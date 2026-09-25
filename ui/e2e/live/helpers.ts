@@ -22,7 +22,7 @@
 import { expect, type Page, type APIRequestContext } from "@playwright/test";
 // From the CSS-free copy module, NEVER from harness-login-pane: that module
 // reaches xterm.css, which Playwright's Node loader cannot load ("No tests found").
-import { SELFRUN_MARKER } from "../../src/app/components/screens/settings/login-pane-copy";
+import { SELFRUN_MARKER, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
 
 // ── the walk's inputs (scripts/kind-sso-walk.sh exports every one) ──────────
 export const ADMIN_TOKEN = process.env.WARDYN_LIVE_ADMIN_TOKEN || "";
@@ -61,8 +61,21 @@ export const OTHER_ROLE = "DevPower";
 // A sandbox on a cluster is a pod: image pull, schedule, proxy sidecar, then a
 // device-code flow. Generous, and bounded — an unbounded wait is how a live
 // suite turns a failure into a hang.
-export const SANDBOX_UP = 300_000;
-export const LOGIN_DONE = 300_000;
+//
+// Both ceilings are ENVIRONMENT-OVERRIDABLE (WARDYN_LIVE_SANDBOX_UP_MS /
+// WARDYN_LIVE_LOGIN_DONE_MS), because the 300s default was tuned on a
+// developer box and is too tight for a hosted CI runner: the nightly kind SSO
+// walk schedules the CNI, Postgres, the daemon, Dex and every sandbox pod
+// concurrently on two vCPUs (#285 — the walk's first nightly dispatch timed
+// out here waiting for a freshly created sign-in sandbox). This is a timeout,
+// not a correctness bound, so raising it for slow CI hardware proves nothing
+// less than the same wait would on a fast box.
+function envMs(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+export const SANDBOX_UP = envMs("WARDYN_LIVE_SANDBOX_UP_MS", 300_000);
+export const LOGIN_DONE = envMs("WARDYN_LIVE_LOGIN_DONE_MS", 300_000);
 
 /**
  * Sign in through Dex's static-password form.
@@ -335,15 +348,30 @@ export async function makeMemberActionable(request: APIRequestContext): Promise<
  * The pane launches the login sandbox on open. The start URL is roster-managed
  * here (the admin set sso_start_url), so the pane goes straight to "Start login"
  * rather than asking for one.
+ *
+ * #628: Start opens NO tab any more — the door narrates the start in its own
+ * steps, and the provider tab opens only from its Open button, which this walk
+ * never needs (the on-cluster fake pre-approves every device code). So every
+ * sign-in the walk drives asserts both halves: the steps are on screen, and
+ * no page — least of all an about:blank placeholder — opened on the click.
  */
 export async function openLoginPane(page: Page): Promise<void> {
   await page.goto("/setup");
   const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
   await expect(cta).toBeVisible({ timeout: 60_000 });
   await cta.click();
-  const start = page.getByRole("button", { name: "Start login" });
-  if (await start.isVisible().catch(() => false)) {
-    await start.click();
+  const opened: Page[] = [];
+  const onPage = (p: Page) => opened.push(p);
+  page.context().on("page", onPage);
+  try {
+    const start = page.getByRole("button", { name: "Start login" });
+    if (await start.isVisible().catch(() => false)) {
+      await start.click();
+    }
+    await expect(page.getByTestId("signin-progress").first()).toContainText(SIGNIN_PROGRESS.STEP_START);
+    expect(opened.map((p) => p.url()), "Start login opened a tab").toEqual([]);
+  } finally {
+    page.context().off("page", onPage);
   }
 }
 

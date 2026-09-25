@@ -87,6 +87,11 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Via != "" {
 		fields["via"] = dl.Via
 	}
+	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go).
+	if dl.UpstreamFault != "" {
+		fields["upstream_fault"] = dl.UpstreamFault
+		s.noteBedrockDataPlaneFault(r.Context(), runID, dl.UpstreamFault)
+	}
 	data, _ := json.Marshal(fields)
 	outcome := decisionOutcome(dl.Decision)
 	ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID,
@@ -278,7 +283,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		if ev.RunID != nil {
 			if _, err := s.cfg.Store.GetRun(r.Context(), *ev.RunID); err != nil {
 				if !errors.Is(err, store.ErrNotFound) {
-					writeError(w, http.StatusInternalServerError, "validate run_id: "+err.Error())
+					writeServerError(w, r, "validate run_id", err)
 					return
 				}
 				ev.RunID = nil
@@ -315,7 +320,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 			// Propagate as a non-2xx so the sender retries (fail-closed
 			// durability). accepted so far is not reported as success: the caller
 			// re-sends the whole batch.
-			writeError(w, http.StatusBadGateway, "record ground-truth event: "+err.Error())
+			writeError(w, http.StatusBadGateway, loggedMsg(r.Context(), "record ground-truth event", err))
 			return
 		}
 		accepted++
@@ -410,9 +415,10 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	switch body.Kind {
-	case types.ApprovalEgressDomain, types.ApprovalToolCall:
-		// Sidecars may only raise egress/tool approvals. credential approvals are
-		// created by the broker mint path, never by an untrusted sidecar.
+	case types.ApprovalEgressDomain, types.ApprovalToolCall, types.ApprovalPushContent:
+		// Sidecars may only raise egress/tool/held-push approvals. credential
+		// approvals are created by the broker mint path, never by an untrusted
+		// sidecar.
 	default:
 		// Recorded: this refusal is the forgery the case above exists to
 		// stop — a sidecar asking Wardyn to raise a `credential` approval. Same
@@ -428,13 +434,28 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "requested_scope is required")
 		return
 	}
+	// `lane` names a control-plane-raised escalation (the Azure DevOps
+	// capability hold). Decidability does not key off it — it keys off
+	// grant_id, which this route never sets — but a sidecar that tries to
+	// write it is probing that boundary, so it is refused and recorded.
+	if scopeNamesLane(body.RequestedScope) {
+		s.auditAuthFailedAs(r, internalApprovalActor, "reserved_scope_key")
+		writeError(w, http.StatusBadRequest, "requested_scope may not name a lane")
+		return
+	}
+	if body.Kind == types.ApprovalPushContent {
+		var ok bool
+		if body.RequestedScope, ok = s.admitPushContentRaise(w, r, claims, body.RequestedScope); !ok {
+			return
+		}
+	}
 
 	// Per-run cap, checked BEFORE the raise. Fail CLOSED on a count
 	// error: an unbounded raise path is the thing being bounded, so "we could not
 	// tell how many this run has" must not read as "allow another one".
 	n, cerr := s.cfg.Approvals.CountForRun(r.Context(), claims.RunID)
 	if cerr != nil {
-		writeError(w, http.StatusServiceUnavailable, "count approvals for run: "+cerr.Error())
+		writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "count approvals for run", cerr))
 		return
 	}
 	if n >= maxApprovalsPerRun {
@@ -449,10 +470,25 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	}
 	created, err := s.cfg.Approvals.Request(r.Context(), req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "request approval: "+err.Error())
+		writeServerError(w, r, "request approval", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+// scopeNamesLane reports whether a top-level `lane` key, in any letter case
+// (encoding/json matches keys case-insensitively), is present.
+func scopeNamesLane(scope json.RawMessage) bool {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(scope, &top) != nil {
+		return false
+	}
+	for k := range top {
+		if strings.EqualFold(k, "lane") {
+			return true
+		}
+	}
+	return false
 }
 
 // handleInternalGetApproval lets a sidecar poll the state of an approval it
@@ -472,7 +508,7 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get approval: "+err.Error())
+		writeServerError(w, r, "get approval", err)
 		return
 	}
 	if ap.RunID != claims.RunID {
@@ -489,6 +525,60 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 	// derivable from capture provenance, and gated on exactly what the eager
 	// path checks. A no-op for every other kind and state.
 	ap = s.reconcileReauthOnRead(r.Context(), ap)
+	// The same repair for an Azure DevOps consent or sign-in request: the
+	// person's new sign-in is the resolution (injection_ado_signin.go).
+	ap = s.reconcileADOReauthOnRead(r.Context(), ap)
+	writeJSON(w, http.StatusOK, ap)
+}
+
+// handleInternalExpireApproval lets wardyn-toolgate close its OWN tool_call
+// approval the moment it gives up waiting for one (its -deadline reached, or
+// its poll loop otherwise exhausted), instead of leaving the row PENDING for
+// the periodic sweep (approval-expiry-after/-interval) to catch up to — up to
+// one sweep interval later. In that window an operator could still approve a
+// call the gate has already answered deny for (#811).
+//
+// Scoped exactly like handleInternalGetApproval (own run only, 404 on any
+// mismatch so existence is never confirmed for another run's row) plus one
+// more restriction: only a tool_call approval the SANDBOX raised
+// (handleBrokerCreateApproval) may be expired here — a grant_id marks a row
+// the control plane raised (an Azure DevOps escalation, adoEscalationScope),
+// which is the operator's to decide, not the sandbox's to withdraw. The
+// transition itself is idempotent — an approval a human or the sweep already
+// decided is left untouched — and the answer is the row's FINAL state, so a
+// gate whose expire lost the race to an approval honours that approval.
+func (s *Server) handleInternalExpireApproval(w http.ResponseWriter, r *http.Request) {
+	claims, err := claimsFromContext(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "missing run claims")
+		return
+	}
+	id, ok := parseIDParam(w, r, "id", "approval")
+	if !ok {
+		return
+	}
+	ap, err := s.cfg.Approvals.Get(r.Context(), id)
+	if notFoundIf(w, err, "approval") {
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, "get approval", err)
+		return
+	}
+	if ap.RunID != claims.RunID || ap.Kind != types.ApprovalToolCall || ap.GrantID != nil {
+		// Do not confirm existence of another run's approval, or of an
+		// approval this route was never meant to touch.
+		writeError(w, http.StatusNotFound, "approval not found")
+		return
+	}
+	if err := s.cfg.Approvals.ExpireOne(r.Context(), id, claims.SPIFFEID, "client_withdrawn"); err != nil {
+		writeServerError(w, r, "expire approval", err)
+		return
+	}
+	if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
+		writeServerError(w, r, "get approval", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, ap)
 }
 
@@ -591,7 +681,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 
 	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, body.GrantID)
 	if err != nil {
-		s.writeMintError(w, err)
+		s.writeMintError(w, r, err)
 		return
 	}
 	s.metrics.credentialMinted()
@@ -699,7 +789,7 @@ const (
 // and already_minted apart — including the SECOND git operation of an
 // approval-gated run, which legitimately 409s with ErrAlreadyMinted
 // (docs/adoption/corp-network-onboarding-findings.md B2).
-func (s *Server) writeMintError(w http.ResponseWriter, err error) {
+func (s *Server) writeMintError(w http.ResponseWriter, r *http.Request, err error) {
 	var pending broker.ErrApprovalPending
 	if errors.As(err, &pending) {
 		// Approval still open: 409 with the approval id so the caller can poll.
@@ -725,7 +815,7 @@ func (s *Server) writeMintError(w http.ResponseWriter, err error) {
 	case errors.Is(err, broker.ErrAlreadyMinted):
 		writeJSON(w, http.StatusConflict, map[string]any{"code": mintConflictAlreadyMinted, "error": "credential already minted (single-use)"})
 	default:
-		writeError(w, http.StatusInternalServerError, "mint: "+err.Error())
+		writeServerError(w, r, "mint", err)
 	}
 }
 
@@ -792,13 +882,16 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			// 403, not 404: same reason as refuseTerminalRun — the caller's own
+			// presented token names claims.RunID, so a missing run is that
+			// token's authority gone, not a path a member could probe.
 			s.auditRenewDenied(r, claims, "run_not_found")
 			writeError(w, http.StatusForbidden, "run not found")
 			return
 		}
 		// Transient store failure: refuse (fail closed) but signal retryable, so a
 		// Postgres blip costs a renew attempt and not the run's credentials.
-		writeError(w, http.StatusServiceUnavailable, "read run: "+err.Error())
+		writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "read run", err))
 		return
 	}
 	if isTerminalRunState(run.State) {
@@ -809,7 +902,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 
 	id, err := s.cfg.Identity.MintRunIdentity(r.Context(), claims.RunID, claims.Sub, claims.Sponsor, internalAudience)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "renew run identity: "+err.Error())
+		writeServerError(w, r, "renew run identity", err)
 		return
 	}
 

@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EpisodeRow, StepEpisodes, EpisodeList, catalogSummary } from "./episode-card";
 import { EPISODES, type Episode } from "../../../lib/demo-videos";
+import * as useDemoVideoBaseUrlModule from "../../../lib/hooks/use-demo-video-base-url";
 
 const shipped: Episode = {
   id: "01",
@@ -64,6 +65,24 @@ describe("EpisodeRow", () => {
     expect(video).not.toHaveAttribute("poster");
   });
 
+  it("an operator-configured mirror (/healthz's demo_video_base_url) re-points the video src", async () => {
+    const spy = vi
+      .spyOn(useDemoVideoBaseUrlModule, "useDemoVideoBaseUrl")
+      .mockReturnValue("https://videos.airgapped.example/wardyn-demos");
+    try {
+      const user = userEvent.setup();
+      const { container } = render(<EpisodeRow episode={shipped} />);
+      await user.click(screen.getByRole("button", { name: "Watch" }));
+      const video = container.querySelector("video");
+      expect(video).toHaveAttribute(
+        "src",
+        "https://videos.airgapped.example/wardyn-demos/v0.6.0/wardyn-01-why-govern-agents.mp4",
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("a reserved (unrecorded) episode shows a neutral chip and no button or link", () => {
     render(<EpisodeRow episode={reserved} />);
     expect(screen.getByText("Not recorded yet")).toBeInTheDocument();
@@ -84,11 +103,63 @@ describe("EpisodeRow", () => {
     fireEvent.error(container.querySelector("video")!);
 
     expect(container.querySelector("video")).toBeNull();
-    expect(screen.getByText(/Couldn't load this episode from GitHub/)).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load this episode from GitHub.")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "Open the release page" });
     expect(link).toHaveAttribute("href", "https://github.com/cjohnstoniv/wardyn/releases/tag/v0.6.0");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link.getAttribute("rel")).toContain("noopener");
+  });
+
+  it("the default (unconfigured) source shows the GitHub stream note", async () => {
+    const user = userEvent.setup();
+    render(<EpisodeRow episode={shipped} />);
+    await user.click(screen.getByRole("button", { name: "Watch" }));
+    expect(
+      screen.getByText("Streams from the Wardyn release on GitHub only after you press Watch. Nothing is prefetched."),
+    ).toBeInTheDocument();
+  });
+
+  it("a configured source shows the configured stream note, names no host or URL", async () => {
+    const spy = vi
+      .spyOn(useDemoVideoBaseUrlModule, "useDemoVideoBaseUrl")
+      .mockReturnValue("https://videos.airgapped.example/wardyn-demos");
+    try {
+      const user = userEvent.setup();
+      const { container } = render(<EpisodeRow episode={shipped} />);
+      await user.click(screen.getByRole("button", { name: "Watch" }));
+      expect(
+        screen.getByText(
+          "Streams from the video source your admin configured, only after you press Watch. Nothing is prefetched.",
+        ),
+      ).toBeInTheDocument();
+      expect(container.textContent).not.toContain("videos.airgapped.example");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a configured source's load error names the policy, not GitHub, and shows no release-page link", async () => {
+    const spy = vi
+      .spyOn(useDemoVideoBaseUrlModule, "useDemoVideoBaseUrl")
+      .mockReturnValue("https://videos.airgapped.example/wardyn-demos");
+    try {
+      const user = userEvent.setup();
+      const { container } = render(<EpisodeRow episode={shipped} />);
+      await user.click(screen.getByRole("button", { name: "Watch" }));
+      fireEvent.error(container.querySelector("video")!);
+
+      expect(container.querySelector("video")).toBeNull();
+      expect(
+        screen.getByText(
+          "Couldn't play this episode. This deployment only allows video from the source your admin configured, and this didn't come from it.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Open the release page" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/GitHub/)).not.toBeInTheDocument();
+      expect(container.textContent).not.toContain("videos.airgapped.example");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -125,6 +196,23 @@ describe("EpisodeList — Shape C path grouping (approved mock round 2026-08-31)
     // in the DOM), and no member chips show in single mode.
     expect(screen.getByText("One command to a cluster")).toBeInTheDocument();
     expect(screen.queryByText("For your members")).not.toBeInTheDocument();
+  });
+
+  it("a configured source swaps the catalog summary's trailing clause, names no host or URL", () => {
+    const spy = vi
+      .spyOn(useDemoVideoBaseUrlModule, "useDemoVideoBaseUrl")
+      .mockReturnValue("https://videos.airgapped.example/wardyn-demos");
+    try {
+      const { container } = render(<EpisodeList mode="single" />);
+      const { recorded, minutes } = catalogSummary(EPISODES);
+      expect(
+        screen.getByText(`${recorded} recorded · about ${minutes} minutes · streamed from your admin's video source on click`),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/streamed from GitHub on click/)).not.toBeInTheDocument();
+      expect(container.textContent).not.toContain("videos.airgapped.example");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("multi mode: the deployment group swaps, member-audience rows are chipped, single collapses", () => {

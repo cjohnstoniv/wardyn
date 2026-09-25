@@ -14,7 +14,7 @@ import { approvalSignals, type RunSignals } from "./board-groups";
 import { RUN } from "../../wardyn/copy";
 import { CLONE_LOAD_FAILED } from "../new-run/wizard-types";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { waitingReauth } from "../../../lib/reauth-waiting-copy";
+import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
 
 // review C-01/C-06/C-07 — cloneRun's own behaviour, not just the menu item's
 // gating. listAudit is stubbed; createRequestFromAudit stays REAL so the
@@ -71,6 +71,21 @@ const reauthSignals = (runId: string) =>
     },
   ]);
 
+// S10 round 2 (F13) — the Azure DevOps twin of reauthSignals: same wire kind
+// (credential_reauth), a DIFFERENT provider, so the board chip must read
+// "Azure DevOps", never "AWS".
+const adoConsentSignals = (runId: string) =>
+  approvalSignals([
+    {
+      id: "a-ado-consent",
+      run_id: runId,
+      kind: "credential_reauth",
+      requested_scope: { lane: "azure_devops", mechanism: "entra_consent", owner: "me", provider_id: "row_1", scopes: [] },
+      state: "PENDING",
+      requested_at: new Date().toISOString(),
+    },
+  ]);
+
 // CONSOLE-RULES §5: every actor on a row is two adjacent glyphs, never fused —
 // WHO (the agent monogram) and WHAT (the state). The state's WORD moved to
 // row 2, but it stays in the DOM: the e2e suite reads state off that text.
@@ -98,6 +113,37 @@ describe("RunCard — two-row anatomy", () => {
     renderCard(run(), reauthSignals("run_3b7f10c4aa99"), "admin@corp");
     expect(screen.getByText(waitingReauth(1, false))).toBeInTheDocument();
     expect(screen.queryByText(waitingReauth(1))).not.toBeInTheDocument();
+  });
+
+  // S10 round 2 (F13) — the Azure DevOps consent chip must never say "AWS".
+  it("a run held on an Azure DevOps consent request names Azure DevOps, never AWS, by the reader", () => {
+    renderCard(run(), adoConsentSignals("run_3b7f10c4aa99"), "me");
+    expect(screen.getByText(waitingAdoConsent(1))).toBeInTheDocument();
+    expect(screen.queryByText(waitingReauth(1))).not.toBeInTheDocument();
+    expect(screen.queryByText(/AWS/)).not.toBeInTheDocument();
+  });
+
+  // A mid-run Azure DevOps SIGN-IN request is the same chip, never the AWS one.
+  it("a run held on an Azure DevOps sign-in request names Azure DevOps, never AWS", () => {
+    const signals = approvalSignals([
+      {
+        id: "a-ado-signin",
+        run_id: "run_3b7f10c4aa99",
+        kind: "credential_reauth",
+        requested_scope: { lane: "azure_devops", mechanism: "entra_signin", reason: "signin", owner: "me", provider_id: "row_1" },
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+      },
+    ]);
+    renderCard(run(), signals, "me");
+    expect(screen.getByText(waitingAdoConsent(1))).toBeInTheDocument();
+    expect(screen.queryByText(/AWS/)).not.toBeInTheDocument();
+  });
+
+  it("…and the same card read by somebody else says the owner's Azure DevOps sign-in", () => {
+    renderCard(run(), adoConsentSignals("run_3b7f10c4aa99"), "admin@corp");
+    expect(screen.getByText(waitingAdoConsent(1, false))).toBeInTheDocument();
+    expect(screen.queryByText(waitingAdoConsent(1))).not.toBeInTheDocument();
   });
 
   it("row 2 carries repo, barrier, short id and age", () => {
@@ -129,9 +175,11 @@ describe("RunCard — two-row anatomy", () => {
     expect(screen.queryByText(/Waiting for your confirmation/)).toBeNull();
   });
 
-  it("Review is always reachable on a card that needs eyes; Attach is revealed, never hover-only", () => {
+  it("the action is always reachable on a card that needs eyes; Attach is revealed, never hover-only", () => {
+    // #215: a failed run is a REPORT, not a request — "Open", not "Review",
+    // the word a held run still keeps (see the held-run cases above/below).
     const { unmount } = renderCard(run({ state: "FAILED" }));
-    const review = screen.getByRole("button", { name: "Review" });
+    const review = screen.getByRole("button", { name: "Open" });
     expect(review).toBeInTheDocument();
     // …and never teal: §2 keeps the accent for the one `default` button per
     // surface, which on the board is the shell's New run.
@@ -152,10 +200,75 @@ describe("RunCard — two-row anatomy", () => {
     expect(screen.getAllByText("Vault")).toHaveLength(1);
     expect(container.querySelectorAll(".bg-vault-fg")).toHaveLength(0);
   });
+
+  // #215 — the card was a div with onClick: no anchor, no role, no tabIndex,
+  // so a run could not be reached by keyboard, middle-clicked, or copied as a
+  // link. The title is now a real <a href>.
+  it("the run title is a real <a href>, reachable by keyboard", () => {
+    renderCard(run());
+    const link = screen.getByRole("link", { name: "Rotate the staging credentials" });
+    expect(link).toHaveAttribute("href", "/runs/run_3b7f10c4aa99");
+    link.focus();
+    expect(link).toHaveFocus();
+  });
+});
+
+// #509 — a PENDING tool_call/credential_reauth row is live until the SERVER
+// says otherwise (its own state), never a client elapsed-time guess: the
+// sandbox stays parked on it for up to WARDYN_APPROVAL_EXPIRY_AFTER (24h
+// default). This pins the RUNS BOARD call site (approvalSignals -> RunCard);
+// the cockpit command bar's call site is pinned in run-detail.test.tsx.
+describe("RunCard — a PENDING hold stays held until the server's own state says otherwise (#509)", () => {
+  const twoHourOldToolCall: RunSignals = approvalSignals([
+    {
+      id: "a1",
+      run_id: "run_3b7f10c4aa99",
+      kind: "tool_call",
+      requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+      state: "PENDING",
+      requested_at: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+    },
+  ]);
+
+  it("a PENDING tool_call 2 hours old — past the old 60-minute ceiling — still says Review and the live sentence", () => {
+    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), twoHourOldToolCall);
+    expect(screen.getByRole("button", { name: "Review" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
+    expect(screen.getByText("1 waiting · sandbox held")).toBeInTheDocument();
+  });
+
+  // The DELIBERATE LIMIT: only the derived claim would ever degrade. The
+  // run's own wire state, via RunStateBadge, still reads exactly what it is —
+  // restyling it would invent a new tone for a state that has not changed.
+  it("leaves RunStateBadge alone — the wire state still reads Awaiting confirmation", () => {
+    renderCard(run({ state: "WAITING_FOR_CONFIRMATION" }), twoHourOldToolCall);
+    expect(screen.getByText("Awaiting confirmation")).toBeInTheDocument();
+  });
+
+  // A row the server has ACTUALLY decided or expired never reaches the card
+  // at all: approvalSignals only ever joins PENDING rows (board-groups.ts), so
+  // a decided/EXPIRED tool_call carries no pending count and no hold.
+  it("a decided or server-expired tool_call is not held — it never produces a signal for the run", () => {
+    for (const state of ["APPROVED", "DENIED", "EXPIRED", "CANCELLED"] as const) {
+      const signals = approvalSignals([
+        {
+          id: "a1",
+          run_id: "run_3b7f10c4aa99",
+          kind: "tool_call",
+          requested_scope: { tool: "Bash", cmd: "rm -rf build" },
+          state,
+          requested_at: new Date().toISOString(),
+        },
+      ]);
+      renderCard(run({ state: "COMPLETED" }), signals);
+      expect(screen.queryByText(/sandbox held/)).not.toBeInTheDocument();
+    }
+  });
 });
 
 // 0.7.3 F7 — the Runs-list door onto the same clone the run header offers.
-describe("RunCard — kebab clone door (0.7.3 F7)", () => {
+describe("RunCard — kebab clone door", () => {
+  // ticket: 0.7.3 F7
   async function openMenu() {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     await user.click(screen.getByRole("button", { name: "Run actions" }));

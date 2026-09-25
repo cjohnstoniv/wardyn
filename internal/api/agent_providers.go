@@ -43,7 +43,7 @@ import (
 const (
 	agent400Unknown           = "agents: %q names no agent this deployment can run — a catalog id or a WARDYN_AGENT_IMAGES key"
 	agent400CustomMechanism   = "agents: %q is not in the agent catalog, so its mechanism must be none — Wardyn wires no model credential into a custom image (%s would show a live credential that binds nothing)"
-	agent400PerUser           = "agents: %q: credential_source per_user is available for bedrock_sso only, not %s"
+	agent400PerUser           = "agents: %q: credential_source per_user is available for %s only, not %s"
 	agent400SSOStartURL       = "agents: %q: sso_start_url is required when mechanism is bedrock_sso and credential_source is per_user"
 	agent400SSOStartURLUnused = "agents: %q: sso_start_url applies only when mechanism is bedrock_sso and credential_source is per_user"
 
@@ -63,6 +63,12 @@ const (
 	agent400NoManagedAuth       = "agents: %q is the bring-your-own-agent row, which Wardyn wires no model credential for, so its mechanism must be none"
 	agent400NeedsLane           = "agents: %q is a catalog agent Wardyn can wire a model credential for, so mechanism none would leave every run of it without one — name the lane you configured"
 	agent412Stale               = "agents changed since you loaded them — reload and retry"
+
+	// The default model provider. A turned-off provider is still a valid
+	// default (it is the one-click incident switch); a missing one, or one not
+	// enabled for the agent, is not.
+	agent400DefaultUnknown    = "agents: %q: default_provider %q names no model provider — add it first, or choose another default"
+	agent400DefaultNotServing = "agents: %q: default_provider %q is not enabled for %q — enable it for this agent, or choose another default"
 
 	// AGENT_422 — the ONE launch-path refusal, and the one string in this file a
 	// MEMBER ever reads. It names the agent and nothing else: no base URL, no
@@ -205,6 +211,7 @@ func normalizeAgentProviders(p *types.AgentProviders) *types.AgentProviders {
 		p.Agents[i].SSOStartURL = strings.TrimSpace(p.Agents[i].SSOStartURL)
 		p.Agents[i].SSOAccountID = strings.TrimSpace(p.Agents[i].SSOAccountID)
 		p.Agents[i].SSORoleName = strings.TrimSpace(p.Agents[i].SSORoleName)
+		p.Agents[i].DefaultProvider = strings.TrimSpace(p.Agents[i].DefaultProvider)
 	}
 	if p.Empty() {
 		return nil
@@ -294,21 +301,25 @@ func validateAgentMechanism(row types.AgentProvider, images map[string]string) e
 	return nil
 }
 
-// validateAgentCredentialSource holds the per-user half: per_user is bedrock_sso
-// only (the one mechanism with a per-principal capture path), and a
-// per-user bedrock_sso row MUST carry the admin-owned start URL every principal
-// signs in against — validated by the same gate the login request's own URL
-// passes, so the two cannot disagree about what an access-portal URL is.
+// validateAgentCredentialSource holds the per-user half: per_user is for the
+// lanes whose credential a member can hold as their own (types.PerUserMechanisms
+// — the captured AWS SSO session they sign in for, and the bedrock-api-key
+// bearer they store under their own principal), and a per-user bedrock_sso row
+// MUST carry the admin-owned start URL every principal signs in against —
+// validated by the same gate the login request's own URL passes, so the two
+// cannot disagree about what an access-portal URL is.
 //
-// The start URL is forbidden on every other row rather than ignored: a value
-// accepted and never read is how an admin comes to believe they pinned a portal
-// they did not.
+// The start URL and the pin stay bedrock_sso's ALONE, on a per-user row as much
+// as on any other: a per-user BEARER row has no portal to sign in against and no
+// sign-in identity to pin, so a value accepted there would be exactly the defect
+// this forbids elsewhere — an admin believing they pinned a portal nothing reads.
 func validateAgentCredentialSource(row types.AgentProvider, bedrockModel string) error {
 	perUser := row.CredentialSource == types.CredentialSourcePerUser
-	if perUser && row.Mechanism != types.AgentMechanismBedrockSSO {
-		return fmt.Errorf(agent400PerUser, row.ID, string(row.Mechanism))
+	if perUser && !types.PerUserMechanisms[row.Mechanism] {
+		return fmt.Errorf(agent400PerUser, row.ID,
+			strings.Join(types.PerUserMechanismList(), " and "), string(row.Mechanism))
 	}
-	if !perUser {
+	if !perUser || row.Mechanism != types.AgentMechanismBedrockSSO {
 		if row.SSOStartURL != "" {
 			return fmt.Errorf(agent400SSOStartURLUnused, row.ID)
 		}
@@ -375,6 +386,30 @@ func validateAgentSSOPin(row types.AgentProvider, bedrockModel string) error {
 	return nil
 }
 
+// validateDefaultProviders cross-checks the roster's defaults against the
+// model-provider block they name. It needs BOTH blocks, so each door runs it
+// once it holds the pair it is about to store: PUT /agent-providers against the
+// stored providers, PUT /model-providers against the stored roster, and PUT
+// /site-config against the document after its carry-forward.
+func validateDefaultProviders(roster *types.AgentProviders, providers *types.ModelProviders) error {
+	if roster == nil {
+		return nil
+	}
+	for _, row := range roster.Agents {
+		if row.DefaultProvider == "" {
+			continue
+		}
+		mp, ok := modelProviderByID(providers, row.DefaultProvider)
+		if !ok {
+			return fmt.Errorf(agent400DefaultUnknown, row.ID, row.DefaultProvider)
+		}
+		if !mp.Serves(row.ID) {
+			return fmt.Errorf(agent400DefaultNotServing, row.ID, row.DefaultProvider, row.ID)
+		}
+	}
+	return nil
+}
+
 // handleGetAgentProviders returns the stored agent roster.
 //
 // The response carries an ETag so a caller that means to base a later PUT on
@@ -385,7 +420,7 @@ func validateAgentSSOPin(row types.AgentProvider, bedrockModel string) error {
 func (s *Server) handleGetAgentProviders(w http.ResponseWriter, r *http.Request) {
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	block := storedAgentProviders(sc)
@@ -423,11 +458,15 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	existing, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	if !ifMatchSatisfied(r, computeETag(storedAgentProviders(existing))) {
 		writeError(w, http.StatusPreconditionFailed, agent412Stale)
+		return
+	}
+	if err := validateDefaultProviders(block, existing.ModelProviders); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid agent providers: "+err.Error())
 		return
 	}
 	candidate := existing
@@ -437,7 +476,7 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 	candidate.EffectiveScmHosts = nil
 	saved, err := s.cfg.Store.PutSiteConfig(ctx, candidate)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		writeServerError(w, r, "put site config", err)
 		return
 	}
 	savedBlock := storedAgentProviders(saved)
@@ -463,8 +502,12 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 // (harness.credential.refused) has no other way to learn what the pin was.
 func agentProviderAuditData(block types.AgentProviders) map[string]any {
 	ids, mechanisms, sources, disabled, pins := []string{}, []string{}, []string{}, []string{}, []string{}
+	var defaults []string
 	for _, row := range block.Agents {
 		ids = append(ids, row.ID)
+		if row.DefaultProvider != "" {
+			defaults = append(defaults, row.ID+":"+row.DefaultProvider)
+		}
 		if row.SSOAccountID != "" {
 			pins = append(pins, row.SSOAccountID+"/"+row.SSORoleName)
 		}
@@ -487,7 +530,7 @@ func agentProviderAuditData(block types.AgentProviders) map[string]any {
 	slices.Sort(sources)
 	slices.Sort(disabled)
 	slices.Sort(pins)
-	return map[string]any{
+	datum := map[string]any{
 		"agent_count": len(block.Agents), "ids": ids,
 		"mechanisms": mechanisms, "credential_sources": sources, "disabled": disabled,
 		// Unlike the start URL: an account id and a role name are not an
@@ -496,6 +539,13 @@ func agentProviderAuditData(block types.AgentProviders) map[string]any {
 		// answer in the trail.
 		"pins": pins,
 	}
+	// Only when a row names one, so a roster with no defaults writes the row it
+	// always wrote.
+	if len(defaults) > 0 {
+		slices.Sort(defaults)
+		datum["defaults"] = defaults
+	}
+	return datum
 }
 
 // enabledAgentProviderCount is site_config.write's count of ENABLED rows — the

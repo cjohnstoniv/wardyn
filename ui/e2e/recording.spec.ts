@@ -37,7 +37,7 @@ const RUNS_ERROR = "Couldn't load the list of runs.";
 
 async function openRecordings(page: Page): Promise<void> {
   await gotoConsole(page);
-  await navToRoute(page, "/recordings");
+  await navToRoute(page, "/admin/recordings");
   await expect(page.getByRole("heading", { name: "Recordings" })).toBeVisible();
 }
 
@@ -74,6 +74,62 @@ async function mockRecordingMeta(
     await route.fulfill({ response, json });
   });
 }
+
+// #459 — a deployment that has turned recording off states so in visible
+// text, not only a `title` tooltip: the true-empty state's own title/body,
+// and a disabled search field with its own helper line once there's a
+// (historical) library to search over.
+test.describe("Recordings — disabled-recording reasons are visible text (#459)", () => {
+  async function mockRecordingDisabled(page: Page): Promise<void> {
+    await page.route("**/healthz", async (route: Route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.components = { ...json.components, recording: { selected: "none", source: "disabled" } };
+      await route.fulfill({ response, json });
+    });
+  }
+
+  // Zero runs at all (never producible by this harness's 9 real fixtures, so
+  // the list is replaced outright) — the OTHER empty state, "None of your
+  // runs have a recording yet", keeps its own e2e pin above untouched.
+  test("the true-empty state (no runs at all) names 'No recordings yet' visibly, as a proper title + body", async ({
+    page,
+  }) => {
+    await page.route(RUNS_LIST_GLOB, async (route: Route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+    });
+    // Not openRecordings(): its own "Recordings" heading assertion is a
+    // substring match that this state's OWN heading, "No recordings yet",
+    // also satisfies — ambiguous by design once both exist on screen.
+    await gotoConsole(page);
+    await navToRoute(page, "/admin/recordings");
+
+    await expect(page.getByRole("heading", { name: "No recordings yet", exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Recordings appear once a run's terminal session is captured."),
+    ).toBeVisible();
+  });
+
+  test("with a historical library, the search field is disabled and states why beneath it", async ({ page }) => {
+    await mockRecordingDisabled(page);
+    await mockRecordingMeta(page, {
+      "e2e fixture 0": { bytes: 1, durationSec: 1 },
+      "e2e fixture 1": { bytes: 1, durationSec: 1 },
+      "e2e fixture 2": { bytes: 1, durationSec: 1 },
+      "e2e fixture 4": { bytes: 1, durationSec: 1 },
+      "e2e fixture 7": { bytes: 1, durationSec: 1 },
+    });
+    await openRecordings(page);
+
+    const search = page.getByPlaceholder(/Search tasks, repos, run IDs/);
+    await expect(search).toBeVisible();
+    await expect(search).toBeDisabled();
+    await expect(
+      page.getByText("Session recording is disabled on this deployment — there is nothing to search."),
+    ).toBeVisible();
+  });
+});
 
 test.describe("Recordings library", () => {
   test("renders the header, the run-list-alone description and a refresh action", async ({ page }) => {
@@ -125,7 +181,7 @@ test.describe("Recordings library", () => {
       }
       return route.continue();
     });
-    await navToRoute(page, "/recordings");
+    await navToRoute(page, "/admin/recordings");
 
     await expect(page.getByText(RUNS_ERROR)).toBeVisible();
     await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();
@@ -275,5 +331,168 @@ test.describe("Recordings library", () => {
       cspWasmErrors,
       `recording player logged CSP/WASM errors (CSP missing 'wasm-unsafe-eval'?):\n${cspWasmErrors.join("\n")}`,
     ).toEqual([]);
+  });
+});
+
+// #159 — the Recordings screen pages instead of stopping at LIST_LIMIT
+// (1000). This harness always seeds 9 runs (one page, whichever way you slice
+// it), so a genuine multi-page walk needs FABRICATED rows, not real ones —
+// mockPagedRuns answers GET /runs?...&limit=&offset=&include=recording_meta
+// with whatever a test hands it, keyed by the offset each page request
+// carries, and falls back to the real backend for every other call (the
+// shell's own mount fetch, the auth probe) so those stay unmocked and real.
+function fakeRun(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id,
+    created_at: "2026-06-01T00:00:00.000Z",
+    updated_at: "2026-06-01T00:00:00.000Z",
+    created_by: "op",
+    agent: "claude-code",
+    repo: "acme/widgets",
+    task: id,
+    confinement_class: "CC1",
+    state: "COMPLETED",
+    spiffe_id: `spiffe://wardyn/${id}`,
+    runner_target: "docker",
+    has_recording: true,
+    recording_bytes: 1024,
+    recording_duration_sec: 30,
+    ...overrides,
+  };
+}
+
+type PageAnswer = { status?: number; runs?: Record<string, unknown>[]; truncated?: boolean; delayMs?: number };
+
+async function mockPagedRuns(page: Page, answer: (offset: number, call: number) => PageAnswer): Promise<void> {
+  let call = 0;
+  await page.route(RUNS_LIST_GLOB, async (route: Route) => {
+    const req = route.request();
+    const url = new URL(req.url());
+    if (req.method() !== "GET" || !url.searchParams.has("offset") || url.searchParams.get("include") !== "recording_meta") {
+      return route.fallback();
+    }
+    const offset = Number(url.searchParams.get("offset") ?? "0");
+    const a = answer(offset, call++);
+    if (a.delayMs) await new Promise((r) => setTimeout(r, a.delayMs));
+    if (a.status && a.status !== 200) {
+      return route.fulfill({ status: a.status, contentType: "application/json", body: '{"error":"boom"}' });
+    }
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (a.truncated) headers["x-wardyn-truncated"] = "true";
+    await route.fulfill({ status: 200, headers, body: JSON.stringify(a.runs ?? []) });
+  });
+}
+
+test.describe("Recordings paging (#159)", () => {
+  // One page only: fewer rows than PAGE_SIZE (100), never truncated — the
+  // real 9-fixture backend already behaves exactly this way, so this is the
+  // one state in the walk that needs no fabricated rows at all.
+  test("one page — nothing more to load, no Load more control", async ({ page }) => {
+    await mockRecordingMeta(page, {
+      "e2e fixture 4": { bytes: 1, durationSec: 1 },
+      "e2e fixture 7": { bytes: 1, durationSec: 1 },
+    });
+    await openRecordings(page);
+
+    await expect(page.getByText("All 2 recordings are loaded.")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Load .* more/ })).toHaveCount(0);
+  });
+
+  test("more available — the note and the Load more text link appear, never a total", async ({ page }) => {
+    await gotoConsole(page);
+    await mockPagedRuns(page, () => ({ runs: [fakeRun("rec-a"), fakeRun("rec-b")], truncated: true }));
+    await navToRoute(page, "/admin/recordings");
+    await expect(page.getByRole("heading", { name: "Recordings" })).toBeVisible();
+
+    await expect(page.getByText("2 recordings loaded so far — there are more on the server.")).toBeVisible();
+    // #159's binding decision: the board's existing text link, not a second
+    // (outline-button) convention — same class the board's own "Load N more"
+    // renders (runs.tsx#RunsTable).
+    const loadMore = page.getByRole("button", { name: "Load 100 more" });
+    await expect(loadMore).toBeVisible();
+    await expect(loadMore).toHaveClass(/text-info/);
+    await expect(page.getByText(/of 1,000|100 of/)).toHaveCount(0);
+  });
+
+  test("loading more — the control disables and swaps its label while the next page is in flight", async ({
+    page,
+  }) => {
+    await gotoConsole(page);
+    await mockPagedRuns(page, (offset) => {
+      if (offset === 0) return { runs: [fakeRun("rec-a"), fakeRun("rec-b")], truncated: true };
+      return { runs: [fakeRun("rec-c")], truncated: false, delayMs: 600 };
+    });
+    await navToRoute(page, "/admin/recordings");
+    await page.getByRole("button", { name: "Load 100 more" }).click();
+
+    const loading = page.getByRole("button", { name: "Loading…" });
+    await expect(loading).toBeVisible();
+    await expect(loading).toBeDisabled();
+
+    // …and it resolves cleanly once the delayed page lands.
+    await expect(page.getByText("All 3 recordings are loaded.")).toBeVisible();
+  });
+
+  test("last page — once the final page lands, Load more is replaced by All N loaded", async ({ page }) => {
+    await gotoConsole(page);
+    await mockPagedRuns(page, (offset) => {
+      if (offset === 0) return { runs: [fakeRun("rec-a"), fakeRun("rec-b")], truncated: true };
+      return { runs: [fakeRun("rec-c")], truncated: false };
+    });
+    await navToRoute(page, "/admin/recordings");
+    await page.getByRole("button", { name: "Load 100 more" }).click();
+
+    await expect(page.getByText("All 3 recordings are loaded.")).toBeVisible();
+    await expect(page.getByRole("button", { name: /Load .* more/ })).toHaveCount(0);
+  });
+
+  test("error mid-page — Retry recovers and keeps what already loaded", async ({ page }) => {
+    await gotoConsole(page);
+    let secondCallFails = true;
+    await mockPagedRuns(page, (offset) => {
+      if (offset === 0) return { runs: [fakeRun("rec-a"), fakeRun("rec-b")], truncated: true };
+      if (secondCallFails) {
+        secondCallFails = false;
+        return { status: 500 };
+      }
+      return { runs: [fakeRun("rec-c")], truncated: false };
+    });
+    await navToRoute(page, "/admin/recordings");
+    await page.getByRole("button", { name: "Load 100 more" }).click();
+
+    await expect(page.getByText("Couldn't load more recordings")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Wardyn stopped answering partway through. The 2 already loaded are still here — retry to continue from where it stopped.",
+      ),
+    ).toBeVisible();
+    // What was already loaded stays on screen through the failure.
+    await expect(page.getByText("rec-a")).toBeVisible();
+    await expect(page.getByText("rec-b")).toBeVisible();
+
+    await page.getByRole("button", { name: "Retry" }).click();
+    await expect(page.getByText("Couldn't load more recordings")).toHaveCount(0);
+    await expect(page.getByText("All 3 recordings are loaded.")).toBeVisible();
+  });
+
+  test("filters applied across pages — the count carries the load-more caveat", async ({ page }) => {
+    await gotoConsole(page);
+    const rows = [
+      fakeRun("rec-alpha", { task: "alpha task" }),
+      fakeRun("rec-beta", { task: "beta task" }),
+      fakeRun("rec-gamma", { task: "gamma task" }),
+      fakeRun("rec-delta", { task: "delta task" }),
+      fakeRun("rec-echo", { task: "search-me task" }),
+    ];
+    await mockPagedRuns(page, () => ({ runs: rows, truncated: true }));
+    await navToRoute(page, "/admin/recordings");
+    await expect(page.getByRole("heading", { name: "Recordings" })).toBeVisible();
+
+    await page.getByPlaceholder(/Search tasks, repos, run IDs/).fill("search-me");
+    await expect(
+      page.getByText(
+        "Showing 1 of 5 recordings · Filters cover the 5 recordings loaded so far. Load more to search further back.",
+      ),
+    ).toBeVisible();
   });
 });

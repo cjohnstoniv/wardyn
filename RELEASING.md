@@ -12,20 +12,27 @@ document is that process, written down.
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to
   `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag. The gate is the
-  `.github/workflows/ci.yml` job list: `build`, `diagrams`, `ui`, `ui-e2e`,
+  `.github/workflows/ci.yml` job list: `changes`, `go`
+  (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e`,
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
-  `envbuild-integration`, `test-pg`, `screenshots-fresh` (PR-only), `gates`
+  `envbuild-integration`, `test-pg`, `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
-  `license-headers`, `gitleaks`), `dco`, `desktop-envelope`, `buildx-smoke`,
+  `license-headers`, `gitleaks`), `dco`, `desktop-envelope`,
   `trivy`, and **`notices`** — the copyleft / unreviewed-dependency gate, which
   was missing from this list entirely. `sbom-stub` used to be named here and is
   **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*), so a
   maintainer following this list literally was waiting on a phantom job while
   skipping the one that catches a GPL regression. Two more publish
   workflows are not part of this job list at all (see "Container images"
-  below): `publish-image` (`.github/workflows/publish-image.yml`, push to
-  `main` only) and `release` (`.github/workflows/release.yml`, triggered by
-  step 5's tag push itself, so it cannot be a prerequisite of tagging).
+  below): `publish-image` (`.github/workflows/publish-image.yml`, after CI
+  passes on a push to `main`) and `release` (`.github/workflows/release.yml`,
+  triggered by step 5's tag push itself, so it cannot be a prerequisite of
+  tagging).
+- The multi-arch build is green on that commit too. It is `nightly.yml`'s
+  `buildx-smoke` (checks named `multi-arch build (…)`), not a `ci.yml` job, so
+  a pull request never runs it: read the latest nightly, or run it on the
+  branch you tag with `gh workflow run nightly.yml --ref release/X.Y`. It is
+  the only build of the arm64 half before `release.yml` publishes it.
 
 Run the local gate first:
 
@@ -40,19 +47,23 @@ The live-service jobs are outside `make release-check`: `conformance`
 from that CI job), `envbuild-integration` (`make test-envbuild-integration`),
 `helm-install-test` (`make helm-install-test`, also needs a local `kind`
 cluster), the Playwright `ui-e2e` job, `desktop-envelope` (compose build +
-up), `buildx-smoke`, and `trivy` (both docker builds). Their checks can run
+up), `trivy` (docker builds) and nightly's `buildx-smoke`. Their checks can run
 locally with the required services; follow `.github/workflows/ci.yml` for
 image builds, cluster setup, and environment variables. Run the Playwright
 lane with `scripts/run-ui-e2e.sh`. Without `WARDYN_TEST_PG` the Postgres
 suite prints a loud SKIPPED line.
 
-Screenshot freshness is CI-only for a different reason: `ci.yml`'s
-`screenshots-fresh` job compares the PR diff, so it can tell "you changed the
-console (anything under `ui/src/app` or `ui/src/styles`) without re-shooting
-`docs/img`" — a local commit-timestamp test cannot, and cannot be cleared at all
-once `make screenshots` re-renders the PNGs byte-identically. Re-shoot with
-`make screenshots` when you touch the console, or apply the `no-screenshots`
-label (and push again) when the change is provably invisible in the two shots.
+Before tagging, run `scripts/stress-proxy-cgroup.sh` (needs docker). It sends
+the egress proxy's worst inspection load through it under the sidecar's 256
+MiB memory cap and fails on a refused request or an OOM kill.
+
+Screenshot freshness is advisory and CI-only. On a pull request, `ci.yml`'s
+`diagrams` job compares the PR diff and adds a warning annotation when the
+console (anything under `ui/src/app` or `ui/src/styles`) changed and `docs/img`
+did not. It never fails a check, because many console changes rightly leave
+both shots alone; a local commit-timestamp test could not tell the difference,
+and could not be cleared once `make screenshots` re-renders the PNGs
+byte-identically. Re-shoot with `make screenshots` when a shot shows the change.
 
 `release-check` pushes nothing and tags nothing. A green local run means "no local
 reason not to tag", not "CI is green" — check the actual CI run on the commit
@@ -88,7 +99,25 @@ flowchart LR
    commit: `release/X.Y` is cut from it for a new minor, or fast-forwarded to it
    for a patch, and the tag goes on that branch.
 5. **Point releases.** A fix is a PR to `main`, cherry-picked onto
-   `release/X.Y`. The branch never takes a feature.
+   `release/X.Y`. The branch never takes a feature. Once `main` carries the
+   next minor, fast-forwarding `release/X.Y` would ship all of it, so a patch
+   takes this path instead:
+   1. Each fix is an issue labelled `backport/X.Y`, fixed by a PR into `main`.
+   2. One backport PR into `release/X.Y` cherry-picks those merge commits with
+      `git cherry-pick -x -m 1 <merge>`, so each commit names its source.
+   3. The release PR (steps 1 and 1b below) targets `release/X.Y`, and the tag
+      goes on that branch.
+   4. A follow-up PR into `main` moves the shipped entries out of
+      `[Unreleased]` into the dated `X.Y.Z` section and bumps `main`'s version
+      strings to match, so `TestVersionMatchesChangelog` stays true there.
+
+   Before tagging, prove nothing from `main` came along:
+
+   ```sh
+   git log --oneline vX.Y.(Z-1)..release/X.Y   # only cherry-picks + the release commit
+   git diff --name-only vX.Y.(Z-1) release/X.Y # only the files the issues name
+   git diff --quiet vX.Y.(Z-1) release/X.Y -- internal/store/migrations ui/src go.mod go.sum
+   ```
 
 **Evidence is certified against a SHA.** A walk, a conformance run or a gate
 proves the commit it ran on. Any commit after it — a fix, a rebase, the release
@@ -134,7 +163,7 @@ another maintainer. Use the chosen version throughout this checklist.
    job (docs/CI.md "Pin the wardyn checkout"). **`docs/DESKTOP.md`'s real-hardware
    smoke recipe** also pins both image tags by hand (`WARDYN_WARDYND_IMAGE`,
    `WARDYN_PROXY_IMAGE` — the desktop tier's MDM config has no `$WARDYN_VERSION`
-   to interpolate; X1a-F10 found this stale for a whole release cycle).
+   to interpolate; a past review found this stale for a whole release cycle).
    `scripts/test-claims-match-code.sh` fails if either pin drifts from
    `internal/version/version.go`.
    `scripts/test-install-sh.sh` asserts the two agree with each other, but it
@@ -147,15 +176,16 @@ another maintainer. Use the chosen version throughout this checklist.
    commit** before tagging.
 
    **Also add a `ROADMAP.md` Shipped row for the release you are cutting**
-   (X1c-F2 found the Shipped table stuck on "Built, awaiting release" for
-   three released versions in a row) — a new row plus flipping that release's
-   own `### What vX.Y shipped` intro from "Built, awaiting release" to
-   "Shipped as `vX.Y.Z`", pointing at the CHANGELOG's now-dated entry instead
-   of `[Unreleased]`.
+   (a past review found the Shipped table stuck on "Built, awaiting release" for
+   three released versions in a row) — a new row in the `## Shipped` table,
+   its Status cell reading "**Shipped (pre-alpha)** — `vX.Y.Z`, <date> (see
+   [CHANGELOG.md](CHANGELOG.md))", pointing at the CHANGELOG's now-dated entry
+   instead of `[Unreleased]`. ROADMAP.md carries no per-version narrative to
+   flip any more — CHANGELOG.md is the only per-release detail.
 
    **Also regenerate `docs/TEST-GAPS.md`: `make test-gaps`** (needs the union
    coverage profile `make ci`/`cover-check` already produced this run) —
-   X1c-F13/D-7 found the generator gained a Kubernetes-gated bucket with
+   a past review found the generator gained a Kubernetes-gated bucket with
    nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
    `make test-gaps` is a standalone target, not in `make ci`.
 
@@ -180,6 +210,22 @@ another maintainer. Use the chosen version throughout this checklist.
    exception rather than as a rule change, and in the
    [CHANGELOG.md](CHANGELOG.md) section for 0.7.2 (`[Unreleased]` until step 1 of
    this checklist renames it). The rule above stands for every later line.
+
+   **Exception, by maintainer decision (2026-09-22):** 0.7.10 is developed on
+   `feature/0.7.10`, cut from `release/0.7`, and merged into `release/0.7` by
+   one release pull request, rather than landing on `main` first and being
+   cherry-picked — `main` carries a large amount of unrelated in-flight work,
+   so writing the change against `main` first and cherry-picking it onto
+   `release/0.7` would mean authoring it twice, against two different code
+   bases. It is forward-ported to `main` after that pull request merges. The
+   exception covers this patch line only; the rule above stands for every
+   later line.
+
+   The cut runs one guard before tagging: `git diff --quiet v0.7.9
+   release/0.7 -- internal/db/migrations go.mod go.sum` must be clean, and
+   any `ui/src` change is limited to the file list named in the release pull
+   request. `release/0.7` carries no branch protection, so that release pull
+   request is reviewed before merge rather than gated by required checks.
 4. **Tag the prepared release commit** on `release/X.Y`: `git tag vX.Y.Z`.
    Use the same `X.Y.Z` committed in step 2; do not recompute a patch number
    here. The version and CHANGELOG updates must already be committed, with
@@ -275,23 +321,36 @@ gh api -X PATCH repos/cjohnstoniv/wardyn/branches/main/protection/required_statu
     "gates (licenses)", "gates (license-headers)",
     "notices",
     "trivy (wardynd)", "trivy (wardyn-proxy)", "trivy (agent-base)",
-    "trivy (agent-codex-cli)", "trivy (agent-aws-sso)"
+    "trivy (agent-codex-cli)", "trivy (agent-aws-sso)",
+    "trivy (agent-vscode)", "trivy (agent-novnc)"
   ]
 }
 JSON
 ```
 
-`notices` and the five `trivy` cells are in that list because the Prerequisites
+`notices` and the seven `trivy` cells are in that list because the Prerequisites
 section above already calls them gates and they are **not** conditional — both
 report on every pull request, so both are eligible contexts. Until the PATCH
 above is applied they are advisory only: `notices` is the copyleft /
-unreviewed-dependency gate, and `trivy` is the only CVE scan of the five images
+unreviewed-dependency gate, and `trivy` is the only CVE scan of the seven images
 a release publishes, so with either red a PR still merges. `trivy` is a matrix
 job, so it reports one context per image cell — adding an image to
 `.github/workflows/ci.yml`'s `trivy` matrix means adding its context here **and**
 re-running the PATCH, or that image merges unscanned.
 `scripts/test-claims-match-code.sh` (C6) fails if this list and that matrix drift
 apart.
+
+**#141 (`agent-vscode`/`agent-novnc` join the publish matrix) is exactly this
+case, and it is not yet done.** This document names `trivy (agent-vscode)` and
+`trivy (agent-novnc)` as required contexts, but the live branch protection
+still lists only the prior five — the PATCH above has to be re-run by the
+owner (never by an agent) before either context is actually required, or both
+merge unscanned in the meantime. Two more owner steps belong with it, both
+after the FIRST real tag that runs `images-ui-sandbox`: confirm
+`ghcr.io/cjohnstoniv/agent-vscode` and `ghcr.io/cjohnstoniv/agent-novnc` are
+PUBLIC packages (a newly-created GHCR package can default to private, which
+silently breaks every documented pull), and re-check this section's PATCH
+body still matches `ci.yml`'s actual `trivy` matrix at that point.
 
 Read it back with
 `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`.
@@ -301,15 +360,19 @@ the five supply-chain gates are `gates (...)` rather than bare names.
 A job conditional on `push`, a schedule, or a path filter must **not** be a required
 context: GitHub does not treat a never-reported required context as passing, so
 the PR sits at "Expected — waiting for status to be reported" and cannot be
-merged. `screenshots-fresh` (PR-only) is the live example. This paragraph used
-to cite `sbom-stub`, which no longer exists.
+merged. Every `nightly.yml` job is such a job, `buildx-smoke` (the multi-arch
+build) included. `ci.yml`'s change classifier (#932) never skips a required job:
+one whose work a change cannot affect still runs, skips its steps and reports
+success (docs/CI.md, "Incremental CI"). A job's check name is its `name:` when it sets one, otherwise
+its job id, so renaming either is the same protection change as deleting the
+job.
 
 ## Container images
 
 Two workflows publish images, on two different triggers — neither overlaps
 the other:
 
-- **Continuous (every push to `main`).**
+- **Continuous (every push to `main` that passes CI).**
   `.github/workflows/publish-image.yml` builds and pushes `wardynd` only, to
   `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`). **Signed
   (keyless, by digest) but not SBOM- or provenance-attested**, and under the
@@ -320,11 +383,13 @@ the other:
   can. The compose stack still always builds from source (see
   [docs/CI.md](docs/CI.md)).
 - **Release (every `vX.Y.Z` tag).** `.github/workflows/release.yml` builds and
-  pushes all FIVE images a release ships —
+  pushes all SEVEN images a release ships —
   `ghcr.io/cjohnstoniv/wardynd` (built with both runner substrates,
   `GO_BUILD_TAGS=docker,k8s`), `ghcr.io/cjohnstoniv/wardyn-proxy`,
   `ghcr.io/cjohnstoniv/agent-base`, `ghcr.io/cjohnstoniv/agent-codex-cli`,
-  `ghcr.io/cjohnstoniv/agent-aws-sso`
+  `ghcr.io/cjohnstoniv/agent-aws-sso`, `ghcr.io/cjohnstoniv/agent-vscode`,
+  `ghcr.io/cjohnstoniv/agent-novnc` (the last two built from the `agent-base`
+  ref this same run pushed — see `release.yml`'s `images-ui-sandbox` job)
   — each tagged with the bare semver (e.g. `0.6.0`, matching `Chart.yaml`'s
   `appVersion`) and **cosign-signed (keyless)** by digest. Step 5's tag push
   is what triggers it. It also attests a per-digest CycloneDX SBOM and build
@@ -356,7 +421,7 @@ the other:
   # 0.6.2 and this loop errored on it every release (an interactive paste with
   # no `set -e` just carries on), while agent-base — the image that IS published
   # — went unverified.
-  for img in wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso; do
+  for img in wardynd wardyn-proxy agent-base agent-codex-cli agent-aws-sso agent-vscode agent-novnc; do
     ref="ghcr.io/cjohnstoniv/$img:$TAG"
     # 1. the tag resolves to an index listing BOTH platforms
     docker buildx imagetools inspect "$ref"

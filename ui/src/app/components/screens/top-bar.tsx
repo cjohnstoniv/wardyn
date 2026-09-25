@@ -1,0 +1,228 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// Extracted from app-shell.tsx (the seam docs/design/*.md already names) to
+// keep that file under the size gate. TopBar owns the header row's identity
+// chrome, theme toggle, New run button and account menu; MobileNav, ShellMeta
+// and the isCustom* trust-domain/identity-provider checks stay in
+// app-shell.tsx, which SidebarNav also relies on for its own trust-domain
+// panel.
+import { Link, useNavigate } from "react-router-dom";
+import { ChevronsUpDown, Fingerprint, LogOut, Moon, Plus, Sun } from "lucide-react";
+import { WardynWordmark } from "../wardyn/logo";
+import { Chip } from "../wardyn/primitives";
+import { useTheme } from "../wardyn/theme-provider";
+import { useGuardedNavClick } from "../../lib/use-unsaved-guard";
+import { Button } from "../ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
+import { useShellView, ViewSwitch } from "../wardyn/view-switch";
+import { viewHome } from "../wardyn/console-view";
+import {
+  isCustomIdentityProvider,
+  isCustomTrustDomain,
+  MobileNav,
+  type ShellMeta,
+} from "./app-shell";
+
+function initials(principal: string): string {
+  const base = principal.split("@")[0] || principal;
+  // Whitespace joins the separators (0.7.1): the value may now be an IdP
+  // display name ("Alice Smith" → AS), not only an email local-part.
+  const parts = base.split(/[\s.\-_]+/).filter(Boolean);
+  const s = (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "");
+  return (s || base.slice(0, 2)).toUpperCase();
+}
+
+// Exported (like MobileNav in app-shell.tsx) so a unit test can drive the account menu
+// directly — SidebarNav's own member tests don't touch this at all.
+export function TopBar({
+  onSignOut,
+  meta,
+  pendingApprovals,
+  attentionCount,
+  onNewRun,
+}: {
+  onSignOut: () => void;
+  meta: ShellMeta;
+  pendingApprovals: number;
+  attentionCount: number;
+  onNewRun: () => void;
+}) {
+  // What the header calls "you": the IdP's display name, else the session
+  // email, else the principal itself (an admin token or local mode has
+  // neither). Display only — usePrincipal() still reads meta.principal.
+  const display = meta.name || meta.email || meta.principal;
+  const { theme, toggle } = useTheme();
+  const { access, view, hasSwitch } = useShellView(meta);
+  // #460 review — every plain <Link> in this header can navigate away from a
+  // dirty editor (app-shell.tsx#SidebarNav's own guardedClick precedent).
+  const navigate = useNavigate();
+  const guardedClick = useGuardedNavClick(navigate);
+  return (
+    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
+      <MobileNav
+        pendingApprovals={pendingApprovals}
+        attentionCount={attentionCount}
+        meta={meta}
+      />
+      <Link
+        to={viewHome(view)}
+        onClick={guardedClick(viewHome(view))}
+        className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+      >
+        {/* F7-F2: icon-only below sm, so New run + the user menu stay onscreen. */}
+        <WardynWordmark compact="sm" />
+      </Link>
+      {/* Beside the wordmark (packet M-A QM-1): which console you are in is the
+          first thing read on every page. Below sm it moves into the nav sheet. */}
+      {hasSwitch && <ViewSwitch access={access} view={view} className="hidden sm:flex" />}
+
+      {/* Shown ONLY when non-default. A default install is always
+          wardyn.local / embedded, so these chips would be four constants nobody
+          can act on, occupying the most valuable strip on every screen — while
+          the footer panel still states the trust domain for anyone who wants it.
+          An external SPIRE provider or a custom trust domain IS worth a reader's
+          attention, and only then do they appear. */}
+      {(isCustomTrustDomain(meta.trustDomain) ||
+        isCustomIdentityProvider(meta.identityProvider)) && (
+        <div className="ml-2 hidden items-center gap-2 lg:flex">
+          {isCustomTrustDomain(meta.trustDomain) && (
+            <EnvIndicator trustDomain={meta.trustDomain} />
+          )}
+          {isCustomIdentityProvider(meta.identityProvider) && (
+            <Chip tone="neutral" className="font-mono">
+              <Fingerprint className="size-3" />
+              identity: {meta.identityProvider}
+            </Chip>
+          )}
+        </div>
+      )}
+
+      {/* F7-F2: min-w-0 lets this cluster actually shrink instead of forcing
+          the header wider than the viewport (no flex-wrap/height change). */}
+      <div className="ml-auto flex min-w-0 items-center gap-1.5">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={toggle}
+          aria-label="Toggle theme"
+        >
+          {theme === "dark" ? (
+            <Sun className="size-4" />
+          ) : (
+            <Moon className="size-4" />
+          )}
+        </Button>
+
+        {/* The Admin view never launches (§3's fourth cue). */}
+        {view === "user" && (
+          <Button onClick={onNewRun} size="sm" aria-label="New run">
+            <Plus className="size-4" /> <span className="hidden sm:inline">New run</span>
+          </Button>
+        )}
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            {/* The shared Button (not a raw <button>), matching
+                every sibling header control (theme toggle above, mobile nav
+                trigger) — its focus-visible ring is what keyboard focus falls
+                back to instead of the bare unthemed browser outline. */}
+            <Button
+              variant="ghost"
+              className="h-auto gap-2 rounded-md px-1.5 py-1"
+            >
+              <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs text-foreground">
+                {initials(display)}
+              </span>
+              <span className="hidden max-w-48 truncate text-sm sm:block">
+                {display.split("@")[0]}
+              </span>
+              <ChevronsUpDown className="size-3.5 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>
+              <div className="flex items-center gap-1.5">
+                <span className="min-w-0 truncate text-xs" title={display}>
+                  {display}
+                </span>
+                {/* Role is a fact, not an alert (prompt-v2): a quiet chip, no
+                    banner, no callout — admin is unchanged, member just says so.
+                    Gated on meta.method like its sibling line below: /me hasn't
+                    resolved (or failed) while method is still "" — the fail-open
+                    role default is "admin" (operator-context.tsx), which would
+                    otherwise flash ADMIN next to a still-"unknown" principal. */}
+                {meta.method && (
+                  <Chip
+                    tone="neutral"
+                    className="shrink-0 uppercase tracking-wide"
+                  >
+                    {meta.role}
+                  </Chip>
+                )}
+              </div>
+              {/* The sign-in subject, kept where admins are told to copy it from
+                  (OPERATIONS.md: paste the sign-in subject) — only when the
+                  line above is not already showing it. */}
+              {display !== meta.principal && (
+                <div
+                  className="min-w-0 truncate font-mono text-xs text-muted-foreground"
+                  title={meta.principal}
+                >
+                  {meta.principal}
+                </div>
+              )}
+              <div className="mt-0.5 text-meta text-muted-foreground">
+                {meta.method === "sso"
+                  ? "signed in via SSO"
+                  : meta.method === "token"
+                    ? "admin token"
+                    : meta.method === "local"
+                      ? "local mode — no login on this install"
+                      : ""}
+              </div>
+            </DropdownMenuLabel>
+            {/* Slimmed to identity and Sign out (packet M-A): Getting started,
+                Setup, Settings and Your account live in the sidebar, the view
+                is the switch, and Preview as a new user is on the Permissions
+                header. */}
+            {/* Local mode has no session to sign out of — humanOrAdminAuth
+                (internal/api/http.go) bypasses auth entirely, so "Sign out" would drop
+                the client to a SignIn screen whose admin-token field is unchecked
+                (probeAuth trivially re-succeeds against the auth-bypassed API on
+                whatever's typed). Hide the no-op action instead of offering fake auth. */}
+            {meta.method !== "local" && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={onSignOut}
+                  className="text-danger focus:text-danger"
+                >
+                  <LogOut className="size-4" /> Sign out
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </header>
+  );
+}
+
+function EnvIndicator({ trustDomain }: { trustDomain: string }) {
+  return (
+    <span className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2 py-1 text-xs">
+      <span className="size-1.5 rounded-full bg-success" />
+      <span className="font-mono text-muted-foreground">{trustDomain}</span>
+    </span>
+  );
+}

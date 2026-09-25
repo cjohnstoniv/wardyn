@@ -28,6 +28,8 @@ export interface UseLaunchParams {
   ccTouched: boolean;
   /** The post-parse union of the authored spec with this run's own selections, or null while the spec doesn't parse. */
   merged: ReturnType<typeof mergeRunSelections> | null;
+  /** Called from Launch's catch block with the caught error (#386's Azure DevOps launch door). */
+  onLaunchError?: (e: unknown) => void;
 }
 
 export interface UseLaunchResult {
@@ -35,6 +37,9 @@ export interface UseLaunchResult {
   launchDisabled: boolean;
   launchSpinning: boolean;
   error: string | null;
+  /** Bumped on every failed launch, including a repeat of the same message —
+   *  so the rail's alert region remounts and gets re-announced (#459). */
+  errorSeq: number;
   credentialRefused: boolean;
   launchWarnings: string[];
   launchedRunId: string | null;
@@ -42,6 +47,8 @@ export interface UseLaunchResult {
   preflighting: boolean;
   preflightResult: PreflightResult | null;
   preflightError: string | null;
+  /** Same remount purpose as errorSeq, for the preflight alert. */
+  preflightErrorSeq: number;
   /** Whether preflightResult/preflightError are graded from the request buildRunInput would send RIGHT NOW. */
   preflightIsCurrent: boolean;
   preflight: () => Promise<void>;
@@ -52,7 +59,7 @@ export interface UseLaunchResult {
 // `ccTouched`/`merged` are the screen's own form state, read here rather than
 // duplicated: buildRunInput composes the wire body from exactly what the form
 // shows, so the screen and this hook can never author two different requests.
-export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: UseLaunchParams): UseLaunchResult {
+export function useLaunch({ state, workspaces, useSaved, ccTouched, merged, onLaunchError }: UseLaunchParams): UseLaunchResult {
   const navigate = useNavigate();
 
   const [launching, setLaunching] = React.useState(false);
@@ -60,6 +67,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
   // spinner once the request has been running long enough to need one.
   const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
+  const [errorSeq, setErrorSeq] = React.useState(0);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
   // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
   const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
@@ -72,6 +80,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
   const [preflighting, setPreflighting] = React.useState(false);
   const [preflightResult, setPreflightResult] = React.useState<PreflightResult | null>(null);
   const [preflightError, setPreflightError] = React.useState<string | null>(null);
+  const [preflightErrorSeq, setPreflightErrorSeq] = React.useState(0);
   // The request body the verdict on screen was graded FROM. A preflight result
   // is a statement about one body, and the rail renders it directly above
   // Launch as "the last thing read before committing" — so the moment the body
@@ -128,11 +137,13 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
         setLaunchedRunId(created.id);
         setLaunching(false); // nothing reads it once onOpenRun is set.
       } else {
-        navigate(`/runs/${encodeURIComponent(created.id)}`);
+        void navigate(`/runs/${encodeURIComponent(created.id)}`);
       }
     } catch (e) {
       setError(getErrorMessage(e) || "Failed to launch run.");
+      setErrorSeq((n) => n + 1);
       setCredentialRefused(isCredentialRefusal(e));
+      onLaunchError?.(e);
       setLaunching(false);
     }
   };
@@ -172,6 +183,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
       setPreflightResult(await runsApi.preflightRun(body));
     } catch (e) {
       setPreflightError(getErrorMessage(e) || "Preflight failed.");
+      setPreflightErrorSeq((n) => n + 1);
     } finally {
       setPreflightedBody(key);
       setPreflighting(false);
@@ -183,6 +195,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
     launchDisabled,
     launchSpinning,
     error,
+    errorSeq,
     credentialRefused,
     launchWarnings,
     launchedRunId,
@@ -190,6 +203,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
     preflighting,
     preflightResult,
     preflightError,
+    preflightErrorSeq,
     preflightIsCurrent,
     preflight,
   };

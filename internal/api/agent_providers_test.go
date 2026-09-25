@@ -90,10 +90,28 @@ func TestValidateAgentProviders(t *testing.T) {
 			agentRow("claude-code", types.AgentMechanismAnthropicAPIKey)),
 			want: "is not unique"},
 
-		{name: "per_user off bedrock_sso", block: agentBlock(types.AgentProvider{
+		// per_user names the two lanes whose credential the member actually
+		// HOLDS: the AWS SSO session they sign in for, and the bedrock-api-key
+		// they store under their own principal. bedrock_env is the daemon's own
+		// environment and bedrock_static the operator's resident SigV4 keys —
+		// operator-namespace reads both, so declaring either per_user would
+		// promise one credential per person and serve the admin's.
+		{name: "per_user off the two per-principal lanes", block: agentBlock(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockEnv,
+			CredentialSource: types.CredentialSourcePerUser,
+		}), want: "per_user is available for bedrock_bearer and bedrock_sso only, not bedrock_env"},
+		{name: "per_user bedrock_bearer is the lane #153 opened", block: agentBlock(types.AgentProvider{
 			ID: "claude-code", Mechanism: types.AgentMechanismBedrockBearer,
 			CredentialSource: types.CredentialSourcePerUser,
-		}), want: "per_user is available for bedrock_sso only"},
+		})},
+		// The portal and the pin stay bedrock_sso's ALONE. A per-user BEARER row
+		// has no sign-in, so a start URL accepted there is the same defect the
+		// shared-row case below names: an admin believing they pinned a portal
+		// nothing reads.
+		{name: "a start URL on a per_user bearer row is refused, not ignored", block: agentBlock(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockBearer,
+			CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
+		}), want: "sso_start_url applies only when"},
 		{name: "per_user with no start URL", block: agentBlock(types.AgentProvider{
 			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
 			CredentialSource: types.CredentialSourcePerUser,
@@ -231,7 +249,7 @@ func TestAgentProvidersPut(t *testing.T) {
 		t.Error("PUT echoes no ETag")
 	}
 
-	// THE AUDIT DATUM, and the one field that must NEVER be in it.
+	// The audit datum, and the one field that must never be in it.
 	var writes []types.AuditEvent
 	for _, ev := range audit.events {
 		if ev.Action == "agent_provider.write" {
@@ -678,7 +696,7 @@ func TestRedactSetupStatusKeepsTheRoster(t *testing.T) {
 			CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
 		}),
 	}, nil)}
-	got := redactSetupStatusForMember(st, false)
+	got := redactSetupStatusForMember(st, false, false)
 	if len(got.Harnesses) != len(harnessCatalog) {
 		t.Fatalf("a member sees %d harness rows, want all %d", len(got.Harnesses), len(harnessCatalog))
 	}
@@ -692,7 +710,7 @@ func TestRedactSetupStatusKeepsTheRoster(t *testing.T) {
 	}
 }
 
-// ── finding 1: the roster's account/role pin ────────────────────────────────
+// finding 1: the roster's account/role pin
 //
 // Ask 1 of the finding, and the one the operator asked for first: "let the
 // admin pin account + role on the roster row, beside sso_start_url, owned the

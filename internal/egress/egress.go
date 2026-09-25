@@ -63,6 +63,11 @@ type DecisionLog struct {
 	// full unredacted text stays on the sidecar's own slog.Warn line and never
 	// rides the wire twice. Empty on every decision that is not a dial-shaped
 	// refusal.
+	//
+	// builtin:upstream-protocol-mismatch is the one exception to "stage plus
+	// underlying error": that round trip COMPLETED, so Cause there is a FIXED
+	// sentence (docs/AUDIT-ACTIONS.md's own row for that source) naming the
+	// protocol answered, never a stage prefix.
 	Cause string `json:"cause,omitempty"`
 	// Via names the CLASS of hop a dial-shaped refusal attempted —
 	// "upstream-proxy" or "direct" — and NEVER an address: an address is
@@ -70,6 +75,12 @@ type DecisionLog struct {
 	// must not reopen that hole beside it. Empty on every decision that is not
 	// a dial-shaped refusal.
 	Via string `json:"via,omitempty"`
+	// UpstreamFault names the AWS error class when Bedrock's data plane refused
+	// a call the proxy ALLOWED and relayed (AccessDeniedException,
+	// ThrottlingException), or "recovered" on the first clean model call after
+	// such a refusal. Empty everywhere else. It is read off the response status
+	// and x-amzn-ErrorType header only — never a body.
+	UpstreamFault string `json:"upstream_fault,omitempty"`
 	// Scan, when non-nil, carries the OUTBOUND content-inspection summary for an
 	// LLM route decision (off-by-default; nil when inspection is disabled). It
 	// makes per-decision coverage honest: a tunneled-opaque LLM CONNECT is
@@ -103,7 +114,7 @@ type ScanSummary struct {
 	SkipReason string        `json:"skip_reason,omitempty"` // "span_oversize" | "parse_error" | "sidecar_error" | "body_oversize" | "uninspected_channel" | "findings_capped"
 	Findings   []ScanFinding `json:"findings,omitempty"`
 	// FindingsCapped and FindingsPastCap put the per-request findings cap ON
-	// THE WIRE (F075).
+	// THE WIRE.
 	//
 	// Findings above carries at most the cap's worth of rows, so a truncated
 	// scan would otherwise be indistinguishable in the audit from one that
@@ -145,7 +156,7 @@ type InjectionRule struct {
 	// Format wraps the secret, e.g. "Bearer %s".
 	Format string `json:"format"`
 	// RequireTLS declares that this rule's credential may ride ONLY a transport
-	// the proxy runs TLS on (F110's residual half). It is the operator's
+	// the proxy runs TLS on. It is the operator's
 	// transport intent, which no other field could carry: injectableTransport
 	// (internal/egress/proxy/inject.go) can rule out cleartext to :443 and to a
 	// host the proxy itself only ever speaks TLS to, but a plaintext connector on

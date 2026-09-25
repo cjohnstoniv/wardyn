@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -470,13 +471,29 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 // widget's only join key), and it is absent — not empty — when nothing narrowed.
 func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 	warns := []string{"resources capped to operator maximum", `dropped 1 egress domain(s) not in operator allowlist: ["evil.example"]`}
-	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", warns)
+	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", warns, types.AutonomyResolution{}, false)
 	got, ok := data["clamp_warnings"].([]string)
 	if !ok || len(got) != len(warns) || got[0] != warns[0] {
 		t.Fatalf("clamp_warnings = %#v, want %#v", data["clamp_warnings"], warns)
 	}
-	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", nil)["clamp_warnings"]; present {
+	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", nil, types.AutonomyResolution{}, false)["clamp_warnings"]; present {
 		t.Error("clamp_warnings must be absent when launch narrowed nothing")
+	}
+}
+
+// TestCreateRunAuditData_CredentialConfinement is #150: the closed-vocabulary
+// credential_confinement field is present, with the ONE value it carries
+// today, exactly when the caller says this run's SSO-delivered credential is
+// below the confinement floor — and absent otherwise, never published as a
+// false negative.
+func TestCreateRunAuditData_CredentialConfinement(t *testing.T) {
+	req := createRunRequest{Agent: "claude-code"}
+	data := createRunAuditData(req, nil, types.CC1, "", "jti", nil, types.AutonomyResolution{}, true)
+	if got := data["credential_confinement"]; got != credentialConfinementBelowFloor {
+		t.Errorf("credential_confinement = %v, want %q", got, credentialConfinementBelowFloor)
+	}
+	if _, present := createRunAuditData(req, nil, types.CC3, "", "jti", nil, types.AutonomyResolution{}, false)["credential_confinement"]; present {
+		t.Error("credential_confinement must be absent when the caller reports no below-floor advisory")
 	}
 }
 
@@ -487,10 +504,10 @@ func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 // distinction survives (docs/AUDIT-ACTIONS.md's run.create row).
 func TestCreateRunAuditData_ConfinementSource(t *testing.T) {
 	req := createRunRequest{Agent: "claude-code"}
-	if got := createRunAuditData(req, nil, types.CC1, "", "jti", nil)["confinement_source"]; got != "defaulted" {
+	if got := createRunAuditData(req, nil, types.CC1, "", "jti", nil, types.AutonomyResolution{}, false)["confinement_source"]; got != "defaulted" {
 		t.Errorf("confinement_source = %v, want \"defaulted\" for an empty reqCC", got)
 	}
-	if got := createRunAuditData(req, nil, types.CC1, types.CC1, "jti", nil)["confinement_source"]; got != "requested" {
+	if got := createRunAuditData(req, nil, types.CC1, types.CC1, "jti", nil, types.AutonomyResolution{}, false)["confinement_source"]; got != "requested" {
 		t.Errorf("confinement_source = %v, want \"requested\" when the caller named CC1 explicitly", got)
 	}
 }
@@ -517,14 +534,14 @@ func pgRosterSrv(t *testing.T, fr *fakeRunner, row types.AgentProvider) *Server 
 	return srv
 }
 
-// TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch is the regression for
-// the two halves of one bug: create resolved the MANAGED subscription lane on
-// different terms than dispatch, and selectedMechanism tests subscription before
-// Bedrock, so the two ends disagreed about what a run would dispatch on.
+// TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch pins that create and
+// dispatch resolve the managed subscription lane on the same terms:
+// selectedMechanism tests subscription before Bedrock, so if the two ends differ
+// they disagree about what a run would dispatch on.
 //
 // Both arms are driven end to end — POST /runs, then the spec the runner was
 // actually handed — because that disagreement is invisible from either half
-// alone: each side's own unit test passed the whole time.
+// alone: each side's own unit test passes regardless.
 func TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch(t *testing.T) {
 	// (a) BEDROCK WINS OVER MANAGED. A managed token is connected AND Bedrock is
 	// configured with a bearer key, under a bedrock_bearer row. Dispatch suppresses
@@ -546,6 +563,7 @@ func TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch(t *testing.T) {
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create = %d, want 201 — dispatch would have credentialed this run; body=%s", w.Code, w.Body.String())
 		}
+		fr.waitForSandbox(t)
 		if fr.createCalls != 1 {
 			t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 		}
@@ -556,10 +574,11 @@ func TestRosterRun_ManagedLaneFoldsTheSameAtCreateAndDispatch(t *testing.T) {
 
 	// (b) POSTURE. Every multi-user/SSO deployment — the only kind with a roster —
 	// runs SubscriptionPostureOK=false, where dispatch refuses to serve the
-	// operator's own subscription to a member. Create used to ignore that and read
-	// "managed" as the lane, admitting a subscription-row run that then reached
-	// dispatch with nothing: 201, then FAILED with no sandbox — the boot-and-die
-	// this gate exists to prevent. It must be refused AT THE DOOR instead.
+	// operator's own subscription to a member. Create must honour that too:
+	// reading "managed" as the lane would admit a subscription-row run that then
+	// reaches dispatch with nothing — 201, then FAILED with no sandbox, the
+	// boot-and-die this gate exists to prevent. It must be refused at the door
+	// instead.
 	t.Run("off-posture managed is refused at the door, never launched", func(t *testing.T) {
 		fr := &fakeRunner{}
 		srv := pgRosterSrv(t, fr, types.AgentProvider{
@@ -705,7 +724,7 @@ func TestResolveLLMInjections_RefusesBeforeResolvingAnySSOScope(t *testing.T) {
 	sandboxEnv := map[string]string{}
 
 	_, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, sandboxEnv,
-		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false)
+		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false, false, bedrockCredUngraded())
 	if ok {
 		t.Fatal("dispatch went ahead on an unreadable roster — the credential namespace was decided from a zero site config")
 	}
@@ -795,12 +814,12 @@ func TestEnforceCreateLLMMechanism_AuditsNothing(t *testing.T) {
 	}
 }
 
-// TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor pins UX round B1: the
-// refusal used to send every reader to "Settings → Model provider", which is the
-// ADMIN's page — under a per_user row its AWS button is admin-only, so the one
-// person who could repair their own captured session was sent to the one page
-// that will not let them. Asserted THROUGH the constants; the sentences are
-// DRAFT until M2 canon rules them.
+// TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor: the refusal must
+// send each reader to their own door, not always to "Settings → Model provider"
+// — that is the admin's page, and under a per_user row its AWS button is
+// admin-only, so the one person who could repair their own captured session
+// would be sent to the one page that will not let them. Asserted through the
+// constants; the sentences are draft until M2 canon rules them.
 func TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor(t *testing.T) {
 	sharedRow := types.AgentProvider{
 		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
@@ -818,13 +837,15 @@ func TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor(t *testing.T) {
 
 	// Shared: the admin's page stays, and "again" is dropped for the one arm
 	// where nothing ever fired here.
+	sharedRemedyFirst := fmt.Sprintf(llmMechanismRemedySharedFmt, "")
+	sharedRemedy := fmt.Sprintf(llmMechanismRemedySharedFmt, " again")
 	sharedNothing := llmMechanismRefusal(sharedRow, "", false, "")
-	if !strings.Contains(sharedNothing, llmMechanismRemedySharedFirst) || strings.Contains(sharedNothing, "sign in again") {
-		t.Errorf("shared not-configured refusal = %q, want %q with no \"again\"", sharedNothing, llmMechanismRemedySharedFirst)
+	if !strings.Contains(sharedNothing, sharedRemedyFirst) || strings.Contains(sharedNothing, "sign in again") {
+		t.Errorf("shared not-configured refusal = %q, want %q with no \"again\"", sharedNothing, sharedRemedyFirst)
 	}
 	sharedWrongLane := llmMechanismRefusal(sharedRow, types.AgentMechanismAnthropicAPIKey, true, "")
-	if !strings.Contains(sharedWrongLane, llmMechanismRemedyShared) {
-		t.Errorf("shared wrong-lane refusal = %q, want %q", sharedWrongLane, llmMechanismRemedyShared)
+	if !strings.Contains(sharedWrongLane, sharedRemedy) {
+		t.Errorf("shared wrong-lane refusal = %q, want %q", sharedWrongLane, sharedRemedy)
 	}
 
 	// The stored-identity refusal carries the same clause: the blob it names is
@@ -843,15 +864,15 @@ func TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor(t *testing.T) {
 	if !strings.Contains(pin, llmMechanismRemedyPerUser) {
 		t.Errorf("per_user pin refusal = %q, want %q", pin, llmMechanismRemedyPerUser)
 	}
-	if !strings.Contains(pinContradictionRefusal(sc, b, false), llmMechanismRemedyShared) {
-		t.Errorf("shared pin refusal = %q, want %q", pinContradictionRefusal(sc, b, false), llmMechanismRemedyShared)
+	if !strings.Contains(pinContradictionRefusal(sc, b, false), sharedRemedy) {
+		t.Errorf("shared pin refusal = %q, want %q", pinContradictionRefusal(sc, b, false), sharedRemedy)
 	}
 
 	// And the spent-renewal sentence — the one the field report quoted.
 	if !strings.Contains(awsSSORefreshSpentRefusal(true), llmMechanismRemedyPerUser) {
 		t.Errorf("per_user spent refusal = %q, want %q", awsSSORefreshSpentRefusal(true), llmMechanismRemedyPerUser)
 	}
-	if !strings.Contains(awsSSORefreshSpentRefusal(false), llmMechanismRemedyShared) {
-		t.Errorf("shared spent refusal = %q, want %q", awsSSORefreshSpentRefusal(false), llmMechanismRemedyShared)
+	if !strings.Contains(awsSSORefreshSpentRefusal(false), sharedRemedy) {
+		t.Errorf("shared spent refusal = %q, want %q", awsSSORefreshSpentRefusal(false), sharedRemedy)
 	}
 }

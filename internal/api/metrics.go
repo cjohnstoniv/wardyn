@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -57,6 +58,10 @@ type metrics struct {
 	// this is precisely the shape that has to be graphable: audit rows flat and
 	// this series climbing IS the attack.
 	authFailedSuppressed int64
+	// deviceIngestSuppressed is authFailedSuppressed's twin for
+	// device.audit.ingest: a refusal whose row was folded into its device's
+	// streak or dropped by the per-device bucket (device_audit_bounds.go).
+	deviceIngestSuppressed int64
 	// authStoreErrors counts requests an authentication lane could not decide
 	// because its store read failed. Distinct from wardyn_store_up: that gauge
 	// answers a PING (see writeHealthGauges), which a healthy pool passes while
@@ -264,6 +269,13 @@ func (m *metrics) authFailedSuppressedInc() {
 	m.authFailedSuppressed++
 }
 
+// deviceIngestSuppressedInc records one device.audit.ingest row not written.
+func (m *metrics) deviceIngestSuppressedInc() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deviceIngestSuppressed++
+}
+
 // authStoreErrorInc records one authentication attempt abandoned on a store
 // failure.
 func (m *metrics) authStoreErrorInc() {
@@ -323,6 +335,15 @@ func (m *metrics) egressDenied() {
 //     never satisfy alongside failures the network actually caused. It is
 //     DELIBERATELY absent from the exclusion list below — a guard refusal counts
 //     as a denial like any other.
+//   - builtin:upstream-protocol-mismatch — a round trip that GOT AN ANSWER: an
+//     HTTP/2 frame on a connection that negotiated no ALPN, which the proxy
+//     could not complete over HTTP/2 either (internal/egress/proxy's
+//     roundTripUpstream, which detects such a peer from its first bytes or
+//     from net/http's parse error and resends when it can). Kept separate from
+//     builtin:dial-failed for the same reason as errGatewayVet above, but the
+//     opposite direction: an identical retry does not fix it, so it is
+//     also DELIBERATELY absent from the exclusion list below and counts as a
+//     denial like any other.
 //   - egress.decisions.dropped:<n> — decisions.go's synthetic summary for
 //     decision records the buffer had to drop. An audit-FIDELITY alert about a
 //     wedged control plane, not a denial of anything; the count rides in the
@@ -419,6 +440,8 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_credential_mints_total counter\nwardyn_credential_mints_total %d\n", m.mints)
 	fmt.Fprintf(w, "# HELP wardyn_auth_failed_suppressed_total Authentication failures whose auth.failed audit row was dropped by the rate limiter. Audit volume is capped at ~1/sec, so this series — not the audit trail — is what grows during a burst.\n"+
 		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
+	fmt.Fprintf(w, "# HELP wardyn_device_ingest_failures_suppressed_total Refused device audit pushes whose device.audit.ingest row was folded into a streak or dropped by the per-device rate limit.\n"+
+		"# TYPE wardyn_device_ingest_failures_suppressed_total counter\nwardyn_device_ingest_failures_suppressed_total %d\n", m.deviceIngestSuppressed)
 	fmt.Fprintf(w, "# HELP wardyn_auth_store_errors_total Requests an authentication lane could not decide because its store read failed (answered 500). Not covered by wardyn_store_up, which only pings.\n"+
 		"# TYPE wardyn_auth_store_errors_total counter\nwardyn_auth_store_errors_total %d\n", m.authStoreErrors)
 	fmt.Fprintf(w, "# HELP wardyn_drive_probe_errors_total Host_path drive agent-readability probes that could not run at all (fails open: the caller falls back to \"cannot tell\" rather than refusing).\n"+
@@ -441,10 +464,26 @@ func (m *metrics) write(w io.Writer) {
 // admin token is configured (cmd/wardynd) and refuses capability disclosure on
 // the anonymous /healthz, so an open /metrics would contradict that posture. A
 // Prometheus scrape_config authenticates with two lines of `authorization:`.
+//
+// The exposition is composed IN FULL before a single byte reaches the
+// ResponseWriter, and that ordering is the point rather than a style choice.
+// writeHealthGauges below makes live store reads; streaming straight at the
+// ResponseWriter commits 200 plus the whole counter block first, so anything
+// that goes wrong afterwards can no longer change the status. The router's
+// Recoverer then writes a 500 that lands nowhere and the scrape reads back as a
+// HEALTHY 200 whose body simply stops mid-file — which Prometheus ingests as
+// "those series do not exist any more", not as a failed scrape. That is
+// strictly worse than a 5xx, because `up` stays 1 and an alert on an absent
+// series is the only thing left that could notice. writeEbpfGroundtruthCounters
+// already reasons about a malformed label taking the WHOLE scrape with it
+// (healthz.go); a buffer is what makes that all-or-nothing true of a panic too.
+// One small allocation per scrape, on a body of a few KB.
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	var body bytes.Buffer
+	s.metrics.write(&body)
+	s.writeHealthGauges(r, &body)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	s.metrics.write(w)
-	s.writeHealthGauges(r, w)
+	_, _ = w.Write(body.Bytes())
 }
 
 // writeHealthGauges appends the two LIVE gauges — sampled at scrape time rather

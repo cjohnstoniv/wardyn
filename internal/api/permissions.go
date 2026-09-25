@@ -96,7 +96,7 @@ func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 	}
 	enf, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get capability enforcement: "+err.Error())
+		writeServerError(w, r, "get capability enforcement", err)
 		return
 	}
 	// The ETag covers ONLY the enforcement map, not Grants: it exists so a
@@ -335,7 +335,7 @@ func (s *Server) handleUpsertCapabilityGrant(w http.ResponseWriter, r *http.Requ
 	g.CreatedBy = principalFromRequest(r)
 	saved, err := s.cfg.Store.UpsertCapabilityGrant(r.Context(), g)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "upsert capability grant: "+err.Error())
+		writeServerError(w, r, "upsert capability grant", err)
 		return
 	}
 	action, status := "capability.grant.created", http.StatusCreated
@@ -366,7 +366,7 @@ func (s *Server) handleDeleteCapabilityGrant(w http.ResponseWriter, r *http.Requ
 		if notFoundIf(w, err, "capability grant") {
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "delete capability grant: "+err.Error())
+		writeServerError(w, r, "delete capability grant", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -405,7 +405,7 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 	defer s.capEnforcementMu.Unlock()
 	existing, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get existing capability enforcement: "+err.Error())
+		writeServerError(w, r, "get existing capability enforcement", err)
 		return
 	}
 	if !ifMatchSatisfied(r, computeETag(existing)) {
@@ -415,7 +415,7 @@ func (s *Server) handlePutCapabilityEnforcement(w http.ResponseWriter, r *http.R
 	}
 	saved, err := s.cfg.Store.PutCapabilityEnforcement(r.Context(), body)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "put capability enforcement: "+err.Error())
+		writeServerError(w, r, "put capability enforcement", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -435,6 +435,7 @@ type meCapabilitiesResponse struct {
 	Enforcement         map[string]bool         `json:"enforcement"`
 	SessionGroups       []string                `json:"session_groups"`
 	GroupsSnapshotStale bool                    `json:"groups_snapshot_stale"`
+	KindsVersion        int                     `json:"kinds_version"`
 }
 
 // handleMeCapabilities is the member-safe twin of GET /permissions: it sits on
@@ -467,5 +468,6 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 		Enforcement:         enf,
 		SessionGroups:       groups,
 		GroupsSnapshotStale: stale,
+		KindsVersion:        capKindsVersion,
 	})
 }

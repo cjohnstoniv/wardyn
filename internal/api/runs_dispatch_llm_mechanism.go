@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -94,15 +95,12 @@ const (
 	// case, as the nav item and the page title are.
 	llmMechanismRemedyPerUser = "sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page."
 
-	// llmMechanismRemedyShared is the ADMIN's destination, unchanged: under a
-	// shared row the one credential is theirs and Settings → Model provider is
-	// where they replace it.
-	llmMechanismRemedyShared = "sign in again under Settings → Model provider."
-
-	// llmMechanismRemedySharedFirst is the same destination without "again":
-	// "again" is a claim about the reader's past, and the not-configured arm is
-	// the one state that says nothing ever fired here.
-	llmMechanismRemedySharedFirst = "sign in under Settings → Model provider."
+	// llmMechanismRemedySharedFmt is the ADMIN's destination: under a shared row
+	// the one credential is theirs and Settings → Model provider is where they
+	// replace it. The one blank is "again" — a claim about the reader's past
+	// that the not-configured arm must not make, since that is the one state
+	// where nothing ever fired here.
+	llmMechanismRemedySharedFmt = "sign in%s under Settings → Model provider."
 
 	// llmDetailBedrockExpired is the brokered-LLM 404's detail for a
 	// half-configured Bedrock deployment (see llmUnavailableDetail). %s = the
@@ -178,16 +176,18 @@ func (s *Server) selectedMechanism(agent string, subscription bool, b bedrockAut
 // mechanism with several sources, and narrowing an admin's "Bedrock" to one
 // sub-lane would refuse runs that work.
 //
-// Under `per_user` the ONLY admissible lane is the principal's own captured AWS
-// SSO session: every other Bedrock arm is an operator-namespace read, so folding
-// them together would serve the admin's credential to a member — the exact
-// failure per_user exists to prevent.
+// Under `per_user` the comparison is EXACT — the sub-lane the admin declared,
+// not the coarse fold. Only two lanes carry a credential the principal owns
+// (types.PerUserMechanisms: their captured AWS SSO session, their own stored
+// bedrock-api-key); the mount and the resident SigV4 keys are operator-namespace
+// reads, so folding the four Bedrock arms together would serve the admin's
+// credential to a member — the exact failure per_user exists to prevent.
 //
-// That promise is now kept at the SOURCE as well as here: resolveBedrockAuth
-// takes the same per_user scope and reads only the principal's own blob, with no
-// fall-through to the bearer/mount/static arms, so a member with no session of
-// their own arrives here as "nothing selected" and this predicate refuses them —
-// never served the admin's session by a lane that fired underneath it.
+// That promise is kept at the SOURCE as well as here: resolveBedrockAuth takes
+// the same per_user scope, reads only the principal's own blob and own bearer,
+// and does not fall through to the mount/static arms — so a member with neither
+// credential of their own arrives here as "nothing selected" and this predicate
+// refuses them, never served the admin's by a lane that fired underneath it.
 //
 // A declared `none` row (BYOA) matches only when NO lane fired, which is what
 // "Wardyn wires no model credential" means. The gate never reaches it in
@@ -201,7 +201,7 @@ func mechanismSatisfied(row types.AgentProvider, selected types.AgentMechanism, 
 		return false
 	}
 	if row.CredentialSource == types.CredentialSourcePerUser {
-		return selected == types.AgentMechanismBedrockSSO
+		return selected == row.Mechanism
 	}
 	return selected.ProviderType() == row.Mechanism.ProviderType()
 }
@@ -225,14 +225,14 @@ const llmRefusalAuditReason = "model_credential"
 // `configured` is whether ANY lane fired — the one state where nothing ever
 // did is also the one where "again" would be false.
 func llmMechanismRemedy(perUser, configured bool) string {
-	switch {
-	case perUser:
+	if perUser {
 		return llmMechanismRemedyPerUser
-	case !configured:
-		return llmMechanismRemedySharedFirst
-	default:
-		return llmMechanismRemedyShared
 	}
+	again := " again"
+	if !configured {
+		again = ""
+	}
+	return fmt.Sprintf(llmMechanismRemedySharedFmt, again)
 }
 
 // llmMechanismRefusal is the sentence for a declared lane that is not carrying
@@ -362,8 +362,8 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 // config.
 //
 // That scope decides WHOSE captured session credentials the run
-// (awsSSOScopeFor, resolveLLMInjections) and whether the operator-wide Bedrock
-// bearer key is reachable at all (resolveBedrockAuth's !sso.perUser guard). A
+// (awsSSOScopeFor, resolveLLMInjections) and WHOSE Bedrock bearer key is read at
+// all — the operator's, or the caller's own (bedrockBearerFor). A
 // failed read yields perUser=false, owner="" — the OPERATOR namespace — so a
 // store blip credentialed a per_user MEMBER's run with the deployment-wide
 // session, unaudited. That is a fail-open on the SERVING door, which the
@@ -464,7 +464,13 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	// launched by newStepRun, never decoded from a create body) — the same term
 	// llmMechanismGateApplies passes.
 	modelRun := isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive)
-	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
+	// refresh may redeem and rotate the captured SSO session, so those reads are
+	// not a mere status check.
+	purpose := secretstore.PurposeStatus
+	if refresh {
+		purpose = secretstore.PurposeSSORefresh
+	}
+	l.bedrock = s.resolveBedrockAuth(secretstore.WithPurpose(ctx, purpose), req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
 	// The SAME predicate dispatch applies, with the same terms — including the
 	// posture term, whose absence here made every SSO deployment's managed run
 	// read as "subscription" at create and dispatch as something else.
@@ -525,6 +531,9 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	selected, ok := s.selectedMechanism(req.Agent, lanes.subscription, lanes.bedrock, lanes.managed, lanes.apiKey)
 	if out != nil {
 		*out = gradeModelCredential(row, declared, lanes, selected, ok, s.subscriptionInjectEnabled())
+		if ok && selected.ProviderType() == types.AgentProviderTypeBedrock {
+			out.bedrockHost = lanes.bedrock.runtimeHost
+		}
 	}
 	if !declared {
 		return true
@@ -595,7 +604,7 @@ func (s *Server) llmUnavailableDetail(ctx context.Context, run types.AgentRun, l
 	// The run's OWN scope: under per_user the expiry worth naming is this
 	// principal's, and the operator's says nothing about why their run has no
 	// credential.
-	blob, found, err := s.readAWSSSOBlob(ctx, sso)
+	blob, found, err := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sso)
 	if err != nil || !found || blob.ExpiresAt.IsZero() {
 		return ""
 	}

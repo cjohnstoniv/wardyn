@@ -36,7 +36,7 @@ export const SESSION_ENDED_REASON = "Your session ended. Sign in again to contin
 // protocol-relative host a router's replaceState would dial cross-origin.
 // `/\evil.com` is the same trick some browsers normalize a backslash into a
 // slash for. Neither a bare `/` (the landing decision, not "where you were")
-// nor `/setup` (its own gate) is a real return path. Applied at BOTH ends —
+// nor `/setup` (its own gate) is a real return path, in either view. Applied at BOTH ends —
 // here at capture (belt) and again by the caller at restore (suspenders) —
 // one rule, checked twice, rather than trusted to travel through state
 // unchecked.
@@ -46,7 +46,9 @@ export function safeReturnPath(path: string | null | undefined): string {
     !path.startsWith("//") &&
     !path.startsWith("/\\") &&
     path !== "/" &&
-    path !== "/setup"
+    path !== "/setup" &&
+    path !== "/admin" &&
+    path !== "/admin/setup"
     ? path
     : "/runs";
 }
@@ -82,16 +84,30 @@ export function onUnauthorized(fn: (reason: string, path: string) => void): void
   _unauthorized = fn;
 }
 
+// Any 403 may mean this tab's view went stale (another tab switched the session
+// under it), so the view re-sync re-reads /me at once (view-switch.tsx).
+let _forbidden: (() => void) | null = null;
+export function onForbidden(fn: (() => void) | null): void {
+  _forbidden = fn;
+}
+
 export class HttpError extends Error {
   status: number;
   /** The envelope's machine-readable class, "" when the body carries none.
-   *  Today only `model_credential`: the create-time refusal the New Run rail
-   *  answers with the AWS sign-in dialog (runs.ts's isCredentialRefusal). */
+   *  `model_credential` and `git_credential` (#386) are the create-time
+   *  refusals the New Run rail answers with a sign-in/connect dialog
+   *  (runs.ts's isCredentialRefusal / isGitCredentialRefusal). */
   reason: string;
-  constructor(status: number, message: string, reason = "") {
+  /** The git_credential 422's Azure DevOps org address (#386's launch door,
+   *  review finding F1) — "" when the body carries none. The dialog names it
+   *  from HERE, not from a preflight fact: a 422 can be the very first thing
+   *  a caller hears about the row. */
+  org: string;
+  constructor(status: number, message: string, reason = "", org = "") {
     super(message);
     this.status = status;
     this.reason = reason;
+    this.org = org;
     this.name = "HttpError";
   }
 }
@@ -232,13 +248,14 @@ export async function wfetch(
     _unauthorized?.(SESSION_ENDED_REASON, safeReturnPath(window.location.pathname));
     throw new HttpError(401, "Unauthorized");
   }
+  if (res.status === 403) _forbidden?.();
   return res;
 }
 
 export async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const { message, reason } = await errEnvelope(res);
-    throw new HttpError(res.status, message, reason);
+    const { message, reason, org } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason, org);
   }
   return (await res.json()) as T;
 }
@@ -265,21 +282,25 @@ function isRawBodyDisplayable(body: string): boolean {
   return body.length <= RAW_BODY_MAX_CHARS && !/^\s*</.test(body);
 }
 
-export async function errEnvelope(res: Response): Promise<{ message: string; reason: string }> {
+export async function errEnvelope(res: Response): Promise<{ message: string; reason: string; org: string }> {
   try {
     const body = await res.text();
-    if (!body) return { message: res.statusText, reason: "" };
+    if (!body) return { message: res.statusText, reason: "", org: "" };
     try {
-      const j = JSON.parse(body) as { error?: unknown; reason?: unknown };
+      const j = JSON.parse(body) as { error?: unknown; reason?: unknown; org?: unknown };
       if (typeof j.error === "string" && j.error) {
-        return { message: j.error, reason: typeof j.reason === "string" ? j.reason : "" };
+        return {
+          message: j.error,
+          reason: typeof j.reason === "string" ? j.reason : "",
+          org: typeof j.org === "string" ? j.org : "",
+        };
       }
     } catch {
       // not JSON — fall through to the raw-body guard below
     }
-    return { message: isRawBodyDisplayable(body) ? body : res.statusText, reason: "" };
+    return { message: isRawBodyDisplayable(body) ? body : res.statusText, reason: "", org: "" };
   } catch {
-    return { message: res.statusText, reason: "" };
+    return { message: res.statusText, reason: "", org: "" };
   }
 }
 

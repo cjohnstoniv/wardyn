@@ -13,14 +13,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── FIX #6: sign-out actually terminates the OIDC session ───────────────────────
+// FIX #6: sign-out actually terminates the OIDC session
 
-// TestLogoutRouteMountedClearsSession is the regression for FIX #6. The UI POSTs
-// /api/v1/auth/logout, but the OIDC logout used to be mounted ONLY as a root
-// GET /auth/logout, so the POST hit no route (404), the HttpOnly wardyn_session
-// cookie survived, and the next probe silently re-signed the operator in. The
-// POST must now be routed (not 404) when OIDC is configured, invoke the OIDC
-// LogoutHandler, and clear the session cookie.
+// TestLogoutRouteMountedClearsSession: the UI POSTs /api/v1/auth/logout, so with
+// OIDC configured that POST must be routed (not 404), invoke the OIDC
+// LogoutHandler, and clear the session cookie. A logout mounted only as a root
+// GET /auth/logout would leave the POST hitting no route, the HttpOnly
+// wardyn_session cookie surviving, and the next probe silently re-signing the
+// operator in.
 //
 // A zero-value *oidc.Authenticator is a valid test double here: its Middleware
 // finds no session cookie and falls through to the admin-token path, and its
@@ -65,9 +65,9 @@ func TestLogoutTokenModeNoOp(t *testing.T) {
 	}
 }
 
-// ─── FIX #8: local-mode Host allowlist (DNS-rebinding defense) ────────────────────
+// FIX #8: local-mode Host allowlist (DNS-rebinding defense)
 
-// TestLocalModeRejectsNonLoopbackHost is the regression for FIX #8. In local
+// TestLocalModeRejectsNonLoopbackHost pins the Host gate. In local
 // no-auth mode humanOrAdminAuth bypasses all auth, so a DNS-rebinding page
 // (Origin==Host==attacker.com rebound to 127.0.0.1) could drive the no-auth
 // surface with no credential. The bypass must reject any non-loopback Host with
@@ -89,7 +89,7 @@ func TestLocalModeRejectsNonLoopbackHost(t *testing.T) {
 	req.Host = "attacker.com"
 	req.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
+	panicFails(t, srv.Handler()).ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("non-loopback Host: code = %d, want 403", w.Code)
 	}
@@ -101,14 +101,14 @@ func TestLocalModeRejectsNonLoopbackHost(t *testing.T) {
 		req.Host = host
 		req.RemoteAddr = "127.0.0.1:54321"
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, req)
+		panicFails(t, srv.Handler()).ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Errorf("loopback Host %q: code = %d, want 200 (should pass the gate)", host, w.Code)
 		}
 	}
 }
 
-// TestLocalModeRejectsNonLoopbackRemoteAddr is the regression for N1. The Host
+// TestLocalModeRejectsNonLoopbackRemoteAddr pins the peer gate. The Host
 // header is forgeable by a direct socket client, so a LAN peer hitting a 0.0.0.0
 // bind with "Host: 127.0.0.1" would otherwise reach the auth-bypassed surface. The
 // bypass must ALSO require a loopback TCP peer (r.RemoteAddr) — which the server
@@ -130,7 +130,7 @@ func TestLocalModeRejectsNonLoopbackRemoteAddr(t *testing.T) {
 		req.Host = "127.0.0.1" // forged — passes the Host gate
 		req.RemoteAddr = peer
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, req)
+		panicFails(t, srv.Handler()).ServeHTTP(w, req)
 		if w.Code != http.StatusForbidden {
 			t.Errorf("non-loopback peer %q with forged loopback Host: code = %d, want 403", peer, w.Code)
 		}
@@ -141,13 +141,13 @@ func TestLocalModeRejectsNonLoopbackRemoteAddr(t *testing.T) {
 	req.Host = "127.0.0.1"
 	req.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
+	panicFails(t, srv.Handler()).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("loopback peer + loopback Host: code = %d, want 200 (legit local path)", w.Code)
 	}
 }
 
-// TestLocalTrustForwarderAllowsGatewayPeer is the regression for the compose fix:
+// TestLocalTrustForwarderAllowsGatewayPeer pins the compose topology:
 // with LocalTrustForwarder set (the compose topology — wardynd bound 0.0.0.0 behind
 // a loopback-only publish, so the peer is always the docker gateway), a non-loopback
 // peer must PASS the peer gate, while the Host gate still rejects DNS-rebinding.
@@ -168,7 +168,7 @@ func TestLocalTrustForwarderAllowsGatewayPeer(t *testing.T) {
 	req.Host = "127.0.0.1"
 	req.RemoteAddr = "172.18.0.1:44444" // docker bridge gateway, non-loopback
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
+	panicFails(t, srv.Handler()).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("trusted-forwarder gateway peer: code = %d, want 200", w.Code)
 	}
@@ -178,7 +178,7 @@ func TestLocalTrustForwarderAllowsGatewayPeer(t *testing.T) {
 	req.Host = "attacker.com"
 	req.RemoteAddr = "172.18.0.1:44444"
 	w = httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, req)
+	panicFails(t, srv.Handler()).ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Errorf("trusted-forwarder + rebinding Host: code = %d, want 403 (Host gate must still fire)", w.Code)
 	}
@@ -201,11 +201,11 @@ func TestIsLoopbackRemoteAddr(t *testing.T) {
 	}
 }
 
-// ─── #19a: auth.failed audit event ─────────────────────────────────────────
+// #19a: auth.failed audit event
 
-// TestAdminAuth401EmitsAuthFailed is the regression for #19a: adminAuth's
-// three 401 branches used to fail silently. Each must now emit auth.failed
-// (actor system, content-free reason + path + source IP).
+// TestAdminAuth401EmitsAuthFailed: each of adminAuth's three 401 branches
+// must emit auth.failed (actor system, content-free reason + path + source
+// IP) rather than fail silently.
 func TestAdminAuth401EmitsAuthFailed(t *testing.T) {
 	h := newHarness(t)
 
@@ -243,8 +243,8 @@ func TestAdminAuth401EmitsAuthFailed(t *testing.T) {
 	}
 }
 
-// TestAuthFailedRateLimited is the regression for the flood-guard half of
-// #19a: a scanner throwing rapid 401s must not get one auth.failed row per
+// TestAuthFailedRateLimited pins the flood guard: a scanner throwing rapid
+// 401s must not get one auth.failed row per
 // request — the process-global token bucket caps it well below the request
 // count.
 func TestAuthFailedRateLimited(t *testing.T) {

@@ -12,13 +12,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
-// refreshAPITokenRolesExists is the COMPILE-TIME anchor for every claim this
+// refreshAPITokenIdentityExists is the COMPILE-TIME anchor for every claim this
 // file pins: the store contract really does re-stamp an api_token's role, so a
 // comment or an operator-facing line saying no sign-in refreshes it is not a
 // stylistic quibble but a false statement about the system. If the refresh is
 // ever removed, this stops compiling and the claims below are re-opened for
 // review rather than silently inverted a second time.
-var refreshAPITokenRolesExists func(store.Store, context.Context, string, string) error = store.Store.RefreshAPITokenRoles
+var refreshAPITokenIdentityExists func(store.Store, context.Context, string, string, []string, bool) error = store.Store.RefreshAPITokenIdentity
 
 // TestRoleSnapshotClaimsMatchTheRefreshThatShipped is F281.
 //
@@ -34,13 +34,13 @@ var refreshAPITokenRolesExists func(store.Store, context.Context, string, string
 // revokes what it demotes), so the line now has THREE true things to keep
 // straight at once. This pins all three rather than banning one sentence.
 func TestRoleSnapshotClaimsMatchTheRefreshThatShipped(t *testing.T) {
-	_ = refreshAPITokenRolesExists
+	_ = refreshAPITokenIdentityExists
 
 	t.Run("the operator-facing remedy names what actually happens", func(t *testing.T) {
 		for _, want := range []struct{ frag, why string }{
 			{"were revoked", "this edit already revoked the principals it demoted (F112) — an operator told to go revoke them is being sent to do work that is done"},
-			{"next sign-in re-stamps the role", "the stamp is bounded-stale, not frozen: RefreshAPITokenRoles fires from the OnLogin hook"},
-			{"RefreshAPITokenRoles", "name the mechanism, so the claim can be checked against the code that makes it true"},
+			{"next sign-in re-stamps the role", "the stamp is bounded-stale, not frozen: RefreshAPITokenIdentity fires from the OnLogin hook"},
+			{"RefreshAPITokenIdentity", "name the mechanism, so the claim can be checked against the code that makes it true"},
 			{"take effect immediately or the owner will not sign in again", "the two cases where the login bound is not enough are exactly when the lever is the right answer (CHANGELOG 0.7's own wording)"},
 		} {
 			if !strings.Contains(roleSnapshotWarnRemedy, want.frag) {
@@ -49,16 +49,18 @@ func TestRoleSnapshotClaimsMatchTheRefreshThatShipped(t *testing.T) {
 		}
 	})
 
-	// The inverted claims, banned by their exact wording because that wording
-	// is what shipped. Role-scoped only: "a token's GROUP snapshot ... signing
-	// in again does not refresh it" (accessStaleSnapshotToken) is TRUE — the
-	// hook re-stamps role and provably does not touch groups — and the distinction
-	// between the two halves is the whole point of that refusal's own message.
+	// The inverted claims, banned by their exact wording. The OnLogin
+	// re-stamp covers the group snapshot as well as the role
+	// (store.RefreshAPITokenIdentity), so "frozen at mint"/"signing in again
+	// does not refresh it" is false for both halves, and every ban below
+	// applies to either.
 	t.Run("no source claim contradicts the refresh", func(t *testing.T) {
 		banned := []struct{ frag, why string }{
-			{"no sign-in refreshes it", "RefreshAPITokenRoles is fired by the OnLogin hook for exactly this column"},
+			{"no sign-in refreshes it", "RefreshAPITokenIdentity is fired by the OnLogin hook for both columns now"},
 			{"has no such bound", "the login re-stamp IS the bound; the SSH lane's is a TTL, which is a different bound, not a missing one"},
 			{"read verbatim forever", "verbatim until the owner's next login re-stamps it, or until this deployment's demotion revokes it"},
+			{"frozen at mint", "the stamp refreshes at the owner's next sign-in; the only unbounded case is an owner who never signs in again"},
+			{"does not touch groups", "RefreshAPITokenIdentity re-stamps groups together with role, in the same call"},
 		}
 		for _, file := range []string{"apitokens.go", "access.go"} {
 			src, err := os.ReadFile(file)

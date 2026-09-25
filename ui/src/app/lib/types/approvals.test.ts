@@ -4,7 +4,17 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { canDecideApproval, decisionArgs, type ApprovalKind } from "./approvals";
+import { canDecideApproval, decisionArgs, isHeld, type ApprovalKind, type ApprovalRequest } from "./approvals";
+
+const approval = (over: Partial<ApprovalRequest> = {}): ApprovalRequest => ({
+  id: "a1",
+  run_id: "run-1",
+  kind: "tool_call",
+  requested_scope: {},
+  state: "PENDING",
+  requested_at: new Date().toISOString(),
+  ...over,
+});
 
 // canDecideApproval is the ONE predicate both approvals.tsx and run-detail.tsx
 // gate their decide buttons on — it must mirror internal/api/approvals.go's
@@ -60,5 +70,57 @@ describe("canDecideApproval — the re-auth kind", () => {
     expect(canDecideApproval(false, "credential")).toBe(false);
     expect(canDecideApproval(true, "credential")).toBe(true);
     expect(canDecideApproval(true, "tool_call")).toBe(true);
+  });
+});
+
+// #509 — isHeld's two unconditional arms (tool_call, credential_reauth) no
+// longer time out client-side at all: PENDING is live until the SERVER moves
+// the row on, because the sandbox stays parked on a PENDING row for up to
+// WARDYN_APPROVAL_EXPIRY_AFTER (24h default), not the 60-minute ceiling #160
+// invented. Both isHeld's callers (the runs board via board-groups.ts, and the
+// run cockpit's command bar via run-detail.tsx's `pending.some(isHeld)`) share
+// this one predicate, so pinning it here pins both call sites at once.
+describe("isHeld — a hold stays live until the server's own state says otherwise", () => {
+  it("a fresh tool_call is held; a fresh credential_reauth is held", () => {
+    expect(isHeld(approval({ kind: "tool_call" }))).toBe(true);
+    expect(isHeld(approval({ kind: "credential_reauth" }))).toBe(true);
+  });
+
+  it("a PENDING tool_call/credential_reauth row 2 hours old is still held, not stale — past the old 60-minute ceiling but well inside the server's 24h expiry", () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    for (const kind of ["tool_call", "credential_reauth"] as const) {
+      expect(isHeld(approval({ kind, requested_at: twoHoursAgo }))).toBe(true);
+    }
+  });
+
+  it("a PENDING tool_call/credential_reauth row 25 hours old — past the server's own 24h default — is STILL held: only the server's own state, never client elapsed time, ends the hold", () => {
+    const twentyFiveHoursAgo = new Date(Date.now() - 25 * 60 * 60_000).toISOString();
+    for (const kind of ["tool_call", "credential_reauth"] as const) {
+      expect(isHeld(approval({ kind, requested_at: twentyFiveHoursAgo }))).toBe(true);
+    }
+  });
+
+  it("once the server has actually moved a tool_call/credential_reauth row to EXPIRED, it reads not held — regardless of age", () => {
+    const fresh = new Date().toISOString();
+    for (const kind of ["tool_call", "credential_reauth"] as const) {
+      const expired = approval({ kind, state: "EXPIRED", requested_at: fresh });
+      expect(isHeld(expired)).toBe(false);
+    }
+  });
+
+  it("a decided (APPROVED/DENIED/CANCELLED) tool_call/credential_reauth row is not held", () => {
+    for (const kind of ["tool_call", "credential_reauth"] as const) {
+      for (const state of ["APPROVED", "DENIED", "CANCELLED"] as const) {
+        const decided = approval({ kind, state });
+        expect(isHeld(decided)).toBe(false);
+      }
+    }
+  });
+
+
+  it("egress wait_for_review keeps its own 30s ceiling, unaffected by the tool_call/credential_reauth change", () => {
+    const past30s = new Date(Date.now() - 60_000).toISOString();
+    const held = approval({ kind: "egress_domain", requested_scope: { host: "h", mode: "wait_for_review" }, requested_at: past30s });
+    expect(isHeld(held)).toBe(false); // still the pre-existing 30s behaviour
   });
 });

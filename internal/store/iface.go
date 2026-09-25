@@ -189,12 +189,13 @@ type Store interface {
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
-	// RefreshAPITokenRoles re-stamps role on every unrevoked api_tokens row a
-	// principal holds. Fired from the SAME OnLogin hook as RefreshSSHKeyRoles,
-	// because both credentials freeze a role at issue time and neither had any
-	// way to learn about a demotion. See the implementation for why it does not
-	// touch groups, and for the ceiling it does NOT remove.
-	RefreshAPITokenRoles(ctx context.Context, principal, role string) error
+	// RefreshAPITokenIdentity re-stamps role AND the group snapshot (plus its
+	// completeness bit) on every unrevoked api_tokens row a principal holds.
+	// Fired from the SAME OnLogin hook as RefreshSSHKeyRoles, because both
+	// credentials freeze an identity at issue time and neither had any way to
+	// learn about a demotion or a group change. See the implementation for the
+	// ceiling it does NOT remove.
+	RefreshAPITokenIdentity(ctx context.Context, principal, role string, groups []string, truncated bool) error
 
 	// Per-user API tokens (migration 0045, self-service via /api/v1/me/tokens
 	// and admin-wide via /api/v1/tokens). These ARE part of Store for the same
@@ -271,6 +272,17 @@ type Store interface {
 	// ListRoleMappings returns every row, oldest first — the console's People
 	// screen and the OIDC login-time merge's whole data need.
 	ListRoleMappings(ctx context.Context) ([]types.RoleMapping, error)
+
+	// User types (migration 0071_user_types). CreateUserType and
+	// UpdateUserType return ErrConflict on a taken id or name; DeleteUserType
+	// returns ErrConflict while the type is built in or still named by a
+	// subject row (UserTypeReferences counts those).
+	ListUserTypes(ctx context.Context) ([]types.UserType, error)
+	GetUserType(ctx context.Context, id string) (types.UserType, error)
+	CreateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
+	UpdateUserType(ctx context.Context, t types.UserType) (types.UserType, error)
+	UserTypeReferences(ctx context.Context, id string) (int, error)
+	DeleteUserType(ctx context.Context, id string) error
 
 	// Governance profiles and their subject assignments (migration 0052,
 	// governance.go): the assignable ceiling that replaces Config.DefaultPolicy

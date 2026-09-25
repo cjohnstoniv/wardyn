@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -78,7 +79,7 @@ func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *
 	warns = append(warns, grantWarns...)
 	drops := make([]capDrop, 0, len(grantWarns))
 	for _, gw := range grantWarns {
-		drops = append(drops, capDrop{reason: "grant_pairing_not_eligible", detail: gw})
+		drops = append(drops, capDrop{reason: authz.ReasonGrantPairingNotEligible, detail: gw})
 	}
 	capWarns, capDrops, cerr := s.narrowMemberInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
 	if cerr != nil {
@@ -166,7 +167,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// store error and 403s an unanswerable group snapshot (see effectiveCeiling).
 	ceiling, ceilErr := s.effectiveCeiling(ctx)
 	if ceilErr != nil {
-		writeCeilingError(w, ceilErr)
+		writeCeilingError(w, r, ceilErr)
 		return types.RunPolicySpec{}, nil, nil, false
 	}
 
@@ -364,7 +365,7 @@ func capEphemeralDiskPreview(spec *types.RunPolicySpec, maxEphemeralDiskMiB int)
 // scoped to `ceiling.Profile != nil`. A member with NO governance assignment —
 // the default posture, and every pre-0.7 deployment upgrading into 0.7 — ran no
 // member pipeline at all, so the control the docs state UNCONDITIONALLY
-// (threatmodel/THREAT-MODEL.md §5.1a, docs/ENV.md's WARDYN_ALLOW_MEMBER_ENV_SECRET
+// (threatmodel/THREAT-MODEL.md §5.1a, docs/ENV.md's WARDYN_ALLOW_USER_ENV_SECRET
 // row, docs/POLICIES.md's env_secret row) simply did not fire for them and the
 // operator's raw secret value reached their sandbox env at
 // resolveEnvSecretGrants. A ceiling-scoped gate must never carry a rule that is
@@ -423,7 +424,7 @@ func dropAdminOnlyEnvSecretGrants(grants []types.GrantSpec) ([]types.GrantSpec, 
 		_, secretRef, _, _, _ := storedSecretGrantPairing(g)
 		w := envSecretAdminOnlyWarning(secretRef)
 		warns = append(warns, w)
-		drops = append(drops, capDrop{reason: "grant_pairing_not_eligible", detail: w})
+		drops = append(drops, capDrop{reason: authz.ReasonGrantPairingNotEligible, detail: w})
 	}
 	return kept, warns, drops
 }
@@ -453,7 +454,10 @@ func (s *Server) boundEnvSecretPosture(ctx context.Context, r *http.Request, spe
 // the reason it went (one of the values OPERATIONS lists under authz.denied)
 // and the detail that names WHICH thing — a host, a secret name, or the
 // pairing warning the member is also shown in Review.
-type capDrop struct{ reason, detail string }
+type capDrop struct {
+	reason authz.Reason
+	detail string
+}
 
 // narrowMemberInlinePolicy bounds a MEMBER's own inline policy by the
 // capability grants that member holds. It runs after composer.Clamp and
@@ -490,8 +494,10 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 	// below walks spec.AllowedDomains, which is the REQUEST BODY's list —
 	// uncapped and un-deduplicated on this path — so a per-value resolution
 	// would let a member's own body decide how many sequential Postgres round
-	// trips the handler performs. See capBatch.
-	cap := s.newCapBatch(ctx)
+	// trips the handler performs. See capBatch. Installed as the resolution's
+	// memo, so any one-value door asked further down shares this snapshot.
+	ctx = withCapBatch(ctx)
+	cap := s.capBatchFor(ctx)
 
 	// One resolution per DISTINCT host, not per entry. The list is the request
 	// body's, and nothing on this path de-duplicates it: validatePolicySpec has
@@ -517,7 +523,7 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 		}
 		if !ok {
 			warns = append(warns, fmt.Sprintf("dropped egress host %q: not granted to you", d))
-			drops = append(drops, capDrop{reason: "capability_" + capEgressHost, detail: d})
+			drops = append(drops, capDrop{reason: authz.ReasonCapabilityEgressHost, detail: d})
 			continue
 		}
 		keptDomains = append(keptDomains, d)
@@ -535,7 +541,7 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 		_, secretRef, knownHostsRef, covered, derr := storedSecretGrantPairing(g)
 		if covered && derr != nil {
 			warns = append(warns, fmt.Sprintf("dropped %s grant: %v", g.Kind, derr))
-			drops = append(drops, capDrop{reason: "capability_" + capSecret, detail: string(g.Kind)})
+			drops = append(drops, capDrop{reason: authz.ReasonCapabilitySecret, detail: string(g.Kind)})
 			continue
 		}
 		if !covered {
@@ -574,7 +580,7 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 		}
 		if refused != "" {
 			warns = append(warns, fmt.Sprintf("dropped %s grant referencing secret %q: not granted to you", g.Kind, refused))
-			drops = append(drops, capDrop{reason: "capability_" + capSecret, detail: refused})
+			drops = append(drops, capDrop{reason: authz.ReasonCapabilitySecret, detail: refused})
 			continue
 		}
 		keptGrants = append(keptGrants, g)
@@ -613,7 +619,7 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 				}
 				if !ok {
 					warns = append(warns, fmt.Sprintf("dropped repo %q: workspace %s is not granted to you", wr.Repo, ws.ID))
-					drops = append(drops, capDrop{reason: "capability_" + capWorkspace, detail: wr.Repo})
+					drops = append(drops, capDrop{reason: authz.ReasonCapabilityWorkspace, detail: wr.Repo})
 					continue
 				}
 			}
@@ -632,15 +638,12 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 // blending every drop into one event) keeps `reason` the single value every
 // authz.denied consumer already reads, with the affected values beside it.
 func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, drops []capDrop) {
-	byReason := map[string][]string{}
+	byReason := map[authz.Reason][]string{}
 	for _, d := range drops {
 		byReason[d.reason] = append(byReason[d.reason], d.detail)
 	}
 	for _, reason := range slices.Sorted(maps.Keys(byReason)) { // stable order for the stream
-		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", "runs.inline_policy", "denied", mustJSON(map[string]any{
-				"reason": reason, "dropped": byReason[reason],
-			})))
+		s.recordRefusal(ctx, r, authz.Drop(reason, "runs.inline_policy", byReason[reason]))
 	}
 }
 
@@ -711,6 +714,17 @@ func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDo
 		}
 		if derr != nil {
 			return nil, nil, http.StatusUnprocessableEntity, fmt.Errorf("%s grant scope invalid: %w", g.Kind, derr)
+		}
+		// bedrock-api-key is never member-authored, whoever owns the row — ahead
+		// of the own-key arm, which would otherwise admit it to any model-provider
+		// host under any header. Its one author is dispatch, whose grant records
+		// the namespace the key is read from (resolveBedrockBearerInjection); a
+		// member's own key reaches their runs that way under a per_user row.
+		if secretRef == bedrockAPIKeySecret {
+			warns = append(warns, fmt.Sprintf(
+				"dropped %s grant naming secret %q: the Bedrock API key reaches a run only through the grant Wardyn authors at launch",
+				g.Kind, secretRef))
+			continue
 		}
 		if g.Kind == types.GrantAPIKey {
 			if _, _, isSentinel := s.oauthProviderForSentinel(secretRef); isSentinel {
@@ -880,12 +894,12 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 						"policy uses %s LLM auth, but no %s token provider is configured", source, source)
 				}
 				// Host pin (write-time defense): the sentinel resolves to a LIVE
-				// OAuth token and may only ever target Anthropic. Reject an authored
-				// grant that points it elsewhere (the inject sink also enforces this,
-				// fail-closed).
-				if !hostEqual(rule.Host, subscriptionInjectionHost) {
+				// OAuth token and may only ever target Anthropic (or the operator's
+				// own configured gateway). Reject an authored grant that points it
+				// elsewhere (the inject sink also enforces this, fail-closed).
+				if !s.subscriptionInjectionHostAllowed(rule.Host) {
 					return http.StatusUnprocessableEntity, fmt.Errorf(
-						"%s LLM auth may only target %s, not %q", source, subscriptionInjectionHost, rule.Host)
+						"%s LLM auth may only target %s, not %q", source, s.subscriptionInjectionHostDesc(), rule.Host)
 				}
 				continue
 			}

@@ -41,7 +41,7 @@ type dockerStage struct {
 // deploy/images ends up with /home/agent/drive present and owned by agent —
 // directly, or by inheriting from a sibling image that does.
 //
-// WHY THIS IS A GUARD AND NOT A COMMENT. A managed (`docker_volume`) drive is
+// Why this is a guard and not a comment. A managed (`docker_volume`) drive is
 // mounted over this path, and Docker's copy-up gives the fresh volume the
 // uid/gid of the image directory it lands on. An image that never creates the
 // directory gets one conjured by the daemon at mount time — owned by ROOT — so
@@ -52,16 +52,16 @@ type dockerStage struct {
 // time would mean chowning volume state, which the control plane must never do
 // (deploy/images/base/Dockerfile states the full argument).
 //
-// This originally held for `base` and `oracle` only; `claude-code`, `codex-cli`
-// and `aws-sso` each created `/home/agent/work` alone, which is the drift this
-// test exists to make loud. deploy/images/README.md's image contract §5 and
-// "Adding a new agent image" step 5 are the prose half.
+// Every agent image needs it, not only `base` and `oracle`: an image that
+// creates `/home/agent/work` alone is the drift this test exists to make loud.
+// deploy/images/README.md's image contract §5 and "Adding a new agent image"
+// step 5 are the prose half.
 //
-// IT IS THE FINAL STAGE THAT SHIPS, so the walk starts there and follows only
+// It is the final stage that ships, so the walk starts there and follows only
 // that stage's own ancestry. A multi-stage Dockerfile's builder stages are
 // thrown away: a `mkdir /home/agent/drive` in one of them creates a directory
 // in a layer no container ever runs, and reading every stage's instructions as
-// one bag (which this guard used to do) let such a line satisfy a runtime stage
+// one bag would let such a line satisfy a runtime stage
 // that has none. The same applies to the FROM chain — an earlier
 // `FROM wardyn/agent-base:local AS tools` says nothing about a final stage
 // built on debian, so the parent hop is taken from the FINAL stage's base only,
@@ -166,11 +166,19 @@ func TestAgentImagesPreCreateDriveDir(t *testing.T) {
 
 // dockerfileStages splits a Dockerfile into its stages: each FROM starts one,
 // and the instructions after it belong to it. ARG lines before the first FROM
-// are global and belong to no stage, so they are dropped.
+// are global and belong to no stage — but their defaults are kept, because a
+// `FROM ${VAR}` base is resolved against them (resolveArgRef).
 func dockerfileStages(src string) []dockerStage {
 	var out []dockerStage
+	globals := map[string]string{}
 	for _, in := range dockerfileInstructions(src) {
 		fields := strings.Fields(in)
+		if len(out) == 0 && len(fields) >= 2 && strings.EqualFold(fields[0], "ARG") {
+			if k, v, ok := strings.Cut(fields[1], "="); ok {
+				globals[k] = v
+			}
+			continue
+		}
 		if len(fields) < 2 || !strings.EqualFold(fields[0], "FROM") {
 			if len(out) > 0 {
 				last := &out[len(out)-1]
@@ -186,13 +194,29 @@ func dockerfileStages(src string) []dockerStage {
 		if len(rest) == 0 {
 			continue
 		}
-		st.base = strings.ToLower(rest[0])
+		st.base = strings.ToLower(resolveArgRef(rest[0], globals))
 		if len(rest) >= 3 && strings.EqualFold(rest[1], "AS") {
 			st.alias = strings.ToLower(rest[2])
 		}
 		out = append(out, st)
 	}
 	return out
+}
+
+// resolveArgRef resolves a BuildKit `FROM ${VAR}` / `FROM $VAR` base against
+// the Dockerfile's own global `ARG VAR=default`, the same resolution
+// scripts/check-image-pins.sh applies. Only the default is knowable here. A
+// ref that does not resolve is returned unchanged, so the FROM-chain check
+// still fails loudly on it rather than passing an image it never traced.
+func resolveArgRef(ref string, globals map[string]string) string {
+	if !strings.HasPrefix(ref, "$") {
+		return ref
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(ref, "$"), "{"), "}")
+	if v, ok := globals[name]; ok && v != "" {
+		return v
+	}
+	return ref
 }
 
 // stageByAlias returns the index of the stage answering to ref, or -1.
@@ -298,12 +322,12 @@ func driveMkdirSegmentIndex(instr string) int {
 // directory — the half that matters, because a drive directory the image creates
 // but leaves owned by root is exactly as unwritable as one it never created.
 //
-// A COMPLETE WORD, never a substring: `strings.Contains(mk, "chown -R
+// A complete word, never a substring: `strings.Contains(mk, "chown -R
 // agent:agent /home/agent")` was satisfied by `chown -R agent:agent
 // /home/agent/work`, which is the drift this file was written for in the first
 // place — the work directory chowned, the drive directory left to root.
 //
-// AND IN ORDER, which membership alone cannot say. `&&` is sequential: a
+// And in order, which membership alone cannot say. `&&` is sequential: a
 // recursive chown that runs BEFORE the mkdir owns everything the image had at
 // that moment and nothing the mkdir goes on to create, so `chown -R agent:agent
 // /home/agent && mkdir -p /home/agent/work /home/agent/drive` ships the exact
@@ -343,7 +367,8 @@ func sortedKeys(m map[string][]dockerStage) []string {
 
 // TestDockerfileStages_ABuilderStageDoesNotCountForTheRuntimeStage is the
 // counterfactual for the walk above, on a Dockerfile no image in the tree has —
-// and the exact shape that used to pass wrongly. Reading every instruction as
+// and the exact shape a one-bag reading passes wrongly. Reading every
+// instruction as
 // one bag found the builder's mkdir; taking the LAST `FROM wardyn/agent-…`
 // found the builder's parent. Both answers describe a layer that is thrown
 // away, while the image that actually ships has a root-owned /home/agent/drive.
@@ -383,7 +408,7 @@ RUN mkdir -p /home/agent/work && chown -R agent:agent /home/agent
 }
 
 // TestDriveDirGuard_RefusesLookalikes is the counterfactual for the two
-// predicates the walk above is built on — the shapes that used to satisfy a
+// predicates the walk above is built on — the shapes that satisfy a
 // substring test while shipping an image whose /home/agent/drive is root-owned
 // or absent. Every "want false" row here is an image that would have graded
 // green.
@@ -417,14 +442,14 @@ func TestDriveDirGuard_RefusesLookalikes(t *testing.T) {
 		want  bool
 	}{
 		{"the real thing", "RUN mkdir -p /home/agent/drive && chown -R agent:agent /home/agent", true},
-		// THE ORIGINAL HOLE: a chown of a CHILD of the home satisfies the
+		// The original hole: a chown of a child of the home satisfies the
 		// substring `chown -R agent:agent /home/agent` and leaves the drive
 		// directory owned by root.
 		{"a child of the home", "RUN mkdir -p /home/agent/drive && chown -R agent:agent /home/agent/work", false},
 		{"not recursive", "RUN mkdir -p /home/agent/drive && chown agent:agent /home/agent", false},
 		{"the wrong owner", "RUN mkdir -p /home/agent/drive && chown -R root:root /home/agent", false},
 		{"a mention, not a chown", `RUN mkdir -p /home/agent/drive && echo "chown -R agent:agent /home/agent"`, false},
-		// THE ORDER HOLE: `&&` is sequential, so a recursive chown that runs
+		// The order hole: `&&` is sequential, so a recursive chown that runs
 		// BEFORE the mkdir owns nothing the mkdir goes on to create. Both
 		// segments are present in one instruction, which is all the membership
 		// test ever asked — and the image ships a ROOT-owned /home/agent/drive.
@@ -442,6 +467,29 @@ func TestDriveDirGuard_RefusesLookalikes(t *testing.T) {
 		t.Run("chown/"+tc.name, func(t *testing.T) {
 			if got := chownsAgentHomeAfter(tc.instr); got != tc.want {
 				t.Errorf("chownsAgentHomeAfter(%q) = %v, want %v", tc.instr, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDockerfileStagesResolvesArgBase pins the FROM ${VAR} resolution: a UI
+// image built `FROM ${BASE_IMAGE}` must trace to the image its ARG default
+// names, or the drive-dir chain dead-ends at a literal "${base_image}".
+func TestDockerfileStagesResolvesArgBase(t *testing.T) {
+	for _, tc := range []struct{ name, src, want string }{
+		{"braced", "ARG BASE_IMAGE=wardyn/agent-base:local\nFROM ${BASE_IMAGE}\nRUN true\n", "wardyn/agent-base:local"},
+		{"bare", "ARG BASE_IMAGE=wardyn/agent-base:local\nFROM $BASE_IMAGE\n", "wardyn/agent-base:local"},
+		{"literal untouched", "FROM wardyn/agent-base:local\n", "wardyn/agent-base:local"},
+		{"unresolvable stays loud", "FROM ${NOPE}\n", "${nope}"},
+		{"stage ARG is not global", "FROM debian AS b\nARG BASE_IMAGE=x\nFROM ${BASE_IMAGE}\n", "${base_image}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := dockerfileStages(tc.src)
+			if len(st) == 0 {
+				t.Fatalf("parsed to zero stages")
+			}
+			if got := st[len(st)-1].base; got != tc.want {
+				t.Errorf("final stage base = %q, want %q", got, tc.want)
 			}
 		})
 	}

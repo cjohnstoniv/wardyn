@@ -4,7 +4,6 @@
 package api
 
 import (
-	"context"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -19,39 +18,22 @@ import (
 // workspace_egress.go computes what a workspace contributes to a run's egress
 // allowlist: the trusted hosts its scan found, the operator's own approvals,
 // the corporate mirrors those get substituted for, the clone hosts every repo
-// source needs, and the deliberately WIDER set a confined replay gets. Split
-// out of workspace_run.go when that file crossed its size cap; the grouping is
-// the real seam — every function here answers "which hosts, and why is that
-// honest", and none of them launch anything.
-//
-// The observed-egress synthesis at the bottom joined it from workspaces.go for
-// the same two reasons: that file reached the same size cap, and "which hosts
-// would an operator want to allow next, and why is offering them honest" is the
-// question this file already answers — read-only and advisory, launching
-// nothing.
+// source needs, the deliberately WIDER set a confined replay gets, and the
+// observed-egress synthesis. Every function here answers "which hosts, and why is
+// that honest", and none of them launch anything.
 
 // unionWorkspaceEgress adds every referenced workspace's trusted egress to the
 // spec's AllowedDomains (deduped, in-place) AND its permanently-denied egress
 // to spec.DeniedDomains (deduped, in-place) — but returns what it added to
-// AllowedDomains ONLY. Three sources, all operator-sanctioned: the scanned
-// profile's EgressDomains (filename-keyed marker table — never file content),
-// the workspace's ApprovedEgress (content-derived suggestions the operator
-// explicitly promoted), and DeniedEgress (the operator's permanent
-// `deny · always` decisions — Phase 4). The scanner's raw SuggestedEgress is
+// AllowedDomains ONLY. Three sources, all operator-sanctioned: the profile's
+// EgressDomains (filename-keyed marker table — never file content),
+// ApprovedEgress and DeniedEgress. The scanner's raw SuggestedEgress is
 // deliberately NOT here — a hostile file must never widen an allowlist
 // without a human approval.
-//
-// The return stays ALLOW-shaped on purpose: its two production consumers,
-// runs_create.go's `added_domains` audit and compose_setup.go's "launch will
-// also allow: …" checklist copy, would both misreport a block as a widening
-// if a deny rode along in the same slice. A caller that needs to know what
-// was denied computes it itself (see setupEgressWorkspaceItem, which diffs
-// spec.DeniedDomains before/after this call).
-//
-// The confinement floor is unaffected; the deny-list is not — and deny beats
-// allow, allow_all_egress, and a runtime first-use approval alike wherever the
-// proxy evaluates policy (see docs/POLICIES.md), so a workspace's permanent
-// deny now rides every union this function backs (create, preflight).
+// The return stays ALLOW-shaped: its consumers (runs_create.go's `added_domains`
+// audit, compose_setup.go's "launch will also allow" copy) would misreport a
+// block as a widening; setupEgressWorkspaceItem diffs spec.DeniedDomains itself.
+// Deny beats allow everywhere the proxy evaluates policy (docs/POLICIES.md).
 func unionWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspace) []string {
 	var added []string
 	for _, ws := range workspaces {
@@ -121,24 +103,16 @@ func filterOffEgress(domains []string, off map[string]bool) []string {
 
 // unionSiteConfigScmHosts adds the operator's site-config default SCM hosts
 // (types.SiteConfig.ScmHosts, set via PUT /api/v1/site-config) to the spec's
-// AllowedDomains (deduped, in-place) and returns what it added. Unlike GitHub/
-// ADO — whose egress bundles are either baked into the example policies or
-// derived from a git_pat/ssh_key grant's host (adoEgressDomains,
-// sshOver443Endpoint) — a self-hosted GHES or ADO Server has no such built-in
-// bundle, so the operator declares its host(s) once in site-config — as a
-// provider row's base URL, or in the legacy ScmHosts list — and every
-// cloning run inherits them. Non-secret, additive: it only ever widens the
-// allowlist with hosts the operator explicitly declared, never anything
-// content-derived. No SiteConfig row / no Store configured / no ScmHosts set
-// are all the common "unconfigured" case and add nothing.
-func (s *Server) unionSiteConfigScmHosts(ctx context.Context, spec *types.RunPolicySpec) []string {
-	if s.cfg.Store == nil {
-		return nil
-	}
-	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil {
-		return nil
-	}
+// AllowedDomains (deduped, in-place) and returns what it added. A self-hosted
+// GHES or ADO Server has no built-in egress bundle, so the operator declares its
+// host(s) once — as a provider row's base URL or in the legacy ScmHosts list —
+// and every cloning run inherits them. Additive, never content-derived; an
+// unconfigured site config adds nothing.
+//
+// It takes the site config rather than reading it: the autonomy gate grades
+// these hosts and launch's unionRunEgress dispatches them, and both must see
+// the SAME read (scmLaneSiteConfig) or they can disagree about the run.
+func unionSiteConfigScmHosts(spec *types.RunPolicySpec, sc types.SiteConfig) []string {
 	// effectiveScmHosts, not the raw ScmHosts list: once a provider row claims a
 	// host, that row decides whether it is reachable — a disabled github row plus
 	// a legacy scm_hosts: ["github.com"] must NOT keep unioning github.com into
@@ -151,38 +125,17 @@ func (s *Server) unionSiteConfigScmHosts(ctx context.Context, spec *types.RunPol
 }
 
 // substituteArtifactEgress applies the operator's egress redirects to a run's
-// AllowedDomains. Two tiers (types.SiteConfig.EgressRedirects):
-//   - Ecosystem set: DROPS that language's entire public-registry host set
-//     (markers.go's egress* literals, via workspacescan.PublicRegistryHosts), not
-//     just the one redirect's own From host, since a mirror commonly fronts more
-//     than one public host for the same ecosystem (e.g. pip's index host AND its
-//     file-download CDN) and byte-identical fold-compat depends on dropping both.
-//   - Ecosystem "" (network-only): DROPS exactly the one declared From host —
-//     there is no per-ecosystem table to consult for an arbitrary redirect.
-//
-// Scope — matching run only. A redirect is applied ONLY when the
-// run's OWN egress actually reaches one of the public hosts it fronts (its From
-// host, or an ecosystem public host — the same hosts a scan of that ecosystem
-// seeds into the run's egress). types.EgressRedirect promises substitution "for
-// every MATCHING run"; without this, an unrelated sealed run gained the corp To
-// host (and, via planArtifactRedirect, the operator's injected registry token) it
-// never asked for. A run that names none of a redirect's public hosts is left
-// entirely untouched by THIS function's allow-side substitution. A
-// network-only row's deny side is not scoped the same way — see
-// appendNetworkRedirectDenials below, applied unconditionally on every run
-// regardless of whether it reaches this redirect (docs/OPERATIONS.md, "Egress
-// redirects: two tiers").
-//
-// The dropped hosts are matched port- and wildcard-aware: a
-// "*.pythonhosted.org" or "pypi.org:443" allowlist entry — both legal in
-// AllowedDomains — is subtracted exactly like a bare "pypi.org" is, so public
-// reach never survives beside the corp mirror.
-//
-// The applied tier ADDS the redirect's To host. Corp REPLACES public for
-// configured, in-scope redirects; everything else is untouched. Returns a FRESH
-// slice (never mutates the input's backing array); a no-op (returns the input)
-// when nothing is configured. A malformed From/To leaves that redirect's public
-// host(s) in place (fail safe: never silently drop egress a build still needs).
+// AllowedDomains. Two tiers (types.SiteConfig.EgressRedirects): an ecosystem row
+// DROPS that language's whole public-registry set (workspacescan.PublicRegistryHosts,
+// since a mirror commonly fronts several hosts, e.g. pip's index AND its CDN); a
+// network-only row (ecosystem "") DROPS exactly its one From host. Either ADDS To.
+// Scope: the allow-side substitution applies ONLY to a run whose own egress
+// reaches one of the redirect's public hosts, so an unrelated run never gains the
+// corp host or planArtifactRedirect's injected token. A network-only row's deny
+// side is NOT scoped: see appendNetworkRedirectDenials. Dropped hosts match port-
+// and wildcard-aware ("*.pythonhosted.org", "pypi.org:443"), so public reach never
+// survives beside the corp mirror. Returns a FRESH slice (input if unconfigured);
+// a malformed From/To keeps its public host(s): never drop egress a build needs.
 func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 	if len(sc.EgressRedirects) == 0 {
 		return domains
@@ -206,21 +159,13 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 		for _, h := range pub {
 			dropHost[strings.ToLower(h)] = true
 		}
-		// Port-qualified, never bare. A bare allowlist entry matches on
-		// EVERY port (classifyDomain gives it port 0, and Policy.AllowsLiteralIP
-		// answers true from allowedExact before it ever consults the
-		// port-qualified map), so a bare redirect To of https://10.40.2.11:8443/
-		// would trust 10.40.2.11:22 and :5432 as well — the private-IP guard's
-		// whole job, undone on ports the operator never named. The MITM/token
-		// half of the SAME redirect is port-exact
-		// (planArtifactRedirect authors mitmHosts as net.JoinHostPort(host,
-		// redirectPort(r.To))), so the credential was scoped to one port while
-		// the SSRF trust was not. Both halves now derive the port from ONE
-		// function, so a To that names no port trusts exactly the port the MITM
-		// half already assumed for it — the port To's scheme names (80 for an
-		// explicit http://, 443 otherwise) — a mirror reached on some other port
-		// needs that port in the To, which is the same thing the token injection has
-		// always required.
+		// Port-qualified, never bare: a bare entry matches EVERY port (classifyDomain
+		// gives it port 0, and Policy.AllowsLiteralIP answers true from allowedExact
+		// first), so a bare To of https://10.40.2.11:8443/ would trust :22 and :5432
+		// too. planArtifactRedirect's MITM/token half derives the port from the same
+		// redirectPort (80 for an explicit http://, 443 otherwise), so the credential
+		// and the SSRF trust are scoped to one port; a mirror on another port needs
+		// that port in the To.
 		entry := net.JoinHostPort(to, strconv.Itoa(redirectPort(r.To)))
 		if !added[entry] {
 			added[entry] = true
@@ -320,21 +265,11 @@ func workspaceSuggestedEgress(workspaces []types.Workspace) []string {
 // (profile.EgressDomains, filename-keyed marker registries) + operator
 // ApprovedEgress. Content-derived SuggestedEgress is NOT included — a build
 // that needs one surfaces as an observed-egress denial the operator can
-// promote (least-privilege, honest).
-//
-// Stays ALLOW-only by return shape, matching unionWorkspaceEgress: the union
-// call below also folds ws.DeniedEgress into base.DeniedDomains, but that half
-// is discarded at the `return` — this function's one caller (workspace_run.go)
-// reads ws.DeniedEgress directly off the raw column for the deny side, since
-// there is no per-source deny CONTRACT to fold the way the required-egress
-// loop below folds allows.
-//
-// A method, not a package function, for one reason: the operator_set
-// provenance gate lives on s.cfg and this path MUST apply it. As a package
-// func, the gate would reach the run-create path only, leaving a scan_seeded
-// egress host — derived by the scanner from UNTRUSTED repo content — still
-// auto-allowed on every confined replay. Both paths now route through
-// egressProvenanceAllowed.
+// promote. ALLOW-only by return shape: the one caller (workspace_run.go) reads
+// ws.DeniedEgress directly for the deny side.
+// A method, so it MUST apply the operator_set provenance gate on s.cfg
+// (egressProvenanceAllowed): otherwise a scan_seeded host, derived from
+// UNTRUSTED repo content, would be auto-allowed on every confined replay.
 func (s *Server) confinedEgressDomains(ws types.Workspace) []string {
 	base := &types.RunPolicySpec{AllowedDomains: workspaceCloneEgress(ws)}
 	unionWorkspaceEgress(base, []types.Workspace{ws})
@@ -363,14 +298,9 @@ func (s *Server) confinedEgressDomains(ws types.Workspace) []string {
 // egress-provenance gate (RequireOperatorSetEgress,
 // WARDYN_REQUIRE_OPERATOR_SET_EGRESS — default TRUE): may this
 // workspace requirement row auto-widen a run's egress allowlist without an
-// operator ever acting?
-//
-// Every path that folds a workspace's egress: requirement rows into a run
-// policy calls this and nothing else. It exists because the gate was
-// originally written inline at the run-create call site, which left the
-// confined-replay path (confinedEgressDomains, above) unioning every required
-// row regardless of provenance — the same host the launch path refused, allowed
-// on the replay. A shared predicate is what makes "both paths" checkable.
+// operator ever acting? Every path that folds a workspace's egress: requirement
+// rows into a run policy (launch and confinedEgressDomains) calls this and
+// nothing else, so the paths cannot disagree.
 //
 // It answers only the PROVENANCE question. Whether a row is enabled at all
 // (required, or an optional row the operator selected) stays with each caller:
@@ -452,20 +382,16 @@ const (
 )
 
 // handleObservedEgress synthesizes least-privilege egress feedback from run
-// TELEMETRY (the pattern: run permissive, then tighten/expand from observed
-// evidence): it returns the egress hosts that runs using THIS workspace were
-// actually DENIED, minus what the workspace already allows or the operator
-// already approved. These are candidates an operator can promote into the
-// workspace's approved-egress list. Read-only and advisory — it never widens
-// anything itself.
+// TELEMETRY: the egress hosts runs using THIS workspace were actually DENIED,
+// minus what the workspace already allows or the operator already approved —
+// candidates an operator can promote into the approved-egress list. Read-only
+// and advisory — it never widens anything itself.
 //
 // The route is member-reachable, so the run scan is filtered by
-// ownsRunOrAdmin — the same owner-or-admin predicate handleListRuns and
-// getRunAuthorized use. Every host returned comes from a RUN's audit trail;
-// unfiltered, a member learned which hosts a colleague's run on the shared
-// workspace dialled — exactly the run telemetry getRunAuthorized 404s them out
-// of on /runs/{id}. An admin still sees the whole workspace's telemetry, which
-// is what the operator-owned promote flow needs.
+// ownsRunOrAdmin (as handleListRuns and getRunAuthorized are): unfiltered, a
+// member would learn which hosts a colleague's run on the shared workspace
+// dialled. An admin still sees the whole workspace's telemetry, which is what
+// the operator-owned promote flow needs.
 func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
 	if !ok {

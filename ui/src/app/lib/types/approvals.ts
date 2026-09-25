@@ -52,6 +52,11 @@ export interface ApprovalRequest {
   // transitions the row once this passes — the console derives "expired"
   // client-side (see copy.ts's approvalScopeBadge).
   decision_expires_at?: string;
+  // When a PENDING request stops waiting and the sweep moves it to EXPIRED:
+  // min(requested_at + the run's wait, the run's end), computed server-side
+  // from the run row (#567). Absent for a run created before run limits; the
+  // deployment's approval expiry still applies.
+  expires_at?: string;
 }
 
 // canDecideApproval mirrors internal/api/approvals.go's decide() exactly: an
@@ -126,11 +131,19 @@ const HOLD_TIMEOUT_MS = 30_000;
 //
 //  - tool_call — wardyn-toolgate blocks the agent's tool call on the PENDING
 //    row itself and polls until it is decided (cmd/wardyn-toolgate/main.go's
-//    -deadline is a 24h ceiling for a control plane that stopped answering,
-//    not a hold timeout), and the scope it raises is {tool,cmd,env} with no
+//    -deadline mirrors the operator's own approval ceiling and normally denies
+//    the call BEFORE the row's own server-side expiry sweeps it EXPIRED), and
+//    the scope it raises is {tool,cmd,env} with no
 //    mode at all (internal/egress/proxy/local_routes.go). PENDING alone IS the
 //    hold here, so nothing client-side bounds it the way HOLD_TIMEOUT_MS
-//    bounds the egress case — the row's own server-side expiry ends it.
+//    bounds the egress case — the row's own server-side expiry ends it, and
+//    only that ends it: #509 — a client-side stale-hold ceiling (60 minutes,
+//    #160) was declaring a row dead while the server kept the agent parked on
+//    it for up to WARDYN_APPROVAL_EXPIRY_AFTER (24h default,
+//    cmd/wardynd/boot_flags.go), which a returning operator's own inbox never
+//    agreed with. A PENDING row is live and still decidable until the
+//    approval.ExpireStale sweeper actually moves it to EXPIRED — no client
+//    constant can know better than the row's own state.
 //  - egress wait_for_review — the proxy carries the mode in the approval's
 //    requested_scope so the UI can flag it, but PENDING alone doesn't mean
 //    "still holding the sandbox": the connection fails closed at
@@ -141,15 +154,89 @@ const HOLD_TIMEOUT_MS = 30_000;
 // the same fact ("N waiting · sandbox held"). Two copies of this test would be
 // two truths that can disagree, and the disagreement would read as "nothing is
 // holding the sandbox" while the sandbox is, in fact, held.
+// ─── Azure DevOps capability escalation (plan slice S10) ───────────────────
+//
+// The canonical scope of a tool_call raised by injection_ado_capability.go's
+// answerADOCapability — see that file's adoCapabityScope doc. Cmd and Tool
+// are server-COMPOSED (adoCapabilityCmd), never client-derived: the console
+// renders them, it does not reconstruct them from the other fields.
+export interface AdoCapabilityScope {
+  lane: "azure_devops";
+  provider_id: string;
+  org: string;
+  grant_id: string;
+  capability: string;
+  repo: string;
+  ref_class?: "protected" | "";
+  tool: string;
+  cmd: string;
+}
+
+// The canonical scope of an Azure DevOps credential_reauth: raiseADOConsent's
+// Entra-consent-missing chain (mechanism entra_consent, with the scopes still
+// needed) or holdForADOSignIn's mid-run sign-in request (mechanism
+// entra_signin, reason "signin", no scopes) — internal/api's
+// injection_ado_capability.go and injection_ado_signin.go.
+export interface AdoConsentScope {
+  lane: "azure_devops";
+  mechanism: "entra_consent" | "entra_signin";
+  reason?: "signin";
+  owner: string;
+  provider_id: string;
+  scopes?: string[];
+}
+
+// Structural, never scope-key-based (mirrors the server's own
+// adoEscalationScope, internal/api/injection_ado_capability.go): a tool_call
+// with grant_id set is a control-plane-raised ADO escalation, an older
+// console's generic tool_call card is not.
+//
+// Takes a Pick, not the full ApprovalRequest: copy.ts's approvalScopeBadge
+// (F11, round 2) calls this with its own narrower Pick, and a full-shape
+// parameter would refuse that caller structurally even though every field
+// this function actually reads is present.
+export function isAdoCapabilityRequest<T extends Pick<ApprovalRequest, "kind" | "grant_id" | "requested_scope">>(
+  a: T,
+): a is T & { requested_scope: AdoCapabilityScope } {
+  return a.kind === "tool_call" && !!a.grant_id && a.requested_scope?.lane === "azure_devops";
+}
+
+export function isAdoConsentRequest(
+  a: ApprovalRequest,
+): a is ApprovalRequest & { requested_scope: AdoConsentScope } {
+  return (
+    a.kind === "credential_reauth" &&
+    a.requested_scope?.lane === "azure_devops" &&
+    (a.requested_scope?.mechanism === "entra_consent" || a.requested_scope?.mechanism === "entra_signin")
+  );
+}
+
+// canDecideApproval's ADO carve-out: authorizeMemberDecision
+// (internal/api/approvals.go) lets the run's OWNER decide their own run's
+// escalation, on top of the security-operator tier ownsRunOrAdmin
+// (internal/api/helpers.go) already covers — unlike every other tool_call,
+// which stays admin-only regardless of ownership. `securityOperator`, not a
+// general operator/admin flag: ownsRunOrAdmin bypasses ownership for
+// isSecurityOperator only, matching every other decide-path gate in this
+// codebase (0.7 §B). Kept as its own function rather than folded into
+// canDecideApproval: that one has no ownership parameter today and every
+// other kind it decides needs none.
+export function canDecideAdoCapability(securityOperator: boolean, isRunOwner: boolean): boolean {
+  return securityOperator || isRunOwner;
+}
+
 export function isHeld(a: ApprovalRequest): boolean {
-  if (a.kind === "tool_call") return true;
+  // #509 — PENDING alone is live for both of these, at any age: see the
+  // tool_call bullet above for why no client ceiling belongs here.
+  if (a.kind === "tool_call") return a.state === "PENDING";
   // A credential_reauth row is raised BECAUSE the proxy is holding a request.
   // It carries no first_use mode of its own — the mode vocabulary belongs to
   // the egress lane — so without this it would read as a passive pending and
   // the run would show no hold while a model call was parked.
-  if (a.kind === "credential_reauth") return true;
+  if (a.kind === "credential_reauth") return a.state === "PENDING";
   if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
   const requestedAt = Date.parse(a.requested_at);
   if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
   return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
 }
+

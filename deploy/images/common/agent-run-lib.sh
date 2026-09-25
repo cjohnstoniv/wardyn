@@ -379,17 +379,23 @@ configure_git_broker_insteadof() {
 # mean a broker failure silently reverts to a lane where the PAT is resident,
 # which is the posture this exists to remove. If the broker is unreachable the
 # clone fails and says so.
+#
+# An entry may also be `<user>@<host>`: the URL Azure DevOps' own Clone button
+# hands out is https://<org>@dev.azure.com/..., and git's insteadOf is a prefix
+# match, so that spelling needs its own rewrite onto the SAME broker path. The
+# user part is dropped — the broker supplies the credential.
 configure_git_pat_broker_insteadof() {
     [[ -n "${WARDYN_GIT_PAT_BROKER_HOSTS:-}" ]] || return 0
     command -v git >/dev/null 2>&1 || return 0
-    local base host
+    local base entry host
     base="${WARDYN_PROXY_URL:-http://wardyn-proxy:3128}"
     base="${base%/}"
-    for host in $WARDYN_GIT_PAT_BROKER_HOSTS; do
+    for entry in $WARDYN_GIT_PAT_BROKER_HOSTS; do
         # Host-shaped only. The value is server-set, but this is the string that
         # becomes a URL prefix, so it is validated here rather than trusted.
-        [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]] || continue
-        git config --global url."${base}/wardyn/git/${host}/".insteadOf "https://${host}/" || true
+        [[ "$entry" =~ ^([A-Za-z0-9-]+@)?[A-Za-z0-9.-]+$ ]] || continue
+        host="${entry#*@}"
+        git config --global --add url."${base}/wardyn/git/${host}/".insteadOf "https://${entry}/" || true
     done
 }
 
@@ -828,4 +834,31 @@ selftest_report_repo_and_git() {
         echo "  caller-auth gate: not provisioned (no git grant; helper fails open so unmatched-host git is unaffected)"
     fi
     return $rc
+}
+
+# go_duration_to_ms converts a Go time.Duration string (h/m/s/ms components,
+# e.g. "24h0m0s", "90m", "1h30m0s" — the shape WARDYN_APPROVAL_EXPIRY_AFTER
+# arrives in, dispatch's mirror of the SAME ceiling the approval-expiry
+# sweeper expires a PENDING approval at) to whole milliseconds on stdout.
+# Unparseable input prints nothing (empty stdout) rather than failing the
+# run — callers fall back to their own default; it always returns 0, so a
+# bare `x=$(go_duration_to_ms ...)` is safe under set -e. RL-1: this is how
+# agent-run sizes MCP_TOOL_TIMEOUT to the real ceiling.
+go_duration_to_ms() {
+    local d="$1" total=0 num unit chunk
+    [[ -n "$d" ]] || return 0
+    while [[ "$d" =~ ^([0-9]+(\.[0-9]+)?)(h|ms|m|s) ]]; do
+        num="${BASH_REMATCH[1]}"
+        unit="${BASH_REMATCH[3]}"
+        case "$unit" in
+            h) chunk=$(awk "BEGIN{printf \"%.0f\", $num*3600000}") ;;
+            m) chunk=$(awk "BEGIN{printf \"%.0f\", $num*60000}") ;;
+            s) chunk=$(awk "BEGIN{printf \"%.0f\", $num*1000}") ;;
+            ms) chunk=$(awk "BEGIN{printf \"%.0f\", $num}") ;;
+        esac
+        total=$((total + chunk))
+        d="${d#"${BASH_REMATCH[0]}"}"
+    done
+    [[ -z "$d" ]] || return 0  # trailing garbage: refuse to guess, print nothing
+    if (( total > 0 )); then echo "$total"; fi
 }

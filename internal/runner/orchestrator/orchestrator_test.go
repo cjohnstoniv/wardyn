@@ -5,6 +5,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ type fakeSubstrate struct {
 	structural bool
 	recording  bool
 	drives     bool
+	managed    bool
 	diskEnf    types.StorageEnforcement
 	refPrefix  string
 
@@ -46,6 +48,7 @@ func (f *fakeSubstrate) Classes(context.Context) (substrate.ClassSupport, error)
 		StructuralEgress:         f.structural,
 		SessionRecording:         f.recording,
 		UserDrives:               f.drives,
+		ManagedFiles:             f.managed,
 		EphemeralDiskEnforcement: f.diskEnf,
 	}, nil
 }
@@ -288,8 +291,8 @@ func TestOrchestrator_NameIsSoleSubstrate(t *testing.T) {
 
 // TestOrchestrator_ClassesCachedWithinTTL pins Capabilities()/substrateFor()
 // memoize each substrate's ClassSupport for capsCacheTTL, so repeated hot-path
-// calls collapse to ONE daemon probe per substrate per TTL (they previously did a
-// live docker Info() round-trip every call). A countable fake proves the probe
+// calls collapse to one daemon probe per substrate per TTL, not a live docker
+// Info() round-trip every call. A countable fake proves the probe
 // count; a fake clock proves the TTL boundary forces exactly one refresh.
 func TestOrchestrator_ClassesCachedWithinTTL(t *testing.T) {
 	oci := &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1, types.CC2}, resolved: map[types.ConfinementClass]string{types.CC1: "oci/runc"}}
@@ -376,6 +379,52 @@ func TestCapabilitiesUserDrivesIsAConjunction(t *testing.T) {
 	}
 }
 
+// TestCapabilitiesManagedFilesIsAConjunction pins the second non-union flag,
+// for UserDrives' reason: whether a run gets its root-owned ceiling is decided
+// BEFORE a substrate is picked, so a union would let a deployment promise a
+// file one of its substrates cannot deliver. The failure that would cause is
+// worse than a refused mount — the control plane would record the ceiling as
+// delivered on a run that never got one.
+func TestCapabilitiesManagedFilesIsAConjunction(t *testing.T) {
+	ctx := context.Background()
+	sub := func(name string, managed bool) *fakeSubstrate {
+		return &fakeSubstrate{name: name, classes: []types.ConfinementClass{types.CC1}, managed: managed}
+	}
+
+	for _, tc := range []struct {
+		name string
+		subs []*fakeSubstrate
+		want bool
+	}{
+		{name: "every substrate can deliver", subs: []*fakeSubstrate{sub("a", true), sub("b", true)}, want: true},
+		{name: "one cannot, so the deployment cannot", subs: []*fakeSubstrate{sub("a", true), sub("b", false)}, want: false},
+		{name: "order does not matter", subs: []*fakeSubstrate{sub("a", false), sub("b", true)}, want: false},
+		{name: "a single capable substrate can", subs: []*fakeSubstrate{sub("a", true)}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var subs []substrate.Substrate
+			for _, s := range tc.subs {
+				subs = append(subs, s)
+			}
+			caps, err := New(subs...).Capabilities(ctx)
+			if err != nil {
+				t.Fatalf("Capabilities: %v", err)
+			}
+			if caps.ManagedFiles != tc.want {
+				t.Errorf("ManagedFiles = %v, want %v", caps.ManagedFiles, tc.want)
+			}
+		})
+	}
+
+	caps, err := New().Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities (no substrates): %v", err)
+	}
+	if caps.ManagedFiles {
+		t.Error("ManagedFiles = true with no substrates wired")
+	}
+}
+
 // TestCapabilities_EphemeralDiskEnforcementIsTheWeakestWord pins the aggregation
 // direction. A UNION would be the bug: the word is what an admin is told a disk
 // number MEANS, and a deployment with one docker-on-xfs substrate must not tell
@@ -406,5 +455,40 @@ func TestCapabilities_EphemeralDiskEnforcementIsTheWeakestWord(t *testing.T) {
 				t.Errorf("EphemeralDiskEnforcement = %q, want %q", caps.EphemeralDiskEnforcement, tc.want)
 			}
 		})
+	}
+}
+
+// endingSubstrate is a fakeSubstrate that can keep an ended sandbox.
+type endingSubstrate struct {
+	*fakeSubstrate
+	ends []string
+}
+
+func (e *endingSubstrate) EndSandbox(_ context.Context, ref string) error {
+	e.rec(&e.ends, ref)
+	return nil
+}
+
+// TestOrchestrator_EndSandbox: the lease end reaches a substrate that can keep
+// a stopped sandbox, and keeps the route so a later kill still finds it. One
+// that cannot keep it (Kubernetes) answers ErrEndUnsupported, which the control
+// plane turns into a full teardown.
+func TestOrchestrator_EndSandbox(t *testing.T) {
+	ctx := context.Background()
+	oci := &endingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
+	o := New(oci)
+	if err := o.EndSandbox(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("EndSandbox: %v", err)
+	}
+	if err := o.KillSandbox(ctx, "wardyn-agent-x"); err != nil {
+		t.Fatalf("KillSandbox after the end: %v", err)
+	}
+	if len(oci.ends) != 1 || len(oci.kills) != 1 {
+		t.Errorf("ends %v kills %v; want the end forwarded and the route kept for the kill", oci.ends, oci.kills)
+	}
+
+	k8s := New(&fakeSubstrate{name: "k8s", classes: []types.ConfinementClass{types.CC1}})
+	if err := k8s.EndSandbox(ctx, "wardyn-agent-y"); !errors.Is(err, runner.ErrEndUnsupported) {
+		t.Errorf("EndSandbox on a substrate that cannot keep a sandbox = %v, want ErrEndUnsupported", err)
 	}
 }

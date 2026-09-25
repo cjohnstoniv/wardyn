@@ -20,7 +20,19 @@
 import * as React from "react";
 import { ShieldAlert, Clock, Check, ChevronDown, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
-import { canDecideApproval, decisionArgs, isHeld, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
+import {
+  canDecideApproval,
+  decisionArgs,
+  isAdoCapabilityRequest,
+  isAdoConsentRequest,
+  isHeld,
+  type ApprovalRequest,
+  type ApprovalScope,
+  type DecisionOptions,
+} from "../../lib/types";
+import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
+import { ADO } from "../../lib/ado-entra-copy";
+import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
@@ -38,7 +50,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { cn } from "../ui/utils";
 import { Mono } from "./code-block";
 
@@ -46,7 +58,7 @@ import { Mono } from "./code-block";
 // re-exported so this module stays the place a reader of the strip looks.
 export { isHeld };
 import { Chip, SectionLabel } from "./primitives";
-import { useSecurityOperator } from "./operator-context";
+import { useSecurityOperator, usePrincipal } from "./operator-context";
 import { attentionRank } from "./run-state-glyph";
 import {
   ALWAYS_NEEDS_WORKSPACE,
@@ -140,16 +152,33 @@ export function LiveApprovals({
   // forgets to pass it shows the option disabled rather than offering a click
   // the server 400s. Every production mount passes it explicitly.
   hasWorkspace = false,
+  // S10 round 2 (F2/F3) — the run this strip is mounted on, so an Azure
+  // DevOps escalation card can tell its own owner from anyone else. All FOUR
+  // real production mounts (run-detail.tsx; demo-runner.tsx; workspace-
+  // detail/record-pane.tsx TWICE) pass it explicitly — run-detail.tsx passes
+  // its real, already-loaded RunDetail; the other three pass `null` on
+  // purpose (see each call site's own comment: none has a real AgentRun in
+  // hand, or an ADO row is not expected there at all). Defaults to null, not
+  // undefined: this
+  // component's own test suite mounts it dozens of times with no ADO row in
+  // play, and `null` reads as "no run known" (AdoCapabilityCard treats it
+  // exactly like a run it couldn't read: a security operator still decides;
+  // anyone else sees the honest "couldn't load this run" state) rather than
+  // `undefined`'s "still loading" — a default that would only ever LOOK
+  // finished once, and every test mount is exactly that "never resolves"
+  // shape if it defaulted to undefined instead.
+  run = null,
 }: {
   runId: string;
   reasonApprove?: string;
   reasonDeny?: string;
   idleHint?: string;
   hasWorkspace?: boolean;
+  run?: AdoCardRun | null;
 }) {
   // Decides here go straight to the API with no ReasonDialog stop, so this is
-  // the one gate for all three mount sites (run detail, demo screen, the
-  // record-mode verify panel) — see approvals.tsx's PendingCard for the
+  // the one gate for all FOUR mount sites (run detail, demo screen, and
+  // record-pane.tsx's two) — see approvals.tsx's PendingCard for the
   // queue-screen equivalent.
   //
   // useSecurityOperator, not useOperator (0.7 §B): authorizeMemberDecision
@@ -157,8 +186,16 @@ export function LiveApprovals({
   // decision_scope=always is its lockstep pair (approvals.go:604), so the
   // security tier decides any kind, on any run, at any scope.
   const securityOperator = useSecurityOperator();
+  // The signed-in viewer's own subject — see the `run` prop's doc above for
+  // why the ADO card needs both.
+  const principal = usePrincipal();
   const [pending, setPending] = React.useState<ApprovalRequest[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
+  // Which of the busy row's two actions is in flight (#458) — `busy` alone
+  // (a row id) is shared with every non-ADO row's own decide(), which never
+  // needed the distinction; only the ADO card's split Approve/Deny does. See
+  // AdoCapabilityCard's own `busy` doc for why a single boolean isn't enough.
+  const [busyAction, setBusyAction] = React.useState<"approve" | "deny" | null>(null);
   // A misclick on Deny (any scope) can't silently poison a host the operator
   // meant to keep — a confirm stop, mirroring DeleteConfirmDialog's pattern.
   // Approve's DEFAULT scope stays a single click: it is the low-risk,
@@ -267,9 +304,16 @@ export function LiveApprovals({
   // "run" so this stays a literal 2-argument api call for the default path
   // (vitest's toHaveBeenCalledWith matches arity exactly).
   //
-  // A tool_call row can only ever take that default path: decide rule 4
-  // (approvals.go) 400s ANY explicit decision_scope on a non-egress approval,
-  // so the caret is not rendered for those rows and nothing can hand one in.
+  // A NON-ADO tool_call row can only ever take that default path: decide
+  // rule 4 (approvals.go) 400s ANY explicit decision_scope on a non-egress,
+  // non-ADO approval, so the caret is not rendered for those rows and
+  // nothing can hand one in. An Azure DevOps escalation (S10) is the ONE
+  // tool_call exception — adoDecisionRule accepts once/run — and it never
+  // reaches this function: isAdoCapabilityRequest/isAdoConsentRequest rows
+  // render <AdoCapabilityCard> below instead, which calls decideAdo (its own
+  // function, right after this one) — NOT decide() — because decisionArgs'
+  // omit-for-"run" convention would collide with adoDecisionRule's own
+  // different bodyless default; see decideAdo's doc.
   const decide = async (a: ApprovalRequest, approve: boolean, scope: ApprovalScope = "run", until?: string) => {
     setBusy(a.id);
     try {
@@ -286,11 +330,30 @@ export function LiveApprovals({
       }
       await refresh();
     } catch (e) {
-      toast.error(approve ? "Approve failed" : "Deny failed", {
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(e),
       });
     } finally {
       setBusy(null);
+    }
+  };
+
+  // decideAdo — the ADO capability card's own decide path (S10), used
+  // instead of decide() above for exactly the reason its comment gives: this
+  // card ALWAYS sends an explicit decision_scope (adoDecisionArgs in
+  // ado-capability-card.tsx), never decisionArgs()'s omit-for-"run" shape.
+  const decideAdo = async (a: ApprovalRequest, approve: boolean, opts: [DecisionOptions]) => {
+    setBusy(a.id);
+    setBusyAction(approve ? "approve" : "deny");
+    try {
+      if (approve) await api.approve(a.id, reasonApprove, ...opts);
+      else await api.deny(a.id, reasonDeny, ...opts);
+      await refresh();
+    } catch (e) {
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(e) });
+    } finally {
+      setBusy(null);
+      setBusyAction(null);
     }
   };
 
@@ -327,14 +390,26 @@ export function LiveApprovals({
   // Three sentences that are false for a re-auth row (UX round B2):
   // "approve to let it through" names a decision nobody makes for this kind;
   // when every pending row is one, the heading names the need instead.
-  const allReauth = pending.length > 0 && pending.every((a) => a.kind === "credential_reauth");
-  const heading = allReauth
+  //
+  // S10 round 2 (F3): credential_reauth is not ONE kind of need — an Azure
+  // DevOps consent row (isAdoConsentRequest) is a DIFFERENT provider from a
+  // mid-run AWS sign-in, and REAUTH_HEADING says "AWS" outright. Both are
+  // split out of the generic reauth bucket so neither claims the other's
+  // provider; a MIXED set (both present, or reauth alongside something else)
+  // falls through to the generic "waiting on you" heading rather than assert
+  // either provider by name.
+  const allAwsReauth =
+    pending.length > 0 && pending.every((a) => a.kind === "credential_reauth" && !isAdoConsentRequest(a));
+  const allAdoConsent = pending.length > 0 && pending.every((a) => isAdoConsentRequest(a));
+  const heading = allAwsReauth
     ? REAUTH_HEADING
-    : anyHeld
-      ? "Sandbox is waiting — approve to let it through"
-      : pending.every((a) => a.kind === "egress_domain")
-        ? "Approval needed — off-policy egress"
-        : "Approval needed — the agent is waiting on you";
+    : allAdoConsent
+      ? ADO.STRIP_HEADING_CONSENT
+      : anyHeld
+        ? "Sandbox is waiting — approve to let it through"
+        : pending.every((a) => a.kind === "egress_domain")
+          ? "Approval needed — off-policy egress"
+          : "Approval needed — the agent is waiting on you";
 
   return (
     <div
@@ -355,8 +430,15 @@ export function LiveApprovals({
             // The re-auth kind is EXCLUDED: "requires the admin role" is false
             // of a row the admin cannot decide either (canDecideApproval is
             // false for it on every tier), and the person it is addressed to is
-            // the one who can fix it.
-            (a) => a.kind !== "credential_reauth" && !canDecideApproval(securityOperator, a.kind),
+            // the one who can fix it. Every ADO escalation is ALSO excluded
+            // (round-2 F2/N4) — this component's own fetch is ownership-gated
+            // server-side at all four of its mount sites (the same
+            // `ownershipScopedList` trust the card itself is given below), so
+            // a row reaching `pending` at all already proves this viewer may
+            // decide it — with or without a `run` object in hand. Without
+            // this, a run's own owner read "requires the admin role" on a row
+            // their own card lets them decide, on the very same strip.
+            (a) => a.kind !== "credential_reauth" && !canDecideApproval(securityOperator, a.kind) && !isAdoCapabilityRequest(a),
           ) && (
           <span className="ml-auto text-meta font-normal normal-case text-muted-foreground">
             {SECURITY_ONLY_REASON}
@@ -364,6 +446,39 @@ export function LiveApprovals({
         )}
       </div>
       {shown.map((a) => {
+        // S10 — an Azure DevOps escalation (or its Entra-consent chain) gets
+        // the FULL card, not the strip's usual one-liner: it needs fields
+        // (repository, ref class, the composed command) and its own Once/
+        // This-run scope control the strip's plain row can't show. `run` and
+        // `principal` are this component's own props/hook (see the `run`
+        // prop's doc) — round 1 hardcoded `operator` to true here on the
+        // (wrong, see F2/F12) assumption every mount site gates on
+        // ownsRunOrAdmin the way run-detail.tsx's GET /runs/{id} does; two of
+        // this component's four real mounts (record-pane.tsx) do not. N1
+        // (round 2): `pending` (this component's own state) is already
+        // PENDING-only (refresh() fetches listApprovals("PENDING", runId)),
+        // but the check is explicit here too — same reasoning as
+        // approvals.tsx's PendingCard.
+        if ((isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) && a.state === "PENDING") {
+          return (
+            <AdoCapabilityCard
+              key={a.id}
+              item={a}
+              securityOperator={securityOperator}
+              viewerPrincipal={principal}
+              run={run}
+              // N4 (round 2): this component's own fetch (listApprovals(state,
+              // runId)) is ownership-gated server-side at every one of its
+              // four mount sites — a row reaching `pending` at all already
+              // proves this viewer may decide it, `run` or no `run`. See the
+              // card's own doc for what this does and does not change.
+              ownershipScopedList
+              busy={busy === a.id ? busyAction : null}
+              onApprove={(opts: [DecisionOptions]) => decideAdo(a, true, opts)}
+              onDeny={(opts: [DecisionOptions]) => decideAdo(a, false, opts)}
+            />
+          );
+        }
         const label = rowLabel(a);
         const held = isHeld(a);
         // Only egress decisions carry a scope (decide rule 4) — see decide().
@@ -501,7 +616,7 @@ export function LiveApprovals({
               disabled={busy === denyTarget?.request.id}
               onClick={(e) => {
                 e.preventDefault();
-                confirmDeny();
+                void confirmDeny();
               }}
               className="bg-danger text-danger-foreground hover:bg-danger/90"
             >
@@ -514,14 +629,25 @@ export function LiveApprovals({
   );
 }
 
+// outline-none + the three focus-visible: classes are CONSOLE-RULES.md §34's
+// standard ring (button.tsx#buttonVariants carries the same three) — these
+// buttons went keyboard-reachable under a Popover (review finding F3) and,
+// without this, showed the browser's default outline instead (review
+// finding 5).
 const SCOPE_ITEM_CLS =
-  "flex w-full flex-col items-start gap-0 rounded-sm px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
+  "flex w-full flex-col items-start gap-0 rounded-sm px-2 py-1.5 text-left text-sm text-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
 
 // ScopeMenu — the split button's caret content (Approve and Deny each mount
 // their own instance). Renders every option as a plain <button>, not
 // DropdownMenuItem: Always must carry a REAL disabled attribute when gated
 // (see reason-dialog.tsx's identical note) — a div-based menu item can never
 // have one, only aria-disabled, and Playwright will happily "click" that.
+// Held in a Popover, not a DropdownMenu (review finding F3): Radix's
+// DropdownMenuContent runs its own roving-tabindex focus manager over
+// registered DropdownMenuItems and swallows Tab, so a plain <button> inside
+// it is dead to the keyboard — neither Tab nor the arrow keys ever reach it.
+// Popover's content does not manage focus that way, so Tab walks these
+// buttons in plain DOM order and Enter/Space activate them natively.
 function ScopeMenu({
   verb,
   hasWorkspace,
@@ -539,6 +665,13 @@ function ScopeMenu({
 }) {
   const [open, setOpen] = React.useState(false);
   const [untilMode, setUntilMode] = React.useState(false);
+  // The sub-view's first control ("← Back") — focused when untilMode opens,
+  // since swapping PopoverContent's children does not move focus on its own
+  // and it would otherwise drop to the page body (#481).
+  const backRef = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    if (untilMode) backRef.current?.focus();
+  }, [untilMode]);
   // The custom datetime-local's picked value, held here until the operator
   // explicitly confirms it — see the "Use this time" button below. A preset
   // click is already one deliberate, atomic action and commits straight
@@ -560,7 +693,7 @@ function ScopeMenu({
   };
 
   return (
-    <DropdownMenu
+    <Popover
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
@@ -570,14 +703,17 @@ function ScopeMenu({
         }
       }}
     >
-      <DropdownMenuTrigger asChild>
+      <PopoverTrigger asChild>
         {/* Deliberately not named "…approve…"/"…deny…" — see the row comment
             above this component's two mount sites. */}
         <Button size="sm" variant="outline" className={cn("h-7 w-6 p-0", triggerClassName)} aria-label="More options">
           <ChevronDown className="size-3.5" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-64 space-y-0.5 p-1">
+      </PopoverTrigger>
+      {/* review finding 6: PopoverContent renders role="dialog" with no
+          accessible name by default — label it to match the trigger it
+          opens from. */}
+      <PopoverContent align="end" className="w-64 space-y-0.5 p-1" aria-label="More options">
         {!untilMode ? (
           <>
             {(["once", "run"] as const).map((s) => (
@@ -605,6 +741,7 @@ function ScopeMenu({
         ) : (
           <>
             <button
+              ref={backRef}
               type="button"
               onClick={() => {
                 setUntilMode(false);
@@ -649,8 +786,8 @@ function ScopeMenu({
             </div>
           </>
         )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </PopoverContent>
+    </Popover>
   );
 }
 

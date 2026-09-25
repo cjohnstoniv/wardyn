@@ -11,9 +11,8 @@ package proxy
 // beside each other in mitm.go, while this lane's own rules — what port an
 // absolute-form URI means, which inspection core its host earns, and where the
 // generic injector runs — were the one piece of that story still folded into
-// the pipeline file. F103/F104/F141 were all instances of this lane silently
-// diverging from the tunnel; keeping it in one place is how the divergence
-// stays visible.
+// the pipeline file. Keeping it in one place is how any divergence from the
+// tunnel stays visible.
 
 import (
 	"context"
@@ -45,7 +44,7 @@ const (
 //
 // The port a decision row states has to be the port the proxy actually dials
 // (docs/AUDIT-ACTIONS.md lists `port` as an egress.* detail field), and the
-// allowlist has to be matched against the same one (F141): hardcoding port 80
+// allowlist has to be matched against the same one: hardcoding port 80
 // here would evaluate, vet and dial `POST https://api.anthropic.com/v1/messages`
 // as port 80 — the policy port matched against 80, the audit row recording 80,
 // and the transport running TLS against :80 — while the request plainly names
@@ -55,6 +54,16 @@ func defaultPortForScheme(scheme string) int {
 		return 443
 	}
 	return 80
+}
+
+// servePlain is the plain forward lane's entry. A host the run's Azure DevOps
+// grant covers is refused here, before evaluation or any injection, because
+// this lane never runs the REST gate (refuseADOPlain).
+func (p *Proxy) servePlain(w http.ResponseWriter, r *http.Request) {
+	if p.refuseADOPlain(w, r) {
+		return
+	}
+	p.handlePlain(w, r)
 }
 
 // handlePlain forwards an absolute-URI plain HTTP request.
@@ -87,7 +96,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. require_tls (F110's residual half): the operator declared that THIS
+	// 4. require_tls: the operator declared that THIS
 	// host's brokered credential may ride only a transport the proxy runs TLS on,
 	// and this request is cleartext. Unlike injectableTransport's rules — which
 	// are the proxy's own reading of a transport and therefore withhold the
@@ -122,8 +131,8 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// with the same questions handleConnect/serveMITMRequest ask:
 	//
 	//   - A MODEL host (isLLMHost) whose channel we can parse takes the LLM
-	//     per-endpoint classifier — the handleConnect parity this lane never had
-	//     (F103/F141). An absolute-form `POST https://api.anthropic.com/v1/messages`
+	//     per-endpoint classifier — the handleConnect parity this lane never had.
+	//     An absolute-form `POST https://api.anthropic.com/v1/messages`
 	//     is the SAME prompt egress as the tunnel, so without this classifier it
 	//     would forward with the brokered credential, unscanned EVEN IN mode=block,
 	//     under a single `allow / policy:allowed / scan=nil` row: no scan event, no
@@ -141,7 +150,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		blocked      bool
 	)
 	// releaseBody returns the inspected body's bytes to maxRetainedScanBytes; it
-	// has to outlive the RoundTrip that reads them (F074).
+	// has to outlive the RoundTrip that reads them.
 	releaseBody := func() {}
 	defer func() { releaseBody() }()
 	channel := p.channelForHost(host)
@@ -185,19 +194,13 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	// 6. Forward to the vetted target over the pinned transport. Its DialContext
 	// dials the vetted ip:port carried on the request context (vettedIPKey), so the
 	// host is never re-resolved. Invoked only post-allow+vet.
-	resp, err := p.transport.RoundTrip(outReq)
+	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
-		// The allow decision is emitted only AFTER a successful round-trip (same
-		// accuracy fix as handleConnect, E3): a failed upstream dial must NOT
-		// over-report an allow. Emit a dial-failed deny (carrying any scan
-		// summary) instead.
-		if log != nil {
-			p.sink.emit(p.denyDialFailed("builtin:dial-failed", log.Request, host, err, log.Scan))
-		}
-		p.httpError(w, "upstream error", err, http.StatusBadGateway)
+		p.failUpstream(w, err, log, host, "upstream error")
 		return
 	}
 	if log != nil {
+		log.UpstreamFault = p.bedrockUpstreamFault(host, r.URL.Path, resp)
 		p.sink.emit(*log)
 	}
 	defer func() { _ = resp.Body.Close() }()

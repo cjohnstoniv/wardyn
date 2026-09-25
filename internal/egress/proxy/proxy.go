@@ -22,6 +22,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -87,6 +88,8 @@ type Proxy struct {
 	// yet), so coverage is reported honestly without flooding the audit log.
 	blindMu    sync.Mutex
 	blindHosts map[string]struct{}
+	// bedrockFaulted: data-plane hosts whose last model call AWS refused (bedrock_fault.go).
+	bedrockFaulted sync.Map
 
 	// privIP is B6's per-run builtin:private-ip memo — the one egress verdict
 	// that cannot change mid-run, so an identical retry is answered without a
@@ -103,6 +106,9 @@ type Proxy struct {
 	// grant to mint from. Empty/nil == no host brokered (the route always 403s),
 	// which is also what a deployment with the lane switched off looks like.
 	patGrants map[string]PATGrant
+	// adoGrants answers the run's Azure DevOps grant per host for the REST gate
+	// (ado_gate.go). Nil == no host gated.
+	adoGrants adoGrantsByHost
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
@@ -139,6 +145,9 @@ type Proxy struct {
 	// dials the vetted IP directly and NEVER chains through the upstream corp
 	// proxy — the split that keeps the run token off the corp-proxy wire.
 	controlTransport *http.Transport
+	// h2 is the egress lane's HTTP/2 fallback and per-run memo of peers that
+	// speak HTTP/2 without negotiating it (upstream_protocol.go).
+	h2 h2Fallback
 	// upstream is the OPTIONAL corporate parent proxy. Nil == direct dial (the
 	// common, backward-compatible case). When set, forward egress is issued as
 	// CONNECT <real-host> to it; see upstream.go and dialThroughUpstream.
@@ -168,7 +177,7 @@ type Proxy struct {
 	// for the same reason as localSubnets. All of them, not just the first: a
 	// wardynd behind more than one A record had only its first address
 	// excluded, while THREAT-MODEL.md states the exclusion covers "its resolved
-	// control-plane host" (F002).
+	// control-plane host".
 	controlPlaneIPs []net.IP
 	// exclusionUnknown is set when NewServer's startup capture of localSubnets
 	// or controlPlaneIPs FAILED. Both admin-authored exceptions to the private-
@@ -176,7 +185,7 @@ type Proxy struct {
 	// are clamped by onOwnSubnetOrControlPlane, so a silently empty clamp made
 	// those exceptions fire MORE widely, not less — the opposite of the
 	// fail-closed NewServer's comment claimed. With this set the clamp answers
-	// "yes" for every address, which refuses every lift/trust (F002).
+	// "yes" for every address, which refuses every lift/trust.
 	exclusionUnknown bool
 
 	// llmUpstreams is the OPERATOR-CONFIGURED internal-gateway table (vendor
@@ -189,6 +198,8 @@ type Proxy struct {
 	// LLMUnavailableDetail). Empty == the generic route sentence; the
 	// below-policy clause is appended either way. See llm404Detail.
 	llmUnavailableDetail string
+	// pushHolds is the held-push state (push_hold.go).
+	pushHolds pushHolds
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
 	// public host), feeding isLLMHost/channelForHost so gateway traffic is
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
@@ -243,6 +254,8 @@ type Options struct {
 	// See Config.PATGrants and pat_broker.go for why it is per-host rather than
 	// per-repo.
 	PATGrants map[string]PATGrant
+	// ADOGrants backs the Azure DevOps REST gate (ado_gate.go). Nil == off.
+	ADOGrants adoGrantsByHost
 	// ControlPlaneURL and RunToken back the local brokered routes. The run
 	// token is injected only toward the control plane and never reaches the
 	// sandbox or any LLM upstream.
@@ -284,16 +297,20 @@ type Options struct {
 	// gives when no credential is behind the route (Config.LLMUnavailableDetail,
 	// forwarded verbatim). Empty == the generic route sentence. See llm404Detail.
 	LLMUnavailableDetail string
+	// Unattended is Config.Unattended: a review-path push is refused, not held.
+	Unattended bool
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
-	// TLSClientConfig is the TLS config for BOTH the forwarding and the
-	// control-plane transports. Production sets it from Config.TrustedCAPEM
-	// (system roots plus the operator's corporate CA bundle — see
-	// NewServer); nil means system roots alone. Tests use it to trust an
-	// httptest TLS server standing in for an HTTPS upstream.
+	// TLSClientConfig is the EGRESS transport's TLS config. Production sets it
+	// from Config.TrustedCAPEM (system roots plus the operator's corporate CA
+	// bundle — see NewServer); nil means system roots alone. Tests use it to
+	// trust an httptest TLS server standing in for an HTTPS upstream.
 	TLSClientConfig *tls.Config
-	Now             func() time.Time
+	// ControlTLS pins the control-plane transport to wardynd's internal CA
+	// (hoptls.ClientConfig). nil pins an EMPTY pool: https fails closed.
+	ControlTLS *tls.Config
+	Now        func() time.Time
 }
 
 // vettedIPKey carries the pre-resolved, policy-checked dial target through the
@@ -413,6 +430,7 @@ func newProxy(opts Options) *Proxy {
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
 		patGrants:            patGrants,
+		adoGrants:            opts.ADOGrants,
 		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
 		controlPlaneURL:      strings.TrimRight(opts.ControlPlaneURL, "/"),
 		runToken:             opts.RunToken,
@@ -425,6 +443,7 @@ func newProxy(opts Options) *Proxy {
 		exclusionUnknown:     opts.ExclusionUnknown,
 		llmUpstreams:         llmUpstreams,
 		llmUnavailableDetail: opts.LLMUnavailableDetail,
+		pushHolds:            pushHolds{unattended: opts.Unattended},
 		gatewayVendor:        gatewayVendor,
 		dial:                 dial,
 		now:                  now,
@@ -472,7 +491,9 @@ func newProxy(opts Options) *Proxy {
 	}
 	mkTransport := func(dc func(context.Context, string, string) (net.Conn, error)) *http.Transport {
 		return &http.Transport{
-			DialContext:           dc,
+			DialContext: dc,
+			// HTTP/1.1 only, which is what controlTransport stays; offerHTTP2
+			// turns HTTP/2 on for the egress transport alone, a few lines below.
 			ForceAttemptHTTP2:     false,
 			MaxIdleConns:          64,
 			IdleConnTimeout:       60 * time.Second,
@@ -483,13 +504,18 @@ func newProxy(opts Options) *Proxy {
 		}
 	}
 	p.transport = mkTransport(egressDial)
+	p.offerHTTP2(egressDial, opts.TLSClientConfig)
 	p.controlTransport = mkTransport(directDial)
+	if opts.ControlTLS == nil {
+		opts.ControlTLS, _ = hoptls.ClientConfig("")
+	}
+	p.controlTransport.TLSClientConfig = opts.ControlTLS.Clone()
 	// localClient uses the CONTROL transport: local-route forwards to the control
 	// plane carry the vetted dial target on the request context so the host is
 	// never re-resolved (same TOCTOU guard), and they NEVER chain through the
 	// upstream corp proxy — the run token stays off the corp-proxy wire.
 	//
-	// The Timeout is load-bearing (F070 sibling), not hygiene: every caller of
+	// The Timeout is load-bearing, not hygiene: every caller of
 	// forwardToControlPlane rides r.Context(), and the agent-facing listener sets
 	// ReadTimeout/WriteTimeout to 0 because streaming bodies and CONNECT tunnels
 	// need it (NewServer, server.go), so without it a control plane that accepts
@@ -542,7 +568,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleLocalRoute(w, r)
 		return
 	}
-	p.handlePlain(w, r)
+	p.servePlain(w, r)
 }
 
 // splitHostPort returns the host (lowercased, no port) and port, defaulting
@@ -610,7 +636,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// 2. Method restriction (CONNECT counts as method "CONNECT"), applied BEFORE
 	// the first-use approval flow below.
 	//
-	// F032: the method check runs BEFORE the first-use approval raise because it
+	// The method check runs BEFORE the first-use approval raise because it
 	// depends on nothing the approval produces, so refusing first is free. If it
 	// ran after the raise, a request whose method can NEVER pass —
 	// allowed_methods=["GET"] and the sandbox sends POST — would still POST an
@@ -794,7 +820,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// than the redirect actually authored. A non-matching port falls through to
 	// an ordinary opaque tunnel, still gated by the policy decision above — and
 	// the SAME clamp is inside mitmLLMHost below, so the fall-through cannot be
-	// re-admitted by the LLM branch for a host that is both (F009).
+	// re-admitted by the LLM branch for a host that is both.
 	if p.ca != nil && p.isCorpMITMHost(host) {
 		if p.mitmPortAllowed(host, port) {
 			if log != nil {
@@ -880,7 +906,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 // tunnel pipes bytes in both directions until EITHER side finishes, then closes
 // both connections — the standard CONNECT-proxy shape.
 //
-// F079 — why the first finisher closes and not both: waiting (wg.Wait()) for
+// Why the first finisher closes and not both: waiting (wg.Wait()) for
 // BOTH io.Copy calls before closing anything would let either direction pin
 // the tunnel forever. When the sandbox side goes away the client->upstream
 // copy returns and half-closes the upstream write side, but the

@@ -15,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -74,7 +75,10 @@ const (
 	// DRAFT (M2 canon pending)
 	credentialReauthApprovalsUnreadableBody = "could not read this run's approvals"
 	// DRAFT (M2 canon pending)
-	credentialReauthRaiseFailedBody = "could not raise the AWS sign-in request: "
+	// Fixed: the raise error wraps the approval store's own error (driver text,
+	// possibly), and the reader is the run's own sandbox — so the cause is
+	// logged, never answered (#173, #505).
+	credentialReauthRaiseFailedBody = "could not raise the AWS sign-in request"
 	// credentialReauthNotDecidableBody is the 409 Server.decide answers for this
 	// kind, on every tier.
 	credentialReauthNotDecidableBody = "an AWS sign-in request is resolved by signing in, not by a " +
@@ -163,7 +167,10 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 	if minted.Injection == nil || minted.Injection.SecretName != types.AWSSSOAccessTokenSecret {
 		return false
 	}
-	ctx := r.Context()
+	// The stored session is read (and renewed) here to derive the value this
+	// resolve injects; that read is recorded as one, and the injection below
+	// as the sentinel's own secret.read.
+	ctx := secretstore.WithPurpose(r.Context(), secretstore.PurposeSSORefresh)
 	fail := func(status int, reason, body string, extra map[string]any) bool {
 		data := map[string]any{"reason": reason, "grant_id": grantID}
 		for k, v := range extra {
@@ -303,6 +310,11 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		if rows[i].Kind != types.ApprovalCredentialReauth {
 			continue
 		}
+		// An Azure DevOps consent row is credential_reauth too, but it has its
+		// own cap (maxADOCapabilityHoldsPerRun) and never spends this budget.
+		if _, consent := adoConsentScope(rows[i]); consent {
+			continue
+		}
 		workflows++
 		switch rows[i].State {
 		case types.ApprovalPending:
@@ -353,7 +365,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		ID: raisedID, RunID: claims.RunID, Kind: types.ApprovalCredentialReauth, RequestedScope: reqScope,
 	})
 	if aerr != nil {
-		writeError(w, http.StatusServiceUnavailable, credentialReauthRaiseFailedBody+aerr.Error())
+		writeError(w, http.StatusServiceUnavailable, loggedMsg(ctx, credentialReauthRaiseFailedBody, aerr))
 		return true
 	}
 	if created.ID != raisedID {
@@ -380,26 +392,38 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 }
 
 // awsSSOGrantSnapshot reads the IMMUTABLE dispatch-time credential scope off
-// the grant itself. It looks the grant up through the RUN's own grant list,
-// which re-proves run binding (I1) independently of the broker's own check.
+// the grant itself (grantSnapshot).
 func (s *Server) awsSSOGrantSnapshot(ctx context.Context, runID, grantID uuid.UUID) (awsSSOScopeSnapshot, bool) {
+	var sn awsSSOScopeSnapshot
+	if !s.grantSnapshot(ctx, runID, grantID, &sn) || !sn.authored() {
+		return awsSSOScopeSnapshot{}, false
+	}
+	return sn, true
+}
+
+// grantSnapshot decodes the dispatch-time "snapshot" a grant's scope carries
+// into dst, false when the grant or its snapshot is absent. It looks the grant
+// up through the RUN's own grant list, which re-proves run binding (I1)
+// independently of the broker's own check.
+func (s *Server) grantSnapshot(ctx context.Context, runID, grantID uuid.UUID, dst any) bool {
+	if s.cfg.Store == nil {
+		return false
+	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
 	if err != nil {
-		return awsSSOScopeSnapshot{}, false
+		return false
 	}
 	for _, g := range grants {
 		if g.ID != grantID {
 			continue
 		}
 		var sc struct {
-			Snapshot awsSSOScopeSnapshot `json:"snapshot"`
+			Snapshot json.RawMessage `json:"snapshot"`
 		}
-		if json.Unmarshal(g.Spec.Scope, &sc) != nil || !sc.Snapshot.authored() {
-			return awsSSOScopeSnapshot{}, false
-		}
-		return sc.Snapshot, true
+		return json.Unmarshal(g.Spec.Scope, &sc) == nil && len(sc.Snapshot) > 0 &&
+			json.Unmarshal(sc.Snapshot, dst) == nil
 	}
-	return awsSSOScopeSnapshot{}, false
+	return false
 }
 
 // authored reports whether a snapshot is present at all. OwnerSubject is
@@ -607,7 +631,7 @@ func (s *Server) reconcileReauthOnRead(ctx context.Context, ap types.ApprovalReq
 		return ap // never derive a scope from a read that failed
 	}
 	scope := awsSSOScopeFor(siteCfg, run.Agent, runIdentitySubject(ctx, run.CreatedBy))
-	blob, found, berr := s.readAWSSSOBlob(ctx, scope)
+	blob, found, berr := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), scope)
 	if berr != nil || !found || blob.SourceRunID == "" {
 		return ap
 	}

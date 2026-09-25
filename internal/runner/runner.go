@@ -60,6 +60,20 @@ type Capabilities struct {
 	// omitempty: absent on a driver that predates the field reads the same as
 	// false, which is the safe half.
 	UserDrives bool `json:"user_drives,omitempty"`
+	// ManagedFiles reports whether this driver can deliver
+	// SandboxSpec.ManagedFiles — an operator-authored file the AGENT CANNOT
+	// MODIFY (root-owned, inside a directory it can neither write nor
+	// replace, in place before the agent's main process runs).
+	//
+	// False is the fail-closed default, for UserDrives' reason one field up
+	// and with the same consequence: a driver that says nothing declares no
+	// managed-file support, so the control plane withholds the file rather
+	// than shipping one the agent could rewrite — a ceiling that is not a
+	// ceiling is worse than no ceiling, because it is reported as delivered.
+	//
+	// omitempty: absent on a driver that predates the field reads as false,
+	// the safe half.
+	ManagedFiles bool `json:"managed_files,omitempty"`
 	// EphemeralDiskEnforcement names WHAT ACTUALLY BINDS a run's Resources.DiskMiB
 	// on this deployment: `filesystem` (docker, on a storage driver that can
 	// enforce a per-container size quota), `eviction` (kubernetes — the kubelet
@@ -147,6 +161,19 @@ type SandboxSpec struct {
 	// (DriveTarget) with the given mode; the Docker driver still converts it to
 	// a Mount internally so the deny matrix runs on the host path.
 	Drive *types.DriveMount
+	// ManagedFiles are operator-authored files delivered into the sandbox that
+	// the AGENT CANNOT MODIFY — root-owned, in a directory it can neither
+	// write nor replace, and present BEFORE its main process runs. Like
+	// Mounts, they are POLICY-controlled and never request-set: nothing on the
+	// create-run wire names a path or a byte of content.
+	//
+	// A driver that does not advertise Capabilities.ManagedFiles MUST refuse a
+	// spec carrying them rather than start a sandbox without them: silently
+	// dropping the ceiling is the one failure mode this field exists to
+	// prevent, and it is invisible to every test that only reads the file
+	// back. See ManagedFile (managed_files.go) for the delivery contract and
+	// ValidateManagedFiles for the path shape both substrates can honour.
+	ManagedFiles []ManagedFile
 	// OnWaiting, when non-nil, reports WHY this sandbox is not up yet, in the
 	// substrate's own `<component>: <Reason>[: <message>]` words ("agent:
 	// ImagePullBackOff: …", "pod: Unschedulable: …", "image: Pulling: <ref>"),
@@ -249,6 +276,10 @@ type ProxyConfig struct {
 	RunToken string
 	// ControlPlaneURL is where sidecars stream decisions/recordings.
 	ControlPlaneURL string
+	// ControlPlaneCAPEM is wardynd's internal CA (internal/hoptls): the only
+	// root the sidecar trusts for ControlPlaneURL. Public; empty with a
+	// loopback http URL only.
+	ControlPlaneCAPEM string
 	// Policy is the run's egress policy, handed verbatim to the wardyn-proxy
 	// sidecar (default-deny domain allowlist, method rules, first-use flag).
 	// Drivers MUST deliver it to the sidecar at launch: a proxy without a
@@ -287,6 +318,9 @@ type ProxyConfig struct {
 	// forge's PAT is minted proxy-side and never enters the sandbox. Empty => no
 	// host brokered. See proxy.Config.PATGrants.
 	PATGrants map[string]proxy.PATGrant
+	// ADOGrant is the run's per-person Azure DevOps grant for the proxy's REST
+	// gate. See proxy.Config.ADOGrant.
+	ADOGrant *proxy.ADOGrantConfig
 	// UpstreamProxyURL is the OPTIONAL corporate parent proxy the sidecar chains
 	// egress through (http://[user:pass@]host[:port] — https-to-proxy is rejected
 	// by the sidecar's own config validation, parseUpstreamProxy). Threaded
@@ -300,8 +334,8 @@ type ProxyConfig struct {
 	// resolveUpstreamProxyURL and its audit event run.upstream_proxy.resolve.
 	UpstreamProxyURL string
 	// TrustedCAPEM is the operator's corporate CA bundle (WARDYN_TRUSTED_CA_FILE,
-	// api.Config.TrustedCAPEM), forwarded verbatim so the sidecar's own outbound
-	// TLS additionally trusts it. Threaded to the proxy via proxy.Config's
+	// api.Config.TrustedCAPEM), forwarded verbatim so the sidecar's egress TLS
+	// additionally trusts it (never its control-plane calls). Threaded to the proxy via proxy.Config's
 	// identically-named field (WARDYN_PROXY_CONFIG_JSON, BuildProxyConfig below).
 	// Control-plane-authored, same trust boundary as MITMCACertPEM/MITMCAKeyPEM
 	// above; empty => system roots only, byte-identical to today.
@@ -332,6 +366,10 @@ type ProxyConfig struct {
 	// generic detail. Threaded to the proxy via proxy.Config's identically-named
 	// field (BuildProxyConfig below).
 	LLMUnavailableDetail string
+	// Unattended marks a run nobody is driving (a non-interactive task run):
+	// a push its push_rules would hold for review is refused instead, since
+	// there is nobody to ask. See proxy.Config.Unattended.
+	Unattended bool
 }
 
 // InjectionGrant pairs an api_key credential grant with its proxy-side
@@ -591,6 +629,23 @@ type Runner interface {
 	// plane cascades identity + credential revocation around this call.
 	KillSandbox(ctx context.Context, ref string) error
 }
+
+// SandboxEnder is an OPTIONAL Runner capability: stop a sandbox and KEEP it
+// (the lease end, long-holds design rev 4). EndSandbox stops the agent without
+// removing it, so its files survive, and removes the proxy sidecar, so nothing
+// the agent could restart has a network path. StopSandbox/KillSandbox still
+// tear the kept sandbox down later. Idempotent on a missing sandbox.
+//
+// A substrate that cannot keep a stopped sandbox (Kubernetes: stopping a pod
+// deletes it) does not implement it, and a router in front of one returns
+// ErrEndUnsupported; the control plane then stops the run outright.
+type SandboxEnder interface {
+	EndSandbox(ctx context.Context, ref string) error
+}
+
+// ErrEndUnsupported is EndSandbox's answer from a router whose substrate for
+// ref cannot keep a stopped sandbox.
+var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended sandbox")
 
 // ImageChecker is an OPTIONAL Runner capability: a
 // substrate whose local image cache can go stale out from under a workspace's

@@ -33,6 +33,7 @@ vi.mock("./harness-login-pane", () => ({
 }));
 
 import { ModelProviderCard, S } from "./connection-cards";
+import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type { SetupStatus } from "../../../lib/types";
 
@@ -40,6 +41,19 @@ const user = userEvent.setup({ pointerEventsCheck: 0 });
 
 function model(status: SetupStatus = baseStatus()) {
   return render(<ModelProviderCard status={status} siteConfig={null} onChanged={vi.fn()} />);
+}
+
+// #337: renders as a MEMBER (operator=false) — every other test in this file
+// renders unwrapped, which useOperator()'s fail-open default reads as an
+// operator (see operator-context.tsx). Needed to pin what a non-operator
+// caller actually sees, not just what an operator sees with `disabled` read
+// off the DOM.
+function memberModel(status: SetupStatus = baseStatus()) {
+  return render(
+    <OperatorProvider operator={false}>
+      <ModelProviderCard status={status} siteConfig={null} onChanged={vi.fn()} />
+    </OperatorProvider>,
+  );
 }
 
 beforeEach(() => {
@@ -84,6 +98,16 @@ function sharedRowStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   });
 }
 
+// #337: a per_user Bedrock BEARER row — perUserStatus's twin with
+// mechanism="bedrock_bearer" instead of "bedrock_sso". A member under THIS
+// row is the one whose own stored key their runs actually authenticate with.
+function perUserBearerStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
+  return baseStatus({
+    harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, mechanism: "bedrock_bearer", credential_source: "per_user" }],
+    ...overrides,
+  });
+}
+
 describe("ModelProviderCard", () => {
   it("offers exactly the three lanes the mock settled on — no Azure, no catalog", () => {
     model();
@@ -96,7 +120,8 @@ describe("ModelProviderCard", () => {
 
   // F4-F13 (Appendix A V8): the group had no roving tabindex or arrow keys —
   // every radio was its own Tab stop, and Left/Right did nothing.
-  describe("the lane group has roving tabindex and arrow keys (F4-F13)", () => {
+  describe("the lane group has roving tabindex and arrow keys", () => {
+    // ticket: F4-F13
     it("only the checked radio is a Tab stop; the rest are -1", () => {
       model();
       const radios = screen.getAllByRole("radio");
@@ -217,6 +242,37 @@ describe("ModelProviderCard", () => {
     expect(screen.queryByLabelText(/^region$/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^model$/i)).not.toBeInTheDocument();
   });
+
+  // #355: SecretLane's "Stored as <name>" caption rendered beside an UNSTORED
+  // Save button too — the ternary that also serves the Replace flow's
+  // "Replaces <name>" fell to "Stored as" in its else arm, which is exactly
+  // the unstored case. A reader took the caption as "already saved". Every
+  // SecretLane shares this component (Anthropic/OpenAI keys here, the git
+  // PAT/SSH lanes on /providers), so the fix and its pin both live in the
+  // shared component, not a Bedrock-only spot (PR #352 review, finding 5).
+  describe('#355: "Stored as" only beside an actually-stored secret', () => {
+    it("unstored: no \"Stored as\" caption beside Save", async () => {
+      model();
+      await user.click(screen.getByRole("radio", { name: /API key/ }));
+      expect(screen.getByLabelText("Anthropic API key")).toBeInTheDocument();
+      expect(screen.queryByText(/Stored as/)).not.toBeInTheDocument();
+    });
+
+    it("stored, not editing: \"Stored as <name>\" shows beside Replace/Disconnect", async () => {
+      model(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+      await user.click(screen.getByRole("radio", { name: /API key/ }));
+      expect(screen.getByRole("button", { name: "Replace" })).toBeInTheDocument();
+      expect(screen.getByText(/Stored as/)).toHaveTextContent("anthropic-api-key");
+    });
+
+    it("stored, editing (Replace clicked): \"Replaces <name>\", never \"Stored as\"", async () => {
+      model(baseStatus({ secrets: { present: ["anthropic-api-key"], github_app: false } }));
+      await user.click(screen.getByRole("radio", { name: /API key/ }));
+      await user.click(screen.getByRole("button", { name: "Replace" }));
+      expect(screen.getByText(/Replaces/)).toHaveTextContent("anthropic-api-key");
+      expect(screen.queryByText(/Stored as/)).not.toBeInTheDocument();
+    });
+  });
 });
 
 // F2 (Appendix A #2): three call sites open HarnessLoginPane; two pass
@@ -225,7 +281,8 @@ describe("ModelProviderCard", () => {
 // server (harnesscred.go:761) THROWS THE TYPED VALUE AWAY because the row's
 // own sso_start_url overrides it. Fix = pass the prop on the same condition
 // the Agents tab already uses.
-describe("ModelProviderCard — F2: the sign-in door under a per_user row", () => {
+describe("ModelProviderCard — the sign-in door under a per_user row", () => {
+  // ticket: F2
   it("passes startURLManaged so the dead start-URL prompt never renders", async () => {
     model(perUserStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
@@ -302,7 +359,8 @@ describe("ModelProviderCard — F2: the sign-in door under a per_user row", () =
 // R9 (fix-first review pass): under per_user, resolveBedrockAuth skips the
 // bearer arm outright (Appendix A finding 3) — a stored key still deletes
 // fine, but the card must say it is never READ while the row is per_user.
-describe("ModelProviderCard — R9: the bearer key is unused under per_user", () => {
+describe("ModelProviderCard — the bearer key is unused under per_user", () => {
+  // ticket: R9
   it("renders S.BEDROCK_BEARER_UNUSED_PER_USER under a per_user row", async () => {
     model(perUserStatus());
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
@@ -323,12 +381,158 @@ describe("ModelProviderCard — R9: the bearer key is unused under per_user", ()
   });
 });
 
+// #337: a member on a per_user BEARER row can store and replace their own
+// Bedrock bearer key — the console's missing half of #153/#327's server-side
+// door. Every "still operator-only" case gets its own test, named for the
+// field it pins, rather than one test asserting a count of disabled fields.
+describe("ModelProviderCard — #337: a member's own bearer field under a per_user bearer row", () => {
+  it("the bearer field is editable for a member on a per_user bearer row", async () => {
+    memberModel(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByLabelText("Bedrock bearer key")).not.toBeDisabled();
+  });
+
+  // PR #352 review, finding 1: this fixture used to carry region/model/
+  // creds_present alongside bearer_present in a MEMBER render — a shape the
+  // server's own redaction (redactSetupStatusForMember, setup.go) never
+  // sends, since those three are always dropped for a non-operator. Shaped
+  // the way a member's response actually reads now: Ready survives always,
+  // BearerPresent survives only under their own per_user bearer row.
+  it("stored reflects the member's OWN bearer, not the operator-namespace secrets.present", async () => {
+    memberModel(perUserBearerStatus({ bedrock: { ready: true, creds_present: false, bearer_present: true } }));
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByRole("button", { name: /disconnect/i })).toBeInTheDocument();
+  });
+
+  // PR #352 review, finding 6: the negative case. secrets.present is an
+  // operator-namespace fact, always redacted to empty for a member anyway —
+  // this pins that a member with no bearer of their OWN reads not-stored
+  // even were that field somehow non-empty, never borrowing anyone else's.
+  it("a member with no bearer of their own reads not-stored, even with secrets.present non-empty", async () => {
+    memberModel(
+      perUserBearerStatus({
+        bedrock: { ready: true, creds_present: false, bearer_present: false },
+        secrets: { present: ["bedrock-api-key"], github_app: false },
+      }),
+    );
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByRole("button", { name: /disconnect/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Bedrock bearer key")).toBeInTheDocument();
+  });
+
+  it("a member on a SHARED row still cannot edit the bearer field", async () => {
+    memberModel(sharedRowStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByLabelText("Bedrock bearer key")).toBeDisabled();
+  });
+
+  it("a member on a per_user SSO row (not bearer) still cannot edit the bearer field", async () => {
+    memberModel(perUserStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByLabelText("Bedrock bearer key")).toBeDisabled();
+  });
+
+  it("a DISABLED per_user bearer row still cannot edit the field", async () => {
+    memberModel(
+      baseStatus({
+        harnesses: [
+          { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: false, mechanism: "bedrock_bearer", credential_source: "per_user" },
+        ],
+      }),
+    );
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByLabelText("Bedrock bearer key")).toBeDisabled();
+  });
+
+  it("a member on a per_user bearer row still cannot edit the Anthropic API key field", async () => {
+    memberModel(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /API key/ }));
+    expect(screen.getByLabelText("Anthropic API key")).toBeDisabled();
+  });
+
+  it("a member on a per_user bearer row still cannot edit the OpenAI API key field", async () => {
+    memberModel(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /API key/ }));
+    expect(screen.getByLabelText("OpenAI API key")).toBeDisabled();
+  });
+
+  it("a member on a per_user bearer row still cannot sign in to the Claude subscription lane", () => {
+    memberModel(perUserBearerStatus());
+    expect(screen.getByRole("button", { name: /^sign in$/i })).toBeDisabled();
+  });
+
+  it("an operator can still edit the bearer field under a per_user bearer row", async () => {
+    model(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByLabelText("Bedrock bearer key")).not.toBeDisabled();
+  });
+
+  // PR #352 review, finding 2 (regression): an operator's PUT lands in the
+  // "" namespace (runs_policy.go) even under a per_user bearer row —
+  // DIFFERENT from bearer_present's per_user-scoped read (the roster owner's
+  // own subject namespace, runs_bedrock_probe.go). Reading bearer_present for
+  // an operator here showed their own just-saved key as unstored; `present`
+  // is the one that matches what their Save actually wrote.
+  it("an operator's own stored bearer shows Replace/Disconnect under a per_user bearer row", async () => {
+    model(perUserBearerStatus({ secrets: { present: ["bedrock-api-key"], github_app: false } }));
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByRole("button", { name: /disconnect/i })).toBeInTheDocument();
+  });
+
+  it("an operator does not read bearer_present under a per_user bearer row", async () => {
+    model(perUserBearerStatus({ bedrock: { ready: true, creds_present: false, bearer_present: true } }));
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByRole("button", { name: /disconnect/i })).not.toBeInTheDocument();
+  });
+});
+
+// PR #352 review, findings 3 + 4: the field's own explanation, instead of
+// (finding 3) a card-level "Requires the admin role." sitting directly above
+// a field the member CAN edit, or (finding 4) no explanation at all for why
+// it's disabled on a shared row.
+describe("ModelProviderCard — PR #352 review: the bearer field explains itself", () => {
+  it("a member on a per_user bearer row sees the own-key note, and not the admin hint, on the Bedrock lane", async () => {
+    memberModel(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByText(S.BEDROCK_BEARER_OWN_NOTE)).toBeInTheDocument();
+    expect(screen.queryByText("Requires the admin role.")).not.toBeInTheDocument();
+  });
+
+  it("that same member still sees the admin hint on the API key lane", async () => {
+    memberModel(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /API key/ }));
+    expect(screen.getByText("Requires the admin role.")).toBeInTheDocument();
+  });
+
+  it("a member on a shared row sees the shared reason, not the own-key note", async () => {
+    memberModel(sharedRowStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByText(S.BEDROCK_BEARER_SHARED_REASON)).toBeInTheDocument();
+    expect(screen.queryByText(S.BEDROCK_BEARER_OWN_NOTE)).not.toBeInTheDocument();
+  });
+
+  it("a member on a per_user SSO row sees neither — BEDROCK_BEARER_UNUSED_PER_USER already explains it", async () => {
+    memberModel(perUserStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByText(S.BEDROCK_BEARER_SHARED_REASON)).not.toBeInTheDocument();
+    expect(screen.queryByText(S.BEDROCK_BEARER_OWN_NOTE)).not.toBeInTheDocument();
+    expect(screen.getByText(S.BEDROCK_BEARER_UNUSED_PER_USER)).toBeInTheDocument();
+  });
+
+  it("an operator on a per_user bearer row sees the own-key note too", async () => {
+    model(perUserBearerStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByText(S.BEDROCK_BEARER_OWN_NOTE)).toBeInTheDocument();
+  });
+});
+
 // F5 (Appendix A #5): the Connected badge was keyed on the deployment having
 // A Bedrock lane at all (`!!bedrockRow`), never the CALLING principal's own
 // model_access — so an admin's browser badged "Connected" from a shared
 // admin-token read that can never itself hold an AWS session, and (the sharp
 // edge this pins) a member whose OWN sign-in has lapsed still saw green.
-describe("ModelProviderCard — F5: the badge follows the caller's own model_access", () => {
+describe("ModelProviderCard — the badge follows the caller's own model_access", () => {
+  // ticket: F5
   const bedrockConfigured = { bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: true } };
 
   it("live: Connected", () => {
@@ -447,7 +651,8 @@ describe("ModelProviderCard — the login dialog's geometry", () => {
 // exactly those two and nothing else. The honest signal is the row's
 // `bedrockLane`, which activeBedrockLane() leaves undefined until a
 // credential lane is actually active.
-describe("ModelProviderCard — U2-01: Connected needs an active credential lane, not region+model", () => {
+describe("ModelProviderCard — Connected needs an active credential lane, not region+model", () => {
+  // ticket: U2-01
   const bedrockLane = () => within(screen.getByRole("radio", { name: /AWS Bedrock/ }));
 
   it("region + model with NO credential of any kind: NOT Connected", () => {
@@ -470,12 +675,14 @@ describe("ModelProviderCard — U2-01: Connected needs an active credential lane
     expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
   });
 
-  it("a member's redacted status ({ready} only — region/model/lanes withheld): Connected (RIDER B7-F6)", () => {
+  it("a member's redacted status ({ready} only — region/model/lanes withheld): Connected", () => {
+    // ticket: B7-F6 (rider)
     model(baseStatus({ bedrock: { ready: true, creds_present: false } }));
     expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
   });
 
-  it("ready:false with region+model and no lane stays NOT Connected (the U2-01 control, spelled out)", () => {
+  it("ready:false with region+model and no lane stays NOT Connected (the negative control, spelled out)", () => {
+    // ticket: U2-01
     model(baseStatus({ bedrock: { ready: false, region: "us-east-1", model: "anthropic.claude", creds_present: false } }));
     expect(bedrockLane().queryByText("Connected")).not.toBeInTheDocument();
   });
@@ -498,7 +705,8 @@ describe("ModelProviderCard — U2-01: Connected needs an active credential lane
 // (harnessLoginMechanismPrincipalRefusal). agents-tab.tsx:253 already drops
 // its whole model-access block for this state; the card keeps the sentence
 // (the badge needs a reason) but drops the imperative and the door.
-describe("ModelProviderCard — U2-03: not_applicable keeps no door it cannot open", () => {
+describe("ModelProviderCard — not_applicable keeps no door it cannot open", () => {
+  // ticket: U2-03
   const notApplicable = { bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: true }, model_access: { state: "not_applicable" } };
 
   it("renders the mechanism sentence with no imperative", async () => {
@@ -526,7 +734,8 @@ describe("ModelProviderCard — U2-03: not_applicable keeps no door it cannot op
 // so the parent never refreshes and the card keeps reading not-connected
 // until a manual reload. Cancel makes no claim about the capture either way;
 // it just costs one GET.
-describe("ModelProviderCard — U2-09: dismissing the login dialog re-reads status", () => {
+describe("ModelProviderCard — dismissing the login dialog re-reads status", () => {
+  // ticket: U2-09
   async function openLogin(onChanged: () => void) {
     render(<ModelProviderCard status={baseStatus()} siteConfig={null} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: /^sign in$/i }));

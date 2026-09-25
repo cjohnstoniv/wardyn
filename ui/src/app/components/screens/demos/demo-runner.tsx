@@ -93,7 +93,8 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
   React.useEffect(() => {
     let active = true;
     const stored = loadStore();
-    Promise.all(
+    // never rejects (each item is pre-caught above) — fire-and-forget is safe.
+    void Promise.all(
       Object.entries(stored).map(async ([demoId, runId]) => {
         const r = await api.getRun(runId).catch(() => undefined);
         return [demoId, r] as const;
@@ -305,6 +306,12 @@ export function DemoRunControls({
           // disabled state IS the demo's lesson (the "once-or-for-good" card
           // teaches it explicitly).
           hasWorkspace={false}
+          // TrackedRun (this file's own local type) carries id + state only,
+          // no created_by — a demo run's owner isn't tracked here. Azure
+          // DevOps escalations aren't expected in a demo sandbox (workspace-
+          // free by construction, same comment as above); if one ever
+          // appears, a security operator still decides it.
+          run={null}
         />
         <DemoAuditPanel runId={run.id} section={demo.section} />
         <Button size="sm" variant="outline" onClick={() => onEnd(run.id)}>

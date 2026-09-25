@@ -43,6 +43,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -253,6 +254,13 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
 		writeError(w, http.StatusConflict, "run is not RUNNING; cannot open a UI app (state="+string(run.State)+")")
+		return
+	}
+	// A kept run is RUNNING with its agent stopped: nothing to open.
+	if runIsKept(run) {
+		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.auth", app, "denied",
+			map[string]any{"reason": "run has ended"})
+		writeError(w, http.StatusConflict, "run has ended; cannot open a UI app")
 		return
 	}
 
@@ -510,6 +518,22 @@ func (b *uiDialErrBox) get() *uiDialError {
 	return b.err
 }
 
+// uiExecFailMsg turns a Runner.ExecStream launch failure into the message a
+// browser sees for the UI relay's own two launch points (the socat dial and
+// the launcher probe/start). sshExecStreamErrorMessage's own fallback arm
+// concatenates the raw error — the substrate's own text, e.g. a container
+// runtime detail — which is fine inside the SSH gateway's channel-local
+// stderr but not here: the UI relay's 502 body is read by a browser over the
+// SECOND, un-authenticated-by-session origin this file's own doc comment
+// describes, so it gets the same log-and-fixed-sentence treatment as every
+// other 5xx body in this package rather than the driver text.
+func uiExecFailMsg(ctx context.Context, action string, err error) string {
+	if errors.Is(err, runner.ErrExecStreamUnsupported) {
+		return sshExecStreamUnsupportedMsg
+	}
+	return loggedMsg(ctx, action, err)
+}
+
 // uiFail records a typed dial failure on the request's box (when there is one)
 // and returns it as the dial error.
 func uiFail(ctx context.Context, status int, msg string) error {
@@ -532,7 +556,7 @@ func uiErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
 		}
 	}
 	slog.WarnContext(r.Context(), "wardynd: ui relay failed", "path", r.URL.Path, "err", err)
-	writeError(w, http.StatusBadGateway, "the sandbox closed the UI connection: "+err.Error())
+	writeError(w, http.StatusBadGateway, loggedMsg(r.Context(), "the sandbox closed the UI connection", err))
 }
 
 // uiDial opens ONE relay connection: it re-checks the run is still live,
@@ -563,6 +587,10 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	if run.State != types.RunRunning || run.SandboxRef == "" {
 		return nil, uiFail(ctx, http.StatusConflict, "run is not RUNNING; the UI app is gone (state="+string(run.State)+")")
 	}
+	// A kept run is RUNNING with its agent stopped: the UI app is gone.
+	if runIsKept(run) {
+		return nil, uiFail(ctx, http.StatusConflict, "run has ended; the UI app is gone")
+	}
 	// …and the human, re-asserted against that same freshly-loaded run and
 	// against the revoke cutoff. The cookie is a long-lived credential; this is
 	// what keeps it bounded-stale rather than final (uiSessionStillAuthorized).
@@ -586,7 +614,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	})
 	if err != nil {
 		release()
-		return nil, uiFail(ctx, http.StatusBadGateway, sshExecStreamErrorMessage(err))
+		return nil, uiFail(ctx, http.StatusBadGateway, uiExecFailMsg(ctx, "start ui relay exec", err))
 	}
 
 	// Keepalive per connection, not per inbound request. handleUIRelay touches
@@ -689,7 +717,7 @@ func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSes
 		Argv: []string{"sh", "-c", uiLauncherScript(launcher, sess.Port)},
 	})
 	if err != nil {
-		return uiFail(ctx, http.StatusBadGateway, sshExecStreamErrorMessage(err))
+		return uiFail(ctx, http.StatusBadGateway, uiExecFailMsg(ctx, "start ui app launcher", err))
 	}
 	// Both streams MUST be drained before Wait: they are unbuffered pipes off
 	// one demux goroutine (runner.ExecSession's contract), so an undrained byte

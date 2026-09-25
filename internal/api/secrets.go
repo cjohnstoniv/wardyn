@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -45,6 +47,7 @@ var reservedSecretNames = map[string]bool{
 	"wardyn-session-key":    true,
 	"wardyn-ssh-host-key":   true,
 	"wardyn-ui-session-key": true,
+	"wardyn-internal-ca":    true,
 }
 
 // reservedSecret reports whether name is a platform-internal / managed-credential
@@ -126,7 +129,8 @@ func sinkReservedSecret(name string) bool {
 // whole point.
 func secretsAPIReserved(name string) bool {
 	return reservedSecret(name) || name == types.SubscriptionOAuthSecret ||
-		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret
+		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret ||
+		name == types.ADOEntraAccessTokenSecret
 }
 
 type putSecretRequest struct {
@@ -145,15 +149,21 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) b
 		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
 		return false
 	}
-	// The Bedrock/SigV4 credential material is ALWAYS resolved from the
-	// operator namespace (runs_bedrock.go's setupBedrock reads present[...]
-	// off For("")) — a member row under one of these four names would read as
-	// "Bedrock is configured" in setup while dispatch never actually uses it,
-	// a confusing dead end rather than a working BYOK path. sinkReservedSecret
-	// deliberately excludes bedrock-api-key (the operator's legitimate write
-	// path); that exclusion does not extend to a non-operator namespace. Shared
-	// by Put and Delete so both paths carry it.
-	if owner != "" && (sinkReservedSecret(name) || name == bedrockAPIKeySecret) {
+	// The three RESIDENT AWS SigV4 names are ALWAYS resolved from the operator
+	// namespace (resolveBedrockAuth signs with them off For("")) — a member row
+	// under one of them would read as "Bedrock is configured" in setup while
+	// dispatch never actually used it, a confusing dead end rather than a
+	// working BYOK path. sinkReservedSecret is exactly that three-name set on
+	// top of the platform keys, so this arm is it.
+	//
+	// bedrock-api-key is NOT among them, and that is the one widening here: the
+	// BEARER is a static Authorization header the proxy injects per run from the
+	// RUN OWNER's own namespace, so a member's own bearer is a credential their
+	// runs really authenticate with (bedrockBearerFor, runs_bedrock.go). Widening
+	// this predicate any further hands a member the three SigV4 names too, which
+	// compiles and passes almost everything — see the per-name tests in
+	// secrets_test.go. Shared by Put and Delete so both paths carry it.
+	if owner != "" && sinkReservedSecret(name) {
 		writeError(w, http.StatusForbidden, "secret name is reserved for platform internals")
 		return false
 	}
@@ -200,12 +210,29 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, []byte(body.Value)); err != nil {
+		if errors.Is(err, secretstore.ErrRowNotWritten) {
+			// Rule 18: the value reached the external store but its row did not,
+			// so the store may already serve it behind this failure.
+			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+				"secret.write", name, "failure", withSecretOwner(map[string]any{"reason": "row"}, owner, ownerKnown)))
+		}
 		writeServerError(w, r, "store secret", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"secret.write", name, "success", secretOwnerAuditData(owner, ownerKnown)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// auditRowNotWritten is rule 18's audit for Wardyn's own writes (a captured or
+// refreshed sign-in, a pasted credential), as handlePutSecret does it for the
+// API's: a store-mode Put whose value reached the external store but whose
+// row was not written, so the store may already serve the new value.
+func (s *Server) auditRowNotWritten(ctx context.Context, err error, actorType types.ActorType, actor, owner, name string) {
+	if errors.Is(err, secretstore.ErrRowNotWritten) {
+		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "secret.write", name, "failure",
+			withSecretOwner(map[string]any{"reason": "row"}, owner, true)))
+	}
 }
 
 // admitSecretCount is the secretsMaxPerOwner check, sited immediately before
@@ -257,13 +284,39 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("owner") != "" && !s.crossOwnerDeleteHitsARow(w, r, owner, name) {
 		return
 	}
-	if err := s.cfg.Secrets.For(owner).Delete(r.Context(), name); err != nil {
+	ctx, rep := secretstore.WithDeleteReport(r.Context())
+	if err := s.cfg.Secrets.For(owner).Delete(ctx, name); err != nil {
 		writeServerError(w, r, "delete secret", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"secret.delete", name, "success", secretOwnerAuditData(owner, ownerKnown)))
+		"secret.delete", name, "success", secretDeleteAuditData(owner, ownerKnown, *rep)))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// secretDeleteAuditData is secretOwnerAuditData plus, when the value lived in
+// an external store, what that store kept (design §2.3a.3): whether it was
+// purged, and for how many days the organisation can still recover it.
+func secretDeleteAuditData(owner string, known bool, rep secretstore.DeleteReport) json.RawMessage {
+	if rep.Store == "" {
+		return secretOwnerAuditData(owner, known)
+	}
+	data := map[string]any{"store": rep.Store, "purged": rep.Purged}
+	if rep.RecoverableDays > 0 {
+		data["recoverable_days"] = rep.RecoverableDays
+	}
+	return withSecretOwner(data, owner, known)
+}
+
+// withSecretOwner adds secretOwnerAuditData's fields to data.
+func withSecretOwner(data map[string]any, owner string, known bool) json.RawMessage {
+	if owner != "" {
+		data["secret_owner"] = owner
+		if !known {
+			data["owner_known"] = false
+		}
+	}
+	return mustJSON(data)
 }
 
 // secretOwnerParam resolves the secret-store namespace PUT, DELETE and the
@@ -290,7 +343,6 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		return s.secretOwnerFromRequest(r), true, true
 	}
 	if !s.isOperator(r.Context()) {
-		writeError(w, http.StatusForbidden, "?owner= is admin-only")
 		// Audited, because this is a member reaching for ANOTHER human's
 		// credential namespace and the row is the only trace it happened.
 		// docs/AUDIT-ACTIONS.md's contract is "every member denial that isn't a
@@ -301,14 +353,12 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		//
 		// SHAPE-IDENTICAL to the middleware's and to getWorkspaceAuthorized's
 		// in-handler twin: reason from the closed vocabulary, target the path,
-		// method in the data — and the member-mode marker, which
-		// is why all four sites build the datum through the one
-		// authzDeniedDatum (membermode.go) rather than hand-rolling the map.
+		// method in the data — and the member-mode marker, which is why the
+		// row comes from refuse (authz.Datum) rather than a hand-rolled map.
 		// It names no namespace: the refusal is constant and runs before any
 		// lookup, so neither the response nor the row can say whether the
 		// principal ?owner= asked about exists.
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
+		s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, r.URL.Path, "?owner= is admin-only"))
 		return "", false, false
 	}
 	resolved, known, refusal := s.resolveSecretOwner(r.Context(), q)
@@ -540,7 +590,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 			// internal identifier for a condition a member cannot clear without
 			// being told how. Same 403 as before; a plain store failure still
 			// 500s under this seam's own prefix.
-			writeCeilingErrorPrefixed(w, "list secrets: ", err)
+			writeCeilingErrorPrefixed(w, r, "list secrets: ", err)
 			return
 		}
 	}

@@ -265,7 +265,7 @@ func TestAPITokenMintCannotOutliveTheLeverItRacedWith(t *testing.T) {
 	// incident, which the lever must kill.
 	if _, err := st.CreateAPIToken(context.Background(), types.APIToken{
 		ID: uuid.New(), Principal: "sub-alice", Email: "alice@corp.example",
-		Role: string(oidc.RoleMember), Name: "pre-incident", CreatedAt: base,
+		Role: string(oidc.RoleUser), Name: "pre-incident", CreatedAt: base,
 	}, "wdn_preincident"); err != nil {
 		t.Fatal(err)
 	}
@@ -276,9 +276,9 @@ func TestAPITokenMintCannotOutliveTheLeverItRacedWith(t *testing.T) {
 	done := make(chan result, 1)
 	go func() {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/me/tokens", body)
-		r.AddCookie(ssoSession(t, "sub-alice", "alice@corp.example", oidc.RoleMember))
+		r.AddCookie(ssoSession(t, "sub-alice", "alice@corp.example", oidc.RoleUser))
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, r)
+		panicFails(t, srv.Handler()).ServeHTTP(rec, r)
 		done <- result{rec}
 	}()
 	select {
@@ -336,7 +336,7 @@ func TestAPITokenMintCannotOutliveTheLeverItRacedWith(t *testing.T) {
 	// still works, so the close above cannot have been "refuse everything".
 	advance(3 * time.Second)
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/tokens",
-		ssoSession(t, "sub-alice", "alice@corp.example", oidc.RoleMember), `{"name":"after"}`)
+		ssoSession(t, "sub-alice", "alice@corp.example", oidc.RoleUser), `{"name":"after"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("a mint admitted after the cutoff = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
@@ -365,7 +365,7 @@ func TestAPITokenMintFailsClosedOnRevocationOutage(t *testing.T) {
 	srv := New(cfg)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/tokens",
-		ssoSession(t, "sub-alice", "alice@corp.example", oidc.RoleMember), `{"name":"ci"}`)
+		ssoSession(t, "sub-alice", "alice@corp.example", oidc.RoleUser), `{"name":"ci"}`)
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("mint during a revocation-store outage = %d, want 500 — an unanswerable revocation check must "+
 			"never mint a credential; body=%s", w.Code, w.Body.String())

@@ -123,6 +123,10 @@ const (
 	// KILLED — by its own Cancel, or by the person's next sign-in superseding it
 	// (harnesscred_supersede.go). See ssoTokenRunKilledRefusal.
 	refuseReasonRunKilled = "run_killed"
+	// refuseReasonSignInBusy: the per-person sign-in lock could not be taken in
+	// time (lockLoginSupersede), so the capture was not serialized and is
+	// refused rather than stored.
+	refuseReasonSignInBusy = "signin_busy"
 )
 
 // DRAFT (M2 canon pending)
@@ -164,6 +168,16 @@ const (
 	// whether captures live per-person or deployment-wide, so without it there is
 	// no way to tell which stored session this would remove.
 	harnessDisconnectRosterUnavailable = "the agent roster could not be read, so Wardyn cannot tell whose stored sign-in this would remove — try again in a moment"
+	// credentialConfinementAdvisorySentence (0.8 #150): the confinement-visibility
+	// WARNING for a run whose model credential is a stored AWS SSO session
+	// delivered to the sandbox at dispatch, under a confinement class weaker than
+	// the CC3 floor such a credential would otherwise require — see
+	// credentialConfinementAdvisory (runs_create.go). It names the enforced class
+	// so the person reading it on the New Run rail or a preflight Review knows
+	// exactly what "weaker" means for this run, and it is a WARNING, never a
+	// refusal: a deployment offering only the weakest confinement class must
+	// still be able to launch.
+	credentialConfinementAdvisorySentence = "this run's model credential is a stored AWS SSO session, delivered to the sandbox at dispatch — it is not counted toward the confinement floor, and the enforced class %s is weaker than the Vault (CC3) floor a credential like this would otherwise require"
 )
 
 // awsAccountID matches an AWS account id. ONE var for the package: the ARN

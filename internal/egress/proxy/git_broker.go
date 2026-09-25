@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -46,7 +47,7 @@ const (
 	// authenticates as — fixed by GitHub, not configurable. Named because it is
 	// half of the credential's wire rendering (SetBasicAuth sends
 	// base64(gitBrokerUsername + ":" + token)), so the mask registration and the
-	// outbound header must derive it from the same place (F155).
+	// outbound header must derive it from the same place.
 	gitBrokerUsername = "x-access-token"
 	// ruleSourceGitRef marks a decision-log row denied by push branch-namespace
 	// confinement (as opposed to the per-repo allowlist), so audit says WHICH gate
@@ -104,7 +105,7 @@ const (
 // expiry (internal/broker/broker_mint_kinds.go mints with ttlFor, honouring an
 // operator ttl_seconds), so any grant authored with ttl_seconds <= 300 was born
 // INSIDE a 5-minute margin: the cached token was treated as stale on the very
-// next sub-request and the clone re-minted and failed (F120). At the
+// next sub-request and the clone re-minted and failed. At the
 // sub-request scale the margin only has to cover the round trip.
 const brokerRefreshMargin = 30 * time.Second
 
@@ -113,7 +114,7 @@ const brokerRefreshMargin = 30 * time.Second
 // it. WARDYN_GIT_APPROVAL_TIMEOUT names it; defaultGitApprovalTimeout is the
 // default.
 //
-// Trust boundary (F070 sibling): the env var alone bounds only the approval
+// Trust boundary: the env var alone bounds only the approval
 // WAIT's timer; nothing else bounds the HTTP calls that timer supervises —
 // handleGitBroker/handlePATBroker pass r.Context() (server.go sets
 // ReadTimeout/WriteTimeout to 0) and forwardToControlPlane rides p.localClient,
@@ -190,7 +191,10 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// section, validate every ref against this run's branch namespace, then forward
 	// the buffered bytes followed by the still-streaming pack. Fetch/clone
 	// (info/refs, upload-pack) never enter this branch: pure streaming, zero added
-	// latency. A denial happens BEFORE gitToken, so a refused push never mints.
+	// latency. A denial happens BEFORE gitToken, so the refused request mints
+	// nothing itself — but the push's own discovery (GET info/refs) came first
+	// and already did (push_rules.go), and a content-rules verdict that has to
+	// read the forge looks the credential up before it is reached.
 	//
 	// allowSrc is the rule_source the ALLOW row below carries. A push forwarded
 	// with the parser opted out gets its own value (ruleSourceGitNSOff) so the
@@ -208,6 +212,24 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	} else if isPush {
 		body, ok := p.confinePush(w, r, slog.String("repo", orgRepo),
 			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) })
+		if !ok {
+			return
+		}
+		reqBody = body
+	}
+	// CONTENT rules, entered independently of the block above rather than
+	// inside its else. git_push_any_branch opts out of WHERE a push may land;
+	// wiring this inside that block would let a WHERE opt-out silently switch
+	// off a WHAT control (push_rules.go). A refused push is never forwarded.
+	// What the pack does not carry is compared with the repository's own trees,
+	// read with this lane's credential (push_forge.go).
+	if isPush {
+		forge := &forgeRepo{p: p, repo: orgRepo,
+			token: func(ctx context.Context) (string, error) { return p.gitToken(ctx, grantID) }}
+		body, release, ok := p.applyPushRules(w, r, reqBody, slog.String("repo", orgRepo),
+			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) }, forge,
+			appPushTarget(orgRepo, grantID))
+		defer release()
 		if !ok {
 			return
 		}
@@ -257,24 +279,40 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	removeHopByHop(outReq.Header)
 	// Defensive: strip any sandbox-supplied credential before injecting ours, so a
 	// rogue in-sandbox client can't smuggle its own onto the outbound request.
-	// F104: stripSandboxCredentials is the one definition of that set (inject.go);
-	// the local Header.Del("Authorization") this replaces left every OTHER
-	// credential header the sandbox set — X-Api-Key, Cookie, X-Access-Token — on
-	// the request alongside the brokered installation token.
+	// stripSandboxCredentials is the one definition of that set (inject.go); a
+	// local Header.Del("Authorization") would leave X-Api-Key, Cookie and
+	// X-Access-Token beside the brokered installation token.
 	stripSandboxCredentials(outReq.Header, "")
+	// Content rules need a pack they can read, and a client only sends one when
+	// the server asks (push_advert.go). The advertisement must be PARSEABLE to be
+	// rewritten, so the sandbox's own content-coding negotiation does not go out
+	// on this ONE request: identity is asked for explicitly rather than merely
+	// deleting the header, which would leave the transport free to negotiate a
+	// coding of its own.
+	noThin := p.noThinAdvert(r, rest)
+	if noThin {
+		outReq.Header.Set("Accept-Encoding", "identity")
+	}
 	outReq.SetBasicAuth(gitBrokerUsername, token) // GitHub App installation-token auth
 	outReq.Host = githubHost
 	outReq.Header.Del("Host")
 
-	p.emitGitDecision(r, egress.Allow, allowSrc)
-
-	resp, err := p.transport.RoundTrip(outReq)
+	// roundTripUpstream, not the transport directly: this forge speaks HTTP/2,
+	// and a peer that speaks it without negotiating it gets the same fallback
+	// the MITM and plain lanes get (upstream_protocol.go). The allow row follows
+	// a successful round trip only (failUpstream).
+	resp, err := p.roundTripUpstream(outReq)
 	if err != nil {
-		p.httpError(w, "git upstream error", err, http.StatusBadGateway)
+		p.failUpstream(w, err, &egress.DecisionLog{Request: p.reqOf(r, githubHost, 443)}, githubHost, "git upstream error")
 		return
 	}
+	p.emitGitDecision(r, egress.Allow, allowSrc)
 	defer func() { _ = resp.Body.Close() }()
 
+	if noThin {
+		relayNoThinAdvert(w, resp) // relay(), with no-thin added to the advertisement
+		return
+	}
 	relay(w, resp) // stream the pack back
 }
 
@@ -344,7 +382,7 @@ func (p *Proxy) gitToken(ctx context.Context, grantID uuid.UUID) (string, error)
 //
 // wireUser maps the mint's username to the one the CALLING LANE will actually
 // put on the wire, so the mask registered below covers the rendering that
-// leaves the process (F120) — the GitHub lane always sends gitBrokerUsername,
+// leaves the process — the GitHub lane always sends gitBrokerUsername,
 // while a github_token mint returns no username at all.
 func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser func(mintUsername string) string) (token, username string, err error) {
 	p.gitTokMu.Lock()
@@ -362,7 +400,7 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 		return e.token, e.username, nil
 	}
 	// One budget for the whole acquisition below — the first mint, the approval
-	// wait and every poll (F070 sibling; see gitApprovalBudget). Armed after the
+	// wait and every poll (see gitApprovalBudget). Armed after the
 	// cache check so a cache hit costs nothing.
 	ctx, cancel := context.WithTimeout(ctx, gitApprovalBudget())
 	defer cancel()
@@ -383,14 +421,14 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 	// AddGlobal dedupes by value, so the cache's re-mints add at most one entry
 	// per rotation on a process that lives one run.
 	//
-	// Both renderings (F155): the raw token AND the base64(username + ":" + tok)
-	// that SetBasicAuth puts on the wire. Registering only the raw token left the
+	// Both renderings: the raw token AND the base64(username + ":" + tok)
+	// that SetBasicAuth puts on the wire. Registering only the raw token leaves the
 	// wire form — the one a transport error quoting the outbound request carries —
 	// unmasked; the mask is exact-bytes, so it protects exactly the renderings it
 	// was given. registerBasicAuthCredential (inject.go) is the one definition of
 	// that set.
 	//
-	// wireUser(user), NOT the mint's username (F120): the two lanes send
+	// wireUser(user), NOT the mint's username: the two lanes send
 	// different usernames and only the caller knows which. internal/broker
 	// leaves Username empty for a github_token (broker.go, "Empty for
 	// github_token") while handleGitBroker authenticates as the constant
@@ -678,7 +716,7 @@ var branchNSWarnOnce sync.Once
 // git_pat lane must refuse in the same words as the App lane, and the only way
 // two lanes say the same thing forever is that there is one place saying it.
 //
-// The name is the lane-neutral half of the split (F015): the confinement is
+// The name is the lane-neutral half of the split: the confinement is
 // ONE rule with two brokers, which is also why the git_pat lane reuses the
 // brokered:git:branch-ns* rule sources rather than minting its own vocabulary.
 // Which lane may reach it, and under which switch, stays the caller's decision —
@@ -687,11 +725,10 @@ func (p *Proxy) confinePush(w http.ResponseWriter, r *http.Request, subject slog
 	// git does not gzip receive-pack bodies (remote-curl only sets
 	// gzip_request for fetch), but a compressed body must never be waved
 	// through unparsed — that would be a silent bypass.
-	if encs := r.Header.Values("Content-Encoding"); len(encs) > 1 ||
-		(len(encs) == 1 && encs[0] != "" && !strings.EqualFold(encs[0], "identity")) {
+	if enc, bad := nonIdentityEncoding(r.Header); bad {
 		deny(ruleSourceGitEnc)
 		http.Error(w, "wardyn: cannot enforce branch-namespace confinement on a "+
-			strings.Join(encs, ",")+"-encoded push body", http.StatusUnsupportedMediaType)
+			enc+"-encoded push body", http.StatusUnsupportedMediaType)
 		return nil, false
 	}
 	prefix := BranchNSPrefix(p.runID)
@@ -776,6 +813,7 @@ func branchNSSwitch(name string, dflt bool, warnOnce *sync.Once) bool {
 func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 	var buf bytes.Buffer
 	hdr := make([]byte, 4)
+	seenCmd := false
 	for {
 		if _, err := io.ReadFull(body, hdr); err != nil {
 			return nil, fmt.Errorf("unreadable pkt-line length: %w", err)
@@ -801,19 +839,30 @@ func readReceivePackCommands(body io.Reader, prefix string) ([]byte, error) {
 			return nil, fmt.Errorf("truncated pkt-line: %w", err)
 		}
 		buf.Write(payload)
-		if err := checkPushCommand(string(payload), prefix); err != nil {
+		if err := checkPushCommand(string(payload), prefix, !seenCmd); err != nil {
 			return nil, err
 		}
+		seenCmd = seenCmd || !bytes.HasPrefix(payload, []byte("shallow "))
 	}
 }
 
 // checkPushCommand validates ONE command-section pkt-line payload:
 // "<old-oid> SP <new-oid> SP <refname>", with "\0<capabilities>" on the first and
-// an optional trailing LF, or a "shallow <oid>" line (no ref to check).
-func checkPushCommand(line, prefix string) error {
-	line, _, _ = strings.Cut(line, "\x00") // capabilities ride the FIRST command only
+// an optional trailing LF, or a "shallow <oid>" line (no ref to check). first
+// reports whether this is the first command line.
+//
+// A NUL anywhere but the first command is refused: git's receive-pack reads a
+// capability list only there, and a forge whose parser differs could read
+// "<old> <new> refs/heads/wardyn/<run>/x\0refs/heads/main" on a later line as a
+// different ref than the one checked here.
+func checkPushCommand(line, prefix string, first bool) error {
+	line, _, caps := strings.Cut(line, "\x00") // capabilities ride the FIRST command only
 	line = strings.TrimSuffix(line, "\n")
-	if strings.HasPrefix(line, "shallow ") {
+	shallow := strings.HasPrefix(line, "shallow ")
+	if caps && (!first || shallow) {
+		return fmt.Errorf("refusing receive-pack command %q: a NUL is allowed only on the first command", line)
+	}
+	if shallow {
 		return nil
 	}
 	parts := strings.SplitN(line, " ", 3)
@@ -823,16 +872,10 @@ func checkPushCommand(line, prefix string) error {
 	ref := parts[2]
 	// Defense in depth: receive-pack refuses funny refnames server-side, but a
 	// prefix test must never be the only thing between "wardyn/<id>/x" and a
-	// traversal or an embedded second ref. Control characters are rejected here
-	// rather than left to the forge: git's own check_refname_format would catch
-	// them, but leaning on the server makes this parser's guarantee weaker than
-	// it reads — an embedded LF or CR is exactly the shape that smuggles a
-	// second command past a line-oriented reader.
-	if strings.Contains(ref, "..") || strings.ContainsAny(ref, " \t\\^~:?*[") {
-		return fmt.Errorf("refusing malformed refname %q", ref)
-	}
-	if i := strings.IndexFunc(ref, func(r rune) bool { return r < 0x20 || r == 0x7f }); i >= 0 {
-		return fmt.Errorf("refusing refname %q: control character at byte %d", ref, i)
+	// traversal or an embedded second ref. The rule is adoscope.CheckRefName,
+	// the ONE ref-name check the Azure DevOps REST refs door applies too.
+	if err := adoscope.CheckRefName(ref); err != nil {
+		return err
 	}
 	if !strings.HasPrefix(ref, prefix) || len(ref) <= len(prefix) {
 		return fmt.Errorf("push to %q is outside this run's branch namespace", ref)

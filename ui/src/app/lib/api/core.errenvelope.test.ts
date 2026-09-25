@@ -7,11 +7,13 @@ import { describe, it, expect } from "vitest";
 import { asJson, errEnvelope, errText, HttpError } from "./core";
 
 // The envelope's second field. `{"error":"…"}` is what every non-2xx carries;
-// a few refusals a console surface ACTS on add `"reason":"<class>"` — today
-// `model_credential`, the create-time refusal the New Run rail answers with
-// the AWS sign-in dialog. The class has to survive asJson's HttpError, and a
-// body without one has to read as "" (never undefined) so callers compare
-// with === and nothing else changes for the ten errText callers.
+// a few refusals a console surface ACTS on add `"reason":"<class>"` —
+// `model_credential` and `git_credential` (#386), the create-time refusals
+// the New Run rail answers with a sign-in/connect dialog. The class has to
+// survive asJson's HttpError, and a body without one has to read as ""
+// (never undefined) so callers compare with === and nothing else changes for
+// the ten errText callers. `org` (#386, review finding F1) is the same shape,
+// carried only by the git_credential envelope.
 describe("errEnvelope / asJson — the envelope's machine-readable reason", () => {
   it('{"error":"x","reason":"model_credential"} -> an HttpError carrying both', async () => {
     const res = new Response(JSON.stringify({ error: "x", reason: "model_credential" }), { status: 422 });
@@ -31,12 +33,28 @@ describe("errEnvelope / asJson — the envelope's machine-readable reason", () =
 
   it("a non-string reason is ignored, never rendered", async () => {
     const res = new Response(JSON.stringify({ error: "x", reason: 42 }), { status: 422 });
-    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "" });
   });
 
   it("a raw (non-envelope) body carries no reason", async () => {
     const res = new Response("plain", { status: 500 });
-    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "" });
+    expect(await errEnvelope(res)).toEqual({ message: "plain", reason: "", org: "" });
+  });
+
+  it('{"error":"…","reason":"git_credential","org":"…"} -> an HttpError carrying the org', async () => {
+    // ticket: F1
+    const res = new Response(
+      JSON.stringify({ error: "not connected", reason: "git_credential", org: "https://dev.azure.com/contoso" }),
+      { status: 422 },
+    );
+    const err = (await asJson(res).catch((e: unknown) => e)) as HttpError;
+    expect(err.reason).toBe("git_credential");
+    expect(err.org).toBe("https://dev.azure.com/contoso");
+  });
+
+  it("a non-string org is ignored, never rendered", async () => {
+    const res = new Response(JSON.stringify({ error: "x", org: 42 }), { status: 422 });
+    expect(await errEnvelope(res)).toEqual({ message: "x", reason: "", org: "" });
   });
 
   it("errText is the envelope's message, byte for byte", async () => {

@@ -98,12 +98,12 @@ func TestSecretOwnerFromRequest(t *testing.T) {
 		},
 		{
 			"sso session, member role: the caller's own sub",
-			mkReq(operatorCtx("sub-member-1", "m1@corp.example", oidc.RoleMember), ""),
+			mkReq(operatorCtx("sub-member-1", "m1@corp.example", oidc.RoleUser), ""),
 			"sub-member-1",
 		},
 		{
 			"wdn_ token, same sub+role as the SSO session above: the identical sub",
-			mkReq(withHumanIdentity(context.Background(), "sub-member-1", "m1@corp.example", oidc.RoleMember, nil, false), ""),
+			mkReq(withHumanIdentity(context.Background(), "sub-member-1", "m1@corp.example", oidc.RoleUser, nil, false), ""),
 			"sub-member-1",
 		},
 	}
@@ -122,7 +122,7 @@ func TestSecretOwnerFromRequest(t *testing.T) {
 func TestPutSecret_MemberStampsOwner_AuditSecretOwner(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{}}
 	h, srv := secretsRBACServer(t, sec)
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key", alice, `{"value":"sk-ant-member-owned-value"}`)
 	if w.Code != http.StatusNoContent {
@@ -151,8 +151,8 @@ func TestPutSecret_MemberStampsOwner_AuditSecretOwner(t *testing.T) {
 func TestDeleteSecret_MemberOtherOwner_204ByteIdenticalToMissing(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{}}
 	_, srv := secretsRBACServer(t, sec)
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
-	bob := ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
+	bob := ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser)
 
 	if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/shared-name", bob, `{"value":"bob-owns-this-value"}`); w.Code != http.StatusNoContent {
 		t.Fatalf("seed bob's row: %d %s", w.Code, w.Body.String())
@@ -189,7 +189,7 @@ func TestListSecrets_MemberOmitsOthersAndUnpairedOperatorNames(t *testing.T) {
 		t.Fatalf("seed bob's row: %v", err)
 	}
 
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/secrets", alice, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /secrets = %d: %s", w.Code, w.Body.String())
@@ -213,7 +213,7 @@ func TestListSecrets_MemberOmitsOthersAndUnpairedOperatorNames(t *testing.T) {
 // the routes that accept it, with a constant 403 for a non-operator.
 func TestListSecrets_AdminOwnerParam_Member403(t *testing.T) {
 	_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/secrets?owner=bob", alice, ""); w.Code != http.StatusForbidden {
 		t.Fatalf("GET /secrets?owner=bob as a member = %d, want 403: %s", w.Code, w.Body.String())
@@ -223,37 +223,81 @@ func TestListSecrets_AdminOwnerParam_Member403(t *testing.T) {
 	}
 }
 
-// TestPutSecret_MemberBedrockNames_403: all FOUR Bedrock/SigV4 credential
-// names are refused for a non-operator PUT, even though sinkReservedSecret
-// itself deliberately excludes bedrock-api-key (that exclusion is for the
-// operator's own legitimate write). The negative control proves the refusal
-// is member-specific, not a blanket name ban: an operator may still PUT it.
+// memberRefusedAWSNames is the AWS SigV4 name set a non-operator PUT/DELETE is
+// still refused, written out ONE PER NAME rather than as a loop over a slice
+// the production code also builds: the widening these tests guard
+// (writableSecretName dropping bedrockAPIKeySecret) is one clause away from
+// widening all four, and a list derived from the predicate under test would
+// follow it silently. bedrockAPIKeySecret is deliberately absent — see
+// TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace.
+var memberRefusedAWSNames = []string{
+	bedrockAccessKeyIDSecret,
+	bedrockSecretAccessKeySecret,
+	bedrockSessionTokenSecret,
+}
+
+// TestPutSecret_MemberBedrockNames_403: the three resident AWS SigV4 names are
+// refused for a non-operator PUT — they are ALWAYS signed out of the operator
+// namespace, so a member row under one would read as "Bedrock is configured"
+// over a credential dispatch never uses. The negative control proves the
+// refusal is member-specific, not a blanket name ban: an operator may still
+// PUT them.
 func TestPutSecret_MemberBedrockNames_403(t *testing.T) {
-	names := []string{
-		bedrockAccessKeyIDSecret,
-		bedrockSecretAccessKeySecret,
-		bedrockSessionTokenSecret,
-		bedrockAPIKeySecret,
-	}
-	for _, name := range names {
+	for _, name := range memberRefusedAWSNames {
 		t.Run(name, func(t *testing.T) {
-			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
-			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+			sec := &memSecrets{m: map[string][]byte{}}
+			_, srv := secretsRBACServer(t, sec)
+			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 			w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+name, alice, `{"value":"some-long-enough-value-000000"}`)
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("member PUT %s = %d, want 403: %s", name, w.Code, w.Body.String())
 			}
+			if len(sec.m) != 0 || len(sec.owned) != 0 {
+				t.Fatalf("a refused PUT of %s wrote a row; it must write none", name)
+			}
 		})
 	}
-	t.Run("negative control: an operator may still PUT it", func(t *testing.T) {
-		sec := &memSecrets{m: map[string][]byte{}}
-		_, srv := secretsRBACServer(t, sec)
-		admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
-		w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+bedrockAPIKeySecret, admin, `{"value":"some-long-enough-value-000000"}`)
-		if w.Code != http.StatusNoContent {
-			t.Fatalf("operator PUT %s = %d, want 204: %s", bedrockAPIKeySecret, w.Code, w.Body.String())
-		}
-	})
+	for _, name := range memberRefusedAWSNames {
+		t.Run("negative control: an operator may still PUT "+name, func(t *testing.T) {
+			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
+			admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+			w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+name, admin, `{"value":"some-long-enough-value-000000"}`)
+			if w.Code != http.StatusNoContent {
+				t.Fatalf("operator PUT %s = %d, want 204: %s", name, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace is the one name #153
+// widened, and the assertion is not merely "204": the row has to land in the
+// MEMBER's namespace and leave the operator's alone. A widening that wrote a
+// member's bearer to the operator row would also answer 204, and would hand
+// every other member's runs one person's key.
+func TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	_, srv := secretsRBACServer(t, sec)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
+
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/"+bedrockAPIKeySecret, alice, `{"value":"alice-own-bedrock-bearer-000000"}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("member PUT %s = %d, want 204: %s", bedrockAPIKeySecret, w.Code, w.Body.String())
+	}
+	if _, inOperator := sec.m[bedrockAPIKeySecret]; inOperator {
+		t.Fatalf("a member's bearer landed in the OPERATOR namespace — every member's runs would read it")
+	}
+	got := string(sec.owned["alice"][bedrockAPIKeySecret])
+	if got != "alice-own-bedrock-bearer-000000" {
+		t.Fatalf("alice's own namespace holds %q, want her bearer", got)
+	}
+
+	// And she can delete her own row, which is the other half of the door.
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+bedrockAPIKeySecret, alice, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("member DELETE %s = %d, want 204: %s", bedrockAPIKeySecret, w.Code, w.Body.String())
+	}
+	if _, still := sec.owned["alice"][bedrockAPIKeySecret]; still {
+		t.Fatalf("alice's bearer survived her own DELETE")
+	}
 }
 
 // TestSecretsAPI_OperatorByteIdenticalPre0050 is the negative control for the
@@ -334,7 +378,7 @@ func TestPutSecret_AdminOwnerParam_LandsInMemberNamespace(t *testing.T) {
 	t.Run("negative control: a member naming ?owner= is refused before any write", func(t *testing.T) {
 		sec := &memSecrets{m: map[string][]byte{}}
 		_, srv := secretsRBACServer(t, sec)
-		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 		w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=bob", alice, `{"value":"sk-ant-bobs-key-value-0000"}`)
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("member PUT ?owner=bob = %d, want 403: %s", w.Code, w.Body.String())
@@ -345,26 +389,31 @@ func TestPutSecret_AdminOwnerParam_LandsInMemberNamespace(t *testing.T) {
 	})
 }
 
-// TestDeleteSecret_MemberBedrockNames_403: the four Bedrock/SigV4 names are
+// TestDeleteSecret_MemberBedrockNames_403: the three AWS SigV4 names are
 // refused for a non-operator on DELETE as well as PUT (the guard lives in the
 // shared writableSecretName), while an operator may still delete them.
+// bedrock-api-key is absent here for the same reason it is absent from PUT —
+// its member DELETE is asserted to SUCCEED in
+// TestPutSecret_MemberBedrockBearer_LandsInOwnNamespace.
 func TestDeleteSecret_MemberBedrockNames_403(t *testing.T) {
-	for _, name := range []string{bedrockAccessKeyIDSecret, bedrockSecretAccessKeySecret, bedrockSessionTokenSecret, bedrockAPIKeySecret} {
+	for _, name := range memberRefusedAWSNames {
 		t.Run(name, func(t *testing.T) {
 			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
-			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+			alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 			if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+name, alice, ""); w.Code != http.StatusForbidden {
 				t.Fatalf("member DELETE %s = %d, want 403: %s", name, w.Code, w.Body.String())
 			}
 		})
 	}
-	t.Run("negative control: an operator may still DELETE it", func(t *testing.T) {
-		_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
-		admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
-		if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+bedrockAPIKeySecret, admin, ""); w.Code != http.StatusNoContent {
-			t.Fatalf("operator DELETE = %d, want 204: %s", w.Code, w.Body.String())
-		}
-	})
+	for _, name := range memberRefusedAWSNames {
+		t.Run("negative control: an operator may still DELETE "+name, func(t *testing.T) {
+			_, srv := secretsRBACServer(t, &memSecrets{m: map[string][]byte{}})
+			admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+			if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/"+name, admin, ""); w.Code != http.StatusNoContent {
+				t.Fatalf("operator DELETE %s = %d, want 204: %s", name, w.Code, w.Body.String())
+			}
+		})
+	}
 }
 
 // TestSecretCountCap is secretsMaxPerOwner (PF-38): one namespace holds at most
@@ -437,7 +486,7 @@ func TestSecretCountCap(t *testing.T) {
 		// secret (For(owner).List is own-rows-only).
 		sec := fill(secretsMaxPerOwner)
 		_, srv := secretsRBACServer(t, sec)
-		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+		alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 		if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/mine", alice, value); w.Code != http.StatusNoContent {
 			t.Fatalf("member PUT with a FULL operator namespace = %d, want 204: %s", w.Code, w.Body.String())
 		}
@@ -474,7 +523,7 @@ func TestReservedSecret_HarnessBlobSealedByPattern(t *testing.T) {
 	}
 }
 
-// ─── group C: the member seam's two ends ─────────────────────────────────────
+// group C: the member seam's two ends
 
 // TestListSecrets_CrossUserReadIsAudited pins the ASYMMETRY, which is the
 // finding rather than "a read was unlogged". `?owner=` is admin-only, and every
@@ -549,7 +598,7 @@ func TestListSecrets_CrossUserReadIsAudited(t *testing.T) {
 func TestListSecrets_OwnNamespaceReadIsNotAudited(t *testing.T) {
 	sec := &memSecrets{m: map[string][]byte{}}
 	h, srv := secretsRBACServer(t, sec)
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/secrets", alice, ""); w.Code != http.StatusOK {
 		t.Fatalf("member GET /secrets = %d, want 200: %s", w.Code, w.Body.String())
@@ -641,7 +690,7 @@ func TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit(t *testing.T) {
 
 	// (3) A MEMBER'S OWN WRITE is their own namespace by construction — never
 	// marked, whatever the directory happens to hold.
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 	if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key", alice,
 		`{"value":"sk-ant-alice-own-value-000"}`); w.Code != http.StatusNoContent {
 		t.Fatalf("member PUT = %d, want 204: %s", w.Code, w.Body.String())
@@ -656,5 +705,117 @@ func TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit(t *testing.T) {
 	}
 	if known, present := ownerKnownFlag(t, lastAuditEvent(t, h.audit.events, "secret.delete")); !present || known {
 		t.Errorf("secret.delete owner_known = (%v, present=%v), want false", known, present)
+	}
+}
+
+// reportingSecrets is memSecrets whose Delete reports as an external store
+// does when the vault kept the value soft-deleted.
+type reportingSecrets struct {
+	*memSecrets
+	rep secretstore.DeleteReport
+}
+
+func (r reportingSecrets) For(owner string) secretstore.Store {
+	return reportingSecrets{r.memSecrets.For(owner).(*memSecrets), r.rep}
+}
+
+func (r reportingSecrets) Delete(ctx context.Context, name string) error {
+	secretstore.ReportDelete(ctx, r.rep)
+	return r.memSecrets.Delete(ctx, name)
+}
+
+// secret.delete carries what an external store kept (design §2.3a.3): not
+// purged, and for how many days the organisation can recover it.
+func TestDeleteSecret_AuditSaysWhatTheStoreKept(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{"npm-token": []byte("v")}}
+	h, srv := secretsRBACServer(t, sec)
+	srv.cfg.Secrets = reportingSecrets{sec, secretstore.DeleteReport{Store: "azurekv", Purged: false, RecoverableDays: 90}}
+	srv.router = srv.routes()
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/npm-token", admin, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d: %s", w.Code, w.Body.String())
+	}
+	var data map[string]any
+	if err := json.Unmarshal(lastAuditEvent(t, h.audit.events, "secret.delete").Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data["store"] != "azurekv" || data["purged"] != false || data["recoverable_days"] != float64(90) {
+		t.Fatalf("secret.delete data = %v; want store azurekv, purged false, recoverable_days 90", data)
+	}
+	if _, present := data["secret_owner"]; present {
+		t.Fatal("an operator delete carries secret_owner")
+	}
+}
+
+// rowFailingSecrets is memSecrets whose Put fails as store mode does when the
+// value reached the external store but its row was not written.
+type rowFailingSecrets struct{ *memSecrets }
+
+func (r rowFailingSecrets) For(owner string) secretstore.Store {
+	return rowFailingSecrets{r.memSecrets.For(owner).(*memSecrets)}
+}
+
+func (rowFailingSecrets) Put(context.Context, string, []byte) error {
+	return fmt.Errorf("pg secretstore: put: the new value is live in azurekv, but updating the row failed: %w: %w",
+		secretstore.ErrRowNotWritten, errors.New("row refused"))
+}
+
+// Rule 18: a failure between the store write and the row write is audited, as
+// a secret.write failure with reason "row", and never carries the value.
+func TestPutSecret_RowFailureIsAudited(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	srv.cfg.Secrets = rowFailingSecrets{sec}
+	srv.router = srv.routes()
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+	const value = "npm-row-failure-value-000000"
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/npm-token", admin, `{"value":"`+value+`"}`); w.Code != http.StatusInternalServerError {
+		t.Fatalf("PUT = %d, want 500: %s", w.Code, w.Body.String())
+	}
+	ev := lastAuditEvent(t, h.audit.events, "secret.write")
+	if ev.Outcome != "failure" || ev.Target != "npm-token" || string(ev.Data) != `{"reason":"row"}` {
+		t.Fatalf("secret.write = (%s, %s, %s); want a failure on npm-token with reason row", ev.Outcome, ev.Target, ev.Data)
+	}
+}
+
+// Rule 18 covers Wardyn's own writes too: a captured or refreshed sign-in
+// whose row was not written is audited as the API's write is.
+func TestInternalWrite_RowFailureIsAudited(t *testing.T) {
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	srv.cfg.Secrets = rowFailingSecrets{sec}
+	ctx := context.Background()
+	for _, c := range []struct {
+		write  func() error
+		target string
+		data   string
+	}{
+		{func() error { return srv.storeADOEntraBlob(ctx, "alice", "ado-1", adoEntraBlob{}) },
+			adoEntraSecretName("ado-1"), `{"reason":"row","secret_owner":"alice"}`},
+		{func() error { return srv.storeAWSSSOBlob(ctx, awsSSOScope{perUser: true, owner: "bob"}, awsSSOBlob{}) },
+			harnessCredSecretName(awsSSOProvider), `{"reason":"row","secret_owner":"bob"}`},
+		{func() error { return srv.storeAWSSSOBlob(ctx, awsSSOScope{}, awsSSOBlob{}) },
+			harnessCredSecretName(awsSSOProvider), `{"reason":"row"}`},
+	} {
+		if err := c.write(); !errors.Is(err, secretstore.ErrRowNotWritten) {
+			t.Fatalf("%s: write = %v; want ErrRowNotWritten", c.target, err)
+		}
+		ev := lastAuditEvent(t, h.audit.events, "secret.write")
+		if ev.Outcome != "failure" || ev.Target != c.target || ev.ActorType != types.ActorSystem || string(ev.Data) != c.data {
+			t.Fatalf("secret.write = (%s, %s, %s, %s); want a system failure on %s with %s", ev.ActorType, ev.Outcome, ev.Target, ev.Data, c.target, c.data)
+		}
+	}
+}
+
+// The operator's pasted harness credential is audited by who pasted it.
+func TestHarnessCredentialPaste_RowFailureIsAudited(t *testing.T) {
+	h, srv := harnessCredSrv(t, rowFailingSecrets{&memSecrets{m: map[string][]byte{}}})
+	if w := do(t, srv, http.MethodPut, "/api/v1/setup/harness-credential/anthropic", adminToken,
+		`{"token":"sk-ant-oat01-row-will-fail"}`); w.Code != http.StatusInternalServerError {
+		t.Fatalf("paste = %d, want 500: %s", w.Code, w.Body.String())
+	}
+	ev := lastAuditEvent(t, h.audit.events, "secret.write")
+	if ev.Outcome != "failure" || ev.Target != harnessCredSecretName("anthropic") || string(ev.Data) != `{"reason":"row"}` {
+		t.Fatalf("secret.write = (%s, %s, %s); want a failure on the harness credential with reason row", ev.Outcome, ev.Target, ev.Data)
 	}
 }

@@ -68,13 +68,16 @@ type ApprovalService interface {
 	Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error)
 	// CancelForRun moves every still-PENDING approval of a run that has just
-	// reached a terminal state to CANCELLED, returning how many it moved. It is
+	// reached a terminal state to CANCELLED, returning how many moved per kind. It is
 	// part of the terminal cascade, beside identity/broker revocation: an
 	// approval whose run has ended is a control that cannot function, and a row
 	// left PENDING renders live Approve/Deny buttons in the console. reason names
 	// the transition ("run_killed", "run_completed", ...). Idempotent by
 	// construction — a second call finds nothing PENDING and emits nothing.
-	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error)
+	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error)
+	// ExpireOne moves one still-PENDING approval to EXPIRED (a no-op once decided):
+	// wardyn-toolgate's give-up signal (#811). actor is the withdrawing agent.
+	ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error
 	// CountForRun returns how many approvals a run has raised, in ANY state —
 	// the per-run cap handleInternalRequestApproval enforces. A sandbox chooses
 	// the hosts it asks about, so without that cap the number of rows one run can
@@ -140,6 +143,12 @@ type Config struct {
 	Identity identity.Provider
 	// Approvals is the approval FSM service.
 	Approvals ApprovalService
+	// ApprovalExpiryAfter mirrors WARDYN_APPROVAL_EXPIRY_AFTER, the deployment's
+	// ceiling on how long any request waits for a decision. A run's captured
+	// wait (captureRunLimits) never exceeds it. 0 means unknown here. Dispatch
+	// also mirrors it onto a hold-mode run's sandbox (approval_expiry.go, RL-1).
+	ApprovalExpiryAfter time.Duration
+	RunLeaseConfig      // the run lease's settings (run_lease_server.go)
 	// Broker mints credentials inside the approval-gated transaction.
 	Broker MintBroker
 	// GitHubRulesets, when set, lets the setup checklist ask GitHub whether the
@@ -185,6 +194,21 @@ type Config struct {
 	// LocalOperator is the principal stamped on runs/approvals/audit in
 	// LocalMode (e.g. "local:<os-user>"). Ignored unless LocalMode is true.
 	LocalOperator string
+	// MemberMode mirrors WARDYN_USER_DESKTOP (cmd/wardynd's validateMemberModePosture
+	// already enforces its precondition at boot). internal/api did not carry this
+	// bit before #378/#379: it exists here so handleHealthz can compute
+	// token_login — a member-mode desktop's admin token is a PROCESS credential
+	// (deploy/desktop/wardyn.env.m-prime.example), never a human sign-in path, so
+	// the console must not offer it as one.
+	MemberMode bool
+	// SSOOnly mirrors WARDYN_SSO_ONLY: the operator's declaration that SSO is the
+	// ONLY way into this console. cmd/wardynd's validateSSOOnlyPosture refuses
+	// boot unless that is actually true (OIDC configured, admin token/local
+	// mode/member mode/no-operator-list override all absent) before this field
+	// is ever set, so handleHealthz's sso_only bit — which the sign-in screen
+	// reads to drop the admin-token form and the role-derivation caveat — can
+	// never overclaim.
+	SSOOnly bool
 	// SubscriptionPostureOK reports whether this deployment may resolve a SHARED
 	// subscription credential (one operator's live Anthropic OAuth token) into an
 	// agent run. Decided once at boot by subscriptionInjectPosture (cmd/wardynd) —
@@ -224,10 +248,26 @@ type Config struct {
 	// (WARDYN_ANTHROPIC_BASE_URL / WARDYN_OPENAI_BASE_URL, validated by
 	// ValidateLLMGateways). Control-plane-authored, same trust boundary as
 	// TrustedCAPEM above — the sandbox cannot set this. nil/empty (the
-	// default) => every api-key lane dials the public host, byte-identical to
-	// today. Scope: the api-key lane only — see (*Server).llmProviderFor;
-	// subscription/managed runs still reach the public host directly.
+	// default) => every lane dials the public host, byte-identical to today.
+	// Consulted by (*Server).llmProviderFor (the api-key lane's host
+	// substitution) and, for Anthropic specifically, by
+	// (*Server).anthropicBaseURL/anthropicGatewayHost/anthropicGatewayHostPort
+	// (the subscription and Wardyn-managed lanes, runs_dispatch_llm.go) and the
+	// subscription-injection host allowlist (injection.go). The harness-login
+	// (`claude setup-token`) lane never consults it and always stays on the
+	// public host — that flow mints the OAuth token itself.
 	LLMGateways map[string]string
+	// LLMGatewayAuth maps the same public model-provider host key as
+	// LLMGateways to an operator-configured injection header/format override
+	// (WARDYN_<VENDOR>_GATEWAY_HEADER / _GATEWAY_FORMAT, validated by
+	// ValidateLLMGateways) — independent of whether that provider also has an
+	// LLMGateways entry. nil/empty (the default) => every provider keeps the
+	// harness catalog's compile-time convention (harness.go's Gateway field),
+	// byte-identical to today. Consulted by (*Server).llmProviderFor, which
+	// applies Header/Format field-by-field onto the InjectionRule it builds —
+	// never onto the mint path directly, so a stored/proposed grant always
+	// reflects the resolved convention at proposal time.
+	LLMGatewayAuth map[string]LLMGatewayAuth
 	// RunnerTarget records which target a run is dispatched to ("docker"|"k8s"),
 	// or "none" for a headless control plane (-runner none: runs stay PENDING).
 	// Defaults to "docker".
@@ -237,6 +277,10 @@ type Config struct {
 	// ControlPlaneURL is the externally-reachable base URL handed to sidecars
 	// (proxy config) so they can call the internal endpoints.
 	ControlPlaneURL string
+	// ControlPlaneCAPEM is wardynd's internal CA certificate (internal/hoptls),
+	// handed to every proxy as the only root it trusts for ControlPlaneURL.
+	// Empty only when ControlPlaneURL is loopback http (a local install).
+	ControlPlaneCAPEM string
 	// ProxyURL, when set, overrides the WARDYN_PROXY_URL injected into sandbox
 	// env. Defaults to "http://wardyn-proxy:3128" (the per-run proxy sidecar
 	// hostname set by the docker driver). Non-secret: it is a network address,
@@ -296,7 +340,7 @@ type Config struct {
 	// buildOptionalFeatures).
 	AllowEmailMappings bool
 	// MemberMounts is the operator/MDM-set posture for MEMBER-authored local_dir
-	// binds (WARDYN_MEMBER_WORKSPACE_ROOTS + _MAP + WARDYN_MEMBER_WRITABLE_ROOTS
+	// binds (WARDYN_USER_WORKSPACE_ROOTS + _MAP + WARDYN_USER_WRITABLE_ROOTS
 	// + _DENY, parsed at boot by runner.ParseMemberMountPolicy). The ZERO VALUE
 	// — the default — means a member may not onboard a host directory at all
 	// (repos and operator-owned workspaces are unaffected), which is the
@@ -440,6 +484,12 @@ type Config struct {
 	// PTY capture / asciicast uploads before they reach the RecordingStore.
 	// A nil registry disables masking (existing tests stay green).
 	MaskRegistry *secretmask.Registry
+	// ADOEntra resolves the Azure DevOps Entra app registration the per-user
+	// sign-in runs against (see ado_entra.go). Nil — the default — means this
+	// deployment offers no Azure DevOps sign-in and both of its routes refuse.
+	// A function rather than a value so the provider row stays the single
+	// source of truth and the sign-in never acts on a cached copy of it.
+	ADOEntra ADOEntraSource
 	// SubscriptionToken, when non-nil, yields the operator's LIVE Anthropic
 	// subscription OAuth access token from the resident ~/.claude credentials.
 	// The internal injection-resolve endpoint uses it to inject a fresh token
@@ -471,7 +521,8 @@ type Config struct {
 	// minute forever from a single retrying sidecar, which the 1/sec rate limiter
 	// never trips and which still evicted every real security event out of the
 	// console's 1000-row window in minutes. See coalesceAuthFailed (http.go) for
-	// the bounds that keep a burst from collapsing into one row.
+	// the bounds that keep a burst from collapsing into one row. The same
+	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
@@ -492,8 +543,14 @@ type Config struct {
 	// AgeKeyDurable reports whether the secret store's age key was SUPPLIED
 	// (WARDYN_AGE_KEY/-age-key non-empty) vs ephemerally generated at boot. When
 	// false, stored secrets are unreadable after a restart — surfaced by
-	// /setup/status as a durability warning. Computed at boot in cmd/wardynd.
+	// /setup/status as a durability warning. Computed at boot in cmd/wardynd;
+	// true in store mode, where no local key holds anything.
 	AgeKeyDurable bool
+	// SecretStoreExternal names the store every credential is written to in store mode ("Vault at
+	// vault.example:8200"), "" in local mode; set, /setup/status shows store_external, not the age-key row.
+	SecretStoreExternal string
+	// PlatformKeySeparate: WARDYN_PLATFORM_KEY_FILE gives the boot keys their own local key; false in local mode, /setup/status shows platform_shared (§2.13 c).
+	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
 	// posture. Computed at boot in cmd/wardynd (listenIsLoopback).
@@ -634,6 +691,18 @@ type Config struct {
 	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
 	// cookie that cannot be signed must never be issued.
 	UISessionKey []byte
+	// DemoVideoBaseURL is WARDYN_DEMO_VIDEO_BASE_URL, validated at boot by
+	// ValidateDemoVideoBaseURL (same seven-rule shape as an internal model
+	// gateway: https://, no userinfo, no query/fragment). It re-points the
+	// Getting Started demo episodes at an operator-run mirror for an
+	// air-gapped deployment, where github.com is unreachable — both the
+	// download URL episodeUrl's /healthz-reading caller builds and the CSP's
+	// media-src this base's host is echoed into (cspMediaSrc,
+	// security_headers.go). Empty (the default) = the two hardcoded GitHub
+	// hosts, byte-identical to today. Control-plane-authored only, same trust
+	// boundary as TrustedCAPEM/LLMGateways above — never a SiteConfig field,
+	// never agent-reachable.
+	DemoVideoBaseURL string
 }
 
 // ComponentInfo describes one pluggable seam's selection for /healthz. Runtime
@@ -770,6 +839,21 @@ type Server struct {
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
 	dirLimiter principalLimiter
+	// enrolLimiter bounds the ONE anonymous device route, POST
+	// /devices/enrol, per TCP peer (devices_auth.go's peerKey), with per-entry
+	// eviction so the map cannot grow without bound. Configured in New.
+	enrolLimiter principalLimiter
+	// The device routes' failure-row bounds (device_audit_bounds.go):
+	// enrolFailures is the anonymous route's one stream, ingestFailures one
+	// stream per device, ingestFailureLimiter that stream's per-device bucket.
+	enrolFailures        failureStreams
+	ingestFailures       failureStreams
+	ingestFailureLimiter principalLimiter
+	// ingestInFlight holds the id of every device with a push in progress —
+	// handleDeviceAuditIngest's one-push-per-device cap. Process-local like
+	// the limiters above; an entry lives only as long as its request.
+	ingestInFlight sync.Map
+	runLeaseState  // the run lease sweep's process state (run_lease_server.go)
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
@@ -789,6 +873,32 @@ type Server struct {
 	ssoRefreshMu    sync.Mutex
 	ssoRefreshLocks map[string]*sync.Mutex
 	ssoRefreshSpent map[string]bool
+	// adoEntra is the per-owner single-flight registry the Azure DevOps
+	// sign-in's redemption takes before it redeems a rotating refresh token
+	// (see ado_entra_store.go). Process-local for the same reason as the locks
+	// above, and its zero value is ready to use.
+	adoEntra adoEntraFlight
+	// adoEntraTokens reuses a minted Azure DevOps access token across the
+	// per-host grants of one run (injection_ado.go), so a sidecar's boot does
+	// not rotate one person's refresh token once per host.
+	adoEntraTokens adoEntraAccessCache
+	// bg tracks every goroutine spawned through goBackground — work detached
+	// from a request so the answering call does not wait for it
+	// (finishHarnessLoginLaunch, killTeardownTail's supersede caller).
+	// http.Server (cmd/wardynd/boot_serve.go) only waits for in-flight
+	// HANDLERS to return; these goroutines outlive their handler by design, so
+	// Shutdown alone would let a SIGTERM cut one off mid-teardown — a run left
+	// KILLED with its sandbox still up, its credentials unrevoked and no
+	// run.kill row. See WaitBackground, which cmd/wardynd calls after
+	// httpSrv.Shutdown so an orderly stop gives this work its own bounded
+	// window to finish. Zero value is ready to use.
+	bg sync.WaitGroup
+	// bgWaitBudget overrides backgroundShutdownBudget for THIS server only,
+	// same shape as keepaliveEvery/pingEvery above: a test proving WaitBackground
+	// actually gives up at its bound needs to do so in milliseconds, not the
+	// real ~35s budget. Zero (the default) means "use backgroundShutdownBudget".
+	// See background.go; signInCaptureKillGrace is ssotoken.go's (tests set 0).
+	bgWaitBudget, signInCaptureKillGrace time.Duration
 }
 
 // New constructs a Server and builds its router. It does not start listening.
@@ -808,7 +918,10 @@ func New(cfg Config) *Server {
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()
 	}
-	s := &Server{cfg: cfg}
+	s := &Server{cfg: cfg, signInCaptureKillGrace: signInCaptureKillGrace,
+		enrolLimiter:         principalLimiter{rate: enrolRatePerSec, burst: enrolBurst, max: enrolLimiterMaxPeers},
+		ingestFailureLimiter: principalLimiter{rate: ingestFailureRatePerSec, burst: ingestFailureBurst, max: ingestFailureMaxDevices},
+	}
 	s.router = s.routes()
 	// drain the durable audit-fallback spool back into the store once it
 	// recovers, so a PG outage no longer leaves spooled events permanently invisible

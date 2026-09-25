@@ -19,6 +19,18 @@ export interface AuditEvent {
   outcome: Outcome;
   source_ip?: string;
   data?: Record<string, unknown>;
+  // The tamper-evidence chain (internal/types/types.go's AuditEvent.PrevHash/
+  // RowHash, migration 0047): row_hash = SHA-256(prev_hash || canonical
+  // serialization of the fields above), computed BY POSTGRES on insert.
+  // Populated on the WRITE path only — the paginated GET /audit read
+  // deliberately does not select them, so both are absent on everything this
+  // console renders from that endpoint. The chain itself is verified through
+  // GET /api/v1/audit/chain/verify, never by reading these back off a row.
+  prev_hash?: string;
+  row_hash?: string;
+  // The enrolled device that forwarded this row (AuditEvent.DeviceID), read
+  // from the stored row; absent on rows this control plane wrote itself.
+  device_id?: string;
 }
 
 // Tool-rule decisions

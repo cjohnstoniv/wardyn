@@ -21,6 +21,7 @@ package api
 import (
 	"context"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -85,11 +86,16 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 		// Skipped by NAME (never a value) and audited, matching this lane's
 		// fail-open-per-name discipline; validateLLMInspection refuses the same
 		// name at write time so an operator sees a 400 rather than a silent skip.
-		if sinkReservedSecret(name) {
+		//
+		// bedrock-api-key is skipped the same way: its namespace is the one
+		// dispatch records on its own grant (resolveBedrockBearerInjection), which
+		// this owner-then-operator read cannot honour — on a per_user member's run
+		// it would put the OPERATOR's key into that run's corpus.
+		if sinkReservedSecret(name) || name == bedrockAPIKeySecret {
 			reserved = append(reserved, name)
 			continue
 		}
-		val, err := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(ctx, name)
+		val, err := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), name)
 		if err != nil || len(val) == 0 {
 			missing++
 			continue
@@ -119,7 +125,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 // dropped by filterMemberGrants even when the operator's ceiling lists the exact
 // (name, secret) pairing. An operator's own runs are unaffected — the ceiling
 // authority is never clamped by its own ceiling.
-const envAllowMemberEnvSecret = "WARDYN_ALLOW_MEMBER_ENV_SECRET"
+const envAllowMemberEnvSecret = "WARDYN_ALLOW_USER_ENV_SECRET"
 
 // resolveEnvSecretGrants resolves this run's env_secret grants store->sandbox
 // env at dispatch: each grant's scope names a stored secret and the variable to
@@ -168,6 +174,12 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 			skip = "scope invalid: " + err.Error()
 		case sinkReservedSecret(secretName):
 			skip = "references a reserved platform-internal secret name"
+		case secretName == bedrockAPIKeySecret:
+			// The bearer is proxy-injected and never resident, and its namespace
+			// is the one dispatch records on its own grant
+			// (resolveBedrockBearerInjection) — which this owner-fallback read
+			// cannot honour.
+			skip = "the Bedrock API key is injected proxy-side only and never written into the sandbox"
 		case s.cfg.Secrets == nil:
 			skip = "no secret store configured"
 		case sandboxEnv[name] != "":
@@ -177,7 +189,7 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 			// runIdentitySubject(run.CreatedBy): same owner-then-operator-fallback
 			// rule as resolveLLMInspectionSecrets above, through the same
 			// chokepoint.
-			val, gerr := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(ctx, secretName)
+			val, gerr := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), secretName)
 			if gerr != nil || len(val) == 0 {
 				skip = "secret could not be resolved"
 			} else {

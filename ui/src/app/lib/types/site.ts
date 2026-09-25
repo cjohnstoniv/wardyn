@@ -91,6 +91,19 @@ export interface SiteConfig {
   // above is, and stripped from every GET-spread body for the same reason
   // (SERVER_OWNED_SITE_CONFIG_KEYS).
   agent_providers?: AgentProviders;
+  // The org's model-provider configuration — which kinds of model credential
+  // this deployment supports, where each sends requests, and which agents may
+  // use it. Configuration only: every person brings their own credential.
+  // Absent (the default) is today. No console surface writes it yet, and it is
+  // stripped from every GET-spread body (SERVER_OWNED_SITE_CONFIG_KEYS) for the
+  // sibling blocks' reason.
+  model_providers?: ModelProviders;
+  // #484 — the admin's own "what to do next" under the four sign-in refusals a
+  // person cannot clear alone (types.SiteConfig.SignInHelpText/URL). PUBLIC:
+  // the anonymous /healthz publishes both. Plain text, at most 1,000
+  // characters; the URL is http(s) only. Edited on the People step.
+  sign_in_help_text?: string;
+  sign_in_help_url?: string;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -130,6 +143,7 @@ export const SERVER_OWNED_SITE_CONFIG_KEYS = [
   "onboarding_completed_at",
   "workspace_providers",
   "agent_providers",
+  "model_providers",
   "effective_scm_hosts",
 ] as const satisfies readonly (keyof SiteConfig)[];
 
@@ -165,6 +179,77 @@ export interface AgentProvider {
   // (bedrock_sso + per_user). ADMIN-OWNED for the same reason sso_start_url is.
   sso_account_id?: string;
   sso_role_name?: string;
+  // The model provider (model_providers[].id) a new run of this agent uses
+  // unless the person chooses another. Must name a provider enabled for this
+  // agent; that provider may be turned off, which makes this default's runs
+  // refused rather than moved. Absent is today.
+  default_provider?: string;
+}
+
+// The org's model-provider configuration. Hand-maintained mirror of Go's
+// types.ModelProviders (internal/types/model_provider.go) — the json tags
+// verbatim; a removed wire field is a runtime TypeError only e2e catches.
+export interface ModelProviders {
+  providers?: ModelProvider[];
+}
+
+// Closed set, server-validated.
+export type ModelProviderKind =
+  | "anthropic_subscription"
+  | "bedrock_sso"
+  | "anthropic_api_key"
+  | "openai_api_key"
+  | "bedrock_bearer"
+  | "custom_endpoint";
+
+// One provider. No credential lives here — each person supplies their own.
+export interface ModelProvider {
+  // The admin's slug ("corp-gateway"), what a run names.
+  id: string;
+  // SERVER-OWNED: minted on first write, carried by id, never reissued. A
+  // submitted value is ignored.
+  readonly uid?: string;
+  // What people see when they choose it.
+  name?: string;
+  kind: ModelProviderKind;
+  // Negative-sense: absent is ENABLED. A disabled provider may still be an
+  // agent's default, whose runs are then refused rather than moved elsewhere.
+  disabled?: boolean;
+  // custom_endpoint: required. Anthropic/OpenAI kinds: an optional
+  // route-through gateway. Bedrock kinds: never (see bedrock.base_url).
+  base_url?: string;
+  // custom_endpoint only: how each person's token is sent. The server fills
+  // Authorization / "Bearer %s" when absent.
+  auth?: ProviderAuth;
+  // bedrock_sso / bedrock_bearer only.
+  bedrock?: BedrockSettings;
+  // The agents this provider may serve, with the settings for each.
+  harnesses?: ProviderHarness[];
+}
+
+export interface ProviderAuth {
+  header?: string;
+  format?: string;
+}
+
+export interface BedrockSettings {
+  region?: string;
+  base_url?: string;
+  // bedrock_sso only, and ADMIN-OWNED: a sign-in never chooses another.
+  sso_start_url?: string;
+  sso_account_id?: string;
+  sso_role_name?: string;
+}
+
+export interface ProviderHarness {
+  // A harness-catalog id ("claude-code", "codex-cli").
+  harness: string;
+  // Admin-set, no member override; required on a Bedrock kind.
+  model?: string;
+  // custom_endpoint only: where the endpoint serves this agent's API dialect.
+  path?: string;
+  auth_header?: string;
+  auth_format?: string;
 }
 
 // The org's workspace-provider policy. Hand-maintained mirror of Go's
@@ -173,6 +258,12 @@ export interface AgentProvider {
 export interface WorkspaceProviders {
   git?: GitProvider[];
   storage?: StorageProviders;
+  // git_pat_broker_enabled is READ-ONLY and SERVER-PROJECTED (#381): the
+  // deployment's own WARDYN_GIT_PAT_BROKER switch, present only once at least
+  // one git row is configured (absent on a never-configured install), never
+  // sent on a PUT (the server clears it if one does). true/false, never a
+  // bare boolean default — see scm-provider.ts's patLaneMeta.
+  git_pat_broker_enabled?: boolean;
 }
 
 // One git-provider row. `disabled` is negative-sense so the zero value is
@@ -189,19 +280,62 @@ export interface GitProvider {
   // scheme and host match one of these and its path equals that base URL's path
   // or extends it at a "/" boundary.
   base_urls: string[];
-  // The closed lane set (ClosedGitLanes). EMPTY MEANS EVERY LANE the kind
-  // supports — the field narrows, it never widens.
+  // The closed lane set (ClosedGitLanes). EMPTY MEANS EVERY LEGACY LANE
+  // (LegacyGitLane) — the field narrows, it never widens, and a lane added
+  // after that list was frozen must be NAMED here to be usable.
   lanes?: GitLane[];
+  // Whose credential this row's lanes use. Absent reads as "shared". The
+  // "entra" lane REQUIRES "per_user" — the server refuses anything else,
+  // because there is no such thing as a shared Entra sign-in.
+  credential_source?: CredentialSource;
+  // The Entra lane's configuration. Present only on a row whose lanes name
+  // "entra", and required on one: the server refuses an orphaned block, and
+  // refuses the lane without it.
+  entra?: ADOEntraConfig;
+}
+
+// Whose credential a provider row's lanes use.
+export type CredentialSource = "shared" | "per_user";
+
+// How an Entra-lane run presents itself to Azure DevOps. Absent reads as
+// "bearer", the only accepted mode: the server refuses "minted_pat" because
+// Azure DevOps mints personal access tokens only for Microsoft's own clients.
+export type ADOTokenMode = "bearer";
+
+// The Entra lane's configuration (types.ADOEntraConfig). The capability
+// strings are the classifier's vocabulary (internal/adoscope) — the console
+// never invents one, and never re-words a capability's label.
+export interface ADOEntraConfig {
+  tenant_id: string;
+  client_id: string;
+  // The widest access a run on this row may ever hold. Non-empty, and it must
+  // include "read".
+  capability_ceiling?: string[];
+  // What a run gets when it asks for nothing. Empty reads as ["read"], and it
+  // must sit inside capability_ceiling.
+  default_profile?: string[];
+  token_mode?: ADOTokenMode;
+  // Whether REST calls are brokered on this lane. ABSENT MEANS TRUE, which is
+  // why it is optional rather than a plain boolean the console might write as
+  // false by omission.
+  rest_api?: boolean;
 }
 
 // The closed git-provider kinds. A self-hosted forge is not a third kind: it is
 // a "github" (GHES) or "azure_devops" (ADO Server) row naming its own host.
 export type GitProviderKind = "github" | "azure_devops";
 
-// The closed credential lanes a run may clone with. "app" is github.com only
-// (the broker has no Azure DevOps equivalent); "ssh" reaches only the two hosts
-// publishing an SSH-over-443 endpoint.
-export type GitLane = "app" | "pat" | "ssh";
+// The lanes an EMPTY `lanes` list admits — types.LegacyGitLanes, frozen at the
+// three that existed when "empty means every lane" was written down. The Git
+// tab renders exactly these; a lane outside the list is configured elsewhere
+// and must survive a toggle here untouched.
+export type LegacyGitLane = "app" | "pat" | "ssh";
+
+// The closed credential lanes a run may clone with (ClosedGitLanes). "app" is
+// github.com only (the broker has no Azure DevOps equivalent); "ssh" reaches
+// only the two hosts publishing an SSH-over-443 endpoint; "entra" is Azure
+// DevOps hosted only and authorizes each person as themselves.
+export type GitLane = LegacyGitLane | "entra";
 
 // The file-system half. Each absent sub-block is legacy behaviour for that half.
 export interface StorageProviders {

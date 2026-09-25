@@ -12,13 +12,13 @@
 // holding four interfaces nothing else imports is a file to keep in sync for no
 // reader. Move them to lib/types/governance.ts the day a second domain needs
 // them.
-import type { CapabilitySubjectType, RunPolicySpec } from "../types";
+import type { CapabilitySubjectType, ConfinementClass, RunPolicySpec } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
 // and `!!limits.deny_x` is how every read is written.
-export interface GovernanceLimits {
+export interface GovernanceLimits extends RunLimits {
   deny_task_mode_exec?: boolean;
   deny_interactive?: boolean;
   // types.GovernanceLimits.DenyUserDrive (0.7 user drives) — the door the
@@ -44,6 +44,20 @@ export interface GovernanceLimits {
   autonomy_rubric?: AutonomyRubric;
 }
 
+// types.RunLimits (long-holds rev 4 §2.2) — embedded in GovernanceLimits, so
+// the seven keys sit flat on `limits`; a run carries the same set, captured at
+// create (AgentRun.run_limits). Absent/0/false keeps today's behaviour: no end,
+// the deployment's approval expiry as the wait, no idle pause.
+export interface RunLimits {
+  max_end_ahead_sec?: number;
+  default_end_sec?: number;
+  allow_no_end?: boolean;
+  max_wait_sec?: number;
+  default_wait_sec?: number;
+  user_changes_limits?: boolean;
+  pause_idle_after_sec?: number;
+}
+
 // types.AutonomyLevel — L0 (most supervised) through L3 (least). The codes
 // stay internal; the console renders plain labels (#93), not spelled here yet.
 export type AutonomyLevel = "L0" | "L1" | "L2" | "L3";
@@ -62,6 +76,65 @@ export interface AutonomyRubric {
   confinement_cc1?: AutonomyLevel;
   confinement_cc2?: AutonomyLevel;
   confinement_cc3?: AutonomyLevel;
+}
+
+// One of AutonomyRubric's nine own field names — what internal/composer/
+// autonomy.go's applicableAutonomyCaps names a cap by, and what
+// AutonomyResolution.BoundBy (below) carries. keyof, not a hand-typed union,
+// so the two can never drift apart.
+export type AutonomyRubricRowKey = keyof AutonomyRubric;
+
+// applicableAutonomyCaps' own fixed field order (internal/composer/
+// autonomy.go) — egress, then secrets, then confinement — the order
+// FoldAutonomy lists tied causes in, so a rendered bound_by sentence reads the
+// same on Review and at launch. Also the row order profile-rubric.tsx draws
+// the editor's three groups in.
+export const AUTONOMY_RUBRIC_ROW_KEYS: AutonomyRubricRowKey[] = [
+  "egress_open",
+  "egress_reviewed",
+  "egress_sealed",
+  "secrets_powerful",
+  "secrets_baseline",
+  "secrets_none",
+  "confinement_cc1",
+  "confinement_cc2",
+  "confinement_cc3",
+];
+
+// AutonomyLevel's own weakest -> strongest ladder (internal/types/
+// governance.go's AutonomyLevel.Rank()) — mirrors lib/types/runs.ts's
+// CC_ORDER for the same reason: lib/ may not import from components/, so the
+// rank order lives here beside the type it orders, and the display labels
+// (AUTONOMY_META) live in components/wardyn/autonomy-meta.ts instead.
+export const AUTONOMY_LEVEL_ORDER: AutonomyLevel[] = ["L0", "L1", "L2", "L3"];
+
+// types.AutonomyEgressPosture / types.AutonomySecretsPosture — the two graded
+// halves of a run's three-axis posture (internal/composer/autonomy.go).
+export type AutonomyEgressPosture = "open" | "reviewed" | "sealed";
+export type AutonomySecretsPosture = "powerful" | "baseline" | "none";
+
+// types.AutonomyPosture — the three-axis shape #97's resolveRunAutonomy folds
+// against a profile's AutonomyRubric.
+export interface AutonomyPosture {
+  egress: AutonomyEgressPosture;
+  secrets: AutonomySecretsPosture;
+  confinement: ConfinementClass;
+}
+
+// types.AutonomyResolution (0.8 #97/#93) — what resolveRunAutonomy decided for
+// one run: the level, the posture that produced it, and every rubric row that
+// bound the result.
+//
+// bound_by IS A LIST, not a string — a wire decision, not a rendering choice
+// (#96's ruling on #93). The fold is a min() over three axes, so rows TIE at
+// the resolved level routinely; naming only the first would send an admin to
+// raise a row the level would not actually move on. governance-copy.ts's
+// autonomyBoundSentence composes the FULL list into one sentence, never just
+// bound_by[0].
+export interface AutonomyResolution {
+  level: AutonomyLevel;
+  posture: AutonomyPosture;
+  bound_by?: AutonomyRubricRowKey[];
 }
 
 // types.GovernanceProfile — one named, assignable ceiling.

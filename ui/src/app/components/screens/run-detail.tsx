@@ -22,16 +22,20 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  canDecideAdoCapability,
   canDecideApproval,
   decisionArgs,
+  isAdoCapabilityRequest,
+  isAdoConsentRequest,
   runHasWorkspace,
-  type AgentRun,
   type ApprovalRequest,
   type ApprovalScope,
   type AuditEvent,
   type CredentialGrant,
+  type DecisionOptions,
   type EgressDecision,
   type Recording,
+  type RunDetail,
 } from "../../lib/types";
 import { isTerminalRunState } from "../../lib/types";
 import { runs as runsApi } from "../../lib/api/runs";
@@ -69,7 +73,9 @@ import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
+import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { APPROVALS } from "../../lib/approvals-copy";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import {
   RECORDING_DISABLED_DESC,
@@ -99,7 +105,7 @@ export function RunDetailScreen() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
 
-  const [run, setRun] = React.useState<AgentRun | null | undefined>(undefined);
+  const [run, setRun] = React.useState<RunDetail | null | undefined>(undefined);
   const [grants, setGrants] = React.useState<CredentialGrant[]>([]);
   const [egress, setEgress] = React.useState<EgressDecision[]>([]);
   const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
@@ -203,11 +209,13 @@ export function RunDetailScreen() {
           // on THIS tick's own fresh state (not a stale last-known ref), so
           // the exact tick a run turns terminal is the one that catches it.
           if (r.value && isTerminalRunState(r.value.state)) {
-            Promise.all([
+            // Best-effort like the allSettled above: a rejected listAudit
+            // leaves endingAudit at its last-good value, never unhandled.
+            void Promise.all([
               auditApi.listAudit(id, "run.complete"),
               auditApi.listAudit(id, "run.kill"),
               auditApi.listAudit(id, "run.autostop"),
-            ]).then((lists) => setEndingAudit(lists.flat()));
+            ]).then((lists) => setEndingAudit(lists.flat())).catch(() => {});
           }
           setStatus("ready");
         })
@@ -231,7 +239,7 @@ export function RunDetailScreen() {
     setRecording(null);
     setRecState("idle");
     setRecKey(id);
-    load(true);
+    void load(true);
   }, [id, load]);
 
   const terminal = run ? isTerminalRunState(run.state) : true;
@@ -280,7 +288,7 @@ export function RunDetailScreen() {
     // Only confirm success if the write actually resolves — writeText rejects
     // asynchronously (a sync try/catch misses it), and navigator.clipboard is
     // undefined in insecure contexts — so a bare success toast would lie.
-    copyAsync(url).then((ok) => {
+    void copyAsync(url).then((ok) => {
       if (ok) toast.success("Link copied");
       else toast.error("Couldn't copy the link — copy it from the address bar.");
     });
@@ -295,7 +303,7 @@ export function RunDetailScreen() {
         description: getErrorMessage(err),
       });
     } finally {
-      load(false);
+      void load(false);
     }
   };
 
@@ -309,7 +317,7 @@ export function RunDetailScreen() {
       toast.warning(CLONE_UNREADABLE);
       return;
     }
-    navigate("/runs/new", { state: { prefill } });
+    void navigate("/runs/new", { state: { prefill } });
   };
 
   const submitDecision = async (reason: string, scope: ApprovalScope, until?: string): Promise<boolean> => {
@@ -318,15 +326,33 @@ export function RunDetailScreen() {
       const args = decisionArgs(scope, until);
       if (decide.action === "approve") await approvalsApi.approve(decide.id, reason, ...args);
       else await approvalsApi.deny(decide.id, reason, ...args);
-      toast.success(decide.action === "approve" ? "Request approved" : "Request denied");
+      toast.success(decide.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       setDecide(null);
-      load(false);
+      void load(false);
       return true;
     } catch (err) {
-      toast.error(decide.action === "approve" ? "Failed to approve" : "Failed to deny", {
+      toast.error(decide.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
       return false;
+    }
+  };
+
+  // decideAdoDirect — the Approvals tab's own Azure DevOps decide path (S10
+  // round 2, F2). Bypasses ReasonDialog/submitDecision entirely, same reason
+  // screens/approvals.tsx's decideAdoDirect does: the card's own control
+  // carries no reason field, and `opts` ALWAYS carries an explicit
+  // decision_scope — decisionArgs()'s omit-for-"run" shape would collide
+  // with adoDecisionRule's different bodyless default (see ado-capability-
+  // card.tsx's adoDecisionArgs).
+  const decideAdoDirect = async (id: string, approve: boolean, opts: [DecisionOptions]): Promise<void> => {
+    try {
+      if (approve) await approvalsApi.approve(id, "approved", ...opts);
+      else await approvalsApi.deny(id, "denied", ...opts);
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
+      void load(false);
+    } catch (err) {
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(err) });
     }
   };
 
@@ -393,7 +419,10 @@ export function RunDetailScreen() {
             exitCode={exitCodeFromAudit(endingEvents)}
             pendingApprovalCount={pending.length}
             sandboxHeld={pending.some(isHeld)}
-            awaitingReauth={pending.some((p) => p.kind === "credential_reauth")}
+            // F13 — split, so the AWS-named chip never fires for an Azure
+            // DevOps consent row (isAdoConsentRequest is also credential_reauth).
+            awaitingReauth={pending.some((p) => p.kind === "credential_reauth" && !isAdoConsentRequest(p))}
+            awaitingAdoConsent={pending.some(isAdoConsentRequest)}
             onCopyLink={copyLink}
             linkCopied={copied}
             onKill={kill}
@@ -446,7 +475,9 @@ export function RunDetailScreen() {
           <TabsContent value="approvals" className="scroll-thin mt-0 min-h-0 flex-1 overflow-y-auto p-4">
             <ApprovalsTab
               approvals={approvals}
+              run={run}
               onDecide={(approvalId, action, kind) => setDecide({ id: approvalId, action, kind })}
+              onAdoDecide={decideAdoDirect}
             />
           </TabsContent>
 
@@ -511,7 +542,7 @@ function Cockpit({
   onGoAudit,
   onGoRecording,
 }: {
-  run: AgentRun;
+  run: RunDetail;
   terminal: boolean;
   grants: CredentialGrant[];
   egress: EgressDecision[];
@@ -546,11 +577,22 @@ function Cockpit({
   // owner. The kind is excluded from the predicate rather than the sentence
   // reworded — a run whose ONLY pending row is a re-auth is not blocked on
   // anyone's decision at all, and the strip's own heading says what it needs.
+  //
+  // S10 round 2 (F2): an Azure DevOps escalation this viewer OWNS is ALSO
+  // excluded — canDecideApproval doesn't know the ADO ownership carve-out
+  // (canDecideAdoCapability does), so without this a run's own owner read
+  // this "you're blocked" note over a card that, two lines below, lets them
+  // decide it.
+  const isRunOwner = run.created_by === principal;
   const viewerBlocked =
     pending.length > 0 &&
     !securityOperator &&
     pending.some((p) => p.kind !== "credential_reauth") &&
-    !pending.some((p) => p.kind !== "credential_reauth" && canDecideApproval(false, p.kind));
+    !pending.some(
+      (p) =>
+        p.kind !== "credential_reauth" &&
+        (canDecideApproval(false, p.kind) || (isAdoCapabilityRequest(p) && canDecideAdoCapability(false, isRunOwner))),
+    );
 
   // The terminal widget's contents. Unchanged from the fixed-rail cockpit: the
   // session, and directly beneath it the approval that is HOLDING the session —
@@ -595,7 +637,7 @@ function Cockpit({
               {VIEWER_APPROVAL_BLOCKS_NOTE}
             </p>
           )}
-          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} />
+          <LiveApprovals runId={run.id} hasWorkspace={runHasWorkspace(run)} run={run} />
         </div>
       )}
     </>
@@ -635,15 +677,28 @@ function attachSessions(audit: AuditEvent[]): AuditEvent[] {
 // Approvals tab (this run's approvals)
 function ApprovalsTab({
   approvals,
+  run,
   onDecide,
+  onAdoDecide,
 }: {
   approvals: ApprovalRequest[];
+  // Round 2 (F2) — this page always has the run loaded by the time this tab
+  // can render (see this file's own `status`/Tabs gate), so unlike
+  // screens/approvals.tsx's per-row RunContextRow fetch, there is no
+  // loading/error tri-state to thread here: it's always the real thing.
+  run: RunDetail;
   onDecide: (id: string, action: "approve" | "deny", kind: ApprovalRequest["kind"]) => void;
+  onAdoDecide: (id: string, approve: boolean, opts: [DecisionOptions]) => Promise<void>;
 }) {
   // useSecurityOperator (0.7 §B): the only thing this reads is
   // canDecideApproval, which mirrors authorizeMemberDecision's early return
   // for the security tier (approvals.go:392).
   const securityOperator = useSecurityOperator();
+  const principal = usePrincipal();
+  // The id of the row currently deciding, and which of its two actions
+  // (#458) — see AdoCapabilityCard's own `busy` doc for why a single
+  // boolean isn't enough.
+  const [adoBusy, setAdoBusy] = React.useState<{ id: string; action: "approve" | "deny" } | null>(null);
   if (approvals.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card">
@@ -658,6 +713,43 @@ function ApprovalsTab({
   return (
     <div className="flex max-w-3xl flex-col gap-3">
       {approvals.map((a) => {
+        // S10 round 2 (F2) — an Azure DevOps escalation (or its Entra-consent
+        // chain) gets AdoCapabilityCard, not this tab's generic row: it needs
+        // an explicit decision_scope (never the bodyless decide onDecide's
+        // ReasonDialog path produces) and the ownership-aware decidability
+        // rule canDecideApproval doesn't model.
+        //
+        // N1 (round 2) — gated on PENDING: `approvals` here is EVERY state
+        // this run's approvals ever reached (unlike approvals.tsx's
+        // pendingItems / live-approvals.tsx's pending, both already PENDING-
+        // only), so a DECIDED Azure DevOps row reaches this map too. Without
+        // the state check it rendered live Approve/Deny buttons — and, on an
+        // ended run, a false "nothing to allow" — over a row nobody can act
+        // on any more. A decided row falls through to the generic branch
+        // below, whose `scopeBadge` (approvalScopeBadge, extended F11) reads
+        // "Allowed once"/"Allowed for this run" for it.
+        if ((isAdoCapabilityRequest(a) || isAdoConsentRequest(a)) && a.state === "PENDING") {
+          return (
+            <AdoCapabilityCard
+              key={a.id}
+              item={a}
+              securityOperator={securityOperator}
+              viewerPrincipal={principal}
+              run={run}
+              busy={adoBusy?.id === a.id ? adoBusy.action : null}
+              onApprove={async (opts) => {
+                setAdoBusy({ id: a.id, action: "approve" });
+                await onAdoDecide(a.id, true, opts);
+                setAdoBusy(null);
+              }}
+              onDeny={async (opts) => {
+                setAdoBusy({ id: a.id, action: "deny" });
+                await onAdoDecide(a.id, false, opts);
+                setAdoBusy(null);
+              }}
+            />
+          );
+        }
         const pending = a.state === "PENDING";
         // Owner-scoped page (getRunAuthorized) — canDecideApproval only needs
         // the KIND question: egress_domain is a member act on an owned run,
@@ -733,21 +825,24 @@ function AuditTab({
   runId: string;
   onMakePolicy: () => void;
 }) {
+  const securityOperator = useSecurityOperator();
   return (
     <div className="max-w-4xl">
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <ScrollText className="size-3.5" />
         Append-only · {events.length} event{events.length === 1 ? "" : "s"} for this run
-        {/* W25-W25.2-3: carry the run. A bare /audit is permanently EMPTY for a
-            member — the server scopes non-admins to ?run_id= of a run they own
-            (internal/api/audit.go handleQueryAudit) — so an unqualified link
-            would drop them on a feed that can never fill. */}
-        <Link
-          to={`/audit?run_id=${runId}`}
-          className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
-        >
-          open full Audit <ArrowRight className="size-3" />
-        </Link>
+        {/* W25-W25.2-3: carry the run, so the full feed opens scoped to it.
+            M-1b: the full-page Audit screen is Admin view only now
+            (/admin/audit), so the link renders only for the tier that screen
+            serves; a user's own events are already inline above. */}
+        {securityOperator && (
+          <Link
+            to={`/admin/audit?run_id=${runId}`}
+            className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
+          >
+            open full Audit <ArrowRight className="size-3" />
+          </Link>
+        )}
         {/* Beside the record it is synthesized FROM, not on the command bar:
             what this run actually did is the whole basis of the proposal. */}
         <Button variant="outline" size="sm" className="ml-auto h-7" onClick={onMakePolicy}>
@@ -825,6 +920,10 @@ function RecordingTab({
   onSelect: (key: string) => void;
   onRetry: () => void;
 }) {
+  // M-1b: the Recordings library is Admin view only (/admin/recordings) and,
+  // until F1, not offered to a security admin either — a user reaches a
+  // recording only through their own run's tab, this one.
+  const operator = useOperator();
   return (
     <div className="max-w-4xl">
       {/* The picker sits ABOVE the body on purpose: a run whose OWN cast is
@@ -883,10 +982,15 @@ function RecordingTab({
         <>
           <TerminalPlayer recording={recording} />
           <div className="mt-2 text-xs text-muted-foreground">
-            Recorded when the run's runner supports session capture ·{" "}
-            <Link to="/recordings" className="text-primary hover:underline">
-              Recordings library
-            </Link>
+            Recorded when the run's runner supports session capture
+            {operator && (
+              <>
+                {" "}·{" "}
+                <Link to="/admin/recordings" className="text-primary hover:underline">
+                  Recordings library
+                </Link>
+              </>
+            )}
           </div>
         </>
       )}

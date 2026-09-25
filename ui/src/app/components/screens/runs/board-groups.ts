@@ -15,7 +15,7 @@ import type { AgentRun, ApprovalRequest } from "../../../lib/types";
 // Import the predicate, not the strip: importing it from live-approvals.tsx
 // would hoist that whole module (and everything it imports) into the eager
 // entry chunk — see isHeld's own doc in lib/types/approvals.ts.
-import { isHeld } from "../../../lib/types";
+import { isAdoConsentRequest, isHeld } from "../../../lib/types";
 import {
   attentionFor,
   attentionRank,
@@ -35,6 +35,13 @@ interface RunApprovalSignals extends AttentionSignals {
    *  the cockpit header then say "Waiting for your AWS sign-in" instead of
    *  "sandbox held", because this hold is the person's own to clear. */
   reauth?: boolean;
+  /** At least one pending row is an Azure DevOps Entra-consent request (S10
+   *  round 2, F13) — a DIFFERENT provider than `reauth` above, so the board
+   *  and cockpit header say "Azure DevOps sign-in", never "AWS sign-in",
+   *  for this one. Checked structurally (isAdoConsentRequest), never folded
+   *  into `reauth`: the two must never collapse into one string that names
+   *  the wrong provider. */
+  adoConsent?: boolean;
 }
 
 export type RunSignals = ReadonlyMap<string, RunApprovalSignals>;
@@ -63,14 +70,25 @@ export function approvalSignals(pending: readonly ApprovalRequest[]): RunSignals
     cur.pending += 1;
     // A held request blocks; a passive deny_with_review pending does not. Once
     // anything on the run is held, the run is held — a passive sibling can
-    // never downgrade that.
-    if (isHeld(a)) cur.held = true;
-    else cur.passiveHold = true;
-    // A mid-run AWS sign-in request is the ONE hold a person can act on
-    // directly, and the board and the cockpit header say so instead of the
-    // generic "sandbox held" — which would send them looking for an Approve
-    // button that does not exist for this kind.
-    if (a.kind === "credential_reauth") cur.reauth = true;
+    // never downgrade that. #509 — every row that reaches this loop is
+    // already PENDING (the guard above), and isHeld now counts PENDING alone
+    // as live for tool_call/credential_reauth (no client-side ceiling), so
+    // there is no longer a "stale but still pending" bucket to fall to — the
+    // server has no such state.
+    if (isHeld(a)) {
+      cur.held = true;
+      // A mid-run AWS sign-in request is the ONE hold a person can act on
+      // directly, and the board and the cockpit header say so instead of the
+      // generic "sandbox held" — which would send them looking for an
+      // Approve button that does not exist for this kind. An Azure DevOps
+      // consent request is the SAME shape (kind credential_reauth) but a
+      // DIFFERENT provider — checked first and separately so it never falls
+      // into the AWS-named `reauth` bucket (F13).
+      if (isAdoConsentRequest(a)) cur.adoConsent = true;
+      else if (a.kind === "credential_reauth") cur.reauth = true;
+    } else {
+      cur.passiveHold = true;
+    }
     by.set(a.run_id, cur);
   }
   return by;
@@ -97,6 +115,30 @@ export function needsAttention(run: AgentRun, signals: RunSignals): boolean {
  */
 export function needsYou(run: AgentRun, signals: RunSignals): boolean {
   return runAttention(run, signals) === "permission";
+}
+
+/** #160 — one counted reason per wait-worthy run in a title group, exclusive
+ *  per run so the header can never render a run under two reasons (and the
+ *  "no fourth chip" acceptance bar holds). `starting` is a run.state fact,
+ *  independent of the approvals fetch, so it is accurate even while the
+ *  caller is still waiting on that fetch to resolve — see runs/title-group.tsx. */
+export interface GroupWaitBreakdown {
+  held: number;
+  reauth: number;
+  starting: number;
+}
+
+export function groupWaitBreakdown(runs: readonly AgentRun[], signals: RunSignals): GroupWaitBreakdown {
+  let held = 0;
+  let reauth = 0;
+  let starting = 0;
+  for (const run of runs) {
+    const s = signalsFor(run, signals);
+    if (s.reauth) reauth++;
+    else if (s.held) held++;
+    else if (run.state === "STARTING") starting++;
+  }
+  return { held, reauth, starting };
 }
 
 // Title grouping

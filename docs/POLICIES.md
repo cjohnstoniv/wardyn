@@ -19,7 +19,7 @@ write time. A guard test fails if a field here drifts from the struct.
 The console has three places a policy gets written, and all three resolve to
 this same JSON through this same validator — there is no separate UI schema.
 
-- **The [`/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
+- **The [`/admin/policies`](../ui) editor.** Operator-gated. Writes a stored, named,
   reusable policy (`POST`/`PUT /policies`).
 - **The run screen's Custom policy.** An `inline_policy` on the create-run
   request, member-authored — this editor carries no operator gate.
@@ -62,6 +62,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes — since 0.7.2, one field governs BOTH brokers: the GitHub-App lane and the `git_pat` lane — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
+| `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for this run's brokered git pushes — WHAT a push may touch, alongside `git_push_any_branch`'s WHERE. Enforced on both brokered lanes before a push is forwarded: see ["`push_rules` — `PushRulesSpec`"](#push_rules--pushrulesspec) below. |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
@@ -775,6 +776,234 @@ and would silently read as enforcement that is not.
 |---|---|---|---|
 | `tool` | `string` | — (required) | The tool name, matched exactly and case-sensitively (`Read`, `Bash`, `WebFetch`, …), or the literal `*` for the unmatched default. Duplicates are refused at write time: two rules for one tool means one of them does nothing. |
 | `effect` | `string` | — (required) | `allow` (run it, no human, still recorded), `hold` (raise an approval and block — the default behaviour), or `deny` (refuse it, no human). A closed enum: an unrecognised effect is a 400, never a silently-ignored rule that reads as enforcement. |
+
+## `push_rules` — `PushRulesSpec`
+
+Content rules for this run's brokered git pushes — the counterpart to
+`git_push_any_branch`'s WHERE: this says WHAT a push may touch (issue #57).
+`null`/omitted (every policy authored before this field existed) means **no
+content rules at all** — byte-identical to today's wire shape and behaviour.
+
+**What a run with content rules gets.** The broker buffers the receive-pack
+request up to the run's inspection ceiling, reads which paths the push would
+introduce, and answers one of three refusals, holds it for an admin's review,
+or forwards the buffered bytes unchanged:
+
+| Refusal | Status | `rule_source` | Remedy |
+|---|---|---|---|
+| A path the push introduces matched `deny_paths` | `403` | `brokered:git:push-rules` | Take those paths out of the push, or have an operator widen `deny_paths`. The refusal names up to ten of them and, for a path the broker compared with the forge, why it could not clear it. |
+| The request is bigger than the inspection ceiling | `413` | `brokered:git:push-too-large` | Push fewer commits, or have an operator raise `max_inspect_pack_mib`. It is **refused, not held**: holding would ask a person to approve a push nobody inspected. |
+| The buffered pack is under the inspection ceiling but still costs more objects, inflated bytes, tree entries or changed paths than `internal/gitpack`'s own compiled-in ceilings allow | `413` | `brokered:git:push-too-large` | Push fewer commits. Raising `max_inspect_pack_mib` does not help — these ceilings are unrelated to that setting. |
+| The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too. |
+| The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
+| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403` | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
+| A path matched `require_review_paths` on an **unattended** run | `403` | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
+
+A refused push is **never forwarded**, and the refused request mints nothing
+itself — but it does not prevent a credential being issued. git sends
+`GET info/refs?service=git-receive-pack` before every push, the forge will not
+advertise refs to that request without the credential, and the broker mints (or
+reuses) it there. So an approval-gated, single-use grant is spent at that
+discovery request even when the push that follows is refused; the cached
+credential then serves the corrected retry until it expires. The offending
+paths go to the sidecar's structured log and to the response git shows the
+person; they never ride the decision log, whose free-text fields are reserved
+for dial-shaped refusals.
+
+**Both brokered lanes, and not behind a branch switch.** `github_token` and
+`git_pat` enforce these rules on exactly the same trigger — the run's policy
+carries a rule — and the trigger is read **independently of branch-namespace
+confinement on both**. `git_push_any_branch` and the two
+`WARDYN_GIT_*_ENFORCE_BRANCH_NS` switches say WHERE a push may land; a WHERE
+opt-out must never switch off a WHAT control, so a run with
+`git_push_any_branch: true` and a `deny_paths` entry is still refused. Both
+lanes also advertise `no-thin` on the receive-pack reference advertisement when
+rules are set, because a lane that enforces rules must ask for a pack it can
+read — the agent images clone shallow, and without it the rules would refuse
+nearly every legitimate push.
+
+**What the rules see, and what they do not.** Read this before authoring a
+pattern.
+
+A pack carries only the objects the forge does not already have, **wherever
+the new tree puts them**. Under branch-namespace confinement every governed
+push lands on the run's own branch, so the pushed commit's parent stays on the
+forge and the pack holds nothing to diff against: the new tree is enumerated
+instead. Every file at the repository root is named, changed or not, and every
+directory the push did not change arrives as a tree the forge already stores —
+which is exactly what a directory moved there, staged under another name by an
+earlier push and renamed, or restored whole from an older revision looks like.
+A **symlink or submodule** is opaque the same way: a checkout resolves paths
+beneath it to content no tree entry in the push names — `infra -> stage` turns
+`stage/prod/main.tf` into `infra/prod/main.tf`. An opaque entry is matched when
+a pattern could match anything beneath it.
+
+So an entry a pattern matches is judged one of two ways:
+
+- **An entry the pack carries is refused from the pack alone.** It is content
+  the push adds or changes.
+- **An entry the pack does not carry is compared with the commit the push
+  builds on.** The broker reads that commit's trees from GitHub's REST API —
+  trees only, never file contents — with the run's own credential for the
+  lane, and compares the mode and object id at the same path. Object ids are
+  content addresses, so a match means the push left that path, and everything
+  beneath it, exactly as that commit held it, and the entry passes. With
+  `deny_paths: [".github/workflows/**"]`, a repository that already has
+  workflows can push an edit to `src/`; a push that adds, changes, moves or
+  restores anything under `.github/workflows/` is refused. `Makefile` and
+  `**/*.pem` work the same way.
+
+**Which commit counts.** A commit may name any object as its parent, and GitHub
+serves every fork's objects through the repository itself, so "GitHub holds
+it" proves nothing. A parent counts only when GitHub's compare API places it in
+the **current** history of the repository's default branch, or of a branch the
+push updates (for the run's own branch, that is the run's earlier pushes). A
+merge passes an entry that matches any counted parent, so merging the default
+branch in after it changed a workflow is not refused.
+
+**History the push re-sends.** git leaves out of a pack only what is reachable
+from the tips the forge advertises that the client also has. A clone taken
+before the default branch moved on has none of them, so it re-sends its
+history — its shallow boundary commit, or everything — and the first commit of
+that history would read as though the push added every file the repository
+has. Those commits are put to the same question: the ones GitHub places in the
+current history of the default branch or an updated branch are taken out, and
+the push is judged against them.
+
+**When the comparison cannot be made, the entry refuses the push, and the
+refusal says why:** the forge is not GitHub (a `git_pat` grant for another
+host); no parent counts; or a read fails, answers other than `200`, comes back
+truncated, needs more than 64 reads, or takes longer than 20 seconds. The
+reads happen only for a push the pack alone would refuse, while it holds the
+sidecar's inspection slot, and the credential is normally the one the push's
+own discovery request already minted. In the refusal, a path ending in `/`
+names a directory the push does not carry, and `/` alone names the whole tree.
+
+**On a `git_pat` forge other than github.com, deny only paths the repository
+does not hold yet.** No comparison can be made there, so an entry that reaches
+anything the repository already has — `infra/**` against an existing `infra/`,
+or `Makefile` — refuses every push, including one that never touches it. The
+run's risk grade says so (`push_rules`, `deny_paths on <host>`) before the
+first push does.
+
+**What these rules do not stop.**
+
+- **Building on an older commit of the default branch keeps what that commit
+  held at a denied path.** A run that checks out an older commit, or never
+  pulls after a workflow changed on the default branch, can push a branch whose
+  workflows are the older ones — including one the default branch has since
+  fixed. The rule is that a push does not *change* a
+  denied path relative to the commit it builds on — not that every branch
+  carries the newest version of it.
+- **Removals are invisible.** These rules judge what a push *introduces*.
+
+**What the person pushing sees.** git renders a receive-pack `403` as
+`error: RPC failed; HTTP 403` without the response body, so the paths are read
+from the run's decision stream and the sidecar's structured log rather than
+from the terminal. A sideband report-status would render, and is deliberately
+not used: it would mean claiming `unpack ok` for a pack the broker never
+forwarded.
+
+**Pattern language.** `**` matches zero or more whole path segments, `*` and
+`?` match within one segment and never cross `/`, and everything else is
+literal. Patterns are anchored at the repository root (a leading `/` is
+trimmed), so `*.pem` matches `server.pem` and not `certs/server.pem`, while
+`**/*.pem` matches both. A trailing `/` means everything beneath the directory,
+as in `.gitignore` and `CODEOWNERS`: `infra/` reads as `infra/**`. An entry
+with an empty, `.` or `..` segment — `./infra/**`, `infra//**`, `a/../b` — is
+**refused at write time**, because no git path contains one and the rule would
+silently match nothing; so is an entry with leading or trailing whitespace
+(almost certainly a typo) or one that is not valid UTF-8. A policy that
+reaches the broker carrying any of these anyway has every push refused rather
+than the entry ignored. `..` inside a segment (`infra..x/`) is an ordinary
+name and reads as written. A pattern that is not a
+valid Go pattern — an unterminated `[`, say — is compared literally rather than
+silently matching nothing.
+
+**Held for review: `require_review_paths`.** A path a review pattern matches
+— same pattern language, same forge comparison, a directory the push does not
+carry matched when a pattern could match beneath it — does not refuse the push:
+the broker holds the request open and raises a `push_content` approval for an
+admin, then forwards the buffered bytes unchanged if it is approved. A deny
+match always wins: a path both lists match is refused and nothing is asked.
+
+- **Admins decide, members do not** — not even on their own run. A member
+  approving their own run's workflow-file edit is the exfiltration the rule
+  exists to stop, so the member gate answers them the same `404` any other
+  non-egress kind gets. A decision carries no `decision_scope` (`400` if one is
+  sent): an approval covers exactly the commits it names.
+- **An unattended run does not hold.** A run with a task and nobody driving it
+  (not `interactive`) has nobody to ask, so a review match is refused at once
+  (`brokered:git:push-held-unattended`) and no approval is raised; the control
+  plane refuses such a raise as well.
+- **The hold lasts `hold_seconds`** (default 120, at most 600). git waits on
+  the open request — it only gives up early if `http.lowSpeedLimit` and
+  `http.lowSpeedTime` are set. Past the hold the push is refused and the
+  request stays in the console; pushing the same commits again waits on that
+  same request rather than raising another.
+- **What an approval covers.** The approval's `requested_scope` is
+  `{"repo","branch","acts_as","acts_as_kind","acts_as_label","paths","paths_total","commits","paths_digest"}`:
+  the repository as the run's grant names it (`github.com/<owner>/<repo>`, or
+  `<host>/<path>` on the `git_pat` lane —
+  `dev.azure.com/<org>/<project>/_git/<repo>` for Azure DevOps); the ref the
+  push updates (several are joined by `, `); the credential it authenticates
+  with, as `<grant kind>:<grant id>`, and — set by the control plane from the
+  run's own grants, never taken from the sidecar — which lane that credential
+  is (`acts_as_kind`: `github_app`, `git_pat` or `ado_entra`) and whose it is
+  (`acts_as_label`: the run's owner for the GitHub App and for a `git_pat`
+  whose secret is in the owner's own namespace, `operator` for the operator's
+  shared secret); the first ten matched paths, sorted, and
+  how many matched in all; the object ids the push sets its refs to, sorted;
+  and a SHA-256 over **every** matched path, sorted and NUL-terminated. The
+  scope is the dedup key — two identical pushes are one request — and commits
+  are content addresses, so a retry git repacks carries the same commits in
+  different bytes and is let through on the approval already given. The key is
+  the whole scope: the same commits pushed to another repository or branch are
+  a new request and are held again. A denial sticks for the rest of the run:
+  the same push is refused without asking again. A request that expires or is cancelled undecided is forgotten, and the
+  next push of those commits asks afresh.
+- **Bounded.** At most 16 pushes are held at once and 256 different pushes are
+  remembered per run; past either the push is refused.
+- **Where it applies.** Wherever a deny path would refuse: the GitHub App lane
+  and the `git_pat` lane (GitHub, GitLab, Azure DevOps over a PAT), whatever
+  either lane's branch switch says. The Azure DevOps **Entra** lane
+  (`/wardyn/git/` for a host the run's per-person Azure DevOps grant covers)
+  applies no content rules yet, so it neither refuses nor holds.
+
+`deny_new_executables` and `max_file_size_mib` are a later change. Whoever adds
+a size rule decides with `gitpack.Change.Within`, which refuses a size the pack
+does not carry (a submodule pointer, an unchanged file on a second push);
+`Size()` returns `(bytes, known)`, so a bare comparison against a limit does
+not compile.
+
+**Unenforceable is a warning, not a refusal.** `push_rules` is enforced only on
+the brokered lanes (`github_token`, `git_pat`) — git's own SSH transport has no
+broker seam. A policy that sets `push_rules` while `ssh_key` is the run's
+**only** git-capable grant is legal (never a `422` at write time) but the rules
+cannot be enforced; the Review rail's risk grade (`composer.Grade`) surfaces
+that as a **medium**-risk item so the operator is told rather than blocked. An
+all-zero `push_rules: {}` — nothing in `deny_paths` or `require_review_paths`,
+`max_inspect_pack_mib` `0`/absent — reads as **absent** (a `hold_seconds` with
+no review path to hold for does not count), the same as `null`: it never survives an
+operator ceiling into a member's clamped spec, and never grades the warning
+above.
+
+**Clamped as a floor, not a bare merge.** An operator ceiling's `push_rules`
+is inherited wholesale by a proposal that sets none, and unioned into one that
+does — `deny_paths` and `require_review_paths` by **exact string**, never case- or whitespace-folded (a
+git path is case- and space-sensitive on Linux, unlike a DNS name), so a
+member re-typing the ceiling's own entry in different case adds a second
+entry rather than silently dropping the operator's. A ceiling that sets none
+leaves a proposal's own `push_rules` untouched — this field only narrows, so
+there is nothing here for a silent ceiling to protect against. When both set
+`max_inspect_pack_mib` or `hold_seconds`, the smaller one applies.
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `deny_paths` | `[]string` | `[]` | Path patterns (e.g. `.github/workflows/**`) refused in a push — see **Pattern language** above. Each entry at most **256 bytes**, valid UTF-8, no NUL or other control character, and no leading or trailing whitespace; rejected (`400`) at write time. **No count cap** — deny-only lists narrow rather than widen, the same stance `denied_domains` takes, and a clamp-merged list can legitimately exceed what either the operator's ceiling or the member's own proposal authored on its own. The matcher therefore bounds its own work instead of assuming the list is short: a list long enough that matching it against a push would not finish in bounded time refuses that push (`brokered:git:push-uninspectable`) rather than being ground through. |
+| `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push the broker buffers before refusing it as too large. `0`/absent means **32 MiB**, deliberately below the maximum an operator may author so that raising the ceiling — the stated remedy for a `413` — is available. Bounded at write time to **0..64**. |
+| `require_review_paths` | `[]string` | `[]` | Path patterns whose match **holds** a push for an admin's `push_content` decision instead of refusing it — see **Held for review** above. Same pattern language and the same per-entry write-time checks as `deny_paths` (256 bytes, valid UTF-8, no control character, no leading or trailing whitespace, no empty/`.`/`..` segment), and likewise no count cap. A `deny_paths` match wins. |
+| `hold_seconds` | `int` | `0` | How long a held push waits for its decision before it is refused. `0`/absent means **120**. Bounded at write time to **0..600**, the proxy's own hold ceiling, which also clamps a stored value past it. |
 
 ## `llm_inspection` — `LLMInspectionSpec`
 

@@ -7,7 +7,7 @@
 // file's fixtures (govServer, govMemberCtx, govProfile, containsAll) and
 // governance_nonescape_test.go's (govSession, newGovEscapeStore, doSSO).
 //
-// INVARIANT UNDER TEST: a caller whose group snapshot is TRUNCATED (present,
+// Invariant under test: a caller whose group snapshot is truncated (present,
 // non-nil, incomplete — GroupsTruncated=true on the cookie / api_tokens row)
 // and for whom a group-tier governance assignment EXISTS is REFUSED (403
 // groups_snapshot_stale via governance.go writeCeilingError) unless a
@@ -18,7 +18,7 @@
 //
 //	cd <repo root> && \
 //	cp local/review-0.7/deep/F2-sso-to-ceiling/governance_ceiling_truncation_probe_test.go internal/api/ && \
-//	nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'TestF2_' -count=1 -p 4 -v ; \
+//	nice -n 10 GOMAXPROCS=8 go test ./internal/api/ -run 'TestGovernanceCeiling_' -count=1 -p 4 -v ; \
 //	rm -f internal/api/governance_ceiling_truncation_probe_test.go
 package api
 
@@ -35,9 +35,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestF2_TruncatedSnapshotRefusesNotWidens is the table half: every shape a
+// TestGovernanceCeiling_TruncatedSnapshotRefusesNotWidens is the table half: every shape a
 // truncated snapshot can meet the store in, and which of them may be served.
-func TestF2_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
+func TestGovernanceCeiling_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
+	// ticket: F2
 	cases := []struct {
 		name      string
 		groups    []string
@@ -111,7 +112,7 @@ func TestF2_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
 					t.Errorf("ceilingErrorStatus = %d, want 403", ceilingErrorStatus(err))
 				}
 				w := httptest.NewRecorder()
-				writeCeilingError(w, err)
+				writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), err)
 				if w.Code != http.StatusForbidden || !containsAll(w.Body.String(), "groups_snapshot_stale", "sign in again") {
 					t.Errorf("writeCeilingError = %d %q; want 403 naming groups_snapshot_stale and the remedy", w.Code, w.Body.String())
 				}
@@ -131,11 +132,12 @@ func TestF2_TruncatedSnapshotRefusesNotWidens(t *testing.T) {
 	}
 }
 
-// TestF2_TruncatedSnapshotRefusedAtTheReadSite drives the refusal through HTTP
+// TestGovernanceCeiling_TruncatedSnapshotRefusedAtTheReadSite drives the refusal through HTTP
 // at a ROUTED READ site (GET /policies/default) rather than the create path
 // governance_nonescape_test.go row 16a already covers — the 403 mapping is one
 // function (writeCeilingError) but every routed site has to actually call it.
-func TestF2_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
+func TestGovernanceCeiling_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
+	// ticket: F2
 	newSrv := func(t *testing.T, cs *capStore) (*Server, *govEscapeStore) {
 		t.Helper()
 		st := newGovEscapeStore(cs)
@@ -190,13 +192,13 @@ func TestF2_TruncatedSnapshotRefusedAtTheReadSite(t *testing.T) {
 		st.tokenRaw = apiTokenPrefix + "f2probe"
 		st.token = &types.APIToken{
 			ID: uuid.New(), Principal: "sub-legacy-token", Email: "legacy@corp.example",
-			Role: oidc.RoleMember, Groups: []string{"a-team"}, GroupsTruncated: nil, Name: "legacy",
+			Role: oidc.RoleUser, Groups: []string{"a-team"}, GroupsTruncated: nil, Name: "legacy",
 		}
 		call := func() *httptest.ResponseRecorder {
 			r := httptest.NewRequest(http.MethodGet, "/api/v1/policies/default", nil)
 			r.Header.Set("Authorization", "Bearer "+st.tokenRaw)
 			w := httptest.NewRecorder()
-			srv.Handler().ServeHTTP(w, r)
+			panicFails(t, srv.Handler()).ServeHTTP(w, r)
 			return w
 		}
 		if w := call(); w.Code != http.StatusForbidden {

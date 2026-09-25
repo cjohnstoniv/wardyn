@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/google/uuid"
@@ -45,12 +46,101 @@ const (
 	// reason put in it would audit every supersede as a failed kill and add a
 	// run.revoke row for a run that was torn down perfectly.
 	supersedeReasonNewLogin = "superseded_by_new_login"
+	// signInCapturedReason rides the run.kill DATA of a sign-in run the server
+	// ended itself once its capture was stored (ssotoken.go), for the same
+	// reason as supersedeReasonNewLogin: outside the error map, so a clean kill
+	// audits success.
+	signInCapturedReason = "sign_in_captured"
 	// supersedeCASAttempts bounds the re-read below. The only way the KILLED CAS
 	// loses is a dispatch forward-transition (PENDING->STARTING->RUNNING) landing
 	// between the read and the write, which can happen at most twice for one run
 	// and never repeatedly — a bound, not a retry policy.
 	supersedeCASAttempts = 3
+	// signInBusyRefusal is the 503 a sign-in launch or capture answers when the
+	// per-person lock could not be taken in time. DRAFT (M2 canon pending)
+	signInBusyRefusal = "another sign-in is in progress, so this one was not started or saved; try again in a moment"
+	// signInUnserializedReasonNoCapacity is auth.signin_unserialized's one
+	// reason: the pool could not spare a connection for the lock.
+	signInUnserializedReasonNoCapacity = "lock_no_capacity"
 )
+
+// errSignInBusy is lockLoginSupersede's refusal: the lock exists and could not
+// be taken, so the work it guards must not run.
+var errSignInBusy = errors.New(signInBusyRefusal)
+
+// lockLoginSupersede serializes ONE person's sign-in launches — and the
+// credential capture that belongs to one — across replicas, and returns the
+// release the caller MUST defer.
+//
+// Why a lock at all, when supersedeOlderLoginRuns argues a deterministic total
+// order needs none: the order is correct and still leaves the interleaving that
+// function names. created_at is stamped in-process by newStepRun BEFORE the
+// insert, so a launch that stalls between the two inserts its row with an
+// EARLIER timestamp than a sibling that started later; the sibling's second
+// pass saw nothing, and the stalled launch's pass sees a sibling that does not
+// precede it. Both survive, neither is KILLED, and the capture PUT's belt does
+// not apply to that pair — two live sandboxes, each able to capture a ~1yr AWS
+// SSO session. Holding a lock across both passes and the insert is what removes
+// the interleaving, because the second launch cannot stamp until the first has
+// inserted.
+//
+// SESSION-scoped, not transaction-scoped, because the span is not one
+// transaction: two supersede passes around CreateRun here, and on the capture
+// path a read-modify-write in a different request minutes later.
+//
+// KEYED BY ACTOR, the login run's creator. Not by the credential scope: under
+// the `shared` roster — every deployment that has not turned on per_user —
+// scope.owner is EMPTY for every sign-in, so a scope-keyed lock would serialize
+// the whole deployment and still not serialize one person's two launches any
+// better.
+//
+// FAILS CLOSED on a wait (#505). Every arm is BOUNDED — the in-process slot
+// and the lock itself share db.LoginSupersedeLockWait (5s), the pool borrow is
+// held to 250ms — and when one runs out the answer is errSignInBusy: nothing
+// is started and nothing is stored. A wait that expires is the concurrent
+// burst this lock exists to serialize, and letting it through unlocked is how
+// two live credential-bearing sandboxes come back. Two arms still proceed
+// unlocked, and neither is a wait: a store without the seam (test doubles —
+// PG implements it) and store.ErrLoginLockNoCapacity, the pool that cannot
+// spare a connection for the hold, which at the documented pool floor is every
+// call. That one is written to the trail as auth.signin_unserialized, so the
+// unserialized pass is evidence rather than one WARN line.
+//
+// AVAILABILITY, because this runs on a request path in a daemon that sets no
+// http.Server WriteTimeout and mounts no TimeoutHandler — a wedged request here
+// ends only when the client disconnects. The hold pins exactly ONE pool
+// connection, and db.AdvisoryLockKeyed gates the whole process to a single
+// hold, so the number pinned does not grow with how many people sign in at
+// once; a sign-in that cannot have the slot waits on a channel, never on a
+// connection. That shape is the fix for a real regression, not caution: one
+// connection per concurrent sign-in starved the very queries this guards, and
+// at pool_max_conns=3 two DIFFERENT people — who never contend on the key at
+// all — were enough to wedge every database-backed request in the daemon.
+func (s *Server) lockLoginSupersede(ctx context.Context, actor string, runID uuid.UUID) (release func(), err error) {
+	noop := func() {}
+	if s.cfg.Store == nil || actor == "" {
+		return noop, nil
+	}
+	locker, ok := s.cfg.Store.(store.LoginLocker)
+	if !ok {
+		slog.WarnContext(ctx, "wardynd: this store cannot serialize concurrent sign-ins; proceeding unlocked")
+		return noop, nil
+	}
+	unlock, err := locker.LockLoginSupersede(ctx, actor)
+	if errors.Is(err, store.ErrLoginLockNoCapacity) {
+		slog.WarnContext(ctx, "wardynd: could not serialize this person's concurrent sign-ins; proceeding unlocked",
+			slog.Any("error", err))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "auth.signin_unserialized",
+			actor, "failure", mustJSON(map[string]any{"reason": signInUnserializedReasonNoCapacity})))
+		return noop, nil
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not serialize this person's concurrent sign-ins; refusing",
+			slog.Any("error", err))
+		return nil, errSignInBusy
+	}
+	return unlock, nil
+}
 
 // supersedeCallerLoginRuns kills actor's other non-terminal login runs on this
 // agent. Called by launchHarnessLoginRun BEFORE newStepRun, which is where the
@@ -81,35 +171,70 @@ func (s *Server) supersedeCallerLoginRuns(ctx context.Context, actor, agent stri
 	}
 }
 
-// supersedeOneLoginRun runs the kill cascade over one orphaned login run,
-// re-reading on a lost CAS: the run may be mid-dispatch (PENDING->STARTING), and
-// a supersede that shrugged at a lost CAS would leave exactly the run it exists
-// to end.
+// supersedeOneLoginRun claims the kill cascade's KILLED transition over one
+// orphaned login run, re-reading on a lost CAS: the run may be mid-dispatch
+// (PENDING->STARTING), and a supersede that shrugged at a lost CAS would leave
+// exactly the run it exists to end.
+//
+// It calls claimKillTransition — not killRunCascade — SYNCHRONOUSLY: this
+// runs inside the sign-in launch POST (launchHarnessLoginRun), and the CAS
+// re-read loop below needs to see each attempt land before deciding whether to
+// retry. Once an attempt WINS, the slow half (KillSandbox under
+// killCascadeTimeout, both revocations, the run.kill row — killTeardownTail)
+// hands off to a goroutine tracked by goBackground (server.go) so the POST
+// answers without waiting for the old sandbox to actually go away, and an
+// orderly daemon shutdown still waits for it instead of cutting it off
+// mid-teardown. context.WithoutCancel because the request this loop runs in
+// answers, and its context dies with it, long before the teardown is done.
+// Panic-safe (recover + log), the same idiom finishHarnessLoginLaunch's
+// detached worker uses (harnesscred_launch.go): a bug in the teardown must not
+// take the daemon down with it.
 func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, actor string, newRunID uuid.UUID) {
+	// WHO is attributed on the eventual run.kill row: the server, not the
+	// person. They asked for a new sign-in, not for a kill — `superseded_for`
+	// names whose sandbox it was, `superseded_by_run` the sign-in that replaced
+	// it, so the row answers both "why did my box disappear" and "which one
+	// took over" without a join back through harness.login.started.
+	extra := map[string]any{
+		"reason":            supersedeReasonNewLogin,
+		"superseded_for":    actor,
+		"superseded_by_run": newRunID.String(),
+	}
 	for attempt := 0; attempt < supersedeCASAttempts; attempt++ {
-		applied, killData, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd",
-			// WHO is attributed: the server, not the person. They asked for a new
-			// sign-in, not for a kill — `superseded_for` names whose sandbox it was,
-			// `superseded_by_run` the sign-in that replaced it, so the row answers
-			// both "why did my box disappear" and "which one took over" without a
-			// join back through harness.login.started.
-			map[string]any{
-				"reason":            supersedeReasonNewLogin,
-				"superseded_for":    actor,
-				"superseded_by_run": newRunID.String(),
-			})
+		// claimKillTransition takes ctx as given (its own doc comment), so THIS
+		// call site owns the detach+bound: the launch POST's own context, which
+		// must not let a closed tab cancel a CAS already in flight.
+		claimCtx, claimCancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+		applied, err := s.claimKillTransition(claimCtx, run)
+		claimCancel()
 		if err != nil {
 			slog.WarnContext(ctx, "wardynd: could not supersede a live sign-in sandbox",
 				slog.String("run_id", run.ID.String()), slog.Any("error", err))
 			return
 		}
 		if applied {
-			if len(killData) > 0 {
-				// The state is KILLED and the row already carries the failing step;
-				// the new sign-in PROCEEDS — the upload belt is what makes that safe.
-				slog.WarnContext(ctx, "wardynd: superseded sign-in sandbox was not fully torn down",
-					slog.String("run_id", run.ID.String()), slog.Any("errors", killData))
-			}
+			detached := context.WithoutCancel(ctx)
+			run := run
+			s.goBackground(func() {
+				defer func() {
+					if rec := recover(); rec != nil {
+						slog.ErrorContext(detached, "wardynd: superseded sign-in teardown panicked",
+							slog.String("run_id", run.ID.String()), slog.Any("panic", rec))
+					}
+				}()
+				// killTeardownTail also takes ctx as given, so THIS goroutine — the
+				// one place this cascade half runs — owns its own killCascadeTimeout
+				// bound, same as claimKillTransition's above.
+				tailCtx, tailCancel := context.WithTimeout(detached, killCascadeTimeout)
+				defer tailCancel()
+				killData := s.killTeardownTail(tailCtx, run, types.ActorSystem, "wardynd", extra)
+				if len(killData) > 0 {
+					// The state is KILLED and the row already carries the failing step;
+					// the new sign-in PROCEEDS — the upload belt is what makes that safe.
+					slog.WarnContext(detached, "wardynd: superseded sign-in sandbox was not fully torn down",
+						slog.String("run_id", run.ID.String()), slog.Any("errors", killData))
+				}
+			})
 			return
 		}
 		// Lost the CAS to a forward transition. Re-read and try from the state it

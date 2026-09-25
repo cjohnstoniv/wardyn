@@ -6,13 +6,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -205,12 +208,11 @@ func TestRunAttach_NoTokenDialsAnyway(t *testing.T) {
 	}
 }
 
-// TestRunAttach_RejectedHandshakeReturnsAPIError is the W25-W25.1-2
-// regression: a server-side handshake rejection (401/403/404 — never a
-// network failure) used to be flattened into websocket.Dial's raw
-// "failed to WebSocket dial: expected status 101 but got NNN" text, discarding
-// the HTTP response and always exiting 1. It must now come back as an
-// *sdk.APIError carrying the real status + the server's {"error":...} body, so
+// TestRunAttach_RejectedHandshakeReturnsAPIError pins that a server-side
+// handshake rejection (401/403/404 — never a network failure) comes back as an
+// *sdk.APIError carrying the real status + the server's {"error":...} body,
+// not as websocket.Dial's raw "failed to WebSocket dial: expected status 101
+// but got NNN" text with the HTTP response discarded and exit 1 — so
 // exitCodeFor and dialHint classify it exactly like every other API call.
 //
 // The mint-then-dial lane surfaces THIS test's exact rejection one step
@@ -277,10 +279,10 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 	// already at EOF — so half 2 (stdin -> server, attach.go's "Half 2" pump)
 	// would get an immediate io.EOF and end the session on ITS OWN, letting
 	// this test pass even with the ctx-cancel wiring ripped out entirely (a
-	// prior version of this test did exactly that — a blind review's mutation
-	// probe proved it green with the fix deleted). Swapping in a pipe whose
-	// write end THIS TEST holds open blocks that half indefinitely, so the
-	// cancel below is the ONLY thing that can end the session.
+	// mutation probe that deletes the wiring stays green on a plain os.Stdin).
+	// Swapping in a pipe whose write end this test holds open blocks that half
+	// indefinitely, so the cancel below is the only thing that can end the
+	// session.
 	// Half 2 (attach.go's "Half 2" goroutine, os.Stdin.Read) is a KNOWN,
 	// pre-existing leak: os.Stdin.Read is a plain blocking syscall, not
 	// ctx-aware, so it stays parked on this pipe even after runAttach
@@ -502,17 +504,16 @@ func TestRunAttach_SIGTERMDetachesCleanly(t *testing.T) {
 	}
 }
 
-// B12a-F1 (review R-04): a SECOND TERM must still kill the process. The
+// A second TERM must still kill the process. The
 // signal disposition NotifyContext installs stays redirected until
 // stopSignals() runs, deferred all the way to runAttach's own return — so if
 // the session is wedged somewhere that does NOT observe ctx (os.Stdout.Write
 // is a plain blocking syscall, unlike conn.Read/Write), the FIRST TERM
 // cancels ctx but can't unstick the write, and every SUBSEQUENT TERM is
-// caught by the same still-registered channel and silently discarded: a
-// session that used to be killable by any TERM becomes unkillable by any
-// number of them. runAttach reverts the disposition itself the moment ctx
-// is Done, so THIS test's second TERM falls through to the normal,
-// process-killing default.
+// caught by the same still-registered channel and silently discarded,
+// leaving the session unkillable by any number of them. runAttach reverts
+// the disposition itself the moment ctx is Done, so this test's second TERM
+// falls through to the normal, process-killing default.
 //
 // The wedge is real, not simulated: the server floods far more than a
 // kernel pipe buffer's worth of data (Linux defaults to 64 KiB) at the
@@ -633,11 +634,11 @@ func TestAttachCmd_RefusesANonUUIDRunID(t *testing.T) {
 }
 
 // --------------------------------------------------------------------------
-// Wardyn 0.7.8 lane/v0.7.8-cli-attach: `wardyn attach` mints a single-use
-// attach ticket with whatever token is configured (POST
-// /runs/{id}/attach-ticket, owner-or-admin) and dials with it, instead of
-// dialing the WS route directly with a bearer that route's fallback lane
-// requires be an ADMIN'S. These four pin the DONE criteria: a member's own
+// `wardyn attach` mints a single-use attach ticket with whatever token is
+// configured (POST /runs/{id}/attach-ticket, owner-or-admin) and dials
+// with it, instead of dialing the WS route directly with a bearer that
+// route's fallback lane requires be an admin's. These four pin that
+// contract: a member's own
 // token mints and dials; a foreign run gets the ticket lane's 404 (no
 // existence oracle); an admin token still works; the ticket is freshly
 // minted on every attach attempt, never cached or reused.
@@ -832,5 +833,302 @@ func TestRunAttach_FallsBackToBareDialWhenMintUnavailable(t *testing.T) {
 	defer cancel()
 	if err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1"); err != nil {
 		t.Fatalf("runAttach = %v, want nil (the legacy bearer dial must still work)", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// The attach-mode frame (internal/api/attach_holder.go's attachModeMsg) is
+// a text frame Half 1 must surface, not skip — otherwise someone attached
+// read-only types, nothing happens, and nothing explains why. These four
+// pin that and the one contract it must never break: stdout stays
+// byte-identical PTY output, nothing else, in every case below.
+// --------------------------------------------------------------------------
+
+// sharedAttachStdinOnce / sharedAttachStdinW back swapSharedAttachStdin below.
+var (
+	sharedAttachStdinOnce sync.Once
+	sharedAttachStdinW    *os.File
+)
+
+// swapSharedAttachStdin points os.Stdin at a pipe this test binary never
+// closes, exactly ONCE for every test in this file that needs one — mirroring
+// the os.Stdin swap TestRunAttach_CtxCancelRestoresTerminal already relies on
+// (see its own comment on why: go test's real os.Stdin is not a blocking
+// source, so Half 2 would race a premature EOF-driven cancel in ahead of the
+// frames these tests need Half 1 to process first).
+//
+// It is package-shared and NEVER reassigned again (sync.Once), on purpose:
+// os.Stdin.Read (attach.go's Half 2) is not ctx-aware, so a pump reading a
+// PRIOR test's pipe can still be mid-syscall, unsynchronized, when a LATER
+// test's setup runs — reassigning the os.Stdin global at that moment is a
+// write racing that read with no happens-before edge between them, which
+// -race reports even though the two are logically unrelated (one earlier
+// test's pipe never gets closed here either, matching that same test's own
+// documented "leaked forever" acceptance). Handing out the same never-closed
+// pipe to every caller means the os.Stdin global is written at most once for
+// the whole file, so there is nothing left for a later test to race against.
+func swapSharedAttachStdin(t *testing.T) *os.File {
+	t.Helper()
+	sharedAttachStdinOnce.Do(func() {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		os.Stdin = r
+		sharedAttachStdinW = w
+	})
+	return sharedAttachStdinW
+}
+
+// redirectAttachIO swaps os.Stdin (once, package-wide — see
+// swapSharedAttachStdin) and os.Stdout/os.Stderr (per call) for pipes the
+// test controls.
+func redirectAttachIO(t *testing.T) (stdinW *os.File, stdout, stderr func() string) {
+	t.Helper()
+	stdinW = swapSharedAttachStdin(t)
+
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdout := os.Stdout
+	os.Stdout = stdoutW
+
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = stderrW
+
+	// stdinW is the PACKAGE-SHARED write end (swapSharedAttachStdin) and is
+	// deliberately never closed here — closing it would EOF every other
+	// test's Half 2 too, including ones that haven't run yet.
+
+	// drain, called AFTER runAttach returns: closes the write ends (unblocking
+	// the readers), restores the real os.Stdout/os.Stderr, and returns each
+	// stream's captured content.
+	drain := func(w *os.File, r *os.File, old *os.File, target **os.File) func() string {
+		return func() string {
+			w.Close()
+			*target = old
+			var buf bytes.Buffer
+			_, _ = io.Copy(&buf, r)
+			return buf.String()
+		}
+	}
+	return stdinW,
+		drain(stdoutW, stdoutR, oldStdout, &os.Stdout),
+		drain(stderrW, stderrR, oldStderr, &os.Stderr)
+}
+
+// TestAttach_ReadOnlyDialPrintsNoticeAndDetachesCleanly pins the read-only
+// half of the fix: the first attach-mode frame (read_only:true) prints ONE
+// stderr line naming the holder and where they attached from, stdout carries
+// only the real PTY bytes, and the session still exits 0 (a clean detach) on
+// the server's own normal close.
+func TestAttach_ReadOnlyDialPrintsNoticeAndDetachesCleanly(t *testing.T) {
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		mode := `{"type":"attach-mode","read_only":true,"holder":{"held":true,"principal":"alice@example.com","source":"web"}}`
+		if err := c.Write(r.Context(), websocket.MessageText, []byte(mode)); err != nil {
+			return
+		}
+		if err := c.Write(r.Context(), websocket.MessageBinary, []byte("server-output")); err != nil {
+			return
+		}
+		_ = c.Close(websocket.StatusNormalClosure, "")
+	}))
+	defer srv.Close()
+
+	_, stdout, stderr := redirectAttachIO(t)
+
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	stdoutGot, stderrGot := stdout(), stderr()
+
+	if attachErr != nil {
+		t.Fatalf("runAttach = %v, want nil (still a clean detach when read-only)", attachErr)
+	}
+	if stdoutGot != "server-output" {
+		t.Errorf("stdout = %q, want exactly the PTY bytes and nothing else", stdoutGot)
+	}
+	if !strings.Contains(stderrGot, "alice@example.com") || !strings.Contains(stderrGot, "browser") {
+		t.Errorf("stderr = %q, want the read-only notice naming the holder and the source", stderrGot)
+	}
+	if !strings.Contains(stderrGot, "detached") {
+		t.Errorf("stderr = %q, want the usual final \"detached\" line too", stderrGot)
+	}
+}
+
+// TestAttach_PromotionPrintsOneLineAndResendsResizeOnce pins the
+// promotion half: a SECOND attach-mode frame whose read_only flips
+// true->false prints exactly one promotion line and re-sends the window size
+// exactly once (never on the frame that made this socket the writer in the
+// first place, and never more than once for one promotion).
+func TestAttach_PromotionPrintsOneLineAndResendsResizeOnce(t *testing.T) {
+	oldMakeRaw, oldRestore, oldGetSize := makeRawFn, restoreTerminalFn, getSizeFn
+	t.Cleanup(func() { makeRawFn, restoreTerminalFn, getSizeFn = oldMakeRaw, oldRestore, oldGetSize })
+	// A real tty is not available under `go test`; fake the raw-mode and
+	// GetSize seams so the promotion's resend-the-window-size path (gated on
+	// oldState != nil) actually runs.
+	makeRawFn = func(int) (*term.State, error) { return &term.State{}, nil }
+	restoreTerminalFn = func(int, *term.State) error { return nil }
+	getSizeFn = func(int) (int, int, error) { return 80, 24, nil }
+
+	var resizeCount int32
+	resizeSeen := make(chan int32, 8)
+
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+
+		go func() {
+			for {
+				typ, data, rerr := c.Read(r.Context())
+				if rerr != nil {
+					return
+				}
+				if typ != websocket.MessageText {
+					continue
+				}
+				var m map[string]any
+				if json.Unmarshal(data, &m) == nil && m["type"] == "resize" {
+					resizeSeen <- atomic.AddInt32(&resizeCount, 1)
+				}
+			}
+		}()
+
+		mode := `{"type":"attach-mode","read_only":true,"holder":{"held":true,"principal":"alice@example.com","source":"web"}}`
+		if err := c.Write(r.Context(), websocket.MessageText, []byte(mode)); err != nil {
+			return
+		}
+
+		// The client's own initial connect-time resize (attach.go's, unrelated
+		// to promotion) never fires here: it sizes from the REAL term.GetSize
+		// against the fd behind os.Stdin, which is a pipe under this test, not
+		// a tty — so the only resize frame this exchange can ever produce is
+		// the promotion's own, sized from the faked getSizeFn seam above.
+		promo := `{"type":"attach-mode","read_only":false,"holder":{"held":true,"principal":"me@example.com","source":"web"}}`
+		if err := c.Write(r.Context(), websocket.MessageText, []byte(promo)); err != nil {
+			return
+		}
+
+		select {
+		case n := <-resizeSeen:
+			if n != 1 {
+				t.Errorf("resize frame count after promotion = %d, want exactly 1", n)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("promotion never re-sent the resize frame")
+		}
+
+		_ = c.Close(websocket.StatusNormalClosure, "")
+	}))
+	defer srv.Close()
+
+	_, stdout, stderr := redirectAttachIO(t)
+
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	stdoutGot, stderrGot := stdout(), stderr()
+
+	if attachErr != nil {
+		t.Fatalf("runAttach = %v, want nil", attachErr)
+	}
+	if stdoutGot != "" {
+		t.Errorf("stdout = %q, want no PTY output leaked by the promotion exchange", stdoutGot)
+	}
+	if n := strings.Count(stderrGot, "promoted"); n != 1 {
+		t.Errorf("stderr contains %d promotion line(s) (%q), want exactly 1", n, stderrGot)
+	}
+	if got := atomic.LoadInt32(&resizeCount); got != 1 {
+		t.Errorf("total resize frames received by the server = %d, want exactly 1", got)
+	}
+}
+
+// TestAttach_UnknownAttachModeFrameIsIgnored pins that an attach-mode-
+// shaped frame this CLI does not recognize (a future control frame type)
+// is silently dropped — never crashing the process, never printing noise,
+// and never interrupting the pump for the binary frames around it.
+func TestAttach_UnknownAttachModeFrameIsIgnored(t *testing.T) {
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		// The writer case (read_only:false) is silent — nothing to warn about.
+		mode := `{"type":"attach-mode","read_only":false,"holder":{"held":true,"principal":"me@example.com","source":"web"}}`
+		if err := c.Write(r.Context(), websocket.MessageText, []byte(mode)); err != nil {
+			return
+		}
+		unknown := `{"type":"some-future-control-frame","foo":"bar"}`
+		if err := c.Write(r.Context(), websocket.MessageText, []byte(unknown)); err != nil {
+			return
+		}
+		if err := c.Write(r.Context(), websocket.MessageBinary, []byte("after-unknown")); err != nil {
+			return
+		}
+		_ = c.Close(websocket.StatusNormalClosure, "")
+	}))
+	defer srv.Close()
+
+	_, stdout, stderr := redirectAttachIO(t)
+
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	stdoutGot, stderrGot := stdout(), stderr()
+
+	if attachErr != nil {
+		t.Fatalf("runAttach = %v, want nil", attachErr)
+	}
+	if stdoutGot != "after-unknown" {
+		t.Errorf("stdout = %q, want exactly the PTY bytes around the unknown frame, nothing dropped or corrupted", stdoutGot)
+	}
+	if want := "detached\n"; stderrGot != want {
+		t.Errorf("stderr = %q, want only %q — no noise for the writer connect or the unrecognised frame", stderrGot, want)
+	}
+}
+
+// TestAttach_TakeoverCloseIsNotACleanDetach pins the corpus item this
+// package's own contract most needs pinned: a take-over's 1008
+// (StatusPolicyViolation) close — attach.go's displace() closure on the
+// server — must never be reported the same as a normal detach.
+func TestAttach_TakeoverCloseIsNotACleanDetach(t *testing.T) {
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		mode := `{"type":"attach-mode","read_only":false,"holder":{"held":true,"principal":"me@example.com","source":"web"}}`
+		if err := c.Write(r.Context(), websocket.MessageText, []byte(mode)); err != nil {
+			return
+		}
+		_ = c.Close(websocket.StatusPolicyViolation, "taken over by bob@example.com")
+	}))
+	defer srv.Close()
+
+	_, stdout, stderr := redirectAttachIO(t)
+
+	attachErr := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL}, "run-1")
+	stdoutGot, stderrGot := stdout(), stderr()
+
+	if attachErr == nil {
+		t.Fatal("runAttach = nil, want an error — a take-over close must not be reported as a clean detach")
+	}
+	if cs := websocket.CloseStatus(attachErr); cs != websocket.StatusPolicyViolation {
+		t.Errorf("CloseStatus(err) = %v, want StatusPolicyViolation (1008)", cs)
+	}
+	if strings.Contains(stderrGot, "detached") {
+		t.Errorf("stderr = %q, must not print the clean-detach line on a take-over", stderrGot)
+	}
+	if stdoutGot != "" {
+		t.Errorf("stdout = %q, want no PTY output leaked", stdoutGot)
 	}
 }

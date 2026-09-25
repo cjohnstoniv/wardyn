@@ -120,7 +120,7 @@ func TestDesktopDocSecretTierMatchesTheRouter(t *testing.T) {
 	for _, want := range []struct{ file, src string }{
 		{"runs_policy.go", "func (s *Server) secretOwnerFromRequest("},
 		{"secrets.go", `"?owner= is admin-only"`},
-		{"secrets.go", "sinkReservedSecret(name) || name == bedrockAPIKeySecret"},
+		{"secrets.go", `if owner != "" && sinkReservedSecret(name) {`},
 	} {
 		if !strings.Contains(readSrc(t, "internal", "api", want.file), want.src) {
 			t.Errorf("internal/api/%s no longer carries %q — DESKTOP.md's secret paragraph names it", want.file, want.src)
@@ -136,29 +136,44 @@ func TestDesktopDocSecretTierMatchesTheRouter(t *testing.T) {
 		"`secretOwnerFromRequest` returns `\"\"` for an operator",
 		"`?owner=<principal>`",
 	)
-	// Every Bedrock/SigV4 name the write boundary refuses to a member has to be
-	// in the doc's list, derived from the constants rather than typed twice.
+	// Every AWS SigV4 name the write boundary refuses to a member has to be in
+	// the doc's list, derived from the constants rather than typed twice.
 	for _, name := range bedrockReservedSecretNames(t) {
 		if !strings.Contains(doc, "`"+name+"`") {
 			t.Errorf("docs/DESKTOP.md's admin-only secret list omits %q, which writableSecretName refuses to a member", name)
 		}
 	}
+	// And the one name that is NOT refused any more has to read that way, or the
+	// doc still tells a member the door is shut on a key they can now store.
+	mustNotSay(t, doc, "docs/DESKTOP.md",
+		"`aws-session-token`, `bedrock-api-key`), which a non-operator `PUT`/`DELETE`",
+		"`bedrock-api-key` and the AWS SigV4 pair are refused for a member's own",
+	)
+	mustSay(t, doc, "docs/DESKTOP.md",
+		"a member may store their own `bedrock-api-key`",
+	)
 }
 
-// bedrockReservedSecretNames is the four-name set a non-operator PUT/DELETE is
-// refused, read off the constants the refusal is written against.
+// bedrockReservedSecretNames is the AWS SigV4 name set a non-operator PUT/DELETE
+// is refused, read off the constants the refusal is written against.
+//
+// bedrock-api-key is deliberately excluded and the exclusion is asserted, not
+// assumed: the BEARER is the one Bedrock name a member may write for themselves,
+// and the tempting one-character widening of writableSecretName would hand them
+// these three as well.
 func bedrockReservedSecretNames(t *testing.T) []string {
 	t.Helper()
 	src := readSrc(t, "internal", "api", "runs_bedrock.go")
 	re := regexp.MustCompile(`bedrock\w*Secret\s+=\s+"([a-z0-9-]+)"`)
 	var out []string
 	for _, m := range re.FindAllStringSubmatch(src, -1) {
-		if !slices.Contains(out, m[1]) {
-			out = append(out, m[1])
+		if m[1] == "bedrock-api-key" || slices.Contains(out, m[1]) {
+			continue
 		}
+		out = append(out, m[1])
 	}
-	if len(out) < 4 {
-		t.Fatalf("found %d Bedrock secret-name constants (%v) — this guard's matcher needs updating, it is checking almost nothing", len(out), out)
+	if len(out) < 3 {
+		t.Fatalf("found %d AWS SigV4 secret-name constants (%v) — this guard's matcher needs updating, it is checking almost nothing", len(out), out)
 	}
 	slices.Sort(out)
 	return out
@@ -175,9 +190,9 @@ func bedrockReservedSecretNames(t *testing.T) []string {
 // cause. The targets are derived from the emit sites, so the next cause that
 // lands undocumented fails here.
 func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
-	targets := denyMemberFieldTargets(t, "governance_profile")
+	targets := refusalTargets(t, "ReasonGovernanceProfile")
 	if len(targets) < 5 {
-		t.Fatalf("found %d denyMemberField targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
+		t.Fatalf("found %d authz.Deny targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
 	}
 	row := opsTableRow(t, readDoc(t, "docs/OPERATIONS.md"), "governance_profile")
 	for _, target := range targets {
@@ -187,16 +202,17 @@ func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
 	}
 }
 
-// denyMemberFieldTargets returns every `target` internal/api denies with the
-// given authz.denied reason, read off the emit sites.
-func denyMemberFieldTargets(t *testing.T, reason string) []string {
+// refusalTargets returns every `target` internal/api denies with the given
+// authz.denied reason (its internal/authz constant name), read off the emit
+// sites.
+func refusalTargets(t *testing.T, reasonConst string) []string {
 	t.Helper()
 	dir := filepath.Join(repoRoot(t), "internal", "api")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read internal/api: %v", err)
 	}
-	re := regexp.MustCompile(`denyMemberField\(w, r, "([a-z_.]+)", "` + regexp.QuoteMeta(reason) + `"`)
+	re := regexp.MustCompile(`authz\.Deny\(authz\.` + regexp.QuoteMeta(reasonConst) + `,\s*"([a-z_.]+)"`)
 	var out []string
 	for _, e := range entries {
 		name := e.Name()
@@ -327,22 +343,6 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 	)
 }
 
-// methodBody returns the source of a method by name, from its `func (recv)`
-// line to the closing brace in column 0. funcBody's anchor only matches a
-// plain top-level func.
-func methodBody(t *testing.T, src, name string) string {
-	t.Helper()
-	loc := regexp.MustCompile(`(?m)^func \([^)]*\) ` + regexp.QuoteMeta(name) + `\(`).FindStringIndex(src)
-	if loc == nil {
-		t.Fatalf("method %s not found — the guard's anchor moved, so it is asserting nothing", name)
-	}
-	rest := src[loc[0]:]
-	if end := strings.Index(rest, "\n}\n"); end >= 0 {
-		return rest[:end]
-	}
-	return rest
-}
-
 // TestMembersDocStatesTheThreeKeyDriveContract (F169) pins the member-facing
 // doc to the shape GET /me actually returns.
 //
@@ -442,9 +442,8 @@ var ruleSourceConst = regexp.MustCompile(`(?m)^\truleSource[A-Za-z]*\s+= "([a-z0
 
 // inlineRuleSourceLiteral finds evaluate()'s OWN decisionLog(...) call sites
 // in internal/egress/proxy/proxy.go whose rule_source argument is an inline
-// string literal rather than a named ruleSource* constant — the second,
-// previously-undocumented family F093's B1 blocking item added (the
-// "evaluator's own inline sources" table).
+// string literal rather than a named ruleSource* constant — the second
+// family the doc tables (the "evaluator's own inline sources" table).
 var inlineRuleSourceLiteral = regexp.MustCompile(`decisionLog\([^,]+,\s*egress\.[A-Za-z]+,\s*"([a-z:-]+)"\)`)
 
 // TestAuditActionsDocEnumeratesEveryRuleSource (F093) pins the new
@@ -609,15 +608,13 @@ func TestAuditActionsDocNamesTheDroppedDecisionSummary(t *testing.T) {
 	)
 }
 
-// TestLiteralIPRedirectDocsNameThePortScope (F053, re-derived for F106) pins
-// OPERATIONS.md and THREAT-MODEL.md's "scoped to that address" claim to what
-// substituteArtifactEgress now actually writes: a PORT-QUALIFIED entry, so the
-// trust it grants is to `to:port` and not to that address on any port.
+// TestLiteralIPRedirectDocsNameThePortScope pins OPERATIONS.md and
+// THREAT-MODEL.md's "scoped to that address" claim to what
+// substituteArtifactEgress writes: a port-qualified entry, so the trust it
+// grants is to `to:port` and not to that address on any port.
 //
-// The claim it originally pinned was the opposite one — the port was STRIPPED,
-// and the docs had to say so. F106 fixed the code; the guard is re-derived
-// against the merged tree rather than skipped, so the docs can never drift back
-// to describing either shape while the other one ships.
+// The guard is derived against the tree, so the docs can never describe a
+// port-stripped entry while a port-qualified one ships, or the reverse.
 func TestLiteralIPRedirectDocsNameThePortScope(t *testing.T) {
 	src := readSrc(t, "internal", "api", "workspace_egress.go")
 	if !strings.Contains(src, "entry := net.JoinHostPort(to, strconv.Itoa(redirectPort(r.To)))") {
@@ -712,9 +709,9 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 			t.Fatalf("revokeNote no longer says %q — re-derive the doc row before trusting this guard", want)
 		}
 	}
-	// B11a-F1 gave the mint a discard door that DOES call GitHub's endpoint, so
-	// the blanket "wardyn does not call it" this row and this note used to carry
-	// became false. Neither may say it again while discardMinted exists.
+	// The mint has a discard door that does call GitHub's endpoint, so a blanket
+	// "wardyn does not call it" is false. Neither this row nor this note may say
+	// it while discardMinted exists.
 	if strings.Contains(note, "wardyn does not call") {
 		t.Fatal(`revokeNote carries the blanket "wardyn does not call" claim again — discardMinted and VerifyRefRuleset both make that call, so it must stay scoped to RevokeRun`)
 	}
@@ -1077,17 +1074,16 @@ func TestDataFlowAuditSinkRowCarriesTheOutageQualifier(t *testing.T) {
 // backtick span as a CITATION only when the span carries a path, so the
 // "same file, second line" shorthand these rows used — a `proxy.go` line
 // number followed by a bare `:N` sibling — is read as a bare ANCHOR and never
-// resolved against anything. Both were wrong: the step-0 private-IP guard moved out of
-// proxy.go entirely (literal_ip_guard.go), and `builtin:dial-failed` is emitted
-// from four places, none of them the duplicated line. A citation nobody checks
-// is how the doc came to name a file the guard no longer lives in.
+// resolved against anything. The step-0 private-IP guard lives in literal_ip_guard.go,
+// not proxy.go, and `builtin:dial-failed` is emitted from four places; a citation
+// nobody checks can name a file the code does not live in, or one site of several.
 //
 // So the rule here is the one the live-citation guard can then enforce: in
 // these rows every site is spelled out in full, and no bare `:N` shorthand is
 // left for a reader (or a guard) to resolve by guesswork. What "in full" means
-// is now a SYMBOL — `path/file.go#Symbol`, resolved with go/parser — because
-// the line-anchored form these rows used to carry made every insertion above a
-// cited line a failure of the required build check. The COUNT is what this
+// is a symbol — `path/file.go#Symbol`, resolved with go/parser — because a
+// line-anchored form makes every insertion above a cited line a failure of the
+// required build check. The count is what this
 // guard adds over its neighbour: a row that names one of several emitters
 // still tells an operator the others do not exist.
 func TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite(t *testing.T) {

@@ -7,7 +7,8 @@
 // All wire fields are snake_case (see lib/types.ts's barrel comment for the
 // one documented exception, in a different domain module).
 
-import type { AutonomyLevel } from "../api/governance";
+import type { AutonomyLevel, AutonomyResolution, RunLimits } from "../api/governance";
+import type { SCMAccess } from "./setup";
 
 // The backend emits dotted agent ids like "claude-code" / "codex-cli".
 // Older mock data used "claude_code" / "codex". Keep the union open
@@ -118,13 +119,23 @@ export interface AgentRun {
   // directly to gate "Always" — use runHasWorkspace(run), which also covers
   // workspace_id; see its doc for why.
   workspace_ids?: string[];
-  // READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps
-  // (internal/api/runs_policy.go handleGetRun) — the run row itself carries
-  // only policy_id, and an inline/default policy has no id to fetch, so the
-  // console reads this off the run payload rather than GET /policies/{id}.
-  // Absent (never present as []) when the run has no declared apps or the
-  // lookup failed server-side — both render the lane's "no apps" state.
-  ui_apps?: UIApp[];
+  // The TRUSTED run->library-source linkage for a per-source scan run (the
+  // three-tier retarget) — internal/types/types.go's AgentRun.SourceID. The
+  // scan-facts upload authorizes on it the way a workspace run authorizes on
+  // workspace_id above. Nil for a user run; nothing in the console reads it
+  // today, but it is a live wire field and the mirror rule forbids dropping one.
+  source_id?: string;
+  // The run's EFFECTIVE idle auto-stop cap, captured from the resolved
+  // RunPolicySpec at creation (internal/types/types.go's
+  // AgentRun.AutoStopAfterSec). 0/absent = never auto-stop; a negative value is
+  // explicitly never (interactive). No console reader today — kept for mirror
+  // parity, same reason as source_id above.
+  auto_stop_after_sec?: number;
+  // The docker exec id of the run's agent process (internal/types/types.go's
+  // AgentRun.AgentExecID) — empty for exec-less substrates and before Exec
+  // runs. Server/crash-recovery bookkeeping only; no console reader today, kept
+  // for mirror parity, same reason as source_id above.
+  agent_exec_id?: string;
   // Server-authored one-line reason for a pre-agent-start failure arm
   // (internal/types/types.go's AgentRun.FailureHint, migration 0044) — set
   // when the run never got as far as an exit code (e.g. workspace mount
@@ -156,6 +167,34 @@ export interface AgentRun {
   // (#99 is types/storage/mirrors only); this field exists so the console has
   // somewhere to read it the day #93 renders it.
   autonomy_level?: AutonomyLevel;
+  // Run limits captured at create (migration 0072, #567): the lease end (null =
+  // no end), the wait for a decision (absent = the deployment's approval
+  // expiry), the owner's profile run limits and that profile's id (absent for
+  // an unassigned or super-admin owner). Optional: a pre-0.8 daemon sends none.
+  ends_at?: string | null;
+  wait_budget_sec?: number;
+  run_limits?: RunLimits;
+  governance_profile_id?: string;
+  // Set when the run lost its sandbox but is kept (migration 0073, #568):
+  // "ended" = its end passed, so it is stopped with no network and its files
+  // stay for the ended-run grace. The run stays RUNNING meanwhile.
+  lost_at?: string;
+  lost_reason?: "ended";
+}
+
+// GET /runs/{id}'s response shape: AgentRun plus ui_apps, a field ONLY that
+// endpoint sends (handleGetRun's anonymous wrapper struct, runs_policy.go) —
+// the READ-ONLY denormalization of the run's EFFECTIVE policy ui_apps. The run
+// row itself carries only policy_id, and an inline/default policy has no id to
+// fetch, so the console reads this off the run payload rather than GET
+// /policies/{id}. Absent (never present as []) when the run has no declared
+// apps or the lookup failed server-side — both render the lane's "no apps"
+// state. Split off AgentRun rather than left optional-on-everything: every
+// LIST consumer (GET /runs, the board/table) is typed for a field it never
+// receives, and a card built from list data must not silently type-check as
+// having answered "no apps declared" for one it was never asked about.
+export interface RunDetail extends AgentRun {
+  ui_apps?: UIApp[];
 }
 
 // Live-run evidence reads (the run-detail cockpit's widgets). These mirror
@@ -478,6 +517,18 @@ export interface PreflightResult {
   // refusal has no verdict to publish). The status row is the default path for
   // exactly that reason.
   model_credential?: ModelCredential;
+  // Autonomy is what resolveRunAutonomy decided for THIS body (0.8 #97/#93) —
+  // internal/api/preflight.go's preflightResponse.Autonomy. ABSENT (never a
+  // zero value) when nothing bound the run: no assigned profile, no rubric on
+  // it, or a rubric that leaves this posture's three fields unset — the same
+  // condition under which the create audit row omits its own field.
+  autonomy?: AutonomyResolution;
+  // THIS caller's Azure DevOps access state (internal/api.SCMAccess, #386) —
+  // deployment-wide, informational (the rail's "before you press Launch"
+  // line), never the gate itself: a run that actually needs it and has none
+  // 422s with reason "git_credential" instead. Absent when no Azure DevOps
+  // row is configured at all.
+  git_credential?: SCMAccess;
 }
 
 // Where a run's MODEL credential lands (internal/api.modelCredentialResidency).

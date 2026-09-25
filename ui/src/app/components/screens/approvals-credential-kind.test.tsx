@@ -12,7 +12,7 @@ import type { ApprovalRequest } from "../../lib/types";
 // is only the wire-level "credential"/"egress_domain"/"tool_call"), so
 // credentialKind() in approvals.tsx key-sniffs the scope shape. Pin one
 // approval per real grant shape so an api_key or ssh_key scope never again
-// renders the git_pat "handed to git / can't expire a PAT" banner.
+// renders the git_pat "attached by the proxy / can't expire a PAT" banner.
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
@@ -67,7 +67,7 @@ describe("ApprovalsScreen — credentialKind banner per grant shape", () => {
     renderScreen();
     await screen.findByText(/injected proxy-side/i);
     expect(screen.queryByText(/grants git write/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/handed to git inside the sandbox/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/attached to the request by the proxy/i)).not.toBeInTheDocument();
   });
 
   it("renders a distinct ssh_key banner, never git_pat's PAT wording", async () => {
@@ -79,7 +79,7 @@ describe("ApprovalsScreen — credentialKind banner per grant shape", () => {
     // (both reuse the same honest wording) — match the host-qualified "what"
     // line specifically so a single element is found.
     await screen.findByText(/ssh key for github\.com is written to disk/i);
-    expect(screen.queryByText(/handed to git inside the sandbox/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/attached to the request by the proxy/i)).not.toBeInTheDocument();
     // ssh_key is a resident, agent-readable, non-downscopable key like a PAT —
     // it still earns the "grants git write" capability chip.
     expect(screen.getByText(/grants git write/i)).toBeInTheDocument();
@@ -93,10 +93,15 @@ describe("ApprovalsScreen — credentialKind banner per grant shape", () => {
       },
     ];
     renderScreen();
-    // Same duplication note as ssh_key above — match the host-qualified "what"
-    // line specifically.
-    await screen.findByText(/token for gitlab\.example\.com is handed to git/i);
+    // #381 F3: the "what" line says "authenticates" rather than asserting a
+    // residency this screen has no switch value to verify (member-facing,
+    // no access to the operator-only providers endpoint) — match the
+    // host-qualified "what" line specifically.
+    await screen.findByText(/token for gitlab\.example\.com authenticates this clone/i);
     expect(screen.getByText(/grants git write/i)).toBeInTheDocument();
+    // The blast states BOTH possible postures rather than picking one.
+    expect(screen.getByText(/attached to the request by the proxy/i)).toBeInTheDocument();
+    expect(screen.getByText(/handed to git inside the sandbox/i)).toBeInTheDocument();
   });
 
   it("renders the github_token banner with a write chip when permissions grant write", async () => {

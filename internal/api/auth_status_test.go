@@ -25,15 +25,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── B6-F2 + B6-F5: a rejected session gets its OWN answer ───────────────────
+// B6-F2 + B6-F5: a rejected session gets its own answer
 
-// TestSessionRejectionResponse is the reason→answer table B6-F2 and B6-F5 are
-// both one edit of. The 503 is the load-bearing row: a revocation-store outage
-// used to fall through to adminAuth and answer 401 "missing bearer token",
-// which drove the console's sign-in gate, which drove a successful SSO login
-// (the callback never consults revocations), which answered 401 again — a
-// sign-in LOOP during a Postgres incident, reported to the operator as a
-// credential problem.
+// TestSessionRejectionResponse is the reason→answer table. The 503 is the
+// load-bearing row: a revocation-store outage must not fall through to
+// adminAuth and answer 401 "missing bearer token" — that drives the console's
+// sign-in gate, which drives a successful SSO login (the callback never
+// consults revocations), which answers 401 again: a sign-in loop during a
+// Postgres incident, reported to the operator as a credential problem.
 func TestSessionRejectionResponse(t *testing.T) {
 	cases := []struct {
 		reason     string
@@ -67,7 +66,7 @@ func TestSessionRejectionResponse(t *testing.T) {
 func expiredSSOSession(t *testing.T, sub, email, role string) *http.Cookie {
 	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
-		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role,
+		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role, UserType: "standard",
 		Expiry: time.Now().UTC().Add(-time.Hour),
 	})
 	if err != nil {
@@ -138,23 +137,23 @@ func TestRejectedSessionAnswersItself(t *testing.T) {
 		r.AddCookie(expiredSSOSession(t, "sub-expired", "e@corp.example", oidc.RoleAdmin))
 		r.Header.Set("Authorization", "Bearer "+adminToken)
 		w := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(w, r)
+		panicFails(t, srv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
 	})
 
-	// R-04: the narrowing keys on bearer PRESENCE, not validity, and this pins
-	// the residual that leaves. An unknown `wdn_` token (a console holding a
-	// stale one in localStorage) suppresses the 503 short-circuit, hits
-	// ErrNotFound in apiTokenAuth, falls through to adminAuth and gets 401 —
-	// so the sign-in loop B6-F2 closes is still reachable this one narrow way.
+	// The narrowing keys on bearer presence, not validity, and this pins the
+	// residual that leaves. An unknown `wdn_` token (a console holding a stale
+	// one in localStorage) suppresses the 503 short-circuit, hits ErrNotFound
+	// in apiTokenAuth, falls through to adminAuth and gets 401 — so the sign-in
+	// loop is still reachable this one narrow way.
 	//
-	// It is NOT a regression (the base did the same) and the alternative —
-	// answering 503 whenever a bearer is present — would break the static admin
-	// token, which is the operator's escape hatch during exactly the database
-	// incident this is about. The trade is deliberate; this test is the record
-	// of it, so a later change to the answer is a decision and not a drift.
+	// The alternative — answering 503 whenever a bearer is present — would
+	// break the static admin token, which is the operator's escape hatch during
+	// exactly the database incident this is about. The trade is deliberate;
+	// this test is the record of it, so a later change to the answer is a
+	// decision and not a drift.
 	t.Run("an unknown bearer still suppresses the outage answer", func(t *testing.T) {
 		out := newHarness(t)
 		cfg := baseTestConfig(out, newTokenMemStore())
@@ -166,7 +165,7 @@ func TestRejectedSessionAnswersItself(t *testing.T) {
 		r.AddCookie(expiredSSOSession(t, "sub-stale", "s@corp.example", oidc.RoleAdmin))
 		r.Header.Set("Authorization", "Bearer wdn_bogus")
 		w := httptest.NewRecorder()
-		outSrv.Handler().ServeHTTP(w, r)
+		panicFails(t, outSrv.Handler()).ServeHTTP(w, r)
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("status = %d, want 401 (today's answer) — if this changed deliberately, "+
 				"the bearer-presence narrowing in rejectedSessionAnswer was re-decided; body=%s",
@@ -218,7 +217,7 @@ func TestAPITokenRevocationOutageIs503(t *testing.T) {
 	}
 }
 
-// ─── B6-F4: driver text stays in the log, never in the body ──────────────────
+// B6-F4: driver text stays in the log, never in the body
 
 // errRunStore fails GetRun with a wrapped pgx-shaped error: the real ones carry
 // the DB host, port, user and database name plus the SQLSTATE and the table or

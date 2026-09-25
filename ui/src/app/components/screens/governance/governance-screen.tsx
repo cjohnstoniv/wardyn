@@ -35,7 +35,8 @@ import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api, type GovernanceProfile, type GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP } from "../../../lib/governance-copy";
+import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import {
   AlertDialog,
@@ -236,6 +237,7 @@ export function GovernanceScreen() {
                   <TableBody>
                     {snap.profiles.map((p) => {
                       const n = assignedCount(p);
+                      const autonomyLowest = foldAutonomyRubric(p.limits.autonomy_rubric).lowest;
                       return (
                         <TableRow key={p.id}>
                           {/* A profile name is a human-chosen label, never mono. */}
@@ -248,11 +250,13 @@ export function GovernanceScreen() {
                                   GovernanceLimits — not from the boolean doors
                                   alone. max_concurrent_runs is enforced
                                   (denyMemberRunQuota's 422), and a quota-only
-                                  profile used to read "None". */}
+                                  profile used to read "None". autonomy_rubric
+                                  joined the same rule the day this chip did. */}
                               {!p.limits.deny_task_mode_exec &&
                                 !p.limits.deny_interactive &&
                                 !p.limits.deny_user_drive &&
                                 !((p.limits.max_concurrent_runs ?? 0) > 0) &&
+                                !autonomyLowest &&
                                 GOV.LIMITS_NONE}
                               {p.limits.deny_task_mode_exec && <Chip tone="neutral">{GOV.LIMIT_EXEC_LABEL}</Chip>}
                               {p.limits.deny_interactive && (
@@ -263,6 +267,14 @@ export function GovernanceScreen() {
                               {p.limits.deny_user_drive && <Chip tone="neutral">{GOV.LIMIT_DRIVE_LABEL}</Chip>}
                               {(p.limits.max_concurrent_runs ?? 0) > 0 && (
                                 <Chip tone="neutral">{GOV.LIMIT_QUOTA_LABEL(p.limits.max_concurrent_runs!)}</Chip>
+                              )}
+                              {/* Ruling 2 (#96 review): names the STRICTEST
+                                  cap, not merely that a rubric exists — the
+                                  fact that matters is on screen, not behind a
+                                  tooltip a phone or a keyboard user cannot
+                                  reach. */}
+                              {autonomyLowest && (
+                                <Chip tone="neutral">{LIMITS_CHIP.AUTONOMY(AUTONOMY_META[autonomyLowest].label)}</Chip>
                               )}
                             </span>
                           </TableCell>
@@ -374,7 +386,7 @@ export function GovernanceScreen() {
               disabled={deleteCount > 0 || busy}
               onClick={(e) => {
                 e.preventDefault();
-                if (toDelete) del(toDelete);
+                if (toDelete) void del(toDelete);
               }}
             >
               {busy ? <Loader2 className="size-4 animate-spin" /> : null}

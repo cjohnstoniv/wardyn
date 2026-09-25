@@ -29,7 +29,7 @@ func (s *Server) routes() chi.Router {
 	// reintroduce X-Forwarded-For parsing ONLY behind an explicit allowlist of
 	// trusted proxy addresses.
 	r.Use(middleware.Recoverer)
-	r.Use(securityHeaders)
+	r.Use(s.securityHeaders)
 
 	r.Get("/healthz", s.handleHealthz)
 	// Readiness: proves Postgres is reachable, not just that the process is up
@@ -50,7 +50,9 @@ func (s *Server) routes() chi.Router {
 	// here: it is POST /api/v1/auth/logout below, inside humanOrAdminAuth.
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
-		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandler)
+		// A sign-in refused over its user type (ambiguous or unknown) is an
+		// auth.failed row; the oidc package stays audit-agnostic.
+		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.auditSignInDenied))
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -87,13 +89,15 @@ func (s *Server) routes() chi.Router {
 			//   direct registrations in this body   (both groups)
 			//   mountPermissionRoutes  (this file)  securityOps
 			//   mountAccountRoutes     (this file)  securityOps
-			//   adminRoutes            (this file)  one per group
+			//   adminRoutes            (this file)  one per group, plus
+			//       mountUserTypeRoutes (user_types.go) securityOps
 			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
 			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
 			//       despite naming its parameter operatorOnly; read the call site
-			//   mountUserDriveRoutes   (user_drives.go) operatorOnly
+			//   mountUserDriveRoutes   (user_drives.go) split: 4 operatorOnly,
+			//       3 securityOps (issue #168)
 			//   mountWorkspaceProviderRoutes        operatorOnly
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
@@ -249,6 +253,7 @@ func (s *Server) routes() chi.Router {
 			// deliberately on r, not operatorOnly (see sshkeys.go's package doc).
 			// Deliberately this one small, localized block rather than a mount of
 			// its own.
+			r.Get("/me/scm-access", s.handleGetSCMAccess) // #386, scmaccess.go: /me/ssh-keys' self-service shape
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)
@@ -579,20 +584,20 @@ func (s *Server) routes() chi.Router {
 
 			// User drives (migration 0054): the storage an admin registers
 			// and allocates, and the per-run flag a member mounts theirs with.
-			// Seven routes, all operatorOnly — SUPER, NOT the securityOps tier
-			// the /governance family right above sits on, and the contrast is
-			// the tier line itself. A drive names a HOST PATH (host_root) or a
-			// cluster storage class, and "never the host" is exactly what
-			// separates the two admin tiers; a security admin's authority over
-			// drives is the DenyUserDrive door in the profile editor, which is
-			// already theirs through /governance. Widening the grant + preview
-			// routes to securityOps is a one-line move plus matrix rows once the
-			// tier's own review settles — the safe direction, taken later.
+			// Seven routes SPLIT across both tiers (issue #168, 0.8): the four
+			// that name a HOST PATH (host_root) or a cluster storage class —
+			// creating, listing, updating, and removing the drive itself — stay
+			// operatorOnly, because "never the host" is exactly what separates
+			// the two admin tiers. The other three — granting an allocation,
+			// revoking one, and previewing whose drive resolves — moved to
+			// securityOps: a security admin's authority over drives was already
+			// the DenyUserDrive door in the profile editor (/governance above),
+			// and none of the three names a host path.
 			//
 			// Registered UNCONDITIONALLY (mountUserDriveRoutes' own doc), so
 			// TestAuthzMatrix's every-conditional-route-mounted doctrine has
 			// nothing to arrange.
-			s.mountUserDriveRoutes(operatorOnly)
+			s.mountUserDriveRoutes(operatorOnly, securityOps)
 
 			// Recording replay: GET /api/v1/runs/{id}/recording/{id}. Owner-or-admin:
 			// recordingAuthorizer is the SAME ownership rule
@@ -625,6 +630,9 @@ func (s *Server) routes() chi.Router {
 			r.Post("/internal/decisions", s.handlePostDecision)
 			r.Post("/internal/approvals", s.handleInternalRequestApproval)
 			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
+			// wardyn-toolgate's own give-up signal (#811): closes the row it
+			// raised instead of leaving it PENDING for the sweep.
+			r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 			r.Post("/internal/credentials/mint", s.handleInternalMint)
 
 			// Token renew: POST /api/v1/internal/token/renew
@@ -672,10 +680,11 @@ func (s *Server) routes() chi.Router {
 		// host eBPF sensor's token is audit-write-only and is rejected by the
 		// mint/approval endpoints. This is the SECOND of the three audit streams
 		// (Postgres self-report + PTY replay are the others).
-		r.Group(func(r chi.Router) {
-			r.Use(s.internalAuthGroundtruth)
-			r.Post("/internal/groundtruth", s.handleGroundtruthEvents)
-		})
+		r.With(s.internalAuthGroundtruth).Post("/internal/groundtruth", s.handleGroundtruthEvents)
+
+		// Hybrid enrolment: anonymous enrol, the wdd_ device routes and the admin
+		// device routes, each in its own group — see mountDeviceRoutes.
+		s.mountDeviceRoutes(r)
 	})
 
 	s.mountUI(r)
@@ -712,6 +721,14 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// block above — never a principal taken from the body.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
+	// Per-user Azure DevOps sign-in (ado_entra.go): two browser doors that
+	// capture ONE PERSON'S Azure DevOps refresh token. It belongs in this
+	// self-service block and nowhere else — both doors refuse a caller with no
+	// identity provider subject, the capture is bound to that subject
+	// fail-closed, and the credential is written under that principal's own
+	// namespace, so neither route can reach anyone else's credential whatever
+	// tier the caller holds.
+	s.mountAzureDevOpsSignInRoutes(r)
 	// "View as member" (membermode.go). Registered HERE rather than
 	// beside the ssh-keys block in routes() only because routes() sits exactly
 	// on the funlen ratchet — this is the /me self-service family either way.
@@ -765,6 +782,10 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	// User types (migration 0071_user_types): defining a type is the same
+	// security-tier duty as authoring a governance profile; deciding who IS a
+	// type stays on the operatorOnly /access routes.
+	s.mountUserTypeRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the

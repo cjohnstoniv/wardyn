@@ -321,9 +321,9 @@ the existing chord kept as an undocumented alias. Does a take-over promote the t
 ### Deployment gaps — [#82](https://github.com/cjohnstoniv/wardyn/issues/82)
 
 **Delivers.** The UI sandbox images become publishable and published, with their licence files and
-SBOM coverage; the model gateway carries subscription and Wardyn-managed runs; a gateway may
-declare its own auth header; the direct-dial bypass gets documentation and a boot lint; three
-corp-proxy instruments; a credentialed daemon proxy; an air-gapped video mirror.
+SBOM coverage; the model gateway carries subscription and Wardyn-managed runs; the direct-dial
+bypass gets documentation and a boot lint; three corp-proxy instruments; a credentialed daemon
+proxy; an air-gapped video mirror.
 
 **Decisions.**
 
@@ -419,8 +419,9 @@ canon tables for the console surfaces that shipped without one.
   already says a grade alone never blocks.
 - The Runs board's group header gets one counted chip per wait reason rather than a sentence,
   built from data already in hand, and renders a pinned "checking" chip before the approvals
-  promise resolves instead of an empty map that reads as "nothing is held". A hold older than a
-  named ceiling degrades to "was held — check the run".
+  promise resolves instead of an empty map that reads as "nothing is held". (#509 superseded this
+  entry's own named client-side ceiling — see its own record — with the server's PENDING/EXPIRED
+  state; a hold no longer degrades to "was held" from the board on client elapsed time alone.)
 - Recordings pagination is server-side offsets rather than a client-side cap, because the screen
   filters after the fetch, so a cap re-slices a window that already dropped everything past the
   first thousand rows. It is the console's first paged screen, so it gets a full mock round.
@@ -539,15 +540,42 @@ deny, uninspectable, too large. Phase two: a held `push_content` approval kind a
 - Phase two's approval kind is admin-decidable only, because a member approving their own
   workflow-file edit is exactly the exfiltration the self-approval rule stops; unattended runs deny
   outright rather than holding for a human who is not there.
-- The brokered app lane is always governed; the token lane only behind its branch-namespace
-  switch, which is what makes that lane parse at all; the key lane never, because it is an opaque
-  tunnel — a medium-risk row warns when rules are set and the only git grant is a key.
+- Both brokered lanes are governed, on one trigger — the run's policy carries a rule — and
+  neither waits on a branch-namespace switch. The token lane terminates and holds the whole
+  request either way, so gating what a push may contain on a switch about where it may land
+  would leave a policy reading as governed while enforcing nothing, and the `no-thin`
+  advertisement follows the enforcement onto that lane so its rules are not a false-refusal
+  machine. The key lane is never governed, because it is an opaque tunnel — a medium-risk row
+  warns when rules are set and the only git grant is a key.
 
 **Risks.** A short delta buffer yields a plausible tree, so the reconstructed size is checked
 against the delta header; and "push any branch" must not silently disable content rules.
 
 **Open question.** `no-thin` on by default when rules are set → **yes**, off when they are nil; a
 fourth switch would create a posture where rules are set and silently uninspectable.
+
+**Measured: the tree-entry ceiling ([#254](https://github.com/cjohnstoniv/wardyn/issues/254)).**
+The inspector's `maxTreeNodes` is set against what real pushes charge. Each range `tip~N..tip` of
+a default branch (2026-09-23) was packed the way `git push` sends it — `git pack-objects --revs
+--delta-base-offset`, no thin pack — and replayed through the walker with every ceiling lifted.
+No range held a shallow-clone boundary. "Before" charges every comparison each time a commit makes
+it; "after" charges a comparison (path, old tree, new tree) once, which is what the walker does now.
+
+| Repository | Shape | Commits replayed | Entries per carried tree entry, before → after | Commits at which each ceiling refuses: `maxInflatedBytes` / `maxTreeNodes` before / after |
+|---|---|---|---|---|
+| this repository | Go and TypeScript application | 41 – 3,642 (whole history) | 2.5–5.3 → 2.4–3.5 | ~320 / ~570 / ~1,150 |
+| kubernetes/kubernetes | wide; deep `vendor/` and `staging/` | 25 – 1,007 | 2.7–9.0 → 2.6–4.1 | ~235 / ~680 / ~1,300 |
+| spring-projects/spring-framework | one class per directory; merge-heavy | 18 – 4,731 | 3.4–16.7 → 2.2–2.8 | ~2,040 / ~570 / ~2,270 |
+| torvalds/linux | dense; merge-heavy | 21 – 1,402 | 1.9–3.3 → 1.9–2.5 | ~1,430 / ~990 / ~1,230 |
+
+Charged per visit, every merge paid again for each directory the other side had changed, so a
+merge-heavy history's charge outgrew its commits, and an honest push of about 570 commits was
+refused as uninspectable while inflating a fifth of what `maxInflatedBytes` allows. Charged once per
+comparison, the charge is about two to four entries per tree entry the pack carries, and
+`maxInflatedBytes` bounds those: the densest trees reach the two ceilings within about 15% of each
+other, and trees of larger files reach `maxInflatedBytes` first. The walk costs 0.15–0.75 µs per
+entry, under a second at the ceiling. The ceiling stays at 1,000,000 rather than rising to clear
+the densest trees, because the walk's memos hold a key for every entry it charges.
 
 ### Dependency hygiene — [#88](https://github.com/cjohnstoniv/wardyn/issues/88)
 

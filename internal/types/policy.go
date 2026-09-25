@@ -6,7 +6,10 @@ package types
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -257,6 +260,103 @@ type RunPolicySpec struct {
 	// ponytail: whole-namespace off, not a per-run allowed-prefix list — add a
 	// prefix list when someone needs an external tool AND confinement at once.
 	GitPushAnyBranch bool `json:"git_push_any_branch,omitempty"`
+	// PushRules declares CONTENT rules for this run's brokered git pushes — WHAT
+	// a push may touch, alongside GitPushAnyBranch's WHERE. Nil (the default,
+	// and every policy authored before this field existed) means no content
+	// rules at all: byte-identical to the wire shape and behaviour of a policy
+	// authored before the field existed, because every reader keys off
+	// IsSet.
+	//
+	// A policy that sets PushRules while this run's only git-capable grant is
+	// ssh_key is legal but UNENFORCEABLE — the SSH transport has no broker
+	// seam (see internal/composer/risk.go's ssh_key rationale) — and
+	// composer.Grade surfaces that as a medium-risk WARNING, never a write-time
+	// refusal: a stored policy is never 422'd for an unenforceable combination.
+	PushRules *PushRulesSpec `json:"push_rules,omitempty"`
+}
+
+// PushRulesSpec declares content rules for a run's brokered git pushes — the
+// counterpart to GitPushAnyBranch's branch-namespace confinement: this type
+// says WHAT a push may touch, not WHERE it may land (issue #57).
+//
+// DenyNewExecutables and MaxFileSizeMiB are reserved for a later change —
+// adding them here would be new fields, not this one's plumbing.
+//
+// A closed struct, deliberately not a free-form rules map: an open map cannot
+// be policed by the strict-field JSON decoder (DisallowUnknownFields) or by
+// TestPolicyDoc_EveryFieldHasRow's reflection-based census, so a typo'd key
+// would silently do nothing instead of failing at write time.
+//
+// This type stores and VALIDATES, and DenyPathSegments is the one reading of a
+// deny_paths entry; how the segments match is the git broker's
+// (internal/egress/proxy/push_rules.go), which reads them on both brokered
+// lanes and documents the pattern language, the ceilings and what a pack
+// cannot show.
+type PushRulesSpec struct {
+	// DenyPaths are path patterns (e.g. ".github/workflows/**") the broker
+	// refuses in a push: "**" crosses path segments, "*" and "?" do not, and
+	// the pattern is anchored at the repository root. A trailing "/" means
+	// everything beneath the directory (DenyPathSegments).
+	DenyPaths []string `json:"deny_paths,omitempty"`
+	// MaxInspectPackMiB caps how much of an incoming push the broker buffers
+	// before refusing it as too large. 0/absent takes the broker's own default,
+	// which sits below the authored maximum so that raising this is a real
+	// remedy; the authored value is bounded 0..64 by validatePolicySpec.
+	MaxInspectPackMiB int `json:"max_inspect_pack_mib,omitempty"`
+	// RequireReviewPaths are patterns in DenyPaths' language whose match HOLDS
+	// a push for an admin's decision (an ApprovalPushContent row) instead of
+	// refusing it. A deny match wins over a review match; an unattended run
+	// refuses rather than holding, since nobody is there to be asked.
+	RequireReviewPaths []string `json:"require_review_paths,omitempty"`
+	// HoldSeconds is how long a held push waits for that decision before it
+	// is refused. 0/absent means 120; bounded 0..600, the proxy's own hold
+	// ceiling, by validatePolicySpec.
+	HoldSeconds int `json:"hold_seconds,omitempty"`
+}
+
+// IsSet reports whether this spec carries an actual rule, which is what every
+// reader means by "the policy sets push_rules" — NOT a bare != nil. An
+// all-zero-but-non-nil *PushRulesSpec (a literal `push_rules: {}`, or the
+// struct a clamp leaves behind) says nothing about what a push may touch, and
+// must read exactly like an absent one wherever the field is consulted:
+// composer's clamp and risk grade, and the broker's no-thin advertisement and
+// enforcement step (internal/egress/proxy). One method so those readers cannot
+// drift into disagreeing about whether a run has content rules at all.
+func (s *PushRulesSpec) IsSet() bool {
+	return s != nil && (len(s.DenyPaths) > 0 || len(s.RequireReviewPaths) > 0 || s.MaxInspectPackMiB > 0)
+}
+
+// DenyPathSegments is the one reading of a push_rules.deny_paths entry, shared
+// by write-time validation and the broker's matcher so the two cannot disagree
+// about what an entry means.
+//
+// A leading "/" is dropped: patterns are anchored at the repository root
+// either way. A trailing "/" means everything beneath that directory — the
+// .gitignore and CODEOWNERS spelling — so "infra/" reads as "infra/**". An
+// empty, "." or ".." segment is refused: git never stores a path containing
+// one, so "./infra/**" or "infra//**" would match nothing, and a deny rule that
+// silently matches nothing reads as enforcement that is not there. Invalid
+// UTF-8 is refused so validation's byte-length and rune-based control-character
+// bounds read the same well-formed string, and leading or trailing whitespace
+// is refused as almost certainly a typo.
+func DenyPathSegments(pattern string) ([]string, error) {
+	if !utf8.ValidString(pattern) {
+		return nil, fmt.Errorf("%q is not valid UTF-8", pattern)
+	}
+	p := strings.TrimPrefix(pattern, "/")
+	if strings.TrimSpace(p) != p {
+		return nil, fmt.Errorf("%q has leading or trailing whitespace (almost certainly a typo)", pattern)
+	}
+	if strings.HasSuffix(p, "/") {
+		p += "**"
+	}
+	segs := strings.Split(p, "/")
+	for _, seg := range segs {
+		if seg == "" || seg == "." || seg == ".." {
+			return nil, fmt.Errorf("%q has an empty, \".\" or \"..\" path segment, which no git path contains", pattern)
+		}
+	}
+	return segs, nil
 }
 
 // ToolEffect is what a matching ToolRule does with the call.
@@ -328,6 +428,12 @@ func (s RunPolicySpec) Clone() RunPolicySpec {
 	if s.Resources != nil {
 		r := *s.Resources
 		out.Resources = &r
+	}
+	if s.PushRules != nil {
+		pr := *s.PushRules
+		pr.DenyPaths = append([]string(nil), s.PushRules.DenyPaths...)
+		pr.RequireReviewPaths = append([]string(nil), s.PushRules.RequireReviewPaths...)
+		out.PushRules = &pr
 	}
 	return out
 }
@@ -453,8 +559,7 @@ func (m WorkspaceMount) ReadOnlyOrDefault() bool {
 // clones the remote's default branch, unchanged from before this field
 // existed. Carried as a 4th tab-separated field in WARDYN_REPOS
 // (buildRepoRecords, runs_scm.go) for agent-run-lib.sh's clone_one to check
-// out (W9-S1-3 — previously advertised on the source's identity but never
-// actually honored by any clone).
+// out.
 type WorkspaceRepo struct {
 	Repo   string `json:"repo"`
 	Target string `json:"target,omitempty"`

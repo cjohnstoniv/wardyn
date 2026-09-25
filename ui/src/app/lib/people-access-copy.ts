@@ -7,9 +7,13 @@
 // table from docs/design/people-access-prompt.md §7, plus its Adjudication
 // section, transcribed verbatim. The People step's role-mappings editor
 // (setup/access-panel.tsx, step-bodies.tsx's DeploymentStep multi-user branch)
-// and the sign-in screen's reworded auth_error arms (sign-in.tsx) read these
-// instead of retyping the copy, so the shipped wording can't drift from the
-// reviewed mock (docs/design/people-access-mock/index.html).
+// reads these instead of retyping the copy, so the shipped wording can't
+// drift from the reviewed mock (docs/design/people-access-mock/index.html).
+//
+// The sign-in screen's own copy (including its three reworded auth_error
+// arms, formerly a SIGNIN export here under §7.7) moved to
+// ui/src/app/lib/sign-in-copy.ts in #457 (docs/design/
+// signin-first-contact-canon.md) — one screen's strings, one home.
 //
 // Pure TS — no React, no fetch, no DOM. Same discipline as permissions-copy.ts
 // (permissions.tsx:11-13): the component that consumes this adds NO copy of
@@ -21,8 +25,8 @@
 // access-panel.tsx's withMono helper), not baked into the string itself.
 //
 // Casing rule (§7.2): a {role}/{defaultRole} interpolated INSIDE a sentence is
-// lowercase ("admin"/"security admin"/"member"). PEOPLE.ROLE_ADMIN /
-// ROLE_SECURITY_ADMIN / ROLE_MEMBER below are the ONLY title-case forms — the
+// lowercase ("admin"/"security admin"/"user"). PEOPLE.ROLE_ADMIN /
+// ROLE_SECURITY_ADMIN / ROLE_USER below are the ONLY title-case forms — the
 // chip/label shape — and a sentence takes the chip's LOWERCASE rather than the
 // chip as-is; access-panel.tsx's roleLabelInSentence is the one derivation that
 // owns that lowering (a fourth tier is one case there, not a new rule here).
@@ -30,7 +34,7 @@
 export const PEOPLE = {
   TABLE_TITLE: "Role mappings",
   TABLE_LEAD:
-    "A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or member.",
+    "A value — an Entra App Role, a groups-claim entry, or an email — mapped to admin or user.",
   EFFECT_NOTE:
     "Takes effect at next sign-in. A person already signed in keeps the role they were given until then.",
   COL_VALUE: "Value",
@@ -40,16 +44,19 @@ export const PEOPLE = {
   ROLE_ADMIN: "Admin",
   // The 0.7 third tier, frozen in docs/design/governance-prompt.md §7.9 as
   // DIRECTORY.ROLE_SECURITY_ADMIN. It lives HERE, next to ROLE_ADMIN/
-  // ROLE_MEMBER, because §7.9 says so in as many words ("one string for all
+  // ROLE_USER, because §7.9 says so in as many words ("one string for all
   // three" — picker option, table chip, mapped-role label — "next to
-  // PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_MEMBER, which is why it is title case AS
+  // PEOPLE.ROLE_ADMIN / PEOPLE.ROLE_USER, which is why it is title case AS
   // THE CHIP/LABEL FORM"). A sentence takes its lowercase — see the casing
   // rule above.
   // When Phase 6's governance-copy.ts transcribes §7.9's DIRECTORY block for
   // the combobox, it re-exports this constant rather than retyping the
   // string: two homes for one frozen label is how they drift.
   ROLE_SECURITY_ADMIN: "Security admin",
-  ROLE_MEMBER: "Member",
+  ROLE_USER: "User",
+  // The built-in user type's name, for when GET /access carries no list to
+  // read it from. A "user" row's chip shows its type's name (UT-2b).
+  TYPE_STANDARD: "Standard user",
   SOURCE_CHART: "From your chart",
   SOURCE_CONSOLE: "Console",
   CHART_HINT: "Edit in your chart values.",
@@ -161,6 +168,13 @@ export const PREVIEW = {
   RESULT_LEGACY: (role: string) =>
     `Would sign in as ${role} — no mappings are configured; the operator allowlist decides.`,
   RESULT_UNKNOWN: "Couldn't check this against your mappings — try again.",
+  // 0.8 user types (packet A canon): the built-in type lost to a custom one,
+  // two custom types tie, or a mapping names a type that doesn't exist.
+  STANDARD_LOST: (values: string) => `${values} also matched, but Standard user never wins against another type.`,
+  RESULT_TIED: (count: number, pairs: string, priority: number) =>
+    `${count === 2 ? "Two" : count} types tie. ${pairs} ${count === 2 ? "both" : "all"} match at priority ${priority}, so this sign-in would be refused. Give one a higher priority.`,
+  RESULT_TYPE_MISSING: (ids: string) =>
+    `Would be denied at sign-in — ${ids} isn't a user type that exists. Create it, or change the mapping that names it.`,
 } as const;
 
 export const ACCESS_STATE = {
@@ -173,18 +187,18 @@ export const ACCESS_STATE = {
   FETCH_FAILED_RETRY: "Retry",
 } as const;
 
-// §7.7 — SIGNIN, the reworded auth_error arms sign-in.tsx's authErrorMessage
-// renders. Only these three keys: the other auth_error codes are unchanged
-// and stay authored directly in sign-in.tsx (out of scope this round).
-export const SIGNIN = {
-  NO_ROLE:
-    "Your account has no Wardyn role assigned. Ask your Wardyn admin to add you to a role mapping (WARDYN_OIDC_ROLE_MAP or WARDYN_OIDC_OPERATOR_EMAILS, or the equivalent on the People step).",
-  EMAIL_VERIFIED_ABSENT:
-    "Your identity provider doesn't send an email_verified claim at all (common on Entra ID), so this console can't confirm the email on its own. Ask your Wardyn admin to map your role by App Role or group instead (WARDYN_OIDC_ROLE_MAP, or the People step).",
-  ROLE_CHECK_UNAVAILABLE: "Couldn't check your access — try again, or contact your admin.",
-  // DRAFT (M2 canon pending): role is three-valued (0.7 SSO Phase 3) — this
-  // sentence must name all three; naming only "admin or member" tells a
-  // security admin they'd sign in as one of the two when neither is true.
-  ROLE_SOURCE:
-    "Your role — admin, security admin or member — comes from your SSO role assignment. Everyone is an admin only when neither a role map nor the operator allowlist is set.",
-} as const;
+// #484 — the two pieces of the admin-written request-access help the SIGN-IN
+// page needs (the People-step card's own strings live in access-posture-copy.ts:
+// this module is in the entry chunk through sign-in.tsx, and the card is not).
+// The link's one fixed label (Q457-7), frozen in docs/design/admin-access-canon.md.
+export const SIGNIN_HELP_LINK_LABEL = "Request access";
+
+// Q457-6: the four auth_error codes (internal/auth/oidc's authError* consts)
+// that carry the admin's help — the refusals a person cannot clear alone.
+// Every other refusal (a timeout, a config error, the generic arm) gets none.
+export const SIGNIN_HELP_REFUSALS: ReadonlySet<string> = new Set([
+  "no_role",
+  "email_domain",
+  "claims_overage",
+  "email_verified_absent",
+]);

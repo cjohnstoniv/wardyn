@@ -138,6 +138,39 @@ type GovernanceLimits struct {
 	// rubric": resolveRunAutonomy (#97) treats it exactly like a member with no
 	// assigned profile at all.
 	AutonomyRubric *AutonomyRubric `json:"autonomy_rubric,omitempty"`
+	// RunLimits is embedded, so its seven fields sit flat on the limits wire
+	// object beside the ones above: ONE field set, the same one a run captures
+	// at create (AgentRun.RunLimits).
+	RunLimits
+}
+
+// RunLimits bound how long a run lives and how long it waits for a decision
+// (long-holds design rev 4, §2.2). Zero values keep today's behaviour: no end,
+// the deployment's approval expiry as the wait, no idle pause.
+//
+// They bind every run under a profile, a security admin's included; only a
+// super admin's run skips them, because effectiveCeiling resolves no profile
+// for an operator.
+type RunLimits struct {
+	// MaxEndAheadSec is the furthest ahead of NOW a run's end may be set. 0 is
+	// no limit. Extending within it never needs UserChangesLimits: extending
+	// is the lease.
+	MaxEndAheadSec int `json:"max_end_ahead_sec,omitempty"`
+	// DefaultEndSec is a new run's end, from create. 0 means MaxEndAheadSec;
+	// when both are 0 a run has no end.
+	DefaultEndSec int `json:"default_end_sec,omitempty"`
+	// AllowNoEnd offers "No end" to a user who may change limits.
+	AllowNoEnd bool `json:"allow_no_end,omitempty"`
+	// MaxWaitSec / DefaultWaitSec are the longest and the default wait for a
+	// decision. 0 is the deployment's approval expiry, which also caps both.
+	MaxWaitSec     int `json:"max_wait_sec,omitempty"`
+	DefaultWaitSec int `json:"default_wait_sec,omitempty"`
+	// UserChangesLimits is the one gate: the user may shorten the end, set No
+	// end, or change the wait.
+	UserChangesLimits bool `json:"user_changes_limits,omitempty"`
+	// PauseIdleAfterSec pauses a run nobody is using after this long. 0 pauses
+	// only runs waiting for a decision.
+	PauseIdleAfterSec int `json:"pause_idle_after_sec,omitempty"`
 }
 
 // AutonomyLevel is one rung on the autonomy ladder a governance profile's
@@ -287,17 +320,27 @@ type AutonomyPosture struct {
 }
 
 // AutonomyResolution is what resolveRunAutonomy (#97) decides for one run: the
-// level, the posture that produced it, and which rubric field bound the
+// level, the posture that produced it, and every rubric field that bound the
 // result — the "level, the posture and what bound it" #77 asks to be
 // provenance on the create audit row, the frozen AgentRun.AutonomyLevel, and
-// the preflight response. Bound is empty when nothing capped the level (no
-// profile, no rubric, or a posture the rubric left unset) — the zero value
-// throughout, matching every other GovernanceLimits field's "empty means
-// unrestricted" rule.
+// the preflight response.
+//
+// BoundBy is a LIST, and that is a wire decision rather than a convenience.
+// The fold is a min() over three axes, so rows TIE at the resolved level
+// routinely — a sealed, grant-less CC3 run under a rubric that caps all three
+// of those postures at L1 is bound by all three. Naming one of them in a fixed
+// order would send an admin to edit a row they can raise without the level
+// moving, still capped by the causes they were never shown. Every tied cause
+// is named, in the fixed field order internal/composer/autonomy.go folds in,
+// so the sentence is complete and identical at both doors.
+//
+// Empty when nothing capped the level (no profile, no rubric, or a posture the
+// rubric left unset) — the zero value throughout, matching every other
+// GovernanceLimits field's "empty means unrestricted" rule.
 type AutonomyResolution struct {
 	Level   AutonomyLevel   `json:"level"`
 	Posture AutonomyPosture `json:"posture"`
-	Bound   string          `json:"bound,omitempty"`
+	BoundBy []string        `json:"bound_by,omitempty"`
 }
 
 // GovernanceProfile is one named, assignable ceiling (migration 0052's

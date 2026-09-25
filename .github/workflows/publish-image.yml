@@ -7,8 +7,14 @@ name: Publish wardynd image
 # forever (see RELEASING.md "Container images" and
 # deploy/helm/wardyn/README.md).
 #
-# Runs on push to main only: ":latest" + ":sha-<short-sha>", the CONTINUOUS
-# (unsigned, main-tip) half of image publishing. A vX.Y.Z release TAG push no
+# Runs after CI passes on a push to main: ":latest" + ":sha-<short-sha>", the
+# CONTINUOUS (main-tip) half of image publishing. It used to run on the push
+# itself, in parallel with CI, so a red commit still became :latest — and
+# :latest is what deploy/desktop/install.sh and wardyn-desktop.sh pull. Now the
+# `gate` job asks scripts/ci-green-for-sha.sh whether every CI push run on the
+# commit, on that branch, passed, and `publish-image` runs only on a yes. That
+# holds for a manual dispatch too: a dispatch on a red commit skips. :latest
+# therefore lags main by one CI run. A vX.Y.Z release TAG push no
 # longer triggers this file — that is now .github/workflows/release.yml's job
 # (cosign-signed, all five images this release ships, not wardynd alone). The
 # two used to both fire on the same tag push, racing to publish the identical
@@ -31,7 +37,9 @@ name: Publish wardynd image
 # reason — that matrix already ran (and had to pass) on the commit before it
 # was tagged. Never runs on pull_request: a PR must never publish.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -53,12 +61,58 @@ permissions:
   id-token: write
 
 jobs:
+  # Fails closed: publish-image needs green == 'true', so a red, pending or
+  # missing CI run skips it and an API error fails this job. The `if` drops the
+  # CI runs that can never publish before a runner starts: pull requests
+  # (including a fork's branch named main) and anything not green.
+  gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      green: ${{ steps.ci.outputs.green }}
+      sha: ${{ steps.ci.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Require green CI on the commit
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # Only the triggering branch's runs: a release fast-forwards the same
+          # commit onto release/X.Y, whose run may still be going. Empty on a
+          # dispatch against a tag ref, which counts every branch's runs.
+          BRANCH: ${{ github.event.workflow_run.head_branch || (github.ref_type == 'branch' && github.ref_name) || '' }}
+        run: |
+          rc=0
+          scripts/ci-green-for-sha.sh "$SHA" "$BRANCH" || rc=$?
+          case "$rc" in
+            0) green=true ;;
+            1) green=false; echo "::notice::CI is not green on $SHA; not publishing" ;;
+            *) exit "$rc" ;;
+          esac
+          { echo "green=$green"; echo "sha=$SHA"; } >> "$GITHUB_OUTPUT"
+
   publish-image:
+    needs: gate
+    if: needs.gate.outputs.green == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # The commit CI passed on, not the branch tip: under workflow_run,
+      # github.sha is main's tip at the time this run started.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
@@ -68,16 +122,16 @@ jobs:
       # (v-prefix stripped, matching Chart.yaml's appVersion) added on a
       # vX.Y.Z tag. Hand-rolled in a few lines rather than pulling in
       # docker/metadata-action for three strings. Via env, not `${{ }}`
-      # inside the script body (ci.yml's screenshots-fresh job sets this
-      # precedent).
+      # inside the script body.
       - name: Compute image tags
         id: tags
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           EXTRA_TAG: ${{ inputs.extra_tag }}
+          SHA: ${{ needs.gate.outputs.sha }}
         run: |
-          tags=("ghcr.io/cjohnstoniv/wardynd:sha-${GITHUB_SHA::7}")
+          tags=("ghcr.io/cjohnstoniv/wardynd:sha-${SHA::7}")
           if [ "$REF_TYPE" = "branch" ] && [ "$REF_NAME" = "main" ]; then
             tags+=("ghcr.io/cjohnstoniv/wardynd:latest")
           fi
@@ -93,7 +147,7 @@ jobs:
             echo "TAGEOF"
           } >> "$GITHUB_OUTPUT"
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v3
-      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         id: build
         with:
           context: .

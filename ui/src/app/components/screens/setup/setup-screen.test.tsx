@@ -46,6 +46,8 @@ vi.mock("../../../lib/api/health", () => ({
     // (its own independent fetch) both GET the site config — default to the
     // unconfigured zero value.
     getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    // #484's People-step help card reads the same document with its ETag.
+    getSiteConfigSnapshot: () => getSiteConfigMock().then((siteConfig: unknown) => ({ siteConfig, etag: null })),
     putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
     // Corporate network's connectivity gate (corp-network-step.tsx) — the
     // walkthroughs below aren't testing the gate itself, so they clear it with
@@ -106,12 +108,15 @@ function renderScreen(ui: Parameters<typeof render>[0], route = "/setup") {
 // E2 provenance is additive/optional. The substrate map (in the shared default)
 // names the concrete runtime each LIVE tier runs as; ready barrier cards render
 // it. This suite's own pin is its `checks` array (gvisor/loopback/kvm/macos-kvm),
-// reused across the review-step assertions below.
+// reused across the review-step assertions below. loopback carries `blocking:
+// true` on purpose — #161's own motivating case, a blocking WARN, so Review's
+// "Blocking" group is proven by `blocking`, not by grade; kvm's `fail` has no
+// `blocking` and lands under "Worth a look" for the same reason.
 function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return sharedBaseStatus({
     checks: [
       { id: "gvisor", label: "gVisor runtime", status: "ok", detail: "runsc detected" },
-      { id: "loopback", label: "Loopback bind", status: "warn", detail: "bound to 0.0.0.0" },
+      { id: "loopback", label: "Loopback bind", status: "warn", detail: "bound to 0.0.0.0", blocking: true },
       { id: "kvm", label: "/dev/kvm", status: "fail", detail: "missing", fix: "enable virtualization" },
       { id: "macos-kvm", label: "macOS note", status: "info", detail: "CC3 unavailable on macOS" },
     ],
@@ -370,7 +375,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeEnabled();
     });
 
-    it("HIGH-1: from a demo, Back into Integrations works while Workspaces stays gated", async () => {
+    it("from a demo, Back into Integrations works while Workspaces stays gated", async () => {
+      // ticket: HIGH-1
       renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sealed-box");
       await screen.findByRole("heading", { name: /the sealed box/i });
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
@@ -531,7 +537,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // configuring it reads "Skipped" in the rail instead of a perpetual "Optional".
   // Exercised via Integrations, since the corporate-network steps are folded
   // into it and this is where that coverage now lives.
-  describe("A4 — Skipped state", () => {
+  describe("Skipped state", () => {
+    // ticket: A4
     it("navigating past Integrations without connecting anything marks its rail badge Skipped", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
@@ -711,13 +718,15 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await user.click(screen.getByRole("button", { name: /^next: review$/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
-    expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
-    expect(screen.getByText("/dev/kvm")).toBeInTheDocument(); // fail (Blocking)
+    expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // blocking warn (Blocking)
+    expect(screen.getByText("/dev/kvm")).toBeInTheDocument(); // non-blocking fail (Worth a look)
     expect(screen.getByText("macOS note")).toBeInTheDocument(); // info (Ready group)
     // the fail row's client-absent fix falls through to the backend-provided fix
     expect(screen.getByText(/enable virtualization/i)).toBeInTheDocument();
-    // grouped headings prove the rollup, not a flat dump
-    expect(screen.getByText("Blocking")).toBeInTheDocument();
+    // grouped headings prove the rollup, not a flat dump; a blocking WARN
+    // lands under "Blocking", not a graded-only "Worth a look" (#161).
+    expect(screen.getByText("Blocking").closest("section")).toHaveTextContent("Loopback bind");
+    expect(screen.getByText("Worth a look").closest("section")).toHaveTextContent("/dev/kvm");
 
     // Exactly 1 — the orchestrator's own mount, and nothing this walk touched
     // re-fetches the same status a second time.
@@ -767,7 +776,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
   // E2 — setup-check provenance
 
-  it("environment step names the concrete substrate each ready tier runs as (E2)", async () => {
+  it("environment step names the concrete substrate each ready tier runs as", async () => {
+    // ticket: E2
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // render settled
     // baseStatus runner has CC1+CC2 ready with a substrate map; each ready column
@@ -785,7 +795,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
   // E3 — default barrier tier selection
 
-  it("preselects the resolved default barrier, moves on a click (in-session only), and keeps a todo card's setup command working (E3)", async () => {
+  it("preselects the resolved default barrier, moves on a click (in-session only), and keeps a todo card's setup command working", async () => {
+    // ticket: E3
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByRole("heading", { name: /pick your barrier/i });
 

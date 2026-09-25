@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -49,21 +50,36 @@ const modelAccessAgent = "claude-code"
 //     (internal/secretstore/pg), so the naive owner-scoped read would serve the
 //     admin's session to a member with no capture of their own. The read here
 //     uses For(owner).List() first and only Gets a name that list contains.
-//   - resolveBedrockAuth's bearer / ~/.aws-mount / static-key arms are all bare
+//   - resolveBedrockAuth's ~/.aws-mount / static-key arms are bare
 //     operator-namespace reads, so they are SKIPPED under perUser as well — a
 //     credential must never silently change source.
+//
+// Under perUser the row also names ONE of the two lanes a member can hold as
+// their own — their captured AWS SSO session or their own stored bearer — and
+// bearer records which. A resolve reads only that lane: a member holding both
+// must not have the other one fire instead and be refused for it.
 //
 // An EMPTY owner under perUser is a credential nobody owns: it resolves as
 // not-configured, never as the operator's.
 type awsSSOScope struct {
 	perUser bool
 	owner   string
+	// bearer: the per_user row declares bedrock_bearer, not bedrock_sso. Zero
+	// is the SSO lane, which is what per_user meant before a member could store
+	// a bearer. Meaningless under shared, where both are operator reads.
+	bearer bool
 }
 
 // namespaced reports whether this scope names a per-principal namespace a read
 // can actually be made in. False under perUser with no owner — the fail-closed
 // direction, since the alternative is reading the operator's row.
 func (sc awsSSOScope) namespaced() bool { return sc.perUser && sc.owner != "" }
+
+// readsBearer / readsSSO report whether a resolve under sc may select the
+// stored bearer / the captured AWS SSO session: always under shared (one
+// precedence chain), and under per_user only the lane the row declares.
+func (sc awsSSOScope) readsBearer() bool { return !sc.perUser || sc.bearer }
+func (sc awsSSOScope) readsSSO() bool    { return !sc.perUser || !sc.bearer }
 
 // awsSSOScopeIsMechanism reports whether sc names the shared admin bearer
 // token under a per_user row — a MECHANISM, not a person: no credential of
@@ -113,7 +129,7 @@ func awsSSOScopeFor(sc types.SiteConfig, agentID, subject string) awsSSOScope {
 	if !ok || row.Disabled || row.CredentialSource != types.CredentialSourcePerUser {
 		return awsSSOScope{}
 	}
-	return awsSSOScope{perUser: true, owner: subject}
+	return awsSSOScope{perUser: true, owner: subject, bearer: row.Mechanism == types.AgentMechanismBedrockBearer}
 }
 
 // setupStatusSSOScope is the AWS SSO namespace a /setup/status READ answers
@@ -239,15 +255,13 @@ const harnessLoginMechanismPrincipalRefusal = "this deployment gives each person
 
 // refuseHarnessLoginMechanismPrincipal writes the 422 refusal for a per_user
 // row reached by the shared admin-bearer-token principal, audits it — the
-// SIBLING refusals in this same function, denyMemberField/
+// SIBLING refusals in this same function, refuse/
 // denyMemberCapability, both audit — this is the one refusal on the
 // credential-capture route an operator's own CI job hits with no error
 // budget, and a row is how they find out it stopped capturing — and returns
 // false so authorizeHarnessLogin can `return types.AgentProvider{}, s.refuse...(w, r)`.
 func (s *Server) refuseHarnessLoginMechanismPrincipal(w http.ResponseWriter, r *http.Request) bool {
-	writeError(w, http.StatusUnprocessableEntity, harnessLoginMechanismPrincipalRefusal)
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"authz.denied", "setup.harness_login", "denied", mustJSON(map[string]any{"reason": "harness_login_mechanism_principal"})))
+	s.refuse(w, r, authz.Deny(authz.ReasonHarnessLoginMechanismPrincipal, "setup.harness_login", harnessLoginMechanismPrincipalRefusal))
 	return false
 }
 

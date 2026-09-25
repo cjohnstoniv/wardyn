@@ -1,3 +1,30 @@
+## Intermediate tags 0.6.6 through 0.7.7, not individually re-scanned (still pullable)
+
+`wardynd`, `wardyn-proxy`, `agent-base`, `agent-codex-cli` and `agent-aws-sso`
+were tagged and published at every one of 0.6.6 through 0.7.7 (all still
+pullable — `gh api .../packages/container/agent-base/versions` lists them),
+but this file was not regenerated for any of them; the last full scan before
+the one in the body above (tag 0.7.8) was 0.6.6, recorded at commit
+`9eaeca03` (`deploy/images/THIRD-PARTY-GPL.md` at that revision — `git show
+9eaeca03:deploy/images/THIRD-PARTY-GPL.md`). Comparing that 0.6.6 snapshot
+against the current 0.7.8 scan above, package-name-for-package-name, per
+image: no component was dropped between the two, and the only version-string
+changes are `libevent-core-2.1-7` (`agent-base`/`agent-codex-cli`/
+`agent-aws-sso`) gaining a `+deb12u1` point release, `ca-certificates`
+appearing in `wardynd`/`wardyn-proxy` (it was not flagged GPL/LGPL in the
+0.6.6 scan), and `agent-aws-sso` additionally carrying `libevent-core-2.1-7`
+and `libutempter0`. The corresponding-source obligation for 0.6.6 through
+0.7.7 is discharged the same way as 0.7.8's: `https://snapshot.debian.org`
+pinned to each package's own version, which this note and the 0.6.6 commit
+above are enough to reconstruct even though no per-tag table was generated.
+
+Unlike the section below, these tags have not been withdrawn: per the header's
+own rule (this offer stands while an image remains pullable, and for three
+years after the last copy of it is conveyed), the offer for 0.6.6 through
+0.7.7 stands now because the tags are still pullable — not under the
+"conveyance has ceased" rule that governs the withdrawn and removed artifacts
+that follow. (added 2026-09-21)
+
 ## Previously conveyed, no longer published
 
 Offers in this section cover copies conveyed while the listed tags were

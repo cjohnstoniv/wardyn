@@ -7,9 +7,9 @@
 // already at the check-file-size.sh ceiling. Its own copy of the screen's
 // mock harness, same shape as new-run-screen-saved-policy.test.tsx's.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useNavigate, type NavigateFunction } from "react-router-dom";
 
 // Which barriers this host can BUILD — read off getSetupStatusMock's
 // runner.confinement_classes (the same field every other surface reads).
@@ -35,6 +35,7 @@ vi.mock("../../../lib/api/runs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
   return {
     isCredentialRefusal: actual.isCredentialRefusal,
+    isGitCredentialRefusal: actual.isGitCredentialRefusal,
     runs: {
       createRun: (...a: unknown[]) => createRunMock(...a),
       listRuns: () => Promise.resolve([]),
@@ -275,6 +276,42 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
     await user.click(screen.getByRole("button", { name: /Launch run/ }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].confinement_class).toBeUndefined();
+  });
+
+  // The top bar's New run navigates to /runs/new with no state while this
+  // screen stays mounted. The mount-time /setup/status read must not run again
+  // off the cleared state and reset the barrier under the rest of the clone.
+  it("keeps the cloned barrier when a stateless /runs/new navigation lands on the mounted form", async () => {
+    mockConfinementClasses = ["CC1", "CC2", "CC3"];
+    let navigate!: NavigateFunction;
+    function CaptureNavigate() {
+      navigate = useNavigate();
+      return null;
+    }
+    render(
+      <MemoryRouter
+        initialEntries={[
+          { pathname: "/runs/new", state: { prefill: { ...prefill, state: { ...prefill.state, confinementClass: "CC2" } } } },
+        ]}
+      >
+        <CaptureNavigate />
+        <OperatorProvider operator>
+          <NewRunScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: "Wall" })).toHaveAttribute("aria-checked", "true"),
+    );
+
+    act(() => {
+      void navigate("/runs/new");
+    });
+    expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    expect(createRunMock.mock.calls[0][0].confinement_class).toBe("CC2");
   });
 
   // The negative control: an ordinary /runs/new is untouched by any of this.

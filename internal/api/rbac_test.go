@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the minimal viewer/operator role gate (requireOperator) ─────────────────
+// the minimal viewer/operator role gate (requireOperator)
 
 const (
 	rbacOperator = "Ops@Corp.Example" // as configured: mixed case, on purpose
@@ -28,9 +28,13 @@ const (
 )
 
 // rbacStore serves the READ routes the viewer must keep. Every other store
-// method is nil (embedded interface), which is fine: the gated write handlers
-// all validate the body/params before they touch the store, so an operator
-// request in these tests stops at a 4xx without ever dereferencing it.
+// method is nil (embedded interface, via noGovernanceStore), which is fine for
+// most of gatedRoutes below: the gated write handlers all validate the
+// body/params before they touch the store, so an operator request in these
+// tests stops at a 4xx without ever dereferencing it. PUT /api/v1/site-config
+// is the one exception — handlePutSiteConfig carries the existing document
+// forward and always writes, even for an empty "{}" body — so it needs its own
+// stub rather than relying on that pattern (#338).
 type rbacStore struct{ noGovernanceStore }
 
 func (rbacStore) ListPolicies(context.Context) ([]types.RunPolicy, error) {
@@ -41,6 +45,9 @@ func (rbacStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 }
 func (rbacStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
+}
+func (rbacStore) PutSiteConfig(_ context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
+	return cfg, nil
 }
 
 // ListRoleMappings: GET /api/v1/access is in gatedRoutes below and — unlike
@@ -73,7 +80,7 @@ func rbacServer(t *testing.T, operatorEmails ...string) *Server {
 // IdP. The encoding is the one oidc.encodeSession produces:
 // base64url(json(Session)) "." base64url(HMAC-SHA256(json)).
 //
-// role must be oidc.RoleAdmin or oidc.RoleMember — decodeSession treats an
+// role must be oidc.RoleAdmin or oidc.RoleUser — decodeSession treats an
 // empty Role as no session (the pre-0.5-cookie guard), so every session this
 // helper mints needs one explicitly. Since B2, role (not email-list
 // membership) is what requireOperator/isOperator gate on (see TestIsOperator
@@ -87,7 +94,7 @@ func ssoSession(t *testing.T, sub, email, role string) *http.Cookie {
 	// would look like a pre-0.7 one and every SSO test would silently fall
 	// through to the admin-token path.
 	payload, err := json.Marshal(oidc.Session{
-		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role,
+		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role, UserType: "standard",
 		Expiry: time.Now().UTC().Add(time.Hour),
 	})
 	if err != nil {
@@ -114,7 +121,7 @@ func doSSO(t *testing.T, srv *Server, method, path string, cookie *http.Cookie, 
 		r.AddCookie(cookie)
 	}
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 
@@ -141,7 +148,7 @@ func TestIsOperator(t *testing.T) {
 		{"admin token: no session, is operator", context.Background(), true},
 		{"local mode: no session, is operator", withLocalPrincipal(context.Background(), "local:alice"), true},
 		{"sso session, admin role, is operator", operatorCtx("sub-1", rbacOperator, oidc.RoleAdmin), true},
-		{"sso session, member role, is not operator", operatorCtx("sub-2", rbacViewer, oidc.RoleMember), false},
+		{"sso session, member role, is not operator", operatorCtx("sub-2", rbacViewer, oidc.RoleUser), false},
 		// Defense-in-depth: B1's decodeSession refuses to hand out a session with
 		// an empty role at all, so this should be unreachable in practice — but
 		// isOperator must still fail closed, not open, if it ever were.
@@ -232,9 +239,9 @@ var gatedRoutes = []struct{ method, path string }{
 	// of here, this table's own GET entry needs rbacStore.ListRoleMappings
 	// stubbed above so the admin-passes probe actually reaches the handler.
 	{http.MethodGet, "/api/v1/access"},
-	// 8. The site-config READ (R1). Its PUT is item 5 above; the GET returns the
-	// same whole document, integration credential refs included, so both belong
-	// to the same tier. A member used to get it on a console page load.
+	// 8. The site-config read. Its PUT is item 5 above; the GET returns the same
+	// whole document, integration credential refs included, so both belong to
+	// the same tier: a member must not get it on a console page load.
 	{http.MethodGet, "/api/v1/site-config"},
 	{http.MethodPost, "/api/v1/access/mappings"},
 	{http.MethodDelete, "/api/v1/access/mappings/m1"},
@@ -244,27 +251,24 @@ var gatedRoutes = []struct{ method, path string }{
 // readRoutes are the reads in those same clusters. A member keeps all of them —
 // this gate refuses writes, it does not blind anyone.
 //
-// NOT here: GET /api/v1/approvals. B2 made it OWNERSHIP-scoped for a member
-// (item 2) rather than a flat pass-through, which needs a store/Approvals
-// fake that can answer "which runs did this principal create" — rbacServer's
-// fakeApprovals models approvals only, not run ownership.
-//
-// CORRECTED (R1): this note used to claim its "real (scoped, non-500) behavior
-// is covered by the chi.Walk-enumerated matrix in authz_test.go instead". That
-// was FALSE, and the claim is why the gap survived — the matrix classifies the
-// route classMember, but the classMember arm only calls assertNotBlocked, which
-// reads a status code and never inspects the body, so it cannot see WHICH rows
-// come back. Deleting the whole member branch from handleListApprovals left
-// `go test ./internal/api/` green. The real coverage now lives in
-// approvals_list_test.go (TestListApprovals_MemberSeesOnlyTheirOwnRuns and its
-// fail-closed twin) and, for the JOIN those rest on, in internal/store's
+// Not here: GET /api/v1/approvals. It is ownership-scoped for a member (item 2)
+// rather than a flat pass-through, which needs a store/Approvals fake that can
+// answer "which runs did this principal create" — rbacServer's fakeApprovals
+// models approvals only, not run ownership. The chi.Walk-enumerated matrix in
+// authz_test.go does not cover that behaviour: it classifies the route
+// classMember, but the classMember arm only calls assertNotBlocked, which reads
+// a status code and never inspects the body, so it cannot see which rows come
+// back. The real coverage lives in approvals_list_test.go
+// (TestListApprovals_MemberSeesOnlyTheirOwnRuns and its fail-closed twin) and,
+// for the join those rest on, in internal/store's
 // TestPG_ListApprovalsPageByRunCreator.
-// NOT here since R1: GET /api/v1/site-config, which moved to gatedRoutes above.
-// It returns the WHOLE site-config document — the upstream-proxy secret ref,
-// every integration's secret_name, and the internal proxy/SCM/artifact hosts —
-// so "this gate refuses writes, it does not blind anyone" was the wrong rule for
-// it: the read IS the disclosure. Its sibling reads GET /sources,
-// /sources/{id} and /base-images moved with it and are asserted by the
+//
+// Not here either: GET /api/v1/site-config, which is in gatedRoutes above. It
+// returns the whole site-config document — the upstream-proxy secret ref, every
+// integration's secret_name, and the internal proxy/SCM/artifact hosts — so
+// "this gate refuses writes, it does not blind anyone" is the wrong rule for it:
+// the read is the disclosure. Its sibling reads GET /sources,
+// /sources/{id} and /base-images are gated with it and asserted by the
 // chi.Walk-enumerated matrix in authz_test.go rather than duplicated here, the
 // same division of labour the approvals note above describes.
 var readRoutes = []string{
@@ -273,11 +277,11 @@ var readRoutes = []string{
 	"/api/v1/secrets",
 }
 
-// TestRequireOperator_ViewerRefusedOnEveryGatedRoute is the finding's regression:
-// a signed-in human with the MEMBER role must be refused on every gated route.
+// TestRequireOperator_ViewerRefusedOnEveryGatedRoute: a signed-in human with the
+// member role must be refused on every gated route.
 func TestRequireOperator_ViewerRefusedOnEveryGatedRoute(t *testing.T) {
 	srv := rbacServer(t, rbacOperator)
-	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleMember)
+	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleUser)
 	for _, rt := range gatedRoutes {
 		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
 			w := doSSO(t, srv, rt.method, rt.path, viewer, "{}")
@@ -314,7 +318,7 @@ func TestRequireOperator_OperatorPassesEveryGatedRoute(t *testing.T) {
 // TestRequireOperator_ViewerKeepsReads: read routes are untouched by the gate.
 func TestRequireOperator_ViewerKeepsReads(t *testing.T) {
 	srv := rbacServer(t, rbacOperator)
-	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleMember)
+	viewer := ssoSession(t, "sub-viewer", rbacViewer, oidc.RoleUser)
 	for _, path := range readRoutes {
 		t.Run(path, func(t *testing.T) {
 			w := doSSO(t, srv, http.MethodGet, path, viewer, "")
@@ -334,7 +338,7 @@ func TestRequireOperator_ViewerKeepsReads(t *testing.T) {
 // consults Config.OperatorEmails at all.
 func TestRequireOperator_RoleGatesNotEmailList(t *testing.T) {
 	srv := rbacServer(t, rbacOperator) // rbacOperator IS on the allowlist
-	memberOnList := ssoSession(t, "sub-1", rbacOperator, oidc.RoleMember)
+	memberOnList := ssoSession(t, "sub-1", rbacOperator, oidc.RoleUser)
 	adminOffList := ssoSession(t, "sub-2", rbacViewer, oidc.RoleAdmin)
 	for _, rt := range gatedRoutes {
 		t.Run("listed-email member-role "+rt.method+" "+rt.path, func(t *testing.T) {
@@ -380,7 +384,7 @@ func TestMeReportsOperatorRole(t *testing.T) {
 		wantSecurityOperator          bool
 	}{
 		{"admin role is operator", "sub-op", "ops@corp.example", oidc.RoleAdmin, true, true},
-		{"member role is not operator", "sub-viewer", rbacViewer, oidc.RoleMember, false, false},
+		{"member role is not operator", "sub-viewer", rbacViewer, oidc.RoleUser, false, false},
 		// 0.7's third tier, and the reason the second field exists: NOT an
 		// operator (the console must keep hiding the super-admin writes) while
 		// security_operator IS true (approvals/audit/permissions/governance are

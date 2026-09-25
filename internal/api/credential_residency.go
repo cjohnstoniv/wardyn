@@ -73,6 +73,11 @@ type modelCredentialFacts struct {
 	// daemon never reads that file back, so the rail names the mount instead of
 	// silently promising nothing is mounted at all.
 	StagedPlaceholder bool `json:"staged_placeholder,omitempty"`
+	// bedrockHost is the Bedrock data-plane host when the lane that RESOLVED is
+	// a Bedrock one, else "". Unexported, so neither surface publishes it: it
+	// is the autonomy gate's input (bedrockCredGradedAs), set by
+	// enforceCreateLLMMechanism from the same resolution as the fields above.
+	bedrockHost string
 }
 
 // gradeModelCredential grades where this run's model credential lands.
@@ -93,17 +98,19 @@ func gradeModelCredential(row types.AgentProvider, declared bool, lanes llmLanes
 		f.Mechanism, f.CredentialSource = string(row.Mechanism), string(row.CredentialSource)
 	}
 
-	// The one case fixed by the row rather than by a resolved lane. Under
-	// per_user the only admissible lane is the principal's OWN captured AWS SSO
-	// session — resolveBedrockAuth refuses to fall through to the operator's
-	// bearer/mount/static arms, and mechanismSatisfied admits nothing else — and
-	// that lane is resident. So the answer is the same before and after the
-	// member signs in, which is precisely the state the rail has to be honest
-	// about: a member reading it has not signed in yet.
-	if declared && row.CredentialSource == types.CredentialSourcePerUser &&
-		row.Mechanism == types.AgentMechanismBedrockSSO {
-		f.Residency = residencySandbox
-		return f
+	// The cases fixed by the ROW rather than by a resolved lane. Under per_user
+	// the admissible lane is the one the row declares and nothing else —
+	// resolveBedrockAuth reads only the principal's own session and own bearer,
+	// never the operator's bearer/mount/static arms, and mechanismSatisfied
+	// compares the exact sub-lane — so the row alone settles residency, and it
+	// settles it the same before and after the member has a credential of their
+	// own. That is precisely the state the rail has to be honest about: a member
+	// reading it has not signed in or stored a key yet.
+	if declared && row.CredentialSource == types.CredentialSourcePerUser {
+		if r := perUserRowResidency(row.Mechanism); r != "" {
+			f.Residency = r
+			return f
+		}
 	}
 
 	if !ok {
@@ -160,21 +167,41 @@ func gradeModelCredential(row types.AgentProvider, declared bool, lanes llmLanes
 // directions — "never written into the sandbox" over a run carrying resident
 // SigV4 keys is the exact defect this lane exists to remove — so it is not made.
 //
-// The per-user Bedrock SSO row is different in kind, not in confidence. It
-// admits no other lane at all: resolveBedrockAuth stops at its per-user branch
-// rather than falling through to the operator's bearer / mount / static arms,
-// and mechanismSatisfied accepts only bedrock_sso under per_user. That lane
-// materialises the captured session inside the sandbox and the in-sandbox SDK
-// mints resident role credentials from it, whatever policy, workspace or
-// integration the run carries. It is also the one state whose precise answer is
-// unavailable on demand: Preflight answers 422 for a member who has not signed
-// in — which is exactly the person deciding whether to sign in.
+// The per-user Bedrock rows are different in kind, not in confidence. They admit
+// no other lane at all: resolveBedrockAuth stops at its per-user branch rather
+// than falling through to the operator's mount / static arms, reads the bearer
+// from the caller's own namespace rather than the operator's, and
+// mechanismSatisfied accepts only the declared sub-lane under per_user. So the
+// declaration IS the lane, whatever policy, workspace or integration the run
+// carries. They are also the states whose precise answer is unavailable on
+// demand: Preflight answers 422 for a member who has no credential of their own
+// — which is exactly the person deciding whether to get one.
 //
 // A DISABLED row launches nothing, so it says nothing.
 func rowFixedResidency(row types.AgentProvider) string {
-	if row.Disabled || row.CredentialSource != types.CredentialSourcePerUser ||
-		row.Mechanism != types.AgentMechanismBedrockSSO {
+	if row.Disabled || row.CredentialSource != types.CredentialSourcePerUser {
 		return ""
 	}
-	return string(residencySandbox)
+	return string(perUserRowResidency(row.Mechanism))
+}
+
+// perUserRowResidency is where a per_user row's own lane puts the credential,
+// "" for a mechanism that is not one (types.PerUserMechanisms is the write-door
+// half of the same fact).
+//
+// bedrock_sso materialises the captured session inside the sandbox and the
+// in-sandbox SDK mints resident role credentials from it. bedrock_bearer is the
+// opposite and for the same structural reason the shared bearer lane is: a
+// static Authorization header the proxy substitutes on the wire, so the sandbox
+// holds the placeholder and never the key — whose key it is does not change
+// where it lives.
+func perUserRowResidency(m types.AgentMechanism) modelCredentialResidency {
+	switch m {
+	case types.AgentMechanismBedrockSSO:
+		return residencySandbox
+	case types.AgentMechanismBedrockBearer:
+		return residencyProxy
+	default:
+		return ""
+	}
 }

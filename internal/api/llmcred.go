@@ -8,9 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -47,9 +52,26 @@ func (s *Server) llmProviderFor(agent string) (llmProvider, bool) {
 	if !ok {
 		return p, false
 	}
-	if base, has := s.cfg.LLMGateways[p.host]; has {
+	// vendorHost is the harness catalog's compile-time public host — the key
+	// BOTH override maps use, so it must be read before p.host is possibly
+	// rewritten below.
+	vendorHost := p.host
+	if base, has := s.cfg.LLMGateways[vendorHost]; has {
 		if h := gatewayHost(base); h != "" {
 			p.host = h
+		}
+	}
+	// The operator's own header/format override (WARDYN_<VENDOR>_GATEWAY_HEADER
+	// / _GATEWAY_FORMAT, validated by ValidateLLMGateways) — independent of
+	// whether a gateway base URL is also set. Each field applies only if the
+	// operator set it; otherwise the harness catalog's vendor convention
+	// (already in p.header/p.format) survives untouched.
+	if auth, has := s.cfg.LLMGatewayAuth[vendorHost]; has {
+		if auth.Header != "" {
+			p.header = auth.Header
+		}
+		if auth.Format != "" {
+			p.format = auth.Format
 		}
 	}
 	return p, true
@@ -273,22 +295,40 @@ func ceilingBlessesClaudeCreds(ceiling types.RunPolicySpec) bool {
 	return specHasMountTarget(&ceiling, claudeCredTarget)
 }
 
-// anthropicReachable reports whether the FINAL spec's egress lets the agent reach
-// api.anthropic.com: allow-all, an exact entry, or a *.anthropic.com wildcard
-// (label-suffix semantics mirroring the proxy's policy matcher). Subscription
-// mode injects no secret, so a wildcard entry is injection-safe here — the
-// injector's exact-host rule (AllowedExactHost) is not in play.
-func anthropicReachable(spec *types.RunPolicySpec) bool {
+// anthropicReachable reports whether the FINAL spec's egress lets the agent
+// reach the host subscription mode will actually dial.
+//
+// With no gateway configured that is api.anthropic.com: allow-all, an exact
+// entry, or a *.anthropic.com wildcard. Subscription mode injects no secret via
+// this check, so a wildcard entry is injection-safe here — the injector's
+// exact-host rule (AllowedExactHost) is not in play.
+//
+// With a gateway configured (gatewayHostPort is s.anthropicGatewayHostPort()),
+// dispatch points ANTHROPIC_BASE_URL at the gateway (runs_dispatch_llm.go), so
+// ONLY the gateway's reachability counts and a vendor-host entry proves
+// nothing: judging api.anthropic.com there would mount the resident credential
+// into a run whose one model dial the proxy refuses. The question is put to the
+// proxy's own evaluator, so an exact entry, a covering wildcard, a :port
+// qualifier, allow-all and denied_domains all answer exactly as they will at
+// the CONNECT.
+func anthropicReachable(spec *types.RunPolicySpec, gatewayHostPort string) bool {
+	if gatewayHostPort != "" {
+		host, ps, err := net.SplitHostPort(gatewayHostPort)
+		port, perr := strconv.Atoi(ps)
+		if err != nil || perr != nil {
+			return false
+		}
+		v, err := proxy.NewBuiltinEvaluator(*spec).EvaluateHost(context.Background(),
+			egress.Request{Host: strings.ToLower(host), Port: port, Method: http.MethodConnect})
+		return err == nil && v == egress.VerdictAllow
+	}
 	if spec.AllowAllEgress {
 		return true
 	}
-	for _, d := range spec.AllowedDomains {
+	return slices.ContainsFunc(spec.AllowedDomains, func(d string) bool {
 		d = strings.ToLower(strings.TrimSpace(d))
-		if d == "api.anthropic.com" || d == "*.anthropic.com" {
-			return true
-		}
-	}
-	return false
+		return d == "api.anthropic.com" || d == "*.anthropic.com"
+	})
 }
 
 // specHasMountTarget reports whether the spec already carries a mount at target.
@@ -309,9 +349,11 @@ func specHasMountTarget(spec *types.RunPolicySpec, target string) bool {
 //   - the run half is the resolved integration (resident_host anthropic_subscription);
 //   - the agent is Claude (there is no Codex/OpenAI subscription-mount path);
 //   - the ceiling blesses the /home/agent/.claude mount (operator staged creds);
-//   - the final egress allows api.anthropic.com — mounting a resident OAuth
-//     credential the agent cannot use is pure downside, so refuse.
-func applyLLMCredMount(spec *types.RunPolicySpec, ceiling types.RunPolicySpec, agent string, requested bool) (bool, []string) {
+//   - the final egress reaches the host the run will dial: the configured
+//     gateway (gatewayHostPort, non-empty only when one is set), else
+//     api.anthropic.com — mounting a resident OAuth credential the agent
+//     cannot use is pure downside, so refuse.
+func applyLLMCredMount(spec *types.RunPolicySpec, ceiling types.RunPolicySpec, agent string, requested bool, gatewayHostPort string) (bool, []string) {
 	if !requested {
 		return false, nil
 	}
@@ -325,11 +367,17 @@ func applyLLMCredMount(spec *types.RunPolicySpec, ceiling types.RunPolicySpec, a
 				"(a workspace_mount targeting " + claudeCredTarget + "). Stage credentials with scripts/stage-claude-creds.sh " +
 				"and point WARDYN_DEFAULT_POLICY at the generated policy, then re-compose."}
 	}
-	if !anthropicReachable(spec) {
-		return false, []string{
-			"subscription mode requested but the clamped policy does not allow api.anthropic.com egress, so the " +
-				"credential mounts were NOT injected (a resident credential the agent cannot use is pure risk). " +
-				"The operator ceiling must list *.anthropic.com (or api.anthropic.com) verbatim."}
+	if !anthropicReachable(spec, gatewayHostPort) {
+		hostDesc, remedy := "api.anthropic.com", "The operator ceiling must list *.anthropic.com (or api.anthropic.com) verbatim."
+		if gatewayHostPort != "" {
+			hostDesc = "the configured gateway " + gatewayHostPort
+			remedy = fmt.Sprintf("The operator ceiling must allow the gateway %s (its host, or a *. wildcard covering it); "+
+				"an api.anthropic.com entry does not count, because the run dials the gateway, not the vendor.", gatewayHostPort)
+		}
+		return false, []string{fmt.Sprintf(
+			"subscription mode requested but the clamped policy does not allow %s egress, so the "+
+				"credential mounts were NOT injected (a resident credential the agent cannot use is pure risk). %s",
+			hostDesc, remedy)}
 	}
 	var warns []string
 	injected := false
@@ -610,7 +658,7 @@ func (s *Server) foldRunIntegration(ctx context.Context, owner string, spec *typ
 	// the sink: the mount is a filesystem copy of the operator's credential dir,
 	// not a token the injection endpoint ever sees.
 	if kind == types.IntegrationKindAnthropicSubscription && subscriptionLane(integ) == "resident_host" && s.cfg.SubscriptionPostureOK {
-		applyLLMCredMount(spec, s.cfg.DefaultPolicy, req.Agent, true)
+		applyLLMCredMount(spec, s.cfg.DefaultPolicy, req.Agent, true, s.anthropicGatewayHostPort())
 	}
 	return integ, kind, bedrockRef
 }
@@ -733,7 +781,7 @@ func (s *Server) reconcileLLMAccess(spec *types.RunPolicySpec, agent string, sec
 				"PROXY-SIDE — Wardyn enables TLS-MITM of api.anthropic.com and swaps in the managed token. The sandbox holds "+
 				"only an inert sentinel (no host credential is mounted or resident).", agent), true
 	}
-	if agent == "claude-code" && specHasMountTarget(spec, claudeCredTarget) && anthropicReachable(spec) {
+	if agent == "claude-code" && specHasMountTarget(spec, claudeCredTarget) && anthropicReachable(spec, s.anthropicGatewayHostPort()) {
 		// Subscription is this run's chosen transport: drop any provider api_key
 		// grant that rode along (the model sometimes proposes one). Least
 		// privilege — the human chose subscription, not a standing brokered key —

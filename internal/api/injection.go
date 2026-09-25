@@ -4,10 +4,12 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -31,11 +33,39 @@ func hostEqual(a, b string) bool {
 // UI agree on the name.
 const subscriptionOAuthSecret = types.SubscriptionOAuthSecret
 
-// subscriptionInjectionHost is the ONLY host the subscription/managed OAuth
-// sentinels may target. They resolve to a LIVE Anthropic OAuth access token,
-// which has exactly one correct destination; injecting it anywhere else would
-// exfiltrate a long-lived operator credential.
+// subscriptionInjectionHost is the vendor-default host the subscription/
+// managed OAuth sentinels may target. They resolve to a LIVE Anthropic OAuth
+// access token, which has exactly one correct destination; injecting it
+// anywhere else would exfiltrate a long-lived operator credential. See
+// subscriptionInjectionHostAllowed for the one other host this may widen to.
 const subscriptionInjectionHost = "api.anthropic.com"
+
+// subscriptionInjectionHostAllowed reports whether host is a permitted target
+// for the subscription/managed OAuth sentinel: the vendor default, or the
+// operator-configured Anthropic gateway (anthropicGatewayHost) — taken from
+// CONFIGURATION, never from host itself or anything else a grant/request
+// supplies. That distinction is the security property: an authored/inline/
+// recorded grant can never widen its own destination by naming a host that
+// happens to match; only the operator's own boot-time
+// WARDYN_ANTHROPIC_BASE_URL can add the second host this accepts.
+func (s *Server) subscriptionInjectionHostAllowed(host string) bool {
+	if hostEqual(host, subscriptionInjectionHost) {
+		return true
+	}
+	if h := s.anthropicGatewayHost(); h != "" && hostEqual(host, h) {
+		return true
+	}
+	return false
+}
+
+// subscriptionInjectionHostDesc is the human-readable list of hosts
+// subscriptionInjectionHostAllowed accepts, for refusal text.
+func (s *Server) subscriptionInjectionHostDesc() string {
+	if h := s.anthropicGatewayHost(); h != "" {
+		return subscriptionInjectionHost + " or the configured gateway " + h
+	}
+	return subscriptionInjectionHost
+}
 
 // oauthProviderForSentinel maps a grant's secret name to the OAuth token
 // provider that resolves it, if it is one of the two Anthropic OAuth sentinels.
@@ -60,6 +90,16 @@ func (s *Server) oauthProviderForSentinel(secretName string) (provider subscript
 // contract is single-sourced and the compiler (not a parity test) enforces that
 // both sides agree — see types.ResolvedInjection for why.
 type injectionResponse = types.ResolvedInjection
+
+// withStoreRow adds the row a SiteAudited read reported — its store, ref and
+// owner (secretstore.Row.AuditData) — to a site's secret.read data. A read that
+// found no row adds nothing.
+func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
+	for k, v := range row.AuditData() {
+		data[k] = v
+	}
+	return data
+}
 
 // handleInternalInjection resolves an api_key grant to its injectable header
 // value for the run's wardyn-proxy sidecar (startup mint).
@@ -89,7 +129,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// The broker enforces run ownership, kind dispatch, and audit (jti).
 	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, grantID)
 	if err != nil {
-		s.writeMintError(w, err)
+		s.writeMintError(w, r, err)
 		return
 	}
 	if minted.Kind != types.GrantAPIKey || minted.Injection == nil {
@@ -113,11 +153,11 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		// token (in cleartext on a plain-HTTP allowlist entry). This is the single
 		// sink chokepoint that protects every caller; the policy validator rejects a
 		// mis-authored host earlier as defense-in-depth.
-		if !hostEqual(minted.Injection.Host, subscriptionInjectionHost) {
+		if !s.subscriptionInjectionHostAllowed(minted.Injection.Host) {
 			s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 				"secret.read", sentinel, "failure",
 				mustJSON(map[string]any{"reason": "oauth-host-not-anthropic", "host": minted.Injection.Host, "grant_id": grantID, "source": source})))
-			writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+subscriptionInjectionHost)
+			writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+s.subscriptionInjectionHostDesc())
 			return
 		}
 		// Posture pin: refuse to resolve a SHARED subscription credential unless this
@@ -199,6 +239,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	if s.resolveAWSSSOInjection(w, r, claims, minted, grantID) {
 		return
 	}
+	// PER-PERSON AZURE DEVOPS (the fourth sentinel): the run owner's own
+	// captured Entra sign-in, redeemed for an access token, pinned to the
+	// dispatch-time snapshot and the organisation's own hosts — see
+	// resolveADOInjection.
+	if s.resolveADOInjection(w, r, claims, minted, grantID) {
+		return
+	}
 
 	// Defense-in-depth at the SINK: never resolve a sink-reserved secret (signing/
 	// session key or a resident AWS Bedrock SigV4 credential) into an injectable header
@@ -231,6 +278,14 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// bedrock-api-key is the ONE stored name whose namespace the ROSTER decides,
+	// so the owner-fallback read below never resolves it: it resolves from the
+	// namespace dispatch recorded on its own grant, or not at all — see
+	// resolveBedrockBearerInjection.
+	if s.resolveBedrockBearerInjection(w, r, claims, minted, grantID) {
+		return
+	}
+
 	// The run's OWN identity (claims.Sub) resolves it: the run's creator's own
 	// row wins, falling back to the operator's — never another member's, even
 	// one named by hand in this run's inline policy (structural: For(owner)
@@ -241,18 +296,38 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// operator's writes under "" only, so no row ever exists under those
 	// strings and the lookup falls back to the operator row: today's single
 	// namespace, unchanged, for every pre-0.7 deployment.
-	secret, err := s.cfg.Secrets.For(claims.Sub).Get(r.Context(), minted.Injection.SecretName)
+	rctx, row := secretstore.SiteAudited(r.Context())
+	secret, err := s.cfg.Secrets.For(claims.Sub).Get(rctx, minted.Injection.SecretName)
 	if err != nil {
-		// Fail closed; the proxy refuses to start without its injections.
+		// Fail closed; the proxy refuses to start without its injections. The
+		// reason tells a store outage from a credential that is gone or refused.
+		reason := "refused"
+		switch {
+		case errors.Is(err, secretstore.ErrUnavailable):
+			reason = "store-unavailable"
+		case errors.Is(err, secretstore.ErrNotFound):
+			reason = "not-found"
+		}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", minted.Injection.SecretName, "failure", nil))
-		writeError(w, http.StatusFailedDependency,
-			"secret "+minted.Injection.SecretName+" is not in the store (set it with `wardyn secret set`)")
+			"secret.read", minted.Injection.SecretName, "failure",
+			mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}, row))))
+		if reason == "store-unavailable" {
+			// Transient: the organisation's store did not answer. A distinct
+			// status, so it is never mistaken for a credential that is gone.
+			writeError(w, http.StatusServiceUnavailable,
+				"Wardyn couldn't reach the service that holds this run's credential, so it couldn't unlock it. Nothing was substituted. Try again in a moment.")
+			return
+		}
+		msg := "secret " + minted.Injection.SecretName + " is not in the store (set it with `wardyn secret set`)"
+		if reason == "refused" { // the row exists: re-setting it would overwrite what an operator may need to inspect
+			msg = "secret " + minted.Injection.SecretName + " exists but could not be used: the store refused it (its value is gone, or bound to another row). Nothing was substituted; ask an admin to check it."
+		}
+		writeError(w, http.StatusFailedDependency, msg)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", minted.Injection.SecretName, "success",
-		mustJSON(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub})))
+		mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}, row))))
 
 	formattedValue := formatInjectionValue(minted.Injection.Format, secret)
 

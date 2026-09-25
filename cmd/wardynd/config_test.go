@@ -4,15 +4,22 @@
 package main
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"flag"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/coreos/go-oidc/v3/oidc/oidctest"
+
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
-// ─── validateConfig: DSN required + TLS both-or-neither + Secure-cookie posture ──
+// validateConfig: DSN required + TLS both-or-neither + Secure-cookie posture
 
 // TestValidateConfig is the P0 config-validation contract: Postgres DSN is
 // mandatory, the TLS cert/key pair is both-or-neither (a half-set pair fails
@@ -181,7 +188,7 @@ func TestValidateConfig(t *testing.T) {
 // TestValidateConfig_SecureCookiesNeverOnPlainHTTP pins the most security-
 // sensitive invariant on its own: with no built-in TLS and no terminating
 // proxy, Secure cookies MUST be false (a Secure cookie is never sent over plain
-// HTTP and would break login). Asserted directly so a regression that flips the
+// HTTP and would break login). Asserted directly so a change that flips the
 // default can never hide inside the larger table.
 func TestValidateConfig_SecureCookiesNeverOnPlainHTTP(t *testing.T) {
 	posture, err := validateConfig("postgres://localhost/wardyn", "", "", "", false, false)
@@ -196,10 +203,10 @@ func TestValidateConfig_SecureCookiesNeverOnPlainHTTP(t *testing.T) {
 	}
 }
 
-// ─── validateOperatorPosture: SSO with no operator allowlist fails closed ────
+// validateOperatorPosture: SSO with no operator allowlist fails closed
 
 // TestValidateOperatorPosture is the second boot refusal's contract: configuring
-// OIDC SSO IS the declaration that more than one human exists, so an empty
+// OIDC SSO is the declaration that more than one human exists, so an empty
 // operator allowlist (which makes every signed-in human admin-equivalent) is
 // refused unless WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST overrides it. Unconditional:
 // no bind-address escape, unlike the plaintext rule above.
@@ -228,7 +235,7 @@ func TestValidateOperatorPosture(t *testing.T) {
 			name: "override with a list set is still fine", oidcConfigured: true, operatorEmails: []string{"ops@corp.example"}, allowNoList: true,
 		},
 		{
-			// W25-S1-1: the in-repo Entra recipe (SKILL.md step 3) sets
+			// The in-repo Entra recipe (SKILL.md step 3) sets
 			// WARDYN_OIDC_ROLE_MAP and nothing else — deriveRole switches to
 			// claim-based admin/member and no longer needs the allowlist, so
 			// this must boot, not crash-loop.
@@ -268,7 +275,7 @@ func TestValidateOperatorPosture(t *testing.T) {
 	}
 }
 
-// ─── flag vs env precedence for the flagEnv/flagBool/flagDuration helpers ────────
+// flag vs env precedence for the flagEnv/flagBool/flagDuration helpers
 //
 // These helpers seed a flag's DEFAULT from the documented env var, then register
 // it on flag.CommandLine. So precedence is: an explicit command-line value wins
@@ -304,7 +311,7 @@ func ensureUnset(t *testing.T, key string) {
 // flagEnv/flagBool/flagDuration are cliutil aliases (main.go); their contracts
 // are tested on the real symbols in internal/cliutil.
 
-// ─── -local-trust-forwarder bind cross-check ──
+// -local-trust-forwarder bind cross-check
 
 // TestListenBindsSpecificRoutable pins the fail-closed gate for
 // -local-trust-forwarder: because that flag DISABLES the loopback-peer check,
@@ -415,15 +422,15 @@ func TestResolveLocalModeRefusesPublishedDemoToken(t *testing.T) {
 	}
 }
 
-// TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC is the bug-rbac-1
-// regression: humanOrAdminAuth branches on LocalMode FIRST and bypasses OIDC
-// entirely without ever consulting it, so an explicit -local-mode alongside a
-// configured -oidc-issuer used to boot clean and silently disable the whole
-// configured SSO/RBAC deployment — every request became the fixed
-// local:operator, full admin. Refused unless allowLocalModeWithOIDC
-// (WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC) explicitly overrides it; the AUTO-
-// enable heuristic (no explicit flag, no admin token, loopback bind) is
-// untouched — it already excludes a configured issuer on its own.
+// TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC: humanOrAdminAuth
+// branches on LocalMode first and bypasses OIDC entirely without ever
+// consulting it, so an explicit -local-mode alongside a configured
+// -oidc-issuer would silently disable the whole configured SSO/RBAC
+// deployment — every request the fixed local:operator, full admin. It is
+// refused unless allowLocalModeWithOIDC (WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC)
+// explicitly overrides it; the auto-enable heuristic (no explicit flag, no
+// admin token, loopback bind) is untouched — it already excludes a configured
+// issuer on its own.
 func TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -467,7 +474,7 @@ func TestResolveLocalMode_RefusesExplicitLocalModeWithOIDC(t *testing.T) {
 	}
 }
 
-// ─── standard-AWS fallback for the Bedrock selectors ────────────────────────────
+// standard-AWS fallback for the Bedrock selectors
 //
 // WARDYN_BEDROCK_REGION / _AWS_PROFILE stay authoritative; the standard AWS env
 // fills in only where they resolve empty, so a machine already configured for
@@ -553,7 +560,7 @@ func TestBedrockAWSProfile_FallsBackToStandardAWSProfile(t *testing.T) {
 	}
 }
 
-// ─── validateUISandboxConfig: the second origin must actually be a second one ──
+// validateUISandboxConfig: the second origin must actually be a second one
 
 // TestValidateUISandboxConfig is the UI-sandbox gateway's boot contract. The
 // same-address case is the one that matters: the gateway relays the SANDBOX's
@@ -680,7 +687,7 @@ func TestValidateUISandboxConfig(t *testing.T) {
 	}
 }
 
-// TestValidateMemberModePosture pins WARDYN_MEMBER_MODE's two preconditions
+// TestValidateMemberModePosture pins WARDYN_USER_DESKTOP's two preconditions
 // (W-MEMB M1). Member mode asserts a topology — the human at the keyboard is a
 // MEMBER, the operator authority is elsewhere — and the whole value of the flag
 // is that boot REFUSES when the assertion is false. Local mode makes the
@@ -709,9 +716,228 @@ func TestValidateMemberModePosture(t *testing.T) {
 	}
 }
 
-// ─── the O-10 kill switch, end to end through the real boot path ────────────────
+// TestValidateHybridPosture covers validateHybridPosture's preconditions
+// (issue #100): nil with no org URL, a token with no URL refused, an org URL
+// with member mode off refused, and the plaintext/loopback/override scheme
+// rule on the URL itself.
+func TestValidateHybridPosture(t *testing.T) {
+	for _, tt := range []struct {
+		name                             string
+		orgURL, enrolToken               string
+		memberMode, allowPlaintextListen bool
+		wantErr                          bool
+	}{
+		{name: "nothing set: no hybrid posture"},
+		{name: "token with no org url is refused", enrolToken: "tok", wantErr: true},
+		{name: "org url with member mode off is refused", orgURL: "https://org.example.com", wantErr: true},
+		{name: "org url https with member mode on", orgURL: "https://org.example.com", memberMode: true},
+		{name: "org url http non-loopback is refused", orgURL: "http://org.example.com", memberMode: true, wantErr: true},
+		{name: "org url http loopback is allowed", orgURL: "http://127.0.0.1:9999", memberMode: true},
+		{name: "org url http localhost is allowed", orgURL: "http://localhost:9999", memberMode: true},
+		{name: "org url http non-loopback with override", orgURL: "http://org.example.com", memberMode: true, allowPlaintextListen: true},
+		{name: "malformed org url is refused", orgURL: "http://[::1", memberMode: true, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateHybridPosture(tt.orgURL, tt.enrolToken, tt.memberMode, tt.allowPlaintextListen)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateHybridPosture(url=%q, token=%q, member=%v, allowPlaintext=%v) error = %v, want error: %v",
+					tt.orgURL, tt.enrolToken, tt.memberMode, tt.allowPlaintextListen, err, tt.wantErr)
+			}
+		})
+	}
+}
 
-// THE ONE CONSTANT (general N-new-1). `awsSSOProxyInjectDefaultOn` in
+// TestValidateSSOOnlyPosture pins WARDYN_SSO_ONLY's precondition (#378): SSO
+// must actually be the only way in before boot may let /healthz's sso_only bit
+// claim it is. One case per way back into "not actually SSO-only", each
+// asserted to name the setting to remove, plus the clean pass.
+func TestValidateSSOOnlyPosture(t *testing.T) {
+	for _, tt := range []struct {
+		name                                       string
+		ssoOnly, oidcConfigured                    bool
+		adminToken                                 string
+		localMode, memberMode, allowNoOperatorList bool
+		wantErr                                    bool
+		wantNames                                  []string
+	}{
+		{name: "off: nothing asserted, nothing checked", adminToken: "tok", localMode: true},
+		{
+			name:    "on with oidc and everything else absent: passes",
+			ssoOnly: true, oidcConfigured: true,
+		},
+		{
+			name: "on with no oidc configured", ssoOnly: true,
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_OIDC_ISSUER"},
+		},
+		{
+			name: "on with an admin token set", ssoOnly: true, oidcConfigured: true, adminToken: "tok",
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_ADMIN_TOKEN"},
+		},
+		{
+			name: "on with local mode set", ssoOnly: true, oidcConfigured: true, localMode: true,
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_LOCAL_MODE"},
+		},
+		{
+			name: "on with member mode set", ssoOnly: true, oidcConfigured: true, memberMode: true,
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_USER_DESKTOP"},
+		},
+		{
+			name: "on with the no-operator-list override set", ssoOnly: true, oidcConfigured: true, allowNoOperatorList: true,
+			wantErr: true, wantNames: []string{"WARDYN_SSO_ONLY", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSSOOnlyPosture(tt.ssoOnly, tt.oidcConfigured, tt.adminToken, tt.localMode, tt.memberMode, tt.allowNoOperatorList)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateSSOOnlyPosture(...) error = %v, want error: %v", err, tt.wantErr)
+			}
+			for _, want := range tt.wantNames {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention %q", err.Error(), want)
+				}
+			}
+		})
+	}
+}
+
+// validateSSOOnlyPosture, end to end through the real boot path
+
+// memSecretStore is a minimal in-memory secretstore.Store good enough for
+// buildOptionalFeatures to construct a REAL oidc.Authenticator (session key
+// bootstrap) without a live Postgres-backed store. Pre-seeded by the caller,
+// so Get always finds the key and loadOrCreateSecret's not-found path is
+// never exercised.
+type memSecretStore struct{ vals map[string][]byte }
+
+func (s *memSecretStore) Name() string { return "mem-test" }
+func (s *memSecretStore) Put(_ context.Context, name string, value []byte) error {
+	s.vals[name] = value
+	return nil
+}
+func (s *memSecretStore) Get(_ context.Context, name string) ([]byte, error) {
+	if v, ok := s.vals[name]; ok {
+		return v, nil
+	}
+	return nil, secretstore.ErrNotFound
+}
+func (s *memSecretStore) Delete(_ context.Context, name string) error {
+	delete(s.vals, name)
+	return nil
+}
+func (s *memSecretStore) List(context.Context) ([]string, error) { return nil, nil }
+func (s *memSecretStore) For(string) secretstore.Store           { return s }
+
+// ssoOnlyBootFlags builds the *bootFlags a real buildOptionalFeatures call
+// needs to reach validateSSOOnlyPosture: a live OIDC issuer (so of.authn is
+// genuinely non-nil, not a hand-set bool) plus an operator allowlist (so
+// validateOperatorPosture — checked immediately before — passes and never
+// masks the assertion this test makes).
+func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
+	recordingSel, recordingDir := "off", ""
+	oidcInternalIss, oidcClientID, oidcClientSecret := "", "test-client", ""
+	oidcRedirectURL := "http://localhost/auth/callback"
+	oidcEmailDomains, oidcRoleMap, oidcDefaultRole := "", "", ""
+	oidcOperatorEmails := "ops@example.com"
+	allowOIDCNoOperatorList, localMode, memberMode := false, false, false
+	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
+	envbuild, scanAIAdvisor := false, false
+	sshListen, uiListen := "", ""
+	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
+	return &bootFlags{
+		recordingSel:            &recordingSel,
+		recordingDir:            &recordingDir,
+		oidcIssuer:              &issuerURL,
+		oidcInternalIss:         &oidcInternalIss,
+		oidcClientID:            &oidcClientID,
+		oidcClientSecret:        &oidcClientSecret,
+		oidcRedirectURL:         &oidcRedirectURL,
+		oidcEmailDomains:        &oidcEmailDomains,
+		oidcOperatorEmails:      &oidcOperatorEmails,
+		allowOIDCNoOperatorList: &allowOIDCNoOperatorList,
+		oidcRoleMap:             &oidcRoleMap,
+		oidcDefaultRole:         &oidcDefaultRole,
+		adminToken:              &adminToken,
+		localMode:               &localMode,
+		memberMode:              &memberMode,
+		ssoOnly:                 &ssoOnly,
+		// Read only past validateSSOOnlyPosture, on the path this test's
+		// "boots clean" case takes all the way to the function's return —
+		// every one of them off/empty so that path is a no-op, not a panic
+		// on a nil pointer this test never meant to exercise.
+		dirProvider:   &dirProvider,
+		dirTenant:     &dirTenant,
+		dirClientID:   &dirClientID,
+		dirSecret:     &dirSecret,
+		envbuild:      &envbuild,
+		scanAIAdvisor: &scanAIAdvisor,
+		sshListen:     &sshListen,
+		uiListen:      &uiListen,
+		controlURL:    &controlURL,
+	}
+}
+
+// TestSSOOnlyPosture_WiredThroughTheRealBootPath is the #378 assertion the
+// pure-function table test (TestValidateSSOOnlyPosture above) cannot make on
+// its own: that boot actually CALLS validateSSOOnlyPosture with the real,
+// resolved "is OIDC configured" fact, on a path that constructs a genuine
+// oidc.Authenticator against a live (test) IdP — not a hand-set bool a caller
+// could drift out of sync with what actually mounted, the same drift class
+// TestAWSSSOProxyInject_BootDefaultIsTheKillSwitchConstant below exists to
+// catch for the AWS SSO kill switch.
+func TestSSOOnlyPosture_WiredThroughTheRealBootPath(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	oidcSrv := &oidctest.Server{PublicKeys: []oidctest.PublicKey{{
+		PublicKey: priv.Public(), KeyID: "test-key", Algorithm: "RS256",
+	}}}
+	httpSrv := httptest.NewServer(oidcSrv)
+	defer httpSrv.Close()
+	oidcSrv.SetIssuer(httpSrv.URL)
+
+	// Pre-seeded with a valid session key, so loadOrCreateSecret's not-found
+	// path is never taken: this test needs a real Authenticator, not a real
+	// bootstrap.
+	newStore := func() *memSecretStore {
+		return &memSecretStore{vals: map[string][]byte{secretSessionKey: []byte("01234567890123456789012345678901")}}
+	}
+
+	t.Run("sso-only with an admin token set: refused", func(t *testing.T) {
+		f := ssoOnlyBootFlags(httpSrv.URL, "some-admin-token", true)
+		_, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false)
+		if err == nil {
+			t.Fatal("buildOptionalFeatures: want a refusal booting WARDYN_SSO_ONLY alongside WARDYN_ADMIN_TOKEN, got nil error")
+		}
+		for _, want := range []string{"WARDYN_SSO_ONLY", "WARDYN_ADMIN_TOKEN"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not mention %q", err.Error(), want)
+			}
+		}
+	})
+
+	t.Run("sso-only with nothing else set: boots clean, real OIDC configured", func(t *testing.T) {
+		f := ssoOnlyBootFlags(httpSrv.URL, "", true)
+		of, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false)
+		if err != nil {
+			t.Fatalf("buildOptionalFeatures: unexpected error: %v", err)
+		}
+		if of.authn == nil {
+			t.Fatal("of.authn is nil — the real OIDC discovery round trip against the test IdP did not wire an Authenticator, so this test would have passed the sso-only checks vacuously (oidcConfigured=false)")
+		}
+	})
+
+	t.Run("an admin token alone (sso-only unset): unaffected", func(t *testing.T) {
+		f := ssoOnlyBootFlags(httpSrv.URL, "some-admin-token", false)
+		if _, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false); err != nil {
+			t.Fatalf("buildOptionalFeatures: unexpected error with sso-only unset: %v", err)
+		}
+	})
+}
+
+// the O-10 kill switch, end to end through the real boot path
+
+// The one constant (general N-new-1). `awsSSOProxyInjectDefaultOn` in
 // internal/api/runs_dispatch_sso_inject.go is the whole rollback for Phase B:
 // flipping it to false must turn a daemon booted with NOTHING set — no flag, no
 // env, which is every deployment that has not opted in — back to the pre-0.7.6

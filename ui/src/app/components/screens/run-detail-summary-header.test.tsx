@@ -16,9 +16,11 @@ import { MemoryRouter } from "react-router-dom";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { waitingReauth } from "../wardyn/model-access-copy";
+import { waitingAdoConsent } from "../../lib/reauth-waiting-copy";
 import type { AgentRun, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
+import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import {
   CHIP_SETTING_UP,
   CHIP_WAITING_FOR_MACHINE,
@@ -47,7 +49,8 @@ const runningInteractive: AgentRun = {
   interactive: true,
 };
 
-describe("SummaryHeader — attachable chip predicate (W25-1)", () => {
+describe("SummaryHeader — attachable chip predicate", () => {
+  // ticket: W25-1
   it("shows the plain 'Interactive' chip (no attachable claim) for a member", () => {
     renderHeader(
       <OperatorProvider operator={false}>
@@ -151,7 +154,8 @@ describe("SummaryHeader — failure_hint chip actually ellipsizes (review R-02)"
 // "Start a run like this one" on the header, for every terminal
 // run (a strict superset of the failure block's 3 endings). Tab order clone
 // -> kill: outline, never the bar's one danger slot.
-describe("SummaryHeader — clone door (0.7.3 F7)", () => {
+describe("SummaryHeader — clone door", () => {
+  // ticket: 0.7.3 F7
   // The component itself gates on the `terminal` PROP, never on
   // `run.state` directly (run-detail-summary-header.tsx:233) — this loop pins
   // the CALLER's contract (every one of the 5 states in TERMINAL_RUN_STATES
@@ -301,6 +305,45 @@ describe("SummaryHeader — the who + what glyph pair", () => {
     expect(waitingReauth(3, false)).toMatch(/2 more waiting/);
   });
 
+  // S10 round 2 (F13) — the Azure DevOps twin: same shape, a DIFFERENT
+  // provider, so the cockpit chip must never say "AWS" for this one.
+  it("a held run waiting on an Azure DevOps sign-in names Azure DevOps, never AWS", () => {
+    renderHeader(
+      <OperatorProvider operator principal="me">
+        <SummaryHeader
+          run={runningInteractive}
+          terminal={false}
+          pendingApprovalCount={2}
+          sandboxHeld
+          awaitingAdoConsent
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(waitingAdoConsent(2))).toBeInTheDocument();
+    expect(waitingAdoConsent(2)).toMatch(/1 more waiting/);
+    expect(waitingAdoConsent(1)).toBe("Waiting for your Azure DevOps sign-in");
+    expect(screen.queryByText(/AWS/)).not.toBeInTheDocument();
+  });
+
+  it("…and says whose Azure DevOps sign-in it is when the reader is NOT the owner", () => {
+    renderHeader(
+      <OperatorProvider operator principal="admin@corp">
+        <SummaryHeader
+          run={runningInteractive}
+          terminal={false}
+          pendingApprovalCount={1}
+          sandboxHeld
+          awaitingAdoConsent
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(waitingAdoConsent(1, false))).toBeInTheDocument();
+    expect(waitingAdoConsent(1, false)).toBe("Waiting for the owner's Azure DevOps sign-in");
+    expect(screen.queryByText(waitingAdoConsent(1))).not.toBeInTheDocument();
+  });
+
   it("a pending approval that is NOT holding the sandbox reads as monitoring, not as a demand", () => {
     renderHeader(
       <OperatorProvider operator>
@@ -413,5 +456,33 @@ describe("SummaryHeader — the startup reason (finding 6)", () => {
     );
     expect(screen.queryByText(CHIP_SETTING_UP)).toBeNull();
     expect(screen.queryByText(STARTING_CONTAINER_CREATING)).toBeNull();
+  });
+});
+
+// #93/#96 — the run header's autonomy chip, beside ConfinementChip.
+// run.autonomy_level freezes the level resolveRunAutonomy capped this run at,
+// at create time (0.8 #97).
+describe("SummaryHeader — the autonomy chip beside the barrier chip", () => {
+  it("renders the level's friendly label when the run carries one", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={{ ...runningInteractive, autonomy_level: "L1" }} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(AUTONOMY_META.L1.label)).toBeInTheDocument();
+    // The wire code stays out of accessible content — same D4 rule
+    // ConfinementChip follows.
+    expect(screen.queryByText("L1")).toBeNull();
+  });
+
+  it("renders no autonomy chip at all for a run with an empty autonomy_level", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    for (const meta of Object.values(AUTONOMY_META)) {
+      expect(screen.queryByText(meta.label)).toBeNull();
+    }
   });
 });

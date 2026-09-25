@@ -62,6 +62,11 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 // regardless of what the (untrusted-input-driven) analyzer OR a member's own
 // hand-authored inline_policy proposed.
 //
+// The returned spec OWNS its memory: it shares no backing array and no pointee
+// with EITHER argument, so an in-place mutation of the caller's proposal (or of
+// the clamped spec) can never move a ceiling this function already enforced.
+// See cloneProposal.
+//
 // Clamps applied:
 //   - confinement raised to the operator's minimum class if the proposal is weaker;
 //   - allow_all_egress forced off unless the ceiling permits it;
@@ -100,7 +105,15 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 //     intersected down to the ceiling's github permissions; TTL capped; and
 //     requires_approval forced on when the ceiling requires it;
 //   - workspace_mounts dropped entirely — host mounts are operator-authored and a
-//     composer (fed untrusted input) must never be able to introduce one.
+//     composer (fed untrusted input) must never be able to introduce one;
+//   - push_rules: when the ceiling sets one, an unset proposal inherits it
+//     WHOLESALE (nil is not "no opinion" once an operator opts in, same stance
+//     as llm_inspection); a proposal that also sets one gets its deny_paths
+//     UNIONED with the ceiling's (deny always wins, same as denied_domains) and
+//     its max_inspect_pack_mib capped at the ceiling's when non-zero. Unlike
+//     llm_inspection, this field only NARROWS what a push may touch — it can
+//     never widen egress or credentials — so a proposal's own push_rules under
+//     a SILENT ceiling passes through unclamped.
 //
 // maxEphemeralDiskMiB is the acting principal's GovernanceLimits.
 // MaxEphemeralDiskMiB (0 = unlimited), and it is a separate argument rather than
@@ -118,7 +131,7 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 // request-less run the ceiling as its size and the docker driver fails a create
 // closed on overlay2-over-ext4 (every laptop) the moment DiskMiB is non-zero.
 func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (types.RunPolicySpec, []string) {
-	out := proposed
+	out := cloneProposal(proposed)
 	var warns []string
 
 	// Confinement floor.
@@ -317,7 +330,153 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 		out.WorkspaceMounts = nil
 	}
 
+	// Push rules. Split into its own function, same reason clampOperatorSwitches
+	// is: it keeps Clamp's own branch count under the gocyclo gate.
+	warns = clampPushRules(&out, ceiling, warns)
+
 	return out, warns
+}
+
+// clampPushRules bounds push_rules: only narrows (deny_paths/
+// max_inspect_pack_mib can never widen what a push may touch), so a
+// proposal's own push_rules under a ceiling that sets NONE passes through
+// unclamped — nothing here to protect against, unlike llm_inspection's
+// detector_sidecar_url. When the ceiling DOES set one, treat it as a floor:
+// an unset proposal inherits it wholesale, and a set proposal has the
+// ceiling's deny_paths unioned in (deny always wins, same as denied_domains
+// above — but see unionPaths, NOT union, for why) and its
+// max_inspect_pack_mib capped at the ceiling's when the ceiling's is
+// non-zero.
+//
+// PushRulesSpec.IsSet guards both the ceiling check here and the risk grade
+// (composer.Grade): an all-zero-but-non-nil *PushRulesSpec — push_rules: {}
+// on the wire — must read as "no opinion" exactly like nil, or an empty
+// ceiling would get inherited wholesale by every member spec and then
+// false-warn on the Review rail about rules that do not exist (found
+// reviewing #176).
+func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if !ceiling.PushRules.IsSet() {
+		return warns
+	}
+	if out.PushRules == nil {
+		warns = append(warns, "push_rules inherited from the operator's policy")
+		cp := *ceiling.PushRules
+		cp.DenyPaths = append([]string(nil), ceiling.PushRules.DenyPaths...)
+		cp.RequireReviewPaths = append([]string(nil), ceiling.PushRules.RequireReviewPaths...)
+		out.PushRules = &cp
+		return warns
+	}
+	merged := *out.PushRules
+	if len(ceiling.PushRules.DenyPaths) > 0 {
+		merged.DenyPaths = unionPaths(merged.DenyPaths, ceiling.PushRules.DenyPaths)
+	}
+	if len(ceiling.PushRules.RequireReviewPaths) > 0 {
+		merged.RequireReviewPaths = unionPaths(merged.RequireReviewPaths, ceiling.PushRules.RequireReviewPaths)
+	}
+	if ceil := ceiling.PushRules.MaxInspectPackMiB; ceil > 0 && (merged.MaxInspectPackMiB <= 0 || merged.MaxInspectPackMiB > ceil) {
+		warns = append(warns, fmt.Sprintf("push_rules.max_inspect_pack_mib capped to operator maximum %d", ceil))
+		merged.MaxInspectPackMiB = ceil
+	}
+	if ceil := ceiling.PushRules.HoldSeconds; ceil > 0 && (merged.HoldSeconds <= 0 || merged.HoldSeconds > ceil) {
+		merged.HoldSeconds = ceil // the shorter of two authored holds, silently: it widens nothing
+	}
+	out.PushRules = &merged
+	return warns
+}
+
+// unionPaths is union's exact-string counterpart for push_rules.deny_paths.
+// union folds case and trims whitespace — the right identity for
+// denied_domains, where DNS names are case-insensitive — but wrong for a
+// filesystem path: a git path is case- AND space-sensitive on Linux. union
+// also seeds its seen-set from its FIRST argument (the proposal, here), so a
+// member re-typing the ceiling's own rule in a different case would silently
+// DISPLACE the ceiling's spelling instead of adding a second entry:
+//
+//	ceiling  [".github/workflows/**"]
+//	proposal [".GitHub/workflows/**"]   ->  union(...) = [".GitHub/workflows/**"]
+//
+// leaving strictly weaker effective rules than the operator set — the one
+// security property this field has (found reviewing #176; #178/#179 inherit
+// the shape). unionPaths dedupes on the exact byte string only, so the
+// ceiling's own entry always survives, however it is later re-typed.
+func unionPaths(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, lists := range [][]string{a, b} {
+		for _, s := range lists {
+			if !seen[s] {
+				seen[s] = true
+				out = append(out, s)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// cloneProposal takes OWNERSHIP of the caller's proposal: the returned spec
+// shares no backing array and no pointee with it, so nothing Clamp hands back
+// can later be widened by a mutation of the original (or the reverse).
+//
+// `out := proposed` is a SHALLOW copy, and a ceiling with no opinion on a field
+// leaves that field's slice header or pointer untouched — so the clamped spec
+// aliased the caller's allowed_domains, denied_domains, allowed_methods,
+// ui_apps, workspace_repos, each grant's Scope bytes, and (whenever the
+// resource cap was already inside the ceiling) the very *ResourceLimits the
+// clamp exists to bound. An in-place write through either side then moved a
+// ceiling that had already been enforced. No caller mutates one today; that is
+// a property of today's callers, not of this function, and it is the clamp's
+// job to hold regardless.
+//
+// slices.Clone, not Clone's `append([]T(nil), ...)` idiom: it preserves nil vs
+// non-nil-empty, so a clamped spec's JSON keeps saying `[]` where it said `[]`.
+// types.RunPolicySpec.Clone is not used for the same reason, plus it copies
+// GrantSpec.Scope and WorkspaceMount.ReadOnly only one level deep.
+//
+// Every reference field is copied, including the three Clamp itself later
+// drops or rebuilds: workspace_mounts (dropped outright), llm_inspection
+// (inherited from the ceiling or cleared) and a non-empty tool_rules (rebuilt
+// by clampToolRules). Those three copies are unobservable through Clamp today,
+// but a helper whose contract is "shares nothing" must not depend on a
+// caller's later step to be true — TestCloneProposal_SharesNothingWithItsInput
+// pins them directly, since no test written against Clamp can.
+func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
+	out := s
+	out.AllowedDomains = slices.Clone(s.AllowedDomains)
+	out.DeniedDomains = slices.Clone(s.DeniedDomains)
+	out.AllowedMethods = slices.Clone(s.AllowedMethods)
+	out.UIApps = slices.Clone(s.UIApps)
+	out.ToolRules = slices.Clone(s.ToolRules)
+	out.WorkspaceRepos = slices.Clone(s.WorkspaceRepos)
+	out.WorkspaceMounts = slices.Clone(s.WorkspaceMounts)
+	for i := range out.WorkspaceMounts {
+		if ro := s.WorkspaceMounts[i].ReadOnly; ro != nil {
+			v := *ro
+			out.WorkspaceMounts[i].ReadOnly = &v
+		}
+	}
+	out.EligibleGrants = slices.Clone(s.EligibleGrants)
+	for i := range out.EligibleGrants {
+		out.EligibleGrants[i].Scope = slices.Clone(s.EligibleGrants[i].Scope)
+	}
+	if s.Resources != nil {
+		r := *s.Resources
+		out.Resources = &r
+	}
+	if s.LLMInspection != nil {
+		li := *s.LLMInspection
+		li.WorkspaceSecretNames = slices.Clone(s.LLMInspection.WorkspaceSecretNames)
+		li.WorkspaceSecretValues = slices.Clone(s.LLMInspection.WorkspaceSecretValues)
+		li.ClassifiedMarkers = slices.Clone(s.LLMInspection.ClassifiedMarkers)
+		out.LLMInspection = &li
+	}
+	if s.PushRules != nil {
+		pr := *s.PushRules
+		pr.DenyPaths = slices.Clone(s.PushRules.DenyPaths)
+		pr.RequireReviewPaths = slices.Clone(s.PushRules.RequireReviewPaths)
+		out.PushRules = &pr
+	}
+	return out
 }
 
 // clampUIApps bounds a proposal's UI apps. The ceiling's list is an ALLOWLIST of (name, port) pairs when it
@@ -433,7 +592,7 @@ func normalizeClampTTL(ttl int) int {
 // This is the SELECTION half of "is this grant within the ceiling", and it is
 // exported because internal/api's write-time comparator
 // (governanceGrantWithinCeiling) must select from the same set the runtime clamp
-// bounds against (F014): one definition, not two independent searches that can
+// bounds against: one definition, not two independent searches that can
 // drift on a kind like github_token, whose scope names no pairing at all.
 //
 // Identity, never bounds: approval, TTL and github scope are what a clamp
@@ -489,7 +648,7 @@ func grantDominatedBy(g, cg types.GrantSpec) bool {
 // covers it, and drops any whose KIND the ceiling does not carry.
 //
 // WHICH ceiling grant supplies the bound is a two-step answer, and the steps are
-// the whole of F014:
+// the whole of it:
 //
 //  1. SELECT the ceiling grants whose identity covers the proposal
 //     (CeilingGrantsCovering: same kind, same pairing where the kind names a

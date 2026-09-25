@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -20,14 +21,45 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// The no-Pool newHarness panics inside store.CreateRun when a create-run request
-// gets PAST all validation (the harness has no Pool). The chi Recoverer turns
-// that panic into a 500. So for these inline-policy tests:
+// The no-Pool newHarness leaves Config.Store nil, so a create-run request that
+// gets past all validation would dereference it inside store.CreateRun — a
+// recovered nil-pointer panic the chi Recoverer turns into an unremarkable
+// 500, indistinguishable from a real bug on the same status code. So the tests
+// below that need to prove a request got past validation (rather than just
+// check a 4xx never happened) set Store to createRunUnconfiguredStore instead
+// of leaving it nil:
 //   - a request REJECTED by validation returns its 4xx (400/422) and never
 //     reaches the store;
-//   - a request ACCEPTED past the validation boundary returns 500 (the recovered
-//     nil-Pool panic), proving validation let it through.
-// Status 500 is the "accepted past validation" sentinel in the no-Pool harness.
+//   - a request ACCEPTED past the validation boundary reaches CreateRun, which
+//     answers errCreateRunNoStoreConfigured, and handleCreateRun's ordinary
+//     writeServerError path turns that into a 500 — a controlled response
+//     instead of a crash, and a request that reaches any other store method
+//     still panics loudly rather than quietly matching this double's intent.
+//
+// Status 500 is still the "accepted past validation" sentinel in this harness.
+//
+// createRunUnconfiguredStore embeds noGovernanceStore rather than a bare
+// store.Store: decodeAndValidateCreateRun reads GetSiteConfig for the agent
+// roster (agentRosterRefusal) on EVERY request with a non-nil Store, ahead of
+// the point these tests actually mean to stop at, so a bare nil embed there
+// panicked exactly where GetSiteConfig's own doc comment already warns it
+// would. noGovernanceStore's "empty deployment" answers are what a Store this
+// unconfigured actually models: no agent roster, no governance, no drives.
+var errCreateRunNoStoreConfigured = errors.New("no store configured (test harness)")
+
+type createRunUnconfiguredStore struct{ noGovernanceStore }
+
+func (createRunUnconfiguredStore) CreateRun(context.Context, types.AgentRun) (types.AgentRun, error) {
+	return types.AgentRun{}, errCreateRunNoStoreConfigured
+}
+
+// ListWorkspaces answers no onboarded workspaces: handleCreateRun's
+// referencedWorkspaces resolves them on EVERY create (workspace_run_launch.go),
+// not only a request that names a mount, ahead of the CreateRun call these
+// tests mean to stop at.
+func (createRunUnconfiguredStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return nil, nil
+}
 
 // TestCreateRun_InlineAndPolicyIDBothSet asserts the XOR: supplying both
 // inline_policy and policy_id is a 400 before any store write.
@@ -132,16 +164,26 @@ func TestCreateRun_MemberInlineClamped(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.OIDC = &oidc.Authenticator{}
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
+	h.srv.cfg.Store = createRunUnconfiguredStore{}
 	h.srv.router = h.srv.routes()
 
 	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC1"}}`
 
-	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	// Status 500 is createRunUnconfiguredStore's controlled errCreateRunNoStoreConfigured
+	// (its doc comment above), the proof each request reached CreateRun rather
+	// than stopping at an earlier refusal — asserted here, not just implied.
+	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), body)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("member: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
+	}
 	if got := lastInlinePolicyConfinement(t, h.audit.events); got != string(types.CC2) {
 		t.Fatalf("member: policy.inline min_confinement_class = %q, want %q (clamped up to DefaultPolicy)", got, types.CC2)
 	}
 
-	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
+	}
 	if got := lastInlinePolicyConfinement(t, h.audit.events); got != string(types.CC1) {
 		t.Fatalf("admin: policy.inline min_confinement_class = %q, want %q (unclamped)", got, types.CC1)
 	}
@@ -230,16 +272,14 @@ func TestFilterMemberGrants(t *testing.T) {
 	}
 }
 
-// TestFilterMemberGrants_SSHKeyKnownHostsPairing is the W12-B-2 regression: an
-// ssh_key grant's known_hosts_secret_ref must match the ceiling's OWN
-// known_hosts_secret_ref for that exact (host, key_secret_ref) pairing — a
-// member must not be able to reuse an operator-approved key pairing while
-// attaching a DIFFERENT known_hosts_secret_ref of their own choosing. Before the
-// fix, storedSecretGrantPairing ignored known_hosts_secret_ref entirely, so a
-// mismatched/added ref here was wrongly KEPT (it would let mintSSHKey, broker.go,
-// return an arbitrary stored secret's value as Minted.KnownHosts, escaping this
-// gate). Fails on base 6d76911; passes once known_hosts_secret_ref is part of
-// the pairing comparison.
+// TestFilterMemberGrants_SSHKeyKnownHostsPairing: an ssh_key grant's
+// known_hosts_secret_ref must match the ceiling's own known_hosts_secret_ref for
+// that exact (host, key_secret_ref) pairing — a member must not be able to reuse
+// an operator-approved key pairing while attaching a different
+// known_hosts_secret_ref of their own choosing. If storedSecretGrantPairing
+// ignored known_hosts_secret_ref, a mismatched/added ref here would be kept,
+// letting mintSSHKey (broker.go) return an arbitrary stored secret's value as
+// Minted.KnownHosts and escape this gate.
 func TestFilterMemberGrants_SSHKeyKnownHostsPairing(t *testing.T) {
 	h := newHarness(t)
 	sshKey := func(host, keyRef, khRef string) types.GrantSpec {
@@ -260,7 +300,7 @@ func TestFilterMemberGrants_SSHKeyKnownHostsPairing(t *testing.T) {
 		t.Fatalf("exact ssh_key pairing incl. known_hosts: kept=%d, want 1", len(kept))
 	}
 	// Same host+key, but a DIFFERENT known_hosts_secret_ref of the member's own
-	// choosing: dropped. This is the W12-B-2 bypass case.
+	// choosing: dropped. This is the bypass case.
 	if kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "", nil, []types.GrantSpec{sshKey("github.com", "gh-ssh-key", "attacker-secret")}); len(kept) != 0 || len(warns) != 1 || code != 0 || err != nil {
 		t.Fatalf("mismatched known_hosts_secret_ref: kept=%d warns=%d code=%d err=%v, want (0,1,0,nil) - member must not smuggle a different known_hosts ref", len(kept), len(warns), code, err)
 	}
@@ -298,6 +338,7 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 		AllowedDomains:      []string{"attacker.example"},
 		EligibleGrants:      []types.GrantSpec{{Kind: types.GrantAPIKey}},
 	}
+	h.srv.cfg.Store = createRunUnconfiguredStore{}
 	h.srv.router = h.srv.routes()
 
 	// Pair a REAL operator secret (seeded) with an attacker-controlled but
@@ -308,14 +349,23 @@ func TestCreateRun_MemberInlineGrantExfilDropped(t *testing.T) {
 	const body = `{"agent":"claude-code","repo":"acme/widgets","inline_policy":{"min_confinement_class":"CC2","eligible_grants":[{"kind":"api_key","scope":{"host":"attacker.example","secret_name":"anthropic-api-key"}}]}}`
 
 	// Member: the exfil pairing is dropped - the resolved inline policy carries
-	// zero grants, so nothing is ever injected.
-	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), body)
+	// zero grants, so nothing is ever injected. Status 500 is
+	// createRunUnconfiguredStore's controlled errCreateRunNoStoreConfigured
+	// (its doc comment above), the proof this request reached CreateRun rather
+	// than stopping at an earlier refusal.
+	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser), body)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("member: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
+	}
 	if got := lastInlinePolicyGrantCount(t, h.audit.events); got != 0 {
 		t.Fatalf("member: policy.inline eligible_grants = %d, want 0 (exfil pairing dropped)", got)
 	}
 
 	// Operator (ceiling authority) is unclamped - their grant is kept.
-	doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), body)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("admin: code = %d, want 500 (errCreateRunNoStoreConfigured — proves it reached CreateRun)", w.Code)
+	}
 	if got := lastInlinePolicyGrantCount(t, h.audit.events); got != 1 {
 		t.Fatalf("admin: policy.inline eligible_grants = %d, want 1 (unclamped)", got)
 	}
@@ -544,11 +594,10 @@ func TestPolicy_RejectsBedrockResidentSecretAtSinks(t *testing.T) {
 	}
 }
 
-// ─── H1 regression: the stored/default policy branch now runs the SAME
-// validateInlineSecretRefs check as the inline branch (previously it only ran
-// for inline_policy) — a stored or default policy naming a missing secret now
-// 422s at create, naming the secret, instead of only failing later at first
-// proxy injection. See CHANGELOG.md "Changed".
+// The stored/default policy branch runs the same validateInlineSecretRefs
+// check as the inline branch — a stored or default policy naming a missing
+// secret 422s at create, naming the secret, instead of only failing later at
+// first proxy injection.
 
 // stubPolicyStore is a minimal store.Store for the stored-policy path: it
 // embeds the interface (nil — any other method panics if called, which is
@@ -647,16 +696,16 @@ func TestCreateRun_StoredPolicyNoSecretStoreRejected(t *testing.T) {
 	}
 }
 
-// TestStoredSecretGrantPairing_UnknownKindIsRefused is the closed-switch
-// regression. storedSecretGrantPairing's default arm used to return
-// covered=false — indistinguishable from "github_token names no stored secret"
-// — so BOTH member gates waved an unrecognized kind straight through:
-// filterMemberGrants kept it unclamped by the operator's eligible-grant
-// pairing, and narrowMemberInlinePolicy kept it unchecked against capSecret.
-// Any grant kind added to types.GrantKind and wired to a stored secret was
-// therefore member-authorable until somebody remembered to extend the switch.
-// It must now be REFUSED (covered=true WITH an error), which filterMemberGrants
-// renders as a 422 and narrowMemberInlinePolicy as a drop.
+// TestStoredSecretGrantPairing_UnknownKindIsRefused pins the closed switch. If
+// storedSecretGrantPairing's default arm returned covered=false —
+// indistinguishable from "github_token names no stored secret" — both member
+// gates would wave an unrecognized kind straight through: filterMemberGrants
+// would keep it unclamped by the operator's eligible-grant pairing, and
+// narrowMemberInlinePolicy would keep it unchecked against capSecret, so any
+// grant kind added to types.GrantKind and wired to a stored secret would be
+// member-authorable until somebody remembered to extend the switch. It must be
+// refused (covered=true with an error), which filterMemberGrants renders as a
+// 422 and narrowMemberInlinePolicy as a drop.
 func TestStoredSecretGrantPairing_UnknownKindIsRefused(t *testing.T) {
 	unknown := types.GrantSpec{
 		Kind:  types.GrantKind("some_future_kind"),
@@ -695,7 +744,7 @@ func TestStoredSecretGrantPairing_UnknownKindIsRefused(t *testing.T) {
 	}
 }
 
-// ─── 6c: own-key exemptions ───────────────────────────────────────────────────
+// 6c: own-key exemptions
 
 // memberAPIKeyGrant builds an api_key grant scoped to (host, secret) — the
 // same shape apiKey() in TestFilterMemberGrants builds, factored out for the
@@ -872,10 +921,10 @@ func TestCreateRun_OperatorStillUnclamped(t *testing.T) {
 // synthesises the legacy anthropic_api_key integration row and provisions
 // model access with no "no model access" warning — proven at the unit level
 // AND through the real POST /api/v1/runs handler (handleCreateRun), which
-// used to consult the operator-only presentSecretNames and so disagreed with
-// preflight's presentSecretNamesFor (handleCreateRun's since-fixed miss). The
-// negative control (same request, member owns nothing) proves the warning
-// still fires — the fix widens presence, it does not silence the check.
+// must consult presentSecretNamesFor like preflight does, not the
+// operator-only presentSecretNames. The negative control (same request,
+// member owns nothing) proves the warning still fires — member presence
+// widens what counts, it does not silence the check.
 func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
 	h := newHarness(t)
 	h.srv.cfg.Secrets = &memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}}
@@ -901,7 +950,7 @@ func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
 		t.Fatalf("expected model access provisioned with no operator row, got note=%q", note)
 	}
 
-	// THROUGH THE HANDLER: a member's real create-run request, hand-authoring
+	// Through the handler: a member's real create-run request, hand-authoring
 	// their own inline api_key grant naming their own secret (the
 	// filterMemberGrants own-key lane) — the request body is IDENTICAL in the
 	// positive and negative cases below; only whether "bob" owns the secret
@@ -928,7 +977,7 @@ func TestIntegrations_MemberKeySynthesisesRow_NoWarning(t *testing.T) {
 		}
 		srv := New(cfg)
 		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-			ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember), body)
+			ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser), body)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("create = %d, want 201: %s", w.Code, w.Body.String())
 		}
@@ -964,7 +1013,7 @@ func TestIntegrations_MemberList_OwnKeyListed(t *testing.T) {
 		cfg.Secrets = secrets
 		srv := New(cfg)
 		w := doSSO(t, srv, http.MethodGet, "/api/v1/integrations",
-			ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember), "")
+			ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser), "")
 		if w.Code != http.StatusOK {
 			t.Fatalf("list = %d, want 200: %s", w.Code, w.Body.String())
 		}
@@ -999,7 +1048,7 @@ func TestIntegrations_MemberSelectsOwnKey_NoWarning(t *testing.T) {
 		cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
 		srv := New(cfg)
 		return doSSO(t, srv, http.MethodPost, "/api/v1/runs",
-			ssoSession(t, "bob", "bob@corp.example", oidc.RoleMember), body)
+			ssoSession(t, "bob", "bob@corp.example", oidc.RoleUser), body)
 	}
 	w := createRun(&memSecrets{owned: map[string]map[string][]byte{"bob": {"anthropic-api-key": []byte("sk-ant-test")}}})
 	if w.Code != http.StatusCreated {

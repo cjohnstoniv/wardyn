@@ -5,7 +5,6 @@
 
 import * as React from "react";
 import {
-  Link,
   NavLink,
   Outlet,
   useLocation,
@@ -14,47 +13,38 @@ import {
 import {
   Activity,
   AlertTriangle,
-  ChevronsUpDown,
+  CircleUser,
   Compass,
-  FlaskConical,
   Fingerprint,
   FolderOpen,
-  KeyRound,
+  HardDrive,
   Lock,
-  LogOut,
   Menu,
-  Moon,
   Play,
-  Plus,
   Scale,
   ScrollText,
   Settings,
   ShieldCheck,
-  Sun,
   UserCog,
   Users,
 } from "lucide-react";
-import { WardynWordmark } from "../wardyn/logo";
-import { Chip } from "../wardyn/primitives";
 import { SHELL } from "../wardyn/copy";
-import { useTheme } from "../wardyn/theme-provider";
 import { lastCheckedLabel } from "../../lib/readiness";
-// GOVERNANCE.TITLE is ONE string for two places — this nav label and the
-// screen's own heading — the way every other nav entry already works. There is
-// no second "Governance profiles" label (governance-prompt.md §7.2).
-import { GOVERNANCE } from "../../lib/governance-copy";
+import { UnsavedGuardProvider, useGuardedNavClick } from "../../lib/use-unsaved-guard";
+import { SidebarLowerLinks } from "./sidebar-settings-link";
+// GOVERNANCE_NAV_TITLE is ONE string for two places — this nav label and the
+// governance screen's own heading (governance-copy.ts's GOVERNANCE.TITLE reads
+// the same constant) — the way every other nav entry already works. There is
+// no second "Governance profiles" label (governance-prompt.md §7.2). Imported
+// from nav-copy.ts rather than governance-copy.ts itself so the eager sidebar
+// doesn't drag the whole §7.2-§7.9 screen-only canon table into the entry
+// chunk (#498) for one string.
+import { GOVERNANCE_NAV_TITLE } from "../../lib/nav-copy";
 import { cn } from "../ui/utils";
 import { Button } from "../ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../ui/sheet";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
-import { MemberModeBanner, MemberModeMenuItem } from "../wardyn/member-mode-banner";
+import { PreviewAvailableProvider, UserPreviewBanner } from "../wardyn/user-preview";
+import { resolveConfinementPosture } from "../../lib/confinement-posture";
 import { ErrorBoundary } from "../wardyn/error-boundary";
 import {
   OperatorProvider,
@@ -62,6 +52,11 @@ import {
   type Role,
 } from "../wardyn/operator-context";
 import { health as api, type MeUserDrive } from "../../lib/api/health";
+import { TopBar } from "./top-bar";
+import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
+import { useShellView, useViewResync, ViewSwitch } from "../wardyn/view-switch";
+import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
+import { NAV as SETTINGS_NAV } from "../../lib/unsaved-copy";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
@@ -72,7 +67,7 @@ export interface ShellMeta {
   trustDomain: string;
   identityProvider: string;
   // principal is the OWNERSHIP key (the OIDC sub, "admin-token", "local:…"):
-  // it feeds PrincipalContext and every `usePrincipal() === run.created_by`
+  // it feeds MeIdentity.principal and every `usePrincipal() === run.created_by`
   // gate. email and name are DISPLAY ONLY — what the header shows for "you",
   // in that order of preference — and are "" outside SSO or when the IdP sent
   // none, so the header falls back to the principal there (0.7.1).
@@ -90,7 +85,7 @@ export interface ShellMeta {
   // returns null, so `resolved` flips on a FAILED fetch too. Anything that
   // picks a lane off `operator` rather than merely offering a control needs
   // this one instead (R4-F110; see operator-context.tsx's
-  // OperatorResolvedContext for the attach-WS case that named it).
+  // MeIdentity.operatorResolved for the attach-WS case that named it).
   identityResolved: boolean;
   // Fail-open (see operator-context.tsx): starts true and stays true unless
   // /me resolves and explicitly says otherwise — an unresolved or failed
@@ -109,7 +104,7 @@ export interface ShellMeta {
   // When the SSO session dies outright (no refresh) — null for
   // local/token auth, which has no session to expire.
   sessionExpiresAt: Date | null;
-  // M3 — see operator-context.tsx's MemberLocalDirRootContext. null until /me
+  // M3 — see operator-context.tsx's MeIdentity.memberLocalDirRoot. null until /me
   // resolves and stays null (fail-closed: unavailable) if it never does.
   memberLocalDirRoot: string | null;
   // 0.7 — the caller's own allocation and the profile door beside it, the same
@@ -119,7 +114,7 @@ export interface ShellMeta {
   // The trade that buys is FRESHNESS PER PAGE LOAD, not per navigation — a
   // member paused mid-session keeps the offer until they reload and learns at
   // launch, which is the direction of error this feature can afford (see
-  // operator-context.tsx's UserDriveContext for the whole argument).
+  // operator-context.tsx's UserDriveMeta for the whole argument).
   userDrive: MeUserDrive | null;
   userDriveDeniedByProfile: string;
   // R4/F091 — the THIRD drive key: WHY /me could not answer, "" when it could.
@@ -139,6 +134,17 @@ export interface ShellMeta {
   /** 0.7.5 — whether this deployment's roster makes the no-credential preview
    *  mean anything. False hides the second account-menu entry entirely. */
   memberPreviewAvailable: boolean;
+  /** #162 — /healthz's `runner` ("docker" / "k8s" / "" on a pre-mount default
+   *  or an older daemon) and `network_policy` ("enforced" / "acknowledged" /
+   *  "unenforced", absent as ""). Neither is read directly by a screen — both
+   *  feed resolveConfinementPosture (confinement-posture.tsx), which is the
+   *  only place that may tell "not applicable" (Docker) from "could not
+   *  confirm" (a k8s daemon that omitted the verdict) apart. */
+  runner: string;
+  networkPolicy: string;
+  /** /healthz's `sso`: OIDC is configured. With it, the admin token is not a
+   *  person and has no User view (console-view.tsx#viewAccess). */
+  sso: boolean;
 }
 
 /** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
@@ -167,6 +173,9 @@ function useMeta(): [ShellMeta, () => void] {
     memberMode: false,
     memberModeNoCredential: false,
     memberPreviewAvailable: false,
+    runner: "",
+    networkPolicy: "",
+    sso: false,
   });
   React.useEffect(() => {
     let alive = true;
@@ -199,6 +208,9 @@ function useMeta(): [ShellMeta, () => void] {
           memberMode: me?.member_mode ?? false,
           memberModeNoCredential: me?.member_mode_no_credential ?? false,
           memberPreviewAvailable: me?.member_preview_available ?? false,
+          runner: h.runner ?? "",
+          networkPolicy: h.network_policy ?? "",
+          sso: h.sso ?? false,
         });
       })
       .catch(() => {
@@ -257,90 +269,72 @@ function useSessionExpiry(expiresAt: Date | null): SessionExpiryState {
   return state;
 }
 
-function initials(principal: string): string {
-  const base = principal.split("@")[0] || principal;
-  // Whitespace joins the separators (0.7.1): the value may now be an IdP
-  // display name ("Alice Smith" → AS), not only an email local-part.
-  const parts = base.split(/[\s.\-_]+/).filter(Boolean);
-  const s = (parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? parts[0]?.[1] ?? "");
-  return (s || base.slice(0, 2)).toUpperCase();
-}
-
-// Flat sidebar nav — nine items, no group headings (stage-1 redesign). Demos
-// and Settings are reachable from the account menu below rather than here.
+// Two nav sets, one per view (admin-member-modes-design.md §3, packet M-A).
+// The Admin view links its own /admin/* paths so the active item follows the
+// URL; the User view is Runs · Approvals · Workspaces at the person's scope.
+// Hiding is COSMETIC ONLY: every route enforces its tier server-side
+// (internal/api/routes.go), and an admin in the User view is answered as a
+// user by the session clamp.
 //
-// Recordings is BACK (mock M6). It left the sidebar on the theory that a deep
-// link from a run or a workspace was enough, which made the evidence trail
-// undiscoverable: the screen and its route existed, and nothing on the console
-// ever said so. It sits after Audit because the two answer the same question —
-// "what happened" — one as events, one as the session itself.
+// Recordings sits after Audit because the two answer the same question, "what
+// happened". Governance sits between Policies and Permissions so the three read
+// as one narrowing sequence (mock Q1).
 interface NavItem {
   to: string;
   label: string;
   icon: React.ElementType;
   badge?: "approvals" | "attention";
+  // Which admin tier the item belongs to, when only one: a security admin's
+  // nav shows only what that tier can write or read org-wide (§2.1). Drives
+  // joins it (grants and preview are securityOps); Secrets is super-only;
+  // Recordings waits for F1 (packet M-A QM-5).
+  tier?: "super" | "security";
 }
-const NAV_ITEMS: NavItem[] = [
+const ADMIN_NAV: NavItem[] = [
+  { to: "/admin/runs", label: "Runs", icon: Activity, badge: "attention" },
+  { to: "/admin/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
+  { to: "/admin/workspaces", label: "Workspaces", icon: FolderOpen },
+  { to: "/admin/policies", label: "Policies", icon: UserCog },
+  // GOVERNANCE_NAV_TITLE is one string for the nav and the screen's heading.
+  { to: "/admin/governance", label: GOVERNANCE_NAV_TITLE, icon: Scale },
+  { to: "/admin/permissions", label: "Permissions", icon: Users },
+  { to: "/admin/drives", label: "Drives", icon: HardDrive, tier: "security" },
+  { to: "/admin/secrets", label: "Secrets", icon: Lock, tier: "super" },
+  { to: "/admin/audit", label: "Audit", icon: ScrollText },
+  { to: "/admin/recordings", label: "Recordings", icon: Play, tier: "super" },
+];
+const USER_NAV: NavItem[] = [
   { to: "/runs", label: "Runs", icon: Activity, badge: "attention" },
-  {
-    to: "/approvals",
-    label: "Approvals",
-    icon: ShieldCheck,
-    badge: "approvals",
-  },
+  { to: "/approvals", label: "Approvals", icon: ShieldCheck, badge: "approvals" },
   { to: "/workspaces", label: "Workspaces", icon: FolderOpen },
-  { to: "/policies", label: "Policies", icon: UserCog },
-  // Governance (0.7) sits BETWEEN Policies and Permissions so the three read as
-  // one narrowing sequence: the deployment ceiling, the ceilings assigned over
-  // it, then the grants layered inside one (mock Q1). Not in MEMBER_NAV_PATHS —
-  // a member never sees it, and there is no member governance route; its own
-  // routes are securityOps server-side.
-  { to: "/governance", label: GOVERNANCE.TITLE, icon: Scale },
-  // Permissioning (0.6 pillar 2) sits beside Policies: both answer "what is
-  // allowed here", one for runs and one for the humans launching them. It is
-  // admin-only — deliberately NOT in MEMBER_NAV_PATHS below, and every route
-  // behind it is operatorOnly server-side.
-  { to: "/permissions", label: "Permissions", icon: Users },
-  { to: "/secrets", label: "Secrets", icon: Lock },
-  { to: "/audit", label: "Audit", icon: ScrollText },
-  { to: "/recordings", label: "Recordings", icon: Play },
+];
+// Under the divider (#217's slot): Setup and Settings in the Admin view, where
+// a security admin has neither; Getting started and Your account in the User
+// view.
+const ADMIN_LOWER: NavItem[] = [
+  { to: "/admin/setup", label: "Setup", icon: Compass },
+  { to: "/admin/settings", label: SETTINGS_NAV.SETTINGS, icon: Settings },
+];
+const USER_LOWER: NavItem[] = [
+  { to: "/setup", label: "Getting started", icon: Compass },
+  { to: "/account", label: NAV.YOUR_ACCOUNT, icon: CircleUser },
 ];
 
-// Member console (B3): a member launches/governs only THEIR OWN runs — nav is
-// Runs · Approvals · Workspaces, nothing else (no Policies/Permissions/
-// Secrets/Audit/Recordings). Filtered by route path, never by re-deriving from
-// a second copy of NAV_ITEMS.
-//
-// Workspaces joined the member set (mock M6): a member launches runs AGAINST
-// workspaces and had no way to see the ones they can use — the picker in the
-// New run wizard was the only place they appeared at all. The screen is
-// already server-scoped like every other member surface.
-//
-// Hiding here is COSMETIC ONLY — every route a member can't reach still
-// enforces that itself server-side (internal/api/routes.go's operatorOnly
-// group and the owner-or-admin routes); this just keeps a member from
-// discovering an admin-only screen as a raw 403 or an empty list instead of
-// simply not offering it.
-const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals", "/workspaces"]);
-function navItemsForRole(role: Role, identityResolved: boolean): NavItem[] {
-  // B1 — the fix the field report bought: `role` is fail-open "admin" for an
-  // unresolved /me AND for one that failed, so leaving this unguarded offers
-  // Policies / Governance / Permissions / Secrets / Audit to a human the
-  // server had correctly refused. Indistinguishable from an authz breach,
-  // and it cost a customer hours of incident response. So "not known yet"
-  // renders neither nav — not the admin set, not the member set — and the
-  // banner below says why. `role`'s own fail-open default stays exactly as
-  // it was (see
-  // operator-context.tsx: never harden it), because the answer to a guess is
-  // not a different guess, it is declining to draw one.
-  if (!identityResolved) return [];
-  // `!== "member"` and NOT `=== "admin"`, which is what makes this correct
-  // unchanged under the three-tier model: a SECURITY ADMIN gets the full nav
-  // (they reach approvals, audit, permissions and governance), and each of
-  // those screens gates its own writes on the right predicate. Hiding is
-  // cosmetic anyway — see the note above.
-  if (role !== "member") return NAV_ITEMS;
-  return NAV_ITEMS.filter((i) => MEMBER_NAV_PATHS.has(i.to));
+function navItemsForView(
+  view: ConsoleView,
+  superAdmin: boolean,
+  identityResolved: boolean,
+): { items: NavItem[]; lower: NavItem[] } {
+  // B1 — `role` and the tiers are fail-open for an unresolved or failed /me,
+  // so "not known yet" renders neither nav, rather than a guess, and the
+  // banner says why. The fail-open defaults themselves stay (operator-context.tsx).
+  if (!identityResolved) return { items: [], lower: [] };
+  if (view === "user") return { items: USER_NAV, lower: USER_LOWER };
+  const tier = superAdmin ? "super" : "security";
+  return {
+    items: ADMIN_NAV.filter((i) => !i.tier || i.tier === tier),
+    lower: superAdmin ? ADMIN_LOWER : [],
+  };
 }
 
 // FOCUS MODE (design board 2c) — one screen, the run cockpit, can ask the shell
@@ -378,6 +372,18 @@ const ModelAccessBanner = React.lazy(() =>
   import("../wardyn/model-access-banner").then((m) => ({ default: m.ModelAccessBanner })),
 );
 
+// #162 — same lazy rationale as ModelAccessBanner above (this file is in the
+// entry chunk), and the same "renders nothing when there is nothing to say"
+// shape: mounted LAST in the banner stack, after ModelAccessBanner, per the
+// mock approval's third ruling.
+const ConfinementPostureBanner = React.lazy(() =>
+  import("../wardyn/confinement-posture").then((m) => ({ default: m.ConfinementPostureBanner })),
+);
+// #484 — same lazy rationale; mounted between the two bands above.
+const EveryoneAdminBanner = React.lazy(() =>
+  import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
+);
+
 const navLinkClass = (isActive: boolean) =>
   cn(
     "relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",
@@ -401,9 +407,21 @@ function SidebarNav({
   meta: ShellMeta;
   onNavigate?: () => void;
 }) {
-  const items = navItemsForRole(meta.role, meta.identityResolved);
+  const { access, view, hasSwitch } = useShellView(meta);
+  const { items, lower } = navItemsForView(view, meta.operator, meta.identityResolved);
+  const navigate = useNavigate();
+  // #217 — a sidebar click can navigate away from a dirty form (Settings ➝
+  // Providers is the case the mock walks); this asks the shared guard first
+  // instead of always navigating straight through (lib/use-unsaved-guard.tsx).
+  const guardedClick = useGuardedNavClick(navigate);
   return (
     <>
+      {/* Below sm the switch leaves the top bar for the top of this sheet, so
+          New run and the avatar stay on screen (F7-F2). */}
+      {onNavigate && hasSwitch && <ViewSwitch access={access} view={view} onNavigate={onNavigate} className="mb-3 sm:hidden" />}
+      {view === "admin" && items.length > 0 && (
+        <div className="label-eyebrow mb-2 px-2.5">{CONSOLE_VIEW.EYEBROW_ADMIN}</div>
+      )}
       <nav className="space-y-0.5">
         {items.map((item) => {
           const count =
@@ -417,7 +435,7 @@ function SidebarNav({
               key={item.to}
               to={item.to}
               end
-              onClick={onNavigate}
+              onClick={guardedClick(item.to, onNavigate)}
               className={({ isActive }) => navLinkClass(isActive)}
             >
               {({ isActive }) => (
@@ -439,6 +457,13 @@ function SidebarNav({
             </NavLink>
           );
         })}
+        {/* #217 — last, under a divider: Settings (Admin view) or Your
+            account (User view), with the view's setup page above it. */}
+        <SidebarLowerLinks
+          items={lower}
+          navLinkClass={navLinkClass}
+          onClick={(to) => guardedClick(to, onNavigate)}
+        />
       </nav>
 
       <div className="mt-auto space-y-3">
@@ -518,8 +543,15 @@ export function AppShell({
   // an ordinary first paint and says nothing to anybody.
   const identityUnknown = meta.resolved && !meta.identityResolved;
   const sessionExpiry = useSessionExpiry(meta.sessionExpiresAt);
+  // #162 — see lib/confinement-posture.ts for the runner+network_policy table.
+  const confinementPosture = resolveConfinementPosture(meta.runner, meta.networkPolicy);
   const location = useLocation();
   const navigate = useNavigate();
+  const { access, view } = useShellView(meta);
+  useViewResync(access, meta.memberMode);
+  React.useEffect(() => {
+    document.title = view === "admin" ? CONSOLE_VIEW.TITLE_ADMIN : CONSOLE_VIEW.TITLE_USER;
+  }, [view]);
 
   // See FocusContext above. Nothing here decides WHEN focus is on — the run
   // cockpit's canvas does, and it clears this on unmount.
@@ -544,9 +576,15 @@ export function AppShell({
       userDrive={meta.userDrive}
       userDriveDeniedByProfile={meta.userDriveDeniedByProfile}
       userDriveUnavailable={meta.userDriveUnavailable}
+      confinementPosture={confinementPosture}
     >
       <RoleProvider role={meta.role} roleResolved={meta.resolved}>
+        <ViewAccessProvider value={access}>
+        <PreviewAvailableProvider value={access === "session-admin" && meta.memberPreviewAvailable}>
         <FocusContext.Provider value={focusValue}>
+        {/* #217 — above BOTH the sidebar that can navigate away and every
+          screen below it that can register a dirty form (lib/use-unsaved-guard.tsx). */}
+        <UnsavedGuardProvider>
           <div className="flex h-screen flex-col bg-background text-foreground">
             {/* Skip-to-content: first focusable element, visually hidden until focused,
           so a keyboard user can jump past the nav to the main region (WCAG 2.4.1). */}
@@ -569,10 +607,10 @@ export function AppShell({
                 onNewRun={() => navigate("/runs/new")}
               />
             )}
-            {/* Renders nothing when the mode is off. FIRST of the banners and not
-          hidden in focus mode: it explains every refusal the other three
-          might be mistaken for, and it is the only way back out. */}
-            <MemberModeBanner active={meta.memberMode} noCredential={meta.memberModeNoCredential} />
+            {/* The no-credential preview's band, and its way out. FIRST of the
+          banners and not hidden in focus mode: it explains the refusals the
+          others might be mistaken for. The plain User view has no band. */}
+            <UserPreviewBanner active={meta.memberModeNoCredential} />
             {/* NOT hidden in focus mode, and z-50 so the cockpit's overlay (z-40)
           cannot paint over it: this banner is the only thing that separates a
           quiet fleet from a dead daemon, and a full-bleed terminal is exactly
@@ -648,6 +686,18 @@ export function AppShell({
               <React.Suspense fallback={null}>
                 <ModelAccessBanner />
               </React.Suspense>
+              {/* #484 — admins only: after the per-person credential block,
+              before the cluster-wide confinement note. */}
+              <React.Suspense fallback={null}>
+                <EveryoneAdminBanner />
+              </React.Suspense>
+              {/* #162 — last in the stack (mock-approval ruling 3): the four
+              bands above are each the better explanation of what you are
+              looking at, or block the very thing a run needs to start, and
+              this one has no per-person urgency. */}
+              <React.Suspense fallback={null}>
+                <ConfinementPostureBanner />
+              </React.Suspense>
             </div>
             <div className="flex min-h-0 flex-1">
               {!focus && (
@@ -693,222 +743,12 @@ export function AppShell({
           screen you reached last, after making them all blind. The one-page
           screen shows the live policy rail beside the form the whole time. */}
           </div>
+        </UnsavedGuardProvider>
         </FocusContext.Provider>
+        </PreviewAvailableProvider>
+        </ViewAccessProvider>
       </RoleProvider>
     </OperatorProvider>
-  );
-}
-
-// Exported (like MobileNav above) so a unit test can drive the account menu
-// directly — SidebarNav's own member tests don't touch this at all.
-export function TopBar({
-  onSignOut,
-  meta,
-  pendingApprovals,
-  attentionCount,
-  onNewRun,
-}: {
-  onSignOut: () => void;
-  meta: ShellMeta;
-  pendingApprovals: number;
-  attentionCount: number;
-  onNewRun: () => void;
-}) {
-  // What the header calls "you": the IdP's display name, else the session
-  // email, else the principal itself (an admin token or local mode has
-  // neither). Display only — PrincipalContext below keeps meta.principal.
-  const display = meta.name || meta.email || meta.principal;
-  const { theme, toggle } = useTheme();
-  return (
-    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-border bg-card/70 px-4 backdrop-blur">
-      <MobileNav
-        pendingApprovals={pendingApprovals}
-        attentionCount={attentionCount}
-        meta={meta}
-      />
-      <Link
-        to="/runs"
-        className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
-      >
-        {/* F7-F2: icon-only below sm, so New run + the user menu stay onscreen. */}
-        <WardynWordmark compact="sm" />
-      </Link>
-
-      {/* Shown ONLY when non-default. A default install is always
-          wardyn.local / embedded, so these chips would be four constants nobody
-          can act on, occupying the most valuable strip on every screen — while
-          the footer panel still states the trust domain for anyone who wants it.
-          An external SPIRE provider or a custom trust domain IS worth a reader's
-          attention, and only then do they appear. */}
-      {(isCustomTrustDomain(meta.trustDomain) ||
-        isCustomIdentityProvider(meta.identityProvider)) && (
-        <div className="ml-2 hidden items-center gap-2 lg:flex">
-          {isCustomTrustDomain(meta.trustDomain) && (
-            <EnvIndicator trustDomain={meta.trustDomain} />
-          )}
-          {isCustomIdentityProvider(meta.identityProvider) && (
-            <Chip tone="neutral" className="font-mono">
-              <Fingerprint className="size-3" />
-              identity: {meta.identityProvider}
-            </Chip>
-          )}
-        </div>
-      )}
-
-      {/* F7-F2: min-w-0 lets this cluster actually shrink instead of forcing
-          the header wider than the viewport (no flex-wrap/height change). */}
-      <div className="ml-auto flex min-w-0 items-center gap-1.5">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggle}
-          aria-label="Toggle theme"
-        >
-          {theme === "dark" ? (
-            <Sun className="size-4" />
-          ) : (
-            <Moon className="size-4" />
-          )}
-        </Button>
-
-        <Button onClick={onNewRun} size="sm" aria-label="New run">
-          <Plus className="size-4" /> <span className="hidden sm:inline">New run</span>
-        </Button>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            {/* The shared Button (not a raw <button>), matching
-                every sibling header control (theme toggle above, mobile nav
-                trigger) — its focus-visible ring is what keyboard focus falls
-                back to instead of the bare unthemed browser outline. */}
-            <Button
-              variant="ghost"
-              className="h-auto gap-2 rounded-md px-1.5 py-1"
-            >
-              <span className="flex size-7 items-center justify-center rounded-full bg-secondary text-xs text-foreground">
-                {initials(display)}
-              </span>
-              <span className="hidden max-w-48 truncate text-sm sm:block">
-                {display.split("@")[0]}
-              </span>
-              <ChevronsUpDown className="size-3.5 text-muted-foreground" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>
-              <div className="flex items-center gap-1.5">
-                <span className="min-w-0 truncate text-xs" title={display}>
-                  {display}
-                </span>
-                {/* Role is a fact, not an alert (prompt-v2): a quiet chip, no
-                    banner, no callout — admin is unchanged, member just says so.
-                    Gated on meta.method like its sibling line below: /me hasn't
-                    resolved (or failed) while method is still "" — the fail-open
-                    role default is "admin" (operator-context.tsx), which would
-                    otherwise flash ADMIN next to a still-"unknown" principal. */}
-                {meta.method && (
-                  <Chip
-                    tone="neutral"
-                    className="shrink-0 uppercase tracking-wide"
-                  >
-                    {meta.role}
-                  </Chip>
-                )}
-              </div>
-              {/* The sign-in subject, kept where admins are told to copy it from
-                  (OPERATIONS.md: paste the sign-in subject) — only when the
-                  line above is not already showing it. */}
-              {display !== meta.principal && (
-                <div
-                  className="min-w-0 truncate font-mono text-xs text-muted-foreground"
-                  title={meta.principal}
-                >
-                  {meta.principal}
-                </div>
-              )}
-              <div className="mt-0.5 text-meta text-muted-foreground">
-                {meta.method === "sso"
-                  ? "signed in via SSO"
-                  : meta.method === "token"
-                    ? "admin token"
-                    : meta.method === "local"
-                      ? "local mode — no login on this install"
-                      : ""}
-              </div>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {/* The guided Getting Started funnel — an operator-chosen route
-                (setup-gate.ts has no hard gate any more), not the eight-item
-                sidebar: this menu entry and the Runs empty state's "guided
-                tour" link (runs-first-run.tsx) are the two ways in. */}
-            <DropdownMenuItem asChild>
-              <Link to="/setup">
-                <Compass className="size-4" /> Getting started
-              </Link>
-            </DropdownMenuItem>
-            {/* Settings is the one home for connections — Host · Model provider ·
-                Providers · Your SSH keys. It replaced /integrations, which now
-                redirects here, and the barrier chip above points at it too.
-                Hidden on a SETTLED-but-unknown identity: /settings is the two-click
-                route to the operator-only Model-provider Connect/Disconnect card
-                and the Providers card into admin /providers, and the shell paints
-                no route at all in that state, so the link would be an invitation
-                to a blank page. Sign out below stays — it is the one control that
-                still works. */}
-            {!(meta.resolved && !meta.identityResolved) && (
-              <DropdownMenuItem asChild>
-                <Link to="/settings">
-                  <Settings className="size-4" /> Settings
-                </Link>
-              </DropdownMenuItem>
-            )}
-            <MemberModeMenuItem meta={meta} />
-            <DropdownMenuItem asChild>
-              <Link to="/ssh-keys">
-                <KeyRound className="size-4" /> SSH keys
-              </Link>
-            </DropdownMenuItem>
-            {/* Demos has no server-side role gate (routes.go), so admins keep
-                the same reasoning the old sidebar carried — it points into
-                Getting Started's first demo step, the one demos surface now
-                (/demos only redirects here). Hidden for members (Phase 5):
-                /setup?step=sealed-box is meaningless on the member's own
-                Getting Started (member-getting-started.tsx) — a member never
-                reaches the admin welcome hero or its step query at all, and
-                its own episode catalog is a single flat "Watch" list at the
-                bottom of the page, not a step deep link.
-                `!== "admin"`, never `=== "member"`. Only the SUPER admin's
-                SetupScreen honours ?step — a security admin's /setup/status is
-                redacted on the same !isOperator predicate (internal/api/setup.go)
-                and App.tsx hands them the same Getting Started, so the deep link
-                is exactly as dead for them. */}
-            {meta.role === "admin" && (
-              <DropdownMenuItem asChild>
-                <Link to="/setup?step=sealed-box">
-                  <FlaskConical className="size-4" /> Demos
-                </Link>
-              </DropdownMenuItem>
-            )}
-            {/* Local mode has no session to sign out of — humanOrAdminAuth
-                (internal/api/http.go) bypasses auth entirely, so "Sign out" would drop
-                the client to a SignIn screen whose admin-token field is unchecked
-                (probeAuth trivially re-succeeds against the auth-bypassed API on
-                whatever's typed). Hide the no-op action instead of offering fake auth. */}
-            {meta.method !== "local" && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={onSignOut}
-                  className="text-danger focus:text-danger"
-                >
-                  <LogOut className="size-4" /> Sign out
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </header>
   );
 }
 
@@ -930,11 +770,3 @@ export function isCustomIdentityProvider(v: string): boolean {
   );
 }
 
-function EnvIndicator({ trustDomain }: { trustDomain: string }) {
-  return (
-    <span className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2 py-1 text-xs">
-      <span className="size-1.5 rounded-full bg-success" />
-      <span className="font-mono text-muted-foreground">{trustDomain}</span>
-    </span>
-  );
-}

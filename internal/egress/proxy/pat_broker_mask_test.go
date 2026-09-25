@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -17,18 +18,18 @@ import (
 //
 // procRegistry is what Proxy.httpError and the decision-log sink (maskDecisionBytes)
 // run every sandbox-visible error string and every emitted decision row through.
-// Three of the four proxy-side credential sources fed it — the injector, the
-// GitHub App lane, and the LLM-inspection secrets — and the git_pat lane, which
-// mints a RAW operator PAT server-side on the same request path, did not: it
-// re-implemented the mint instead of sharing the GitHub lane's, so the
-// AddGlobal beside that mint never ran for it and a `glpat-…` passed
-// maskDecisionBytes verbatim. The GitHub lane's own comment states the standard
-// this holds both lanes to: "no path today" is not a property of the token, it
-// is a property of the current call sites.
+// Four proxy-side credential sources feed it — the injector, the GitHub App
+// lane, the LLM-inspection secrets, and the git_pat lane, which mints a raw
+// operator PAT server-side on the same request path. The git_pat lane must
+// register its PAT too: a lane that re-implements the mint instead of sharing
+// the GitHub lane's skips the AddGlobal beside that mint, and a `glpat-…` then
+// passes maskDecisionBytes verbatim. The GitHub lane's own comment states the
+// standard this holds both lanes to: "no path today" is not a property of the
+// token, it is a property of the current call sites.
 //
 // The two subtests are deliberately the same assertion against the two lanes:
-// the github_token case is the CONTROL that passed before and must keep passing,
-// so a regression that unregisters both is not read as "the pin moved".
+// the github_token case is the control that must keep passing, so a change
+// that unregisters both is not read as "the pin moved".
 func TestBrokeredCredentialsAreMaskRegistered(t *testing.T) {
 	// A decision row shaped like the ones both sinks actually carry, so this
 	// asserts the real masking path rather than a bare registry lookup.
@@ -39,7 +40,10 @@ func TestBrokeredCredentialsAreMaskRegistered(t *testing.T) {
 	t.Run("gitPAT", func(t *testing.T) {
 		// Unique per lane and per run so the process-global registry another test
 		// in this package populated can never make this pass by accident.
-		const pat = "glpat-F123-ONLY-THIS-TEST-MINTS-THIS"
+		// Unique per ITERATION too: procRegistry is process-global and never
+		// evicted, so a constant would be registered already on a second
+		// `-count` iteration and fail its own precondition.
+		pat := "glpat-F123-ONLY-THIS-TEST-MINTS-THIS-" + uuid.NewString()
 		if !bytes.Contains(maskDecisionBytes(row(pat)), []byte(pat)) {
 			t.Fatal("precondition failed: this value is registered before the broker ever minted it")
 		}
@@ -63,7 +67,7 @@ func TestBrokeredCredentialsAreMaskRegistered(t *testing.T) {
 	})
 
 	t.Run("githubToken", func(t *testing.T) {
-		const tok = "ghs_F100_ONLY_THIS_TEST_MINTS_THIS"
+		tok := "ghs_F100_ONLY_THIS_TEST_MINTS_THIS_" + strings.ReplaceAll(uuid.NewString(), "-", "_")
 		if !bytes.Contains(maskDecisionBytes(row(tok)), []byte(tok)) {
 			t.Fatal("precondition failed: this value is registered before the broker ever minted it")
 		}

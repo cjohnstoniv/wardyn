@@ -371,6 +371,22 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		if s.writeAdmissionLaunchRefusal(w, r, lerr) {
 			return
 		}
+		// The same gate could not read the sign-in state: the 503 every
+		// other door answers, not the 422 below and not a bare 500.
+		if errors.Is(lerr, errGitCredentialUnreadable) {
+			writeGitCredentialUnreadable(w, r, lerr)
+			return
+		}
+		// The per-user Azure DevOps gate (#386 review follow-up N4): admitted,
+		// but this person hasn't connected — the same 422 shape the New Run
+		// door and the Build/Scan steps answer with (gitCredentialErrorBody).
+		var gcErr *gitCredentialRefusalError
+		if errors.As(lerr, &gcErr) {
+			writeJSON(w, http.StatusUnprocessableEntity, gitCredentialErrorBody{
+				Error: gitCredentialNotConnectedRefusal, Reason: gitCredentialRefusalReason, Org: gcErr.Org,
+			})
+			return
+		}
 		// A governance LIMIT is a refusal, not a fault: 403, the same status
 		// denyMemberGovernance answers when the identical limit refuses the
 		// identical principal's ordinary run. Both limits map here — the quota
@@ -393,10 +409,10 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 		// differently from run-create for the same cause. Everything else keeps
 		// today's 500.
 		if errors.Is(lerr, errGroupsSnapshotStale) {
-			writeCeilingError(w, lerr)
+			writeCeilingError(w, r, lerr)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "launch record run: "+lerr.Error())
+		writeServerError(w, r, "launch record run", lerr)
 		return
 	}
 
@@ -802,7 +818,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 	res.EgressPromoted = priorPromoted || len(promoted) > 0
 	updated, applied, perr := s.putRecordResult(r.Context(), id, taskKey, res, recordStatusRecorded)
 	if perr != nil {
-		writeError(w, http.StatusInternalServerError, "persist promotion marker: "+perr.Error())
+		writeServerError(w, r, "persist promotion marker", perr)
 		return
 	}
 	if !applied {
@@ -827,7 +843,7 @@ func (s *Server) handlePromoteRecordEgress(w http.ResponseWriter, r *http.Reques
 				writeError(w, http.StatusUnprocessableEntity, "promotion would exceed the requirements cap (max 256) — prune the contract first")
 				return
 			}
-			writeError(w, http.StatusInternalServerError, "merge requirements: "+serr.Error())
+			writeServerError(w, r, "merge requirements", serr)
 			return
 		}
 		updated.Requirements = wsAfter.Requirements

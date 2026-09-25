@@ -12,12 +12,12 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -88,7 +88,7 @@ func oidcNameFromContext(ctx context.Context) string {
 	return n
 }
 
-// oidcRoleCtxKey carries the Wardyn role (oidc.RoleAdmin / oidc.RoleMember)
+// oidcRoleCtxKey carries the Wardyn role (oidc.RoleAdmin / oidc.RoleUser)
 // derived for the same verified OIDC session, published by humanOrAdminAuth next
 // to the principal/email for the same reason those two keys exist: isOperator
 // reads this (never oidc's own context key) so the auth middleware stays the
@@ -202,7 +202,7 @@ func withHumanIdentity(ctx context.Context, sub, email, role string, groups []st
 // errorBody is the uniform JSON error envelope.
 type errorBody struct {
 	Error  string `json:"error"`
-	Reason string `json:"reason,omitempty"` // a machine-readable class for the few refusals a console surface acts on; absent everywhere else
+	Reason string `json:"reason,omitempty"` // machine-readable refusal class; the SDK exposes it as APIError.Reason; coverage phased in under #204
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -470,7 +470,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 // comment already reads "operator" to mean "admin", and the two are now exactly
 // the same tier.
 //
-// isOperator reads the caller's ROLE (oidc.RoleAdmin / oidc.RoleMember,
+// isOperator reads the caller's ROLE (oidc.RoleAdmin / oidc.RoleUser,
 // derived at OIDC login by internal/auth/oidc's deriveRole and carried on the
 // session cookie) — never the OperatorEmails list directly. Config.OperatorEmails
 // (WARDYN_OIDC_OPERATOR_EMAILS) still matters: cmd/wardynd feeds the SAME list
@@ -479,7 +479,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 // deleted, it now flows through Session.Role like every other role signal
 // instead of being re-checked here a second time. With WARDYN_OIDC_ROLE_MAP
 // unset, deriveRole derives the role from this operator allowlist ALONE (an
-// email on it => RoleAdmin, everyone else => RoleMember); only with NEITHER a
+// email on it => RoleAdmin, everyone else => RoleUser); only with NEITHER a
 // role map nor an allowlist does every signed-in human default to RoleAdmin
 // (true pre-0.5) — see oidc.deriveRole.
 //
@@ -491,14 +491,12 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 		if !s.isOperator(r.Context()) {
 			// Do not name the allowlist/role-map's members — the caller learns
 			// only that they are not an admin.
-			writeError(w, http.StatusForbidden, "requires admin role")
 			// authz.denied: a member denied a reachable admin surface. Low-noise
 			// by design (see the audit doc in runs_create.go's denyMemberRequest) —
 			// this is the ONE universal chokepoint every admin-gated route funnels
 			// through (incl. the attach WS's ticketOrHumanAuth fallback lane), so
 			// one audit call here covers all of them.
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
+			s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, r.URL.Path, ""))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -530,6 +528,12 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 // empty one — decodeSession already refuses to hand out a session with an
 // empty role, so this is defense-in-depth, not a real path).
 func (s *Server) isOperator(ctx context.Context) bool {
+	// A device request carries no OIDC human, which the next branch reads as
+	// the admin token. A daemon is never an operator, so refuse it first —
+	// whatever file the handler asking was written in.
+	if _, isDevice := deviceFromContext(ctx); isDevice {
+		return false
+	}
 	if oidcHumanFromContext(ctx) == "" {
 		return true // admin token, local mode, or OIDC not configured: no session role to demote
 	}
@@ -568,6 +572,9 @@ func (s *Server) isOperator(ctx context.Context) bool {
 //     workspace list, policies.go's four read-redaction sites, and helpers.go's
 //     ownsRunOrAdmin — each commented at its own site.
 func (s *Server) isSecurityOperator(ctx context.Context) bool {
+	if _, isDevice := deviceFromContext(ctx); isDevice {
+		return false // the same refusal isOperator makes first
+	}
 	if oidcHumanFromContext(ctx) == "" {
 		return true // same shared-credential arm as isOperator — see above
 	}
@@ -588,50 +595,11 @@ func (s *Server) isSecurityOperator(ctx context.Context) bool {
 func (s *Server) requireSecurityOperator(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.isSecurityOperator(r.Context()) {
-			writeError(w, http.StatusForbidden, "requires admin role")
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "security_admin_surface", r.Method))))
+			s.refuse(w, r, authz.Deny(authz.ReasonSecurityAdminSurface, r.URL.Path, ""))
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// authFailedRatePerSec and authFailedBurst bound the auth.failed audit emit
-// (see authFailedLimiter.allow) — a steady 1/sec with a small burst so a
-// handful of genuine failures in the same second are not silently dropped,
-// while a scanner's rapid-fire 401s past the burst are.
-const (
-	authFailedRatePerSec = 1.0
-	authFailedBurst      = 5.0
-)
-
-// authFailedLimiter is a process-local token bucket gating auth.failed
-// audit emits. Zero value is ready to use (tokens fill to authFailedBurst on
-// first call).
-type authFailedLimiter struct {
-	mu     sync.Mutex
-	last   time.Time
-	tokens float64
-}
-
-func (l *authFailedLimiter) allow(now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.last.IsZero() {
-		l.tokens = authFailedBurst
-	} else if elapsed := now.Sub(l.last).Seconds(); elapsed > 0 {
-		l.tokens += elapsed * authFailedRatePerSec
-		if l.tokens > authFailedBurst {
-			l.tokens = authFailedBurst
-		}
-	}
-	l.last = now
-	if l.tokens < 1 {
-		return false
-	}
-	l.tokens--
-	return true
 }
 
 // adminAuth gates the public API behind a constant-time bearer compare. An
@@ -711,6 +679,10 @@ const (
 	// above it — and a row naming the wrong one sends an incident review to the
 	// credential-stuffing runbook for what is a cross-origin page.
 	csrfActor = "wardyn/csrf"
+	// oidcCallbackActor is the SSO sign-in callback, refusing a login the
+	// IdP approved because of what the role map makes of it (a user type
+	// that is ambiguous or does not exist).
+	oidcCallbackActor = "wardyn/oidcCallback"
 )
 
 // auditAuthFailedAs is the ONE rate-bound emit every authentication refusal

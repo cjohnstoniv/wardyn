@@ -16,9 +16,7 @@ import { Chip } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { useRole } from "../../wardyn/operator-context";
-import { setup as api } from "../../../lib/api/setup";
 import { lsGet, lsSet } from "../../../lib/storage";
-import { markGateFired } from "../setup/setup-gate";
 import { deploymentMode } from "../../../lib/readiness";
 import type { SetupStatus } from "../../../lib/types";
 import { HowItWorksStrip, IntroBlurb } from "./intro";
@@ -64,17 +62,7 @@ export function GettingStarted({
   // field.
   const [seen, setSeen] = React.useState(onboardingSeen());
   const installOnboarded = status?.onboarding_complete ?? false;
-  // Being IN the funnel satisfies the gate's purpose for this load. The gate's
-  // once-per-load flag otherwise arms only when a GATED route renders — but a
-  // load can start directly on /setup (a reload while onboarding, the SSO
-  // callback's return), which sits outside the gate's wrapper; without this,
-  // the first navigation out of such a load re-fires the gate and the funnel's
-  // own "Open Permissions" bounces back to step one. Landing here IS the
-  // forced redirect's destination, so arriving here arms it.
-  React.useEffect(() => {
-    markGateFired();
-  }, []);
-  // Deliberately `!== "admin"`, not `role === "member"`, for the reason
+  // Deliberately `!== "admin"`, not `role === "user"`, for the reason
   // setupGateActive (setup/setup-gate.ts) is written the same way now that role
   // is three-valued: GET /setup/status is redacted for every non-operator
   // (handleSetupStatus -> redactSetupStatusForMember zeroes Checks, Providers
@@ -94,6 +82,7 @@ export function GettingStarted({
     // (App.tsx) keeps the operator here until they finish the flow.
     return (
       <OnboardingScreen
+        status={status ?? null}
         onGetStarted={() => {
           markOnboardingSeen();
           setSeen(true);
@@ -101,7 +90,7 @@ export function GettingStarted({
       />
     );
   }
-  return <SetupScreen onDone={onDone} />;
+  return <SetupScreen onDone={onDone} initialStatus={status} />;
 }
 
 function ReadinessRow({
@@ -182,32 +171,24 @@ function ReadinessRow({
 
 export function OnboardingScreen({
   onGetStarted,
+  status = null,
 }: {
   onGetStarted: () => void;
+  // The App-resolved status (App.tsx fetches it once per session and polls
+  // it every few minutes) — NOT a fetch of its own. A second, independent
+  // getSetupStatus() call here used to run once with no retry, so a single
+  // dropped request left this page permanently reading a real install as
+  // "unknown" (or, worse, silently defaulting the episode catalog below to
+  // single-user) for the rest of that page load. Sharing App's copy means a
+  // dropped request self-heals on App's next poll instead of wedging.
+  status?: SetupStatus | null;
 }) {
-  const [status, setStatus] = React.useState<SetupStatus | null>(null);
-  const [loading, setLoading] = React.useState(true);
-
-  React.useEffect(() => {
-    let active = true;
-    api
-      .getSetupStatus()
-      .then((s) => {
-        // getSetupStatus() resolves (never rejects) to the synthetic
-        // READY_FALLBACK on a failed/unreachable probe — its empty
-        // confinement_classes would otherwise render as a real "Barrier:
-        // needs setup" for a host we simply couldn't reach. Leave readiness
-        // unknown instead, same as a thrown error below.
-        if (active && !s.unreachable) setStatus(s);
-      })
-      .catch(() => {
-        /* leave readiness unknown — never block the welcome on a failed probe */
-      })
-      .finally(() => active && setLoading(false));
-    return () => {
-      active = false;
-    };
-  }, []);
+  // `unreachable` marks the synthetic READY_FALLBACK (setup.ts) — a failed or
+  // unreachable probe, not a real answer. Treat it exactly like "no answer
+  // yet" rather than a real single-user/no-barrier install (same rule every
+  // other consumer of this field follows).
+  const known = status && !status.unreachable ? status : null;
+  const loading = status === null;
 
   return (
     <div className="mx-auto w-full max-w-[780px] px-6 py-12">
@@ -225,7 +206,7 @@ export function OnboardingScreen({
         <HowItWorksStrip />
       </div>
 
-      <ReadinessRow status={status} loading={loading} />
+      <ReadinessRow status={known} loading={loading} />
 
       <div className="mt-6 flex flex-wrap items-center gap-2.5">
         <Button onClick={onGetStarted}>
@@ -239,7 +220,7 @@ export function OnboardingScreen({
         the account menu.
       </p>
 
-      <EpisodeList mode={status && deploymentMode(status) === "multi-user" ? "multi" : "single"} />
+      <EpisodeList mode={known && deploymentMode(known) === "multi-user" ? "multi" : "single"} />
     </div>
   );
 }

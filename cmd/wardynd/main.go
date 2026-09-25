@@ -13,7 +13,6 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -30,8 +29,6 @@ import (
 
 	"filippo.io/age"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
@@ -96,13 +93,15 @@ func run() error {
 		return genAndPrintAgeKey(os.Stdout)
 	}
 
-	// -rotate-age-key: MAINTENANCE MODE, another early exit — it re-encrypts the
-	// secret store and returns, never serving. Ahead of validateConfig on
+	// -rotate-age-key: MAINTENANCE MODE, another early exit — it rewraps the
+	// secret store's data keys and returns, never serving. Ahead of validateConfig on
 	// purpose: those rules (TLS posture, bind routability, plaintext listen) all
 	// govern SERVING, and a rotation run under the deployment's own environment
 	// must not be refused over a listener it never opens. See rotateAgeKeyMode.
-	if p := strings.TrimSpace(*f.rotateAgeKey); p != "" {
-		return rotateAgeKeyMode(f, p)
+	// -migrate-secrets / -reconcile (store mode) are early exits for the same
+	// reason; maintenanceMode (migrate_secrets.go) dispatches all three.
+	if ran, err := maintenanceMode(f); ran {
+		return err
 	}
 
 	// Validate + derive the TLS/DSN posture from the resolved flag/env values.
@@ -119,12 +118,11 @@ func run() error {
 
 	// Parse the agent images map at boot so a malformed value fails closed
 	// immediately rather than silently using the convention for all agents.
-	var agentImages map[string]string
-	if *f.agentImagesJSON != "" {
-		if err := json.Unmarshal([]byte(*f.agentImagesJSON), &agentImages); err != nil {
-			return fmt.Errorf("parse WARDYN_AGENT_IMAGES: %w", err)
-		}
-		slog.Info("wardynd: agent image overrides", slog.Any("images", agentImages))
+	// Extracted into parseAgentImages (boot_gateway.go) for the same reason
+	// the endpoint knobs above are: run()'s cyclomatic budget is full.
+	agentImages, err := parseAgentImages(*f.agentImagesJSON)
+	if err != nil {
+		return err
 	}
 
 	// LOCAL HOST MODE posture (fail closed on a routable no-auth bind); see
@@ -202,8 +200,12 @@ func run() error {
 		return err
 	}
 
-	// Secret store (pluggable seam; default "pg" = age-encrypted Postgres column).
-	secrets, err := buildSecretStore(pool, *f.ageKey, *f.secretStoreSel)
+	// Secret store (pluggable seam; default "pg" = envelope-encrypted Postgres
+	// rows), wrapped so every read is audited once (secretstore.Audited).
+	// Returned only after its v0 rows are converted, so the boot-key reads
+	// below never see one. rootCtx, not bootCtx: the conversion is one
+	// all-or-nothing transaction over the whole table.
+	secrets, err := openSecretStore(rootCtx, pool, f, maskedRec)
 	if err != nil {
 		return err
 	}
@@ -298,11 +300,22 @@ func run() error {
 	// policy's allowed_domains does not list a configured gateway's host — the
 	// operator must add it, or every run under that policy 404s on its first
 	// model call once ensureLLMGrant/reconcileLLMAccess point at the gateway.
-	llmGateways, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(f)
+	llmGateways, llmGatewayAuth, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(f)
 	if err != nil {
 		return err
 	}
 	warnMissingGatewayHosts(defaultPolicy, llmGateways)
+
+	// WARDYN_DEMO_VIDEO_BASE_URL: same fail-closed-at-boot posture as the
+	// model gateways above, but answers a different question (where the
+	// Getting Started demo episodes stream from, not where a model call
+	// goes) — so it is validated on its own rather than folded into
+	// validateModelEndpoints, whose own test fixture is about model
+	// endpoints only.
+	demoVideoBaseURL, err := api.ValidateDemoVideoBaseURL(*f.demoVideoBaseURL)
+	if err != nil {
+		return err
+	}
 
 	if *f.adminToken == "" && !lm.enabled {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
@@ -337,11 +350,16 @@ func run() error {
 		return err
 	}
 
-	// MEMBER-MODE DESKTOP posture. Checked here (not in validateConfig) because
-	// both of its inputs only exist this far into boot: lm.enabled is the
-	// RESOLVED local-mode fact — local mode auto-enables, so the raw flag is not
-	// the answer — and feats.authn is the resolved "OIDC is configured" one.
-	if err := validateMemberModePosture(*f.memberMode, lm.enabled, feats.authn != nil); err != nil {
+	// MEMBER-MODE DESKTOP posture, then HYBRID BOOT's org control-plane posture
+	// (issue #100) right after it — folded into one call so run() gains no
+	// extra branch for the second, adjacent refusal (gocyclo); see each
+	// validator's own doc comment in boot_posture.go for what it enforces.
+	// Checked here (not in validateConfig) because both of member mode's
+	// inputs only exist this far into boot: lm.enabled is the RESOLVED
+	// local-mode fact — local mode auto-enables, so the raw flag is not the
+	// answer — and feats.authn is the resolved "OIDC is configured" one.
+	if err := checkMemberAndHybridBootPosture(*f.memberMode, lm.enabled, feats.authn != nil,
+		*f.orgURL, *f.orgEnrolToken, *f.allowPlaintextListen); err != nil {
 		return err
 	}
 
@@ -349,12 +367,23 @@ func run() error {
 	// The roster half of the model-identity posture, WARNED at boot beside the
 	// model-ARN one above (validateModelEndpoints). See warnBedrockSSOPinPosture.
 	warnBedrockSSOPinPosture(bootCtx, st, *f.bedrockModel)
+	// The SiteConfig half of warnMissingGatewayHosts above: that call (line
+	// ~305) runs before st exists (SiteConfig lives in Postgres), so its
+	// sibling — no upstream_proxy_no_proxy entry covering a configured
+	// gateway host — reads st here instead, against the same llmGateways.
+	// See warnUpstreamProxyNoBypass.
+	warnUpstreamProxyNoBypass(bootCtx, st, llmGateways)
 
 	srv := api.New(api.Config{
 		Store:     st,
 		Identity:  idp,
 		Approvals: approvals,
 		Broker:    brk,
+		// The wait ceiling a run's captured wait folds under; the approval
+		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
+		// mirrors it onto a hold-mode run's sandbox (RL-1).
+		ApprovalExpiryAfter: *f.approvalExpiryAfter,
+		RunLeaseConfig:      api.RunLeaseConfig{EndedRunGrace: *f.endedRunGrace},
 		// Same minter, second use: the setup checklist asks it whether GitHub
 		// confines the App to the run branch namespace. nil when no App is
 		// configured, which omits the row.
@@ -370,6 +399,8 @@ func run() error {
 		Runner:                    run,
 		AdminToken:                *f.adminToken,
 		LocalMode:                 lm.enabled,
+		MemberMode:                *f.memberMode,
+		SSOOnly:                   *f.ssoOnly,
 		SubscriptionPostureOK:     subPostureOK,
 		SubscriptionPostureReason: subPostureReason,
 		LocalOperator:             lm.operator,
@@ -377,9 +408,12 @@ func run() error {
 		DefaultPolicy:             defaultPolicy,
 		TrustedCAPEM:              trustedCAPEM,
 		LLMGateways:               llmGateways,
+		DemoVideoBaseURL:          demoVideoBaseURL,
+		LLMGatewayAuth:            llmGatewayAuth,
 		RunnerTarget:              runnerTarget,
 		UIDir:                     *f.uiDir,
 		ControlPlaneURL:           *f.controlURL,
+		ControlPlaneCAPEM:         feats.hop.caCertPEM(),
 		RecordingStore:            feats.recStore,
 		OIDC:                      feats.authn,
 		// §I: nil unless WARDYN_DIRECTORY_PROVIDER is set — the whole feature
@@ -409,6 +443,7 @@ func run() error {
 		ProxyURL:                  *f.proxyURL,
 		Secrets:                   secrets,
 		MaskRegistry:              maskReg,
+		ADOEntra:                  adoEntraSourceFromFlags(st, f), // ado_entra_source.go
 		SubscriptionToken:         feats.subToken,
 		ManagedToken:              feats.managedToken,
 		DisableSubscriptionInject: feats.disableSubInject,
@@ -421,7 +456,9 @@ func run() error {
 		// subscription-inject escape hatch.
 		DisableGitPATBroker: strings.EqualFold(strings.TrimSpace(*f.gitPATBroker), "off"),
 		// First-run setup readiness inputs (GET /api/v1/setup/status).
-		AgeKeyDurable:         strings.TrimSpace(*f.ageKey) != "",
+		AgeKeyDurable:         secretsDurable(*f.ageKey, secrets),
+		SecretStoreExternal:   storesExternally(secrets),
+		PlatformKeySeparate:   strings.TrimSpace(*f.platformKeyFile) != "",
 		LocalLoopback:         lm.loopback,
 		LocalTrustForwarder:   *f.localTrustFwd,
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
@@ -449,6 +486,13 @@ func run() error {
 		BaseCtx: rootCtx,
 	})
 
+	// The login-grant edge, joined after both sides exist and before anything is
+	// served, because they form a cycle (see attachLoginGrantSink). It is a
+	// NO-OP for every deployment without an Azure DevOps Entra row: the sink
+	// answers "nothing to add", the authorization request is not widened and the
+	// callback stores nothing (internal/api/ado_entra_login.go).
+	attachLoginGrantSink(feats.authn, srv)
+
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
 	startBackgroundWorkers(rootCtx, f, srv, run, pool, idp, brk, maskedRec, feats.recStore)
@@ -462,7 +506,7 @@ func run() error {
 	startUISandboxGateway(rootCtx, f, posture, srv)
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last.
-	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan)
+	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan, feats.hop)
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved
@@ -660,41 +704,6 @@ func genAndPrintAgeKey(w io.Writer) error {
 	return err
 }
 
-// buildSecretStore constructs the age-encrypted Postgres secret store. The age
-// identity comes from -age-key; if empty one is generated and logged (operators
-// MUST persist it across restarts to keep prior ciphertext readable).
-func buildSecretStore(pool *pgxpool.Pool, ageKey, storeName string) (secretstore.Store, error) {
-	var id *age.X25519Identity
-	var err error
-	if ageKey == "" {
-		id, err = age.GenerateX25519Identity()
-		if err != nil {
-			return nil, fmt.Errorf("generate age identity: %w", err)
-		}
-		// F10: log the PUBLIC recipient as a fingerprint, never the secret identity.
-		// The old message printed the full AGE-SECRET-KEY- to a log file created at
-		// the default umask (~/.wardyn/host-wardynd.log), leaking the secret-store
-		// master key. To persist, mint one with `wardynd -gen-age-key` (prints to
-		// stdout by design) and set WARDYN_AGE_KEY — do not copy it out of this log.
-		slog.Warn("wardynd: generated ephemeral age identity; secrets are LOST on restart. Persist one with `wardynd -gen-age-key` + set WARDYN_AGE_KEY",
-			slog.String("public_recipient", id.Recipient().String()),
-		)
-	} else {
-		if isKnownPublicAgeKey(ageKey) {
-			return nil, fmt.Errorf("refusing to start: WARDYN_AGE_KEY is a publicly-known key (published in this repo's git history) — secrets encrypted under it are not protected; unset WARDYN_AGE_KEY to generate an ephemeral key, or mint your own with `wardynd -gen-age-key`")
-		}
-		id, err = age.ParseX25519Identity(ageKey)
-		if err != nil {
-			return nil, fmt.Errorf("parse age identity: %w", err)
-		}
-	}
-	s, err := secretstore.New(storeName, secretstore.Deps{Pool: pool, AgeIdentity: id})
-	if err != nil {
-		return nil, fmt.Errorf("secret store: %w", err)
-	}
-	return s, nil
-}
-
 // secretKeyStore is the minimal secret-store surface loadOrCreateSecret needs.
 // Narrowing the dependency to Get/Put makes the load-or-create control flow
 // unit-testable with a hand-rolled fake (cmd/wardynd/main_test.go) and documents
@@ -710,7 +719,7 @@ type secretKeyStore interface {
 // SECURITY (boot-key destruction): the previous per-key logic treated ANY
 // Get error as "key not present" and then generated + Put a fresh key,
 // OVERWRITING whatever ciphertext was already there. The pg secret store
-// distinguishes a TRUE not-found (it wraps pgx.ErrNoRows) from an age-decrypt
+// distinguishes a TRUE not-found (secretstore.ErrNotFound) from an age-decrypt
 // failure (a generic error). Conflating the two meant a single transient/
 // permanent decrypt error silently rotated the key, invalidating every issued
 // SVID and every active session cookie. We now regenerate ONLY when the key is
@@ -729,7 +738,7 @@ func loadOrCreateSecret(
 ) ([]byte, error) {
 	// secretKeyStore has no For: the boot keys it bootstraps (identity signing,
 	// OIDC session) are process-global, never per-principal.
-	raw, err := secrets.Get(ctx, name)
+	raw, err := secrets.Get(secretstore.WithPurpose(ctx, secretstore.PurposeBoot), name)
 	switch {
 	case err == nil:
 		if valid(raw) {
@@ -738,8 +747,10 @@ func loadOrCreateSecret(
 		// Present but unusable (e.g. a legacy too-short session key): fall
 		// through to regenerate. This is safe — the stored value cannot serve
 		// its purpose anyway.
-	case errors.Is(err, pgx.ErrNoRows):
-		// TRUE not-found (first boot): generate + persist below.
+	case errors.Is(err, secretstore.ErrNotFound):
+		// TRUE not-found (first boot): generate + persist below. Only an
+		// absent ROW is not-found: a pointer row whose external value is gone
+		// is a refusal, so a lost boot key is never minted over.
 	default:
 		// Decrypt failure or any other Get error: FAIL CLOSED. Do NOT generate
 		// or Put — overwriting here would destroy the existing key.

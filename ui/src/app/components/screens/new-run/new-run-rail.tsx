@@ -23,14 +23,17 @@ import type {
   ModelCredential,
   PreflightResult,
   RunPolicySpec,
+  SCMAccess,
   SetupHarnessTool,
 } from "../../../lib/types";
-import { Button } from "../../ui/button";
-import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
+import { Button, buttonVariants } from "../../ui/button";
+import { AutonomyChip, Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
-import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
+import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { ADO } from "../../../lib/ado-entra-copy";
+import { PEOPLE } from "../../../lib/people-access-copy";
+import { RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
 import { MODEL_ACCESS_AGENT } from "../../../lib/model-access";
@@ -41,6 +44,7 @@ import {
   useModelAccessDoor,
   type ModelAccessDoorHandle,
 } from "../../wardyn/model-access-context";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../ui/dialog";
 
 interface RunRailProps {
   /**
@@ -72,6 +76,9 @@ interface RunRailProps {
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
     error: string | null;
+    /** Bumped on every failed launch (see use-launch.ts) so a repeated,
+     *  identical failure remounts the alert region and is re-announced (#459). */
+    errorSeq: number;
     /** The server refused this launch for the caller's own model credential (a
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
@@ -85,7 +92,12 @@ interface RunRailProps {
      *  navigation off the screen, so this must replace Launch instead. */
     onOpenRun: (() => void) | null;
   };
-  preflight: { error: string | null; result: PreflightResult | null };
+  preflight: {
+    error: string | null;
+    /** Same remount purpose as launch.errorSeq, for the preflight alert. */
+    errorSeq: number;
+    result: PreflightResult | null;
+  };
   /**
    * The picked agent's /setup/status roster row — withheld by the screen for a
    * run that makes no model call (a shell command), so its absence is also how
@@ -99,6 +111,24 @@ interface RunRailProps {
    * rendered "AWS credentials sign inside the sandbox" over a Claude sign-in.
    */
   agentRow?: SetupHarnessTool;
+  /** The Connect Azure DevOps launch-door dialog (§2.4, #386): owned by the
+   *  screen (use-ado-launch-door.ts), rendered here. `org` comes from the
+   *  422 body itself (review finding F1), never from a preflight fact — a
+   *  422 can be the very first thing this caller hears about the row.
+   *  `blockedUrl` is set when the browser refused the popup (review finding
+   *  F9): a plain link to it renders instead. F8: confirming never
+   *  relaunches — the person presses Launch themselves. */
+  adoDialog: {
+    open: boolean;
+    connecting: boolean;
+    org: string;
+    blockedUrl: string | null;
+    onConfirm: () => void;
+    /** review follow-up N1: fires the same connect outcome as onConfirm, off
+     *  the blocked-popup fallback link's own poll. */
+    onFallbackClick: () => void;
+    onCancel: () => void;
+  };
 }
 
 // CredentialFacts states where the model credential lands, and nothing wider —
@@ -287,6 +317,22 @@ function ModelAccessLine({ door, onSignIn }: { door: ModelAccessDoorHandle; onSi
   );
 }
 
+// GitCredentialLine states what the rail knows about THIS caller's Azure
+// DevOps connection before Launch is pressed (§2.4). Mirrors ModelAccessLine's
+// "say nothing rather than invent" default: `live` needs no attention (and
+// this rail has no person NAME to compose PREFLIGHT_LIVE with, so it does not
+// try to), `shared_*`/`not_applicable` are nothing a launch-time line can fix,
+// and `expiring` needs a deadline this deployment cannot compute yet
+// (scmaccess.go's doc comment) — only `not_configured` renders.
+function GitCredentialLine({ cred }: { cred?: SCMAccess }) {
+  if (cred?.state !== "not_configured") return null;
+  return (
+    <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
+      <span>{ADO.PREFLIGHT_MISSING}</span> <span>{ADO.PREFLIGHT_MISSING_SUB}</span>
+    </p>
+  );
+}
+
 export function RunRail({
   governanceProfile,
   savedPolicy,
@@ -298,11 +344,13 @@ export function RunRail({
   launch,
   preflight,
   agentRow,
+  adoDialog,
 }: RunRailProps) {
   // Both of finding 1's facts, read rather than asserted: where the model
   // credential lands, and whether this deployment records anything at all.
   // `recordingDisabled` is tri-state — undefined until /healthz answers.
   const cred = preflight.result?.model_credential;
+  const gitCredential = preflight.result?.git_credential; // #386, informational — see GitCredentialLine
   const recordingDisabled = useRecordingDisabled();
   // Finding 1: model_access grades the claude-code row alone, so a shell
   // command or a different agent (codex) never reads this line whatever the
@@ -355,12 +403,16 @@ export function RunRail({
     door.openDoor(launchRef.current, () => onLaunchRef.current());
     // The strip and the line above catch up with what the server just said.
     void door.refresh();
-  }, [launch.credentialRefused, door.open, door.bedrockSSO, door.perUser, door.operator, door.openDoor, door.refresh]);
+  }, [launch.credentialRefused, door]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
   // has no Credentials section at all, rather than a heading over nothing.
-  const showCredentials = showModelWarning || !!cred || !!agentRow || showModelAccess;
+  // review follow-up N5: gitCredential contributes only when GitCredentialLine
+  // actually renders something for it (state "not_configured") — a `live`
+  // gitCredential (nothing to say, see GitCredentialLine above) must not by
+  // itself open an empty heading over a shell run with nothing else to show.
+  const showCredentials = showModelWarning || !!cred || !!agentRow || showModelAccess || gitCredential?.state === "not_configured";
   // With no provider connected and nothing resolved, "Resolved at launch."
   // and the Preflight hint must not sit directly under "No model provider is
   // connected. This run launches; its first model call fails." Nothing
@@ -416,6 +468,40 @@ export function RunRail({
           <p className="text-xs text-muted-foreground">{CC_META[cc].doesntProtect}</p>
         </RailSection>
 
+        {/* What resolveRunAutonomy (#97) would cap this run at — known only
+            once a preflight verdict is on screen, exactly like the risk/
+            confinement block at the bottom of this rail. `preflight.result.
+            autonomy` is ABSENT (never a zero value) when nothing bound the
+            run, which is indistinguishable from "no rubric on the assigned
+            profile" and "no profile at all" — governanceProfile (already
+            threaded above) is what tells those two apart. */}
+        {preflight.result && (
+          <RailSection title={AUTONOMY_RAIL.HEADING}>
+            <div className="mb-1">
+              <AutonomyChip level={preflight.result.autonomy?.level} />
+            </div>
+            {preflight.result.autonomy ? (
+              <>
+                {/* Ruling 1 (#96 review): bound_by is a LIST — a tie at the
+                    resolved level names EVERY cause, not just the first. */}
+                <p className="text-xs text-muted-foreground">
+                  {autonomyBoundSentence(preflight.result.autonomy.bound_by ?? [])}
+                </p>
+                {showHoldNote && preflight.result.autonomy.level === "L1" && (
+                  <p className="mt-1 text-xs font-medium text-foreground">{AUTONOMY_RAIL.DERIVED_HOLD_NOTE}</p>
+                )}
+                {governanceProfile && (
+                  <p className="mt-1 text-xs text-muted-foreground">{AUTONOMY_RAIL.PROFILE_LINE(governanceProfile)}</p>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {governanceProfile ? AUTONOMY_RAIL.NO_CAP : AUTONOMY_RAIL.NO_PROFILE}
+              </p>
+            )}
+          </RailSection>
+        )}
+
         {showCredentials && (
         <RailSection title="Credentials">
           {/* Finding 1, above CredentialFacts: a per-person fact ("do I have a
@@ -441,7 +527,7 @@ export function RunRail({
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* The action that fills the gap rides next to the
                   need, not only in a footer. Links are --info, never teal. */}
-              <Link to="/settings" className="font-medium text-info hover:underline">
+              <Link to="/account" className="font-medium text-info hover:underline">
                 {RAIL_MODEL_ACCESS.NO_PROVIDER_CTA}
               </Link>
             </p>
@@ -449,6 +535,7 @@ export function RunRail({
           {showCredentialFacts && (
             <CredentialFacts cred={cred} agentRow={agentRow} preflightRun={!!preflight.result} />
           )}
+          <GitCredentialLine cred={gitCredential} />
         </RailSection>
         )}
 
@@ -493,9 +580,18 @@ export function RunRail({
       </div>
 
       {launch.error && (
-        <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
+        // key={launch.errorSeq}: a re-announce of the SAME sentence still
+        // needs a fresh DOM node — an update in place is silent to a screen
+        // reader on a live region (#459).
+        <p
+          key={launch.errorSeq}
+          role="alert"
+          className="mt-3 flex items-start gap-1.5 text-xs text-danger"
+        >
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          {launch.error}
+          <span>
+            <span className="sr-only">{RAIL.LAUNCH_ERROR_LABEL}</span> {launch.error}
+          </span>
         </p>
       )}
 
@@ -551,9 +647,15 @@ export function RunRail({
       )}
 
       {preflight.error && (
-        <p className="mt-3 flex items-start gap-1.5 text-xs text-danger">
+        <p
+          key={preflight.errorSeq}
+          role="alert"
+          className="mt-3 flex items-start gap-1.5 text-xs text-danger"
+        >
           <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-          {preflight.error}
+          <span>
+            <span className="sr-only">{RAIL.PREFLIGHT_ERROR_LABEL}</span> {preflight.error}
+          </span>
         </p>
       )}
       {/* Unframed: a bordered box inside the rail card is a card in a card
@@ -576,6 +678,51 @@ export function RunRail({
           )}
         </div>
       )}
+
+      {/* #386's launch door (§2.4): opened automatically on a git_credential
+          422, and closable without launching — the screen owns the popup
+          (use-ado-connect.ts), this dialog only asks. `org` is the 422
+          body's own (review finding F1): this dialog can be the very first
+          thing a caller sees about the row, before any preflight verdict. */}
+      <Dialog open={adoDialog.open} onOpenChange={(open) => !open && adoDialog.onCancel()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{ADO.LAUNCH_DIALOG_TITLE}</DialogTitle>
+            <DialogDescription>{ADO.LAUNCH_DIALOG_BODY(adoDialog.org)}</DialogDescription>
+          </DialogHeader>
+          {/* review finding F9: the browser refused the popup outright — a
+              plain link is the fallback, opened by the browser itself. N1:
+              the same connect poll starts alongside that navigation, so the
+              dialog still advances when the person comes back connected. */}
+          {adoDialog.blockedUrl && (
+            <p className="text-xs text-muted-foreground">
+              {ADO.CONNECT_POPUP_BLOCKED}{" "}
+              <a
+                href={adoDialog.blockedUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={buttonVariants({ variant: "outline", size: "sm" })}
+                onClick={adoDialog.onFallbackClick}
+              >
+                {ADO.CONNECT_POPUP_OPEN}
+              </a>
+            </p>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={adoDialog.onCancel}>
+              {PEOPLE.CANCEL}
+            </Button>
+            <Button type="button" onClick={adoDialog.onConfirm} disabled={adoDialog.connecting}>
+              <Loader2 className={adoDialog.connecting ? "size-4 animate-spin" : "size-4 animate-spin invisible"} />
+              {ADO.CONNECT_CTA}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }
+
+// Re-exported so new-run-screen.tsx's existing "./new-run-rail" import line
+// covers it too — that file sits at its own 1000-line gate.
+export { useAdoLaunchDoor } from "./use-ado-launch-door";

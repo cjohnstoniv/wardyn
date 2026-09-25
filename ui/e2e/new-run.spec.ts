@@ -24,6 +24,8 @@ import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
 import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
+import { AUTONOMY_META } from "../src/app/components/wardyn/autonomy-meta";
+import { AUTONOMY_RAIL, autonomyBoundSentence } from "../src/app/lib/governance-copy";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
 import type { ConfinementClass } from "../src/app/lib/types";
@@ -222,7 +224,8 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
 // all). The failure block no longer has its own clone button, so
 // `getByRole("button", { name: RUN.CLONE_CTA })` below resolves to exactly
 // one element (a second door would be a Playwright strict-mode violation).
-test.describe("New run — B4b clone from a killed run", () => {
+test.describe("New run — clone from a killed run", () => {
+  // ticket: B4b
   test("clones task/agent/barrier from the killed run, and Launch enables once titled", async ({ page }) => {
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     // "e2e fixture 7" is the seeded backend's KILLED run (scripts/e2e-backend.sh)
@@ -320,7 +323,8 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
 // itself (Go-tested). ui/new-run-rail.tsx's primitive-level
 // lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto (this lane) is what keeps
 // Launch/Open run reachable here.
-test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F2-F7/F3-F1)", () => {
+test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650", () => {
+  // ticket: F2-F7/F3-F1
   test("Launch, then Open run, stay in viewport with every rail section showing at once", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 650 });
 
@@ -691,7 +695,57 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await page.getByLabel("Title").fill("e2e plain refusal");
     await page.getByRole("button", { name: "Launch run" }).click();
     await expect(page.getByText(refusal)).toBeVisible();
+    // #459: the refusal is an announced alert region, sr-only prefix + the
+    // server's own sentence, unchanged. No dialog opens here to aria-hide it.
+    await expect(page.getByRole("alert")).toContainText("Launch failed");
+    await expect(page.getByRole("alert")).toContainText(refusal);
     await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
+  });
+});
+
+// #93/#96 — the New Run rail's Autonomy section. The seeded backend's bearer
+// is an operator, so a real preflight never resolves an autonomy cap
+// (effectiveCeiling's own operator short-circuit — see governance.spec.ts's
+// header note) — spliced onto POST /runs/preflight's real response, the same
+// route.fetch()+patch+refulfill technique this file already uses above for
+// model_credential, so the shape around the spliced field stays genuine.
+test.describe("New run rail — the Autonomy section (#93/#96)", () => {
+  async function mockPreflightAutonomy(page: Page, boundBy: string[]): Promise<void> {
+    await page.route("**/api/v1/runs/preflight", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.autonomy = {
+        level: "L1",
+        posture: { egress: "sealed", secrets: "powerful", confinement: "CC1" },
+        bound_by: boundBy,
+      };
+      await route.fulfill({ response, json });
+    });
+  }
+
+  test("shows the resolved level and, for a tie, EVERY bound_by cause — not just the first", async ({ page }) => {
+    // Ruling 1 (#96 review): bound_by is a LIST, and a tie at the resolved
+    // level names every cause. This is the regression the ruling exists to
+    // prevent: reading bound_by[0] alone would drop confinement_cc1 here.
+    await mockPreflightAutonomy(page, ["secrets_powerful", "confinement_cc1"]);
+    await openNewRun(page);
+    await page.getByRole("button", { name: "Preflight" }).click();
+    await expect(page.getByTestId("preflight-result")).toBeVisible();
+
+    await expect(page.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
+    await expect(page.getByText(AUTONOMY_META.L1.label, { exact: true })).toBeVisible();
+    const sentence = autonomyBoundSentence(["secrets_powerful", "confinement_cc1"]);
+    await expect(page.getByText(sentence, { exact: true })).toBeVisible();
+  });
+
+  test("with no autonomy on the wire (the default): no cap on this deployment's operator bearer", async ({
+    page,
+  }) => {
+    await openNewRun(page);
+    await page.getByRole("button", { name: "Preflight" }).click();
+    await expect(page.getByTestId("preflight-result")).toBeVisible();
+    await expect(page.getByText(AUTONOMY_RAIL.HEADING, { exact: true })).toBeVisible();
+    await expect(page.getByText(AUTONOMY_RAIL.NO_PROFILE, { exact: true })).toBeVisible();
   });
 });

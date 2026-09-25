@@ -33,7 +33,8 @@ describe("EffectivePolicyWidget", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders nothing when the row exists but never stamped clamp_warnings (a pre-C2 trail)", () => {
+  it("renders nothing when the row exists but never stamped clamp_warnings", () => {
+    // ticket: C2
     const { container } = render(<EffectivePolicyWidget audit={[createRow({})]} />);
     expect(container).toBeEmptyDOMElement();
   });
@@ -82,7 +83,8 @@ describe("the registry gates the tile on the same datum the widget does", () => 
     expect(avail([])).toBe(false);
   });
 
-  it("a row that never stamped clamp_warnings (a pre-C2 trail) => no tile", () => {
+  it("a row that never stamped clamp_warnings => no tile", () => {
+    // ticket: C2
     expect(avail([createRow({})])).toBe(false);
   });
 

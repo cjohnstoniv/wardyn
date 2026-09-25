@@ -255,11 +255,9 @@ type pgRoleMappings struct {
 }
 
 // ListRoleMappings delegates to the store — this adapter exists only so
-// internal/auth/oidc, which must stay dependency-free of internal/types (see
-// oidc.RoleMapping's own doc comment), never imports internal/store either.
-// The conversion from types.RoleMapping (id/timestamps/provenance) to
-// oidc.RoleMapping (bare Value/Role) happens here, the one place both types
-// are in scope.
+// internal/auth/oidc never imports internal/store. The conversion from
+// types.RoleMapping (id/timestamps/provenance) to oidc.RoleMapping (bare
+// Value/Role/UserType) happens here, the one place both types are in scope.
 func (r *pgRoleMappings) ListRoleMappings(ctx context.Context) ([]oidc.RoleMapping, error) {
 	rows, err := store.NewPG(r.pool).ListRoleMappings(ctx)
 	if err != nil {
@@ -267,7 +265,7 @@ func (r *pgRoleMappings) ListRoleMappings(ctx context.Context) ([]oidc.RoleMappi
 	}
 	out := make([]oidc.RoleMapping, len(rows))
 	for i, m := range rows {
-		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role}
+		out[i] = oidc.RoleMapping{Value: m.Value, Role: m.Role, UserType: m.UserType}
 	}
 	return out, nil
 }
@@ -311,8 +309,11 @@ func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.Approval
 func (s *approvalService) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
 	return s.st.ListApprovals(ctx, state)
 }
-func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
+func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	return approval.CancelForRun(ctx, s.st, runID, reason)
+}
+func (s *approvalService) ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error {
+	return approval.ExpireOne(ctx, s.st, id, actor, reason)
 }
 func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	return s.st.CountApprovalsForRun(ctx, runID)
@@ -560,13 +561,16 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// the reaper's subtraction is finally two readings of ONE clock — wardynd's
 	// own was the skew that stopped actively-attached runs (B8-F2).
 	//
+	// A KEPT run (lost_at set: its lease ended it) is not idle, it is stopped;
+	// the ended-run grace decides when its files go, not auto_stop_after_sec.
+	//
 	// An EMPTY scan returns the zero time, which the reaper reads as "no clock":
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
 		SELECT id, updated_at, auto_stop_after_sec, now()
 		FROM agent_runs
-		WHERE state = $1`
+		WHERE state = $1 AND lost_at IS NULL`
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("wardynd: list running with policy: %w", err)
@@ -882,4 +886,18 @@ func runRecordingSweeper(ctx context.Context, s recordingSweepable, rec audit.Re
 			}
 		}
 	}
+}
+
+// attachLoginGrantSink joins the console login to the credential capture, and
+// owns the nil check so run() does not: authn is nil on every deployment
+// without SSO, and there is no login to widen there.
+//
+// The edge is attached rather than configured because the two sides form a
+// cycle — oidc.Config is built before the server, and the server holds the
+// Authenticator — so the only order that works is "construct both, then join".
+func attachLoginGrantSink(authn *oidc.Authenticator, sink oidc.LoginGrantSink) {
+	if authn == nil {
+		return
+	}
+	authn.AttachLoginGrantSink(sink)
 }

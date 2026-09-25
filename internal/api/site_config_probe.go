@@ -20,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -828,7 +829,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	ctx := r.Context()
 	siteCfg, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	// An unconfigured proxy is not an error, it is the common case — and the
@@ -851,8 +852,12 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 	var getSecret func(context.Context, string) ([]byte, error)
 	if s.cfg.Secrets != nil {
 		// Operator namespace ONLY, matching resolveRunUpstreamProxy: the probe
-		// must resolve the same value real dispatch would.
-		getSecret = s.cfg.Secrets.For("").Get
+		// must resolve the same value real dispatch would. A status read: the
+		// probe grades the value, it does not use it.
+		sec := s.cfg.Secrets.For("")
+		getSecret = func(ctx context.Context, name string) ([]byte, error) {
+			return sec.Get(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), name)
+		}
 	}
 	resolvedUpstream, upstreamFailReason := resolveUpstreamProxyURL(ctx, siteCfg.UpstreamProxyURL, siteCfg.UpstreamProxySecretRef, getSecret)
 	var upstream string
@@ -896,7 +901,7 @@ func (s *Server) handleTestSiteConfigProxy(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, http.StatusOK, siteConfigProbeResponse{State: "no_runner", Detail: perr.Error()})
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "launch proxy probe: "+perr.Error())
+		writeServerError(w, r, "launch proxy probe", perr)
 		return
 	}
 	resp := classifyProxyProbe(res, subj, s.cfg.ControlPlaneURL)
@@ -945,7 +950,7 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 	ctx := r.Context()
 	siteCfg, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	red, ok := findEgressRedirect(siteCfg, req.From)
@@ -975,7 +980,7 @@ func (s *Server) handleTestSiteConfigRedirect(w http.ResponseWriter, r *http.Req
 			writeJSON(w, http.StatusOK, siteConfigProbeResponse{State: "no_runner", Detail: perr.Error()})
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "launch redirect probe: "+perr.Error())
+		writeServerError(w, r, "launch redirect probe", perr)
 		return
 	}
 	resp := classifyRedirectProbe(res, toHost, fromHost, s.cfg.ControlPlaneURL)

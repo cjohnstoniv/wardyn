@@ -317,17 +317,32 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	if err := validateUpstreamProxyNoProxy(cfg.UpstreamProxyNoProxy); err != nil {
 		return err
 	}
+	if err := validateSignInHelp(cfg.SignInHelpText, cfg.SignInHelpURL); err != nil {
+		return err
+	}
 	// The workspace-provider block, when the body carries one: ONE validator for
 	// both write doors (this one and PUT /workspace-providers), so an
 	// MDM-delivered document can never store a block the providers endpoint
-	// would have refused (workspace_providers.go).
+	// would have refused (workspace_providers.go) — with exactly ONE stated
+	// exception (#380 F2): `false` here means an explicit SSH lane exceeding its
+	// row's own path scope is NOT refused on THIS door. A laptop re-applies
+	// /etc/wardyn/site-config.json on every boot; refusing the whole document
+	// for a row an admin ticked before 0.7.10 existed — with no migration path
+	// and no undo — is a worse failure than the host-level over-admission #380
+	// closes. handlePutSiteConfig reports the affected rows instead
+	// (sshLaneWidePastPathRows) and warns loudly rather than failing silently.
+	// The console door (handlePutWorkspaceProviders) keeps the hard refusal.
 	//
 	// The SIBLING agent_providers block is validated by its own gate at each of
 	// those two doors instead of here (validateAgentProviders, agent_providers.go):
 	// admitting a row needs the boot agent-image map, which is server state this
 	// deliberately pure function has no access to. Both doors run it, so the
 	// "one validator, two doors" property is the same.
-	return validateWorkspaceProviders(cfg.WorkspaceProviders)
+	if err := validateWorkspaceProviders(cfg.WorkspaceProviders, false); err != nil {
+		return err
+	}
+	// model_providers needs no server state, so its one validator runs here.
+	return validateModelProviders(cfg.ModelProviders)
 }
 
 // validateInternalHosts enforces SiteConfig.InternalHosts's write-time
@@ -519,7 +534,7 @@ func danglingSiteConfigSecretRefs(sc types.SiteConfig, present map[string]bool) 
 func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return
 	}
 	// The ETag hashes the STORED document, before the projection below: PUT
@@ -529,6 +544,24 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// effective_scm_hosts: the read-only union (workspace_providers.go) — ONE
 	// spelling of the claim rule, in Go, so the console never re-implements it.
 	cfg.EffectiveScmHosts = effectiveScmHosts(cfg)
+	// workspace_providers.git_pat_broker_enabled: the SAME projection GET
+	// /workspace-providers does, and for the same reason (#381) — this door
+	// returns the identical nested block, so a console reading site-config
+	// directly (or an MDM diffing its own `apply` against a `get`) must see
+	// the same live switch value, not a stale/absent one.
+	//
+	// A COPY, never a mutation through the pointer: cfg.WorkspaceProviders may
+	// be the SAME struct the store keeps (or another concurrent reader holds);
+	// storedWorkspaceProviders's own dereference is this file's established
+	// way of saying so. Setting the field straight through the pointer once
+	// leaked the projection into the ETag hash for every OTHER reader —
+	// including this door's own PUT, which re-GETs for its If-Match check.
+	if providersConfigured(cfg) {
+		wp := *cfg.WorkspaceProviders
+		on := !s.cfg.DisableGitPATBroker
+		wp.GitPatBrokerEnabled = &on
+		cfg.WorkspaceProviders = &wp
+	}
 	writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -542,7 +575,10 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // Add a key here when you add one to types.SiteConfig, and
 // TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName fails until you
 // have decided which side of this line it sits on.
-var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers"}
+var siteConfigFieldsAfter066 = []string{
+	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
+	"model_providers", "sign_in_help_text", "sign_in_help_url",
+}
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
 // body did not MENTION, for the fields an older client cannot know about.
@@ -583,10 +619,44 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	if !present["agent_providers"] {
 		cfg.AgentProviders = existing.AgentProviders
 	}
+	// model_providers on the same terms. A body that names the block gets its
+	// server-owned UIDs from the stored one instead; a carried-forward block
+	// already holds them, and is the store's own value, so it is not touched.
+	if !present["model_providers"] {
+		cfg.ModelProviders = existing.ModelProviders
+	} else {
+		assignModelProviderUIDs(cfg.ModelProviders, existing.ModelProviders)
+	}
+	// The sign-in help pair, for the same MDM reason: a boot-time re-apply of a
+	// file written before these keys existed must not erase the admin's text.
+	if !present["sign_in_help_text"] {
+		cfg.SignInHelpText = existing.SignInHelpText
+	}
+	if !present["sign_in_help_url"] {
+		cfg.SignInHelpURL = existing.SignInHelpURL
+	}
 	// effective_scm_hosts is NOT carried forward: it is server-owned and
 	// PROJECTED on read (handleGetSiteConfig), never stored, so there is nothing
 	// to preserve — the write clears it instead.
 	cfg.EffectiveScmHosts = nil
+	// git_pat_broker_enabled (nested in workspace_providers) takes the SAME
+	// treatment, and for the same reason (#381 F1): it is projected on read
+	// from the deployment's own env switch, never stored. Without this line a
+	// value that arrived in the request body — or rode along unnoticed on the
+	// just-carried-forward existing.WorkspaceProviders above — persisted into
+	// the JSONB and was echoed back as truth on every later GET, exactly the
+	// bug handlePutWorkspaceProviders was already fixed against.
+	//
+	// A COPY, never a mutation through the pointer, for the identical
+	// aliasing reason handleGetSiteConfig's own projection states: in the
+	// carried-forward branch above, cfg.WorkspaceProviders IS
+	// existing.WorkspaceProviders — the very value this store's OTHER readers
+	// may be holding right now.
+	if cfg.WorkspaceProviders != nil {
+		wp := *cfg.WorkspaceProviders
+		wp.GitPatBrokerEnabled = nil
+		cfg.WorkspaceProviders = &wp
+	}
 }
 
 // handlePutSiteConfig validates and persists the operator-wide site config.
@@ -647,6 +717,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// lowercase-host/no-trailing-slash form.
 	cfg.WorkspaceProviders = normalizeWorkspaceProviders(cfg.WorkspaceProviders)
 	cfg.AgentProviders = normalizeAgentProviders(cfg.AgentProviders)
+	cfg.ModelProviders = normalizeModelProviders(cfg.ModelProviders)
 	// ScmHosts / EgressRedirects[].{From,To} / UpstreamProxyURL on the
 	// same terms — see normalizeSiteConfigTopology's doc.
 	normalizeSiteConfigTopology(&cfg)
@@ -666,7 +737,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	defer s.siteConfigMu.Unlock()
 	existing, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get existing site config: "+err.Error())
+		writeServerError(w, r, "get existing site config", err)
 		return
 	}
 	// Checked under siteConfigMu, against the SAME read this handler's own
@@ -704,6 +775,12 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
+	// After the carry-forward: the roster's defaults are checked against the
+	// providers this document will actually hold, whichever side was named.
+	if err := validateDefaultProviders(cfg.AgentProviders, cfg.ModelProviders); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
+		return
+	}
 	// Narrowing is never silent on this door either, and this is the door where
 	// it matters most: a laptop re-applies /etc/wardyn/site-config.json on EVERY
 	// boot, so an MDM-tightened base URL lands here, not on the providers page,
@@ -715,17 +792,19 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	if present["workspace_providers"] {
 		n, cerr := s.sourcesNoLongerAdmitted(r.Context(), cfg)
 		if cerr != nil {
-			writeError(w, http.StatusInternalServerError, "count sources this block refuses: "+cerr.Error())
+			writeServerError(w, r, "count sources this block refuses", cerr)
 			return
 		}
 		narrowed = &n
 	}
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
+		writeServerError(w, r, "put site config", err)
 		return
 	}
 	logWarnInternalHostsDeclared(saved.InternalHosts)
+	sshWideRows := sshLaneWidePastPathRows(saved.WorkspaceProviders)
+	logWarnSSHLaneWidePastPath(sshWideRows)
 	redirectPairs, redirectsTruncated := auditEgressRedirectPairs(saved.EgressRedirects)
 	hostSuffixes := auditInternalHostSuffixes(saved.InternalHosts)
 	datum := map[string]any{
@@ -753,9 +832,18 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		// ENABLED rows, so a roster narrowed by an MDM push is reviewable
 		// from the audit log alone.
 		"agent_providers": enabledAgentProviderCount(saved),
+		// The sign-in help pair (#484), in the clear: /healthz publishes both
+		// to anyone, so the log can hold what every signed-out reader sees.
+		"sign_in_help_text": saved.SignInHelpText,
+		"sign_in_help_url":  saved.SignInHelpURL,
 	}
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
+	}
+	// Only once a provider block exists, so a deployment without one writes the
+	// row it always wrote.
+	if saved.ModelProviders != nil {
+		datum["model_providers"] = enabledModelProviderCount(saved)
 	}
 	// Only when the body NAMED the block — see the count above.
 	if narrowed != nil {
@@ -767,6 +855,17 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Projected onto the response for the same reason GET projects it — and
 	// AFTER the ETag above, which must hash the stored document.
 	saved.EffectiveScmHosts = effectiveScmHosts(saved)
+	// git_pat_broker_enabled (#381 F4): the SAME after-ETag projection, so a
+	// `site-config apply` (or the console's own PUT round trip) sees the live
+	// switch immediately rather than a dropped field until the next GET. A
+	// COPY, never a mutation through the pointer — `saved` came straight back
+	// from the store and may be the same object a concurrent reader holds.
+	if providersConfigured(saved) {
+		wp := *saved.WorkspaceProviders
+		on := !s.cfg.DisableGitPATBroker
+		wp.GitPatBrokerEnabled = &on
+		saved.WorkspaceProviders = &wp
+	}
 	// dangling_secret_refs surfaces the "reset+apply came back green but every
 	// credentialed path is dead" gap: this document round-trips secret NAMES
 	// only, so an apply after a secret-store wipe (or a hand-edited file) can
@@ -778,6 +877,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		OnboardingCompletedAtIgnored: ignoredOnboardingMark,
 		AppliesFrom:                  siteConfigAppliesFromNextDispatch,
 		SourcesNoLongerAdmitted:      narrowed,
+		SSHLaneWidePastPath:          sshWideRows,
 	})
 }
 
@@ -816,6 +916,17 @@ type siteConfigPutResponse struct {
 	// block at all (there is nothing to report), and present as 0 when it did,
 	// because 0 is the reassurance an admin narrowing a base URL is looking for.
 	SourcesNoLongerAdmitted *int `json:"sources_no_longer_admitted,omitempty"`
+	// SSHLaneWidePastPath (#380 F2) names every provider row this door
+	// GRANDFATHERED rather than refused: an explicit SSH lane on a row whose
+	// own addresses carry a path, which the console door (PUT
+	// /workspace-providers) refuses outright. This door instead keeps applying
+	// the rest of the document — an MDM-delivered config predates this rule and
+	// has no migration path, and a laptop that cannot re-apply its own stored
+	// document is a worse failure than the host-level over-admission the rule
+	// closes — and reports the rows here (also warned at slog.Warn level,
+	// logWarnSSHLaneWidePastPath) so the drop from "refused" to "admitted +
+	// warned" is never silent, the same shape DanglingSecretRefs takes.
+	SSHLaneWidePastPath []string `json:"ssh_lane_wide_past_path,omitempty"`
 }
 
 // siteConfigAppliesFromNextDispatch is the ONE value AppliesFrom takes today:

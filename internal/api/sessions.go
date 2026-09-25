@@ -105,7 +105,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	case body.All:
 		if err := s.cfg.SessionRevocations.RevokeAll(r.Context()); err != nil {
-			writeError(w, http.StatusInternalServerError, "revoke all sessions: "+err.Error())
+			writeServerError(w, r, "revoke all sessions", err)
 			return
 		}
 		n, err := s.revokeAPITokensFor(r, "")
@@ -116,14 +116,14 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 			// idempotent, so a retry converges on whatever is still live.
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 				"session.revoke", "*", "failure", mustJSON(map[string]any{"scope": "all", "tokens_revoked": n, "error": err.Error()})))
-			writeError(w, http.StatusInternalServerError, "revoke api tokens: "+err.Error())
+			writeServerError(w, r, "revoke api tokens", err)
 			return
 		}
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"session.revoke", "*", "success", mustJSON(map[string]any{"scope": "all", "tokens_revoked": n})))
 	case body.Sub != "":
 		if err := s.cfg.SessionRevocations.RevokeSub(r.Context(), body.Sub); err != nil {
-			writeError(w, http.StatusInternalServerError, "revoke sessions: "+err.Error())
+			writeServerError(w, r, "revoke sessions", err)
 			return
 		}
 		n, err := s.revokeAPITokensFor(r, body.Sub)
@@ -131,7 +131,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 			// Same partial-application honesty as the all arm above.
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 				"session.revoke", body.Sub, "failure", mustJSON(map[string]any{"scope": "sub", "sub": body.Sub, "tokens_revoked": n, "error": err.Error()})))
-			writeError(w, http.StatusInternalServerError, "revoke api tokens: "+err.Error())
+			writeServerError(w, r, "revoke api tokens", err)
 			return
 		}
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

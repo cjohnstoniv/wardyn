@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -99,11 +100,11 @@ func (s *Server) claimImportStep(ctx context.Context, ws types.Workspace, runID 
 		return types.Workspace{}, nil, errImportStepBusy
 	}
 	return claimed, func(e error) error {
-		hint := "the workspace import step could not start"
-		if e != nil {
-			hint += ": " + e.Error()
-		}
-		s.failAndRevoke(ctx, runID, types.RunPending, hint)
+		// The hint is member-visible and e is usually a store error (host,
+		// port, SQLSTATE), so the hint is fixed and e goes to the log.
+		slog.ErrorContext(ctx, "wardynd: the workspace import step could not start",
+			slog.String("run_id", runID.String()), slog.Any("err", e))
+		s.failAndRevoke(ctx, runID, types.RunPending, "the workspace import step could not start")
 		_, _ = s.cfg.Store.ClearWorkspaceActiveRun(ctx, ws.ID, runID)
 		return e
 	}, nil
@@ -155,6 +156,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
 		RunnerTarget: s.cfg.RunnerTarget,
 	}
+	s.captureRunLimits(&run, gov.ceiling)
 	if set != nil {
 		set(&run)
 	}
@@ -247,6 +249,18 @@ func (s *Server) mintRecordAPIKeyInjections(ctx context.Context, runID uuid.UUID
 		}
 	}
 	return injections, nil
+}
+
+// recordLaunchFailureHint is the record card's hint for a launch that failed
+// before dispatch. The card is member-visible, so only the two refusals written
+// for that member (a governance limit, a stored source target) pass through.
+// Anything else is a daemon fault, usually a store error carrying host, port
+// and SQLSTATE: it gets a fixed sentence, and release logs the error.
+func recordLaunchFailureHint(reason error) string {
+	if errors.Is(reason, errRecordCeilingLimit) || errors.Is(reason, errWorkspaceSourceTarget) {
+		return "launch failed: " + reason.Error()
+	}
+	return "launch failed: the run could not be recorded"
 }
 
 // errRecordCeilingLimit marks a refusal by the acting principal's governance
@@ -560,7 +574,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		now := s.cfg.Now().UTC()
 		_, _, _ = s.putRecordResult(ctx, ws.ID, sessionKey, RecordTaskResult{
 			RunID: runID, Label: sessionLabel, Mode: recordModeInteractive, Confined: confined, Status: recordStatusFailed, StartedAt: now, FinishedAt: &now,
-			FailureHint: "launch failed: " + reason.Error(),
+			FailureHint: recordLaunchFailureHint(reason),
 		}, recordStatusRecording)
 		return release(reason)
 	}
@@ -639,14 +653,16 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// requirement credential is never skipped just because this session
 	// happens to be subscription-mounted.
 	before := len(policy.EligibleGrants)
-	_ = s.applyWorkspaceRequirements(ctx, &policy, "claude-code", []types.Workspace{ws}, nil)
+	reqEvents := s.applyWorkspaceRequirements(ctx, &policy, "claude-code", []types.Workspace{ws}, nil)
+	// Audited the way POST /runs audits them, before any grant is minted.
+	s.recordCreateFolds(ctx, runID, types.Integration{}, "", reqEvents)
 	minted, ierr := s.mintRecordAPIKeyInjections(ctx, runID, now, policy.EligibleGrants[before:])
 	if ierr != nil {
 		return types.AgentRun{}, false, abort(fmt.Errorf("create requirement grant: %w", ierr))
 	}
 	injections = append(injections, minted...)
 	// llmGrantsBefore fences the fallback mint below to ONLY what IT adds: the
-	// fold above already minted (and audited) the requirement grants — reusing
+	// fold above already minted and audited the requirement grants — reusing
 	// the full policy.EligibleGrants slice there would remint and re-inject
 	// every one of them a second time.
 	llmGrantsBefore := len(policy.EligibleGrants)
@@ -665,7 +681,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// No workspace/operator integration bound: fall back to the operator
 		// ceiling's convention subscription mount, else a brokered api-key grant
 		// (today's behavior for an unbound workspace).
-		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true); m {
+		if m, _ := applyLLMCredMount(&policy, s.cfg.DefaultPolicy, "claude-code", true, s.anthropicGatewayHostPort()); m {
 			subMounted = true
 		} else {
 			s.ensureLLMGrant(&policy, "claude-code", s.presentSecretNames(ctx), false)
@@ -707,7 +723,10 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// Sessions are interactive (the operator drives the activity in the attach
 	// shell); no auto command plan. The `--idle` path clones the repo + attaches.
 	var resolvedManaged bool
-	result := s.dispatchAndSettle(ctx, created, ceilingForDispatch(ceiling), dispatchParams{
+	// adoEntraUngraded: the record/verify session door runs no autonomy gate —
+	// it is operator-only and no rubric caps it — so there is no frozen grade
+	// for dispatch to hold the Azure DevOps lane to.
+	result := s.dispatchAndSettle(ctx, created, ceilingForDispatch(ceiling, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken:           runToken,
 		Image:              image,
 		Policy:             policy,

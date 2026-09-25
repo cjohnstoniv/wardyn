@@ -27,6 +27,7 @@ import { CONFIG_STEPS, DEMO_EGRESS_IDS, DEMO_SECRETS_IDS, STEP_LABEL, stepOrder,
 import { statusTone, statusWord } from "../../../lib/workspace-status";
 import { AccessPanel, type AccessLoadState } from "./access-panel";
 import { UserDrivesCard } from "./user-drives-card";
+import { SignInHelpCard } from "./sign-in-help-card";
 import type { AccessResponse } from "../../../lib/types";
 
 // Shared check-row primitives (Review + the Corporate network step).
@@ -65,13 +66,14 @@ export function CheckRow({ check }: { check: SetupCheck }) {
 }
 
 // Review step — the consolidated readiness rollup (its own step, before Launch).
-// Every cross-cutting check grouped by status (blockers → warnings → ready), plus
+// Every cross-cutting check grouped by whether it BLOCKS the install first,
+// then by status within that (grade stays visible as the row's own chip), plus
 // the permanent "About this host" facts, spanning steps 2–7 as a single honest
 // go/no-go view.
 
-// DRAFT (M2 canon pending) — distinct from "Worth a look" (warnings): nothing
-// here is wrong, there's just a fix available for something that was never
-// required.
+// DRAFT (M2 canon pending) — distinct from "Worth a look" (non-blocking fail
+// or warn): nothing here is wrong, there's just a fix available for something
+// that was never required.
 const REVIEW_GROUP_OPTIONAL = "Optional — not blocking";
 
 // #213 — the two optional lists Review names apart, per the approved
@@ -138,14 +140,19 @@ export function ReviewStep({
   // Actionable checks (exclude permanent platform facts — those are reference).
   const actionable = status.checks.filter((c) => !c.platform);
   const infoNotes = status.checks.filter((c) => c.platform);
-  const blockers = actionable.filter((c) => c.status === "fail");
-  const warnings = actionable.filter((c) => c.status === "warn");
+  // Partition on whether a check BLOCKS the install before its grade — a grade
+  // alone never gates (setup-gate.ts's setupGateActive reads only `blocking`),
+  // so a blocking warn belongs here, not under "Worth a look". Grade still
+  // shows as the row's own chip.
+  const blockers = actionable.filter((c) => c.blocking === true);
+  const nonBlocking = actionable.filter((c) => !c.blocking);
+  const warnings = nonBlocking.filter((c) => c.status === "fail" || c.status === "warn");
   // An `info` check with a fix (e.g. the image builder, off by default, with a
   // one-line env var to turn it on) is optional, not done — lumping it under
   // green "Ready" would claim nothing was left to do when there was. Only an
   // `info` check with no fix (a permanent fact about this host) belongs there.
-  const optionalNotBlocking = actionable.filter((c) => c.status === "info" && c.fix);
-  const ready = actionable.filter((c) => c.status === "ok" || (c.status === "info" && !c.fix));
+  const optionalNotBlocking = nonBlocking.filter((c) => c.status === "info" && c.fix);
+  const ready = nonBlocking.filter((c) => c.status === "ok" || (c.status === "info" && !c.fix));
   const group = (label: string, tone: StepBadge["tone"], checks: SetupCheck[]) =>
     checks.length > 0 && (
       <section className="space-y-2" key={label}>
@@ -252,8 +259,8 @@ export function useSiteConfigStep(
   const [saving, setSaving] = React.useState(false);
 
   React.useEffect(() => {
-    reloadSiteConfig();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void reloadSiteConfig();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-once prologue by design (see doc comment above); reloadSiteConfig's identity rides adminReads and must not re-fire this on that account
   }, []);
 
   const mutate = async (next: SiteConfig, errorMessage: string): Promise<boolean> => {
@@ -418,7 +425,7 @@ export function DeploymentStep({
         </p>
         <div className="mt-3 flex items-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link to="/permissions">{PT.MULTI_USER_PERMISSIONS_ACTION}</Link>
+            <Link to="/admin/permissions">{PT.MULTI_USER_PERMISSIONS_ACTION}</Link>
           </Button>
           <span className="text-xs text-muted-foreground">{PT.MULTI_USER_PERMISSIONS_HINT}</span>
         </div>
@@ -434,6 +441,8 @@ export function DeploymentStep({
         state={accessState ?? "loading"}
         onReload={onReloadAccess ?? (() => {})}
       />
+      {/* #484 — under Role mappings: what a refused person is told to do. */}
+      <SignInHelpCard />
     </div>
   );
 }

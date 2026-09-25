@@ -38,16 +38,12 @@ const leafCertTTL = 24 * time.Hour
 // leafRenewBefore is how long before NotAfter a CACHED leaf stops being reused
 // and is re-minted instead.
 //
-// A per-run proxy sidecar has no lifetime bound of its own — internal/lifecycle
-// skips the idle reaper entirely when the run's AutoStopAfterSec <= 0, which is
-// the default, and the per-run MITM CA is minted for a YEAR
-// (internal/api/mitmca.go) precisely because runs are expected to outlive a
-// day. leafCertTTL is only 24h: without this margin, a leaf picked up moments
-// before NotAfter would answer a new CONNECT to a MITM'd host with "200
-// Connection Established" and then fail the sandbox's TLS handshake with
-// "certificate has expired", silently and permanently. The margin keeps a leaf
-// from expiring mid-handshake on a conn that picked it up just before
-// NotAfter.
+// A per-run proxy sidecar has no lifetime bound of its own, and the per-run
+// MITM CA is minted for a YEAR (internal/api/mitmca.go) because runs are
+// expected to outlive a day — far longer than leafCertTTL's 24h. The margin
+// keeps a leaf picked up moments before NotAfter from answering a CONNECT and
+// then failing the sandbox's TLS handshake mid-flight, silently and
+// permanently.
 const leafRenewBefore = time.Hour
 
 // leafUsableAt reports whether a cached leaf is still safely reusable at now —
@@ -416,10 +412,31 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 		// ReadTimeout bounds the whole request incl. body so a slow-loris body
 		// can't pin a goroutine + scan buffer indefinitely. WriteTimeout stays 0:
 		// model RESPONSES legitimately stream for a long time.
-		ReadTimeout: 5 * time.Minute,
+		ReadTimeout: mitmReadTimeout,
 		IdleTimeout: 90 * time.Second,
 	}
 	_ = srv.Serve(&oneConnListener{conn: served})
+}
+
+// mitmReadTimeout is the inner server's per-request read bound. A var only so
+// a test can shorten it.
+var mitmReadTimeout = 5 * time.Minute
+
+// rearmBodyDeadline gives the request's body a whole mitmReadTimeout from NOW.
+//
+// ReadTimeout counts from when the request's headers began to arrive, and it
+// is not reset once they are read (measured: a body read after the deadline
+// fails with an i/o timeout even though the handler is running). So a request
+// a person was asked about — an Azure DevOps capability hold (up to
+// maxCapabilityHoldTimeout) or a credential sign-in hold (up to
+// WARDYN_CREDENTIAL_REAUTH_TIMEOUT) — would have its unread body cut off by
+// the time already spent waiting: a large upload after a four-minute hold had
+// one minute left, and after a ten-minute sign-in hold none. Called after
+// each point that can hold, before the body is read; the bound itself is
+// unchanged, it just starts when the proxy starts reading. A writer that
+// cannot set deadlines (a test recorder) has none to re-arm.
+func rearmBodyDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(mitmReadTimeout))
 }
 
 // serveMITMRequest serves a MITM-terminated request. It inspects the plaintext
@@ -469,6 +486,10 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	if !p.isLLMHost(host) {
 		mitmSource = ruleSourceArtifactMITM
 	}
+	if mitmSource = p.gateADO(w, r, host, port, mitmSource); mitmSource == "" {
+		return
+	}
+	rearmBodyDeadline(w) // the gate may have held the request (awaitADOCapability)
 
 	// Dial target: through the corp proxy (by hostname) when an upstream is
 	// configured — the transport's egressDial chains the CONNECT and TLS then
@@ -507,7 +528,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	var scanSummary *egress.ScanSummary
 	var blocked bool
 	// The inspected body stays charged to maxRetainedScanBytes until this
-	// request's own round trip has consumed it (F074).
+	// request's own round trip has consumed it.
 	releaseBody := func() {}
 	defer func() { releaseBody() }()
 	if channel == contentscan.ChannelGeneric && p.scanner != nil &&
@@ -550,6 +571,11 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 			// request — so the owner's sign-in still lands for whoever is left.
 			return
 		}
+		if p.isADOLane(host) {
+			// Azure DevOps answers in its own error shape, never the AWS one.
+			p.refuseADOCredential(w, r, host, port, ierr)
+			return
+		}
 		if errors.Is(ierr, errReauthNoCredential) {
 			// The hold ended with no credential. 401 + a modelled
 			// UnauthorizedException, NOT the 502 below: both AWS SDKs read that
@@ -589,6 +615,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		p.httpErrorAWSAware(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException")
 		return
 	}
+	rearmBodyDeadline(w) // the resolve may have held the request (credhold.go)
 	var injectHdr *injectedHeader
 	if ok {
 		injectHdr = &hdr

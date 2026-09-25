@@ -8,7 +8,9 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -286,6 +288,9 @@ type optionalFeatures struct {
 	// set. nil is the ABSENT mode all the way down: the search endpoint answers
 	// its distinct 503 and every "who" field stays free text.
 	dir directory.Directory
+	// hop is the control-plane to proxy TLS (internal_tls.go); nil only on a
+	// loopback-http local install.
+	hop *hopTLS
 }
 
 // buildOptionalFeatures wires every optional subsystem from its flags. Extracted
@@ -332,10 +337,9 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			return of, fmt.Errorf("parse WARDYN_OIDC_ROLE_MAP: %w", rerr)
 		}
 		hasRoleMap = len(roleMap) > 0
-		defaultRole := strings.TrimSpace(*f.oidcDefaultRole)
-		if defaultRole != "" && !validDefaultRole(defaultRole) {
-			return of, fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
-				defaultRole, oidc.RoleAdmin, oidc.RoleMember, oidc.RoleSecurityAdmin)
+		defaultRole, derr := parseDefaultRole(*f.oidcDefaultRole)
+		if derr != nil {
+			return of, derr
 		}
 		// The redirect URL is TWO things, and oidc.New only validates one of
 		// them: the IdP callback target (it checks non-empty, nothing more)
@@ -377,16 +381,21 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			// Wired unconditionally the same way Revocations is — pool is
 			// already required whenever OIDC boots at all.
 			RoleMappings: roleMappingsFor(pool),
-			// OnLogin (migration 0046): every successful login re-stamps
-			// role+role_checked_at on every ssh_public_keys row this principal
-			// owns — the bounded-stale re-check sshAuth's admin-override path
-			// reads (WARDYN_SSH_ROLE_TTL). store.NewPG(pool) is a cheap value
+			// UserTypes (0.8): the user types a role-map value may name, read
+			// once per login beside RoleMappings and failing the login closed
+			// the same way. store.PG already has the one method it needs.
+			UserTypes: store.NewPG(pool),
+			// OnLogin (migration 0046, widened by #152): every successful login
+			// re-stamps role+role_checked_at on every ssh_public_keys row this
+			// principal owns — the bounded-stale re-check sshAuth's admin-override
+			// path reads (WARDYN_SSH_ROLE_TTL) — and role+groups+groups_truncated
+			// on every api_tokens row they hold. store.NewPG(pool) is a cheap value
 			// wrapper (constructed the same way elsewhere in this file), not a
 			// connection of its own. Best-effort: a store hiccup here logs and
 			// the login still succeeds — see oidc.Config.OnLogin's own doc for
 			// why that contract lives on the callback side, not here.
-			OnLogin: func(ctx context.Context, sub, role string) {
-				refreshLoginStamps(ctx, store.NewPG(pool), sub, role, time.Now().UTC())
+			OnLogin: func(ctx context.Context, sub, role string, groups []string, groupsTruncated bool) {
+				refreshLoginStamps(ctx, store.NewPG(pool), sub, role, groups, groupsTruncated, time.Now().UTC())
 			},
 		}, sessKey)
 		if err != nil {
@@ -418,6 +427,7 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 				"boot continues past this ONLY with WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST set (set the operator list instead to make everyone else a member)")
 		}
 		warnRoleMapPosture(roleMap, f, defaultRole)
+		warnUnknownUserTypes(bootCtx, store.NewPG(pool), roleMap, defaultRole)
 	}
 
 	// The second boot refusal (validateConfig, main.go, is the first): SSO
@@ -426,6 +436,16 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 	// authenticator only exists this far into boot; of.authn is the resolved
 	// "OIDC is configured" fact, so this cannot drift from what actually mounted.
 	if err := validateOperatorPosture(of.authn != nil, splitCSV(*f.oidcOperatorEmails), *f.allowOIDCNoOperatorList, hasRoleMap); err != nil {
+		return of, err
+	}
+
+	// WARDYN_SSO_ONLY's precondition (see validateSSOOnlyPosture): declaring SSO
+	// the only way in requires OIDC actually being configured, and requires every
+	// OTHER way in to be absent. Checked beside validateOperatorPosture above for
+	// the same reason — of.authn is the resolved "OIDC is configured" fact, and
+	// the raw flags below are the ones an operator actually set, not a value
+	// resolveLocalMode or anything else may have derived from them.
+	if err := validateSSOOnlyPosture(*f.ssoOnly, of.authn != nil, *f.adminToken, *f.localMode, *f.memberMode, *f.allowOIDCNoOperatorList); err != nil {
 		return of, err
 	}
 
@@ -537,6 +557,12 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		}
 	}
 
+	hop, herr := loadHopTLS(bootCtx, secrets, *f.controlURL)
+	if herr != nil {
+		return of, herr
+	}
+	of.hop = hop
+
 	return of, nil
 }
 
@@ -559,7 +585,7 @@ func warnRoleMapPosture(roleMap map[string]string, f *bootFlags, defaultRole str
 	// a role map for claim-based members.
 	if len(roleMap) == 0 {
 		if len(splitCSV(*f.oidcOperatorEmails)) > 0 {
-			slog.Warn("wardynd: no WARDYN_OIDC_ROLE_MAP set — roles come only from the WARDYN_OIDC_OPERATOR_EMAILS allowlist (listed = admin, everyone else = member); set a role map to derive admin/member from SSO roles/groups instead")
+			slog.Warn("wardynd: no WARDYN_OIDC_ROLE_MAP set — roles come only from the WARDYN_OIDC_OPERATOR_EMAILS allowlist (listed = admin, everyone else = user); set a role map to derive admin/user from SSO roles/groups instead")
 		}
 	} else if len(splitCSV(*f.oidcEmailDomains)) == 0 {
 		// Same warning shape as the WARDYN_OIDC_OPERATOR_EMAILS one above
@@ -631,8 +657,9 @@ func componentsInfo(f *bootFlags, runnerTarget string, recStore recording.Store)
 }
 
 // validDefaultRole reports whether role is admissible as
-// WARDYN_OIDC_DEFAULT_ROLE. STRICTER than oidc.ValidRole on exactly one value:
-// oidc.RoleSecurityAdmin is refused, and boot FAILS CLOSED on it.
+// WARDYN_OIDC_DEFAULT_ROLE: admin, user, or a user type id (0.8), which is the
+// user tier on that type. STRICTER than oidc.ValidMappingTarget on exactly one
+// value: oidc.RoleSecurityAdmin is refused, and boot FAILS CLOSED on it.
 //
 // The default role is what a signed-in human falls through to when NOTHING in
 // the merged role map matched them — i.e. the tier granted by accident, to
@@ -647,7 +674,57 @@ func componentsInfo(f *bootFlags, runnerTarget string, recStore recording.Store)
 // misconfiguration produces no error at any point, just a quietly over-powered
 // org, discovered at audit time.
 func validDefaultRole(role string) bool {
-	return oidc.ValidRole(role) && role != oidc.RoleSecurityAdmin
+	return oidc.ValidMappingTarget(role) && role != oidc.RoleSecurityAdmin
+}
+
+// parseDefaultRole validates WARDYN_OIDC_DEFAULT_ROLE, accepting the pre-0.8
+// "member" as the user tier with the boot WARN until 0.9.
+func parseDefaultRole(raw string) (string, error) {
+	role := strings.TrimSpace(raw)
+	if role == oidc.LegacyRoleMember {
+		slog.Warn(oidc.LegacyRoleMemberWarning("WARDYN_OIDC_DEFAULT_ROLE", ""))
+		role = oidc.RoleUser
+	}
+	if role != "" && !validDefaultRole(role) {
+		return "", fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q, %q or a user type id (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
+			role, oidc.RoleAdmin, oidc.RoleUser, oidc.RoleSecurityAdmin)
+	}
+	return role, nil
+}
+
+// warnUnknownUserTypes WARNs once per WARDYN_OIDC_ROLE_MAP value, and for
+// WARDYN_OIDC_DEFAULT_ROLE, that names a user type the store does not hold. A
+// WARN, not a refusal: the type may be created in the console after boot. Until
+// it exists, a user or security admin sign-in that reaches the value is
+// refused (user_type_unknown), never given a wider default; an admin sign-in
+// gets the built-in type instead (deriveRole).
+func warnUnknownUserTypes(ctx context.Context, src oidc.UserTypeSource, roleMap map[string]string, defaultRole string) {
+	named := map[string][]string{}
+	for k, v := range roleMap {
+		if _, ut, ok := oidc.SplitMappingTarget(v); ok && ut != types.UserTypeStandard && ut != "" {
+			named[ut] = append(named[ut], "WARDYN_OIDC_ROLE_MAP entry "+strconv.Quote(k+"="+v))
+		}
+	}
+	if _, ut, ok := oidc.SplitMappingTarget(defaultRole); ok && ut != types.UserTypeStandard && ut != "" {
+		named[ut] = append(named[ut], "WARDYN_OIDC_DEFAULT_ROLE")
+	}
+	if len(named) == 0 {
+		return
+	}
+	list, err := src.ListUserTypes(ctx)
+	if err != nil {
+		slog.Warn("wardynd: could not read user types to check the role map; sign-ins that reach a missing one are refused", "error", err)
+		return
+	}
+	for _, t := range list {
+		delete(named, t.ID)
+	}
+	for _, id := range slices.Sorted(maps.Keys(named)) {
+		refs := named[id]
+		slices.Sort(refs)
+		slog.Warn("wardynd: the user type "+strconv.Quote(id)+" doesn't exist yet; user and security admin sign-ins it decides are refused until it is created or the value is remapped (admin sign-ins get the standard type)",
+			"named_by", refs)
+	}
 }
 
 // chartMapHasNoAdminPath reports whether the chart role map grants
@@ -739,41 +816,43 @@ func buildDirectoryConnector(f *bootFlags) (directory.Directory, error) {
 // asserted by grepping this file for a method name.
 type loginStampStore interface {
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
-	RefreshAPITokenRoles(ctx context.Context, principal, role string) error
+	RefreshAPITokenIdentity(ctx context.Context, principal, role string, groups []string, truncated bool) error
 }
 
-// refreshLoginStamps re-stamps the role a login just derived onto both frozen-role
-// credential lanes this principal owns: their ssh_public_keys rows (migration
-// 0046, the bounded-stale re-check sshAuth's admin-override path reads under
-// WARDYN_SSH_ROLE_TTL) and their api_tokens rows (the twin — both credentials
-// freeze a role at issue time and neither can learn about a demotion on its own,
-// so a demoted human's outstanding wdn_ tokens kept authenticating as an admin
-// until someone remembered to revoke them by hand). One login bounds both.
+// refreshLoginStamps re-stamps the identity a login just derived onto both
+// frozen-role credential lanes this principal owns: their ssh_public_keys rows
+// (migration 0046, the bounded-stale re-check sshAuth's admin-override path
+// reads under WARDYN_SSH_ROLE_TTL) and their api_tokens rows (the twin — both
+// credentials freeze an identity at issue time and neither can learn about a
+// demotion or a group change on its own, so a demoted human's outstanding
+// wdn_ tokens kept authenticating as an admin, and a human whose groups moved
+// on kept authorizing against the snapshot they had at mint, until someone
+// remembered to revoke or re-mint by hand). One login bounds both.
 //
 // It is a NAMED FUNCTION over an INTERFACE, so a grep for its method name can
 // see the call site but not argument order. The only thing guarding this bound
 // was apitoken_stamp_doc_test.go's strings.Contains(boot_deps.go,
-// "RefreshAPITokenRoles") — a grep for the method NAME. Transposing the two
-// string arguments (`st.RefreshAPITokenRoles(ctx, role, sub)`) silently stamps
-// the role column of whatever principal is literally named "member" and leaves
-// every demoted admin's tokens untouched, and cmd/wardynd, internal/auth/oidc and
-// internal/store all stayed green. A name a guard can see is not a behaviour a
-// guard can check. login_stamp_test.go now drives this function with a recording
-// fake and asserts each call got the principal in the principal position and the
-// role in the role position; the grep guard stays, because it catches DELETION,
-// which the driven test cannot.
+// "RefreshAPITokenIdentity") — a grep for the method NAME. Transposing two
+// same-typed arguments (e.g. `st.RefreshAPITokenIdentity(ctx, role, sub, ...)`)
+// silently stamps the role column of whatever principal is literally named
+// "member" and leaves every demoted admin's tokens untouched, and cmd/wardynd,
+// internal/auth/oidc and internal/store all stayed green. A name a guard can
+// see is not a behaviour a guard can check. login_stamp_test.go now drives this
+// function with a recording fake and asserts each call got every argument in
+// its named position; the grep guard stays, because it catches DELETION, which
+// the driven test cannot.
 //
 // BEST-EFFORT, deliberately, and in BOTH directions: a store hiccup logs and the
 // login still succeeds (oidc.Config.OnLogin's own doc carries why that contract
 // lives on the callback side), and a failure of the FIRST stamp must not skip the
 // SECOND — they bound two independent credential lanes and one being unreachable
 // is no reason to leave the other stale.
-func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role string, now time.Time) {
+func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role string, groups []string, groupsTruncated bool, now time.Time) {
 	if err := st.RefreshSSHKeyRoles(ctx, sub, role, now); err != nil {
 		slog.Warn("wardynd: ssh key role refresh at login failed", slog.String("err", err.Error()))
 	}
-	if err := st.RefreshAPITokenRoles(ctx, sub, role); err != nil {
-		slog.Warn("wardynd: api token role refresh at login failed", slog.String("err", err.Error()))
+	if err := st.RefreshAPITokenIdentity(ctx, sub, role, groups, groupsTruncated); err != nil {
+		slog.Warn("wardynd: api token identity refresh at login failed", slog.String("err", err.Error()))
 	}
 }
 

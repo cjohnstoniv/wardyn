@@ -78,6 +78,7 @@ func createMemberRun(t *testing.T, srv *Server, fr *fakeRunner, session *http.Co
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create run: code = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
+	fr.waitForSandbox(t) // dispatch runs after the 201 (runs_create_launch.go)
 	if fr.createCalls != 1 {
 		t.Fatalf("CreateSandbox calls = %d, want 1", fr.createCalls)
 	}
@@ -103,7 +104,7 @@ func memberOwnedWorkspace(st *ownerStore, owner, path string) uuid.UUID {
 func TestMemberMountPosture_DispatchedToDriver(t *testing.T) {
 	root, project := memberProjectRoot(t)
 	srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 
 	spec := createMemberRun(t, srv, fr, member, memberOwnedWorkspace(st, ownerMemberSub, project))
 
@@ -151,7 +152,7 @@ func TestCreateRun_MemberSourceOutsideRootsIs422(t *testing.T) {
 	// anything the operator allows.
 	_, stranded := memberProjectRoot(t)
 	srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
-	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 	wsID := memberOwnedWorkspace(st, ownerMemberSub, stranded)
 
 	body := `{"agent":"claude-code","task":"do the thing","workspace_id":"` + wsID.String() + `"}`

@@ -7,13 +7,18 @@ import { test, expect, gotoConsole, mockMemberRole, navTo, sidebarLink, type Nav
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { SHELL } from "../src/app/components/wardyn/copy";
 import { HEALTH_POLL_MS } from "../src/app/App";
+import { VIEW_REFUSAL } from "../src/app/components/wardyn/copy/console-view";
 
 // Navigation + theme + error-boundary coverage for the Wardyn admin console.
 //
-// The shell (app-shell.tsx) renders a FLAT eight-item sidebar — Runs, Approvals,
-// Workspaces, Policies, Permissions, Secrets, Audit, Recordings — of react-router
-// <NavLink>s (role="link"), with no group headings. Settings, SSH keys and Demos
-// live in the account menu.
+// The shell (app-shell.tsx) renders one flat sidebar per view (M-2, packet
+// M-A) of react-router <NavLink>s (role="link"), with no group headings. The
+// Admin view: Runs, Approvals, Workspaces, Policies, Governance, Permissions,
+// Secrets, Audit, Recordings, then Setup and Settings under a divider (#217's
+// slot). The User view: Runs, Approvals, Workspaces, then Getting started and
+// Your account. The harness is a single-operator install, so the URL is the
+// view: gotoConsole(page, "admin") lands in the Admin view. The avatar menu
+// holds identity and Sign out only (view-switch.spec.ts).
 // The top bar carries a "Toggle theme" button (aria-label) and no posture
 // chips (0.7.3 F6 removed the Fence/NetworkPolicy chips — posture lives on
 // the setup Environment step). Each screen supplies its own <h1> via
@@ -60,8 +65,11 @@ const SIDEBAR_LABELS: NavLabel[] = [
   "Recordings",
 ];
 
-async function expectSidebarMounted(page: import("@playwright/test").Page) {
-  for (const label of SIDEBAR_LABELS) {
+// The User view's sidebar, the one "/" lands in once onboarded (D1).
+const USER_SIDEBAR_LABELS: NavLabel[] = ["Runs", "Approvals", "Workspaces", "Getting started", "Your account"];
+
+async function expectSidebarMounted(page: import("@playwright/test").Page, labels = SIDEBAR_LABELS) {
+  for (const label of labels) {
     await expect(sidebarLink(page, label)).toBeVisible();
   }
 }
@@ -82,11 +90,11 @@ test.describe("navigation + shell", () => {
     // are present on boot.
     await expect(page.getByRole("heading", { name: "Runs", level: 1 })).toBeVisible();
     await expect(page.getByText(/each confined behind its own barrier/i)).toBeVisible();
-    await expectSidebarMounted(page);
+    await expectSidebarMounted(page, USER_SIDEBAR_LABELS);
   });
 
   test("every sidebar destination loads its screen heading + content", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     for (const dest of DESTINATIONS) {
       await navTo(page, dest.label);
       // The screen's own <h1> title (PageHeader renders an h1, distinct from the
@@ -102,7 +110,7 @@ test.describe("navigation + shell", () => {
   });
 
   test("the app shell (sidebar) stays mounted across navigation", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     // Capture the Runs sidebar link handle, then navigate the full circuit and
     // back; the same shell element must remain attached the entire time.
     const runsNav = sidebarLink(page, "Runs");
@@ -124,7 +132,7 @@ test.describe("navigation + shell", () => {
   });
 
   test("navigating away from a screen and back re-renders it", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
 
     // Boot lands on Runs already; leave to Audit, then come back to Runs.
     await navTo(page, "Runs");
@@ -143,7 +151,7 @@ test.describe("navigation + shell", () => {
   });
 
   test("the active sidebar item reflects the current screen", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     // The seeded backend has PENDING approvals; the Approvals entry must exist
     // and be navigable. Clicking it lands on the Approvals screen.
     await navTo(page, "Approvals");
@@ -154,12 +162,54 @@ test.describe("navigation + shell", () => {
     await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toHaveCount(0);
   });
 
+  // #217 — Settings sits last in the Admin view's rail, under a divider, with
+  // Setup above it (M-2, packet M-A).
+  test("#217 — Settings is last in the sidebar, after Setup and Recordings, and opens the real screen", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    // Order is the contract: within the desktop rail, Settings is the LAST
+    // link, Setup above it, Recordings above that.
+    const rail = page.locator("aside").getByRole("link");
+    const names = await rail.allTextContents();
+    expect(names[names.length - 1]).toMatch(/^Settings/);
+    expect(names[names.length - 2]).toMatch(/^Setup/);
+    expect(names[names.length - 3]).toMatch(/^Recordings/);
+
+    await navTo(page, "Settings");
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    await expect(page.getByText(/This host, what runs your agents/i)).toBeVisible();
+  });
+
+  // M-1b — /settings is deleted, and the rail's lower slot splits by view: the
+  // Admin view's Settings is /admin/settings, the User view's Your account is
+  // /account. Both mount the same screen until M-5, so the h1 alone can't tell
+  // them apart — the URL is the pin, and a user must never meet the refusal.
+  // M-2 slimmed the avatar menu, so the rail is the one door.
+  test("M-1b — as admin, the sidebar Settings lands on /admin/settings", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navTo(page, "Settings");
+    await expect(page).toHaveURL(/\/admin\/settings$/);
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    await page.locator("header").getByRole("button").last().click();
+    await expect(page.getByRole("menu").getByRole("menuitem", { name: "Settings" })).toHaveCount(0);
+  });
+
+  test("M-1b — as a user, the sidebar Your account lands on /account, never the refusal", async ({ page }) => {
+    await mockMemberRole(page);
+    await gotoConsole(page);
+    await expect(sidebarLink(page, "Settings")).toHaveCount(0);
+    await navTo(page, "Your account");
+    await expect(page).toHaveURL(/\/account$/);
+    await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: VIEW_REFUSAL.TITLE })).toHaveCount(0);
+  });
+
   // B1 — the sidebar itself is the surface the fail-open bug widened: a
   // settled-but-unknown /me used to render the FULL admin nav (every item in
   // NAV_ITEMS) off a guess. The auth-flow assertions (the banner, Retry) are
   // auth.spec.ts's; this is the sidebar's own pin, that NOTHING renders
   // rather than the wrong thing rendering.
-  test("B1 — a settled-but-unknown /me renders no nav at all, admin or member", async ({ page }) => {
+  test("a settled-but-unknown /me renders no nav at all, admin or member", async ({ page }) => {
+    // ticket: B1
     await page.route("**/api/v1/me", (route) =>
       route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }),
     );
@@ -170,7 +220,9 @@ test.describe("navigation + shell", () => {
     // landed.
     await page.goto("/");
     await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
-    for (const label of [...SIDEBAR_LABELS, "Workspaces"] as NavLabel[]) {
+    // #217 — the sidebar Settings link is gated on the same expression as the
+    // account menu's own entry, so it disappears here too.
+    for (const label of [...SIDEBAR_LABELS, ...USER_SIDEBAR_LABELS, "Setup", "Settings"] as NavLabel[]) {
       await expect(sidebarLink(page, label)).toHaveCount(0);
     }
   });
@@ -245,9 +297,10 @@ test.describe("theme toggle", () => {
   // console. This reads the raw served markup directly — no JS execution at
   // all — so it proves the class ships in the HTML itself, not merely after
   // hydration.
-  test("F7-F4: the served HTML carries class=dark and color-scheme=dark before any JS runs", async ({
+  test("the served HTML carries class=dark and color-scheme=dark before any JS runs", async ({
     page,
   }) => {
+    // ticket: F7-F4
     const res = await page.request.get("/");
     const html = await res.text();
     expect(html).toMatch(/<html[^>]*\bclass="dark"/);
@@ -258,7 +311,8 @@ test.describe("theme toggle", () => {
   // preference once the app takes over — ThemeProvider's effect still runs
   // `classList.toggle("dark", theme === "dark")` on mount and removes the
   // class for a stored "light" value, exactly as before this fix.
-  test("F7-F4 neg: a stored light preference still renders light once the app mounts", async ({ page }) => {
+  test("negative control: a stored light preference still renders light once the app mounts", async ({ page }) => {
+    // ticket: F7-F4
     await page.addInitScript(() => {
       try {
         localStorage.setItem("wardyn-theme", "light");
@@ -273,7 +327,7 @@ test.describe("theme toggle", () => {
   });
 
   test("theme choice persists across navigation", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     const toggle = page.getByRole("button", { name: "Toggle theme" });
 
     // Switch to light, then navigate to another screen.
@@ -298,14 +352,15 @@ test.describe("theme toggle", () => {
 // affordance at all — the last few items (Recordings) were unreachable.
 // ui/sheet.tsx's primitive-level min-h-0 + overflow-y-auto (this lane) is
 // what keeps it reachable here.
-test.describe("mobile navigation drawer (F3-F8/F7-F6)", () => {
+test.describe("mobile navigation drawer", () => {
+  // ticket: F3-F8/F7-F6
   test("667x375: the drawer scrolls — Recordings (near the bottom of the list) is reachable", async ({
     page,
   }) => {
     // gotoConsole waits on the DESKTOP sidebar link — below md that aside is
     // hidden entirely (md:flex), so the viewport switch has to come AFTER
     // landing, not before (the mobile hamburger only exists once mounted).
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await page.setViewportSize({ width: 667, height: 375 });
     await page.getByRole("button", { name: "Open navigation menu" }).click();
     const drawer = page.getByRole("dialog");
@@ -318,7 +373,8 @@ test.describe("mobile navigation drawer (F3-F8/F7-F6)", () => {
     const box = await recordings.boundingBox();
     expect(box, "Recordings link boundingBox").not.toBeNull();
     expect(box!.y, "Recordings top edge").toBeGreaterThanOrEqual(0);
-    expect(box!.y + box!.height, "Recordings bottom edge").toBeLessThanOrEqual(375);
+    // +1: scrolled flush to the sheet's bottom, the edge lands on a sub-pixel.
+    expect(box!.y + box!.height, "Recordings bottom edge").toBeLessThanOrEqual(376);
 
     await recordings.click();
     await expect(page.getByRole("heading", { name: "Recordings", level: 1 })).toBeVisible();
@@ -330,7 +386,8 @@ test.describe("mobile navigation drawer (F3-F8/F7-F6)", () => {
 // with no flex-wrap and a fixed height — the header overflowed sideways on a
 // phone, and the user-menu trigger (the sign-out path) could be pushed off
 // the right edge entirely.
-test.describe("header compaction at phone width (F7-F2)", () => {
+test.describe("header compaction at phone width", () => {
+  // ticket: F7-F2
   test("390x844 /runs: no horizontal overflow, and the user-menu trigger stays in the viewport", async ({ page }) => {
     await gotoConsole(page);
     await page.setViewportSize({ width: 390, height: 844 });
@@ -341,7 +398,7 @@ test.describe("header compaction at phone width (F7-F2)", () => {
     }));
     expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.innerWidth);
 
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await expect(userMenuTrigger).toBeVisible();
     await expect(userMenuTrigger).toBeInViewport();
   });
@@ -361,7 +418,8 @@ test.describe("header compaction at phone width (F7-F2)", () => {
 // most valuable real estate for nothing an admin could act on. Both are gone
 // outright (no degraded chip, no replacement); posture now lives on the setup
 // Environment step alone.
-test.describe("the header carries no posture chips (0.7.3 F6)", () => {
+test.describe("the header carries no posture chips", () => {
+  // ticket: 0.7.3 F6
   test("no barrier or NetworkPolicy chip, on an admin session", async ({ page }) => {
     await gotoConsole(page);
     const header = page.getByRole("banner");
@@ -380,7 +438,7 @@ test.describe("error boundary (no spurious fallback)", () => {
     // wrong". The seeded backend exposes runs in ALL nine RunStates (incl. the
     // COMPLETED-state value that previously threw during render). Visiting every
     // screen must NOT trip the boundary — proving the fail-soft rendering holds.
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     for (const dest of DESTINATIONS) {
       await navTo(page, dest.label);
       await expect(page.getByRole("heading", { name: dest.heading, level: 1 })).toBeVisible();
@@ -410,7 +468,8 @@ test.describe("error boundary (no spurious fallback)", () => {
 //   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
 //   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
 //   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/navigation.spec.ts
-test.describe("the unreachable banner sees a store outage (R4/F066)", () => {
+test.describe("the unreachable banner sees a store outage", () => {
+  // ticket: R4/F066
   const BANNER = /Control plane unreachable — showing the last data received/i;
 
   test("a live daemon with an unreachable store raises the banner", async ({ page }) => {
@@ -467,12 +526,13 @@ test.describe("the unreachable banner sees a store outage (R4/F066)", () => {
   });
 });
 
-// X2-F23: /integrations died with the Settings consolidation (App.tsx
-// redirects it) but nothing walked the redirect itself — same gap /demos had
-// before demos.spec.ts's own one-line pin (X2-F21's sibling).
+// M-1b: /integrations died a second time — the Settings-consolidation
+// redirect X2-F23 pinned is itself deleted now, clean break, no alias
+// (admin-member-modes-design.md §2.3), since its target (/settings) is also
+// gone. A stale link falls to the member catch-all instead.
 test.describe("dead routes redirect", () => {
-  test("/integrations redirects to Settings", async ({ page }) => {
+  test("/integrations falls through to Runs", async ({ page }) => {
     await page.goto("/integrations");
-    await expect(page).toHaveURL(/\/settings$/);
+    await expect(page).toHaveURL(/\/runs$/);
   });
 });

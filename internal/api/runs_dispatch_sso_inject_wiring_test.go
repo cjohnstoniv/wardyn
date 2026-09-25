@@ -19,7 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// THE DISPATCH WIRING, which had no coverage at all (general S3b): the flags
+// The dispatch wiring, which had no coverage at all (general S3b): the flags
 // that decide whether Phase B happens were reachable only through
 // authorBedrockSSOInjection called by hand, so the derivation, the kill switch
 // and the other lanes' silence were asserted nowhere.
@@ -68,7 +68,7 @@ func dispatchLLM(t *testing.T, s *Server, sso awsSSOScope) (dispatchLLMPlan, *ca
 	}
 	plan, ok := s.resolveLLMInjections(context.Background(), run,
 		dispatchParams{Interactive: false, TaskMode: ""},
-		&policy, sandboxEnv, nil, "", artifactRedirectPlan{}, false, site, true)
+		&policy, sandboxEnv, nil, "", artifactRedirectPlan{}, false, site, true, false, bedrockCredUngraded())
 	return plan, captured, sandboxEnv, ok
 }
 
@@ -180,7 +180,7 @@ func TestDispatchWiring_SwitchOffIsThePreviousBehaviour(t *testing.T) {
 	}
 }
 
-// A RUN DISPATCHED UNDER `on` KEEPS ITS LANE when the flag flips to `off`
+// A run dispatched under `on` keeps its lane when the flag flips to `off`
 // (Codex #5 / the plan's on->off restart case). The switch is read ONCE, at
 // dispatch; the resolver and the capture-side resolution never consult it, so a
 // HELD run's grant still resolves and its hold still works after the flip.
@@ -218,7 +218,7 @@ func TestDispatchWiring_AFlipDoesNotChangeALaneUnderARunningRun(t *testing.T) {
 	}
 }
 
-// THE OTHER LANES AUTHOR NOTHING, through the real dispatch: a bearer, a
+// The other lanes author nothing, through the real dispatch: a bearer, a
 // static-key or a ~/.aws-mount run must acquire no portal.sso grant and no MITM
 // entry for it.
 func TestDispatchWiring_OtherBedrockLanesAuthorNoSSOInjection(t *testing.T) {
