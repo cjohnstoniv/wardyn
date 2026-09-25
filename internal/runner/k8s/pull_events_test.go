@@ -139,6 +139,32 @@ func TestWaitContainerRunning_EventsForbiddenKeepsThePodsReason(t *testing.T) {
 	}
 }
 
+// TestPullingDetail_NotContainerCreatingNeverLights pins the containerCreating
+// guard in pullingDetail: once the container's own status has moved past
+// ContainerCreating — here to ErrImagePull, a reason already more specific
+// than "Pulling" — a stale Pulling Event left over from an earlier pull must
+// not re-light the download step, and the guard must stop the read before it
+// ever asks the apiserver.
+func TestPullingDetail_NotContainerCreatingNeverLights(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	pod := pullTestPodAt(testNamespace, false)
+	pod.Status.ContainerStatuses[0].State = corev1.ContainerState{
+		Waiting: &corev1.ContainerStateWaiting{Reason: "ErrImagePull"},
+	}
+	var lists atomic.Int32
+	cs.PrependReactor("list", "events", func(clienttesting.Action) (bool, runtime.Object, error) {
+		lists.Add(1)
+		return true, &corev1.EventList{Items: []corev1.Event{kubeletEvent("Pulling", "")}}, nil
+	})
+
+	if got := d.pullingDetail(context.Background(), pod, mainContainerName, &pullWatch{}); got != "" {
+		t.Fatalf("pullingDetail = %q, want \"\" — ErrImagePull is not ContainerCreating, so a stale Pulling Event must not light the step", got)
+	}
+	if n := lists.Load(); n != 0 {
+		t.Errorf("events listed %d times for a non-ContainerCreating pod, want 0 — the containerCreating guard must short-circuit before the read", n)
+	}
+}
+
 // TestPullingFromEvents pins what may and may not light the step. Every
 // negative row is a way an Event could claim a pull that is not this pod's, or
 // not happening now.

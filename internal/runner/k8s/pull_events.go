@@ -86,6 +86,15 @@ func containerCreating(pod *corev1.Pod, container string) bool {
 // nothing an Event says reaches the reader: the image ref comes from the pod's
 // own spec, and the Event only chooses between two strings Wardyn wrote. An
 // Event for a same-named earlier pod (a different UID) is not this pod's.
+//
+// The list is assumed time-ordered — the apiserver's default List order for
+// Events is creation/key order, and the kubelet writes Pulling before any
+// later reason for the same container — so the last matching reason seen here
+// wins. If that ever went the other way, the failure direction is safe: a
+// pull reported out of order would either drop back to "" one tick early (the
+// pod's own status still says ContainerCreating, so the step just re-lights
+// on the next read) or, at worst, fail to light "Pulling" at all — never
+// claim a pull that already finished.
 func pullingFromEvents(pod *corev1.Pod, container string, evs []corev1.Event) string {
 	image := ""
 	for _, c := range pod.Spec.Containers {
