@@ -36,64 +36,18 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 	return runner.UserDriveHostRootCheck(s.cfg.UserDriveHostRoots)
 }
 
-// driveHostRootNesting is the FOURTH gate, and the only one that has to look at
-// the other ROWS: a host_path drive whose host_root sits inside — or contains —
-// another host_path drive's host_root is refused, 422, naming the other drive.
-//
-// The hole it closes is a member's, not an admin's typo. Drive A is rooted at
-// /srv/shares and gives alice a WRITABLE home at /srv/shares/alice. Drive B is
-// then rooted at /srv/shares/alice/team. Nothing above notices: B's root is
-// inside the deployment's ceiling, exists, is not a credential directory and is
-// an ordinary path. But its whole tree is a directory alice can write from
-// INSIDE a run — so she can replace `team`, or any segment under it, with a
-// link, and B's members are bound wherever she points them. The driver's
-// resolved-real-path checks bound where that can aim (the ceiling, and now the
-// member's own home name) but they cannot make the layout supportable: two
-// drives sharing a tree means one drive's members author the other drive's
-// storage.
-//
-// Strict nesting only. Two drives on the SAME root are left alone: that is the
-// ordinary "one share, two allocations with different home templates" shape, and
-// neither drive's members can move the other's root, because the root is not
-// inside anybody's home. Equal roots are a naming question; nested roots are a
-// containment one.
-//
-// On the stored strings **and on the resolved paths**, and it has to be both.
-// The lexical half is what the rows say; the resolved half is what the
-// filesystem says, and no other check compares TWO DRIVES' roots. The symlink
-// half cannot be delegated to UserDriveHostRootCheck: that check
-// resolves ONE root against the deployment's env ceiling and has no second
-// drive in scope, so it cannot see nesting at all. The gap was reachable with
-// the deployment's own ceiling honoured throughout: drive A rooted at
-// /srv/shares, drive B rooted at /mnt/teamshare where /mnt/teamshare is a
-// SYMLINK to /srv/shares/alice/team. Both roots are inside the roots, both
-// resolve, neither is a credential directory — and the literal nested path is
-// refused while the link to it is accepted, which is the same containment loss
-// with an extra hop.
-//
-// A resolve failure on the other row falls back to the lexical answer, not to a
-// 500 and not to a refusal. This drive's own root has ALREADY resolved (gate 3,
-// UserDriveHostRootCheck, which fails closed on exactly that), so the only path
-// that can fail here is a STORED row whose share is gone — and a drive that
-// cannot resolve binds nothing, so there is no tree left for it to share.
-// Turning that into a refusal would let one dead row block every new drive an
-// admin tries to author.
-//
-// One store read, on the drive-write path only — a handful of calls in a
-// deployment's lifetime, and the same list the console already loads on every
-// visit to the screen.
-//
-// And it is a read followed by an unconditional write, exactly as
-// driveRehomeGuard is, which that gate says out loud and this one did not. Two
-// concurrent creates — /srv/shares and /srv/shares/alice/team — can both list
-// before either writes, and both are then stored: the pair this gate exists to
-// refuse, accepted 201/201. It is application-level for the same reason the
-// re-home guard is (the Store interface exposes finished operations rather
-// than a tx handle, to PG and to every test double alike), the database-level
-// form is deferred, and what it does close is the case that actually happens —
-// one admin authoring one drive at a time. Stated here because a residual an
-// operator cannot read is a residual nobody can plan around, and because the
-// sibling gate stating its own made this one's silence read as absence.
+// driveHostRootNesting is the FOURTH gate, and the only one that looks at other
+// ROWS: a host_path drive whose host_root sits inside, or contains, another
+// host_path drive's host_root is refused, 422, naming the other drive. Nested
+// drives mean one drive's members author the other's storage (alice's writable
+// home can hold another drive's root, and she can swap a segment for a link).
+// Strict nesting only: equal roots are the ordinary "one share, two allocations"
+// shape. Checked on the stored strings AND the resolved paths, because
+// UserDriveHostRootCheck sees one root, and a SYMLINKED root nests just the same.
+// A resolve failure on the OTHER row falls back to the lexical answer: this
+// drive's root already resolved (gate 3), and a dead stored row must not block
+// every new drive. A read then an unconditional write, like driveRehomeGuard:
+// two concurrent creates can both pass; the database-level form is deferred.
 func (s *Server) driveHostRootNesting(r *http.Request, d types.UserDrive) (int, string) {
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
@@ -154,13 +108,9 @@ func driveRootReal(root string) string {
 // Either answer refuses, which is the fail-closed direction: a link that lands
 // inside the other tree nests just as surely as a literal path does, and a link
 // that lands OUT of it does not un-nest a literal one (the link is host-side
-// state a member with a run in the outer drive can replace).
-//
-// Strict on both, for driveHostRootNesting's stated reason: two drives on the
-// SAME root are the ordinary "one share, two allocations" shape, and equal roots
-// are a naming question rather than a containment one — including the case where
-// two different strings resolve to one directory, which is that same shape
-// spelled with a link.
+// state a member with a run in the outer drive can replace). Strict on both,
+// for driveHostRootNesting's reason: equal roots, including two strings that
+// resolve to one directory, are a naming question, not a containment one.
 func driveRootInside(inner, innerReal, outer, outerReal string) bool {
 	if strings.HasPrefix(inner, outer+"/") {
 		return true

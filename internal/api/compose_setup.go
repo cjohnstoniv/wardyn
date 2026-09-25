@@ -267,36 +267,17 @@ func setupWorkspaceItems(workspaces []types.Workspace) []SetupItem {
 const maxWorkspaceSecretRows = 5
 
 // setupWorkspaceSecretItems surfaces the secret NAMES a referenced workspace
-// needs: its scanned profile's declared REQUIRED needs (RequiredSecrets with
-// Optional=false — optional/deploy-time needs stay in the workspace needs
-// panel) UNIONED with any "secret:<NAME>" entry in its requirements contract
-// (types.Workspace.Requirements) whose Level is "required". The two sources
-// are merged by sanitized name so the same secret never duplicates a row.
-//
-// Kind is normally "workspace_secret" — the review panel's destructive ("run
-// will 422") styling is gated to llm_access|secret, and a scanner-derived
-// advisory row must render neutral (a workspace-declared secret never blocks
-// launch by itself, and the operator decides whether to store one). BUT a
-// name the requirements contract marks Required that is ALSO absent from the
-// store escalates to Kind "secret": under that contract it genuinely will not
-// be there at launch — applyWorkspaceRequirements's trust boundary means even
-// a scan_seeded Required secret never auto-grants — so the row must carry the
-// SAME blocking styling an unmet llm_access/secret row does, not just an
-// advisory note. The run still launches either way; whatever needs the secret
-// fails at that point. A Required name a launch already granted (present +
-// operator_set) needs no escalation HERE: setupSecretItems already renders
-// that as a satisfied "secret:" row from the live grant
-// applyWorkspaceRequirements minted onto the spec.
-//
-// Names are grounded via sanitizeSecretName — the SAME normalization
-// groundAPIKeySecretNames uses — so the add-secret fix can't dead-end on
-// secretNameRE, and presence is checked against the sanitized form. A
-// contract-declared name is already secretNameRE-shaped
-// (validateWorkspaceRequirement enforces it at write time), so it needs no
-// further sanitizing. The raw scanner-declared name stays in the label with
-// its provenance (those names come from UNTRUSTED workspace content, already
-// charset-capped by DeriveProfile); a contract-required name is labeled as
-// such instead.
+// needs: its scanned profile's REQUIRED needs (RequiredSecrets, Optional=false)
+// unioned with every required "secret:<NAME>" requirements-contract entry, merged
+// by sanitized name so a secret never duplicates a row.
+// Kind is "workspace_secret" (neutral: a scanner-derived row never blocks launch),
+// except that a contract-Required name ABSENT from the store escalates to Kind
+// "secret": applyWorkspaceRequirements never auto-grants it, so it will not be
+// there at launch. A granted one is already setupSecretItems' satisfied row.
+// Names go through sanitizeSecretName (as groundAPIKeySecretNames does) so the
+// add-secret fix can't dead-end on secretNameRE; contract names are already
+// secretNameRE-shaped. Scanner names are UNTRUSTED workspace content (charset-capped
+// by DeriveProfile) and stay in the label with their provenance.
 func setupWorkspaceSecretItems(workspaces []types.Workspace, presentSecrets map[string]bool) []SetupItem {
 	type needRow struct {
 		raw, ws  string
@@ -491,23 +472,17 @@ func setupEgressWorkspaceItem(spec types.RunPolicySpec, workspaces []types.Works
 	}, true
 }
 
-// setupBackendItem is the "backend" checklist row: can THIS host actually
-// enforce the proposal's FINAL (post-floor/clamp) confinement class right now?
-// It reuses the SAME runner-capability probe and MEMBERSHIP check the launch gate
-// itself uses (runs.go: slices.Contains over caps.ConfinementClasses) — never a
-// duplicate probe, never a rank compare (M8: CC2/CC3 are independent runtimes, so
-// a Kata-only host advertises the non-contiguous set [CC1, CC3] and a rank compare
-// would call a CC2 proposal "satisfied" here while create-run 422s on it) — so this
-// row can never disagree with what create-run would 422 on. When the
-// class isn't live it distinguishes an honest "needs setup" (an installable
-// runtime — CC2/CC3 with the substrate simply not registered yet) from an
-// honest "not fixable on this host" (Vault without /dev/kvm), reusing the exact
-// hardware fact wired into internal/setup for the Getting
-// Started wizard. A "missing" verdict's Fix is always "none": the remedy is a
-// host-level command (`wardyn setup wall`/`vault`) or a hardware limit, neither
-// of which this server can drive with a button — Detail points at Getting
-// Started instead. ok=false only when there is no explicit class to check (an empty run class
-// AND an empty policy floor — nothing this run structurally requires).
+// setupBackendItem is the "backend" checklist row: can THIS host enforce the
+// proposal's FINAL (post-floor/clamp) confinement class right now? It uses the
+// launch gate's own runner-capability probe and MEMBERSHIP check
+// (slices.Contains over caps.ConfinementClasses), never a rank compare — CC2/CC3
+// are independent runtimes, so a Kata-only host advertises [CC1, CC3] — so it can
+// never disagree with create-run. A missing class is "needs setup" when the
+// runtime is installable and "not fixable on this host" otherwise (Vault without
+// /dev/kvm, the internal/setup hardware fact). Its Fix is always "none": the
+// remedy is a host-level command or a hardware limit, so Detail points at Getting
+// Started. ok=false only when there is no explicit class to check (an empty run
+// class AND an empty policy floor).
 func (s *Server) setupBackendItem(ctx context.Context, run composer.RunInput, spec types.RunPolicySpec) (SetupItem, bool) {
 	final := types.ConfinementClass(run.ConfinementClass)
 	if final == "" {
@@ -580,29 +555,16 @@ func tierLabel(cc types.ConfinementClass) string {
 const maxWorkspaceIntegrationRows = 6
 
 // setupWorkspaceIntegrationItems surfaces the integrations a referenced
-// workspace's requirements contract names as REQUIRED
-// ("integration:<id>", Level "required").
+// workspace's requirements contract names as REQUIRED ("integration:<id>").
+// The fold degrades SILENTLY by design — an `integration:<id>` naming an
+// unconfigured row opens, grants and audits nothing (applyIntegrationRequirement),
+// so a missing one never bricks a run — but PREFLIGHT is where an operator asks
+// what the run will actually get, so it gets a row here.
 //
-// It exists because the fold degrades SILENTLY by design: an
-// `integration:<id>` naming a row that isn't configured opens nothing, grants
-// nothing and audits nothing (applyIntegrationRequirement) — deliberately, so
-// a workspace may state an intent before the integration exists and a missing
-// one never bricks a run. But "opens nothing, says nothing" is the wrong
-// answer at PREFLIGHT, which is exactly where an operator is asking what this
-// run will actually get. A required-but-absent SECRET already gets a row here;
-// a required-but-unconfigured INTEGRATION was the one contract requirement
-// that could quietly resolve to nothing.
-//
-// Kind is "workspace_integration", NOT "secret": the review panel's
-// destructive styling is gated to credential absence (llm_access|secret, see
-// compose-review.tsx's decision-4 comment), and this is config state — the
-// same class as the workspace/backend rows that stay plain and let their amber
-// StatusChip carry the signal. The run still launches either way; what it
-// cannot do is reach the system it was promised.
-//
-// Optional requirements are deliberately not rowed: they only apply when a run
-// enables them, so listing every one an operator declined would bury the
-// required set they actually depend on.
+// Kind is "workspace_integration", NOT "secret": destructive styling is gated to
+// credential absence (llm_access|secret), and this is config state, like the
+// workspace/backend rows. The run still launches either way. Optional
+// requirements are not rowed: they apply only when a run enables them.
 func (s *Server) setupWorkspaceIntegrationItems(ctx context.Context, owner string, workspaces []types.Workspace, presentSecrets map[string]bool) []SetupItem {
 	// id -> the workspace that requires it (first wins; the row is about the
 	// integration, and naming one workspace is enough provenance).
