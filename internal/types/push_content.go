@@ -4,6 +4,8 @@
 package types
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -11,9 +13,74 @@ import (
 )
 
 // PushContentMaxPaths caps the review-matched paths a PushContentScope names.
-// PathsTotal carries the exact count; the full list goes to the sidecar's
-// structured log, never to a stored row or a refusal body.
+// PathsTotal carries the exact count; the complete list rides beside the scope
+// as a PushPathList and is stored per approval, never in the scope (the dedup
+// key) or a refusal body.
 const PushContentMaxPaths = 10
+
+// The bounds of a PushPathList: at most PushPathListMaxPaths paths and
+// PushPathListMaxBytes bytes of path text, whichever cuts the list first.
+const (
+	PushPathListMaxPaths = 10_000
+	PushPathListMaxBytes = 1 << 20
+)
+
+// PushPathList is a held push's complete review-matched path list, sorted and
+// bounded: every path when Truncated is false, otherwise the first ones that
+// fit the bounds. The sidecar sends it beside the push_content
+// requested_scope; the control plane verifies it against that scope
+// (VerifyAgainst) and keeps it immutable per approval.
+type PushPathList struct {
+	Paths     []string `json:"paths"`
+	Truncated bool     `json:"truncated"`
+}
+
+// NewPushPathList bounds paths, which are sorted and distinct.
+func NewPushPathList(paths []string) PushPathList {
+	n, size := 0, 0
+	for n < len(paths) && n < PushPathListMaxPaths && size+len(paths[n]) <= PushPathListMaxBytes {
+		size += len(paths[n])
+		n++
+	}
+	return PushPathList{Paths: paths[:n], Truncated: n < len(paths)}
+}
+
+// VerifyAgainst checks l is the list s was built from: sorted, distinct and
+// within bounds, opening with s.Paths, and — unless Truncated — exactly
+// PathsTotal paths whose digest is s.PathsDigest. Where a truncated list was
+// cut is the sidecar's word: nothing the scope carries names the next path.
+func (l PushPathList) VerifyAgainst(s PushContentScope) error {
+	size := 0
+	for _, p := range l.Paths {
+		size += len(p)
+	}
+	head := min(len(l.Paths), len(s.Paths))
+	switch {
+	case len(l.Paths) > PushPathListMaxPaths || size > PushPathListMaxBytes:
+		return fmt.Errorf("path list is over %d paths or %d bytes", PushPathListMaxPaths, PushPathListMaxBytes)
+	case !sortedUnique(l.Paths) || slices.Contains(l.Paths, ""):
+		return errors.New("path list must be non-empty paths, sorted and distinct")
+	case !slices.Equal(l.Paths[:head], s.Paths[:head]):
+		return errors.New("path list does not open with the scope's paths")
+	case l.Truncated && len(l.Paths) >= s.PathsTotal:
+		return fmt.Errorf("a truncated path list holds %d paths, want fewer than paths_total %d", len(l.Paths), s.PathsTotal)
+	case !l.Truncated && len(l.Paths) != s.PathsTotal:
+		return fmt.Errorf("path list holds %d paths, want paths_total %d", len(l.Paths), s.PathsTotal)
+	case !l.Truncated && PushPathsDigest(l.Paths) != s.PathsDigest:
+		return errors.New("path list does not match paths_digest")
+	}
+	return nil
+}
+
+// PushPathsDigest is PushContentScope.PathsDigest over paths.
+func PushPathsDigest(paths []string) string {
+	h := sha256.New()
+	for _, p := range paths {
+		h.Write([]byte(p))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 // PushContentScope is the requested_scope of an ApprovalPushContent row — the
 // bytes the console renders on the push card, stored verbatim.

@@ -636,6 +636,19 @@ lever today**. Concretely:
   rows, or a single run's rows. Migration `0001_init.sql`'s row-level trigger and
   `0004_audit_truncate_guard.sql`'s statement-level trigger make this true at the
   database layer, so there is no admin-surface workaround either.
+- A held push's complete review-matched path list is kept the same way. Its
+  `push_content` approval names ten paths; migration `0085_push_content_paths`
+  keeps the rest, one row per approval, bounded at 10,000 paths or 1 MiB of
+  path text (`truncated: true` past either), verified against the approval's
+  `paths_total` and `paths_digest` before it is written, and refused UPDATE,
+  DELETE and TRUNCATE by its own triggers. The same list is written into the
+  run's audit trail as `approval.push_paths.record` (AUDIT-ACTIONS.md), so the
+  run's audit export carries it, and `GET /api/v1/approvals/{id}/paths` reads
+  it back to whoever may see the approval — the run's owner, an admin or a
+  `security_admin` — whatever state the run ended in. The route answers every
+  `push_content` approval: one raised by a previous-release proxy, which sent no
+  list, answers with the ten paths its scope names and `truncated: true` when
+  more matched.
 
 **This is asymmetric with session recordings**, which have the retention lever
 audit lacks: `WARDYN_RECORDING_RETENTION_DAYS` (`docs/ENV.md:47`) age-deletes

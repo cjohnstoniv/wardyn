@@ -236,6 +236,9 @@ func (s *Server) routes() chi.Router {
 			// audience, /internal/approvals below), so this cannot starve an agent
 			// of anything it could previously do for itself.
 			r.Get("/approvals", s.handleListApprovals)
+			// A held push's complete path list, with the approval's own
+			// visibility (handleGetPushPathList).
+			r.Get("/approvals/{id}/paths", s.handleGetPushPathList)
 			r.Post("/approvals/{id}/approve", s.handleApproveApproval)
 			r.Post("/approvals/{id}/deny", s.handleDenyApproval)
 
