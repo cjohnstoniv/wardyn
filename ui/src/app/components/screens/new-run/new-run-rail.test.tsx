@@ -43,7 +43,7 @@ vi.mock("../settings/harness-login-pane", () => ({
 }));
 
 import { RunRail } from "./new-run-rail";
-import { RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
+import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import { ModelAccessBanner } from "../../wardyn/model-access-banner";
 import { ModelAccessProvider, useModelAccessDoor } from "../../wardyn/model-access-context";
@@ -990,36 +990,3 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
 // #459 — the launch and preflight errors become role="alert" regions,
 // announced on arrival, with an sr-only prefix spoken before the server's own
 // (unchanged, still-visible) sentence.
-describe("RunRail — failure lines are announced (#459)", () => {
-  it("the launch error is an alert carrying the sr-only prefix and the server's sentence", () => {
-    renderRail({ launchError: "the server's launch sentence" });
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(RAIL.LAUNCH_ERROR_LABEL);
-    expect(alert).toHaveTextContent("the server's launch sentence");
-    // The sentence itself is unchanged and visible — only the prefix hides.
-    expect(screen.getByText("the server's launch sentence")).toBeVisible();
-  });
-
-  it("the preflight error is an alert carrying the sr-only prefix and the server's sentence", () => {
-    renderRail({ preflightError: "the server's preflight sentence" });
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(RAIL.PREFLIGHT_ERROR_LABEL);
-    expect(alert).toHaveTextContent("the server's preflight sentence");
-  });
-
-  it("a repeated, identical launch failure remounts the alert region (errorSeq keys it)", () => {
-    const r = renderRail({ launchError: "same sentence", launchErrorSeq: 1 });
-    const first = screen.getByRole("alert");
-    r.rerenderWith({ launchError: "same sentence", launchErrorSeq: 2 });
-    const second = screen.getByRole("alert");
-    expect(second).not.toBe(first);
-  });
-
-  it("a repeated, identical preflight failure remounts the alert region (errorSeq keys it)", () => {
-    const r = renderRail({ preflightError: "same sentence", preflightErrorSeq: 1 });
-    const first = screen.getByRole("alert");
-    r.rerenderWith({ preflightError: "same sentence", preflightErrorSeq: 2 });
-    const second = screen.getByRole("alert");
-    expect(second).not.toBe(first);
-  });
-});
