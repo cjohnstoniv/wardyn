@@ -100,8 +100,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// the control-plane-facing network is joined after create. It carries the
 	// run token + control-plane URL as non-secret env (the token is verifiable
 	// but not usable outside the platform, per runner.ProxyConfig).
+	proxyEnvSlice, err := proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
+	if err != nil {
+		return fail(fmt.Errorf("docker: build proxy config: %w", err))
+	}
 	proxyID, err := d.startProxy(ctx, spec.RunID, wardynLabels(spec.RunID, componentProxy, spec.Labels),
-		proxyEnv(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort), netip.Addr{})
+		proxyEnvSlice, netip.Addr{})
 	if err != nil {
 		return fail(err)
 	}

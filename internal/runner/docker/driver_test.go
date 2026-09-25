@@ -446,6 +446,41 @@ func TestCreateSandbox_RequiresProxyImage(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_ProxyExitsAtConfigLoad pins #894/#984: when the proxy
+// sidecar exits right back out after start (it refused its own rendered
+// config — a strict-decode error under the docker-Env-slice delivery),
+// CreateSandbox must fail with the NAMED cause instead of pressing on to the
+// IP lookup and reporting only the generic "proxy has no IP…" while the run
+// sits at STARTING forever. Both the proxy and the per-run network must come
+// back down, and the agent must never have been started on top of a dead
+// proxy.
+func TestCreateSandbox_ProxyExitsAtConfigLoad(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	runID := testSpec().RunID
+	f.exitedOnStart = map[string]int{proxyContainerName(runID): 1}
+	f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, `unknown field "x"`)}
+
+	_, err := d.CreateSandbox(context.Background(), testSpec())
+	if err == nil {
+		t.Fatal("expected the proxy's config-load failure")
+	}
+	if !strings.Contains(err.Error(), "proxy exited at config load (exit 1)") || !strings.Contains(err.Error(), `unknown field "x"`) {
+		t.Errorf("error = %v; want the named cause and log tail", err)
+	}
+	if p := f.containers[proxyContainerName(runID)]; p != nil && !p.removed {
+		t.Error("the dead proxy must be removed")
+	}
+	if _, ok := f.networks[internalNetName(runID)]; ok {
+		t.Error("the per-run network must be rolled back")
+	}
+	agentName := agentContainerName(runID)
+	if slices.Contains(f.startedNames, agentName) {
+		t.Errorf("the agent must never start behind a proxy that died at config load (started: %v)", f.startedNames)
+	}
+}
+
 func TestTeardown_Idempotent(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true

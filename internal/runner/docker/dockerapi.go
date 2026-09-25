@@ -76,6 +76,10 @@ type dockerAPI interface {
 	// CopyFromContainer reads /etc and /etc/passwd out of a created container,
 	// so checkManagedFileImage can vet the image without running anything.
 	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
+	// ContainerLogs backs startProxy's exit watch (driver_proxy_revive.go): the
+	// last lines a proxy that exited right at boot wrote, so a config-load
+	// failure is reported with its own cause (#894/#984).
+	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)
 
 	ExecCreate(ctx context.Context, containerID string, options client.ExecCreateOptions) (client.ExecCreateResult, error)
 	ExecAttach(ctx context.Context, execID string, options client.ExecAttachOptions) (client.ExecAttachResult, error)

@@ -181,6 +181,14 @@ type fakeDocker struct {
 	// bind mount, so a ProbeDrive test scripts the answer this way instead.
 	// Zero (readable) unless a test overrides it.
 	probeExitCode int64
+
+	// exitedOnStart, keyed by container name, makes ContainerStart put that
+	// container straight into an exited state with the given code instead of
+	// Running — the shape of a proxy sidecar that refuses its own config at
+	// boot (#894/#984). logs pairs the same names to what ContainerLogs
+	// answers, so startProxy's exit-watch log tail is exercisable.
+	exitedOnStart map[string]int
+	logs          map[string][]byte
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -430,7 +438,9 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 	if c == nil {
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
-	if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
+	if code, ok := f.exitedOnStart[id]; ok {
+		c.state = &container.State{Status: "exited", ExitCode: code}
+	} else if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
 		// No real command interpreter here to run the probe's `test -r/-x`
 		// against a bind mount — model it as already exited with the
 		// scripted code, the same "immediate" shape a real one-shot process
@@ -486,6 +496,18 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		HostConfig:      c.host,
 		NetworkSettings: &container.NetworkSettings{Networks: nets},
 	}}, nil
+}
+
+// ContainerLogs answers f.logs[id] verbatim (a test scripts it pre-framed with
+// muxFrame when the reader under test demuxes it, as startProxy's exit watch
+// does). Options are ignored: no fake here models Tail/Follow/Since filtering.
+func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, _ client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.containers[id] == nil {
+		return nil, fakeNotFound{msg: "no such container: " + id}
+	}
+	return io.NopCloser(bytes.NewReader(f.logs[id])), nil
 }
 
 func (f *fakeDocker) ContainerStop(ctx context.Context, id string, _ client.ContainerStopOptions) (client.ContainerStopResult, error) {

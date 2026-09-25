@@ -6,18 +6,32 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/netip"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+)
+
+// proxyStartWatch/proxyStartWatchInterval bound how long startProxy waits to
+// see whether a just-started proxy stays up, versus exiting right back out
+// because it refused its own rendered config (#894/#984). Kept short: this
+// sits on the create-latency path for every run, and a HEALTHY proxy reaches
+// Running well inside it — the watch exists to catch the FAST, config-load
+// failure, not to babysit a slow one.
+const (
+	proxyStartWatch         = 3 * time.Second
+	proxyStartWatchInterval = 200 * time.Millisecond
 )
 
 // proxyConfigEnv is the proxy sidecar's config variable: the one place its
@@ -104,7 +118,71 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 		remove()
 		return "", fmt.Errorf("docker: start proxy: %w", err)
 	}
+	// Watch briefly for the proxy exiting right back out — the shape of it
+	// refusing its own rendered config at boot (a strict-decode error, an
+	// unreadable MITM key, …). Without this, CreateSandbox pressed straight on
+	// to the IP lookup, which found no IP on a dead container and reported the
+	// generic "proxy has no IP…" — never the proxy's own, named cause — and
+	// k8s already surfaces that cause (sandbox.go:163-166), so Docker was the
+	// odd substrate out.
+	if err := d.watchProxyExit(ctx, resp.ID); err != nil {
+		remove()
+		return "", err
+	}
 	return resp.ID, nil
+}
+
+// watchProxyExit polls id for up to proxyStartWatch, returning a named error
+// the moment it observes the container exited with a non-zero code (it
+// refused its config at start) and nil the moment it observes Running (the
+// common case) or once the window elapses without either — a proxy still
+// mid-start at that point is left to the caller's own next step (the IP
+// lookup, or a subsequent ProxyConfig read) rather than this watch inventing
+// a second timeout.
+func (d *Driver) watchProxyExit(ctx context.Context, id string) error {
+	deadline := time.Now().Add(proxyStartWatch)
+	for {
+		res, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+		if err != nil {
+			// Can't observe it — leave the verdict to whatever inspects next.
+			return nil
+		}
+		st := res.Container.State
+		if st != nil {
+			if st.Running {
+				return nil
+			}
+			if st.ExitCode != 0 {
+				return fmt.Errorf("docker: proxy exited at config load (exit %d): %s", st.ExitCode, d.proxyExitLogTail(ctx, id))
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(proxyStartWatchInterval):
+		}
+	}
+}
+
+// proxyExitLogTail reads the last ~20 lines the proxy wrote before dying, so
+// the failure the operator sees names the actual decode/config error instead
+// of just an exit code. Best-effort: a log-read failure yields a placeholder
+// rather than losing the exit-code error it is decorating.
+func (d *Driver) proxyExitLogTail(ctx context.Context, id string) string {
+	rc, err := d.cli.ContainerLogs(ctx, id, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "20"})
+	if err != nil {
+		return "(no log: " + err.Error() + ")"
+	}
+	defer rc.Close()
+	var buf bytes.Buffer
+	// No TTY on the proxy container (driver_proxy_revive.go's container.Config
+	// leaves Tty unset), so the stream is stdcopy-multiplexed; StdCopy strips
+	// the frame headers so the tail is clean text, not binary garbage.
+	_, _ = stdcopy.StdCopy(&buf, &buf, rc)
+	return strings.TrimSpace(buf.String())
 }
 
 // EnsureProxyImage — see runner.ProxyReviver. ReplaceProxy also ensures the
