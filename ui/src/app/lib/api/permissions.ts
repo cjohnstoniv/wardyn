@@ -24,10 +24,23 @@ import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 // value than the one on screen. The characters a Go path never escapes
 // ($&+,:;=@) are sent bare: escaped, they set URL.RawPath, the router hands the
 // handler "%3A" instead of ":", and an image ref's tag reads as another value.
+// !'()* are escaped as Go escapes them, so the path is always Go's canonical
+// form and RawPath stays empty.
+//
+// An empty, "." or ".." segment is refused before any request: the router
+// cleans the path, so a value such as "../policy/<id>" (an image ref a person
+// can plant in the catalog) would read and write another resource's list.
 function availabilityPath(kind: string, value: string): string {
-  const encodedValue = value
-    .split("/")
-    .map((s) => encodeURIComponent(s).replace(/%(24|26|2B|2C|3A|3B|3D|40)/gi, (e) => decodeURIComponent(e)))
+  const segs = value.split("/");
+  if (segs.some((s) => s === "" || s === "." || s === "..")) {
+    throw new HttpError(400, `Invalid availability target: ${JSON.stringify(value)}`);
+  }
+  const encodedValue = segs
+    .map((s) =>
+      encodeURIComponent(s)
+        .replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase())
+        .replace(/%(24|26|2B|2C|3A|3B|3D|40)/gi, (e) => decodeURIComponent(e)),
+    )
     .join("/");
   return `/permissions/availability/${encodeURIComponent(kind)}/${encodedValue}`;
 }

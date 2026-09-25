@@ -28,4 +28,29 @@ describe("permissions availability path", () => {
     );
     expect(String(fetchMock.mock.calls[1][0])).toMatch(/\/image\/ghcr\.io\/acme\/a%20b%3Fc$/);
   });
+
+  it("escapes !'()* as Go does, so the path is Go's canonical form", async () => {
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL) =>
+        new Response(JSON.stringify({ kind: "image", value: "x", restricted: false, allowed_by: [] }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await permissions.getAvailability("image", "a(b)#c");
+
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/image\/a%28b%29%23c$/);
+  });
+
+  // A catalog ref is person-plantable: "../policy/<id>" would otherwise be
+  // cleaned by the router into another resource's availability.
+  it.each(["../policy/x", "a//b", "."])("refuses %j before any request", async (value) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(permissions.getAvailability("image", value)).rejects.toThrow(
+      `Invalid availability target: ${JSON.stringify(value)}`,
+    );
+    await expect(permissions.putAvailability("image", value, true)).rejects.toThrow(/Invalid availability target/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

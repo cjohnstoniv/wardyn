@@ -260,6 +260,24 @@ describe("AvailabilityControl — states.html", () => {
     expect(container.textContent).toBe(AVAILABILITY.LOAD_FAILED);
   });
 
+  // A person-plantable image ref like "../policy/<id>" must never reach the
+  // router, which would clean it into another resource's availability.
+  it("state 7: a value with a dot segment is one couldn't-load line, and no request goes out", async () => {
+    const actual = await vi.importActual<typeof import("../../lib/api/permissions")>("../../lib/api/permissions");
+    getAvailabilityMock.mockImplementation((k: string, v: string) => actual.permissions.getAvailability(k, v));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const { container } = render(<AvailabilityControl kind="image" value={`../policy/${ID}`} adminsOnly />);
+
+      expect(await screen.findByText(AVAILABILITY.LOAD_FAILED)).toBeInTheDocument();
+      expect(container.textContent).toBe(AVAILABILITY.LOAD_FAILED);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("state 8: a security admin gets the working control", async () => {
     getAvailabilityMock.mockResolvedValue(view(true, [DEV, PM]));
     render(
