@@ -84,8 +84,8 @@ prevent an edit in between, and re-asserting a file cannot un-run a run.
 If your threat model *does* include the developer, this tier is the wrong one —
 the agent has to execute somewhere the developer does not administer, which is
 [the Kubernetes shape](../deploy/helm/wardyn/README.md), where the runner talks
-to an API server under scoped RBAC and the human gets a member role rather than
-admin.
+to an API server under scoped RBAC and the human signs in as a user rather than
+an admin.
 
 See also [the threat model](../threatmodel/THREAT-MODEL.md) for what Wardyn as
 a whole does not defend against.

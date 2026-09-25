@@ -4446,7 +4446,7 @@ no logic change.
   role the human does not hold, and both credential-mint doors — which key on the
   flag, not on the stamped tier — refused them their own SSH key and API token
   with "Exit member mode…", breaking the member Getting Started's "Connect your
-  tools · Add SSH key" card and `docs/USERS.md`'s SSH path. Turning it OFF
+  tools · Add SSH key" card and `docs/MEMBERS.md`'s SSH path. Turning it OFF
   still re-signs, always.
 
 ### Changed
@@ -6306,7 +6306,7 @@ before turning a 0.7 feature on:
 - Setup: each corp-network probe verdict (`timed_out`, `not_run`, an exec that never started) gets its own heading, note and tone instead of sharing one.
 - Cockpit: the command bar carries the board's who + what status pair; the approvals strip caps at two rows and ranks held above passive; focus-mode shortcuts are labelled key chips spelled per platform.
 - New run: field rhythm and the rail from the New run mock, Enter submits and Esc leaves an untouched form, preflight results unframed.
-- Install instructions are organised by three audiences — running Wardyn for yourself, running it for a team, and joining a Wardyn someone else operates — with a new [`docs/USERS.md`](docs/USERS.md) for that last audience.
+- Install instructions are organised by three audiences — running Wardyn for yourself, running it for a team, and joining a Wardyn someone else operates — with a new [`docs/MEMBERS.md`](docs/MEMBERS.md) for that last audience.
 - Getting Started can play the demo episodes in place: **Watch** streams the pinned release asset only after the click (no autoplay, no prefetch), an episode not yet recorded shows a plain "Not recorded yet" instead of a dead link, and a failed load offers the release page as a fallback.
 - An operator can trust a corporate TLS-inspecting proxy's root CA (`WARDYN_TRUSTED_CA_FILE`): the daemon, the proxy sidecar and every sandbox — including the published base image's exec-mode runs and the setup connectivity probe — pick it up, delivered on compose, the desktop profile and the Helm chart.
 - The admin's Getting Started gains a **People** step naming single-user vs multi-user access; a member signing into someone else's Wardyn gets their own Getting Started page — what's already set up for them, adding a workspace, bringing their own model key, their first run, approvals they can decide, and connecting their tools — and the console's first landing waits until it knows the signed-in role before choosing a screen.

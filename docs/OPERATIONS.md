@@ -5606,7 +5606,7 @@ directly, and the `authz.denied` marker moved with it from the now-deleted
 
 **Not renamed in this pass** — each is a separate, later issue, so the old name
 is still correct until its own PR lands:
-- `docs/USERS.md`, the People/Getting-Started copy, and the rest of this
+- The People/Getting-Started copy, and the rest of this
   file's own "view as member" prose ([Exercising member mode as an
   admin](#exercising-member-mode-as-an-admin)) — #620, the docs pass.
 - The console's remaining "member" copy — #618.
