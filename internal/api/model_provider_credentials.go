@@ -70,6 +70,9 @@ const (
 	mpcBody     = `body must be {"value":"<your key or token>"}`
 	mpcTooShort = "your key or token must be at least %d characters"
 	mpcNoStore  = "no secret store configured"
+	// mpcNotGranted is the capModelProvider refusal at the key door, worded as
+	// its sign-in twin (mpsNotGranted).
+	mpcNotGranted = "you are not granted model provider %q — ask an admin to grant it before adding your key or token to it"
 )
 
 // ownSecret reads name from owner's OWN namespace and never the operator's.
@@ -188,6 +191,12 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	defer s.siteConfigMu.Unlock()
 	p, ok := s.providerForCredential(w, r, true)
 	if !ok {
+		return
+	}
+	// "Available to" (capModelProvider), the launch door's own check: a person
+	// the provider is not granted to stores nothing for it. A delete is not
+	// gated, so a withdrawn grant can still be cleaned up.
+	if s.denyUserCapability(w, r, capModelProvider, p.ID, "model_provider.credential", fmt.Sprintf(mpcNotGranted, p.ID)) {
 		return
 	}
 	if err := s.cfg.Secrets.For(owner).Put(r.Context(), providerSecretName(p.UID, providerKeyPart), []byte(value)); err != nil {

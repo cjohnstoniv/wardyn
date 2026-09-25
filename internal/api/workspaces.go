@@ -270,6 +270,9 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 		if !repoFieldSafe(b.Image) {
 			return fmt.Sprintf(repoField400Charset, "base_image.image")
 		}
+		if !imageRefPathSafe(b.Image) {
+			return fmt.Sprintf(image400DotSegment, "base_image.image")
+		}
 	}
 	// base_image.steps validation is GONE, because the thing it validated is
 	// never executed. See types.BaseImageEntry.Steps — operator RUN lines would
