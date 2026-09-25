@@ -3,78 +3,84 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Pins lib/model-providers-copy.ts to canon.html Table 1 (owner-approved
-// 2026-09-25), byte for byte: each literal below is the canon row, with the
-// row's own fixture filled into its {placeholder}.
-import { describe, it, expect } from "vitest";
-import { T } from "./integrations";
-import { MODEL_PROVIDERS, PROVIDER_EDITOR, PROVIDERS } from "./model-providers-copy";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import { parseFrozenTables } from "./copy-doc-parity";
+import { MODEL_LEDE, MODEL_PROVIDERS as M, PROVIDER_EDITOR as E, PROVIDERS } from "./model-providers-copy";
 
-describe("model-providers canon, Table 1 (#537)", () => {
-  it("every string is its canon row", () => {
-    expect(MODEL_PROVIDERS.ADD_CTA).toBe("Add model provider");
-    expect(MODEL_PROVIDERS.KIND.anthropic_api_key).toBe("Anthropic API key");
-    expect(MODEL_PROVIDERS.KIND.openai_api_key).toBe("OpenAI API key");
-    expect(MODEL_PROVIDERS.KIND.custom_endpoint).toBe("Your own endpoint");
-    expect(MODEL_PROVIDERS.KIND.anthropic_subscription).toBe("Claude subscription");
-    expect(MODEL_PROVIDERS.KIND.bedrock_sso).toBe("Amazon Bedrock");
+// The canon doc (docs/design/model-providers-canon.md, packet MP-A) parsed back
+// out and compared whole: a changed string, a new doc row or a dropped one all
+// fail here. process.cwd() is the vitest root, ui/.
+const doc = parseFrozenTables(
+  resolve(process.cwd(), "../docs/design/model-providers-canon.md"),
+  /^## (Frozen|Implementation) strings/,
+);
 
-    const E = PROVIDER_EDITOR;
-    expect(E.KIND_TITLE).toBe("What kind of model provider?");
-    expect(E.PROVIDES_KEY).toBe("Each person adds their own key.");
-    expect(E.PROVIDES_TOKEN).toBe("Each person adds their own token. You set how it is sent.");
-    expect(E.NAME).toBe("Name");
-    expect(E.NAME_HINT).toBe("What people see when they choose it.");
-    expect(E.ROUTE_THROUGH).toBe("Route through a gateway (optional)");
-    expect(E.ROUTE_THROUGH_HINT("api.anthropic.com")).toBe(
-      "Send requests to your gateway instead of api.anthropic.com. Each person's key goes with them, and they are told where it goes.",
-    );
-    expect(E.BASE_URL).toBe("Base URL");
-    expect(E.BASE_URL_HINT).toBe("https only. Wardyn sends this provider's requests here.");
-    expect(E.AUTH_HEADER).toBe("Auth header");
-    expect(E.VALUE_FORMAT).toBe("Value format");
-    expect(E.USE_WITH).toBe("Use with");
-    expect(E.MODEL).toBe("Model");
-    expect(E.MODEL_HINT).toBe("Leave empty for the agent's own default.");
-    expect(E.PATH).toBe("Path");
-    expect(E.PATH_HINT_CLAUDE).toBe(
-      "Where your endpoint serves the Anthropic Messages API for Claude Code, e.g. /anthropic.",
-    );
-    expect(E.PATH_HINT_CODEX).toBe("Where your endpoint serves the OpenAI Responses API for Codex CLI, e.g. /v1.");
-    expect(E.CANCEL).toBe("Cancel");
-    expect(E.SAVE).toBe("Save");
-    expect(E.REMOVE).toBe("Remove");
-    expect(E.SAVED_TOAST).toBe("Provider saved.");
-    expect(PROVIDERS.SAVE_REFUSED_TITLE_ONE).toBe("This provider can't be saved as written");
-    expect(E.DELETE_TITLE("Corp gateway")).toBe("Remove Corp gateway?");
-    expect(E.DELETE_BODY).toBe(
-      "Runs that chose it are refused until they choose another. Everyone's tokens for it are deleted.",
-    );
-    expect(E.DELETE_BODY_KEY).toBe(
-      "Runs that chose it are refused until they choose another. Everyone's keys for it are deleted.",
-    );
-    expect(E.DELETE_BLOCKED("Corp gateway", "Claude Code")).toBe(
-      "Corp gateway is the default for Claude Code — choose another default first.",
-    );
-    expect(E.ADDRESS_TITLE("Corp gateway")).toBe("Change where Corp gateway sends requests?");
-    expect(E.ADDRESS_BODY(12)).toBe(
-      "The tokens 12 people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.",
-    );
-    expect(E.ADDRESS_BODY_ONE).toBe(
-      "The token 1 person added was given for the old address, so it is deleted. They add it again.",
-    );
-    expect(E.ADDRESS_BODY_KEY(12)).toBe(
-      "The keys 12 people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.",
-    );
-    expect(E.ADDRESS_BODY_KEY_ONE).toBe(
-      "The key 1 person added was given for the old address, so it is deleted. They add it again.",
-    );
+const rendered: Record<string, string> = {
+  "MODEL_PROVIDERS.TITLE": M.TITLE,
+  MODEL_LEDE,
+  "MODEL_PROVIDERS.ADD_CTA": M.ADD_CTA,
+  "MODEL_PROVIDERS.EMPTY_TITLE": M.EMPTY_TITLE,
+  "MODEL_PROVIDERS.EMPTY_BODY": M.EMPTY_BODY,
+  ...Object.fromEntries(Object.entries(M.KIND).map(([k, v]) => [`MODEL_PROVIDERS.KIND.${k}`, v])),
+  "MODEL_PROVIDERS.PROVIDES.SSO": M.PROVIDES.SSO,
+  "MODEL_PROVIDERS.PROVIDES.TOKEN": M.PROVIDES.TOKEN,
+  "MODEL_PROVIDERS.PROVIDES.KEY": M.PROVIDES.KEY,
+  "PROVIDER_EDITOR.PROVIDES_CLAUDE": E.PROVIDES_CLAUDE,
+  "MODEL_PROVIDERS.USED_BY(harness)": M.USED_BY(["{harness}"]),
+  "MODEL_PROVIDERS.USED_BY(harness, harness)": M.USED_BY(["Claude Code", "Codex CLI"]),
+  "MODEL_PROVIDERS.CHIP_DEFAULT_FOR(harness)": M.CHIP_DEFAULT_FOR(["{harness}"]),
+  "MODEL_PROVIDERS.CHIP_DEFAULT_FOR_BOTH": M.CHIP_DEFAULT_FOR(["Claude Code", "Codex CLI"]),
+  "MODEL_PROVIDERS.CONNECTED(n)": M.CONNECTED(2).replace("2", "{n}"),
+  "MODEL_PROVIDERS.CONNECTED(1)": M.CONNECTED(1),
+  "MODEL_PROVIDERS.CONNECTED(0)": M.CONNECTED(0),
+  "MODEL_PROVIDERS.CHIP_OFF": M.CHIP_OFF,
+  "MODEL_PROVIDERS.OFF_LINE": M.OFF_LINE,
+  "MODEL_PROVIDERS.OFF_STILL_DEFAULT(harness)": M.OFF_STILL_DEFAULT("{harness}"),
+  "MODEL_PROVIDERS.UNUSED": M.UNUSED,
+  "MODEL_PROVIDERS.HARNESS_UNSERVED(harness)": M.HARNESS_UNSERVED("{harness}"),
+  "MODEL_PROVIDERS.FETCH_FAILED_TITLE": M.FETCH_FAILED_TITLE,
+  "MODEL_PROVIDERS.FETCH_FAILED_BODY": M.FETCH_FAILED_BODY,
+  // The provider editor (#537).
+  "PROVIDER_EDITOR.KIND_TITLE": E.KIND_TITLE,
+  "PROVIDER_EDITOR.PROVIDES_KEY": E.PROVIDES_KEY,
+  "PROVIDER_EDITOR.PROVIDES_TOKEN": E.PROVIDES_TOKEN,
+  "PROVIDER_EDITOR.NAME": E.NAME,
+  "PROVIDER_EDITOR.NAME_HINT": E.NAME_HINT,
+  "PROVIDER_EDITOR.ROUTE_THROUGH": E.ROUTE_THROUGH,
+  "PROVIDER_EDITOR.ROUTE_THROUGH_HINT(host)": E.ROUTE_THROUGH_HINT("{host}"),
+  "PROVIDER_EDITOR.BASE_URL": E.BASE_URL,
+  "PROVIDER_EDITOR.BASE_URL_HINT": E.BASE_URL_HINT,
+  "PROVIDER_EDITOR.AUTH_HEADER": E.AUTH_HEADER,
+  "PROVIDER_EDITOR.VALUE_FORMAT": E.VALUE_FORMAT,
+  "PROVIDER_EDITOR.USE_WITH": E.USE_WITH,
+  "PROVIDER_EDITOR.MODEL": E.MODEL,
+  "PROVIDER_EDITOR.MODEL_HINT": E.MODEL_HINT,
+  "PROVIDER_EDITOR.PATH": E.PATH,
+  "PROVIDER_EDITOR.PATH_HINT_CLAUDE": E.PATH_HINT_CLAUDE,
+  "PROVIDER_EDITOR.PATH_HINT_CODEX": E.PATH_HINT_CODEX,
+  "PROVIDER_EDITOR.CANCEL": E.CANCEL,
+  "PROVIDER_EDITOR.SAVE": E.SAVE,
+  "PROVIDER_EDITOR.REMOVE": E.REMOVE,
+  "PROVIDER_EDITOR.SAVED_TOAST": E.SAVED_TOAST,
+  "PROVIDERS.SAVE_REFUSED_TITLE_ONE": PROVIDERS.SAVE_REFUSED_TITLE_ONE,
+  "PROVIDER_EDITOR.DELETE_TITLE(name)": E.DELETE_TITLE("{name}"),
+  "PROVIDER_EDITOR.DELETE_BODY": E.DELETE_BODY,
+  "PROVIDER_EDITOR.DELETE_BODY_KEY": E.DELETE_BODY_KEY,
+  "PROVIDER_EDITOR.DELETE_BLOCKED(name, harness)": E.DELETE_BLOCKED("{name}", "{harness}"),
+  "PROVIDER_EDITOR.ADDRESS_TITLE(name)": E.ADDRESS_TITLE("{name}"),
+  "PROVIDER_EDITOR.ADDRESS_BODY(n)": E.ADDRESS_BODY(12).replace("12", "{n}"),
+  "PROVIDER_EDITOR.ADDRESS_BODY_ONE": E.ADDRESS_BODY_ONE,
+  "PROVIDER_EDITOR.ADDRESS_BODY_KEY(n)": E.ADDRESS_BODY_KEY(12).replace("12", "{n}"),
+  "PROVIDER_EDITOR.ADDRESS_BODY_KEY_ONE": E.ADDRESS_BODY_KEY_ONE,
+};
+
+describe("model-providers-copy — docs/design/model-providers-canon.md", () => {
+  it("renders every frozen string byte for byte, and no key the doc lacks", () => {
+    expect(Object.fromEntries(doc)).toEqual(rendered);
   });
 
-  it("the two reused catalog reasons are still integrations.ts's rows", () => {
-    expect(T.X_KEY_CODEX).toBe("Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.");
-    expect(T.X_OPENAI_CLAUDE).toBe(
-      "Claude Code speaks the Anthropic API only — an OpenAI key can't drive it. Not a setting.",
-    );
+  it("renders a plural count with the number itself", () => {
+    expect(M.CONNECTED(12)).toBe("Connected by 12 people");
   });
 });

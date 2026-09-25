@@ -6,7 +6,7 @@
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
 
 // The provider editor (#537, model-provider-editor.tsx), opened from
-// Settings until #536's Model providers list hosts it. Two things only an e2e
+// Settings → Model providers (#536). Two things only an e2e
 // proves: the add → save → list round trip through the real client (If-Match,
 // the whole document, the toast, the re-read), and E6 rendering the REAL
 // server's 400 body verbatim.

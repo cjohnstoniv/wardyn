@@ -50,6 +50,15 @@ vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: vi.fn(), deleteSecret: vi.fn() },
 }));
 
+// #536: the Admin view's Model providers list reads these two.
+const getModelProvidersMock = vi.fn();
+vi.mock("../../../lib/api/model-providers", () => ({
+  modelProviders: { getModelProviders: () => getModelProvidersMock() },
+}));
+vi.mock("../../../lib/api/agent-providers", () => ({
+  agentProviders: { getAgentProviders: () => Promise.resolve({ providers: {}, etag: null }) },
+}));
+
 // The model card's sign-in pane drives a real PTY through xterm, which does not
 // render in jsdom.
 vi.mock("./harness-login-pane", () => ({
@@ -59,11 +68,12 @@ vi.mock("./harness-login-pane", () => ({
 import { SettingsScreen } from "./settings-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { DRIVES } from "../../../lib/user-drives-copy";
+import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 
-function renderScreen(operator = true, operatorResolved = true) {
+function renderScreen(operator = true, operatorResolved = true, path = "/") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <OperatorProvider operator={operator} operatorResolved={operatorResolved} securityOperator>
         <SettingsScreen />
       </OperatorProvider>
@@ -83,6 +93,7 @@ beforeEach(() => {
       runner_target: "docker",
     });
   getWorkspaceProvidersMock.mockReset().mockResolvedValue({ providers: {}, etag: null });
+  getModelProvidersMock.mockReset().mockResolvedValue({ providers: {}, connected: {}, etag: null });
 });
 
 describe("SettingsScreen", () => {
@@ -120,6 +131,24 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
     expect(screen.queryByTestId("user-drives-card")).toBeNull();
     expect(getDrivesMock).not.toHaveBeenCalled();
+  });
+});
+
+// #536: the list is admin configuration, so it is in the Admin view only —
+// /account mounts the same screen and must neither draw it nor read it.
+describe("SettingsScreen — Model providers list", () => {
+  it("draws above the Model provider card at /admin/settings", async () => {
+    renderScreen(true, true, "/admin/settings");
+    expect(await screen.findByText(MODEL_PROVIDERS.EMPTY_TITLE)).toBeInTheDocument();
+    const html = document.body.innerHTML;
+    expect(html.indexOf(`>${MODEL_PROVIDERS.TITLE}<`)).toBeLessThan(html.indexOf(">Model provider<"));
+  });
+
+  it("is absent at /account, which asks GET /model-providers nothing", async () => {
+    renderScreen(true, true, "/account");
+    await screen.findByRole("heading", { name: "Host", level: 3 });
+    expect(screen.queryByTestId("model-providers-list")).toBeNull();
+    expect(getModelProvidersMock).not.toHaveBeenCalled();
   });
 });
 
