@@ -46,22 +46,47 @@ func minimalBlobPack(n int) []byte {
 	return append(commandSection("report-status", cmd), append(pack, sum[:]...)...)
 }
 
-// TestPackCeiling_ObjectCountIsRefused pins the object ceiling (#250). The
-// issue's pack — 1,048,576 minimal blobs, a legal 16.8 MB body — used to be
-// inspected, and holding its Result kept 656 MiB live. It is refused now, as is
-// one object past the ceiling, because per-object bookkeeping is what the
-// ceiling bounds.
+// TestPackCeiling_ObjectCountIsRefused pins the object ceiling (#250). A pack
+// of 1,048,576 minimal blobs is a legal 16.8 MB body, and inspecting it —
+// holding its Result — keeps 656 MiB live. It is refused, as is one object
+// past the ceiling, because per-object bookkeeping is what the ceiling
+// bounds.
 func TestPackCeiling_ObjectCountIsRefused(t *testing.T) {
 	for _, n := range []int{1 << 20, maxObjects + 1} {
 		body := minimalBlobPack(n)
 		res, err := Inspect(body)
-		if !errors.Is(err, ErrUninspectable) || !strings.Contains(err.Error(), "objects") {
-			t.Fatalf("%d objects (%d-byte body): err = %v, want ErrUninspectable naming the object ceiling",
+		if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "objects") {
+			t.Fatalf("%d objects (%d-byte body): err = %v, want ErrTooLarge naming the object ceiling",
 				n, len(body), err)
 		}
 		if res.idx != nil || len(res.Changes) != 0 {
 			t.Errorf("%d objects: a refusal came back with a partial Result", n)
 		}
+	}
+}
+
+// TestPackCeiling_InflatedBytesIsRefused pins the inflate ceiling (#254): five
+// distinct all-zero blobs, each exactly maxObjectBytes and individually legal,
+// push the cumulative inflated total past maxInflatedBytes on the fifth. Each
+// blob compresses to a handful of bytes, so the pack body stays small while
+// what it declares does not — the same shape charge() exists to catch.
+func TestPackCeiling_InflatedBytesIsRefused(t *testing.T) {
+	if testing.Short() {
+		t.Skip("inflates over maxInflatedBytes of blob content")
+	}
+	var objs []rawObject
+	for range 5 {
+		objs = append(objs, rawObject{typ: objBlob, payload: make([]byte, maxObjectBytes)})
+	}
+	tree := mkTree()
+	commit := mkCommit(hashObject("tree", tree))
+	objs = append(objs, rawObject{typ: objTree, payload: tree}, rawObject{typ: objCommit, payload: commit})
+	cmd := strings.Repeat("0", 40) + " " + hashObject("commit", commit) + " refs/heads/main"
+	body := append(commandSection("report-status", cmd), buildPack(t, objs...)...)
+
+	_, err := Inspect(body)
+	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "inflates") {
+		t.Fatalf("5x%d-byte blobs: err = %v, want ErrTooLarge naming the inflate ceiling", maxObjectBytes, err)
 	}
 }
 
@@ -126,7 +151,7 @@ func TestPackCeiling_BlobContentIsNotRetained(t *testing.T) {
 	body := append(commandSection("report-status", cmd), buildPack(t, objs...)...)
 
 	res, retained := retainedBy(t, body)
-	if len(res.Changes) != 4 || res.Changes[0].Size != 8<<20 {
+	if len(res.Changes) != 4 || res.Changes[0].size != 8<<20 {
 		t.Fatalf("Changes = %+v, want four 8 MiB blobs", res.Changes)
 	}
 	runtime.KeepAlive(res)

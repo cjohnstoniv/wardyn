@@ -208,8 +208,8 @@ test.describe("auth / sign-in gate", () => {
 
     // Open the user menu (top-right trigger holds the principal + chevron) and
     // sign out. The trigger has no role="button" semantics distinct from the
-    // nav, so reach it via the principal label rendered inside it ("admin").
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    // nav, so reach it as the header's one menu trigger (the view switch sits beside it).
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await expect(userMenuTrigger).toBeVisible();
     await userMenuTrigger.click();
 
@@ -229,7 +229,7 @@ test.describe("auth / sign-in gate", () => {
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await expect(userMenuTrigger).toBeVisible();
     await userMenuTrigger.click();
     const signOut = page.getByRole("menuitem", { name: "Sign out" });
@@ -404,7 +404,8 @@ test.describe("admin-written help under a sign-in refusal (#484)", () => {
 //   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
 //   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
 //   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/auth.spec.ts
-test.describe("outage vs. rejection (R4/F027)", () => {
+test.describe("outage vs. rejection", () => {
+  // ticket: R4/F027
   test("a 5xx mount probe does not clear a stored token the daemon never rejected", async ({ page }) => {
     // The daemon is up enough to serve the console, but the runs list 500s —
     // a store outage, a rolling restart, a failing-over Postgres.
@@ -427,26 +428,41 @@ test.describe("outage vs. rejection (R4/F027)", () => {
   });
 
   test("the gate keeps asking /healthz, so an SSO-only deployment is not left with no way in", async ({ page }) => {
-    // /healthz is down for the gate's FIRST read only. The one-shot mount fetch
-    // this replaced read that as sso:false and never asked again.
-    let served = 0;
-    await page.route("**/healthz", async (route) => {
-      served += 1;
-      if (served === 1) return route.fulfill({ status: 503, body: "" });
-      return route.fallback();
-    });
+    // /healthz is down until `healthy` flips. The one-shot mount fetch this
+    // replaced read the outage as sso:false and never asked again.
+    //
+    // No request count: App.tsx polls /healthz itself (HEALTH_POLL_MS) in
+    // every auth state, so "served more than once" holds with the gate's own
+    // re-ask paused. What is pinned is the gate's own reads: the outage on
+    // screen first, then the recovery reaching the screen ONLY through the
+    // gate's poll. page.clock drives SSO_POLL_MS (sign-in.tsx) instead of a
+    // real 10s setInterval racing a loaded CI host.
+    await page.clock.install();
+    let healthy = false;
+    await page.route("**/healthz", (route) =>
+      healthy
+        ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok" }) })
+        : route.fulfill({ status: 503, body: "" }),
+    );
     await clearTokenInit(page);
     await page.goto("/");
-    // #457: the FIRST read is the outage, so the screen is honestly
-    // "checking" until the next poll (SSO_POLL_MS) lands the real answer —
-    // longer than the default assertion timeout covers.
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+    // #457: no answer yet, so the gate is honestly "checking" and offers no door.
+    await expect(page.getByRole("status").filter({ hasText: SIGNIN.CHECKING })).toBeVisible();
+    await expect(signInToken(page)).toBeHidden();
 
-    // What must NOT happen is the posture being frozen on the outage's
-    // answer — the gate has asked more than once.
-    await expect
-      .poll(() => served, { timeout: 30_000 })
-      .toBeGreaterThan(1);
+    // Only the gate's own unanswered reads (mount + two SSO_POLL_MS ticks)
+    // turn "checking" into "still checking" — so its mount read has landed on
+    // the outage before `healthy` flips below. runFor, not fastForward: the
+    // latter fires a due interval at most once.
+    await page.clock.runFor("00:21");
+    await expect(page.getByRole("status").filter({ hasText: SIGNIN.STILL_CHECKING })).toBeVisible();
+    await expect(signInToken(page)).toBeHidden();
+
+    // The daemon comes back. The posture must not stay frozen on the outage:
+    // one more SSO_POLL_MS tick and the gate offers the token door.
+    healthy = true;
+    await page.clock.fastForward("00:11");
+    await expect(signInToken(page)).toBeVisible();
   });
 });
 
@@ -465,7 +481,8 @@ test.describe("outage vs. rejection (R4/F027)", () => {
 //   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
 //   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
 //   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/auth.spec.ts
-test.describe("a session revoked mid-run (R4/F116)", () => {
+test.describe("a session revoked mid-run", () => {
+  // ticket: R4/F116
   test("a 401 arriving on an ALREADY-authenticated console returns to the sign-in gate", async ({
     page,
   }) => {
@@ -504,7 +521,8 @@ test.describe("a session revoked mid-run (R4/F116)", () => {
   // own alert slot (the same box submitToken's own failures use), and
   // re-authenticating returns to the SCREEN the 401 interrupted, not always
   // to Runs.
-  test("a 401 while on another screen shows why, and re-auth returns to that screen (X3-F7)", async ({ page }) => {
+  test("a 401 while on another screen shows why, and re-auth returns to that screen", async ({ page }) => {
+    // ticket: X3-F7
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
@@ -534,12 +552,13 @@ test.describe("a session revoked mid-run (R4/F116)", () => {
 // M2: the plan's own X3-F7 row says "restore the path after re-auth
 // (fallback /runs on 403)" — the captured path belongs to whoever was
 // signed in BEFORE, not necessarily whoever signs back in on this tab.
-test.describe("the restored path is checked against the re-authenticated role (M2)", () => {
+test.describe("the restored path is checked against the re-authenticated role", () => {
+  // ticket: M2
   test("a member re-authenticating over an admin's captured operator-only path lands on Runs, not a dead end", async ({ page }) => {
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    await page.goto("/drives");
+    await page.goto("/admin/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
     await page.route("**/api/v1/**", (route) =>
@@ -572,7 +591,7 @@ test.describe("the restored path is checked against the re-authenticated role (M
     await bootWithStoredToken(page, GOOD_TOKEN);
     await expect(runsNav(page)).toBeVisible();
 
-    await page.goto("/drives");
+    await page.goto("/admin/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
     await page.route("**/api/v1/**", (route) =>
@@ -598,7 +617,8 @@ test.describe("the restored path is checked against the re-authenticated role (M
 // the FULL admin nav off a guess, indistinguishable from an authz breach.
 // identityResolved now gates the nav directly: settled-but-unknown renders
 // NEITHER nav set, and the banner below is the whole page.
-test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav, not a guess)", () => {
+test.describe("settled-but-unknown identity (a failed /me renders no nav, not a guess)", () => {
+  // ticket: B1
   test("a 500 on /me shows the identity-unknown banner, no admin nav and no member nav", async ({ page }) => {
     let meFailing = true;
     await page.route("**/api/v1/me", (route) => {
@@ -631,10 +651,10 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
     await expect(banner).toHaveCount(0);
   });
   // VL-26 (V1 lens D): the gate is the ROUTE SHELL, not the nav. A person who
-  // types /settings (or any admin route) while /me is refused gets the same
-  // banner and no screen — before the fix the nav was hidden but the route
-  // still painted operator controls off the fail-open context default.
-  test("a 500 on /me shows the banner on /settings and /governance — no screen paints for an unknown identity", async ({ page }) => {
+  // types /admin/settings (or any admin route) while /me is refused gets the
+  // same banner and no screen — before the fix the nav was hidden but the
+  // route still painted operator controls off the fail-open context default.
+  test("a 500 on /me shows the banner on /admin/settings and /admin/governance — no screen paints for an unknown identity", async ({ page }) => {
     let meFailing = true;
     await page.route("**/api/v1/me", (route) => {
       if (!meFailing) return route.fallback();
@@ -642,7 +662,7 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
     });
     await bootWithStoredToken(page, GOOD_TOKEN);
 
-    for (const path of ["/settings", "/governance"]) {
+    for (const path of ["/admin/settings", "/admin/governance"]) {
       await page.goto(path);
       await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Settings" })).toHaveCount(0);
@@ -663,7 +683,8 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
 // throws), and the local admin token is always dropped either way — the
 // question this answers is whether the SERVER-side OIDC session might still
 // be live, which matters on a shared machine.
-test.describe("R4-F107 — a failed sign-out is surfaced, not swallowed", () => {
+test.describe("a failed sign-out is surfaced, not swallowed", () => {
+  // ticket: R4-F107
   test("POST /auth/logout failing still drops the local session, but toasts that the server wasn't confirmed", async ({
     page,
   }) => {
@@ -674,7 +695,7 @@ test.describe("R4-F107 — a failed sign-out is surfaced, not swallowed", () => 
       route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }),
     );
 
-    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    const userMenuTrigger = page.locator('header button[aria-haspopup="menu"]');
     await userMenuTrigger.click();
     await page.getByRole("menuitem", { name: "Sign out" }).click();
 

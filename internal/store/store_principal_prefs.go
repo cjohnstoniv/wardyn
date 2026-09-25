@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-person preferences (migration 0072_user_view_type).
+// Per-person preferences (migration 0077_user_view_type).
 package store
 
 import (

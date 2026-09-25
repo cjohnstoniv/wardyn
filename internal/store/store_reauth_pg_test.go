@@ -34,7 +34,7 @@ func seedReauthRun(t *testing.T, st store.PG) uuid.UUID {
 	return runID
 }
 
-// THE ROUND TRIP. The enum-parity guards compare a migration's CHECK against
+// The round trip. The enum-parity guards compare a migration's CHECK against
 // the Go set by PARSING; this one writes the value and reads it back, which is
 // the only thing that proves the constraint the database is actually enforcing
 // admits it.
@@ -175,10 +175,10 @@ func TestPG_ResolveReauthApproval_RefusesAnotherKind(t *testing.T) {
 	}
 }
 
-// THE INDEX, UNDER CONCURRENCY (patch-review batch E). Migration 0064's own
-// comment claims the 0022 partial unique index "now also covers this kind ...
-// One lapsed credential per run is one request, however many of the sandbox's
-// concurrent calls discover it" — and nothing proved it. The index is
+// The index, under concurrency. Migration 0064's own comment claims the 0022
+// partial unique index "now also covers this kind ... One lapsed credential per
+// run is one request, however many of the sandbox's concurrent calls discover
+// it"; this proves it. The index is
 // `(run_id, kind, requested_scope) WHERE state='PENDING' AND kind <> 'credential'`,
 // so the claim rests on `credential_reauth` being a kind OTHER than `credential`,
 // which is the kind of thing a reader agrees with and a database decides.

@@ -83,10 +83,14 @@ older daemon rather than "nothing is wrong":
 - `user_drive_denied_by_profile` — the **door**: the name of the governance
   profile that refuses to mount a drive for you, or `""` when none does.
 - `user_drive_unavailable` — `""` when Wardyn could answer. Any other value is
-  one of four tokens saying it could **not**, and which remedy that implies:
+  one of five tokens saying it could **not**, and which remedy that implies:
   - `groups_snapshot_stale` — your group membership cannot be read, so an
     allocation may exist and be invisible to this answer. Sign in again; until
     you do, a launch that asks for the drive is refused (`403`).
+  - `user_type_unknown` — the user type you signed in with no longer exists
+    (an admin deleted it), so which drive your type is given cannot be told.
+    Ask an admin to give you another type, then sign in again; until you do, a
+    launch that asks for the drive is refused (`403`).
   - `unmountable` — an allocation exists and this deployment cannot bind it: a
     directory that is not on the share, or a name that cannot name a directory.
     An admin's fix, not yours; a launch is a `422`.
@@ -97,7 +101,7 @@ older daemon rather than "nothing is wrong":
     and a launch is refused rather than guessed at.
 
 So `user_drive: null` on its own **no longer means** "nothing is allocated to
-you". It means that only when `user_drive_unavailable` is `""`; in the four
+you". It means that only when `user_drive_unavailable` is `""`; in the five
 states above the obvious reading — ask an admin for an allocation — is the wrong
 one, which is exactly why the third key exists.
 
@@ -263,7 +267,7 @@ their own inline policy.
   host and by URL prefix, so `https://dev.azure.com/acme` and
   `https://dev.azure.com/acme-labs` are two different answers. On an Azure DevOps organisation
   backed by Entra ID you may be asked to sign in with your own identity instead of an admin's shared
-  token — see [azure-devops-entra.md](adoption/azure-devops-entra.md) for what that looks like. If
+  token — see [AZURE-DEVOPS.md](AZURE-DEVOPS.md) for what that looks like. If
   instead the refusal says your work may not come from that provider, ask for a
   `workspace_provider` capability grant naming it.
 - **A custom sandbox image** — an `image` capability grant.

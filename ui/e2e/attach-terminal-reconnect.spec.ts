@@ -26,7 +26,6 @@ const AUTH = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 // and the four __ws* helpers below are how the test drives them (open a
 // connect, drop one abnormally, push a PTY output frame, read the count).
 function installFakeWebSocket() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any;
   class FakeSocket {
     static OPEN = 1;

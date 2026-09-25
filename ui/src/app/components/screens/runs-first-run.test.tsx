@@ -32,13 +32,21 @@ function renderIt(r: Readiness) {
   );
 }
 
-describe("RunsFirstRun — model provider row icon (X3-F12)", () => {
+describe("RunsFirstRun — model provider row icon", () => {
+  // ticket: X3-F12
   it("llmReady:false renders the dashed (untested) icon", () => {
     const { container } = renderIt(readiness({ llmReady: false }));
     const row = screen.getByText("Model provider").closest("li")!;
     expect(row.querySelector(".lucide-circle-dashed")).not.toBeNull();
     expect(row.querySelector(".lucide-circle-check")).toBeNull();
     expect(container).toBeInTheDocument(); // smoke: mounted at all
+  });
+
+  // RunsFirstRun renders for admin tiers only, so its Connect door opens the
+  // Admin view's Settings, where the org's shared model credential lives.
+  it("llmReady:false links Connect to /admin/settings", () => {
+    renderIt(readiness({ llmReady: false }));
+    expect(screen.getByRole("link", { name: "Connect →" })).toHaveAttribute("href", "/admin/settings");
   });
 
   it("llmReady:true renders the check icon, not the dashed one", () => {

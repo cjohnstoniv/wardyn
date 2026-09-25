@@ -37,7 +37,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fakes ───────────────────────────────────────────────────────────────────
+// fakes
 
 // uiMemStore extends the package's run fake (sshMemStore) with the two things
 // the gateway needs beyond a run row: the attach-ticket table it redeems, and
@@ -347,7 +347,7 @@ func okBackend() http.Handler {
 	})
 }
 
-// ─── the gateway exists only on its own origin ───────────────────────────────
+// the gateway exists only on its own origin
 
 // TestUIGateway_OffMeansNoHandlerAndNoHealthzBlock: empty
 // WARDYN_UI_SANDBOX_LISTEN is off — no handler for cmd/wardynd to serve, and
@@ -401,7 +401,7 @@ func TestUIGateway_ConsoleOriginHasNoRelayRoutes(t *testing.T) {
 	}
 }
 
-// ─── enter: the ticket is the only way in ────────────────────────────────────
+// enter: the ticket is the only way in
 
 // TestUIGateway_EnterRejectsBadTickets covers every way a ticket can fail to
 // authorize: absent, garbage, already used, and minted for another run. All
@@ -500,6 +500,49 @@ func TestUIGateway_EnterRequiresRunningRun(t *testing.T) {
 	}
 }
 
+// TestUIGateway_EnterRefusesAKeptRun: a run the lease ended is RUNNING with
+// its agent stopped, so /enter must refuse it with a plain 409 rather than
+// minting a cookie and redirecting into a relay that dies on its first dial
+// (matching the attach gates' TestAttach_RefusesAKeptRun).
+func TestUIGateway_EnterRefusesAKeptRun(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	kept := h.run
+	endedAt := time.Now()
+	kept.LostAt, kept.LostReason = &endedAt, types.LostEnded
+	h.store.putRun(kept)
+
+	rec := h.enter(url.Values{
+		"run": {h.run.ID.String()}, "app": {"code"},
+		"ticket": {h.ticket(h.run.ID, h.owner, oidc.RoleUser)},
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("kept run: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == uiCookieName {
+			t.Fatal("a kept run must not get a relay cookie")
+		}
+	}
+}
+
+// TestUIGateway_RelayRefusesAKeptRun: the per-connection dial gate re-checks
+// the run on EVERY new connection (not just at enter), so a session opened
+// before the run ended must stop working once it is kept, the same as a
+// stopped run.
+func TestUIGateway_RelayRefusesAKeptRun(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	good := h.openSession()
+
+	kept := h.run
+	endedAt := time.Now()
+	kept.LostAt, kept.LostReason = &endedAt, types.LostEnded
+	h.store.putRun(kept)
+
+	if rec := h.relay("/ide", good, nil); rec.Code != http.StatusConflict {
+		t.Fatalf("kept run: %d %s, want 409", rec.Code, rec.Body.String())
+	}
+}
+
 // TestUIGateway_EnterSetsRunScopedCookie pins the cookie's attributes. Path
 // scoping is the control that stops one run's page from making the browser
 // attach another run's session on a shared origin — and, since the path names
@@ -567,7 +610,7 @@ func TestUIGateway_HostModeBindsEnterToTheRunsOrigin(t *testing.T) {
 	}
 }
 
-// ─── relay: the cookie is the only credential ────────────────────────────────
+// relay: the cookie is the only credential
 
 // TestUIGateway_RelayRequiresAValidSessionForThisRun: no cookie, a forged one,
 // an expired one, and another run's cookie all fail — and none of them fall
@@ -722,7 +765,7 @@ func TestUIGateway_RelayDropsSandboxWardynCookiesOutbound(t *testing.T) {
 	}
 }
 
-// ─── launcher ────────────────────────────────────────────────────────────────
+// launcher
 
 // TestUIGateway_MissingLauncherIs502WithTheFrozenMessage: the BYOI case an
 // operator actually hits. The body is a frozen string the console prints
@@ -793,7 +836,7 @@ func TestUIGateway_LauncherScriptShape(t *testing.T) {
 	}
 }
 
-// ─── bounds ──────────────────────────────────────────────────────────────────
+// bounds
 
 // TestUIGateway_PerRunConnectionCap: every relay connection is a live exec in
 // the sandbox, so the count is bounded per run and slots come back on close.
@@ -835,7 +878,7 @@ func TestUIGateway_RelayTouchesTheRun(t *testing.T) {
 	}
 }
 
-// ─── audit ───────────────────────────────────────────────────────────────────
+// audit
 
 // TestUIGateway_AuditsAuthAndSessionWithoutContent: the ui.* actions record
 // THAT a human opened an app, never what they did in it — and they are
@@ -860,7 +903,7 @@ func TestUIGateway_AuditsAuthAndSessionWithoutContent(t *testing.T) {
 	}
 }
 
-// ─── session cookie ──────────────────────────────────────────────────────────
+// session cookie
 
 // TestUIGateway_SessionCookieIsSignedAndBounded: the cookie is the whole
 // credential, so a flipped byte, a swapped key, or a passed expiry must all

@@ -196,7 +196,7 @@ export function AssignmentsBlock({
               className={buttonVariants({ variant: "outline" })}
               onClick={(e) => {
                 e.preventDefault();
-                if (toRemove) remove(toRemove);
+                if (toRemove) void remove(toRemove);
               }}
             >
               {busy ? <Loader2 className="size-4 animate-spin" /> : null}

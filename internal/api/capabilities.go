@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -104,6 +105,13 @@ const (
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
 var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider}
+
+// capKindsVersion numbers the kind table, and GET /me/capabilities returns it so
+// a client holding a copy of the set (the console's CAPABILITY_KINDS) can tell
+// its copy is stale. Monotonic: a change to capKinds — a kind added, or a row's
+// direction changed — bumps it by one and it never goes down.
+// TestCapKindsVersionPinsTheTable fails on a table change that forgets to.
+const capKindsVersion = 1
 
 // validCapabilityKind reports whether kind is one of the seven. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
@@ -226,18 +234,22 @@ type capKind struct {
 	// member's own choice. False for all seven — "a capability bounds what a
 	// member chose, never what an admin pre-authorized" (capIntegration).
 	gatesAdminPins bool
+	// reason is the authz.denied reason a refusal of this kind carries. The
+	// widening kind's refusal is the BYOI one: image is refused as a member
+	// bringing their own image, whichever door asked.
+	reason authz.Reason
 }
 
 // capKinds is the table, keyed by exactly the names in capabilityKinds
 // (TestCapKindTableIsTheClosedSet).
 var capKinds = map[string]capKind{
-	capEgressHost:        {direction: capNarrowing, hostSet: true},
-	capSecret:            {direction: capNarrowing},
-	capWorkspace:         {direction: capNarrowing, restrictable: true},
-	capImage:             {direction: capWidening, restrictable: true},
-	capAgent:             {direction: capNarrowing, restrictable: true},
-	capIntegration:       {direction: capNarrowing, restrictable: true},
-	capWorkspaceProvider: {direction: capNarrowing, restrictable: true},
+	capEgressHost:        {direction: capNarrowing, hostSet: true, reason: authz.ReasonCapabilityEgressHost},
+	capSecret:            {direction: capNarrowing, reason: authz.ReasonCapabilitySecret},
+	capWorkspace:         {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspace},
+	capImage:             {direction: capWidening, restrictable: true, reason: authz.ReasonBYOIMember},
+	capAgent:             {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityAgent},
+	capIntegration:       {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityIntegration},
+	capWorkspaceProvider: {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspaceProvider},
 }
 
 // the wrappers

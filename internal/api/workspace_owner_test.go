@@ -196,17 +196,15 @@ func TestWorkspaceOwnership_OwnerReachesOwn(t *testing.T) {
 	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
 	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 
-	// R1-F315: the MUTATIONS are in here too, and each gets its OWN fixture from
-	// inside the loop. That is the whole reason they were missing — this control
-	// used to walk one shared workspace, so a PUT would rename it and a DELETE
-	// remove it under the cases that follow, and the four {id} mutations sat with
+	// The mutations are in here too, and each gets its own fixture from inside
+	// the loop: one shared workspace would be renamed by a PUT and removed by a
+	// DELETE under the cases that follow, leaving the four {id} mutations with
 	// their foreign-404 direction pinned and their owner-ADMIT direction pinned
-	// nowhere (ownerAdmitNotInTheControl's admitted debt). A handler that refused
-	// the owning member on PUT /workspaces/{id} left all 221 test files in this
-	// package green — exactly F315's own counterfactual for env-as-code.
+	// nowhere (ownerAdmitNotInTheControl's admitted debt). A handler that refuses
+	// the owning member on PUT /workspaces/{id} must fail here.
 	//
-	// A fresh fixture per case is what makes the destructive ones safe to include,
-	// which is why the shared one this test used to open is gone.
+	// A fresh fixture per case is what makes the destructive ones safe to
+	// include.
 	for _, c := range []struct{ method, suffix, body string }{
 		{http.MethodGet, "", ""},
 		{http.MethodGet, "/build", ""},
@@ -426,7 +424,7 @@ func TestWorkspaceOwnership_MemberLocalDirGate(t *testing.T) {
 }
 
 // TestWorkspaceOwnership_MemberWritableAllowlist pins O3's two halves at the
-// route: writable inside WARDYN_MEMBER_WRITABLE_ROOTS is accepted, and the
+// route: writable inside WARDYN_USER_WRITABLE_ROOTS is accepted, and the
 // deny carve-out wins over it.
 func TestWorkspaceOwnership_MemberWritableAllowlist(t *testing.T) {
 	root, project := memberProjectRoot(t)

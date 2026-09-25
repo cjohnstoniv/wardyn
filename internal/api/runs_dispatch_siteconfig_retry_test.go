@@ -98,7 +98,7 @@ func TestDispatch_RefusedRosterLeavesNoBedrockCredentialInTheEnv(t *testing.T) {
 	sandboxEnv := map[string]string{}
 
 	if _, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, sandboxEnv,
-		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false, false); ok {
+		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false, false, bedrockCredUngraded()); ok {
 		t.Fatal("dispatch went ahead on an unreadable roster")
 	}
 	for k := range sandboxEnv {
