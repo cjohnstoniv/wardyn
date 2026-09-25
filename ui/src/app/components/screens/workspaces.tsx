@@ -47,6 +47,14 @@ export const KIND_META: Record<WorkspaceKind, { Icon: React.ElementType; label: 
   ephemeral: { Icon: Hourglass, label: "ephemeral" },
 };
 
+// The one lookup every KIND_META[ws.kind] site goes through: `""` (a
+// multi-source workspace — see Workspace.kind's doc comment) has no entry, so
+// this returns undefined rather than failing to typecheck. Callers keep their
+// existing `?? KIND_META.local_dir` fallback.
+export function kindMetaOf(kind: Workspace["kind"]): { Icon: React.ElementType; label: string } | undefined {
+  return kind ? KIND_META[kind] : undefined;
+}
+
 // The list's "Source" column: a multi-source composition summary
 // ("2 dirs · 1 repo") or, for a single/pre-composition source, its mono path —
 // exported so the detail page's header renders a consistent line off the same
@@ -220,7 +228,7 @@ export function WorkspacesScreen() {
             </TableHeader>
             <TableBody>
               {filtered.map((w) => {
-                const kindMeta = KIND_META[w.kind] ?? KIND_META.local_dir;
+                const kindMeta = kindMetaOf(w.kind) ?? KIND_META.local_dir;
                 const image = workspaceImage(w);
                 // A3's per-repo-source `admitted` flag (§5.3): the row present,
                 // dimmed, never removed — the `user_drive_unavailable`
