@@ -105,12 +105,15 @@ func (p *managedCredProvider) evict() {
 
 // Current returns the managed token (no refresh — see type doc).
 func (p *managedCredProvider) Current(ctx context.Context) (subscription.Token, error) {
-	return p.read(ctx)
+	return p.read(secretstore.WithPurpose(ctx, secretstore.PurposeManagedToken))
 }
 
-// Peek is identical to Current here (no refresh side effect to avoid).
+// Peek reads the store like Current (no refresh side effect to avoid), but
+// neither uses nor fills the cache: its callers only ask whether a token is
+// there (managedInjectReady), so its read is recorded as a status read, and
+// the cache only ever holds a token read for injection.
 func (p *managedCredProvider) Peek() (subscription.Token, error) {
-	return p.read(context.Background())
+	return p.fetch(secretstore.WithPurpose(context.Background(), secretstore.PurposeStatus))
 }
 
 // evictManagedToken drops the managed provider's cached token, so the next

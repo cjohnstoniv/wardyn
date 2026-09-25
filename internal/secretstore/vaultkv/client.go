@@ -164,7 +164,9 @@ func tlsConfig(caFile string) (*tls.Config, error) {
 // call makes one API call with the current token. A 401/403 re-authenticates
 // (a rotated token file, an expired login) and retries once; a transient
 // failure is retried with backoff. The HTTP status is returned alongside a
-// nil error only for 2xx and 404, which callers interpret.
+// nil error only for 2xx, and for a 404 to a GET, which callers interpret as
+// "nothing there". A 404 to a write or a DELETE is an error: Vault answers
+// one when no engine is mounted at the path, and nothing was stored or removed.
 func (c *client) call(ctx context.Context, method, path string, in, out any) (int, error) {
 	status, err := c.retrying(ctx, method, path, in, out, true)
 	if s := statusOf(err); s == http.StatusForbidden || s == http.StatusUnauthorized {
@@ -241,7 +243,7 @@ func (c *client) once(ctx context.Context, method, path string, in, out any, aut
 		return 0, &vaultError{method: method, path: path, cause: err}
 	}
 	switch {
-	case resp.StatusCode == http.StatusNotFound:
+	case resp.StatusCode == http.StatusNotFound && method == http.MethodGet:
 		return resp.StatusCode, nil
 	case resp.StatusCode/100 != 2:
 		var e struct {

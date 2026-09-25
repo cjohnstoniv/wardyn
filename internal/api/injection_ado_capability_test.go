@@ -405,10 +405,10 @@ func newADODecideFixture(t *testing.T) *scopeFixture {
 // lane is still not the owner's to decide.
 func TestADOCapability_DecideMatrix(t *testing.T) {
 	owner := func(t *testing.T, f *scopeFixture) *http.Cookie {
-		return ssoSession(t, f.memberID, "owner@corp.example", oidc.RoleMember)
+		return ssoSession(t, f.memberID, "owner@corp.example", oidc.RoleUser)
 	}
 	stranger := func(t *testing.T, _ *scopeFixture) *http.Cookie {
-		return ssoSession(t, "sub-stranger", "stranger@corp.example", oidc.RoleMember)
+		return ssoSession(t, "sub-stranger", "stranger@corp.example", oidc.RoleUser)
 	}
 	admin := func(t *testing.T, _ *scopeFixture) *http.Cookie {
 		return ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)

@@ -167,9 +167,6 @@ func transientResolveFailure(err error) bool {
 // injection must never widen egress nor leak a secret to a wildcard/approved
 // host. Returns an error if any mint fails (fail closed at startup).
 func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Policy, rules []InjectionConfig, client *http.Client) (*injector, error) {
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
 	inj := &injector{
 		byHost: make(map[string]*injEntry), base: base, token: token, client: client,
 		reauth:    newReauthCoordinator(),

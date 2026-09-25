@@ -37,7 +37,7 @@ func TestPG_RoleMappings_UpsertFlipsInPlace(t *testing.T) {
 	st := store.NewPG(pool)
 	value := "test-value-" + uuid.NewString()
 
-	first, err := st.UpsertRoleMapping(ctx, roleMapping(value, "member"))
+	first, err := st.UpsertRoleMapping(ctx, roleMapping(value, "user"))
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestPG_RoleMappings_ListOldestFirst(t *testing.T) {
 
 	var ids []uuid.UUID
 	for i, v := range []string{"a", "b", "c"} {
-		m, err := st.UpsertRoleMapping(ctx, roleMapping(prefix+v, "member"))
+		m, err := st.UpsertRoleMapping(ctx, roleMapping(prefix+v, "user"))
 		if err != nil {
 			t.Fatalf("seed %d: %v", i, err)
 		}

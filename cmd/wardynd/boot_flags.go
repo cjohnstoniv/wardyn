@@ -104,7 +104,10 @@ type bootFlags struct {
 	confinementMap       *string
 	trustDomain          *string
 	controlURL           *string
-	policyPath           *string
+	// internalListen is the proxy-facing TLS listener (internal_tls.go); it
+	// runs whenever controlURL is https.
+	internalListen *string
+	policyPath     *string
 	// trustedCAFile is WARDYN_TRUSTED_CA_FILE (see trusted_ca.go): a PATH to a
 	// PEM bundle of additional roots a corporate TLS-inspecting middlebox signs
 	// with. Same shape as policyPath above (a path read once at boot, not a
@@ -218,6 +221,7 @@ type bootFlags struct {
 
 	approvalExpiryInterval *time.Duration
 	approvalExpiryAfter    *time.Duration
+	endedRunGrace          *time.Duration
 	auditCoalesceWindow    *time.Duration
 
 	envbuild     *bool
@@ -348,7 +352,8 @@ func parseBootFlags() *bootFlags {
 		recordingSel:            flagEnv("recording-store", "WARDYN_RECORDING_STORE", "pg", `recording store (pluggable seam): "pg" (default; Postgres-backed, visible to every replica), "fs" (legacy per-pod on-disk store) or "off" (no recording, no replay)`),
 		confinementMap:          flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins making CC3 runtime-pluggable, e.g. "CC2=runsc;CC3=kata-qemu" (or "CC3=oci:kata-qemu"); empty = built-in defaults`),
 		trustDomain:             flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
-		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars"),
+		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "https://wardynd:8443", "the URL every run's proxy dials to reach this daemon's internal TLS listener (-internal-listen); its host is the name wardynd's internal CA certifies. http:// is refused at boot unless the host is loopback (localhost, 127.0.0.0/8, ::1)"),
+		internalListen:          flagEnv("internal-listen", "WARDYN_INTERNAL_LISTEN", ":8443", "listen address of the proxy-facing TLS listener (the /api/v1/internal/ routes and /healthz only), served with a certificate from wardynd's own internal CA. Runs whenever -control-plane-url is https"),
 		policyPath:              flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		trustedCAFile:           flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots (e.g. a corporate TLS-inspecting middlebox's CA), added to the system roots for wardynd's own outbound TLS, the proxy sidecar's forwarding transport, and every sandbox's CA trust. Empty (default) = system roots only, byte-identical to today"),
 		daemonProxyURL:          flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) wardynd's OWN outbound HTTP calls traverse: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO CreateToken renewal, and Entra directory sync. Empty (default) = http.DefaultTransport is left untouched (today's ProxyFromEnvironment behavior). Malformed ⇒ boot refused. See docs/ENV.md"),
@@ -384,8 +389,8 @@ func parseBootFlags() *bootFlags {
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
 		// shape as -allow-plaintext-listen above.
 		allowOIDCNoOperatorList: flagBool("allow-oidc-no-operator-list", "WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST", false, "override: allow boot with OIDC SSO configured but WARDYN_OIDC_OPERATOR_EMAILS empty, i.e. — absent a WARDYN_OIDC_ROLE_MAP — every signed-in human admin-equivalent (normally refused — prefer setting the operator allowlist)"),
-		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an Entra App Role ("roles" claim), a "groups" claim entry, or an email to "admin", "security_admin" or "member" (e.g. "Wardyn.Admin=admin,Wardyn.Security=security_admin,eng-team=member"); when more than one matches, the HIGHEST tier wins (member < security_admin < admin). "security_admin" governs approvals, audit, permissions and governance profiles but never reaches another human's run, credentials or host config — and this map is the ONLY way to grant it. Empty (the default) disables role derivation: every signed-in human is "admin", exactly today's behavior`),
-		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "member") assigned when -oidc-role-map is set but nothing in a signed-in human's roles/groups/email matched an entry. "security_admin" is REFUSED here (boot fails closed): it is a mapped tier only, never the tier every unnamed human falls through to — name its App Role/group in -oidc-role-map instead. Empty (the default) DENIES that login instead, naming WARDYN_OIDC_ROLE_MAP in the error page. Ignored when -oidc-role-map is empty`),
+		oidcRoleMap:             flagEnv("oidc-role-map", "WARDYN_OIDC_ROLE_MAP", "", `comma-separated "value=role" pairs mapping an Entra App Role ("roles" claim), a "groups" claim entry, or an email to "admin", "security_admin" or "user" (e.g. "Wardyn.Admin=admin,Wardyn.Security=security_admin,eng-team=user"); when more than one matches, the HIGHEST tier wins (user < security_admin < admin). The pre-0.8 value "member" is still accepted as "user", with a boot warning, until 0.9. "security_admin" governs approvals, audit, permissions and governance profiles but never reaches another human's run, credentials or host config — and this map is the ONLY way to grant it. Empty (the default) disables role derivation: every signed-in human is "admin", exactly today's behavior`),
+		oidcDefaultRole:         flagEnv("oidc-default-role", "WARDYN_OIDC_DEFAULT_ROLE", "", `role ("admin" or "user"; the pre-0.8 "member" is accepted as "user", with a boot warning, until 0.9) assigned when -oidc-role-map is set but nothing in a signed-in human's roles/groups/email matched an entry. "security_admin" is REFUSED here (boot fails closed): it is a mapped tier only, never the tier every unnamed human falls through to — name its App Role/group in -oidc-role-map instead. Empty (the default) DENIES that login instead, naming WARDYN_OIDC_ROLE_MAP in the error page. Ignored when -oidc-role-map is empty`),
 		oidcAllowEmailMappings:  flagBool("oidc-allow-email-mappings", "WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS", false, "override: allow an email-shaped value (contains \"@\") on a console People-step role mapping (POST /access/mappings). Refused by default — an SSO/Entra deployment's default posture steers to an App Role or group key instead; env WARDYN_OIDC_ROLE_MAP email keys are unaffected either way (legacy, still boot-warned separately)"),
 
 		dirProvider: flagEnv("directory-provider", "WARDYN_DIRECTORY_PROVIDER", "", `identity-directory connector for the console's "who" autocomplete (governance assignment subject, People-step mapping value): "entra" (Microsoft Graph) or empty. Empty (the default) is the whole feature OFF — no directory read, every field stays free text. Enabling it grants wardynd READ OF THE WHOLE DIRECTORY (users + groups, App Roles when consented) and adds daemon-side outbound HTTPS to graph.microsoft.com:443 — see docs/OPERATIONS.md`),
@@ -397,6 +402,7 @@ func parseBootFlags() *bootFlags {
 
 		approvalExpiryInterval: flagDuration("approval-expiry-interval", "WARDYN_APPROVAL_EXPIRY_INTERVAL", 10*time.Minute, "how often to sweep stale PENDING approvals (0 disables)"),
 		approvalExpiryAfter:    flagDuration("approval-expiry-after", "WARDYN_APPROVAL_EXPIRY_AFTER", 24*time.Hour, "PENDING approvals older than this are transitioned to EXPIRED"),
+		endedRunGrace:          flagDuration("ended-run-grace", "WARDYN_ENDED_RUN_GRACE", 7*24*time.Hour, "how long a run whose end has passed keeps its files — stopped, with no network and no broker credentials — before it is torn down (0 tears it down at its end)"),
 		// A maximum GAP between two IDENTICAL consecutive auth.failed rows, not a
 		// cap on how long a streak may run: the flood this bounds was one row a
 		// minute forever from one retrying sidecar, which the auth.failed rate
@@ -524,6 +530,16 @@ func parseBootFlags() *bootFlags {
 	}
 	if *f.bedrockAWSProfile == "" {
 		*f.bedrockAWSProfile = envOr("AWS_PROFILE", "")
+	}
+
+	// <VAR>_FILE twins resolve here, with the rest of the flag/env reading,
+	// so every caller — -rotate-age-key included — sees one resolved value. A
+	// bad file is a malformed setting like a bad flag, so it exits here the way
+	// flag.Parse does, with main's own fatal line (run() has no cyclomatic
+	// budget left for another early return).
+	if err := resolveSecretFiles(secretFileSettings(f)); err != nil {
+		slog.Error("wardynd: fatal", slog.Any("err", err))
+		os.Exit(1)
 	}
 	return f
 }

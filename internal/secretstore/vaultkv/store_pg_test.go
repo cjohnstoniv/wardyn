@@ -171,23 +171,33 @@ func TestStoreMode_PointerWithNoStoreConfiguredRefusesByName(t *testing.T) {
 	}
 }
 
-// Rule 18, Put: a store failure writes no row; a row failure removes the value.
+// Rule 18, Put: a store failure writes no row, and no row write is even
+// attempted; a row failure comes after the value reached Vault, and removes it.
 func TestStoreMode_PutWritesTheStoreBeforeTheRow(t *testing.T) {
 	pool := throwawayDB(t)
 	f := newFakeVault(t)
 	s := storeMode(t, pool, newFakeStore(t, f), nil)
 	ctx := t.Context()
 
+	// Every row write issued for 'k' leaves a note in row_writes that a later
+	// compensating DELETE of the row does not remove.
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE row_writes (name text);
+		CREATE FUNCTION note_row_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO row_writes VALUES (NEW.name); RETURN NEW; END $$;
+		CREATE TRIGGER note_row_write BEFORE INSERT OR UPDATE ON secrets FOR EACH ROW WHEN (NEW.name = 'k') EXECUTE FUNCTION note_row_write();`); err != nil {
+		t.Fatal(err)
+	}
 	f.mu.Lock()
 	f.force = []int{403, 403}
 	f.mu.Unlock()
 	if err := s.Put(ctx, "k", []byte("v")); err == nil {
 		t.Fatal("Put succeeded with Vault refusing")
 	}
-	var n int
+	var n, attempts int
 	_ = pool.QueryRow(ctx, `SELECT count(*) FROM secrets WHERE name='k'`).Scan(&n)
-	if n != 0 {
-		t.Fatal("a row was written although the store write failed")
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM row_writes`).Scan(&attempts)
+	if n != 0 || attempts != 0 {
+		t.Fatalf("with the store write refused: %d rows, %d row writes attempted; want 0 and 0 (store before row)", n, attempts)
 	}
 
 	if _, err := pool.Exec(ctx, `
@@ -202,6 +212,18 @@ func TestStoreMode_PutWritesTheStoreBeforeTheRow(t *testing.T) {
 	defer f.mu.Unlock()
 	if _, ok := f.kv["ns1/operator/boom"]; ok {
 		t.Fatal("the value outlived its failed row (an orphan)")
+	}
+	write, remove := -1, -1
+	for i, c := range f.calls {
+		switch c {
+		case "POST wardyn/data/ns1/operator/boom":
+			write = i
+		case "DELETE wardyn/metadata/ns1/operator/boom":
+			remove = i
+		}
+	}
+	if write < 0 || remove < write {
+		t.Fatalf("Vault calls %v: want the value written, then removed after the row failed", f.calls)
 	}
 }
 
@@ -318,6 +340,67 @@ func TestMigrate_RefusesToOverwriteAValueAlreadyAtTheTarget(t *testing.T) {
 	}
 	if v, _ := local.Get(ctx, "k"); string(v) != "local" {
 		t.Fatalf("row value = %q, want it untouched", v)
+	}
+}
+
+// Rules 18 and 22: Vault answers 404 to a write under a mount it does not
+// serve. The migrator must abort with nothing moved and the local copy intact,
+// not flip the row to a pointer at nothing.
+func TestMigrate_AbortsOnAMountVaultDoesNotServe(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	ext := newFakeStore(t, f)
+	id, _ := age.GenerateX25519Identity()
+	ctx := t.Context()
+	local, _ := secretstore.New("pg", secretstore.Deps{Pool: pool, AgeIdentity: id, External: ext})
+	if err := local.Put(ctx, "wardyn-signing-key", []byte("pem")); err != nil {
+		t.Fatal(err)
+	}
+	ext.mount = "typo"
+	res, err := local.(*secretstorepg.Store).Migrate(ctx, Name, func(string, string) {})
+	if err == nil || res.Moved != 0 {
+		t.Fatalf("Migrate to an unserved mount = (%d, %v); want an abort with 0 moved", res.Moved, err)
+	}
+	var ver int16
+	var ct []byte
+	if err := pool.QueryRow(ctx, `SELECT enc_version, ciphertext FROM secrets WHERE name='wardyn-signing-key'`).Scan(&ver, &ct); err != nil {
+		t.Fatal(err)
+	}
+	if ver != 1 || len(ct) == 0 {
+		t.Fatalf("row after the abort = (v%d, %d ciphertext bytes); want the local copy intact", ver, len(ct))
+	}
+	if v, err := local.Get(ctx, "wardyn-signing-key"); err != nil || string(v) != "pem" {
+		t.Fatalf("Get after the abort = (%q, %v); want the value", v, err)
+	}
+}
+
+// A database writer who points Alice's row at Bob's orphan cannot hide the
+// orphan: a row claims only the path its owner and name derive.
+func TestReconcile_AForgedPointerDoesNotHideAnOrphan(t *testing.T) {
+	pool := throwawayDB(t)
+	f := newFakeVault(t)
+	ext := newFakeStore(t, f)
+	s := storeMode(t, pool, ext, nil)
+	ctx := t.Context()
+	if err := s.For("alice").Put(ctx, "pat", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	bobRef, err := ext.Put(ctx, "bob", "orphan", "", []byte("v"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE secrets SET kek_id=$1 WHERE owned_by='alice' AND name='pat'`, Name+":"+bobRef); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Dangling) != 1 || !strings.Contains(rep.Dangling[0], `owned_by="alice"`) {
+		t.Fatalf("dangling = %v; want alice's forged row", rep.Dangling)
+	}
+	if len(rep.Orphans) != 1 || rep.Orphans[0].Owner != "bob" {
+		t.Fatalf("orphans = %+v; want bob's value, which no row derives", rep.Orphans)
 	}
 }
 

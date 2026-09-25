@@ -96,6 +96,16 @@ func (s *Server) oauthProviderForSentinel(secretName string) (provider subscript
 // both sides agree — see types.ResolvedInjection for why.
 type injectionResponse = types.ResolvedInjection
 
+// withStoreRow adds the row a SiteAudited read reported — its store, ref and
+// owner (secretstore.Row.AuditData) — to a site's secret.read data. A read that
+// found no row adds nothing.
+func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
+	for k, v := range row.AuditData() {
+		data[k] = v
+	}
+	return data
+}
+
 // handleInternalInjection resolves an api_key grant to its injectable header
 // value for the run's wardyn-proxy sidecar (startup mint).
 //
@@ -301,7 +311,8 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// operator's writes under "" only, so no row ever exists under those
 	// strings and the lookup falls back to the operator row: today's single
 	// namespace, unchanged, for every pre-0.7 deployment.
-	secret, err := s.cfg.Secrets.For(claims.Sub).Get(r.Context(), minted.Injection.SecretName)
+	rctx, row := secretstore.SiteAudited(r.Context())
+	secret, err := s.cfg.Secrets.For(claims.Sub).Get(rctx, minted.Injection.SecretName)
 	if err != nil {
 		// Fail closed; the proxy refuses to start without its injections, and
 		// mid-run it acts on the status: see storeReadRefusal.
@@ -310,13 +321,13 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 			slog.String("secret", minted.Injection.SecretName), slog.String("reason", reason), slog.Any("err", err))
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", minted.Injection.SecretName, "failure",
-			mustJSON(map[string]any{"reason": reason, "grant_id": grantID})))
+			mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}, row))))
 		writeError(w, status, body)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", minted.Injection.SecretName, "success",
-		mustJSON(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub})))
+		mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}, row))))
 
 	formattedValue := formatInjectionValue(minted.Injection.Format, secret)
 
@@ -378,8 +389,8 @@ func storeReadRefusal(name string, err error) (status int, reason, body string) 
 	case errors.Is(err, secretstore.ErrNotFound):
 		return http.StatusFailedDependency, "not-found", "secret " + name + " is not in the store (set it with `wardyn secret set`)"
 	default:
-		return http.StatusFailedDependency, "refused", "secret " + name + " is stored, but the store refused it " +
-			"(it was moved or changed at the store, or Wardyn's access to it was revoked). Nothing was substituted; set it again, " +
-			"or ask an administrator to check the store."
+		// The row exists: re-setting it would overwrite what an operator may need to inspect.
+		return http.StatusFailedDependency, "refused", "secret " + name + " exists but could not be used: the store refused it " +
+			"(its value is gone or bound to another row, or Wardyn's access to it was revoked). Nothing was substituted; ask an admin to check it."
 	}
 }

@@ -78,8 +78,10 @@ type Store struct {
 
 var _ secretstore.External = (*Store)(nil)
 
-// New validates cfg and logs in. A store that cannot log in refuses to be
-// built, so boot fails closed (K11). The token is kept alive until ctx ends.
+// New validates cfg, logs in and checks that a KV v2 engine is mounted at
+// cfg.Mount. A store that cannot log in, or whose mount does not exist, refuses
+// to be built, so boot fails closed (K11) instead of the first write. The
+// token is kept alive until ctx ends.
 func New(ctx context.Context, cfg Config) (*Store, error) {
 	if err := validSegments(cfg.Mount); err != nil {
 		return nil, fmt.Errorf("WARDYN_VAULT_KV_MOUNT: %w", err)
@@ -99,6 +101,15 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	}
 	if err := c.login(ctx); err != nil {
 		return nil, fmt.Errorf("vault at %s: %w", c.base.Host, err)
+	}
+	// A KV v2 mount answers GET <mount>/config; a mistyped mount, or an engine
+	// not yet enabled, answers 404.
+	status, err := c.call(ctx, http.MethodGet, cfg.Mount+"/config", nil, nil)
+	if err == nil && status == http.StatusNotFound {
+		err = fmt.Errorf("no KV v2 engine is mounted there (GET %s/config answered 404)", cfg.Mount)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("WARDYN_VAULT_KV_MOUNT %q at %s: %w", cfg.Mount, c.base.Host, err)
 	}
 	go c.keepAlive(ctx)
 	return &Store{c: c, mount: cfg.Mount, prefix: cfg.Prefix, maxVersions: cfg.MaxVersions}, nil
@@ -150,6 +161,16 @@ func (s *Store) rel(owner, name string) (string, error) {
 
 // ref is what the row records after "vaultkv:": the mount and the derived path.
 func (s *Store) ref(rel string) string { return s.mount + "/" + rel }
+
+// Ref implements secretstore.External: the ref DERIVED from (owner, name).
+// The recorded ref plays no part.
+func (s *Store) Ref(owner, name, _ string) (string, error) {
+	rel, err := s.rel(owner, name)
+	if err != nil {
+		return "", err
+	}
+	return s.ref(rel), nil
+}
 
 // derive returns the derived path for the row and refuses a recorded ref
 // that names any other (design rule 16): a pointer moved or forged by a
@@ -243,7 +264,7 @@ func (s *Store) Put(ctx context.Context, owner, name, _ string, value []byte, cr
 	if !found || m.MaxVersions != s.maxVersions || !sameMap(m.CustomMetadata, want) {
 		body := map[string]any{"max_versions": s.maxVersions, "custom_metadata": want}
 		if _, err := s.c.call(ctx, http.MethodPost, s.mount+"/metadata/"+rel, body, nil); err != nil {
-			return "", err
+			return "", fmt.Errorf("write %s in mount %q: %w", s.ref(rel), s.mount, err)
 		}
 	}
 	body := map[string]any{
@@ -251,7 +272,7 @@ func (s *Store) Put(ctx context.Context, owner, name, _ string, value []byte, cr
 		"options": map[string]int{"cas": m.CurrentVersion},
 	}
 	if _, err := s.c.call(ctx, http.MethodPost, s.mount+"/data/"+rel, body, nil); err != nil {
-		return "", err
+		return "", fmt.Errorf("write %s in mount %q: %w", s.ref(rel), s.mount, err)
 	}
 	return s.ref(rel), nil
 }
@@ -313,7 +334,7 @@ func (s *Store) Check(ctx context.Context, owner, name, ref string) error {
 		return err
 	}
 	if !found || !m.live() {
-		return fmt.Errorf("Vault no longer holds this credential at %s", ref)
+		return fmt.Errorf("refused: Vault no longer holds this credential at %s", ref)
 	}
 	return bound(m.CustomMetadata, owner, name)
 }

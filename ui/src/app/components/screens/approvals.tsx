@@ -506,9 +506,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
           <div className="rounded-xl border border-border bg-card">
             <EmptyState
               icon={ShieldCheck}
-              title={role === "member" ? "Approvals raised by your runs appear here." : "You're all caught up"}
+              title={role === "user" ? "Approvals raised by your runs appear here." : "You're all caught up"}
               description={
-                role === "member"
+                role === "user"
                   ? undefined
                   : "New credential, egress, and tool-call requests appear here the moment an agent needs you."
               }
