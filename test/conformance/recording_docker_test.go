@@ -95,6 +95,9 @@ func TestRecordingDocker(t *testing.T) {
 				if !strings.Contains(line, "canary=true") || !strings.Contains(line, "tls=true") {
 					t.Fatalf("the cast arrived without the canary or off TLS: %q\n%s", line, logs)
 				}
+				if !strings.Contains(line, "auth=true") {
+					t.Fatalf("the proxy did not inject this run's token on the upload: %q\n%s", line, logs)
+				}
 				t.Logf("control plane saw: %s", line)
 				return
 			}

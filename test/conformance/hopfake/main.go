@@ -7,7 +7,8 @@
 // injection grant for one run token, and logs every request with whether it
 // arrived over TLS. In TestRecordingDocker it is the internal recording-upload
 // endpoint: it logs each cast the proxy brokers (size, whether it carries the
-// test's canary, and whether it arrived over TLS). A TEST BINARY: the test
+// test's canary, whether it arrived over TLS, and whether the proxy injected
+// the run token). A TEST BINARY: the test
 // builds it and copies it into a throwaway busybox container; nothing packages
 // or publishes it.
 package main
@@ -36,8 +37,9 @@ func main() {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if id, ok := strings.CutPrefix(r.URL.Path, recordingsPath); ok {
 			body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-			fmt.Printf("hopfake: recording run=%s bytes=%d canary=%t tls=%t\n",
-				id, len(body), bytes.Contains(body, []byte("wardyn-rec-canary")), r.TLS != nil)
+			fmt.Printf("hopfake: recording run=%s bytes=%d canary=%t tls=%t auth=%t\n",
+				id, len(body), bytes.Contains(body, []byte("wardyn-rec-canary")), r.TLS != nil,
+				r.Header.Get("Authorization") == wantAuth)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
