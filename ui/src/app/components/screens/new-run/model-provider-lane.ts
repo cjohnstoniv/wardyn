@@ -17,9 +17,14 @@
 // never named, and nothing rendered either sentence: a disabled or
 // wholly-ungranted default fell through to R6's shape (no preselection,
 // Launch waits) with no line naming WHY. The owner approved drawing both
-// (docs/design/542-rail-gaps-mock/canon.md, same day) — providerGate below is
-// their one shared derivation, read by both resolveProviderSelection (so a
-// disabled default is never silently replaced by whichever OTHER candidate
+// (docs/design/542-rail-gaps-mock/canon.md, same day), but Opus review round
+// 2 found R5b undrawable from here: setupModelProviderState's capVisible
+// (internal/api/provider_access.go) already narrows `model_providers` to
+// providers THIS PERSON is granted before the wire, so an ungranted provider
+// never reaches this module at all, and the server's own chooseModelProvider
+// launches on R9's silent advisory in that shape rather than refusing. Only
+// R5c ships: providerGate below is read by both resolveProviderSelection (so
+// a disabled default is never silently replaced by whichever OTHER candidate
 // happened to survive) and the rail's own ModelProviderSection (so it can
 // name the same fact instead of falling through to R9's generic shape).
 import type { SetupModelProvider, SetupProviderAccess } from "../../../lib/types";
@@ -105,31 +110,36 @@ export function providersServing(providers: SetupModelProvider[] | undefined, ag
   return (providers ?? []).filter((p) => p.harnesses.includes(agent));
 }
 
-export type ProviderGate = { kind: "not_granted" } | { kind: "default_off"; provider: SetupModelProvider };
+export type ProviderGate = { kind: "default_off"; provider: SetupModelProvider };
 
 /**
- * R5b/R5c (#542 rail-gap packet, owner-approved 2026-09-25): the reason
- * nothing may launch yet when providerCandidates comes back empty for a
- * reason more specific than R9's "nothing serves this agent at all" — R9
- * itself stays this function's `undefined`, its existing silent shape
- * unchanged.
+ * R5c (#542 rail-gap packet, owner-approved 2026-09-25): the reason nothing
+ * may launch yet when providerCandidates comes back empty (or the sole
+ * survivor isn't the intended default) because this agent's own NAMED roster
+ * default is a disabled provider — regardless of how many other candidates
+ * remain (mirrors chooseModelProvider's own unconditional disabled-default
+ * refusal, internal/api/run_model_provider.go: the disabled default is
+ * refused even with exactly one other candidate left, never silently passed
+ * over). R9's "nothing serves this agent at all" stays this function's
+ * `undefined`, its existing silent shape unchanged.
  *
- * A NAMED default that is disabled is R5c regardless of how many other
- * candidates remain (mirrors chooseModelProvider's own unconditional
- * disabled-default refusal, internal/api/run_model_provider.go: the disabled
- * default is refused even with exactly one other candidate left, never
- * silently passed over). With no named default, "every serving row is
- * disabled" is as close as the console can read "granted none" (R5b) — the
- * console has no visibility into the server's per-provider capModelProvider
- * grant, only into `disabled`, which is why R5b reads generically ("ask your
- * admin") rather than naming a provider the way R5c does.
+ * R5b ("granted none") is deliberately NOT drawn here (Opus review round 2):
+ * setupModelProviderState (internal/api/provider_access.go's capVisible)
+ * already narrows `model_providers` to providers THIS PERSON is granted
+ * before it ever reaches the wire, so an UNGRANTED provider never appears at
+ * all — there is no "all serving rows disabled" shape left for the console to
+ * read as "granted none", and the server's own chooseModelProvider agrees:
+ * with no named default and zero enabled candidates it launches on R9's
+ * silent advisory (run_model_provider.go's `len(serving) == 0` branch), not a
+ * refusal. RAIL_PROVIDER.NOT_GRANTED stays defined (canon-pinned) for the
+ * follow-up issue that gives the console a real signal for it; nothing here
+ * produces it yet.
  */
 export function providerGate(providers: SetupModelProvider[] | undefined, agent: string): ProviderGate | undefined {
   const serving = providersServing(providers, agent);
   if (serving.length === 0) return undefined;
   const disabledDefault = serving.find((p) => p.disabled && p.default_for?.includes(agent));
   if (disabledDefault) return { kind: "default_off", provider: disabledDefault };
-  if (serving.every((p) => p.disabled)) return { kind: "not_granted" };
   return undefined;
 }
 
@@ -147,12 +157,25 @@ export function providerGate(providers: SetupModelProvider[] | undefined, agent:
  *   - with no default among the candidates, nothing is preselected and the
  *     person chooses (R6 — QC-4: Wardyn never silently substitutes).
  *
- * A workspace pin (F2, #612) is checked ahead of both: a pin naming a
- * candidate is preselected ahead of the roster default, silently; a pin
- * naming a provider that is NOT a candidate preselects nothing at all — the
- * server refuses it by name (cmp.Or(requested, pin) in
+ * A workspace pin (F2, #612) is checked ahead of the default/sole-candidate
+ * rule: a pin naming a candidate is preselected ahead of the roster default,
+ * silently; a pin naming a provider that is NOT a candidate preselects
+ * nothing at all — the server refuses it by name (cmp.Or(requested, pin) in
  * internal/api/run_model_provider.go), and this rail must not paper over that
  * refusal by silently substituting some OTHER provider the pin never named.
+ *
+ * `previousId` is kept ONLY when it is either the person's OWN prior pick
+ * (`previousExplicit`) or there is nothing that could outrank it (no pin, and
+ * the agent's own default isn't disabled) — Opus review round 2: keeping ANY
+ * still-serving previousId unconditionally, before ever looking at the pin,
+ * let an AUTOMATIC pick (this function's own earlier R1/R2 adoption) outlive
+ * a pin that arrived later — the workspace attaching or finishing its load
+ * AFTER the providers already resolved is the ordinary sequence, not an edge
+ * case — and let that same automatic pick ride across an agent switch into an
+ * agent whose own default is disabled, bypassing R5c's "never auto-carried"
+ * rule. An EXPLICIT pick still always wins outright, matching the doctrine
+ * new-run-screen.tsx's onModelProviderChange already states in prose: a
+ * choice the person actually made is never something this rule second-guesses.
  */
 export function resolveProviderSelection(params: {
   candidates: SetupModelProvider[];
@@ -161,6 +184,10 @@ export function resolveProviderSelection(params: {
   previousId: string | undefined;
   previousName: string | undefined;
   agentChanged: boolean;
+  /** True when `previousId` is the person's OWN prior pick (a real
+   *  onModelProviderChange call), never an automatic adoption this function
+   *  itself made on an earlier run — see the doc comment above. */
+  previousExplicit?: boolean;
   /** The primary workspace's llm_cred.provider_ref, if any — see the doc
    *  comment above. */
   pin?: string;
@@ -170,8 +197,10 @@ export function resolveProviderSelection(params: {
    *  default would be replaced silently instead of refused (R5c). */
   defaultDisabled?: boolean;
 }): ProviderSelectionResult {
-  const { candidates, agent, agentLabel, previousId, previousName, agentChanged, pin, defaultDisabled } = params;
-  if (previousId && candidates.some((c) => c.id === previousId)) {
+  const { candidates, agent, agentLabel, previousId, previousName, agentChanged, pin, defaultDisabled, previousExplicit } =
+    params;
+  const previousStillServes = !!previousId && candidates.some((c) => c.id === previousId);
+  if (previousStillServes && (previousExplicit || (!pin && !defaultDisabled))) {
     return { selectedId: previousId, changeNote: null };
   }
   if (pin) {

@@ -167,6 +167,49 @@ describe("NewRunScreen — F2 (#612): the primary workspace's pin beats the rost
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     expect(createRunMock.mock.calls[0][0].model_provider).toBe(claude.id);
   });
+
+  // Opus review round 2 (F2) — the ORIGINAL bug, reproduced with a REAL race:
+  // providers resolve first, this effect automatically adopts the roster
+  // default (gateway), and ONLY THEN does the workspace list resolve with the
+  // pin. The old "keep any still-serving previousId" rule would have let that
+  // automatic gateway pick outlive the pin forever; previousExplicit fixes it.
+  it("a pin that resolves ~300ms AFTER the automatic default pick still wins", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      providerStatus([
+        { provider: gateway, defaultFor: ["claude-code"], state: "live" },
+        { provider: claude, state: "live" },
+      ]),
+    );
+    listWorkspacesMock.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve([
+                {
+                  id: "ws1",
+                  name: "repo-a",
+                  kind: "local_dir",
+                  source: "/home/agent/repo-a",
+                  status: "scanned",
+                  llm_cred: { provider_ref: claude.id },
+                },
+              ]),
+            300,
+          ),
+        ),
+    );
+    renderScreenWithWorkspace("ws1");
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    // The automatic default lands first — proves the race is real, not
+    // avoided by mock timing.
+    await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(gateway.id));
+    // The pin then arrives and wins outright.
+    await waitFor(() => expect(railProps.at(-1)?.modelProvider?.selectedId).toBe(claude.id), { timeout: 2000 });
+    await user.click(screen.getByRole("button", { name: /Launch run/ }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    expect(createRunMock.mock.calls[0][0].model_provider).toBe(claude.id);
+  });
 });
 
 describe("NewRunScreen — R6 (QC-4): no default among several candidates — Launch waits for a choice", () => {

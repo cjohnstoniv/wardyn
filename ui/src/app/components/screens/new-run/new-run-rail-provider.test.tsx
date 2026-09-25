@@ -8,9 +8,10 @@
 // (selected, not connected — its own door, now all five kinds), R4
 // (residency by kind), R7 (an agent switch's change note), and R9 (no
 // candidate: today's shape, unchanged) — the acceptance list packet C draws.
-// R5b/R5c below are the rail-gap packet's addition (owner-approved
-// 2026-09-25, docs/design/542-rail-gaps-mock/canon.md) — see
-// model-provider-lane.ts's providerGate.
+// R5c below is the rail-gap packet's addition (owner-approved 2026-09-25,
+// docs/design/542-rail-gaps-mock/canon.md) — see model-provider-lane.ts's
+// providerGate. R5b is NOT drawn (Opus review round 2 — see that function's
+// own doc comment).
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -30,7 +31,7 @@ vi.mock("../settings/harness-login-pane", () => ({
 import { RunRail } from "./new-run-rail";
 import { RAIL_CREDENTIAL, RAIL_PROVIDER } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS, MODEL_ACCESS_BANNER } from "../../wardyn/model-access-copy";
-import { CONNECTIONS, DOOR, KEY_DOOR } from "../../wardyn/copy/door";
+import { CLAUDE_DOOR, CONNECTIONS, DOOR, KEY_DOOR } from "../../wardyn/copy/door";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { MODEL_PROVIDERS, providerStatus } from "../../../lib/test-fixtures";
 import { WithDoor } from "../../../../test/door-harness";
@@ -57,6 +58,7 @@ function renderRail(opts: {
   status: Parameters<typeof WithDoor>[0]["status"];
   modelProvider?: ComponentProps<typeof RunRail>["modelProvider"];
   showModelWarning?: boolean;
+  launch?: Partial<ComponentProps<typeof RunRail>["launch"]>;
 }) {
   render(
     <WithDoor status={opts.status} path="/runs/new" operator={false} principal="bob@acme.example">
@@ -66,7 +68,7 @@ function renderRail(opts: {
         startup="It starts."
         showHoldNote={false}
         toolRules={null}
-        launch={baseLaunch()}
+        launch={baseLaunch(opts.launch)}
         preflight={{ error: null, errorSeq: 0, result: null }}
         modelProvider={opts.modelProvider}
         adoDialog={{
@@ -290,7 +292,12 @@ describe("R3 — selected, not connected: a warning and its own door (§5.8)", (
       },
     });
     expect(await screen.findByText(RAIL_PROVIDER.NOT_SIGNED_IN_CLAUDE("Claude subscription"))).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: CONNECTIONS.SIGN_IN_CLAUDE })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: CONNECTIONS.SIGN_IN_CLAUDE }));
+    // The Claude door (case b, door-dialog.tsx) titles itself CLAUDE_DOOR.TITLE,
+    // NOT MODEL_ACCESS_BANNER.DIALOG_TITLE — that title is the AWS door's own
+    // (login === "aws"); anthropic_subscription's login is "anthropic".
+    const dialog = await screen.findByRole("dialog", { name: CLAUDE_DOOR.TITLE });
+    expect(dialog).toHaveTextContent(DOOR.FOR("Claude subscription"));
   });
 });
 
@@ -308,30 +315,13 @@ describe("R9 — no candidate for this agent: today's shape, unchanged", () => {
   });
 });
 
-// #542 rail-gap packet (owner-approved 2026-09-25) — R5b/R5c, distinct from
-// R9's "nothing serves this agent at all": something does, but nobody may
-// launch on it yet, and this rail names WHY instead of falling through to R9's
-// generic deployment warning.
-describe("R5b — granted none: no select, Launch refused, naming the harness", () => {
-  it("renders NOT_GRANTED with no picker at all", async () => {
-    const status = providerStatus([{ provider: gateway, state: "not_configured" }]);
-    renderRail({
-      status,
-      modelProvider: {
-        candidates: [],
-        access: status.provider_access,
-        selectedId: undefined,
-        onChange: () => {},
-        changeNote: null,
-        gate: { kind: "not_granted" },
-        harnessLabel: "Claude Code",
-      },
-    });
-    expect(await screen.findByText(RAIL_PROVIDER.NOT_GRANTED("Claude Code"))).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeNull();
-  });
-});
-
+// #542 rail-gap packet (owner-approved 2026-09-25) — R5c, distinct from R9's
+// "nothing serves this agent at all": something does, but the admin's own
+// default among it is disabled, and this rail names WHY instead of falling
+// through to R9's generic deployment warning. R5b ("granted none") is NOT
+// drawn (Opus review round 2 — model-provider-lane.ts's providerGate doc
+// comment): an all-disabled roster with no named default falls through to
+// R9's existing, unchanged shape (see that describe block above).
 describe("R5c — the default is turned off: never auto-picked, even alone", () => {
   it("with another candidate: a Select with the placeholder, nothing preselected, naming the disabled default", async () => {
     const status = providerStatus([{ provider: claude, state: "live" }]);
@@ -370,5 +360,50 @@ describe("R5c — the default is turned off: never auto-picked, even alone", () 
     });
     expect(await screen.findByText(RAIL_PROVIDER.DEFAULT_OFF_ONLY("Corp gateway", "Claude Code"))).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: RAIL_PROVIDER.LABEL })).toBeNull();
+  });
+});
+
+// F4 (Opus review round 2) — the bottom launch-problem caption is suppressed
+// ONLY when it IS the gate's own sentence (ModelProviderSection already names
+// that one inline); a DIFFERENT, higher-priority problem must still show even
+// while a gate is active, since it's a separate reason nothing has launched.
+describe("F4 — a gate suppresses only its OWN sentence on the launch caption", () => {
+  it("a title problem still shows under Launch even with a default_off gate", async () => {
+    const status = providerStatus([]);
+    renderRail({
+      status,
+      launch: { problem: "Give this run a title." },
+      modelProvider: {
+        candidates: [],
+        access: [],
+        selectedId: undefined,
+        onChange: () => {},
+        changeNote: null,
+        gate: { kind: "default_off", provider: gateway },
+        harnessLabel: "Claude Code",
+      },
+    });
+    expect(await screen.findByText("Give this run a title.")).toBeInTheDocument();
+  });
+
+  it("the gate's OWN sentence, passed as the problem, is suppressed on the caption (still shown inline above)", async () => {
+    const status = providerStatus([]);
+    const sentence = RAIL_PROVIDER.DEFAULT_OFF_ONLY("Corp gateway", "Claude Code");
+    renderRail({
+      status,
+      launch: { problem: sentence },
+      modelProvider: {
+        candidates: [],
+        access: [],
+        selectedId: undefined,
+        onChange: () => {},
+        changeNote: null,
+        gate: { kind: "default_off", provider: gateway },
+        harnessLabel: "Claude Code",
+      },
+    });
+    // Exactly one match in the document — the inline line, not a second
+    // caption copy — so getByText (not queryAllByText) proves it.
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
   });
 });
