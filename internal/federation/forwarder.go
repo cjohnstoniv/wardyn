@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -70,6 +71,11 @@ type Forwarder struct {
 	loaded  bool
 	halted  bool
 	backoff time.Duration
+
+	// markPending is true from a revoke whose MarkFederationRevoked failed until
+	// step retries it durably. The in-process gate (Status().Revoked) is closed
+	// the instant revoke runs, regardless — this only tracks the durable write.
+	markPending bool
 }
 
 // NewForwarder returns a forwarder for cred. Nothing is read until Load or Run.
@@ -146,6 +152,12 @@ func (f *Forwarder) step(ctx context.Context) (time.Duration, bool) {
 		}
 	}
 	if f.Status().Revoked {
+		if f.markPending {
+			f.markRevokedDurable(ctx)
+			if f.markPending {
+				return f.interval, false
+			}
+		}
 		return 0, true
 	}
 	head, err := f.store.AuditHeadSeq(ctx)
@@ -223,7 +235,23 @@ func (f *Forwarder) refused(ctx context.Context, err error) (time.Duration, bool
 	switch {
 	case se.Revoked():
 		f.revoke(ctx, se)
+		// The in-process gate (Status().Revoked) is already closed; stop calling
+		// the organisation only once the mark is durable too — otherwise step
+		// retries the write on the next tick, at the normal interval, without
+		// contacting the organisation again.
+		if f.markPending {
+			return f.interval, false
+		}
 		return 0, true
+	case se.Code == http.StatusUnauthorized:
+		// A 401 without deviceAuth's own realm: something on the path answered,
+		// not the organisation. Halt like any definitive refusal, but say what
+		// actually happened rather than logging a bland "refused".
+		f.halted = true
+		slog.Error("federation: 401 from something that is not the organisation; forwarding is halted until wardynd restarts",
+			"device_id", f.cred.DeviceID, "acked_seq", f.Status().AckedSeq)
+		f.update(func(s *Status) { s.LastError = "401 from something that is not the organisation" })
+		return f.interval, false
 	case se.Code == 429 && se.RetryAfter > 0:
 		f.update(func(s *Status) { s.LastError = se.Error() })
 		return min(se.RetryAfter, maxBackoff), false
@@ -251,9 +279,7 @@ func (f *Forwarder) revoke(ctx context.Context, se *StatusError) {
 	slog.Error("federation: the organisation revoked this device; new runs are refused until it is re-enrolled",
 		"device_id", f.cred.DeviceID, "status", se.Code, "acked_seq", st.AckedSeq)
 	f.update(func(s *Status) { s.Revoked, s.LastError = true, se.Error() })
-	if err := f.store.MarkFederationRevoked(ctx); err != nil {
-		slog.Error("federation: recording the revocation durably failed; a restart will not remember it", "error", err)
-	}
+	f.markRevokedDurable(ctx)
 	data, _ := json.Marshal(map[string]any{"status": se.Code, "acked_seq": st.AckedSeq})
 	if err := f.audit.Record(ctx, types.AuditEvent{
 		ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem, Actor: AuditActor,
@@ -261,4 +287,18 @@ func (f *Forwarder) revoke(ctx context.Context, se *StatusError) {
 	}); err != nil {
 		slog.Error("federation: recording device.local.revoke failed", "error", err)
 	}
+}
+
+// markRevokedDurable tries once to persist the revoked mark and clears
+// markPending on success; on failure it sets markPending so step retries it on
+// the next tick. The in-process gate (Status().Revoked) is already closed
+// either way — a laptop never trusts the credential again on the strength of
+// an unwritten mark, but a restart before the write lands would forget it.
+func (f *Forwarder) markRevokedDurable(ctx context.Context) {
+	if err := f.store.MarkFederationRevoked(ctx); err != nil {
+		slog.Error("federation: recording the revocation durably failed; retrying on the tick loop", "error", err)
+		f.markPending = true
+		return
+	}
+	f.markPending = false
 }

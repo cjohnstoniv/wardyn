@@ -131,6 +131,7 @@ func (s *Server) deviceAuth(next http.Handler) http.Handler {
 		ds, ok := s.cfg.Store.(store.DeviceStore)
 		if !ok {
 			s.auditAuthFailedAs(r, deviceAuthActor, "device_store_unavailable")
+			w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 			writeError(w, http.StatusUnauthorized, "this deployment does not accept device credentials")
 			return
 		}
@@ -146,6 +147,7 @@ func (s *Server) deviceAuth(next http.Handler) http.Handler {
 		}
 		if errors.Is(err, store.ErrNotFound) {
 			s.auditAuthFailedAs(r, deviceAuthActor, "invalid_device_token")
+			w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 			writeError(w, http.StatusUnauthorized, "invalid device token")
 			return
 		}
@@ -264,6 +266,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 	d, ok := deviceFromContext(r.Context())
 	ds, isDS := s.cfg.Store.(store.DeviceStore)
 	if !ok || !isDS {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 		writeError(w, http.StatusUnauthorized, "invalid device token")
 		return
 	}
@@ -310,6 +313,7 @@ func (s *Server) handleDeviceAuditIngest(w http.ResponseWriter, r *http.Request)
 		// Revoked after deviceAuth admitted this request: the same 401 its
 		// next request gets, recorded as the revocation it is.
 		s.auditIngestFailure(r, d, "revoked", len(rows))
+		w.Header().Set("WWW-Authenticate", `Bearer realm="wardyn-device", error="invalid_token"`)
 		writeError(w, http.StatusUnauthorized, "invalid device token")
 		return
 	case errors.Is(err, store.ErrFederatedRowInvalid):

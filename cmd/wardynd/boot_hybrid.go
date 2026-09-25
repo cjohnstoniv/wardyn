@@ -61,15 +61,23 @@ func bootHybrid(ctx, rootCtx context.Context, orgURL, enrolToken string, secrets
 			if err != nil {
 				return nil, fmt.Errorf("refusing to start: enrolment at WARDYN_ORG_URL failed: %w", err)
 			}
-			if err := st.ResetFederation(ctx); err != nil {
-				return nil, err
-			}
 			enrolled = &resp
 			return json.Marshal(federation.Credential{DeviceID: resp.DeviceID, Token: resp.Token,
 				EnrolmentTokenSHA256: federation.TokenSHA256(enrolToken)})
 		})
 	if err != nil {
 		return nil, err
+	}
+	// Put-then-Reset: loadOrCreateSecret only returns nil once the new
+	// credential is durably stored, so the revoked mark from a prior enrolment
+	// clears no earlier than that. Clearing it first (inside generate, before
+	// Put) would leave the gate open with no new credential behind it if Put
+	// then failed. A Reset failure here refuses the boot — the laptop keeps
+	// refusing on the old mark rather than starting in an unknown state.
+	if enrolled != nil {
+		if err := st.ResetFederation(ctx); err != nil {
+			return nil, fmt.Errorf("refusing to start: reset federation state after enrolment: %w", err)
+		}
 	}
 	cred, _ := parseOrgCredential(raw)
 	if enrolled != nil {
