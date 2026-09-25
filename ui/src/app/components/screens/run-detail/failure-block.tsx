@@ -173,7 +173,7 @@ function ProviderDoor({ run, provider }: { run: AgentRun; provider: string }) {
   return (
     <div className="mt-2 space-y-1">
       <p className="text-xs leading-relaxed text-muted-foreground">{MODEL_ACCESS_RUN_DOOR.NOT_OWNER(run.created_by)}</p>
-      {owner && <OpenInUserView runId={run.id} />}
+      {owner && <OpenInUserView />}
     </div>
   );
 }

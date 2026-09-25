@@ -168,19 +168,21 @@ export async function switchView(to: ConsoleView, target: string, noCredential =
 }
 
 /** M-7 (§4.6, QM-7): what the Admin view gives in place of a personal door on
- *  the admin's own run — that run, in the User view (also #543's failed run
- *  and held sign-in, whose door opens in the User view only). ViewSwitch's rule: a
- *  single-operator install only navigates; an SSO session flips its clamp
- *  first, and says so when that fails. The admin token is not a person and has
- *  no User view, so it gets nothing. Stops the click, since the rows it sits in
- *  open the run in this view. */
-export function OpenInUserView({ runId, className }: { runId: string; className?: string }) {
+ *  the admin's own run — with `runId`, that run in the User view; without it
+ *  (#543's failed-run block and approvals card), this same page there, where
+ *  the door opens. ViewSwitch's rule: a single-operator install only
+ *  navigates; an SSO session flips its clamp first, and says so when that
+ *  fails. The admin token is not a person and has no User view, so it gets
+ *  nothing. Stops the click, since the rows it sits in open the run in this
+ *  view. */
+export function OpenInUserView({ runId, className }: { runId?: string; className?: string } = {}) {
   const access = useViewAccess();
   const navigate = useNavigate();
+  const { pathname, search, hash } = useLocation();
   const [busy, setBusy] = React.useState(false);
   const [failed, setFailed] = React.useState(false);
   if (access === "admin-only") return null;
-  const target = `/runs/${encodeURIComponent(runId)}`;
+  const target = runId ? `/runs/${encodeURIComponent(runId)}` : viewTarget("user", pathname, `${search}${hash}`);
   const go = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (access === "url") {

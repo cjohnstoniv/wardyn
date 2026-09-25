@@ -776,7 +776,7 @@ function PendingCard({
           reauthDoor ? (
             <ReauthAction provider={reauth.provider} />
           ) : reauthOwnRow ? (
-            <OpenInUserView runId={item.run_id} />
+            <OpenInUserView />
           ) : null
         ) : (
           <>
