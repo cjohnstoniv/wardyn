@@ -64,13 +64,16 @@ func (s PG) UpsertGovernanceProfile(ctx context.Context, p types.GovernanceProfi
 		INSERT INTO governance_profiles (id, name, ceiling, limits, created_by)
 		VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT (id) DO UPDATE
-			SET name = EXCLUDED.name, ceiling = EXCLUDED.ceiling,
-			    limits = (governance_profiles.limits - $6::text[]) || EXCLUDED.limits, updated_at = now()
+			SET name = EXCLUDED.name,
+			    ceiling = (governance_profiles.ceiling - $6::text[]) || EXCLUDED.ceiling,
+			    limits = (governance_profiles.limits - $7::text[]) || EXCLUDED.limits, updated_at = now()
 		RETURNING ` + governanceProfileCols
-	// limits keeps the keys types.GovernanceLimits does not declare: a limit a
-	// newer wardynd set must survive this binary's edit (declaredJSONKeys).
+	// ceiling and limits each keep the keys this binary's RunPolicySpec/
+	// GovernanceLimits do not declare: a field a newer wardynd set must survive
+	// this binary's edit (declaredJSONKeys) — the same skew rule as limits, now
+	// applied to ceiling too (#675).
 	out, err := scanGovernanceProfile(s.Pool.QueryRow(ctx, q,
-		p.ID, p.Name, ceilingJSON, limitsJSON, p.CreatedBy, declaredJSONKeys(p.Limits)))
+		p.ID, p.Name, ceilingJSON, limitsJSON, p.CreatedBy, declaredJSONKeys(p.Ceiling), declaredJSONKeys(p.Limits)))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

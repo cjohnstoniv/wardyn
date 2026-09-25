@@ -92,6 +92,49 @@ func TestGovernanceLimitsRoundTripPreservesUnknownKeys(t *testing.T) {
 	}
 }
 
+// TestGovernanceCeilingRoundTripPreservesUnknownKeys is
+// TestGovernanceLimitsRoundTripPreservesUnknownKeys's sibling for ceiling
+// (#675): a full RunPolicySpec document has the same forward-compat problem —
+// a field a newer wardynd added must survive an older binary's edit to an
+// unrelated field — and until this fix ceiling = EXCLUDED.ceiling did a whole-
+// document replace instead of the key-preserving merge limits already used.
+func TestGovernanceCeilingRoundTripPreservesUnknownKeys(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	p := seedGovernanceProfile(t, st, "test-skew-ceiling-"+uuid.NewString())
+	if _, err := pool.Exec(ctx,
+		`UPDATE governance_profiles SET ceiling = ceiling || '{"ceiling_from_a_newer_wardynd": "bedrock_sso"}'::jsonb WHERE id = $1`, p.ID); err != nil {
+		t.Fatalf("seed a newer binary's ceiling field: %v", err)
+	}
+
+	p.Ceiling.AllowAllEgress = true // a declared field this edit sets
+	if _, err := st.UpsertGovernanceProfile(ctx, p); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	got := storedDoc(t, pool.QueryRow(ctx, `SELECT ceiling FROM governance_profiles WHERE id = $1`, p.ID).Scan)
+	if !jsonEq(got["ceiling_from_a_newer_wardynd"], `"bedrock_sso"`) {
+		t.Errorf("ceiling after an older binary's edit = %s, want ceiling_from_a_newer_wardynd kept", got)
+	}
+	if !jsonEq(got["allow_all_egress"], `true`) {
+		t.Errorf("allow_all_egress = %s, want this edit's value", got["allow_all_egress"])
+	}
+
+	p.Ceiling.AllowAllEgress = false // a declared field this edit clears back to its omitempty zero
+	if _, err := st.UpsertGovernanceProfile(ctx, p); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	got = storedDoc(t, pool.QueryRow(ctx, `SELECT ceiling FROM governance_profiles WHERE id = $1`, p.ID).Scan)
+	if v, ok := got["allow_all_egress"]; ok {
+		t.Errorf("allow_all_egress = %s, want it cleared — a key this binary declares must still clear", v)
+	}
+	if !jsonEq(got["ceiling_from_a_newer_wardynd"], `"bedrock_sso"`) {
+		t.Errorf("ceiling_from_a_newer_wardynd = %s, want it still kept after the clearing edit", got["ceiling_from_a_newer_wardynd"])
+	}
+}
+
 func storedDoc(t *testing.T, scan func(...any) error) map[string]json.RawMessage {
 	t.Helper()
 	var raw []byte
