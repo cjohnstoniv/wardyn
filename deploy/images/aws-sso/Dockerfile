@@ -43,7 +43,7 @@
 # $TARGETARCH below (pure Go, CGO_ENABLED=0) — no QEMU for the compile. Stage 2
 # does need it (apt + the AWS CLI installer run as the target arch; that stage
 # already selects x86_64/aarch64 off its own TARGETARCH).
-FROM --platform=$BUILDPLATFORM golang:1.27@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
 
 WORKDIR /build
 
@@ -78,7 +78,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec   
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-aws-sso    ./cmd/wardyn-aws-sso
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
-FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 
 # Apache-2.0 s4(a) requires a copy of the Licence to accompany the distribution and
 # s4(d) requires the NOTICE contents to be carried. Publishing an image IS
