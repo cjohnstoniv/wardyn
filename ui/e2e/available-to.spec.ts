@@ -223,9 +223,7 @@ test.describe("Available to — a stored policy (#923)", () => {
     expect(await (await run(insider)).text()).not.toContain("isn't available to you");
   });
 
-  // Needs #1015's server filter on GET /policies, which train/17 lacks; the
-  // train runs it once #1015 and this land together. Remove the fixme then.
-  test.fixme("a person outside the list doesn't see it in the list; a person on the list does", async ({ page }) => {
+  test("a person outside the list doesn't see it in the list; a person on the list does", async ({ page }) => {
     const names = async (headers: { Authorization: string }) => {
       const res = await page.request.get("/api/v1/policies", { headers });
       expect(res.status(), await res.text()).toBe(200);
