@@ -546,13 +546,10 @@ type Config struct {
 	// /setup/status as a durability warning. Computed at boot in cmd/wardynd;
 	// true in store mode, where no local key holds anything.
 	AgeKeyDurable bool
-	// SecretStoreExternal describes the organisation's store that every
-	// credential is written to in store mode ("Vault at vault.example:8200"),
-	// or "" in local mode. Set, /setup/status shows store_external instead of
-	// the age-key row.
+	// SecretStoreExternal names the store every credential is written to in store mode ("Vault at
+	// vault.example:8200"), "" in local mode; set, /setup/status shows store_external, not the age-key row.
 	SecretStoreExternal string
-	// PlatformKeySeparate: WARDYN_PLATFORM_KEY_FILE gives the boot keys their own
-	// key in local mode; false there, /setup/status shows platform_shared (§2.13 c).
+	// PlatformKeySeparate: WARDYN_PLATFORM_KEY_FILE gives the boot keys their own local key; false in local mode, /setup/status shows platform_shared (§2.13 c).
 	PlatformKeySeparate bool
 	// LocalLoopback reports whether the HTTP listen address binds only loopback.
 	// It feeds SetupAuth.LocalLoopback so the wizard can explain the local-mode
