@@ -112,6 +112,65 @@ func TestReplaceProxy_FailsClosed(t *testing.T) {
 	}
 }
 
+// TestReplaceProxy_NewProxyExitsAtConfigLoad pins F2: when the REPLACEMENT
+// proxy itself exits at config load, the OLD proxy is already gone by the
+// time startProxy's exit-watch catches this, so the exited NEW container
+// (same deterministic name) must be LEFT IN PLACE rather than removed — it is
+// now the only surviving copy of the run's config and MITM CA — and
+// ProxyConfig must still read it back, or the run becomes unrevivable.
+func TestReplaceProxy_NewProxyExitsAtConfigLoad(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	ctx := context.Background()
+	sb, err := d.CreateSandbox(ctx, testSpec())
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	runID := testSpec().RunID
+	cfg, err := d.ProxyConfig(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("ProxyConfig: %v", err)
+	}
+	old := f.containers[proxyContainerName(runID)]
+
+	// The replacement proxy reuses the OLD proxy's deterministic name, and
+	// ReplaceProxy inspects the OLD proxy once (for its labels) before
+	// removing it — that inspect must not consume the NEW container's
+	// exitAfterInspects budget, so onCreate resets the counter the instant
+	// the NEW container is actually created.
+	f.exitAfterInspects = map[string]int{proxyContainerName(runID): 2}
+	f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, `unknown field "y"`)}
+	f.onCreate = func(name string) {
+		if name == proxyContainerName(runID) {
+			f.mu.Lock()
+			delete(f.inspectCounts, name)
+			f.mu.Unlock()
+		}
+	}
+
+	err = d.ReplaceProxy(ctx, sb.Ref, cfg)
+	if !errors.Is(err, runner.ErrProxyReplaceFailed) {
+		t.Fatalf("ReplaceProxy with a dying new proxy = %v, want ErrProxyReplaceFailed", err)
+	}
+	if !strings.Contains(err.Error(), "proxy exited at config load (exit 1)") {
+		t.Errorf("error = %v; want the named config-load cause", err)
+	}
+	if !old.removed {
+		t.Error("the retiring proxy must already be gone before the new one is attempted")
+	}
+	if p := f.containers[proxyContainerName(runID)]; p == nil || p.removed {
+		t.Fatalf("new (exited) proxy = %+v; want it left in place, not removed", p)
+	}
+	readBack, err := d.ProxyConfig(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("ProxyConfig after the new proxy died: %v", err)
+	}
+	if string(readBack) != string(cfg) {
+		t.Errorf("config read back = %s; want the config the dying proxy was started with", readBack)
+	}
+}
+
 // TestStartSandbox_OnlyBehindARunningProxy is revive after a reboot on Docker
 // (long-holds design rev 4 §4 row 3): a kept agent is started again only once
 // its proxy runs. A stopped proxy has given its address back, and an agent

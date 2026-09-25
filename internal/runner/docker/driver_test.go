@@ -454,12 +454,17 @@ func TestCreateSandbox_RequiresProxyImage(t *testing.T) {
 // sits at STARTING forever. Both the proxy and the per-run network must come
 // back down, and the agent must never have been started on top of a dead
 // proxy.
+//
+// exitAfterInspects=2 (Running for two inspects, THEN exited) pins F1: Docker
+// reports a container Running the instant ContainerStart returns, but a real
+// proxy that refuses its config dies a beat later — a watch that trusted the
+// first Running sighting would return nil here and miss the failure entirely.
 func TestCreateSandbox_ProxyExitsAtConfigLoad(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
 	d := newTestDriver(f)
 	runID := testSpec().RunID
-	f.exitedOnStart = map[string]int{proxyContainerName(runID): 1}
+	f.exitAfterInspects = map[string]int{proxyContainerName(runID): 2}
 	f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, `unknown field "x"`)}
 
 	_, err := d.CreateSandbox(context.Background(), testSpec())
@@ -468,6 +473,12 @@ func TestCreateSandbox_ProxyExitsAtConfigLoad(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "proxy exited at config load (exit 1)") || !strings.Contains(err.Error(), `unknown field "x"`) {
 		t.Errorf("error = %v; want the named cause and log tail", err)
+	}
+	// The log tail must be stdcopy-demuxed clean text, not the raw
+	// multiplexed frame (byte 0x01 is stdout's stream-type header byte, which
+	// never appears in the plain-text log line itself).
+	if strings.ContainsRune(err.Error(), '\x01') {
+		t.Errorf("error = %q; want the stdcopy frame header stripped from the log tail", err.Error())
 	}
 	if p := f.containers[proxyContainerName(runID)]; p != nil && !p.removed {
 		t.Error("the dead proxy must be removed")

@@ -27,11 +27,24 @@ import (
 // see whether a just-started proxy stays up, versus exiting right back out
 // because it refused its own rendered config (#894/#984). Kept short: this
 // sits on the create-latency path for every run, and a HEALTHY proxy reaches
-// Running well inside it — the watch exists to catch the FAST, config-load
-// failure, not to babysit a slow one.
+// a STABLE Running well inside it — the watch exists to catch the FAST,
+// config-load failure, not to babysit a slow one.
+//
+// proxyStartSettle is how long Running must have HELD before the watch trusts
+// it. Docker flips container.State.Running to true the INSTANT
+// ContainerStart returns — well before the sidecar's own process has read and
+// decoded its config. Against a real daemon, a real wardyn-proxy given an
+// unknown config key was observed dying 47-108ms after that first Running
+// sighting, and a watch that returned on the FIRST Running observation (no
+// settle check) caught that failure only ~2/10 times. Any exit inside the
+// settle window — a bad config, an OOM kill, anything — is reported with the
+// SAME fixed cause string below: from the driver's side, a proxy that never
+// stayed up long enough to matter IS a config-load failure, whatever actually
+// killed it.
 const (
 	proxyStartWatch         = 3 * time.Second
 	proxyStartWatchInterval = 200 * time.Millisecond
+	proxyStartSettle        = 1 * time.Second
 )
 
 // proxyConfigEnv is the proxy sidecar's config variable: the one place its
@@ -125,22 +138,29 @@ func (d *Driver) startProxy(ctx context.Context, runID uuid.UUID, labels map[str
 	// generic "proxy has no IP…" — never the proxy's own, named cause — and
 	// k8s already surfaces that cause (sandbox.go:163-166), so Docker was the
 	// odd substrate out.
+	//
+	// On a watch failure the container is deliberately NOT removed here (F2):
+	// on the CreateSandbox path the caller removes it after also rolling back
+	// the per-run network (driver_network.go); on the ReplaceProxy path the
+	// exited container is the only copy left of the run's rendered config and
+	// MITM CA (the OLD proxy is already gone by the time startProxy runs), and
+	// removing it here would make that run unrevivable forever.
 	if err := d.watchProxyExit(ctx, resp.ID); err != nil {
-		remove()
-		return "", err
+		return resp.ID, err
 	}
 	return resp.ID, nil
 }
 
 // watchProxyExit polls id for up to proxyStartWatch, returning a named error
 // the moment it observes the container exited with a non-zero code (it
-// refused its config at start) and nil the moment it observes Running (the
-// common case) or once the window elapses without either — a proxy still
-// mid-start at that point is left to the caller's own next step (the IP
-// lookup, or a subsequent ProxyConfig read) rather than this watch inventing
-// a second timeout.
+// refused its config at start) and nil once it has observed Running held for
+// at least proxyStartSettle (the common case) or once the window elapses
+// without either — a proxy still mid-start at that point is left to the
+// caller's own next step (the IP lookup, or a subsequent ProxyConfig read)
+// rather than this watch inventing a second timeout.
 func (d *Driver) watchProxyExit(ctx context.Context, id string) error {
-	deadline := time.Now().Add(proxyStartWatch)
+	watchStart := time.Now()
+	deadline := watchStart.Add(proxyStartWatch)
 	for {
 		res, err := d.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 		if err != nil {
@@ -149,11 +169,16 @@ func (d *Driver) watchProxyExit(ctx context.Context, id string) error {
 		}
 		st := res.Container.State
 		if st != nil {
-			if st.Running {
-				return nil
-			}
+			// Checked BEFORE the Running/settle branch, and regardless of
+			// Running: a container that has already exited is never also
+			// reported Running, so there is no ordering ambiguity — but
+			// checking the terminal state first keeps that true even if a
+			// future daemon/fake ever reported both transiently.
 			if st.ExitCode != 0 {
 				return fmt.Errorf("docker: proxy exited at config load (exit %d): %s", st.ExitCode, d.proxyExitLogTail(ctx, id))
+			}
+			if st.Running && time.Since(proxyRunningSince(st, watchStart)) >= proxyStartSettle {
+				return nil
 			}
 		}
 		if time.Now().After(deadline) {
@@ -165,6 +190,20 @@ func (d *Driver) watchProxyExit(ctx context.Context, id string) error {
 		case <-time.After(proxyStartWatchInterval):
 		}
 	}
+}
+
+// proxyRunningSince resolves when the proxy last reported starting, so
+// watchProxyExit can require Running to have HELD for proxyStartSettle rather
+// than trusting the first sighting (F1). st.StartedAt is Docker's RFC3339Nano
+// timestamp; if it is missing or unparseable, fallback (the watch's own start
+// time) stands in — the only effect is a possibly longer wait before
+// returning nil, never a shorter one that would reopen F1.
+func proxyRunningSince(st *container.State, fallback time.Time) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, st.StartedAt)
+	if err != nil {
+		return fallback
+	}
+	return t
 }
 
 // proxyExitLogTail reads the last ~20 lines the proxy wrote before dying, so
@@ -223,6 +262,14 @@ func (d *Driver) ProxyConfig(ctx context.Context, ref string) ([]byte, error) {
 // (immutable, and still there after a stopped proxy gave its address back),
 // and re-joins the control-plane-facing network as at create. Every check
 // that can fail without touching the old sidecar runs before the remove.
+//
+// If the NEW proxy then exits at config load, startProxy's watch reports that
+// (wrapped in ErrProxyReplaceFailed below) WITHOUT removing the exited
+// container (F2): by this point the OLD proxy is already gone, so the exited
+// new one is the only copy left of the run's rendered config and MITM CA —
+// removing it too would make the run unrevivable forever. ProxyConfig can
+// still read a stopped-or-exited proxy's env, so a subsequent revive attempt
+// (with a corrected config) has something to read back.
 func (d *Driver) ReplaceProxy(ctx context.Context, ref string, cfgJSON []byte) error {
 	id, err := d.proxyRunID(ctx, ref)
 	if err != nil {

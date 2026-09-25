@@ -182,13 +182,20 @@ type fakeDocker struct {
 	// Zero (readable) unless a test overrides it.
 	probeExitCode int64
 
-	// exitedOnStart, keyed by container name, makes ContainerStart put that
-	// container straight into an exited state with the given code instead of
-	// Running — the shape of a proxy sidecar that refuses its own config at
-	// boot (#894/#984). logs pairs the same names to what ContainerLogs
-	// answers, so startProxy's exit-watch log tail is exercisable.
-	exitedOnStart map[string]int
-	logs          map[string][]byte
+	// exitAfterInspects, keyed by container name, makes ContainerInspect report
+	// Running for that many calls and then flip the container to exited(1) on
+	// every call after — the shape of a real wardyn-proxy that Docker already
+	// reports Running (the daemon flips State.Running the INSTANT
+	// ContainerStart returns) but which dies a beat later refusing its own
+	// config: against a real daemon, a watch that trusted the FIRST Running
+	// sighting caught that failure only ~2/10 times (F1). 0 means "already
+	// exited by the first inspect". inspectCounts is this field's own
+	// per-container call counter. logs pairs the same container names to what
+	// ContainerLogs answers, so startProxy's exit-watch log tail is
+	// exercisable.
+	exitAfterInspects map[string]int
+	inspectCounts     map[string]int
+	logs              map[string][]byte
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -438,16 +445,26 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 	if c == nil {
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
-	if code, ok := f.exitedOnStart[id]; ok {
-		c.state = &container.State{Status: "exited", ExitCode: code}
-	} else if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
+	if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
 		// No real command interpreter here to run the probe's `test -r/-x`
 		// against a bind mount — model it as already exited with the
 		// scripted code, the same "immediate" shape a real one-shot process
 		// this fast would leave ContainerWait to observe.
 		c.state = &container.State{Status: "exited", ExitCode: int(f.probeExitCode)}
 	} else {
-		c.state = &container.State{Status: "running", Running: true}
+		// Backdated StartedAt: a REAL container's StartedAt is the instant
+		// ContainerStart returns, and watchProxyExit (driver_proxy_revive.go)
+		// requires Running to have HELD for proxyStartSettle before trusting
+		// it. Backdating here keeps every OTHER test's CreateSandbox fast. A
+		// container scripted via exitAfterInspects gets a FRESH StartedAt
+		// instead: it is modelling the real Running-then-dies race (F1), so
+		// its settle timer must actually run across the scripted Running
+		// observations rather than being satisfied by the first one.
+		startedAt := time.Now().Add(-time.Hour)
+		if _, scripted := f.exitAfterInspects[id]; scripted {
+			startedAt = time.Now()
+		}
+		c.state = &container.State{Status: "running", Running: true, StartedAt: startedAt.Format(time.RFC3339Nano)}
 	}
 	f.startedNames = append(f.startedNames, id)
 	return client.ContainerStartResult{}, nil
@@ -459,6 +476,16 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 	c := f.containers[id]
 	if c == nil || c.removed {
 		return client.ContainerInspectResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	if n, ok := f.exitAfterInspects[id]; ok {
+		if f.inspectCounts == nil {
+			f.inspectCounts = map[string]int{}
+		}
+		count := f.inspectCounts[id]
+		f.inspectCounts[id] = count + 1
+		if count >= n {
+			c.state = &container.State{Status: "exited", ExitCode: 1}
+		}
 	}
 	// Synthesize NetworkSettings from the container's known networks (primary
 	// NetworkMode + explicit endpoints + NetworkConnect'd nets) with a

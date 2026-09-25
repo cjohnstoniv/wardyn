@@ -107,6 +107,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	proxyID, err := d.startProxy(ctx, spec.RunID, wardynLabels(spec.RunID, componentProxy, spec.Labels),
 		proxyEnvSlice, netip.Addr{})
 	if err != nil {
+		// startProxy's own exit-watch failure (F2, driver_proxy_revive.go)
+		// deliberately leaves the container behind — on ReplaceProxy's revive
+		// path it is the only copy left of the run's config; here, on CREATE,
+		// there is no earlier proxy to preserve, so THIS caller removes it
+		// before rolling back the rest (the per-run network, via fail).
+		if proxyID != "" {
+			_, _ = d.cli.ContainerRemove(context.Background(), proxyID, client.ContainerRemoveOptions{Force: true})
+		}
 		return fail(err)
 	}
 	rollback = append(rollback, func() {
