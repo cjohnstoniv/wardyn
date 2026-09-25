@@ -167,7 +167,7 @@ if [ -n "$drift" ]; then
   echo "ERROR: third-party notices are out of date. Run: make notices ARGS=fix"
   echo "$drift"
   git diff --stat -- "$NOTICES" "$TEXTS"
-  git diff -U0 -- "$NOTICES" | head -n 200
+  git diff -U0 -- "$NOTICES" | head -n 200 || true
   if [ -s "$tmp/go-licenses.err" ]; then
     echo "go-licenses stderr:"
     head -n 100 "$tmp/go-licenses.err"
