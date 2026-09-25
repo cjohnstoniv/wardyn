@@ -101,11 +101,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   revive is also refused when the model credential its proxy would inject has been erased or its
   integration disabled, and the revived proxy takes the upstream proxy, trusted CA and model
   gateways from the current configuration rather than its old rendered copy. When anyone but the
-  owner asks, the owner is known by sub alone: any deny row covering the value refuses, and only
-  `all` rows or allow rows for the owner's sub count, not the owner's admin role. So under an
-  enforced kind, an admin-owned run can be revived, restarted or extended only by its owner, or
-  with an allow row for the owner's sub. Each refusal is audited `denied` with the owner as
-  `subject` (#679).
+  owner asks, the owner is known by sub and by the user type stamped on the run: any deny row
+  covering the value refuses, and only `all` rows or allow rows for the owner's sub or stamped type
+  count, not the owner's admin role. A stamp naming a type deleted since refuses; a run with no
+  stamp counts no type rows (#1019). So under an enforced kind, an admin-owned run can be revived,
+  restarted or extended only by its owner, or with an allow row for the owner's sub or type. Each
+  refusal is audited `denied` with the owner as `subject` (#679).
 - **The idle reaper is now hold-aware: it no longer stops a run out from under an open
   push/egress/ADO/credential/tool-call request that is still within its wait.** The idle-stop
   CAS (`UpdateRunStateIfIdle`) now also checks for a PENDING approval whose own
