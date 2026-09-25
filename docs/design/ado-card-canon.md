@@ -34,7 +34,8 @@ other Settings card here follows).
 **Decision: "Connect Azure DevOps".** `ADO.REQ_CONSENT_CTA` changes from "Allow and continue" to
 "Connect Azure DevOps" — the same label the destination card's own CTA (`ADO.CONNECT_ADO`) already
 uses. Both consent-chain doors (the Entra-consent card and the mid-run sign-in card) now link to
-`/settings#azure-devops`, the Settings card's own anchor, instead of a bare `/settings`.
+`/settings#azure-devops`, the Settings card's own anchor, instead of a bare `/settings`. (M-1b, #633:
+that anchor now lives at `/account#azure-devops`; `/settings` is deleted.)
 
 | Key | String (unchanged, reused for the match) |
 |---|---|

@@ -171,7 +171,7 @@ test.describe("Run cockpit terminal", () => {
     // used to poll the SCREEN for were removed from the product by that PR,
     // three hours before this spec was even written — a stale assertion, not
     // a product regression.
-    latestWs!.close({ code: 1006, reason: "abnormal" });
+    await latestWs!.close({ code: 1006, reason: "abnormal" });
 
     await expect(pane.getByText(TERMINAL.RECONNECTING_LINE(1, 4))).toBeVisible();
     await expect
@@ -186,6 +186,8 @@ test.describe("Run cockpit terminal", () => {
     await stubInteractiveRun(page, runId);
     await stubAttachTicket(page, runId);
     await stubTakeover(page, runId);
+    // The no-re-dial window below is a page.clock jump, not a real sleep.
+    await page.clock.install();
 
     const { opens } = await stubAttachSocket(page, (n, ws) => {
       if (n === 1) ws.send(attachModeFrame(true, { principal: "bob@e2e.example" }));
@@ -211,8 +213,12 @@ test.describe("Run cockpit terminal", () => {
 
     // The bound the issue names: "does not re-dial" means exactly one
     // further open across a whole window, never merely "no crash" — assert
-    // no THIRD socket opens once the reclaim has settled.
-    await page.waitForTimeout(3000);
+    // no THIRD socket opens once the reclaim has settled. The window runs past
+    // RECONNECT_MAX_DELAY_MS (attach-terminal.tsx, 5s), so any backoff re-dial
+    // has fired; the driving check adds a round trip so a re-dial's socket
+    // reaches opens() before it is read.
+    await page.clock.fastForward("00:06");
+    await expect(pane.getByText(RUN_COCKPIT.driving)).toBeVisible();
     expect(opens()).toBe(2);
   });
 

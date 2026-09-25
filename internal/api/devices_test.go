@@ -82,6 +82,33 @@ func (f *fakeDeviceStore) ConsumeEnrolmentToken(_ context.Context, token string,
 	return t, true, nil
 }
 
+func (f *fakeDeviceStore) ListEnrolmentTokens(_ context.Context, now time.Time) ([]types.DeviceEnrolmentToken, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []types.DeviceEnrolmentToken
+	for _, t := range f.tokens {
+		if t.ConsumedAt == nil && t.ExpiresAt.After(now) {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// RevokeEnrolmentToken is the in-memory twin of the PG store's conditional
+// UPDATE: only a still-redeemable token is revoked.
+func (f *fakeDeviceStore) RevokeEnrolmentToken(_ context.Context, id uuid.UUID, now time.Time) (types.DeviceEnrolmentToken, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for raw, t := range f.tokens {
+		if t.ID == id && t.ConsumedAt == nil && t.ExpiresAt.After(now) {
+			t.ConsumedAt = &now
+			f.tokens[raw] = t
+			return t, nil
+		}
+	}
+	return types.DeviceEnrolmentToken{}, store.ErrNotFound
+}
+
 func (f *fakeDeviceStore) CreateDevice(_ context.Context, d types.Device, raw string) (types.Device, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -308,7 +335,7 @@ func auditReason(t *testing.T, ev types.AuditEvent) string {
 	return reason
 }
 
-// ─── the no-run invariant: a device token authenticates a daemon, never a person ───
+// the no-run invariant: a device token authenticates a daemon, never a person
 
 // TestDevices_DeviceTokenIs401OnMe: the device credential must never reach the
 // human routes — humanOrAdminAuth republishes a HUMAN through withHumanIdentity,
@@ -481,7 +508,7 @@ func TestDevices_EnrolmentTokenDoubleConsumeFails(t *testing.T) {
 	})
 }
 
-// ─── the rest of the contract ────────────────────────────────────────────────
+// the rest of the contract
 
 // TestDevices_PathIDMustMatchTheTokensDevice: a live token on any id but its
 // own is 404 — never 403, which would confirm the other device exists.
@@ -743,6 +770,41 @@ func TestDevices_AdminRoutes(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &listed)
 	if len(listed) != 1 || listed[0].ID != id || listed[0].Name != "bobs-laptop" || listed[0].EnrolledBy != adminTokenPrincipal {
 		t.Fatalf("inventory = %+v, want the one enrolled device with its minter", listed)
+	}
+}
+
+// TestDevices_EnrolmentTokenListAndRevoke pins the cancel path: a pending
+// token is listed without the token, a revoke is audited once and makes the
+// token unredeemable, and a second revoke is a 404 with no second row.
+func TestDevices_EnrolmentTokenListAndRevoke(t *testing.T) {
+	srv, _, rec := newDeviceTestServer(t, false)
+	raw := mintEnrolmentToken(t, srv, "alices-laptop")
+	w := do(t, srv, http.MethodGet, "/api/v1/admin/devices/enrolment-tokens", adminToken, "")
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), raw) {
+		t.Fatalf("list = %d %s, want 200 without the token", w.Code, w.Body.String())
+	}
+	var listed []types.DeviceEnrolmentToken
+	_ = json.Unmarshal(w.Body.Bytes(), &listed)
+	if len(listed) != 1 || listed[0].DeviceName != "alices-laptop" || listed[0].MintedBy != adminTokenPrincipal {
+		t.Fatalf("listed = %+v, want the one pending token with its minter", listed)
+	}
+	path := "/api/v1/admin/devices/enrolment-tokens/" + listed[0].ID.String()
+	if w := do(t, srv, http.MethodDelete, path, adminToken, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("revoke = %d %s", w.Code, w.Body.String())
+	}
+	if w := doPeer(t, srv, http.MethodPost, "/api/v1/devices/enrol", "", `{"token":"`+raw+`"}`, "203.0.113.10:4000"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("enrol with a revoked token = %d, want 401", w.Code)
+	}
+	if w := do(t, srv, http.MethodDelete, path, adminToken, ""); w.Code != http.StatusNotFound {
+		t.Fatalf("second revoke = %d, want 404", w.Code)
+	}
+	revokes := auditRows(rec, "device.enrolment_token.revoke", "success")
+	if len(revokes) != 1 || revokes[0].Target != listed[0].ID.String() || strings.Contains(string(revokes[0].Data), raw) {
+		t.Fatalf("device.enrolment_token.revoke rows = %+v, want one naming the token id and never the token", revokes)
+	}
+	w = do(t, srv, http.MethodGet, "/api/v1/admin/devices/enrolment-tokens", adminToken, "")
+	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
+		t.Fatalf("list after revoke = %d %s, want []", w.Code, w.Body.String())
 	}
 }
 

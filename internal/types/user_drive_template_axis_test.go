@@ -80,7 +80,7 @@ func TestUserDriveTemplateRulesKeyOnWhoNamesTheObject(t *testing.T) {
 		}
 	}
 
-	// AND THE DEFAULT: an unstated template on a static PVC now lands on `hash`
+	// And the default: an unstated template on a static PVC now lands on `hash`
 	// and is accepted, which is the recommended posture — before, the default
 	// was refused and the admin had to name an identity template to get a row.
 	d := UserDrive{Name: "corp-nas", Backend: DriveBackendK8sPVCStatic, Reclaim: DriveReclaimRetain}

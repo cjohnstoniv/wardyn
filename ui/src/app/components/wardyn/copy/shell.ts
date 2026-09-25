@@ -39,8 +39,17 @@ export const SHELL = {
 // interrupts cannot prevent the loss it exists to prevent").
 export const UNSAVED_GUARD = {
   TITLE: "Leave without saving?",
-  BODY: "This form has changes that aren't saved. Leaving now discards them.",
+  // #460 (Q460): reworded from #217's original sentence to the frozen §460
+  // canon (docs/design/unsaved-guard-canon.md).
+  BODY: "Your changes on this page haven't been saved. Leaving loses them.",
   STAY: "Keep editing",
   LEAVE: "Discard changes",
+  // #460 — lives here, not in workspace-providers-copy.ts, on purpose:
+  // this module is on the console's EAGER entry path (app-shell.tsx ->
+  // use-unsaved-guard.tsx), and workspace-providers-copy.ts is a large,
+  // route-split file (bundle-split.test.ts's entry-chunk budget). Every
+  // per-editor dirty chip reuses THIS constant rather than each carrying its
+  // own copy — providers-screen.tsx's PROVIDERS_DRAFT.UNSAVED_MARKER included.
+  DIRTY_CHIP: "Unsaved changes",
 } as const;
 

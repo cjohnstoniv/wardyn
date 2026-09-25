@@ -15,7 +15,8 @@ import (
 
 // deviceCmd is the organisation admin's surface for hybrid enrolment: mint the
 // single-use token a managed laptop's first boot trades for its device
-// credential, see which laptops are enrolled, and cut one off. See
+// credential, see and cancel the tokens not yet redeemed, see which laptops
+// are enrolled, and cut one off. See
 // internal/api/devices.go for the server side.
 func deviceCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
@@ -97,6 +98,50 @@ func deviceCmd(client clientFn) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(enrolToken, list, revoke)
+	var tokensJSON bool
+	tokenList := &cobra.Command{
+		Use:   "enrol-token-list",
+		Short: "List enrolment tokens not yet redeemed, revoked or expired",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			tokens, err := client().ListDeviceEnrolmentTokens(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if tokensJSON {
+				if tokens == nil {
+					tokens = []sdk.DeviceEnrolmentToken{}
+				}
+				return emitJSON(tokens)
+			}
+			tw := newTab()
+			fmt.Fprintln(tw, "ID\tDEVICE NAME\tMINTED BY\tCREATED\tEXPIRES")
+			for _, t := range tokens {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", t.ID, t.DeviceName, t.MintedBy,
+					t.CreatedAt.Format(time.RFC3339), t.ExpiresAt.Format(time.RFC3339))
+			}
+			return tw.Flush()
+		},
+	}
+	tokenList.Flags().BoolVar(&tokensJSON, "json", false, "emit raw JSON")
+
+	tokenRevoke := &cobra.Command{
+		Use:   "enrol-token-revoke <id>",
+		Short: "Revoke an enrolment token that has not been redeemed yet",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := uuid.Parse(args[0])
+			if err != nil {
+				return fmt.Errorf("enrolment token id: %w", err)
+			}
+			if err := client().RevokeDeviceEnrolmentToken(cmd.Context(), id); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "revoked enrolment token %s\n", id)
+			return nil
+		},
+	}
+
+	cmd.AddCommand(enrolToken, tokenList, tokenRevoke, list, revoke)
 	return subcommandGroup(cmd)
 }
