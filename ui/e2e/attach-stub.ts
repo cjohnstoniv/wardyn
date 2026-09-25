@@ -46,13 +46,23 @@ export async function findRunningFixture(page: Page): Promise<{ id: string; crea
  *  Page- or context-scoped, so the two-tabs case's second page is covered by
  *  registering once on the context. */
 export async function stubInteractiveRun(target: Page | BrowserContext, runId: string): Promise<void> {
+  // Cache-and-serve (agents.spec.ts's precedent), not route.fetch() per match:
+  // the run page POLLS this read, and a page.clock.fastForward fires that poll
+  // just before a case ends — the context then closes (disposing the fetched
+  // body) under a handler still mid route.fetch(), and "Response has been
+  // disposed" fails the case. Only the first read, which every case waits on
+  // before it asserts anything, goes to the network.
+  let cached: Record<string, unknown> | null = null;
   await target.route(`**/api/v1/runs/${runId}`, async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
-    const response = await route.fetch();
-    const json = await response.json();
-    json.interactive = true;
-    json.state = "RUNNING";
-    await route.fulfill({ response, json });
+    if (!cached) {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.interactive = true;
+      json.state = "RUNNING";
+      cached = json;
+    }
+    await route.fulfill({ json: cached! });
   });
 }
 
