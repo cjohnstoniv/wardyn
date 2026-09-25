@@ -87,6 +87,7 @@ import { RUN_COCKPIT, SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { sessionOptionLabel } from "./run-detail/recording-tab-copy";
 import { toast } from "sonner";
+import { aheadByHours } from "../../lib/test-clock";
 
 beforeEach(() => {
   // review R-07: clears toast.warning/error/success's call history too — the
@@ -290,7 +291,7 @@ describe("RunDetailScreen — a stale recording fetch never overwrites a later s
 describe("RunDetailScreen — the recording tab's session-picker copy", () => {
   const session = {
     id: "e1",
-    time: "2026-01-01T00:04:00Z",
+    time: aheadByHours(-1),
     actor_type: "human",
     actor: "alice",
     action: "session.recording",

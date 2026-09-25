@@ -91,6 +91,9 @@ describe("modelAccessDoor — the shared-dead state is audience-aware (Codex #7)
   });
 
   it("an admin's shared-row `expiring` is actionable (their own repair path)", () => {
+    // passthrough, never compared to the clock — modelAccessDoor forwards the
+    // server's deadline/action verbatim (model-access.ts:138), it never grades
+    // them against Date.now().
     const status = statusFor(
       { state: "expiring", action: "Sign in again before 2026-09-19T14:03:22Z", deadline: "2026-09-19T14:03:22Z" },
       [sharedRow()],
@@ -137,6 +140,8 @@ describe("modelAccessDoor — the states with nothing to say", () => {
 
 describe("modelAccessActionLine — the deadline is localised, never a raw UTC stamp", () => {
   it("re-composes `expiring` through the frozen template with the viewer's own clock", () => {
+    // passthrough, never compared to the clock — only re-templated via
+    // absoluteTime, which formats absolutely regardless of past/future.
     const deadline = "2026-09-19T14:03:22Z";
     const line = modelAccessActionLine({
       state: "expiring",
@@ -148,6 +153,7 @@ describe("modelAccessActionLine — the deadline is localised, never a raw UTC s
   });
 
   it("falls back to the server's sentence verbatim with no deadline (an older daemon)", () => {
+    // passthrough, never compared to the clock — rendered verbatim.
     const action = "Sign in again before 2026-09-19T14:03:22Z";
     expect(modelAccessActionLine({ state: "expiring", action })).toBe(action);
   });

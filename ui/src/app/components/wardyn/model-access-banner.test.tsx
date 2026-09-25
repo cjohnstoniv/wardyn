@@ -163,6 +163,8 @@ describe("the per-person states", () => {
   });
 
   it("expiring against a daemon that sends no deadline falls back to the server's sentence", () => {
+    // passthrough, never compared to the clock — an older daemon's opaque
+    // action sentence, rendered verbatim with no deadline field to parse.
     const action = "Sign in again before 2026-09-19T14:03:22Z";
     renderStrip({ access: { state: "expiring", action } });
     expect(screen.getByText(action)).toBeInTheDocument();

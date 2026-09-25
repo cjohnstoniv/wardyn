@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { audit, demoAuditRows, egressFromAudit, exitCodeFromAudit, runEndingFromAudit } from "./audit";
 import type { AuditEvent } from "../types";
+import { aheadByHours } from "../test-clock";
 
 // egressFromAudit is the ONLY source of the run-detail egress table — the backend
 // has no /egress endpoint, so a projection bug here silently blanks or mislabels
@@ -14,7 +15,7 @@ import type { AuditEvent } from "../types";
 function ev(partial: Partial<AuditEvent>): AuditEvent {
   return {
     id: "e1",
-    time: "2026-07-17T00:00:00Z",
+    time: aheadByHours(-1),
     actor_type: "agent",
     actor: "run",
     action: "egress.deny",

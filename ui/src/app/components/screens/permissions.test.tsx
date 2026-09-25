@@ -39,6 +39,7 @@ import { PermissionsScreen } from "./permissions";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { HttpError } from "../../lib/api/core";
+import { aheadByHours } from "../../lib/test-clock";
 
 function grant(over: Partial<CapabilityGrant> = {}): CapabilityGrant {
   return {
@@ -48,7 +49,7 @@ function grant(over: Partial<CapabilityGrant> = {}): CapabilityGrant {
     capability: "egress_host",
     value: "*.github.com",
     effect: "allow",
-    created_at: "2026-08-01T00:00:00Z",
+    created_at: aheadByHours(-1),
     created_by: "admin",
     ...over,
   };

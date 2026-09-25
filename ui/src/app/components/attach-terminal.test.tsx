@@ -130,6 +130,7 @@ import { OperatorProvider } from "./wardyn/operator-context";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { runs } from "../lib/api/runs";
 import { HttpError } from "../lib/api/core";
+import { aheadByHours } from "../lib/test-clock";
 
 // The attach-mode control frame the daemon sends as a TEXT frame on EVERY
 // connect (internal/api/attach_holder.go), read_only=false included.
@@ -140,7 +141,7 @@ function attachModeFrame(readOnly: boolean, principal: string) {
     holder: {
       held: true,
       principal,
-      since: "2026-08-16T12:00:00Z",
+      since: aheadByHours(-1),
       cols: 132,
       rows: 50,
       source: "web",

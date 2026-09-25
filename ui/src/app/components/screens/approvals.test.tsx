@@ -10,6 +10,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { REAUTH_ROW, REAUTH_TITLE } from "../wardyn/model-access-copy";
+import { aheadByHours } from "../../lib/test-clock";
 
 // HIGH fix (error handling): approve/deny were unguarded awaits. A rejected
 // deny() must NOT leave the dialog's confirm button spinning forever, must
@@ -426,7 +427,7 @@ describe("ApprovalsScreen — egress host not granted (member)", () => {
           capability: "egress_host",
           value: "*.example.com",
           effect: "allow",
-          created_at: "2026-08-01T00:00:00Z",
+          created_at: aheadByHours(-1),
         },
       ],
     };

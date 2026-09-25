@@ -24,6 +24,7 @@ import {
   policyNameFor,
 } from "./session-helpers";
 import type { RecordResult, Workspace } from "../../../lib/types";
+import { aheadByHours } from "../../../lib/test-clock";
 
 const ws = (over: Partial<Workspace> = {}): Workspace => ({
   id: "w",
@@ -41,9 +42,9 @@ describe("record helpers — read the server-authored record fields", () => {
     expect(recordSessions(ws())).toEqual([]);
     const w = ws({
       record_results: {
-        "agent-loop": { run_id: "r2", label: "agent loop", mode: "interactive", status: "recorded", started_at: "2026-01-02" },
-        "build-test": { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded", started_at: "2026-01-01" },
-        "no-label": { run_id: "r3", mode: "interactive", status: "recorded", started_at: "2026-01-03" },
+        "agent-loop": { run_id: "r2", label: "agent loop", mode: "interactive", status: "recorded", started_at: aheadByHours(-2) },
+        "build-test": { run_id: "r1", label: "build & test", mode: "interactive", status: "recorded", started_at: aheadByHours(-3) },
+        "no-label": { run_id: "r3", mode: "interactive", status: "recorded", started_at: aheadByHours(-1) },
         // A confined replay result must never show up as its own "session".
         "verify:build-test": { run_id: "r4", label: "build & test", mode: "interactive", confined: true, status: "recorded" },
       },
@@ -315,21 +316,23 @@ describe("lastCleanReplay — the workspace-wide roll-up", () => {
   });
 
   it("picks the LATEST clean confined entry by finished_at, across different sessions", () => {
+    const earlier = aheadByHours(-2);
+    const latest = aheadByHours(-1);
     const w = ws({
       record_results: {
         a: { run_id: "ra", mode: "interactive", status: "recorded" },
         "verify:a": {
           run_id: "ra2", label: "build & test", mode: "interactive", confined: true, status: "recorded",
-          clean: true, caught: 0, finished_at: "2026-01-01T00:00:00Z",
+          clean: true, caught: 0, finished_at: earlier,
         },
         b: { run_id: "rb", mode: "interactive", status: "recorded" },
         "verify:b": {
           run_id: "rb2", label: "agent loop", mode: "interactive", confined: true, status: "recorded",
-          clean: true, caught: 0, finished_at: "2026-01-03T00:00:00Z", // latest
+          clean: true, caught: 0, finished_at: latest, // latest
         },
       },
     });
-    expect(lastCleanReplay(w)).toEqual({ label: "agent loop", finishedAt: "2026-01-03T00:00:00Z" });
+    expect(lastCleanReplay(w)).toEqual({ label: "agent loop", finishedAt: latest });
   });
 
   it("excludes a non-confined (open) entry, a not-clean entry, and a still-in-flight entry", () => {
@@ -400,8 +403,8 @@ describe("sessionStage — record open → recorded → replaying confined → r
     // the ORIGINAL (t1) capture.
     const w = ws({
       record_results: {
-        s: { run_id: "r3", mode: "interactive", status: "recorded", started_at: "2026-01-02T00:00:00Z" },
-        "verify:s": { run_id: "r2", mode: "interactive", confined: true, status: "recorded", started_at: "2026-01-01T01:00:00Z" },
+        s: { run_id: "r3", mode: "interactive", status: "recorded", started_at: aheadByHours(-1) },
+        "verify:s": { run_id: "r2", mode: "interactive", confined: true, status: "recorded", started_at: aheadByHours(-2) },
       },
     });
     // NOT the stale "replayed" green — the fresh capture reads as needing a replay.
@@ -411,8 +414,8 @@ describe("sessionStage — record open → recorded → replaying confined → r
   it("re-record after replay, re-record FAILS: the failed fresh open still outranks the stale confined verdict", () => {
     const w = ws({
       record_results: {
-        s: { run_id: "r3", mode: "interactive", status: "record_failed", started_at: "2026-01-02T00:00:00Z" },
-        "verify:s": { run_id: "r2", mode: "interactive", confined: true, status: "recorded", started_at: "2026-01-01T01:00:00Z" },
+        s: { run_id: "r3", mode: "interactive", status: "record_failed", started_at: aheadByHours(-1) },
+        "verify:s": { run_id: "r2", mode: "interactive", confined: true, status: "recorded", started_at: aheadByHours(-2) },
       },
     });
     expect(sessionStage(w, "s")).toBe("record_failed");
@@ -423,8 +426,8 @@ describe("sessionStage — record open → recorded → replaying confined → r
     // the confined entry now postdates the current open capture, so it's current.
     const w = ws({
       record_results: {
-        s: { run_id: "r3", mode: "interactive", status: "recorded", started_at: "2026-01-02T00:00:00Z" },
-        "verify:s": { run_id: "r4", mode: "interactive", confined: true, status: "recorded", started_at: "2026-01-02T01:00:00Z" },
+        s: { run_id: "r3", mode: "interactive", status: "recorded", started_at: aheadByHours(-2) },
+        "verify:s": { run_id: "r4", mode: "interactive", confined: true, status: "recorded", started_at: aheadByHours(-1) },
       },
     });
     expect(sessionStage(w, "s")).toBe("replayed");
