@@ -126,13 +126,11 @@ export function decisionArgs(scope: ApprovalScope, until?: string): [] | [Decisi
 
 const HOLD_TIMEOUT_MS = 30_000;
 
-// #160 — the ceiling for the two UNCONDITIONAL arms below (tool_call,
-// credential_reauth), a different arm from HOLD_TIMEOUT_MS above: that one
-// bounds an egress wait_for_review connection that fails closed in seconds.
-// A tool call a human answers can legitimately sit for a long time, so a
-// short ceiling would hide a genuine hold — which matters more here than
-// forgiving a truly abandoned one. 60 minutes, per the issue's own call.
-const STALE_HOLD_CEILING_MS = 60 * 60 * 1000;
+// The proxy's own ceiling for an Azure DevOps capability escalation
+// (internal/egress/proxy/credhold.go's maxCapabilityHoldTimeout) — exported
+// so ado-capability-card.tsx's stillHeld() and isHeld() below read ONE
+// number instead of two independently-maintained 240_000s that could drift.
+export const ADO_HOLD_WINDOW_MS = 240_000;
 
 // True once `requestedAt` is old enough to cross `ceilingMs` — and only once:
 // an unparseable timestamp fails TOWARD showing the hold (not stale), the same
@@ -147,13 +145,19 @@ function isStale(requestedAt: string, ceilingMs: number): boolean {
 //
 //  - tool_call — wardyn-toolgate blocks the agent's tool call on the PENDING
 //    row itself and polls until it is decided (cmd/wardyn-toolgate/main.go's
-//    -deadline is a 24h ceiling for a control plane that stopped answering,
-//    not a hold timeout), and the scope it raises is {tool,cmd,env} with no
+//    -deadline mirrors the operator's own approval ceiling and normally denies
+//    the call BEFORE the row's own server-side expiry sweeps it EXPIRED), and
+//    the scope it raises is {tool,cmd,env} with no
 //    mode at all (internal/egress/proxy/local_routes.go). PENDING alone IS the
 //    hold here, so nothing client-side bounds it the way HOLD_TIMEOUT_MS
-//    bounds the egress case — the row's own server-side expiry ends it. It
-//    IS bounded by STALE_HOLD_CEILING_MS below, a much longer window: a row
-//    a human hasn't answered in an hour reads as abandoned, not live.
+//    bounds the egress case — the row's own server-side expiry ends it, and
+//    only that ends it: #509 — a client-side stale-hold ceiling (60 minutes,
+//    #160) was declaring a row dead while the server kept the agent parked on
+//    it for up to WARDYN_APPROVAL_EXPIRY_AFTER (24h default,
+//    cmd/wardynd/boot_flags.go), which a returning operator's own inbox never
+//    agreed with. A PENDING row is live and still decidable until the
+//    approval.ExpireStale sweeper actually moves it to EXPIRED — no client
+//    constant can know better than the row's own state.
 //  - egress wait_for_review — the proxy carries the mode in the approval's
 //    requested_scope so the UI can flag it, but PENDING alone doesn't mean
 //    "still holding the sandbox": the connection fails closed at
@@ -221,7 +225,7 @@ export function isAdoConsentRequest(
   );
 }
 
-// canDecideApproval's ADO carve-out: authorizeMemberDecision
+// canDecideApproval's ADO carve-out: authorizeUserDecision
 // (internal/api/approvals.go) lets the run's OWNER decide their own run's
 // escalation, on top of the security-operator tier ownsRunOrAdmin
 // (internal/api/helpers.go) already covers — unlike every other tool_call,
@@ -236,25 +240,25 @@ export function canDecideAdoCapability(securityOperator: boolean, isRunOwner: bo
 }
 
 export function isHeld(a: ApprovalRequest): boolean {
-  if (a.kind === "tool_call") return !isStale(a.requested_at, STALE_HOLD_CEILING_MS);
+  // An Azure DevOps capability escalation is a tool_call row, but the proxy
+  // releases ITS hold after ADO_HOLD_WINDOW_MS (credhold.go's
+  // maxCapabilityHoldTimeout) while the row stays PENDING —
+  // ado-capability-card.tsx counts down the same ADO_HOLD_WINDOW_MS and
+  // already flips its own text to "no longer waiting" at that point. Without
+  // this arm the board and the cockpit header kept saying "sandbox held" after
+  // the card itself said the opposite (#725/F1).
+  if (isAdoCapabilityRequest(a)) return a.state === "PENDING" && !isStale(a.requested_at, ADO_HOLD_WINDOW_MS);
+  // #509 — PENDING alone is live for both of these, at any age: see the
+  // tool_call bullet above for why no client ceiling belongs here.
+  if (a.kind === "tool_call") return a.state === "PENDING";
   // A credential_reauth row is raised BECAUSE the proxy is holding a request.
   // It carries no first_use mode of its own — the mode vocabulary belongs to
   // the egress lane — so without this it would read as a passive pending and
   // the run would show no hold while a model call was parked.
-  if (a.kind === "credential_reauth") return !isStale(a.requested_at, STALE_HOLD_CEILING_MS);
+  if (a.kind === "credential_reauth") return a.state === "PENDING";
   if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
   const requestedAt = Date.parse(a.requested_at);
   if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
   return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
 }
 
-// A tool_call/credential_reauth row old enough that isHeld no longer counts
-// it live — distinguishes "was held, now stale" from "never held at all" for
-// a caller that has to say something different for the two (the runs board's
-// group chip and card, #160). Egress wait_for_review is not this arm: past its
-// own HOLD_TIMEOUT_MS it is a passive pending, not a stale hold, because
-// nothing ever promised the connection would still be parked.
-export function isStaleHold(a: ApprovalRequest): boolean {
-  if (a.kind !== "tool_call" && a.kind !== "credential_reauth") return false;
-  return isStale(a.requested_at, STALE_HOLD_CEILING_MS);
-}

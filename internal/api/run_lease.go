@@ -19,7 +19,7 @@ import (
 // The lease (long-holds design rev 4, §2.1, RL-3). A run with an end
 // (AgentRun.EndsAt) is warned at 24 h, 1 h and 10 min before it, and at the end
 // it stops and is KEPT: approvals cancelled, broker credentials revoked, the
-// agent stopped and the proxy removed, so it has no network while its files
+// agent and the proxy stopped, so it has no network while its files
 // stay for Config.EndedRunGrace. The grace running out tears it down. The run
 // token is deliberately not revoked: nothing holds it once the proxy is gone,
 // it lapses within its TTL, and a later revive mints from it.
@@ -68,35 +68,61 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 	now := s.cfg.Now()
 	switch {
 	case run.LostAt != nil:
-		if run.LostReason != types.LostEnded {
-			return
-		}
-		if !now.Before(run.LostAt.Add(s.cfg.EndedRunGrace)) {
-			s.stopEndedRun(ctx, run, "run.ended.expired", map[string]any{
+		ended := run.LostReason == types.LostEnded
+		if until, ok := s.keptUntil(run); ok && !now.Before(until) {
+			action, data := "run.ended.expired", map[string]any{
 				"ended_at": run.LostAt, "grace_sec": int64(s.cfg.EndedRunGrace.Seconds()),
-			})
+			}
+			if !ended {
+				action, data = "run.lost.expired", map[string]any{
+					"lost_at": run.LostAt, "reason": string(run.LostReason), "ends_at": run.EndsAt,
+					"grace_sec": int64(s.cfg.EndedRunGrace.Seconds()),
+				}
+			}
+			s.stopKeptRun(ctx, run, types.RunStopped, action, data)
 			return
 		}
-		// Re-assert the end every pass: a crash between the claim and the end
-		// in endRun would otherwise leave a kept run with its agent, proxy and
-		// broker credentials up. The broker revoke writes a row per credential,
-		// so it runs once per process; a crash shows up as a restart.
+		// A revive clears the lost mark before it starts the new proxy, and
+		// this pass listed the run before then: a stale row must neither stop
+		// that proxy nor revoke the revived run's broker. A failed read is
+		// retried next pass.
+		if _, busy := s.reviving.Load(run.ID); busy {
+			return
+		}
+		if cur, err := s.cfg.Store.GetRun(ctx, run.ID); err != nil || cur.LostAt == nil {
+			return
+		}
+		// Re-assert the stop every pass: a crash between the claim and the
+		// stop would otherwise leave a kept run with its proxy and broker
+		// credentials up. The broker revoke writes a row per credential, so it
+		// runs once per process; a crash shows up as a restart.
 		if _, done := s.leaseEnded.LoadOrStore(run.ID, struct{}{}); !done {
 			s.revokeRunBroker(ctx, run.ID)
 		}
-		err := s.endSandbox(ctx, run)
+		var err error
+		if ended {
+			err = s.endSandbox(ctx, run)
+		} else {
+			err = s.stopLostSandbox(ctx, run, now)
+		}
 		if errors.Is(err, runner.ErrEndUnsupported) {
 			// The substrate cannot keep a sandbox, for good: tear the run down
 			// as the first pass would have.
-			s.stopEndedRun(ctx, run, "run.ended", map[string]any{
-				"kept": false, "end_error": err.Error(), "ended_at": run.LostAt,
-			})
+			if ended {
+				s.stopKeptRun(ctx, run, types.RunStopped, "run.ended", map[string]any{
+					"kept": false, "end_error": err.Error(), "ended_at": run.LostAt,
+				})
+			} else {
+				s.stopKeptRun(ctx, run, types.RunFailed, "run.lost", map[string]any{
+					"kept": false, "lost_error": err.Error(), "reason": string(run.LostReason),
+				})
+			}
 			return
 		}
 		// Any other failure is the daemon failing, and a teardown would fail
 		// on the same daemon, so it is retried next pass.
 		if err != nil {
-			slog.WarnContext(ctx, "wardynd: re-asserting an ended run's stop failed",
+			slog.WarnContext(ctx, "wardynd: re-asserting a kept run's stop failed",
 				slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		}
 	case run.EndsAt == nil:
@@ -125,11 +151,16 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	}
 	data := map[string]any{"ends_at": run.EndsAt}
 	if _, canKeep := s.cfg.Runner.(runner.SandboxEnder); canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != "" {
-		s.cancelRunApprovals(ctx, run.ID)
-		s.revokeRunBroker(ctx, run.ID)
-		s.leaseEnded.Store(run.ID, struct{}{})
 		err := s.endSandbox(ctx, run)
 		if err == nil {
+			// Cancel/revoke only once the end has actually succeeded: on failure
+			// this falls through to stopEndedRun, whose finalizeRunTail already
+			// runs the full cascade — calling it here too would revoke the
+			// broker credentials twice (a row per credential) on every substrate
+			// whose SandboxEnder answers ErrEndUnsupported.
+			s.cancelRunApprovals(ctx, run.ID)
+			s.revokeRunBroker(ctx, run.ID)
+			s.leaseEnded.Store(run.ID, struct{}{})
 			data["kept"] = true
 			data["kept_until"] = now.Add(s.cfg.EndedRunGrace)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ended",
@@ -139,7 +170,7 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 		data["end_error"] = err.Error()
 	}
 	data["kept"] = false
-	s.stopEndedRun(ctx, run, "run.ended", data)
+	s.stopKeptRun(ctx, run, types.RunStopped, "run.ended", data)
 }
 
 // endSandbox is the runner half of the end. The caller has checked the runner
@@ -152,13 +183,14 @@ func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) error {
 	return ender.EndSandbox(ctx, run.SandboxRef)
 }
 
-// stopEndedRun makes an ended run terminal (STOPPED) through the shared
-// terminal tail: the full revoke cascade, the approval cancel and the sandbox
-// teardown. The CAS keeps a concurrent kill's outcome.
-func (s *Server) stopEndedRun(ctx context.Context, run types.AgentRun, action string, data map[string]any) {
-	applied, err := s.casRunState(ctx, run.ID, types.RunRunning, types.RunStopped)
+// stopKeptRun makes an ended or lost run terminal (STOPPED at its end or
+// grace, FAILED when a lost run cannot be kept) through the shared terminal
+// tail: the full revoke cascade, the approval cancel and the sandbox teardown.
+// The CAS keeps a concurrent kill's outcome.
+func (s *Server) stopKeptRun(ctx context.Context, run types.AgentRun, terminal types.RunState, action string, data map[string]any) {
+	applied, err := s.casRunState(ctx, run.ID, types.RunRunning, terminal)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: stopping an ended run failed",
+		slog.WarnContext(ctx, "wardynd: stopping a kept run failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return
 	}
@@ -210,7 +242,8 @@ func (s *Server) warnRunEnding(ctx context.Context, leaser store.RunLeaser, run 
 	}
 }
 
-// runIsKept reports whether a run the lease ended (or, later, one lost to a
-// reboot) is being kept. Its agent is stopped on purpose, so an agent-exit
-// watcher must not finalize it: that would tear down the files it is kept for.
+// runIsKept reports whether a run the lease ended, or one lost to a reboot or
+// an outage (run_lost.go), is being kept. Its agent is stopped on purpose (or,
+// for an outage, cut off from the network), so an agent-exit watcher must not
+// finalize it: that would tear down the files it is kept for.
 func runIsKept(run types.AgentRun) bool { return run.LostAt != nil }

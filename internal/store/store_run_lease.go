@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The run lease (long-holds design rev 4, RL-3; migration 0070): the reads and
+// The run lease (long-holds design rev 4, RL-3; migration 0073): the reads and
 // the two conditional writes the lease sweep needs. Kept out of store.go for
 // the same size reason as store_watcher.go.
 package store
@@ -37,9 +37,12 @@ type RunLeaser interface {
 	// SetRunEndAndWait moves run id's end and wait from (fromEnd, fromWait) to
 	// (toEnd, toWait), but only while the run still has those values and the
 	// run limits fromLimits the caller decided against, is not terminal and is
-	// not kept. false means the run changed since the caller read it — its end,
-	// its wait, or a tightened profile re-clamping its limits; nil ends are "no
-	// end". Moving the end clears end_tightened_at.
+	// not kept by its OWN end (LostEnded). A run lost to a reboot or a
+	// control-plane outage may still move its end (F1, long-holds design rev 4
+	// §2.3): extending it is how it becomes revivable again. false means the
+	// run changed since the caller read it — its end, its wait, or a tightened
+	// profile re-clamping its limits; nil ends are "no end". Moving the end
+	// clears end_tightened_at.
 	SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromLimits types.RunLimits, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int) (bool, error)
 }
 
@@ -93,8 +96,8 @@ func (s PG) SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromLimits types
 		UPDATE agent_runs SET ends_at=$4, wait_budget_sec=$5,
 			end_tightened_at = CASE WHEN ends_at IS DISTINCT FROM $4 THEN NULL ELSE end_tightened_at END
 		WHERE id=$1 AND ends_at IS NOT DISTINCT FROM $2 AND wait_budget_sec=$3
-		  AND run_limits = $7 AND lost_at IS NULL AND state = ANY($6)`,
-		id, fromEnd, fromWait, toEnd, toWait, nonTerminalStateNames(), limitsJSON)
+		  AND run_limits = $7 AND (lost_at IS NULL OR lost_reason <> $8) AND state = ANY($6)`,
+		id, fromEnd, fromWait, toEnd, toWait, nonTerminalStateNames(), limitsJSON, string(types.LostEnded))
 	if err != nil {
 		return false, fmt.Errorf("store: set run end and wait: %w", err)
 	}

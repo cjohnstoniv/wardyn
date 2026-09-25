@@ -26,7 +26,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── fakes ─────────────────────────────────────────────────────────────────
+// fakes
 
 // countingShellSession is a runner.Session that RECORDS what was written to it
 // (keystrokes) and how often it was resized, and never echoes. That is the
@@ -213,7 +213,7 @@ func (e *fakeSSHChannelErr) Read(p []byte) (int, error) {
 
 var _ ssh.Channel = (*fakeSSHChannel)(nil)
 
-// ─── harness ───────────────────────────────────────────────────────────────
+// harness
 
 // holderTestServer builds a Server wired for attach: a RUNNING run owned by
 // alice, a runner that hands out inspectable sessions, SSO cookie auth (so
@@ -326,7 +326,7 @@ func getHolder(t *testing.T, srv *Server, runID uuid.UUID, cookie *http.Cookie) 
 	return v
 }
 
-// ─── registry unit tests ───────────────────────────────────────────────────
+// registry unit tests
 
 // TestAttachHolderRegistry_RoundTrip is the core contract: one writer at a
 // time, a second registration is admitted READ-ONLY (and registers nothing), an
@@ -382,23 +382,22 @@ func TestAttachHolderRegistry_RoundTrip(t *testing.T) {
 	releaseFirst() // idempotent: the deferred release must be safe twice
 }
 
-// TestAttachHolderRegistry_ReleaseNeverEvictsSuccessor: after a take-over
-// evicts a holder and a fresh client claims the run, the DISPLACED handler's
-// A displaced holder must lose WRITE AUTHORITY at eviction, not whenever its
-// socket finishes dying.
+// TestAttachHolder_EvictionRevokesWriteAuthorityImmediately: a displaced holder
+// must lose write authority at eviction, not whenever its socket finishes
+// dying.
 //
-// This is the regression test for the one real hole a review found in this
-// file. The pumps gate writes on the *attachHolder they captured at attach
-// time; evictAttachHolder only removed the map entry, and displace() closes the
-// socket rather than cancelling the pump (deliberately — a cancelled context
-// sends no close frame). coder/websocket's Close does a full handshake whose
-// second half blocks on the read mutex the displaced pump holds, so between
-// "take-over returned 200" and "the old socket actually died" the OLD client
-// could still write into the same tmux session as the new one. Two writers is
-// precisely the state this file exists to prevent.
+// The pumps gate writes on the *attachHolder they captured at attach time, and
+// displace() closes the socket rather than cancelling the pump (deliberately —
+// a cancelled context sends no close frame). coder/websocket's Close does a
+// full handshake whose second half blocks on the read mutex the displaced pump
+// holds, so if eviction only removed the map entry, then between "take-over
+// returned 200" and "the old socket actually died" the old client could still
+// write into the same tmux session as the new one. Two writers is precisely the
+// state this file exists to prevent.
 //
 // Asserting on canWrite() rather than on the close status is the point: the
-// existing take-over test already checks the close, and it passed throughout.
+// take-over test already checks the close, and that check passes even with two
+// writers.
 func TestAttachHolder_EvictionRevokesWriteAuthorityImmediately(t *testing.T) {
 	srv := New(Config{Audit: &recRecorder{}, AdminToken: adminToken})
 	runID := uuid.New()
@@ -519,15 +518,15 @@ func TestAttachTakeoverReason(t *testing.T) {
 	}
 }
 
-// ─── endpoint tests ────────────────────────────────────────────────────────
+// endpoint tests
 
 // TestAttachHolderEndpoints_ForeignRun404: both endpoints are owner-or-admin,
 // and a non-owning member gets the byte-identical 404 a missing run would — no
 // existence oracle, and no "is anyone watching?" oracle over someone else's run.
 func TestAttachHolderEndpoints_ForeignRun404(t *testing.T) {
 	srv, _, _, _, run := holderTestServer(t)
-	stranger := ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleMember)
-	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+	stranger := ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleUser)
+	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/runs/" + run.ID.String() + "/attach-holder"},
@@ -571,9 +570,9 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
-	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+	owner := ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 
-	// ── first client: the holder ──
+	// first client: the holder
 	c1 := dialAttach(t, ts, srv, run.ID, holderOwner, "&cols=80&rows=24")
 	mode1 := readAttachMode(t, c1)
 	if mode1.ReadOnly {
@@ -607,7 +606,7 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	}
 	waitFor(t, "the holder's keystrokes to reach the session", func() bool { return fr.session(0).written() > 0 })
 
-	// ── second client: read-only ──
+	// second client: read-only
 	c2 := dialAttach(t, ts, srv, run.ID, holderSecond, "")
 	mode2 := readAttachMode(t, c2)
 	if !mode2.ReadOnly {
@@ -673,7 +672,7 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 		t.Fatal("the observer never received the streamed PTY output")
 	}
 
-	// ── take-over ──
+	// take-over
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/attach/takeover", admin, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("takeover: code = %d, body = %s", w.Code, w.Body.String())
@@ -682,12 +681,19 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 		TakenOver      bool   `json:"taken_over"`
 		PreviousHolder string `json:"previous_holder"`
 		PreviousSource string `json:"previous_source"`
+		Promoted       bool   `json:"promoted"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode takeover body %q: %v", w.Body.String(), err)
 	}
 	if !body.TakenOver || body.PreviousHolder != holderOwner || body.PreviousSource != attachSourceWeb {
 		t.Fatalf("takeover body = %+v, want the displaced web holder %s", body, holderOwner)
+	}
+	// admin has no queued observer socket on this run, so the slot is freed —
+	// the UI's doTakeover must take its evict-then-reconnect path on this
+	// answer (see the promoted:true assertion in attach_promotion_test.go).
+	if body.Promoted {
+		t.Errorf("takeover body promoted = true, want false (the taker had no observer socket to promote)")
 	}
 
 	// The displaced socket is closed with a reason the client can READ — this is
@@ -728,7 +734,7 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 	}
 }
 
-// ─── SSH lane ──────────────────────────────────────────────────────────────
+// SSH lane
 
 // TestSSHAttachHolder_RegistersAndIsDisplaced: an SSH-gateway PTY is the SAME
 // shared tmux session, so it registers in the SAME registry with source "ssh".
@@ -864,7 +870,7 @@ func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
 		want    int
 	}{
 		{"owner", func(t *testing.T) *http.Cookie {
-			return ssoSession(t, holderOwner, holderOwner, oidc.RoleMember)
+			return ssoSession(t, holderOwner, holderOwner, oidc.RoleUser)
 		}, http.StatusOK},
 		{"super admin", func(t *testing.T) *http.Cookie {
 			return ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
@@ -873,7 +879,7 @@ func TestAttachTakeover_OwnerOrSuperAdminOnly(t *testing.T) {
 			return ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin)
 		}, http.StatusNotFound},
 		{"member, not the owner", func(t *testing.T) *http.Cookie {
-			return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleMember)
+			return ssoSession(t, "sub-mallory", "mallory@corp.example", oidc.RoleUser)
 		}, http.StatusNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -964,24 +970,21 @@ func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
 	}
 }
 
-// ─── D1: a holder that outlives its socket ─────────────────────────────────
+// D1: a holder that outlives its socket
 
-// TestAttachWS_DeadPeerHolderIsFreed is the regression test for D1's liveness
-// probe (attachPingInterval).
+// TestAttachWS_DeadPeerHolderIsFreed pins the liveness probe
+// (attachPingInterval).
 //
-// MEASUREMENT (done before writing this fix, per the campaign spec): built the
-// same scenario below against the PRE-FIX pump — a silent PTY (never fed any
-// output) and a peer that stops reading right after the attach-mode frame, the
-// exact shape of a browser tab whose machine died or lost its network mid-
-// session. attachHolderFor(run.ID) was STILL non-nil after several real
-// seconds of polling, and nothing in the pump could ever free it: with no
-// output, attachWriteTimeout's bounded Write is never attempted; with no
-// client frame, c.Read has no deadline of its own. The slot was bounded only
-// by whatever the OS/proxy eventually notices about the dead TCP connection —
-// in the worst case (a genuine network black hole, no FIN, no RST), never.
-// Every OTHER attacher (a second browser tab, `wardyn attach`, the SSH
-// gateway) reads that run as permanently "held" until the daemon restarts —
-// this is the reported "sometimes I can never click back in".
+// The scenario: a silent PTY (never fed any output) and a peer that stops
+// reading right after the attach-mode frame — the exact shape of a browser tab
+// whose machine died or lost its network mid-session. Without a probe nothing
+// in the pump can free the holder: with no output, attachWriteTimeout's
+// bounded Write is never attempted; with no client frame, c.Read has no
+// deadline of its own. The slot would be bounded only by whatever the OS/proxy
+// eventually notices about the dead TCP connection — in the worst case (a
+// genuine network black hole, no FIN, no RST), never — and every other
+// attacher (a second browser tab, `wardyn attach`, the SSH gateway) would read
+// that run as permanently "held" until the daemon restarts.
 //
 // SIMULATING "dead" without a real dead socket: coder/websocket only answers
 // (or even observes) a Ping while something on that side is calling
@@ -1011,7 +1014,7 @@ func TestAttachWS_DeadPeerHolderIsFreed(t *testing.T) {
 	})
 }
 
-// ─── D2: release before the recording/audit tail ───────────────────────────
+// D2: release before the recording/audit tail
 
 // blockingDetachAudit delays ONLY the "session.detach" audit write until the
 // test signals unblock, so a test can hold open the exact window D2's fix
@@ -1032,17 +1035,16 @@ func (r *blockingDetachAudit) Record(ctx context.Context, ev types.AuditEvent) e
 	return r.sshTestRecorder.Record(ctx, ev)
 }
 
-// TestAttachWS_RemountReleasesHolderBeforeAuditTail is the regression test for
-// D2. Focus mode (canvas.tsx) remounts the terminal: the OLD attach socket
-// closes in cleanup and the NEW one opens in the same effect flush, well
-// before the OLD handler's finishRecording + session.detach audit have any
-// chance to run (they are disk/DB I/O with no bound). Pre-fix, releaseHolder
-// was deferred to run AFTER that tail, so the new handshake's
-// registerAttachHolder call landed inside that window and was admitted READ-
-// ONLY against its own vanishing self — the reported "sometimes I can never
-// click back in".
+// TestAttachWS_RemountReleasesHolderBeforeAuditTail: focus mode (canvas.tsx)
+// remounts the terminal — the old attach socket closes in cleanup and the new
+// one opens in the same effect flush, well before the old handler's
+// finishRecording + session.detach audit have any chance to run (they are
+// disk/DB I/O with no bound). releaseHolder runs before that tail; deferred
+// until after it, the new handshake's registerAttachHolder call would land
+// inside that window and be admitted read-only against its own vanishing self,
+// leaving the user unable to click back in.
 //
-// This also PINS the accepted audit-order trade-off the fix's own comment
+// This also pins the accepted audit-order trade-off the handler's own comment
 // documents: releasing the slot promptly means a successor's session.attach
 // can be recorded BEFORE the departing session's session.detach lands — the
 // opposite of handleAttachTakeover's "audit first, displace second" rule,
@@ -1064,7 +1066,7 @@ func TestAttachWS_RemountReleasesHolderBeforeAuditTail(t *testing.T) {
 	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
-	// ── the departing session: the OLD terminal instance ──
+	// the departing session: the old terminal instance
 	c1 := dialAttach(t, ts, srv, run.ID, holderOwner, "")
 	mode1 := readAttachMode(t, c1)
 	if mode1.ReadOnly {
@@ -1090,7 +1092,7 @@ func TestAttachWS_RemountReleasesHolderBeforeAuditTail(t *testing.T) {
 		t.Fatal("session.detach already recorded — this test's premise (it is held open) is not exercising the window at all")
 	}
 
-	// ── the remount's new instance, same principal, same run ──
+	// the remount's new instance, same principal, same run
 	c2 := dialAttach(t, ts, srv, run.ID, holderOwner, "")
 	mode2 := readAttachMode(t, c2)
 	if mode2.ReadOnly {
@@ -1098,7 +1100,7 @@ func TestAttachWS_RemountReleasesHolderBeforeAuditTail(t *testing.T) {
 	}
 	waitFor(t, "the second session to open", func() bool { return fr.session(1) != nil })
 
-	// PIN THE ORDER: the successor's session.attach is already durably
+	// Pin the order: the successor's session.attach is already durably
 	// recorded while the departing session's session.detach is STILL absent —
 	// the accepted inversion the fix's comment documents.
 	events := audit.snapshot()

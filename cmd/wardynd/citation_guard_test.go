@@ -25,13 +25,12 @@ var citationRoots = []string{"cmd", "internal", "pkg"}
 // would mean re-resolving every one on every run, and a citation that resolves
 // to the WRONG code still passes such a check.
 //
-// Every instance this guard was written for had already rotted. The 2026-07-17
-// god-function decomposition (6e789f5) moved the run-create path out of
-// internal/api/runs.go into runs_create.go; six comments in
-// internal/api/compose_setup.go went on citing line numbers in files that had
-// since shrunk below them, so each one sent the reader to unrelated code. A
-// symbol name survives that refactor; a line number never does. Cite the symbol
-// (and the file, if it is not obvious) instead.
+// A line citation rots on the first refactor that moves or shrinks the cited
+// file: moving the run-create path out of internal/api/runs.go into
+// runs_create.go, for instance, leaves every comment citing a runs.go line
+// number pointing at unrelated code. A symbol name survives that refactor; a
+// line number never does. Cite the symbol (and the file, if it is not obvious)
+// instead.
 var lineCitation = regexp.MustCompile(`[a-zA-Z0-9_]+\.go:[0-9]+`)
 
 // TestCommentsCiteSymbolsNotLineNumbers fails on any Go comment under
@@ -200,20 +199,20 @@ func TestSecurityDocsCitationsResolve(t *testing.T) {
 }
 
 // TestMembersDocCitesSymbolsNotLineNumbers extends the same rule to
-// docs/MEMBERS.md, the first member-facing doc: a line citation there rots
+// docs/USERS.md, the first member-facing doc: a line citation there rots
 // the same way it does everywhere else, and a member reader has even less
 // use for one than a security reviewer does. Cite endpoints, env vars and
 // doc anchors instead.
 func TestMembersDocCitesSymbolsNotLineNumbers(t *testing.T) {
 	root := repoRoot(t)
-	path := filepath.Join(root, "docs", "MEMBERS.md")
+	path := filepath.Join(root, "docs", "USERS.md")
 	b, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read docs/MEMBERS.md: %v", err)
+		t.Fatalf("read docs/USERS.md: %v", err)
 	}
 	for i, line := range strings.Split(string(b), "\n") {
 		if m := lineCitation.FindString(line); m != "" {
-			t.Errorf("docs/MEMBERS.md:%d cites %q by line number — cite the SYMBOL instead", i+1, m)
+			t.Errorf("docs/USERS.md:%d cites %q by line number — cite the SYMBOL instead", i+1, m)
 		}
 	}
 }

@@ -3,7 +3,7 @@
 
 package pg
 
-// Postgres-backed tests for Rekey — the whole-table re-encryption behind
+// Postgres-backed tests for Rekey — the whole-table DEK rewrap behind
 // `wardynd -rotate-age-key`. Both halves of its contract need a real server: the
 // round trip (every row readable under the NEW key and none under the old) and
 // the all-or-nothing abort (one undecryptable row leaves EVERY row untouched),
@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 	"github.com/google/uuid"
@@ -95,8 +96,9 @@ var seeded = map[string]string{
 }
 
 // TestRekeyRoundTripsEveryRow: after a rekey, every stored secret reads back
-// verbatim under the NEW identity, the OLD identity reads none of them, and the
-// count returned matches the rows actually rotated.
+// verbatim under the NEW identity, the OLD identity reads none of them, the
+// count returned matches the rows actually rotated — and only the wrap moved:
+// every sealed value is byte-identical, so the rotation decrypted nothing.
 func TestRekeyRoundTripsEveryRow(t *testing.T) {
 	pool := rekeyDatabase(t)
 	ctx := context.Background()
@@ -112,12 +114,19 @@ func TestRekeyRoundTripsEveryRow(t *testing.T) {
 		}
 	}
 
-	n, err := Rekey(ctx, pool, oldID, newID)
+	before := rawRows(t, pool)
+	n, err := Rekey(ctx, pool, oldID, newID, nil)
 	if err != nil {
 		t.Fatalf("Rekey: %v", err)
 	}
 	if n != len(seeded) {
 		t.Errorf("Rekey re-encrypted %d rows, want %d", n, len(seeded))
+	}
+	for k, r := range rawRows(t, pool) {
+		was := before[k]
+		if !bytes.Equal(r.ct, was.ct) || bytes.Equal(r.wrapped, was.wrapped) || r.kekID == was.kekID {
+			t.Errorf("%s: a rekey must rewrap the DEK (new wrapped_dek and kek_id) and leave the ciphertext alone", k)
+		}
 	}
 
 	newStore, err := New(pool, newID)
@@ -170,7 +179,7 @@ func TestRekeyAbortsWholeTransactionOnUndecryptableRow(t *testing.T) {
 		t.Fatalf("Put stray: %v", err)
 	}
 
-	n, err := Rekey(ctx, pool, oldID, newID)
+	n, err := Rekey(ctx, pool, oldID, newID, nil)
 	if err == nil {
 		t.Fatal("Rekey succeeded over a row the old key cannot decrypt; a partial rekey was committed")
 	}
@@ -206,16 +215,85 @@ func TestRekeyAbortsWholeTransactionOnUndecryptableRow(t *testing.T) {
 	}
 }
 
+// TestRekeyAbortsOnAV0Row: a rotation is not a conversion. A pre-envelope row
+// (one this binary's boot never converted) aborts the rekey by name.
+func TestRekeyAbortsOnAV0Row(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	oldID, newID := mustIdentity(t), mustIdentity(t)
+	seedV0(t, pool, oldID, "", "legacy", "v0-value")
+	n, err := Rekey(ctx, pool, oldID, newID, nil)
+	if err == nil || n != 0 {
+		t.Fatalf("Rekey over a v0 row = (%d, %v), want an abort", n, err)
+	}
+	if !strings.Contains(err.Error(), rowRef("", "legacy")) || !strings.Contains(err.Error(), "convert") {
+		t.Errorf("abort error %q does not name the row and the conversion it needs", err)
+	}
+}
+
+// TestRekeyAbortsOnAnUnknownKey: a v1 row whose kek_id names no key this
+// wardynd knows (not local, not a key service's) aborts the rotation naming
+// the row, rather than passing unrotated. Only Transit's rows are left alone.
+func TestRekeyAbortsOnAnUnknownKey(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO secrets (owned_by, name, enc_version, kek_id, wrapped_dek, ciphertext)
+		VALUES ('', 'stranger', 1, 'awskms:arn:x', '\x00', '\x00')`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := Rekey(ctx, pool, mustIdentity(t), mustIdentity(t), nil)
+	if err == nil || n != 0 || !strings.Contains(err.Error(), rowRef("", "stranger")) || !strings.Contains(err.Error(), "awskms:arn:x") {
+		t.Fatalf("Rekey over a row under an unknown key = (%d, %v), want an abort naming the row and its key", n, err)
+	}
+}
+
 // TestRekeyOnEmptyStore: a store with no secrets rotates cleanly to zero rows
 // rather than erroring, so a fresh deployment can still run the runbook.
 func TestRekeyOnEmptyStore(t *testing.T) {
 	pool := rekeyDatabase(t)
-	n, err := Rekey(context.Background(), pool, mustIdentity(t), mustIdentity(t))
+	n, err := Rekey(context.Background(), pool, mustIdentity(t), mustIdentity(t), nil)
 	if err != nil {
 		t.Fatalf("Rekey on an empty store: %v", err)
 	}
 	if n != 0 {
 		t.Errorf("Rekey on an empty store re-encrypted %d rows, want 0", n)
+	}
+}
+
+// TestRekeyStampsUpdatedAt: every re-encrypted row carries updated_at=now() from
+// the rotation, so a row's age reflects the ciphertext actually stored rather
+// than the last Put under a key that no longer reads it.
+func TestRekeyStampsUpdatedAt(t *testing.T) {
+	pool := rekeyDatabase(t)
+	ctx := context.Background()
+	oldID, newID := mustIdentity(t), mustIdentity(t)
+	oldStore, err := New(pool, oldID)
+	if err != nil {
+		t.Fatalf("New(old): %v", err)
+	}
+	for name, val := range seeded {
+		if err := oldStore.Put(ctx, name, []byte(val)); err != nil {
+			t.Fatalf("Put %s: %v", name, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE secrets SET updated_at = now() - interval '1 day'`); err != nil {
+		t.Fatalf("backdate updated_at: %v", err)
+	}
+	var before time.Time
+	if err := pool.QueryRow(ctx, `SELECT now()`).Scan(&before); err != nil {
+		t.Fatalf("read the database clock: %v", err)
+	}
+
+	if _, err := Rekey(ctx, pool, oldID, newID, nil); err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+
+	var stale int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM secrets WHERE updated_at < $1`, before).Scan(&stale); err != nil {
+		t.Fatalf("count stale rows: %v", err)
+	}
+	if stale != 0 {
+		t.Errorf("%d of %d rows kept their pre-rotation updated_at; Rekey must stamp now()", stale, len(seeded))
 	}
 }
 
@@ -245,7 +323,7 @@ func TestRekey_TwoNamespacesKeepDistinctPlaintexts(t *testing.T) {
 		t.Fatalf("Put alice row: %v", err)
 	}
 
-	n, err := Rekey(ctx, pool, oldID, newID)
+	n, err := Rekey(ctx, pool, oldID, newID, nil)
 	if err != nil {
 		t.Fatalf("Rekey: %v", err)
 	}
@@ -273,12 +351,12 @@ func TestRekey_TwoNamespacesKeepDistinctPlaintexts(t *testing.T) {
 	}
 }
 
-// TestRekeyRejectsANonX25519Identity keeps the constructor's contract visible at
+// TestRekeyRejectsAnIdentityWithNoRecipient keeps the constructor's contract visible at
 // this seam: New derives the recipient from the identity, so an identity that
 // cannot produce one must fail here rather than mid-transaction.
-func TestRekeyRejectsANonX25519Identity(t *testing.T) {
+func TestRekeyRejectsAnIdentityWithNoRecipient(t *testing.T) {
 	pool := rekeyDatabase(t)
-	_, err := Rekey(context.Background(), pool, scryptOnlyIdentity{}, mustIdentity(t))
+	_, err := Rekey(context.Background(), pool, scryptOnlyIdentity{}, mustIdentity(t), nil)
 	if err == nil {
 		t.Fatal("Rekey accepted an identity with no Recipient()")
 	}

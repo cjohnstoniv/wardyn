@@ -85,7 +85,7 @@ func overCapNumstat() string {
 //
 // The 512 KiB io.LimitReader left sess.Stdout undrained, so the in-sandbox git
 // blocked on write, the demux goroutine blocked with it, and Wait could only
-// time out: a 5 s stall, a 500, and a run.files FAILURE row on every poll tick
+// time out: a 5 s stall, a 500, and a run.files.fail FAILURE row on every poll tick
 // — for a workspace that simply has a lot of changed files. And the byte-cap
 // truncation itself was invisible: truncated stayed false, so a short list was
 // presented as the whole truth.
@@ -114,8 +114,8 @@ func TestRunFiles_ByteCapTruncatesWithoutStallingOnWait(t *testing.T) {
 		t.Errorf("vcs = %q, want %q — git ran and produced output", resp.VCS, runFilesVCSGit)
 	}
 	for _, ev := range audit.events {
-		if ev.Action == "run.files" {
-			t.Fatalf("run.files audit row %+v — hitting the cap is an ordinary outcome, not a failure of the read", ev)
+		if ev.Action == "run.files.fail" {
+			t.Fatalf("run.files.fail audit row %+v — hitting the cap is an ordinary outcome, not a failure of the read", ev)
 		}
 	}
 }

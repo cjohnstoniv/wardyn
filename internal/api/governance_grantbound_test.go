@@ -44,7 +44,7 @@ func apiKeyScope(t *testing.T, host, secret string) json.RawMessage {
 // surface would otherwise write a profile carrying an arbitrary grant pairing,
 // assign it to themselves — their own ceiling IS their assigned profile, since
 // the resolver's operator short-circuit keys on the admin tier they do not hold
-// — and filterMemberGrants plus the dispatch injection would then deliver any
+// — and filterUserGrants plus the dispatch injection would then deliver any
 // operator-stored secret into their own sandbox, with self-authored egress to
 // carry it out.
 //

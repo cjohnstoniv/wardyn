@@ -249,7 +249,7 @@ func TestAgentProvidersPut(t *testing.T) {
 		t.Error("PUT echoes no ETag")
 	}
 
-	// THE AUDIT DATUM, and the one field that must NEVER be in it.
+	// The audit datum, and the one field that must never be in it.
 	var writes []types.AuditEvent
 	for _, ev := range audit.events {
 		if ev.Action == "agent_provider.write" {
@@ -696,7 +696,7 @@ func TestRedactSetupStatusKeepsTheRoster(t *testing.T) {
 			CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
 		}),
 	}, nil)}
-	got := redactSetupStatusForMember(st, false, false)
+	got := redactSetupStatusForUser(st, false, false)
 	if len(got.Harnesses) != len(harnessCatalog) {
 		t.Fatalf("a member sees %d harness rows, want all %d", len(got.Harnesses), len(harnessCatalog))
 	}
@@ -710,7 +710,7 @@ func TestRedactSetupStatusKeepsTheRoster(t *testing.T) {
 	}
 }
 
-// ── finding 1: the roster's account/role pin ────────────────────────────────
+// finding 1: the roster's account/role pin
 //
 // Ask 1 of the finding, and the one the operator asked for first: "let the
 // admin pin account + role on the roster row, beside sso_start_url, owned the

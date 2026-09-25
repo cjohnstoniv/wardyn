@@ -10,12 +10,13 @@
 // lib/permissions-copy.ts here), and a stored kind this build doesn't know is
 // inert rather than a parse error.
 
-export type CapabilitySubjectType = "user" | "group" | "all";
+export type CapabilitySubjectType = "user" | "group" | "user_type" | "all";
 export type CapabilityEffect = "allow" | "deny";
 
 // One row of the grant table: "subject S may (or may not) use capability C at
 // value V". `subject` is "" for subject_type "all" (there is nothing for it to
-// name); user/group subjects are stored lowercased server-side.
+// name); user/group subjects are stored lowercased server-side, and a
+// user_type subject is the type's id, verbatim.
 export interface CapabilityGrant {
   id: string;
   subject_type: CapabilitySubjectType;

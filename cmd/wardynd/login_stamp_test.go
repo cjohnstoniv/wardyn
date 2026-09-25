@@ -16,6 +16,7 @@ import (
 type loginStampCall struct {
 	principal string
 	role      string
+	userType  string
 	checkedAt time.Time
 	groups    []string
 	truncated bool
@@ -33,8 +34,8 @@ func (r *recordingLoginStampStore) RefreshSSHKeyRoles(_ context.Context, princip
 	return r.sshErr
 }
 
-func (r *recordingLoginStampStore) RefreshAPITokenIdentity(_ context.Context, principal, role string, groups []string, truncated bool) error {
-	r.tokenCalls = append(r.tokenCalls, loginStampCall{principal: principal, role: role, groups: groups, truncated: truncated})
+func (r *recordingLoginStampStore) RefreshAPITokenIdentity(_ context.Context, principal, role, userType string, groups []string, truncated bool) error {
+	r.tokenCalls = append(r.tokenCalls, loginStampCall{principal: principal, role: role, userType: userType, groups: groups, truncated: truncated})
 	return r.tokenErr
 }
 
@@ -55,12 +56,12 @@ func (r *recordingLoginStampStore) RefreshAPITokenIdentity(_ context.Context, pr
 // fixture picks values that could not be confused for one another by a human
 // reading a failure, and asserts the position of each.
 func TestRefreshLoginStampsPassesPrincipalAndRoleInOrder(t *testing.T) {
-	const sub, role = "auth0|demoted-admin", "member"
+	const sub, role, userType = "auth0|demoted-admin", "user", "portfolio-manager"
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	groups := []string{"eng", "oncall"}
 
 	st := &recordingLoginStampStore{}
-	refreshLoginStamps(context.Background(), st, sub, role, groups, true, now)
+	refreshLoginStamps(context.Background(), st, sub, role, userType, groups, true, now)
 
 	for _, c := range []struct {
 		lane  string
@@ -91,6 +92,10 @@ func TestRefreshLoginStampsPassesPrincipalAndRoleInOrder(t *testing.T) {
 	// #152: the token lane's stamp carries groups and truncated too, and they
 	// must land in THEIR named positions, not swapped with role.
 	tok := st.tokenCalls[0]
+	// #611: the user type lands in its own position, never swapped with role.
+	if tok.userType != userType {
+		t.Errorf("api_tokens: re-stamped user type %q, want %q", tok.userType, userType)
+	}
 	if len(tok.groups) != 2 || tok.groups[0] != "eng" || tok.groups[1] != "oncall" {
 		t.Errorf("api_tokens: re-stamped groups = %v, want %v", tok.groups, groups)
 	}
@@ -116,7 +121,7 @@ func TestRefreshLoginStampsIsBestEffortInBothDirections(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := &recordingLoginStampStore{sshErr: tc.sshErr, tokenErr: tc.tokenErr}
-			refreshLoginStamps(context.Background(), st, "auth0|someone", "admin", nil, false, time.Now().UTC())
+			refreshLoginStamps(context.Background(), st, "auth0|someone", "admin", "standard", nil, false, time.Now().UTC())
 			if len(st.sshCalls) != 1 || len(st.tokenCalls) != 1 {
 				t.Fatalf("ssh=%d token=%d re-stamps — a failing lane must be logged and stepped over, "+
 					"never allowed to skip the other lane's bound", len(st.sshCalls), len(st.tokenCalls))

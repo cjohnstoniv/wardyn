@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── runMarker: deterministic per-run revocation sentinel jti ────────────────────
+// runMarker: deterministic per-run revocation sentinel jti
 
 // TestRunMarker pins the run-level revocation key shape. identity_revocations.jti
 // is the PRIMARY KEY, so the run-marker must be unique per run (not a shared
@@ -44,19 +45,20 @@ func TestRunMarker(t *testing.T) {
 	}
 }
 
-// ─── FIX #5: approval recorder is the masked + fanout recorder ───────────────────
+// FIX #5: approval recorder is the masked + fanout recorder
 
-// TestApprovalRecorderIsMaskedFanout is the regression guard for FIX #5: the
-// approval FSM + sweeper were constructed with the PLAIN store.Recorder (Postgres
-// only), so approval.decide / approval.expire audit events bypassed masking AND
-// the SIEM fanout that idp/broker already used (maskedRec). The recorder seam must
-// therefore hold an audit.Recorder (the masked+fanout one), not a concrete
-// store.Recorder, and events must flow through it MASKED.
+// TestApprovalRecorderIsMaskedFanout pins that the approval FSM + sweeper record
+// through the masked+fanout audit.Recorder, not the plain store.Recorder (Postgres
+// only) — otherwise approval.decide / approval.expire audit events bypass masking
+// and the SIEM fanout that idp/broker use (maskedRec). The recorder seam must
+// therefore hold an audit.Recorder, not a concrete store.Recorder, and events must
+// flow through it masked.
 //
 // A fakeAuditRecorder is an audit.Recorder but NOT a store.Recorder — assigning
 // it (and a maskingRecorder) into approvalStore.rec only compiles because that
-// field is audit.Recorder. If it regressed to store.Recorder this test would fail
-// to compile. approvalService holds the SAME approvalStore value, so the FSM and
+// field is audit.Recorder. If the field were a store.Recorder this test would
+// fail to compile. approvalService holds the same approvalStore value, so the FSM
+// and
 // the sweeper cannot drift onto two different recorders.
 func TestApprovalRecorderIsMaskedFanout(t *testing.T) {
 	reg := secretmask.NewRegistry()
@@ -98,7 +100,7 @@ func TestApprovalRecorderIsMaskedFanout(t *testing.T) {
 	}
 }
 
-// ─── role mappings: boot wiring (Phase 2 lane A) ──────────────────────────────
+// role mappings: boot wiring (Phase 2 lane A)
 
 // TestRoleMappingsFor_WiredWheneverPoolConfigured is the deps-builder wiring
 // assertion the task calls for: buildOptionalFeatures itself needs a live
@@ -127,7 +129,7 @@ func TestRoleMappingsFor_WiredWheneverPoolConfigured(t *testing.T) {
 	}
 }
 
-// ─── maskingRecorder: verbatim secret masking + delegation ──────────────────────
+// maskingRecorder: verbatim secret masking + delegation
 
 // fakeAuditRecorder is a hand-rolled audit.Recorder capturing the (possibly
 // masked) event the maskingRecorder forwards, plus an optional error to assert
@@ -250,7 +252,7 @@ func TestMaskingRecorder_NilRunID_OtherRunsSecretDoesNotLeak(t *testing.T) {
 
 // TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies is
 // W20-groundtruth-mapper-2: a run-less audit row (ev.RunID == nil —
-// policy.inline, secret.*, an admin action) used to bypass masking ENTIRELY,
+// policy.inline.apply, secret.*, an admin action) used to bypass masking ENTIRELY,
 // because the old guard (`m.reg != nil && ev.RunID != nil`) short-circuited
 // the whole block whenever RunID was nil. It must still be masked against the
 // PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered via
@@ -259,7 +261,7 @@ func TestMaskingRecorder_NilRunID_OtherRunsSecretDoesNotLeak(t *testing.T) {
 func TestMaskingRecorder_NilRunID_GlobalCorpusStillApplies(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	const secret = "ghp_supersecrettoken123"
-	reg.AddGlobal([]byte(secret))
+	reg.AddGlobal("", "test-credential", time.Now(), []byte(secret))
 
 	inner := &fakeAuditRecorder{}
 	rec := maskingRecorder{inner: inner, reg: reg}
@@ -293,15 +295,14 @@ func TestMaskingRecorder_DelegationErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestMaskingRecorder_MasksJSONEscapedSecretInData is the D31 regression: ev.Data
-// is JSON, so a registered secret bearing a newline/quote/backslash (an ssh_key
-// PEM is the real case broker.mint mask-registers) appears in Data in its
-// JSON-escaped form (newlines → \n), which the raw-value masker misses. The
-// maskingRecorder now expands the snapshot with JSONEscapedVariants, so the
-// escaped rendering is masked too.
+// TestMaskingRecorder_MasksJSONEscapedSecretInData: ev.Data is JSON, so a
+// registered secret bearing a newline/quote/backslash (an ssh_key PEM is the real
+// case broker.mint mask-registers) appears in Data in its JSON-escaped form
+// (newlines → \n), which the raw-value masker misses. The maskingRecorder expands
+// the snapshot with JSONEscapedVariants, so the escaped rendering is masked too.
 //
-// RED before the fix (raw snapshot only): the distinctive marker survives in the
-// forwarded Data. GREEN after: it is replaced by the placeholder.
+// With the raw snapshot only, the distinctive marker survives in the forwarded
+// Data; with the variants it is replaced by the placeholder.
 func TestMaskingRecorder_MasksJSONEscapedSecretInData(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	runID := uuid.New()

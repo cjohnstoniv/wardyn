@@ -31,14 +31,11 @@ func foldRef(s *Server, spec *types.RunPolicySpec, ws *types.Workspace, agent st
 
 // applyWorkspaceCreds/applyPrimaryWorkspaceCreds fold a workspace/run's
 // resolved ai_provider Integration into a run's policy at create
-// (resolveWorkspaceIntegration / resolveRunIntegration / applyIntegrationCreds,
-// llmcred.go). These restore the coverage deleted in 1e2fda5 ("Eight tests for
-// workspace credential bindings are deleted rather than ported. The binding is
-// inert until integrations resolve it... Keeping green tests over a stub
-// would have been the lie.") against the NEW Integration-ref shape now that
-// resolution is real: api_key binding grants+egress, an absent secret falling
-// back honestly, managed dropping a competing api-key grant, a bedrock ref
-// overriding the global region/model, and no binding staying a no-op.
+// (resolveWorkspaceIntegration / resolveRunIntegration /
+// applyIntegrationCreds, llmcred.go). These cover the Integration-ref shape:
+// api_key binding grants+egress, an absent secret falling back honestly,
+// managed dropping a competing api-key grant, a bedrock ref overriding the
+// global region/model, and no binding staying a no-op.
 
 // integrationTestServer builds a Server whose SiteConfig.Integrations is
 // exactly `rows` (via fakeSiteConfigStore, site_config_test.go) plus the given
@@ -235,13 +232,13 @@ func TestApplyPrimaryWorkspaceCreds_BedrockIntegration_ModelOnlyNoMalformedHost(
 	}
 }
 
-// TestResolveRunIntegration_DisabledRow_NeverFolds is the bug-integrations-1
-// (CRIT) regression: resolveRunIntegration never read in.Disabled on any of
-// its three precedence tiers, so a row the operator explicitly disabled
-// still got resolved and folded into a run's model credentials/egress by
-// applyIntegrationCreds — the exact operator control the Disabled flag exists
-// to enforce, silently bypassed. All three tiers must refuse a Disabled row
-// the same way integrations_run.go's probe path already does.
+// TestResolveRunIntegration_DisabledRow_NeverFolds: resolveRunIntegration
+// must read in.Disabled on every one of its three precedence tiers — a row
+// the operator explicitly disabled must never be resolved and folded into a
+// run's model credentials/egress by applyIntegrationCreds, or the operator
+// control the Disabled flag exists to enforce is silently bypassed. All three
+// tiers refuse a Disabled row the same way integrations_run.go's probe path
+// does.
 func TestResolveRunIntegration_DisabledRow_NeverFolds(t *testing.T) {
 	disabled := apiKeyIntegration("acme-anthropic", "acme-anthropic-key")
 	disabled.Disabled = true
@@ -450,10 +447,8 @@ func TestResolveRunIntegration_ExplicitResidentHostID_RefusedWithoutWorkspacePin
 	}
 }
 
-// TestApplyWorkspaceCreds_NoBindingIsNoOp restores TestApplyWorkspaceCreds_NoBindingIsNoOp
-// (both the original pre-Integration version and its interim W5-stub
-// replacement): nil binding, an empty ref, a non-LLM agent, and — now that
-// resolution is real — a ref that resolves to nothing at all (a bare Server
+// TestApplyWorkspaceCreds_NoBindingIsNoOp: nil binding, an empty ref, a non-LLM
+// agent, and a ref that resolves to nothing at all (a bare Server
 // with no stored/derivable integrations) must all stay a no-op.
 func TestApplyWorkspaceCreds_NoBindingIsNoOp(t *testing.T) {
 	s := New(Config{})
@@ -487,7 +482,7 @@ func TestApplyWorkspaceCreds_NoBindingIsNoOp(t *testing.T) {
 // TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp is the create-path twin
 // of TestApplyWorkspaceCreds_NoBindingIsNoOp: zero workspaces, zero
 // integrations, no explicit integration_id — must resolve to nothing. kind==""
-// is exactly the gate runs.go keys the run.workspace.creds audit off (it emits
+// is exactly the gate runs.go keys the run.workspace_cred.resolve audit off (it emits
 // only when kind != ""), so an empty kind is what proves the no-op never
 // audits.
 func TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp(t *testing.T) {
@@ -500,7 +495,7 @@ func TestApplyPrimaryWorkspaceCreds_NoneConfiguredIsNoOp(t *testing.T) {
 		t.Fatalf("bedrockRef = %+v, want nil", bedrockRef)
 	}
 	if kind != "" {
-		t.Fatalf("kind = %q, want empty (a no-op must not audit run.workspace.creds)", kind)
+		t.Fatalf("kind = %q, want empty (a no-op must not audit run.workspace_cred.resolve)", kind)
 	}
 	if len(spec.EligibleGrants) != 0 || len(spec.AllowedDomains) != 0 {
 		t.Fatal("no-op case must not mutate the spec")

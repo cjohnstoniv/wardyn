@@ -10,6 +10,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -29,7 +30,7 @@ func perUserDisconnectSrv(t *testing.T, admin, member string) (*Server, *memSecr
 	sec := &memSecrets{m: map[string][]byte{}}
 	for _, owner := range []string{admin, member} {
 		blob := []byte(`{"access_token":"` + owner + `-token","start_url":"` + perUserPortal +
-			`","region":"us-east-1","account_id":"123456789012","role_name":"R","expires_at":"2100-01-01T00:00:00Z"}`)
+			`","region":"us-east-1","account_id":"123456789012","role_name":"R","expires_at":"` + testutil.FutureRFC3339(24*30) + `"}`)
 		if err := sec.For(owner).Put(t.Context(), harnessCredSecretName(awsSSOProvider), blob); err != nil {
 			t.Fatalf("seed %s: %v", owner, err)
 		}
@@ -44,19 +45,20 @@ func perUserDisconnectSrv(t *testing.T, admin, member string) (*Server, *memSecr
 	return srv, sec
 }
 
-// TestHandleHarnessDisconnect_PerUserDeletesTheCallersOwnBlob is finding 4.
+// TestHandleHarnessDisconnect_PerUserDeletesTheCallersOwnBlob pins that a
+// per-user Disconnect is scoped to the caller, not the whole estate.
 //
 // Under per_user EVERY capture — the admin's included — lives in For(subject),
-// so the unscoped Delete this route used to make removed nothing anybody had
-// captured and still answered {"captured": false}: an operator's own Disconnect
-// was a silent no-op on a per-user estate.
+// so an unscoped Delete would remove nothing anybody had captured and still
+// answer {"captured": false}: an operator's own Disconnect would be a silent
+// no-op on a per-user estate.
 //
-// The route tier does NOT change in 0.7.2 (it stays operatorOnly), so this
-// revokes the CALLER's own session and nobody else's. A member's stored session
-// is superseded by their next sign-in, ends at the IdP when an admin revokes the
-// session there, and expires with its registration — docs/OPERATIONS.md's "AWS
-// SSO per-user" subsection and the THREAT-MODEL residency row say so, and name
-// a self-service member Disconnect as a 0.8 item.
+// The route tier stays operatorOnly, so this revokes the caller's own session
+// and nobody else's. A member's stored session is superseded by their next
+// sign-in, ends at the IdP when an admin revokes the session there, and expires
+// with its registration — docs/OPERATIONS.md's "AWS SSO per-user" subsection and
+// the THREAT-MODEL residency row say so, and name a self-service member
+// Disconnect as a 0.8 item.
 func TestHandleHarnessDisconnect_PerUserDeletesTheCallersOwnBlob(t *testing.T) {
 	// The namespace selector is the SESSION SUBJECT (withHumanIdentity stores
 	// Sub, and principalFromRequest returns it) — the same value storeAWSSSOBlob

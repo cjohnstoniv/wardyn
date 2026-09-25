@@ -48,16 +48,16 @@ func TestPostDecisionEmitsLLMScanAudit(t *testing.T) {
 		t.Fatalf("alert: want egress.allow=1 + llm.scan.alert=1, got egress=%v scan=%v", eg, sc)
 	}
 
-	// (2) A BLIND decision emits ONLY llm.scan.blind — never a duplicate egress event.
+	// (2) A BLIND decision emits ONLY llm.scan.bypass — never a duplicate egress event.
 	h.audit.events = nil
 	blind := `{"request":{"host":"api.anthropic.com","method":"CONNECT"},"decision":"allow","rule_source":"scan:opaque-tunnel",` +
-		`"scan":{"scanned":false,"coverage":"tunneled-opaque","mode":"alert","action":"blind"}}`
+		`"scan":{"scanned":false,"coverage":"tunneled-opaque","mode":"alert","action":"bypass"}}`
 	if w := do(t, h.srv, http.MethodPost, path, tok, blind); w.Code != http.StatusAccepted {
 		t.Fatalf("blind status=%d", w.Code)
 	}
 	eg, sc = countActions(h.audit.events)
-	if sc["llm.scan.blind"] != 1 {
-		t.Fatalf("blind: want llm.scan.blind=1, got %v", sc)
+	if sc["llm.scan.bypass"] != 1 {
+		t.Fatalf("blind: want llm.scan.bypass=1, got %v", sc)
 	}
 	if len(eg) != 0 {
 		t.Fatalf("blind must NOT emit any egress event, got %v", eg)

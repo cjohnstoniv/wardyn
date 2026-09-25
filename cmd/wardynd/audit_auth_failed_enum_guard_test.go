@@ -18,7 +18,7 @@ import (
 // when the middleware set one, and those four values are declared in
 // internal/auth/oidc and appear at no call site at all. withSessionRejectedCall
 // walks them too, so a fifth rejection reason added upstream cannot land in
-// auth.failed with this fence green.
+// auth.fail with this fence green.
 //
 // `(?s)` and `[^)]` (rather than `[^),]`) so a call gofmt has wrapped across
 // lines is still read — a multi-line emit was invisible to the first version of
@@ -31,6 +31,11 @@ var (
 	// *Actor names are declared. Scanned only inside a const declaration, so a
 	// local `reason = "..."` assignment in some handler cannot shadow one.
 	goStringConst = regexp.MustCompile(`^\s*(?:const\s+)?(\w+)\s*=\s*"([^"]*)"\s*$`)
+	// A CONST line of the shape `name = pkg.Ident` — the one-spelling alias G4
+	// prefers over a second string literal (authFailedUserTypeUnknown =
+	// oidc.DenialUserTypeUnknown). Resolved in a second pass once the aliased
+	// package's own consts are known.
+	goQualifiedConstAlias = regexp.MustCompile(`^\s*(?:const\s+)?(\w+)\s*=\s*(\w+\.\w+)\s*$`)
 	// authFailedForward is auditAuthFailed's own one-line body forwarding its
 	// PARAMETER. Removed before the walk: it is the wrapper, not an emit, and
 	// leaving it in would make "the reason is a constant" unenforceable for
@@ -38,9 +43,10 @@ var (
 	authFailedForward = "s.auditAuthFailedAs(r, adminAuthActor, reason)"
 )
 
-// constStrings returns the string constants one Go source declares — const
-// blocks and single-line `const x = "…"` only, never a function body.
-func constStrings(src string, into map[string]string) {
+// constLines walks src's const blocks and single-line `const x = ...`
+// declarations only, never a function body, applying re to each candidate
+// line and recording its two capture groups into into.
+func constLines(src string, re *regexp.Regexp, into map[string]string) {
 	inBlock := false
 	for _, line := range strings.Split(src, "\n") {
 		switch {
@@ -53,19 +59,27 @@ func constStrings(src string, into map[string]string) {
 		case !inBlock && !strings.HasPrefix(line, "const "):
 			continue
 		}
-		if m := goStringConst.FindStringSubmatch(line); m != nil {
+		if m := re.FindStringSubmatch(line); m != nil {
 			into[m[1]] = m[2]
 		}
 	}
 }
 
+// constStrings returns the string constants one Go source declares.
+func constStrings(src string, into map[string]string) { constLines(src, goStringConst, into) }
+
+// constAliases returns the qualified-identifier constants one Go source
+// declares (name -> "pkg.Ident"), e.g. authFailedUserTypeUnknown ->
+// "oidc.DenialUserTypeUnknown".
+func constAliases(src string, into map[string]string) { constLines(src, goQualifiedConstAlias, into) }
+
 // TestAuthFailedReasonEnumIsDocumented is the fence under AUDIT-ACTIONS.md's
-// claim that `auth.failed`'s `reason` is a CLOSED ENUM — the row an operator
+// claim that `auth.fail`'s `reason` is a CLOSED ENUM — the row an operator
 // builds a SIEM rule from.
 //
 // It exists because the claim drifted the moment it was tested: the CSRF lane
 // added `cross_origin_refused`, said in csrf.go that it "joins the enum the
-// auth.failed row documents", and the row was then left without it through a
+// auth.fail row documents", and the row was then left without it through a
 // hand-resolved rebase conflict. Nothing went red, because nothing tied the
 // emits to the doc.
 //
@@ -81,6 +95,7 @@ func TestAuthFailedReasonEnumIsDocumented(t *testing.T) {
 	}
 
 	consts := map[string]string{}
+	aliases := map[string]string{}
 	var sources []string
 	for _, e := range entries {
 		name := e.Name()
@@ -94,6 +109,41 @@ func TestAuthFailedReasonEnumIsDocumented(t *testing.T) {
 		src := strings.Replace(string(b), authFailedForward, "", 1)
 		sources = append(sources, src)
 		constStrings(src, consts)
+		constAliases(src, aliases)
+	}
+
+	// oidcConsts, qualified "oidc.Name": authFailedUserTypeUnknown is declared
+	// AS oidc.DenialUserTypeUnknown (one spelling, not a second literal G4
+	// would flag), so a call site naming it reads a constant this package
+	// never declares itself.
+	oidcConsts := map[string]string{}
+	rawOidcConsts := map[string]string{}
+	oidcSrcDir := filepath.Join(root, "internal", "auth", "oidc")
+	oidcSrcEntries, err := os.ReadDir(oidcSrcDir)
+	if err != nil {
+		t.Fatalf("read internal/auth/oidc: %v", err)
+	}
+	for _, e := range oidcSrcEntries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		b, rerr := os.ReadFile(filepath.Join(oidcSrcDir, name))
+		if rerr != nil {
+			t.Fatalf("read internal/auth/oidc/%s: %v", name, rerr)
+		}
+		constStrings(string(b), rawOidcConsts)
+	}
+	for k, v := range rawOidcConsts {
+		oidcConsts["oidc."+k] = v
+	}
+	// Fold a resolved alias (authFailedUserTypeUnknown -> oidc.DenialUserTypeUnknown
+	// -> "user_type_unknown") into consts under its own LOCAL name, so a call
+	// site naming the alias resolves exactly as one naming the literal would.
+	for local, qualified := range aliases {
+		if v, ok := oidcConsts[qualified]; ok {
+			consts[local] = v
+		}
 	}
 
 	resolve := func(arg string) (string, bool) {
@@ -101,7 +151,10 @@ func TestAuthFailedReasonEnumIsDocumented(t *testing.T) {
 		if strings.HasPrefix(arg, `"`) && strings.HasSuffix(arg, `"`) {
 			return strings.Trim(arg, `"`), true
 		}
-		v, ok := consts[arg]
+		if v, ok := consts[arg]; ok {
+			return v, true
+		}
+		v, ok := oidcConsts[arg]
 		return v, ok
 	}
 
@@ -158,15 +211,15 @@ func TestAuthFailedReasonEnumIsDocumented(t *testing.T) {
 		t.Fatalf("found %d withSessionRejected reasons; oidc.Middleware stamps 4 — the walk stopped enumerating", rejections)
 	}
 
-	row := auditDocRowFor(t, root, "auth.failed")
+	row := auditDocRowFor(t, root, "auth.fail")
 	for reason := range reasons {
 		if !strings.Contains(row, "`"+reason+"`") {
-			t.Errorf("auth.failed reason %q is emitted but is NOT in docs/AUDIT-ACTIONS.md's closed enum", reason)
+			t.Errorf("auth.fail reason %q is emitted but is NOT in docs/AUDIT-ACTIONS.md's closed enum", reason)
 		}
 	}
 	for actor := range actors {
 		if !strings.Contains(row, "`"+actor+"`") {
-			t.Errorf("auth.failed actor %q refuses requests but is NOT named in docs/AUDIT-ACTIONS.md's row", actor)
+			t.Errorf("auth.fail actor %q refuses requests but is NOT named in docs/AUDIT-ACTIONS.md's row", actor)
 		}
 	}
 }

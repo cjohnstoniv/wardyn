@@ -53,7 +53,7 @@ func createMemberSandbox(t *testing.T, mounts []runner.Mount, memberRoots []stri
 
 	spec := testSpec()
 	spec.Mounts = mounts
-	spec.MemberMountRoots = memberRoots
+	spec.UserMountRoots = memberRoots
 	_, err = d.CreateSandbox(context.Background(), spec)
 	return f.containers[agentContainerName(spec.RunID)] != nil, err
 }
@@ -151,8 +151,8 @@ func TestCreateSandbox_SystemMountOnMemberRunApplied(t *testing.T) {
 // mounted :ro into WARDYND'S OWN container, and the comment above that bind
 // claims THIS is what refuses a writable member mount ("the daemon would allow
 // the writable mount and the bind would refuse it"). That is testable, because
-// the whole member-writable decision lives in this package: ValidateMemberMount
-// (authoring time) and ValidateMemberMountSource (bind time, called from
+// the whole member-writable decision lives in this package: ValidateUserMount
+// (authoring time) and ValidateUserMountSource (bind time, called from
 // agentMounts above) never open, stat-for-write, or otherwise probe the
 // SOURCE's own permissions — they only EvalSymlinks (a read) and string-match
 // against WritableRoots. So a source whose real host permissions are read-only
@@ -181,7 +181,7 @@ func TestCreateSandbox_MemberMountWritable_ReadOnlySourcePermissionIrrelevant(t 
 
 	spec := testSpec()
 	spec.Mounts = []runner.Mount{{Source: project, Target: "/home/agent/work", ReadOnly: false, MemberAuthored: true}}
-	spec.MemberMountRoots = []string{root}
+	spec.UserMountRoots = []string{root}
 	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
 		t.Fatalf("writable member mount refused despite the source's own read-only permission bits having nothing to do with the gate: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestCreateSandbox_MemberMountWritable_ReadOnlySourcePermissionIrrelevant(t 
 }
 
 // TestCreateSandbox_OperatorMountUnaffectedByMemberGate is matrix row 7: an
-// operator run (nil MemberMountRoots) binds a legitimate source that is OUTSIDE
+// operator run (nil UserMountRoots) binds a legitimate source that is OUTSIDE
 // every member root, exactly as it does today. The member gate must be purely
 // additive — it never narrows an operator mount.
 func TestCreateSandbox_OperatorMountUnaffectedByMemberGate(t *testing.T) {
@@ -204,7 +204,7 @@ func TestCreateSandbox_OperatorMountUnaffectedByMemberGate(t *testing.T) {
 		[]runner.Mount{{Source: "/home/maintainer/repo", Target: "/home/agent/work", ReadOnly: false}},
 		nil)
 	if err != nil {
-		t.Fatalf("operator mount outside every member root failed: %v — nil MemberMountRoots must take exactly today's path", err)
+		t.Fatalf("operator mount outside every member root failed: %v — nil UserMountRoots must take exactly today's path", err)
 	}
 	if !created {
 		t.Fatal("agent container was not created for an operator mount")

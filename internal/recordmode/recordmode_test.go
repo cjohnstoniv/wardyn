@@ -18,7 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ── audit-event builders (hand-built []types.AuditEvent, parsed via encoding/json) ──
+// audit-event builders (hand-built []types.AuditEvent, parsed via encoding/json)
 
 // egressEvent builds an egress.<decision> audit event whose Data matches the map
 // handlePostDecision marshals ({host,port,method,path,rule_source,approval_id}).
@@ -97,7 +97,7 @@ func fileWriteEvent(path string) types.AuditEvent {
 	})
 }
 
-// ── TestCapture: table-driven over hand-built event slices ──
+// TestCapture: table-driven over hand-built event slices
 
 func TestCapture(t *testing.T) {
 	tests := []struct {
@@ -158,7 +158,7 @@ func TestCapture(t *testing.T) {
 			},
 		},
 		{
-			// W19-W19b-4: a deny during a CONFINED replay is the advertised
+			// A deny during a confined replay is the advertised
 			// containment proof working as designed, not an anomaly a
 			// synthesis must second-guess — it must still show up on the
 			// per-host DomainObservation (nothing hidden), just not in
@@ -390,7 +390,7 @@ func TestCaptureOrderIndependent(t *testing.T) {
 	}
 }
 
-// ── TestCleanReplay ──
+// TestCleanReplay
 
 func TestCleanReplay(t *testing.T) {
 	tests := []struct {
@@ -454,7 +454,7 @@ func TestCleanReplay(t *testing.T) {
 	}
 }
 
-// ── TestSynthesize ──
+// TestSynthesize
 
 func TestSynthesize(t *testing.T) {
 	run := types.AgentRun{ID: uuid.New(), ConfinementClass: types.CC2}
@@ -658,7 +658,7 @@ func TestSynthesizeDeterministic(t *testing.T) {
 	}
 }
 
-// ── helpers + fixed ids (kept stable so sorted-order assertions are reproducible) ──
+// helpers + fixed ids (kept stable so sorted-order assertions are reproducible)
 
 var (
 	fixedGrantA = uuid.MustParse("11111111-1111-1111-1111-111111111111")

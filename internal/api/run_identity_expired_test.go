@@ -22,14 +22,14 @@ import (
 // control-plane outage (a wardynd rollout longer than the renewer's half-life)
 // holds a dead identity for the rest of its life, and every /internal/* call it
 // makes 401s. Before this that fact existed in the trail only as an
-// undifferentiated pile of auth.failed rows. It is one row now, keyed to the run,
+// undifferentiated pile of auth.fail rows. It is one row now, keyed to the run,
 // emitted ONCE — because a row per request is the flood B5 exists to stop.
 
 // expiredIdentity is an identity.Provider that answers Verify with the typed
 // expiry refusal for ONE token and a flat error for anything else — the two
 // shapes internal/api has to tell apart. The provider side (that a real expired
 // token verifies this way, and that no OTHER failure does) is pinned where it
-// lives, internal/identity/embedded's TestB5_ExpiredVerifyCarriesTheRunID.
+// lives, internal/identity/embedded's TestExpiredVerifyCarriesTheRunID.
 type expiredIdentity struct {
 	token string
 	runID uuid.UUID
@@ -84,7 +84,7 @@ func expiredIdentityServer(t *testing.T, st store.Store, audit *syncAudit, runID
 }
 
 // TestRunIdentityExpired_EmittedOncePerRunningRun: a non-terminal run presenting
-// an expired identity gets ONE run.identity.expired row however many calls it
+// an expired identity gets ONE run.identity.expire row however many calls it
 // makes, and is left running (mid-flight work is the owner's; the remedy is kill
 // + start a new run).
 func TestRunIdentityExpired_EmittedOncePerRunningRun(t *testing.T) {
@@ -101,9 +101,9 @@ func TestRunIdentityExpired_EmittedOncePerRunningRun(t *testing.T) {
 		}
 	}
 
-	rows := audit.eventsFor(runID, "run.identity.expired")
+	rows := audit.eventsFor(runID, "run.identity.expire")
 	if len(rows) != 1 {
-		t.Fatalf("run.identity.expired rows = %d for 20 refused calls, want exactly 1 — a row per request is the "+
+		t.Fatalf("run.identity.expire rows = %d for 20 refused calls, want exactly 1 — a row per request is the "+
 			"flood this exists to stop", len(rows))
 	}
 	// AND the repeats cost nothing. The guard is consulted BEFORE the run read, so
@@ -134,11 +134,11 @@ func TestRunIdentityExpired_AFailedRunReadDoesNotSpendTheRow(t *testing.T) {
 	srv, tok := expiredIdentityServer(t, failing, audit, runID)
 
 	do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok, `{"kind":"egress_domain","requested_scope":{"host":"x"}}`)
-	if rows := audit.eventsFor(runID, "run.identity.expired"); len(rows) != 0 {
+	if rows := audit.eventsFor(runID, "run.identity.expire"); len(rows) != 0 {
 		t.Fatalf("a failed run read still wrote %d rows; it cannot know the run is non-terminal", len(rows))
 	}
 	do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok, `{"kind":"egress_domain","requested_scope":{"host":"x"}}`)
-	if rows := audit.eventsFor(runID, "run.identity.expired"); len(rows) != 1 {
+	if rows := audit.eventsFor(runID, "run.identity.expire"); len(rows) != 1 {
 		t.Errorf("rows after the store recovered = %d, want 1 — a blip must not silently spend the run's one row "+
 			"(that is exactly when this evidence matters)", len(rows))
 	}
@@ -169,15 +169,15 @@ func TestRunIdentityExpired_TerminalRunEmitsNothing(t *testing.T) {
 
 		do(t, srv, http.MethodPost, "/api/v1/internal/approvals", tok, `{"kind":"egress_domain","requested_scope":{"host":"x"}}`)
 
-		if rows := audit.eventsFor(runID, "run.identity.expired"); len(rows) != 0 {
-			t.Errorf("%s run emitted %d run.identity.expired rows; its token is meant to be dead", state, len(rows))
+		if rows := audit.eventsFor(runID, "run.identity.expire"); len(rows) != 0 {
+			t.Errorf("%s run emitted %d run.identity.expire rows; its token is meant to be dead", state, len(rows))
 		}
 	}
 }
 
 // TestRunIdentityExpired_ForgedTokenEmitsNothing: only an expiry names a run. A
 // forged or unparseable token names nobody, so it must stay as coarse as the
-// auth.failed row beside it — otherwise a prober picks the run id the row is
+// auth.fail row beside it — otherwise a prober picks the run id the row is
 // written against.
 func TestRunIdentityExpired_ForgedTokenEmitsNothing(t *testing.T) {
 	runID := uuid.New()
@@ -188,8 +188,8 @@ func TestRunIdentityExpired_ForgedTokenEmitsNothing(t *testing.T) {
 	do(t, srv, http.MethodPost, "/api/v1/internal/approvals", "not-a-real-token", "")
 
 	for _, ev := range audit.events {
-		if ev.Action == "run.identity.expired" {
-			t.Fatalf("a forged token produced a run.identity.expired row (%+v); only a token that names one of "+
+		if ev.Action == "run.identity.expire" {
+			t.Fatalf("a forged token produced a run.identity.expire row (%+v); only a token that names one of "+
 				"our runs may", ev)
 		}
 	}

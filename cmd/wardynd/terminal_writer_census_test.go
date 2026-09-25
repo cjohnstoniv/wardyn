@@ -64,14 +64,19 @@ var terminalWriterCensus = map[string]string{
 	// --selftest`, a failed task Exec — with the sandbox and proxy sidecar up and
 	// an egress approval already raisable), and skips it below RUNNING, where no
 	// approval can exist yet. Both arms are pinned in internal/api. The frozen
-	// claim here USED to be "exempt: fails a run that never reached RUNNING" —
-	// which was false at three call sites and is what let a PENDING approval sit
-	// in the queue for 24h and expire as "nobody answered".
+	// claim must not read "exempt: fails a run that never reached RUNNING" —
+	// that is false at three call sites, and would let a PENDING approval sit in
+	// the queue for 24h and expire as "nobody answered".
 	"failAndRevoke": "calls cancelRunApprovals when from==RunRunning; exempt below it",
-	// (5) The lease (#568): a run whose end passed and could not be kept, or
-	// whose ended-run grace ran out. CASes RUNNING->STOPPED, then
-	// finalizeRunTail.
-	"stopEndedRun": "CASes, then finalizeRunTail",
+	// (5) The lease (#568) and lost runs (#574): a run whose end passed, or
+	// whose sandbox was lost, and could not be kept, or whose grace ran out.
+	// CASes RUNNING->STOPPED or FAILED, then finalizeRunTail.
+	"stopKeptRun": "CASes, then finalizeRunTail",
+	// A run whose token lapsed and that cannot be kept (#574).
+	"sweepLapsedRunTokens": "reconcileFinalize -> finalizeRunTail",
+	// A revived run whose proxy could not be replaced and that cannot be kept
+	// lost (#575).
+	"reloseRun": "reconcileFinalize -> finalizeRunTail",
 }
 
 // TestTerminalRunStateWriterCensus scans every non-test .go file in internal/api

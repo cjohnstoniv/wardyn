@@ -20,12 +20,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
-// TestDecisionSinkEmitCloseRace locks down E3: emit() must never send on a
-// closed channel. Before the fix emit() checked closed, released the lock, then
-// sent — so a concurrent close() could close the channel between the check and
-// the send, panicking. The non-blocking send now runs UNDER s.mu, mutually
-// exclusive with close()'s close(ch). Run under `go test -race`; pre-fix this
-// panics (crashing the test binary), post-fix it passes.
+// TestDecisionSinkEmitCloseRace: emit() must never send on a closed channel. If
+// emit() checked closed, released the lock, then sent, a concurrent close()
+// could close the channel between the check and the send and panic. The
+// non-blocking send runs under s.mu, mutually exclusive with close()'s
+// close(ch). Run under `go test -race`; a racy emit panics, crashing the test
+// binary.
 func TestDecisionSinkEmitCloseRace(t *testing.T) {
 	log := decisionLog(egress.Request{Host: "x.test"}, egress.Allow, "policy:allowed")
 	for iter := 0; iter < 50; iter++ {
@@ -122,7 +122,7 @@ func TestDecisionSinkDropsOnBackpressure(t *testing.T) {
 }
 
 // TestDecisionSinkReportsDroppedSummary locks down FIX #18: when decisions are
-// dropped on backpressure, a synthetic egress.decisions.dropped audit event must
+// dropped on backpressure, a synthetic egress.deny (rule_source egress:dropped-decisions-<n>) must
 // reach the control plane BEFORE shutdown (piggybacked on the next flush) — not
 // only surface as a shutdown-time counter.
 func TestDecisionSinkReportsDroppedSummary(t *testing.T) {
@@ -133,7 +133,7 @@ func TestDecisionSinkReportsDroppedSummary(t *testing.T) {
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var d egress.DecisionLog
 		_ = json.NewDecoder(r.Body).Decode(&d)
-		if strings.HasPrefix(d.RuleSource, "egress.decisions.dropped:") {
+		if strings.HasPrefix(d.RuleSource, "egress:dropped-decisions-") {
 			summaries.Add(1)
 			lastSource.Store(d.RuleSource)
 			w.WriteHeader(http.StatusAccepted)
@@ -171,10 +171,10 @@ func TestDecisionSinkReportsDroppedSummary(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if summaries.Load() == 0 {
-		t.Fatal("no egress.decisions.dropped summary posted before shutdown")
+		t.Fatal("no egress:dropped-decisions-<n> summary posted before shutdown")
 	}
-	if src, _ := lastSource.Load().(string); !strings.HasPrefix(src, "egress.decisions.dropped:") {
-		t.Fatalf("summary rule_source = %q, want egress.decisions.dropped:<n>", src)
+	if src, _ := lastSource.Load().(string); !strings.HasPrefix(src, "egress:dropped-decisions-") {
+		t.Fatalf("summary rule_source = %q, want egress:dropped-decisions-<n>", src)
 	}
 	_ = s.close(context.Background())
 }
@@ -252,7 +252,7 @@ func TestMaskDecisionBytesMasksJSONEscapedSecrets(t *testing.T) {
 		"f125-nl\nsecret-value-0003", // newline -> \n
 		"f125-plain-ascii-value-04",  // control: masked before this fix too
 	} {
-		procRegistry.AddGlobal([]byte(secret))
+		procMask([]byte(secret))
 		body, err := json.Marshal(decisionLog(
 			egress.Request{Host: "x.test", Method: http.MethodGet, Path: "/x?k=" + secret},
 			egress.Allow, "policy:allowed"))

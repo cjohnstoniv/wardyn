@@ -20,13 +20,13 @@ import (
 
 // flakyCeilingStore answers the FIRST governance resolve and fails every one
 // after it — what a concurrent profile edit or a transient store blip produces
-// between two of the reads a single create used to make.
+// between two reads, if a single create ever resolved more than once.
 type flakyCeilingStore struct {
 	store.Store
 	calls atomic.Int64
 }
 
-func (s *flakyCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *flakyCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if s.calls.Add(1) == 1 {
 		return &types.GovernanceProfile{ID: uuid.New(), Name: "walled", Ceiling: types.RunPolicySpec{
 			MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
@@ -42,11 +42,15 @@ func (s *flakyCeilingStore) ListCapabilityGrants(context.Context) ([]types.Capab
 func (s *flakyCeilingStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
-func (s *flakyCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (s *flakyCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (s *flakyCeilingStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, nil
+}
+
+func (s *flakyCeilingStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 func (s *flakyCeilingStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 	return nil, nil
@@ -59,8 +63,8 @@ func (s *flakyCeilingStore) GetSiteConfig(context.Context) (types.SiteConfig, er
 // ceiling reads per create cannot disagree" — given an implementing mechanism.
 //
 // It had none. A member create took THREE independent, uncached, untransacted
-// reads of governance_assignments (denyMemberGovernance -> resolveRunPolicy ->
-// filterMemberGrants) and dispatch a fourth, while resolveRunPolicy's own
+// reads of governance_assignments (denyUserGovernance -> resolveRunPolicy ->
+// filterUserGrants) and dispatch a fourth, while resolveRunPolicy's own
 // comment asserted "a create must never resolve two different ceilings for one
 // request" and governance.go's called the repetition "PF-13's accepted double
 // resolution", justified purely on latency. Two in-tree comments, opposite
@@ -85,7 +89,7 @@ func TestCeilingIsResolvedOncePerRequest(t *testing.T) {
 	// The memo rides the REQUEST context, so this drives the real middleware
 	// chain rather than calling the resolver directly — the point is that every
 	// site inside one HTTP request shares it.
-	member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member,
 		`{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]}}`)
 
@@ -111,7 +115,7 @@ func TestCeilingMemoIsPerRequestNotProcessWide(t *testing.T) {
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"}}
 	srv := New(cfg)
-	member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleUser)
 	body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]}}`
 
 	doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member, body)
@@ -144,7 +148,7 @@ func TestCeilingRefusalCarriesItsRemedy(t *testing.T) {
 	}
 	// The canonical mapping, unchanged.
 	w := httptest.NewRecorder()
-	writeCeilingError(w, errGroupsSnapshotStale)
+	writeCeilingError(w, httptest.NewRequest(http.MethodGet, "/", nil), errGroupsSnapshotStale)
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), remedy) {
 		t.Errorf("writeCeilingError = %d %s, want 403 naming the remedy", w.Code, w.Body.String())
 	}
@@ -157,7 +161,7 @@ func TestCeilingRefusalCarriesItsRemedy(t *testing.T) {
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	srv := New(cfg)
-	sess := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleMember)
+	sess := ssoSession(t, "sub-gov-bob", "bob@corp.example", oidc.RoleUser)
 	// A nil group snapshot is the unanswerable shape; ssoSession carries none.
 	got := doSSO(t, srv, http.MethodGet, "/api/v1/secrets", sess, "")
 	if got.Code != http.StatusForbidden {

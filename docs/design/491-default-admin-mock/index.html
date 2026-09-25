@@ -1,0 +1,95 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Default-role-admin warning packet</title>
+<!--
+  #491 mock packet · static, for owner review.
+  The landing page: what the gap is, the one new sentence, and the decisions this packet
+  asks for. Canon is docs/design/admin-access-canon.md (#484, frozen); this packet proposes
+  one new row to it.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Default-role-admin warning — mock packet for #491</h1>
+    <div class="sub">Say "approve the packet", or name the decisions you'd change. Static: nothing here is wired.</div>
+  </div>
+  <nav><a class="cur" href="index.html">Packet</a><a href="banner.html">Banner + setup row</a><a href="canon.md">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>The problem</span><b>#484's warning has a blind spot</b></div>
+  <p class="lead" style="margin-top:0">The everyone-is-an-admin warning (#484) shows when nobody is mapped to a role and no admin list is set — <span class="mono">ssoRBACCheck</span> in <span class="mono">internal/api/setup_checks.go</span>. It does not check the other way admin becomes universal: <span class="mono">WARDYN_OIDC_DEFAULT_ROLE=admin</span>. When that variable is set, every sign-in the role map does not match falls through to admin (<span class="mono">deriveRole</span>, <span class="mono">internal/auth/oidc/derive.go</span>), and <span class="mono">validDefaultRole</span> (<span class="mono">cmd/wardynd/boot_deps.go</span>) permits it.</p>
+  <p class="lead">A role map being set is exactly the condition that today reads <span class="chip success"><span class="dot"></span>ok</span> and hides the banner — so a deployment can have named role-map rows, a default role of admin, and still hand admin to everyone the map does not name, with no warning anywhere. Proposal: warn whenever the default role is admin, whether or not a role map is set. Same banner, same title, same CTA — three small copy additions for this state: a banner body sentence, and the matching setup-row detail and fix. No new title, no new surface.</p>
+</section>
+
+<section class="state">
+  <div class="tag"><span>The screens</span><b>One page, one stylesheet</b></div>
+  <div class="grid2">
+    <a class="pagecard" href="banner.html">
+      <b>Banner + setup row</b>
+      <p>The #484 case side by side with the new #491 case: same banner component, same setup-status row, one added sentence.</p>
+      <ul>
+        <li>Today: no role map, no admin list (#484's case)</li>
+        <li>New: role map set, default role admin (#491's case)</li>
+        <li>The Review step's setup-check row for the new case</li>
+      </ul>
+    </a>
+    <a class="pagecard" href="canon.md">
+      <b>Canon</b>
+      <p>The one row this packet proposes adding to <span class="mono">docs/design/admin-access-canon.md</span>'s frozen-strings table, plus a "why this wording" note.</p>
+    </a>
+  </div>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Decisions</span><b>Three, each drawn as recommended.</b></div>
+  <ol class="decisions">
+    <li><b>Same banner, or a distinct one?</b> Drawn: the existing <span class="mono">EveryoneAdminBanner</span> component and the existing <span class="mono">sso_rbac</span> setup row, unchanged in shape — only the warn condition widens and the body sentence is chosen per-case. The other option is a second banner/row dedicated to the default-role case.
+      <p>Recommended: same banner. Both cases are the same fact from the person signing in — every unmatched identity becomes admin — and Q457-4 already established one banner shows this fact to admins everywhere. A second banner risks both showing at once when a deployment has neither a role map nor an admin list AND a default role of admin.</p></li>
+    <li><b>Does the sentence name the env var?</b> Drawn: no. The banner sentence stays in the same register as today's — "signs in", "identity provider", never a variable name — and reads a setup-check <span class="mono">fix</span> string, not the banner body, for the operator-facing detail. Compare the banner page's two body sentences to decide.
+      <p>Recommended: no. #484's frozen strings never name <span class="mono">WARDYN_OIDC_OPERATOR_EMAILS</span> either; the setup row's <span class="mono">fix</span> field is where a chart variable is named (see <span class="mono">tls_cookie_posture</span>'s fix, which does name one), consistent with the existing split between banner (what/why) and setup detail (how to fix).</p></li>
+    <li><b>Does the setup check turn warn, or stay ok with the banner only?</b> Drawn: the setup check turns <span class="mono">warn</span> too — the check exists to catch exactly this configuration mistake, and Q457-6's canon already treats <span class="mono">Blocking: true</span> as the row's own concern, not the banner's. The other option is to leave the row <span class="mono">ok</span> (a role map is configured) and let only the banner carry the new warning.
+      <p>Recommended: warn. A setup row that reads <span class="mono">ok</span> while every unmapped person becomes admin is the exact gap #491 reports; hiding it behind the banner alone reintroduces the "row says fine, nothing else shows" failure #484 was built to close.</p></li>
+  </ol>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Settled without asking</span><b>Called out so neither is a surprise</b></div>
+  <ul style="font-size:13px;color:var(--muted-foreground);max-width:86ch;padding-left:18px">
+    <li>The title stays "Everyone who signs in is an admin" for this case too, even though a role map means most sign-ins get their mapped role — only an unmatched one falls to admin. Flag it in review if you want a title that names "unmapped" specifically instead.</li>
+    <li>The setup row's fix for this state gets its own new sentence (naming the chart variable) rather than reusing #484's "Map people to admin or user on the People step" fix, because that fix alone doesn't address a deployment where people ARE already mapped and the default role is the actual problem.</li>
+  </ul>
+</section>
+
+<section class="state">
+  <div class="tag"><span>Not drawn</span><b>Out of this issue</b></div>
+  <ul style="font-size:13px;color:var(--muted-foreground);max-width:86ch;padding-left:18px">
+    <li>Any change to <span class="mono">validDefaultRole</span> or the boot-time WARN in <span class="mono">cmd/wardynd/boot_deps.go</span> — #491 is the console warning, not a boot-time behavior change.</li>
+    <li>A third setup-check id. This packet reuses <span class="mono">sso_rbac</span>; a new id is out of scope unless the owner asks for one in review.</li>
+  </ul>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>

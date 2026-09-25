@@ -97,17 +97,18 @@ Alongside the [session and API-token revocation procedure](OPERATIONS.md#per-use
 - Inspect the person's registered keys. `wardyn ssh-key list --json` lists
   only the caller's keys; the owner can remove them in **Account → SSH keys**
   or with `DELETE /api/v1/me/ssh-keys/{fingerprint}`. Percent-encode the
-  fingerprint as one path segment. There is no `ssh-key delete` command and
-  no admin API for another person's keys; an operator with database access
-  must identify that principal's keys and remove their registrations directly,
-  as in [the fingerprint-removal example](#reclaiming-a-squatted-fingerprint).
+  fingerprint as one path segment. `wardyn ssh-key delete <fingerprint>` does
+  the same from the CLI. There is no admin API for another person's keys; an
+  operator with database access must identify that principal's keys and
+  remove their registrations directly, as in
+  [the fingerprint-removal example](#reclaiming-a-squatted-fingerprint).
 - End access to affected sandboxes with `wardyn run kill <run-id>` and verify
   teardown succeeded. Deleting a key prevents subsequent authentications;
   it does not disconnect an already-authenticated SSH connection or stop it
   opening more channels into the same running sandbox. Include foreign runs
   reached through an admin override when determining which runs are affected.
 
-The `ssh_key.add`, `ssh_key.delete`, and `ssh.auth` events help identify the
+The `ssh_key.add`, `ssh_key.delete`, and `ssh.authenticate` events help identify the
 registered keys and accessed runs; see [Audit actions](AUDIT-ACTIONS.md).
 
 ## 2. Connect
@@ -380,7 +381,7 @@ the clear until retention deletes it.
 
 **Auth.** Registered public keys only — no password, no keyboard-interactive.
 `MaxAuthTries` is bounded per connection; an unknown key or a malformed
-username (anything that isn't a run id) is rejected and audited (`ssh.auth`,
+username (anything that isn't a run id) is rejected and audited (`ssh.authenticate`,
 `outcome=failure`), so a scan against the gateway leaves a trail.
 
 **Owner-or-admin, and the admin half is a bounded-stale stamp — weaker than
@@ -400,7 +401,7 @@ consults the human's role live at connect time — SSH carries no session for
 the browser terminal's `requireOperator` gate, which reads the session's role
 fresh on every attach. What bounds the staleness now: **a demoted admin's
 already-registered key keeps its override only until whichever comes first —
-their own next login (re-stamping `role=member`), `role_checked_at` aging past
+their own next login (re-stamping `role=user`), `role_checked_at` aging past
 `WARDYN_SSH_ROLE_TTL` (the TTL bites even if they never log in again), or the
 key being deleted/re-registered.** An operator who wants the override gone
 immediately (rather than waiting out the TTL, or waiting for the demoted human
@@ -413,10 +414,22 @@ to force a refresh, just the immediate one that does not wait on either a
 login or the TTL. There is still no in-place "update this key's role"
 endpoint.
 
-**Upgrading from 0.5 (or from pre-`0046`): your existing key is a `member`
+**A key registered in the user view is capped, for good.** An admin whose
+console session is in the user view (member mode) can register a key; it is
+stored with `capped = true` (migration `0070_ssh_key_view_capped`) and role
+`user`. A capped key never gains the admin override: the sign-in re-stamp
+(`RefreshSSHKeyRoles`) refreshes its `role_checked_at` but leaves its role
+`user`, the database refuses a capped row that reads `admin`, and the gateway
+refuses the override for a capped key before it reads the role. The refusal is
+audited as `ssh.authenticate`, `outcome=failure`, reason "capped key (registered in the
+user view): no admin override". The key still reaches its owner's own runs. A
+break-glass key that reaches other people's runs is registered outside the
+user view. The `ssh_key.add` audit row marks a capped key with `capped: true`.
+
+**Upgrading from 0.5 (or from pre-`0046`): your existing key is a `user`
 key, and even an `admin`-stamped key loses the override until it is
 refreshed.** `role` is stamped at registration, and migration `0043`
-backfilled every pre-0.6 row as `member` — the fail-closed value, because
+backfilled every pre-0.6 row as `member` (`0074` renames it `user`) — the fail-closed value, because
 nothing in the schema knows what role a pre-0.6 registrant actually held, and
 guessing `admin` would hand every key already in the deployment a cross-user
 reach it was never granted. Migration `0046` adds a second fail-closed
@@ -432,12 +445,12 @@ visible without reading the database: Settings → SSH keys badges the row
 **Admin override**. That badge reflects the STORED `role` only — it does not
 currently show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`,
 so a badged key can still be refused by the gateway once its stamp goes stale;
-the audit log (`ssh.auth`, `outcome=failure`, reason "admin override stale")
+the audit log (`ssh.authenticate`, `outcome=failure`, reason "admin override stale")
 is the authoritative signal for that, not the badge. It is still a
 self-service view only — there is no console listing of another human's keys,
 for the same reason the API has none.
 
-An override connection is audited distinctly: the `ssh.auth` success event
+An override connection is audited distinctly: the `ssh.authenticate` success event
 carries `override:true` in its data whenever the owner check did NOT match
 and the admin-role check is what let the connection through — so "who used
 the override, and when" is a normal audit-log query, not something you have
@@ -472,10 +485,10 @@ shell.
 `TERM`/`LANG`/`LC_*` from the client's environment into the exec — nothing
 else the client's shell happens to export reaches the sandbox.
 
-**Audit actions**: `ssh.auth` (every attempt, including failures),
+**Audit actions**: `ssh.authenticate` (every attempt, including failures),
 `session.attach` with `transport:ssh` in its data (the shell path — same
 action name the browser terminal uses, so both show up together in a run's
-timeline), `ssh.exec` (`argv`, `exit`), `ssh.sftp` (`bytes` transferred),
+timeline), `ssh.exec` (`argv`, `exit`), `ssh.sftp.transfer` (`bytes` transferred),
 `ssh.forward` (`port`, `bytes`). This is the source of record for these four;
 [`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md) is the vocabulary reference for
 every other audit action in the system and points back here for these.

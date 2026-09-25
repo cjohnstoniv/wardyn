@@ -119,8 +119,9 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	r.PolicyID = &polID
 	r.ConfinementClass = types.CC3
 	r.SandboxRef = "container-" + r.ID.String()
-	r.AutoStopAfterSec = 900        // the effective idle cap persists on the run row
-	r.AgentExecID = "agent-exec-01" // the exec id persists for restart-safe liveness
+	r.AutoStopAfterSec = 900           // the effective idle cap persists on the run row
+	r.AgentExecID = "agent-exec-01"    // the exec id persists for restart-safe liveness
+	r.ModelProviderID = "corp-gateway" // the run's model-provider choice (#527) persists on the row
 	created := persistRun(t, ctx, pool, r)
 
 	// CreateRun returns the hydrated row.
@@ -133,7 +134,7 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 		t.Fatalf("get run: %v", err)
 	}
 
-	// Field-by-field round-trip. got/want on each so a single regression is clear.
+	// Field-by-field round-trip. got/want on each so a single mismatch is clear.
 	if got.CreatedBy != r.CreatedBy {
 		t.Errorf("created_by = %q, want %q", got.CreatedBy, r.CreatedBy)
 	}
@@ -164,6 +165,9 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 	if got.AgentExecID != "agent-exec-01" {
 		t.Errorf("agent_exec_id = %q, want %q (exec id persists for restart-safe liveness)", got.AgentExecID, "agent-exec-01")
 	}
+	if got.ModelProviderID != "corp-gateway" {
+		t.Errorf("model_provider_id = %q, want %q (run's model-provider choice, #527)", got.ModelProviderID, "corp-gateway")
+	}
 	// SetRunAgentExecID scoped-writes the column post-create (the real path: the
 	// exec id is only known after Exec runs).
 	if err := store.NewPG(pool).SetRunAgentExecID(ctx, r.ID, "agent-exec-02"); err != nil {
@@ -186,8 +190,7 @@ func TestPG_CreateGetRun_RoundTrip(t *testing.T) {
 }
 
 // TestPG_UpdateRunStateIf_ConditionalTransition is the core state-machine
-// regression backing the reaper + completion-watcher fixes. UpdateRunStateIf
-// must:
+// guard behind the reaper and the completion watcher. UpdateRunStateIf must:
 //   - apply (return true) only when the row is STILL in fromState, and
 //   - return false WITHOUT clobbering when the row has already moved to a
 //     terminal state (the TOCTOU "someone else won the transition" case).
@@ -424,7 +427,7 @@ func TestPG_UpdateRunStateIfIdle_HoldAware(t *testing.T) {
 	}
 
 	// Case 3 — a PENDING approval with NO run-scoped bound (wait_budget_sec 0,
-	// ends_at NULL — a run created before migration 0069, or one with neither
+	// ends_at NULL — a run created before migration 0072, or one with neither
 	// set): openHoldSQL's LEAST(...) is NULL, which reads as "still open" (the
 	// deployment's own approval-expiry ceiling reaps it, not the idle reaper).
 	noBoundHold := persistRun(t, ctx, pool, newRun(types.RunRunning)) // WaitBudgetSec 0, EndsAt nil
@@ -596,7 +599,7 @@ func TestPG_TouchRun_Keepalive(t *testing.T) {
 	}
 }
 
-// TestPG_TouchRun_RefusesATerminalRun (W6-S1) pins the guard that bounds the
+// TestPG_TouchRun_RefusesATerminalRun pins the guard that bounds the
 // killed-run liveness gate's five-minute tail-upload grace.
 //
 // That grace is measured from agent_runs.updated_at, and TouchRun is called by

@@ -12,7 +12,7 @@ export const YOUR_MODEL_KEY = {
   // DRAFT (M2 canon pending) — X3-F3. The member's own key is stored under the
   // PROVIDER's conventional name, and which provider that is follows the org's
   // agent roster: a codex-only roster cannot use an anthropic key at all, so
-  // offering one was a write nothing would ever read. MEMBERS.md already names
+  // offering one was a write nothing would ever read. USERS.md already names
   // both. Keyed by the harness catalog id the roster row carries.
   BY_AGENT: {
     "claude-code": { secretName: "anthropic-api-key", placeholder: "sk-ant-…" },

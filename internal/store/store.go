@@ -29,6 +29,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // ErrNotFound is returned when a Get* call finds no row.
@@ -108,6 +109,13 @@ func (s PG) Ping(ctx context.Context) error {
 
 // AgentRun
 
+// createRunSQL is CreateRun's statement: one placeholder per runInsertCols
+// column, in order (TestCreateRunBindsEveryInsertColumn).
+var createRunSQL = `
+		INSERT INTO agent_runs (` + runInsertCols + `)
+		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
+		RETURNING ` + runCols
+
 // CreateRun inserts a new run and returns the persisted row.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
 	// updated_at ON THE DATABASE'S CLOCK, like every other writer of the column
@@ -121,21 +129,16 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	if !r.UpdatedAt.IsZero() {
 		updatedAge = db.AppClockAgeMicros(r.UpdatedAt, s.now())
 	}
-	q := `
-		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
-		RETURNING ` + runCols
-
 	limitsJSON, err := json.Marshal(r.RunLimits)
 	if err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: marshal run limits: %w", err)
 	}
-	row := s.Pool.QueryRow(ctx, q,
+	row := s.Pool.QueryRow(ctx, createRunSQL,
 		r.ID, r.CreatedAt, updatedAge, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs, string(r.AutonomyLevel),
-		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID,
+		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.ModelProviderID, r.UserType,
 	)
 	return scanRun(row)
 }
@@ -224,6 +227,9 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 // here); a NULL result (no run-scoped bound — wait_budget_sec 0 and ends_at
 // NULL) means the request is open until the deployment's own approval-expiry
 // ceiling reaps it, which is approval.ExpireStale's job, not the idle reaper's.
+// That ceiling only exists while its sweeper runs (WARDYN_APPROVAL_EXPIRY_INTERVAL
+// > 0); with it disabled, openHoldSQL has no other bound for the NULL case, so
+// such a request — and the run parked on it — stays open until decided.
 func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error) {
 	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now()
@@ -252,8 +258,8 @@ const openHoldSQL = `EXISTS (
 
 // execRun is the one body the scoped single-column agent_runs writers below
 // share: Exec, wrap a driver error as "store: <verb>", and translate "no row
-// matched" into ErrNotFound. verb is exactly the error text each writer used to
-// spell for itself, so the wrapped message a caller matches on is unchanged.
+// matched" into ErrNotFound. verb is the error text a caller matches on, so
+// each writer passes its own.
 // UpdateRunStateIf/UpdateRunStateIfIdle deliberately do NOT route through here:
 // zero rows affected is a legitimate no-op for a guarded transition, not a
 // missing row.
@@ -268,10 +274,14 @@ func (s PG) execRun(ctx context.Context, verb, query string, args ...any) error 
 	return nil
 }
 
-// SetSandboxRef records the runner reference (container ID / pod name).
+// SetSandboxRef records the runner reference (container ID / pod name). A
+// non-empty ref also records this release as the one that started the run's
+// proxy (proxy_release, migration 0084).
 func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
 	return s.execRun(ctx, "set sandbox ref",
-		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now() WHERE id=$2`, ref, id)
+		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now(),
+		   proxy_release = CASE WHEN $1 <> '' THEN $3 ELSE proxy_release END
+		 WHERE id=$2`, ref, id, version.Version)
 }
 
 // SetRunImage scoped-writes ONLY the resolved-image provenance column. Called
@@ -353,7 +363,7 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // (SetRunFailureHint) rather than by CreateRun is visible as exactly that, and
 // a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
-	`ends_at, wait_budget_sec, run_limits, governance_profile_id`
+	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type`
 const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, end_tightened_at`
 
 // scanRun is the ONE reader for runCols, which is now the ONE spelling of the
@@ -371,7 +381,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.PolicyID, &cc, &state,
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
 		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &autonomyLevel,
-		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID,
+		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID, &r.ModelProviderID, &r.UserType,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &r.EndTightenedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -461,7 +471,7 @@ func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec ty
 // Note: agent_runs.policy_id has NO foreign key, so a delete always succeeds even
 // while runs still reference the policy — those runs keep a dangling policy_id.
 // The run's authorization envelope survives regardless: dispatch records the
-// fully-widened spec as a run.policy.effective event in the append-only audit log.
+// fully-widened spec as a run.policy.resolve event in the append-only audit log.
 func (s PG) DeletePolicy(ctx context.Context, id uuid.UUID) error {
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM run_policies WHERE id=$1`, id)
 	if err != nil {
@@ -506,7 +516,7 @@ func (s PG) CreateGrant(ctx context.Context, g types.CredentialGrant) (types.Cre
 
 // ListGrantsByRun returns all grants for a run.
 func (s PG) ListGrantsByRun(ctx context.Context, runID uuid.UUID) ([]types.CredentialGrant, error) {
-	const q = `SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at`
+	const q = `SELECT id, run_id, created_at, spec FROM credential_grants WHERE run_id=$1 ORDER BY created_at, id`
 	return collect(ctx, s.Pool, "list", "grants", q, []any{runID}, scanGrant)
 }
 
@@ -792,7 +802,7 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 
 // LatestAuditEventByAction returns the most recent audit event whose action
 // equals the given action, or ErrNotFound when none exists. Used by /healthz to
-// find the latest kernel.sensor.heartbeat that drives the eBPF ground-truth
+// find the latest kernel.sensor.ping that drives the eBPF ground-truth
 // health state (so the stream reports healthy only while beats are arriving).
 //
 // Most recent by `time`, picked out of a seq-ordered window, and both halves
@@ -857,6 +867,7 @@ func scanAuditEvent(row pgx.Row) (types.AuditEvent, error) {
 	if len(dataRaw) > 0 {
 		ev.Data = json.RawMessage(dataRaw)
 	}
+	ev.DeviceID = FederatedDeviceID(ev)
 	return ev, nil
 }
 
@@ -884,9 +895,10 @@ func (s PG) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
 
 // PutSiteConfig upserts the single operator-wide site config row and returns
 // the persisted value. The `singleton` primary key (CHECKed true) makes a
-// second row impossible at the schema level; a write always REPLACES the whole
-// document (no partial merge — the API layer decodes and validates the full
-// document before calling this).
+// second row impossible at the schema level; a write REPLACES every key
+// types.SiteConfig declares (no partial merge — the API layer decodes and
+// validates the full document before calling this) and keeps any key it does
+// not, which only a newer wardynd could have written (declaredJSONKeys).
 func (s PG) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -895,10 +907,11 @@ func (s PG) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.Site
 	const q = `
 		INSERT INTO site_config (singleton, config, updated_at)
 		VALUES (true, $1, now())
-		ON CONFLICT (singleton) DO UPDATE SET config = EXCLUDED.config, updated_at = now()
+		ON CONFLICT (singleton) DO UPDATE
+			SET config = (site_config.config - $2::text[]) || EXCLUDED.config, updated_at = now()
 		RETURNING config`
 	var out []byte
-	if err := s.Pool.QueryRow(ctx, q, raw).Scan(&out); err != nil {
+	if err := s.Pool.QueryRow(ctx, q, raw, declaredJSONKeys(cfg)).Scan(&out); err != nil {
 		return types.SiteConfig{}, fmt.Errorf("store: put site config: %w", err)
 	}
 	var saved types.SiteConfig
