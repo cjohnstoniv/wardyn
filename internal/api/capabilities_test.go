@@ -221,6 +221,10 @@ type capStore struct {
 
 	// restricted is capability_restrictions: kind -> restricted values.
 	restricted map[string]map[string]bool
+	// restrictErr fails ListCapabilityRestrictions alone, distinct from the
+	// general s.err every other method checks — so a test can fail JUST the
+	// restriction read and see whether that alone can turn into an allow.
+	restrictErr error
 }
 
 func (s *capStore) ResolveUserDrive(context.Context, []string, []string, string) (
@@ -336,6 +340,9 @@ func (s *capStore) GetCapabilityEnforcement(context.Context) (map[string]bool, e
 }
 
 func (s *capStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	if s.restrictErr != nil {
+		return nil, s.restrictErr
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
