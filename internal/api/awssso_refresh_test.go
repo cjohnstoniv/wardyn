@@ -259,9 +259,9 @@ func TestAWSSSORefresh_InvalidGrantMarksDeadAndNeverFallsThroughToAPIKey(t *test
 	if _, err := s.cfg.Secrets.Get(context.Background(), harnessCredSecretName(awsSSOProvider)); !errors.Is(err, secretstore.ErrNotFound) {
 		t.Fatalf("stored sign-in after invalid_grant: err = %v, want it deleted", err)
 	}
-	if del := audit.find("credential.expired_deleted"); len(del) != 1 || del[0].Outcome != "success" ||
+	if del := audit.find("credential.expired.delete"); len(del) != 1 || del[0].Outcome != "success" ||
 		!strings.Contains(string(del[0].Data), `"reason":"invalid_grant"`) {
-		t.Fatalf("credential.expired_deleted rows = %+v; want one success row with reason invalid_grant", del)
+		t.Fatalf("credential.expired.delete rows = %+v; want one success row with reason invalid_grant", del)
 	}
 	ba2 := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, true, nil, awsSSOScope{})
 	if ba2.ready || ba2.ssoInject {

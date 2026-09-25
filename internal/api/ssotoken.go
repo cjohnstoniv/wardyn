@@ -295,7 +295,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		captured["model_provider"] = stamp.ModelProvider
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-		"harness.credential.captured", scope.ssoSecret(), "success", mustJSON(captured)))
+		"harness.credential.capture", scope.ssoSecret(), "success", mustJSON(captured)))
 
 	// A sign-in answers any held run. Every PENDING credential_reauth
 	// this capture satisfies moves to APPROVED, so the sidecar holding that run's
@@ -436,7 +436,7 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	// needs no new trust source: the region is the same
 	// cmp.Or(BedrockAWSSSORegion, BedrockRegion) boot config this sandbox was
 	// launched with, and the start URL is the operator's own request value read
-	// back off THIS run's harness.login.started row.
+	// back off THIS run's harness.login.start row.
 	//
 	// A provider sign-in binds to that provider's region and model as they read
 	// at launch (its stamp), never the boot config; an empty one refuses.

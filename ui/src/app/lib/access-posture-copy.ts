@@ -16,6 +16,11 @@ import { SIGNIN_HELP_LINK_LABEL } from "./people-access-copy";
 export const ADMIN_ACCESS_BANNER = {
   TITLE: "Everyone who signs in is an admin",
   BODY: "Nobody is mapped to a role and no admin list is set, so every person your identity provider lets in can change policies, read and write secrets, decide approvals, and open a shell in any running sandbox.",
+  // #491/Q491-1 — shown in place of BODY when the sso_rbac row's cause is
+  // "default_role": a role map is set, but WARDYN_OIDC_DEFAULT_ROLE=admin
+  // still lets an unmatched sign-in through as admin. Same title, same CTA.
+  BODY_DEFAULT_ROLE:
+    "The default role is admin, so anyone your identity provider lets in whom the role map doesn't match can still change policies, read and write secrets, decide approvals, and open a shell in any running sandbox.",
   ACTION: "Set who is an admin",
 } as const;
 

@@ -161,7 +161,7 @@ var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channe
 //
 // user_view is a marker, present only when true — renamed in 0.8 from
 // member_mode (docs/OPERATIONS.md's "Renamed in 0.8" appendix; history not
-// rewritten, and no dual-emit here unlike auth.user_view's own action row:
+// rewritten, and no dual-emit here unlike auth.user_view.set's own action row:
 // this key lives inside authz.denied's own Data map, not on a separate audit
 // row, so there is no old-key row to keep landing). user_type (the caller's
 // stamped type, or the type a user view looks through) rides on its own,

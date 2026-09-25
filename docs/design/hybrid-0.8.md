@@ -78,7 +78,7 @@ sets their own ceiling is not a person an org control plane bounds.
 
 **An audited channel into a running sandbox is DONE.** The SSH gateway runs the
 sandbox's own `sftp-server` as the subsystem's backing process — no SFTP protocol
-reimplementation — and audits it as `ssh.sftp`
+reimplementation — and audits it as `ssh.sftp.transfer`
 (`internal/api/sshgateway_channels.go:687-713`). That channel is the one existing
 seam through which bytes can move between a human's machine and a sandbox under an
 audit row, and §7 builds on it rather than inventing a transport.
@@ -345,7 +345,7 @@ is permanent, and §8 carries the security half of the argument.
 ### 7.2 Option (ii) — file sync over the EXISTING sftp channel: the follow-on
 
 The gateway already runs the sandbox's own `sftp-server` as the subsystem's backing
-process and audits every session as `ssh.sftp`
+process and audits every session as `ssh.sftp.transfer`
 (`internal/api/sshgateway_channels.go:687-713`). A mutagen- or rsync-shaped
 bidirectional sync of ONE local directory against a per-user PVC needs **no new
 protocol surface** — it is a client on a channel that already exists, under an audit
@@ -420,7 +420,7 @@ adds no new reachable surface, so it goes first.
 
 Under **(ii)**, the laptop's bytes do leave — but through an audited, run-scoped,
 governed channel. **New audit actions: none required either**, because the sftp
-channel already audits as `ssh.sftp`; what a sync lane should add is one action of
+channel already audits as `ssh.sftp.transfer`; what a sync lane should add is one action of
 its own naming the selected directory, so a reader can distinguish a human's
 interactive `sftp` session from a sync engine holding one for a run's lifetime.
 The blast radius is the directory the human selected — not a mount namespace, not

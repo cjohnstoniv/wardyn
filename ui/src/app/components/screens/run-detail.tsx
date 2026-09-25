@@ -112,16 +112,16 @@ export function RunDetailScreen() {
   const [egress, setEgress] = React.useState<EgressDecision[]>([]);
   const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
   const [audit, setAudit] = React.useState<AuditEvent[]>([]);
-  // The run's session.recording events, indexed SEPARATELY from the
+  // The run's session.recording.write events, indexed SEPARATELY from the
   // general audit trail — that trail is fetched oldest-first with a hard
-  // 1000-row cap (LIST_LIMIT), so a chatty run's earlier session.recording
+  // 1000-row cap (LIST_LIMIT), so a chatty run's earlier session.recording.write
   // events can crowd out later ones (or vice versa: an early one falls off)
   // before the recording picker ever sees them. A tiny second, filtered
   // fetch spends its own 1000-row budget on just this action.
   const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
   // F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
   // trail — the first ones the 1000-row cap on `audit` above pushes off —
-  // scoped-fetched the same way session.recording is, so the exit code and
+  // scoped-fetched the same way session.recording.write is, so the exit code and
   // ending derivation stay known past that cap.
   const [endingAudit, setEndingAudit] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
@@ -181,7 +181,7 @@ export function RunDetailScreen() {
         // and internal/api/approvals.go:56-61.
         approvalsApi.listApprovals("", id),
         auditApi.listAudit(id),
-        auditApi.listAudit(id, "session.recording"),
+        auditApi.listAudit(id, "session.recording.write"),
       ])
         .then(([r, g, runApprovals, a, recA]) => {
           if (r.status === "rejected") {
@@ -668,11 +668,11 @@ function Cockpit({
 // Every human attach session is recorded and masked, but under a COMPOSITE cast
 // key the console never asked for — so it is write-only without an index.
 // There is no list-casts endpoint (and no Store.List to add one on): the
-// index is a session.recording-FILTERED audit fetch — not the
+// index is a session.recording.write-FILTERED audit fetch — not the
 // general trail, whose own 1000-row cap a chatty run can blow through —
 // where the event's TARGET is that very key.
 function attachSessions(audit: AuditEvent[]): AuditEvent[] {
-  return audit.filter((e) => e.action === "session.recording" && e.outcome === "success" && e.target);
+  return audit.filter((e) => e.action === "session.recording.write" && e.outcome === "success" && e.target);
 }
 
 // Approvals tab (this run's approvals)
@@ -915,7 +915,7 @@ function RecordingTab({
    *  cast means "it can't", not "it hasn't yet". */
   recordingDisabled: boolean;
   runId: string;
-  // The run's interactive attach sessions (session.recording audit events).
+  // The run's interactive attach sessions (session.recording.write audit events).
   sessions: AuditEvent[];
   selected: string;
   onSelect: (key: string) => void;

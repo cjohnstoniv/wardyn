@@ -423,7 +423,7 @@ func TestInlinePolicy_DropsAreAggregatedPerReason(t *testing.T) {
 
 // TestInlinePolicy_PreflightDoesNotAudit: Review re-resolves on every edit, so a
 // dry run warns without writing denials nobody's run ever hit — the same rule
-// policy.inline already follows.
+// policy.inline.apply already follows.
 func TestInlinePolicy_PreflightDoesNotAudit(t *testing.T) {
 	h := capPolicyServer(t, nil, map[string]bool{capEgressHost: true})
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC2, AllowedDomains: []string{"pypi.org"}}
