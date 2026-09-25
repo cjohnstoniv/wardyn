@@ -195,6 +195,15 @@ export function ModelAccessProvider({
   return <ModelAccessContext.Provider value={value}>{children}</ModelAccessContext.Provider>;
 }
 
+/** The shell's last /setup/status, ungraded, and its re-read — for a shell
+ *  band that reads a different row of the same answer (the everyone-is-an-
+ *  admin banner) instead of fetching the expensive endpoint a second time, and
+ *  for the one screen whose writes change that row (the People step). */
+export function useShellSetupStatus(): { status: SetupStatus | null; refresh: () => void | Promise<unknown> } {
+  const { status, refresh } = React.useContext(ModelAccessContext);
+  return React.useMemo(() => ({ status, refresh }), [status, refresh]);
+}
+
 /**
  * useModelAccessDoor grades the shell's last /setup/status for THIS viewer and
  * hands back the shared door controls.

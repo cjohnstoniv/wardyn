@@ -39,6 +39,10 @@ func (r3PlainStore) ListCapabilityGrantsFor(context.Context, []string, []string,
 func (r3PlainStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, nil
 }
+
+func (r3PlainStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
 func (r3PlainStore) ListWorkspaces(context.Context) ([]types.Workspace, error) { return nil, nil }
 func (r3PlainStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil

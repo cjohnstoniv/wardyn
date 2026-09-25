@@ -92,9 +92,9 @@ two card CTAs never drift into four spellings of one control — this document d
 
 ### 3.3 Behaviour notes (not copy, but load-bearing for the next visual change)
 
-- Suppressed entirely on `/setup` (the page *is* the door); suppressed on `/settings` and
-  `/providers` for an operator only, since those pages mount their own sign-in pane for the same
-  states.
+- Suppressed entirely on `/setup` (the page *is* the door); suppressed on `/admin/settings`,
+  `/admin/providers` and `/account` for an operator only, since those pages mount their own
+  sign-in pane for the same states.
 - The first-run (`not_configured`) and the non-operator dead-shared-credential states are the only
   two a viewer may dismiss for the session (`sessionStorage`, keyed per-principal so a sign-out in
   the same tab cannot pre-dismiss it for the next person).
@@ -139,7 +139,7 @@ document's scope, since none of the four named surfaces open it.
 | `doneMarker` | `wardyn: aws sso credential captured` |
 | `failMarker` | `wardyn: aws sso credential rejected:` |
 | `expects[0]` | A sandboxed login run starts and a terminal appears here, running `aws sso login` — with no credential to start from. |
-| `expects[1]` | A browser tab opens the AWS verification page: enter the short code the terminal shows and approve with your IAM Identity Center login. |
+| `expects[1]` | When the AWS verification page is ready, “Open AWS sign-in” opens it in a new tab: enter the code shown beside the button and approve with your IAM Identity Center login. (#628: the tab opens only from that button.) |
 | `expects[2]` | The SSO session is uploaded from inside the sandbox and stored write-only; Bedrock runs exchange it for short-lived role credentials. |
 | `blurb`, `startURLManaged=false` | Give Wardyn your organization’s AWS access portal URL and it opens a sandbox, writes a minimal `~/.aws/config` holding just that URL and the configured SSO region (no credential — the sandbox has none to start with), and runs `aws sso login` for you. It prints a verification URL and a short user code — open the link in any browser, enter the code, and approve. Wardyn then captures the SSO session automatically so later Bedrock runs can exchange it for short-lived role credentials — with no host `~/.aws` mount and no static keys. |
 | `blurb`, `startURLManaged=true` | Same body, opening clause replaced with `login-pane-copy.ts#AWS_BLURB_MANAGED_OPENING` ("Your admin set your organization's AWS access portal; there is nothing to enter.") followed by "Wardyn". |
@@ -152,11 +152,11 @@ the clock and a failure-streak floor both have to agree before the wait calls it
 
 | Verdict | Condition | Sentence |
 |---|---|---|
-| `starting` | Default / a healthy short wait / a read blip under the retrying floor | `LOGIN_SANDBOX_STARTING` — "Starting the sign-in sandbox. A first start may need to pull the image, which can take a few minutes." |
+| `starting` | Default / a healthy short wait / a read blip under the retrying floor | No sentence: the door's steps (`login-pane-copy.ts#SIGNIN_PROGRESS`, #628) say it — "Starting the sign-in sandbox", or "Downloading the sign-in image — first time only" with "Can take a few minutes the first time." while the substrate reports `Pulling` — the Docker runner only; the kubelet reports `ContainerCreating` through a pull, so on Kubernetes the first step stays lit. |
 | `slow` | Reads are healthy, ≥ `RUN_POLL_SLOW_START_MS` (60 s) elapsed, still not up | The run's own `status_detail` sentence if one exists, else `LOGIN_SANDBOX_SLOW_START` — "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet. A first start may need to pull the image, which can take a few minutes." |
 | `retrying` | Reads have been failing for ≥ `RUN_POLL_RETRYING_AFTER_MS` (10 s) but under the unreadable floor | `LOGIN_SANDBOX_READ_RETRYING` — "Wardyn can't read the sign-in sandbox right now — still trying. It may be starting normally." |
 | `unreadable` | Reads failing ≥ `RUN_POLL_UNREADABLE_AFTER_MS` (`LAUNCH_DEADLINE_MS`) **and** ≥ `RUN_POLL_MIN_FAILURES` (15) consecutive failures | `LOGIN_SANDBOX_UNREADABLE` — "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again." Ends the wait; phase → `error`. |
-| `stuck` | The substrate reports a terminal reason (`ImagePullBackOff`, `CreateContainerError`, `CreateContainerConfigError`, `CrashLoopBackOff`, …) | `LOGIN_SANDBOX_STUCK_LEAD_IN` ("The sign-in sandbox cannot start — this needs your admin; trying again gets the same answer until they fix it.") followed by the substrate's own sentence. Ends the wait; phase → `error`. |
+| `stuck` | The substrate reports a terminal reason (`ImagePullBackOff`, `CreateContainerError`, `CreateContainerConfigError`, `CrashLoopBackOff`, …) | An image-pull reason (`ImagePullBackOff`, `ErrImagePull`, `InvalidImageName`) is #628's state 7: "Downloading the sign-in image — failed", the run's `status_detail` as is, and Retry. Any other: `LOGIN_SANDBOX_STUCK_LEAD_IN` ("The sign-in sandbox cannot start — this needs your admin; trying again gets the same answer until they fix it.") followed by the substrate's own sentence. Ends the wait; phase → `error`. |
 
 If the run itself goes terminal while `starting` (killed/stopped with no substrate reason):
 `LOGIN_SANDBOX_ENDED` — "The sign-in sandbox stopped before it was ready — nothing was captured. Try
@@ -167,8 +167,11 @@ carries one.
 
 | Condition | Text |
 |---|---|
-| Auth URL known, tab blocked | `auth-tab-handle.ts#AUTH_TAB_BLOCKED_NOTE` — "Your browser blocked the automatic tab — use the link above to open the verification page." |
-| Neither `signedIn` nor auto-captured yet | "In the tab that opened (or the link above), enter the user code shown in the terminal and approve. Wardyn captures the session automatically when the login completes." |
+| Link not yet printed | `login-pane-copy.ts#SIGNIN_PROGRESS.WAIT_HINT` — "Waiting on {provider} to hand back a verification link." (`signin-progress.tsx`) |
+| Link ready, tab not opened | `SIGNIN_PROGRESS.OPEN` — "Open {provider} sign-in" (the provider tab opens only from this button), with the device code beside it |
+| Link ready, popup blocked | `SIGNIN_PROGRESS.COPY_LEAD` + `COPY_LINK` — "If nothing opens:" "copy the link" — {url} |
+| Tab opened | `SIGNIN_PROGRESS.TAB_OPEN` — "The {provider} sign-in tab is open. Waiting for your approval there." |
+| Tab opened, person wants it again | `SIGNIN_PROGRESS.REOPEN` — "Reopen tab" |
 | CLI printed its own success line (`capture-confirm.ts#extractSignedIn`, a hint only — never a verdict) | `capture-confirm.ts#CAPTURE_HANDOFF` — "The sign-in tool reports you are signed in. Wardyn is waiting for the sandbox to hand over your session. If the terminal above lists accounts or roles, click or tab into it, type the number you want and press Enter — it may ask twice, account then role." |
 | Auto-captured, still saving | "SSO session captured — connecting…" |
 

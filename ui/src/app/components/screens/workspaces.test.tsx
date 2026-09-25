@@ -76,8 +76,10 @@ describe("WorkspacesScreen — list columns", () => {
   });
 
   it("Source column: a multi-source workspace shows the composition summary instead", async () => {
-    const w = ws({}, { status: "scanned" }) as unknown as Workspace & { sources: unknown[] };
-    w.sources = [{ type: "local_dir", path: "/a" }, { type: "local_dir", path: "/b" }, { type: "repo", source: "acme/x" }];
+    const w = ws({}, {
+      status: "scanned",
+      sources: [{ type: "local_dir", path: "/a" }, { type: "local_dir", path: "/b" }, { type: "repo", source: "acme/x" }],
+    });
     listWorkspacesMock.mockResolvedValue([w]);
     renderScreen();
     expect(await screen.findByText("2 dirs · 1 repo")).toBeInTheDocument();
@@ -135,8 +137,8 @@ describe("WorkspacesScreen — a source is not an enabled provider", () => {
       kind: "repo",
       source: REPO_URL,
       status: "scanned",
-    }) as unknown as Workspace & { sources: unknown[] };
-    w.sources = [{ type: "repo", source: REPO_URL, admitted: false }];
+      sources: [{ type: "repo", source: REPO_URL, admitted: false }],
+    });
     listWorkspacesMock.mockResolvedValue([w]);
     renderScreen();
     const text = await screen.findByText(PROVIDERS.CARD_NOT_ADMITTED);
@@ -151,10 +153,12 @@ describe("WorkspacesScreen — a source is not an enabled provider", () => {
   });
 
   it("a row with admitted:true renders no sentence", async () => {
-    const w = ws({}, { kind: "repo", source: "acme/payments", status: "scanned" }) as unknown as Workspace & {
-      sources: unknown[];
-    };
-    w.sources = [{ type: "repo", source: "acme/payments", admitted: true }];
+    const w = ws({}, {
+      kind: "repo",
+      source: "acme/payments",
+      status: "scanned",
+      sources: [{ type: "repo", source: "acme/payments", admitted: true }],
+    });
     listWorkspacesMock.mockResolvedValue([w]);
     renderScreen();
     await screen.findByText("payments");
@@ -162,10 +166,12 @@ describe("WorkspacesScreen — a source is not an enabled provider", () => {
   });
 
   it("an older daemon's absent `admitted` key (undefined, never false) renders no sentence", async () => {
-    const w = ws({}, { kind: "repo", source: "acme/payments", status: "scanned" }) as unknown as Workspace & {
-      sources: unknown[];
-    };
-    w.sources = [{ type: "repo", source: "acme/payments" }];
+    const w = ws({}, {
+      kind: "repo",
+      source: "acme/payments",
+      status: "scanned",
+      sources: [{ type: "repo", source: "acme/payments" }],
+    });
     listWorkspacesMock.mockResolvedValue([w]);
     renderScreen();
     await screen.findByText("payments");
@@ -286,7 +292,8 @@ describe("WorkspacesScreen — Add workspace dialog opens from both the header b
 // M3 (0027f514): POST /workspaces is member-allowed now — the header "Add
 // workspace" button used to be operator-only. Pin that a MEMBER role sees it
 // enabled, not gated behind the operator-only chip/disabled state.
-describe("WorkspacesScreen — M3 member workspace access", () => {
+describe("WorkspacesScreen — member workspace access", () => {
+  // ticket: M3
   beforeEach(() => {
     listWorkspacesMock.mockReset().mockResolvedValue([]);
     createWorkspaceMock.mockReset();

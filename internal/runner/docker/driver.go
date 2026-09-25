@@ -183,6 +183,7 @@ const mainProcCastDir = "/tmp/wardyn-rec"
 // Driver is the OCI/Docker confinement substrate; the orchestrator wraps it to
 // present the runner.Runner surface to the control plane.
 var _ substrate.Substrate = (*Driver)(nil)
+var _ runner.SandboxEnder = (*Driver)(nil)
 
 // New constructs a Driver against the host Docker daemon. API-version negotiation
 // with the server is on by default in the moby v29 client (forward/backward compat).

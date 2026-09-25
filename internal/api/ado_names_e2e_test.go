@@ -83,8 +83,8 @@ func TestADONames_ImportLaunchCloneFetchPush(t *testing.T) {
 	}
 	s, _ := newADODispatchServer(&adoTestStore{})
 	policy, env, runID := types.RunPolicySpec{}, map[string]string{}, uuid.New()
-	lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: runID}, ado, true, adoEntraUngraded(),
-		dispatchLLMPlan{mitmCACertPEM: string(caCert), mitmCAKeyPEM: string(caKey)}, &policy, env, nil)
+	lane, ok := s.authorADOEntraLane(context.Background(), types.AgentRun{ID: runID}, ado, true,
+		adoEntraUngraded(), dispatchLLMPlan{mitmCACertPEM: string(caCert), mitmCAKeyPEM: string(caKey)}, &policy, env, nil)
 	if !ok {
 		t.Fatal("dispatch refused the lane")
 	}

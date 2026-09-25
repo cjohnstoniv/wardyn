@@ -64,19 +64,18 @@
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
+import { USER_PREVIEW } from "../../src/app/components/wardyn/copy/console-view";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
 import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/capture-confirm";
-import { LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/login-pane-copy";
+import { LOGIN_SANDBOX_UNREADABLE, SIGNIN_PROGRESS } from "../../src/app/components/screens/settings/login-pane-copy";
 import {
   LOGIN_SANDBOX_SLOW_START,
   LOGIN_SANDBOX_READ_RETRYING,
-  LOGIN_SANDBOX_STUCK_LEAD_IN,
 } from "../../src/app/components/screens/settings/login-start-wait";
 // 0.7.6 lane starting-detail (finding 6). run-status-detail.ts is deliberately
 // CSS-free and component-free so a Playwright spec can import it — the same
 // rule helpers.ts states for SELFRUN_MARKER.
-import { STARTING_UNSCHEDULABLE, STUCK_IMAGE_PULL } from "../../src/app/components/screens/run-status-detail";
+import { STARTING_UNSCHEDULABLE } from "../../src/app/components/screens/run-status-detail";
 // 0.7.6 lanes ui-model-access-door (the strip) and ui-new-run-model-access (the
 // rail), by constant name from local/v076/canon/*-docs.md.
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
@@ -269,34 +268,36 @@ async function approvalsFor(page: Page, runID: string): Promise<unknown[]> {
  *  carry the e2e daemon's bearer token and base URL, neither of which applies
  *  on a cluster driven through Dex. */
 async function gotoAgentsTab(page: Page): Promise<void> {
-  // NEVER `page.goto("/settings")` as the admin. App.tsx's RequireSetup bounces
-  // the FIRST gated-route render of every full document load into /setup while
-  // any setup check grades fail or warn — which a fresh kind install always does
-  // — and only ONCE per load (setup-gate.ts's gateFiredThisLoad). 0.7.5's first
-  // green-looking walk sat 30 minutes on the welcome page for exactly this.
+  // NEVER `page.goto("/admin/settings")` as the admin. App.tsx's RequireSetup
+  // bounces the FIRST gated-route render of every full document load into
+  // /setup while any setup check grades fail or warn — which a fresh kind
+  // install always does — and only ONCE per load (setup-gate.ts's
+  // gateFiredThisLoad). 0.7.5's first green-looking walk sat 30 minutes on the
+  // welcome page for exactly this.
   //
   // AND NEVER TIME THE BOUNCE. The gate decides when /setup/status and /me have
   // BOTH answered, not when the URL changes: the second attempt here loaded
   // /runs, waited for "/runs or /setup" — which the URL satisfies the instant
-  // goto returns, before either answer — pushed /settings, and the gate then
-  // spent its one bounce ON /settings. So navigate client-side (pushState +
-  // popstate, what a <NavLink> click does — ui/e2e/fixtures.ts's navToRoute; a
-  // second full load would re-arm the gate) and let the page say when it took:
-  // the Settings card only paints once the gate has let the route through, and
-  // if the one bounce landed on top of this navigation the retry cannot be
-  // bounced again. Correct whichever side of the gate's decision it starts on.
+  // goto returns, before either answer — pushed /admin/settings, and the gate
+  // then spent its one bounce ON /admin/settings. So navigate client-side
+  // (pushState + popstate, what a <NavLink> click does — ui/e2e/fixtures.ts's
+  // navToRoute; a second full load would re-arm the gate) and let the page say
+  // when it took: the Settings card only paints once the gate has let the
+  // route through, and if the one bounce landed on top of this navigation the
+  // retry cannot be bounced again. Correct whichever side of the gate's
+  // decision it starts on.
   await page.goto("/runs");
   await expect(async () => {
-    if (!/\/settings$/.test(page.url())) {
+    if (!/\/admin\/settings$/.test(page.url())) {
       await page.evaluate((path) => {
         window.history.pushState({}, "", path);
         window.dispatchEvent(new PopStateEvent("popstate"));
-      }, "/settings");
+      }, "/admin/settings");
     }
     await expect(page.getByTestId("providers-card")).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 90_000 });
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
-  await expect(page).toHaveURL(/\/providers$/);
+  await expect(page).toHaveURL(/\/admin\/providers$/);
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
 }
 
@@ -706,9 +707,14 @@ test("E (login-pane): a sign-in held 65 s in STARTING reads as slow, never as un
   // SUBSTRATE's sentence instead of the hedged clock one: it names SCHEDULING
   // for a wait that is not a pull, which is the whole of finding 6 in one
   // assertion. The 65 s hold above is load-bearing for it: below
-  // RUN_POLL_SLOW_START_MS (60 s) the pane still shows LOGIN_SANDBOX_STARTING,
-  // because Unschedulable is NOT terminal and therefore grades on the clock.
+  // RUN_POLL_SLOW_START_MS (60 s) the pane shows only its first step, because
+  // Unschedulable is NOT terminal and therefore grades on the clock.
   await expect(page.getByText(STARTING_UNSCHEDULABLE)).toBeVisible();
+  // #628: the whole hold was narrated in the door itself, on its first step —
+  // the person was never sent to a blank tab to wait.
+  await expect(
+    page.getByTestId("signin-progress").getByRole("listitem").filter({ hasText: SIGNIN_PROGRESS.STEP_START }),
+  ).toHaveAttribute("data-state", "active");
   // …and the sentence it REPLACED is gone. Asserting only the new one would
   // pass on a pane that showed both, which is the thing finding 6 is against.
   await expect(page.getByText(LOGIN_SANDBOX_SLOW_START)).toHaveCount(0);
@@ -952,8 +958,10 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
   try {
     // The rollout replaced the pod; wait for the new one to actually serve
     // before driving a browser at it.
+    // The old pod drops its connections mid-rollout (ECONNRESET); a thrown
+    // request is "not serving yet", not a failure.
     await expect
-      .poll(async () => (await request.get("/healthz")).status(), { timeout: 120_000 })
+      .poll(async () => (await request.get("/healthz").catch(() => null))?.status() ?? 0, { timeout: 120_000 })
       .toBe(200);
 
     await dexSignIn(page, MEMBER_EMAIL);
@@ -965,25 +973,25 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
     // only makes it stricter.
     const started = Date.now();
 
-    // The lead-in names the speaker; the sentence after it is the SUBSTRATE's,
-    // and the registry's own message follows the colon because that is what
-    // names the fix.
-    await expect(page.getByText(STUCK_IMAGE_PULL)).toBeVisible({ timeout: 20_000 });
+    // #628 state 7: the door's download step reads failed, and the alert is
+    // the server's own status_detail as is — the registry's words are in it,
+    // because they are what names the fix.
+    await expect(
+      page.getByTestId("signin-progress").getByRole("listitem").filter({ hasText: SIGNIN_PROGRESS.STEP_DOWNLOAD_FAILED }),
+    ).toBeVisible({ timeout: 20_000 });
     const elapsed = Date.now() - started;
     expect(elapsed, "a terminal reason must end the wait on the reason, not on the 5-minute clock").toBeLessThan(
       20_000,
     );
-    await expect(page.getByText(LOGIN_SANDBOX_STUCK_LEAD_IN)).toBeVisible();
+    await expect(page.getByTestId("harness-login-pane").getByRole("alert")).toContainText("no-such-tag-0f0f");
     // Neither of the two clock-graded sentences: this wait never became "slow",
     // and Wardyn could read the run throughout.
     await expect(page.getByText(LOGIN_SANDBOX_SLOW_START)).toHaveCount(0);
     await expect(page.getByText(LOGIN_SANDBOX_UNREADABLE)).toHaveCount(0);
-    // CANCEL ONLY. "Try again" is suppressed on a terminal reason (round-2 UX
-    // B3/S9) — trying again gets the same answer until somebody changes the
-    // image, and offering it would be the pane pretending the answer is not
-    // final.
-    await expect(page.getByRole("button", { name: /try again/i })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Cancel" }).first()).toBeVisible();
+    // The approved packet offers Retry here (it starts a fresh sandbox), and
+    // Cancel beside it.
+    await expect(page.getByRole("button", { name: SIGNIN_PROGRESS.RETRY })).toBeVisible();
+    await expect(page.getByRole("button", { name: SIGNIN_PROGRESS.CANCEL }).first()).toBeVisible();
 
     // The same evidence on the wire, which is what makes the sentence above
     // more than a console string: a run that went STARTING → FAILED between two
@@ -1096,10 +1104,10 @@ test("F (member-preview): an admin previews the state a member is in before they
   await signInThroughPane(page, openAdminLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
 
-  // Into the preview.
-  await page.locator("header").getByRole("button").last().click();
-  await page.getByRole("menuitem", { name: MEMBER_MODE.MENU_NEW }).click();
-  await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeVisible({ timeout: 60_000 });
+  // Into the preview, from the Permissions header (M-2).
+  await page.goto("/admin/permissions");
+  await page.getByRole("button", { name: USER_PREVIEW.MENU_NEW }).click();
+  await expect(page.getByText(USER_PREVIEW.BANNER)).toBeVisible({ timeout: 60_000 });
   await expect.poll(async () => (await me(page)).user_view_no_credential, { timeout: 30_000 }).toBe(true);
 
   // The state every new member is in, and the one the plain toggle structurally
@@ -1125,8 +1133,8 @@ test("F (member-preview): an admin previews the state a member is in before they
 
   // Nothing was deleted: the admin's session sits untouched in the store and
   // comes back the moment they exit.
-  await page.getByRole("button", { name: MEMBER_MODE.EXIT }).click();
-  await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeHidden({ timeout: 60_000 });
+  await page.getByRole("button", { name: USER_PREVIEW.EXIT }).click();
+  await expect(page.getByText(USER_PREVIEW.BANNER)).toBeHidden({ timeout: 60_000 });
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("live");
 });
 
@@ -1189,13 +1197,26 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
 
   // The server's own story of THIS click: created (never refused), credentialed
   // on the fresh capture, and executed. A member reads their own run's trail.
-  const actions = (await page.evaluate(async (id: string) => {
-    const r = await fetch(`/api/v1/audit?run_id=${encodeURIComponent(id)}&limit=200`, { credentials: "include" });
-    const body = (await r.json()) as { items?: Array<{ action: string; outcome?: string }> } | Array<{ action: string; outcome?: string }>;
-    return (Array.isArray(body) ? body : (body.items ?? [])).map((e) => `${e.action}:${e.outcome ?? ""}`);
-  }, runID)) as string[];
+  // POLLED, not read once (#804): run.exec is a follow-on write after the
+  // create that already got this spec onto the run page, and under load the
+  // row can land after a single read — a live walk saw run.create,
+  // credential.mint, secret.read and identity.renew all present with run.exec
+  // still missing. Poll the trail (bounded by SANDBOX_UP, the same ceiling
+  // dispatch itself races against) until run.exec:success appears, and keep
+  // the LAST read for the assertions below rather than fetching again.
+  let actions: string[] = [];
+  const readAuditTrail = async (): Promise<string[]> => {
+    actions = (await page.evaluate(async (id: string) => {
+      const r = await fetch(`/api/v1/audit?run_id=${encodeURIComponent(id)}&limit=200`, { credentials: "include" });
+      const body = (await r.json()) as { items?: Array<{ action: string; outcome?: string }> } | Array<{ action: string; outcome?: string }>;
+      return (Array.isArray(body) ? body : (body.items ?? [])).map((e) => `${e.action}:${e.outcome ?? ""}`);
+    }, runID)) as string[];
+    return actions;
+  };
+  await expect
+    .poll(readAuditTrail, { timeout: SANDBOX_UP })
+    .toContain("run.exec:success");
   expect(actions, "the relaunch created the run").toContain("run.create:success");
-  expect(actions, "the run was dispatched on the fresh capture and executed").toContain("run.exec:success");
   expect(actions.filter((a) => a.startsWith("run.create:failure")), "never refused for its credential").toEqual([]);
 
   // The server agrees on both halves: the member is live again, and the run

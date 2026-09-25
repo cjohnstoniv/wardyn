@@ -32,8 +32,9 @@ import (
 // session, or the status itself is the existence oracle denyForeignWorkspace
 // exists to close.
 
-// TestF335_ForeignMemberWorkspaceNotLaunchable is door 1.
-func TestF335_ForeignMemberWorkspaceNotLaunchable(t *testing.T) {
+// TestForeignMemberWorkspaceNotLaunchable is door 1.
+func TestForeignMemberWorkspaceNotLaunchable(t *testing.T) {
+	// ticket: F335
 	for _, tc := range []struct{ name, sub, email, role string }{
 		{"plain member", ownerOtherSub, "other@corp.example", oidc.RoleUser},
 		{"security admin", "sub-sec-admin", "sec@corp.example", oidc.RoleSecurityAdmin},
@@ -64,12 +65,13 @@ func TestF335_ForeignMemberWorkspaceNotLaunchable(t *testing.T) {
 	}
 }
 
-// TestF335_ForeignMemberSourceRefusedOnResolvedSpec is door 2: the same refusal
+// TestForeignMemberSourceRefusedOnResolvedSpec is door 2: the same refusal
 // on the RESOLVED spec, which is what a hand-authored policy naming the path
 // directly walks through. Driven at seedAndAdmitWorkspace, the chokepoint
 // create AND preflight share, so neither can preview or launch what the other
 // refuses.
-func TestF335_ForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
+func TestForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
+	// ticket: F335
 	root, project := memberProjectRoot(t)
 	srv, st, _ := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 	memberOwnedWorkspace(st, ownerMemberSub, project) // the OTHER member's onboarded dir
@@ -96,10 +98,11 @@ func TestF335_ForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
 	}
 }
 
-// TestF335_OwnAndOperatorWorkspacesStillLaunch is the counterfactual that stops
+// TestOwnAndOperatorWorkspacesStillLaunch is the counterfactual that stops
 // the gate above from being satisfied by refusing everyone: the owner's own
 // workspace and an OPERATOR-owned one both still reach the runner.
-func TestF335_OwnAndOperatorWorkspacesStillLaunch(t *testing.T) {
+func TestOwnAndOperatorWorkspacesStillLaunch(t *testing.T) {
+	// ticket: F335
 	for _, tc := range []struct{ name, owner string }{
 		{"own workspace", ownerMemberSub},
 		{"operator-owned workspace", ""},

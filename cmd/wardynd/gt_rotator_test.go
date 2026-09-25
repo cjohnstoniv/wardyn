@@ -45,10 +45,10 @@ func TestWriteTokenFileAtomic_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestRotator_SeedsFileImmediately is the producer regression: the shipped
-// deployment had no process keeping the token file fresh, so the ingest went blind
-// ~1h in. The rotator must mint + write a token to the shared file at once (so the
-// ingest has one on first read) and then keep it fresh. Cancel after the seed.
+// TestRotator_SeedsFileImmediately pins the producer: without a process keeping
+// the token file fresh, the ingest goes blind ~1h in. The rotator must mint +
+// write a token to the shared file at once (so the ingest has one on first read)
+// and then keep it fresh. Cancel after the seed.
 func TestRotator_SeedsFileImmediately(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gt-token")
 	m := &fakeGTMinter{token: "seed-token", expiry: time.Now().Add(time.Hour)}

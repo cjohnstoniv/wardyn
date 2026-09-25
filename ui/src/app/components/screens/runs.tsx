@@ -184,7 +184,7 @@ export function RunsScreen() {
     // New run is its own page, so the openNewRun intent is a redirect —
     // and `replace` keeps Back going where the operator came from rather
     // than bouncing through this screen again.
-    navigate("/runs/new", { replace: true });
+    void navigate("/runs/new", { replace: true });
   }, [location.state, navigate]);
 
   // Background refresh: update in place, silent on failure (a blip shouldn't
@@ -208,7 +208,7 @@ export function RunsScreen() {
   const [refreshing, setRefreshing] = React.useState(false);
   const manualRefresh = () => {
     setRefreshing(true);
-    refresh().finally(() => setRefreshing(false));
+    void refresh().finally(() => setRefreshing(false));
   };
 
   const kill = async (id: string) => {
@@ -220,7 +220,7 @@ export function RunsScreen() {
         description: getErrorMessage(err),
       });
     } finally {
-      refresh();
+      void refresh();
     }
   };
 

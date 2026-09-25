@@ -123,14 +123,19 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 	}
 	q := `
 		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
 		RETURNING ` + runCols
 
+	limitsJSON, err := json.Marshal(r.RunLimits)
+	if err != nil {
+		return types.AgentRun{}, fmt.Errorf("store: marshal run limits: %w", err)
+	}
 	row := s.Pool.QueryRow(ctx, q,
 		r.ID, r.CreatedAt, updatedAge, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs, string(r.AutonomyLevel),
+		r.EndsAt, r.WaitBudgetSec, limitsJSON, r.GovernanceProfileID, r.UserType,
 	)
 	return scanRun(row)
 }
@@ -218,8 +223,8 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 
 // execRun is the one body the scoped single-column agent_runs writers below
 // share: Exec, wrap a driver error as "store: <verb>", and translate "no row
-// matched" into ErrNotFound. verb is exactly the error text each writer used to
-// spell for itself, so the wrapped message a caller matches on is unchanged.
+// matched" into ErrNotFound. verb is the error text a caller matches on, so
+// each writer passes its own.
 // UpdateRunStateIf/UpdateRunStateIfIdle deliberately do NOT route through here:
 // zero rows affected is a legitimate no-op for a guarded transition, not a
 // missing row.
@@ -318,8 +323,9 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // failure_hint — a concatenation, so the one column written by a scoped UPDATE
 // (SetRunFailureHint) rather than by CreateRun is visible as exactly that, and
 // a column appended to runInsertCols reaches both lists at once.
-const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level`
-const runCols = runInsertCols + `, failure_hint, status_detail`
+const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
+	`ends_at, wait_budget_sec, run_limits, governance_profile_id, user_type`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason`
 
 // scanRun is the ONE reader for runCols, which is now the ONE spelling of the
 // agent_runs column list. A new column is APPENDED to runInsertCols (or to
@@ -329,12 +335,15 @@ const runCols = runInsertCols + `, failure_hint, status_detail`
 // set of pasted copies to keep in step by hand.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
-	var cc, state, autonomyLevel string
+	var cc, state, autonomyLevel, lostReason string
+	var limitsRaw []byte
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
 		&r.PolicyID, &cc, &state,
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
-		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &autonomyLevel, &r.FailureHint, &r.StatusDetail,
+		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &autonomyLevel,
+		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID, &r.UserType,
+		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -345,6 +354,10 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.ConfinementClass = types.ConfinementClass(cc)
 	r.State = types.RunState(state)
 	r.AutonomyLevel = types.AutonomyLevel(autonomyLevel)
+	r.LostReason = types.LostReason(lostReason)
+	if err := json.Unmarshal(limitsRaw, &r.RunLimits); err != nil {
+		return types.AgentRun{}, fmt.Errorf("store: unmarshal run limits: %w", err)
+	}
 	return r, nil
 }
 
@@ -607,7 +620,18 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 // recorded", and RETURNING names them so the caller sees those rather than the
 // Go zero value of a field never assigned.
 const approvalInsertCols = `id, run_id, grant_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason`
-const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at`
+const approvalCols = approvalInsertCols + `, decision_scope, decision_expires_at, ` + approvalExpiresAtSQL
+
+// approvalExpiresAtSQL computes a request's expiry from its run's CURRENT end
+// and wait: min(requested_at + wait_budget_sec, ends_at). LEAST skips a NULL,
+// so a run with only one of the two bounds by that one, and a run with neither
+// (wait 0, no end) yields NULL. Read-time rather than a stored column so a
+// change to the run's end or wait reaches its open requests with no second
+// write, and so no raise path (store.CreateApproval, the broker's own INSERT)
+// can forget to set it. Every splice site names the table unaliased, which the
+// correlated approvals.run_id relies on.
+const approvalExpiresAtSQL = `(SELECT LEAST(approvals.requested_at + make_interval(secs => NULLIF(r.wait_budget_sec, 0)), r.ends_at)
+		FROM agent_runs r WHERE r.id = approvals.run_id)`
 
 // scanApproval is the ONE reader for approvalCols, which is now the ONE
 // spelling of the approvals column list. A new column is APPENDED to
@@ -621,7 +645,7 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	var scopeRaw []byte
 	err := row.Scan(
 		&a.ID, &a.RunID, &a.GrantID, &kind, &scopeRaw, &state, &a.RequestedAt,
-		&a.DecidedAt, &a.DecidedBy, &a.MintedJTI, &a.Reason, &decisionScope, &a.DecisionExpiresAt,
+		&a.DecidedAt, &a.DecidedBy, &a.MintedJTI, &a.Reason, &decisionScope, &a.DecisionExpiresAt, &a.ExpiresAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.ApprovalRequest{}, ErrNotFound
@@ -804,6 +828,7 @@ func scanAuditEvent(row pgx.Row) (types.AuditEvent, error) {
 	if len(dataRaw) > 0 {
 		ev.Data = json.RawMessage(dataRaw)
 	}
+	ev.DeviceID = FederatedDeviceID(ev)
 	return ev, nil
 }
 

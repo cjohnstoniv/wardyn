@@ -62,6 +62,10 @@ func (s *memberBoundStore) GetCapabilityEnforcement(context.Context) (map[string
 	return nil, nil
 }
 
+func (s *memberBoundStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
+}
+
 // memberBoundFixture wires one member, one governance ceiling, and one stored
 // policy row whose spec is IDENTICAL to the inline body the same member sends,
 // so the only difference between the two resolutions is how the content

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"sync/atomic"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -48,6 +49,8 @@ type callerSubjects struct {
 // that names a type refuses rather than resolving without it — dropping the
 // type would silently lift a type-tier deny and hand the person the `all`
 // tier's answer instead of their type's.
+//
+//lint:ignore ST1005 the text is the sentence the refused person reads, as errGroupsSnapshotStale's is
 var errUserTypeUnknown = errors.New(userTypeUnknownMsg)
 
 const userTypeUnknownMsg = "Your user type no longer exists, so Wardyn can't tell what you may use. " +
@@ -102,9 +105,7 @@ func (s *Server) callerSubjects(ctx context.Context) (callerSubjects, error) {
 	_, err := s.cfg.Store.GetUserType(ctx, c.userType)
 	if errors.Is(err, store.ErrNotFound) {
 		if s.cfg.Audit != nil && !isDisplayRead(ctx) && firstUserTypeRefusal(ctx) {
-			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
-				"authz.denied", "user_type", "denied",
-				mustJSON(map[string]any{"reason": "user_type_unknown", "user_type": c.userType})))
+			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonUserTypeUnknown, "user_type", userTypeUnknownMsg))
 		}
 		return callerSubjects{}, errUserTypeUnknown
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -480,9 +481,9 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// owner != "" IS the member test (secretOwnerFromRequest is "" for an
 	// operator), so this is the same ownership stamp the line above reads.
 	if owner != "" && req.LLMCred != nil && req.LLMCred.IntegrationRef != "" {
-		s.denyUserField(w, r, "workspaces.llm_cred", "admin_surface",
+		s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, "workspaces.llm_cred",
 			"llm_cred is operator-only — an admin binds a workspace's model/harness credential "+
-				"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding")
+				"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding"))
 		return
 	}
 	// A member's own local_dir sources must clear the member-safe mount gate

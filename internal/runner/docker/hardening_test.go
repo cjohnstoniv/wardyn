@@ -768,7 +768,7 @@ func TestHardenedHostConfig_NeverCarriesKataAnnotations(t *testing.T) {
 // floor shipped) still passes classToRuntime/pickRuntime and is advertised as
 // CC3 — and (2) THREAT-MODEL.md honestly discloses that gap under CC3's "What
 // it does not stop" instead of presenting the install floor as a property of
-// the tier itself (W4-S1-4). If a future version probe closes the code gap,
+// the tier itself. If a future version probe closes the code gap,
 // update both halves together rather than letting the doc go stale again.
 func TestCC3_KataFloorIsInstallTimeOnly_DocumentedResidual(t *testing.T) {
 	// (1) Code behavior: a kata runtime is accepted purely by name prefix.

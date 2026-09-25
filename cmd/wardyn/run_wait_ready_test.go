@@ -297,9 +297,8 @@ func TestWaitReady_ExpectGitFlagWaitsForGit(t *testing.T) {
 // Without --expect-git (and no repo) the caller asked only for a USABLE
 // sandbox: the exec ran, so the sandbox is up, and Path names the directory it
 // settled on — that is exactly the "workspace inspectable" this command
-// promises. Waiting cannot improve it; the loop used to poll the state to the
-// full 5-minute deadline and exit 124 on a sandbox an editor could already
-// open.
+// promises. Waiting cannot improve it: polling the state to the full 5-minute
+// deadline and exiting 124 would fail a sandbox an editor can already open.
 //
 // With --expect-git it must still wait: "unknown" is git confirming a work
 // tree and then a later git command failing (internal/api/run_files.go's

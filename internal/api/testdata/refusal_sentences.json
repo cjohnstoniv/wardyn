@@ -1,0 +1,212 @@
+[
+  {
+    "reason": "admin_surface",
+    "target": "\"workspaces.llm_cred\"",
+    "sentence": "\"llm_cred is operator-only — an admin binds a workspace's model/harness credential \" + \"(PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding\""
+  },
+  {
+    "reason": "admin_surface",
+    "target": "r.URL.Path",
+    "sentence": "\"?owner= is admin-only\""
+  },
+  {
+    "reason": "admin_surface",
+    "target": "r.URL.Path",
+    "sentence": "\"requires admin role\" (registry)"
+  },
+  {
+    "reason": "admin_surface",
+    "target": "r.URL.Path",
+    "sentence": "\"requires admin role\" (registry)"
+  },
+  {
+    "reason": "admin_view",
+    "target": "r.URL.Path",
+    "sentence": "userViewLaunchRefusal(typeID)"
+  },
+  {
+    "reason": "attach_ticket_foreign_run",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
+  },
+  {
+    "reason": "byoi_user",
+    "target": "\"runs.image\"",
+    "sentence": "\"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image\""
+  },
+  {
+    "reason": "byoi_user",
+    "target": "\"runs.image\"",
+    "sentence": "\"image \" + image + \" comes from your own workspace's base image and is not granted to you — \" + \"ask an admin to grant the exact image ref, or launch with the agent's convention image\""
+  },
+  {
+    "reason": "byoi_user",
+    "target": "\"runs.image\"",
+    "sentence": "\"image \" + req.Image + \" is not granted to you — ask an admin to grant the exact image ref, \" + \"or launch with the agent's convention image or an onboarded workspace's base image\""
+  },
+  {
+    "reason": "capKinds[capAgent].reason",
+    "target": "\"runs.agent\"",
+    "sentence": "\"you are not granted agent \" + req.Agent + \" — ask an admin to grant it, or launch one you hold\""
+  },
+  {
+    "reason": "capKinds[capAgent].reason",
+    "target": "\"setup.harness_login\"",
+    "sentence": "fmt.Sprintf(harnessLoginAgentRefusal, row.ID)"
+  },
+  {
+    "reason": "capKinds[capIntegration].reason",
+    "target": "\"runs.integration\"",
+    "sentence": "\"you are not granted integration \" + req.IntegrationID + \" — ask an admin to grant it, or launch without integration_id\""
+  },
+  {
+    "reason": "capKinds[capWorkspaceProvider].reason",
+    "target": "target",
+    "sentence": "fmt.Sprintf(capProvider403, row.Kind)"
+  },
+  {
+    "reason": "capKinds[capWorkspace].reason",
+    "target": "\"runs.workspace\"",
+    "sentence": "\"you are not granted workspace \" + req.WorkspaceID.String() + \" — ask an admin for access, or launch without a workspace\""
+  },
+  {
+    "reason": "capKinds[kind].reason",
+    "target": "target",
+    "sentence": "msg"
+  },
+  {
+    "reason": "capability_egress_host",
+    "target": "id.String()",
+    "sentence": "\"you are not granted egress host \" + host + \" — an admin decides this one, or can grant it to you\""
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.agent\"",
+    "sentence": "fmt.Sprintf(\"%s is not supported under your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(req.Agent), name, level, bound)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.agent\"",
+    "sentence": "fmt.Sprintf(\"codex-cli is not supported under your governance profile %q: its tool rules hold or deny, and codex-cli has no external tool-approval contract. Launch a different agent.\", name)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.drive\"",
+    "sentence": "driveDeniedByProfileMsg(profile)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.interactive\"",
+    "sentence": "fmt.Sprintf(\"interactive runs are not allowed by your governance profile %q, and a request with no task comes up interactive too. Launch with a task, and without `--interactive`.\", name)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.interactive\"",
+    "sentence": "fmt.Sprintf(\"unattended runs are not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), \" + \"which requires a human at the pane. Launch with `--interactive`, or narrow the run's egress, secrets or confinement.\", name, level, bound)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.interactive_start\"",
+    "sentence": "fmt.Sprintf(\"a shell startup command is not allowed by your governance profile %q — with `interactive_start` unset or `shell` the task runs as a shell command at sandbox boot, before anyone attaches, unattended the way exec does. Launch with `interactive_start=agent`, or without a task.\", name)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.interactive_start\"",
+    "sentence": "fmt.Sprintf(\"a startup command is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and with `interactive_start` unset or `shell` an interactive run's task runs as a shell command at sandbox boot, before anyone attaches — \" + \"what `task_mode=exec` does. Launch with `interactive_start=agent` to hand the task to the agent as its first prompt, or without a task.\", name, level, bound)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.seed_auto_tools\"",
+    "sentence": "fmt.Sprintf(\"`seed_auto_tools` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and the pre-attach seed runs before any human is at the pane. Launch without it.\", name, level, bound)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.seed_auto_tools\"",
+    "sentence": "fmt.Sprintf(\"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.\", name)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.task_mode\"",
+    "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", name, level, bound)"
+  },
+  {
+    "reason": "governance_profile",
+    "target": "\"runs.task_mode\"",
+    "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", name)"
+  },
+  {
+    "reason": "groups_snapshot_stale",
+    "target": "\"governance.ceiling\"",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "groups_snapshot_stale",
+    "target": "\"runs.drive\"",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "harness_login_mechanism_principal",
+    "target": "\"setup.harness_login\"",
+    "sentence": "harnessLoginMechanismPrincipalRefusal"
+  },
+  {
+    "reason": "harness_login_not_per_user",
+    "target": "\"setup.harness_login\"",
+    "sentence": "harnessLoginNotPerUserRefusal"
+  },
+  {
+    "reason": "not_owner",
+    "target": "id.String()",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "not_owner",
+    "target": "id.String()",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "not_owner",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
+  },
+  {
+    "reason": "not_owner",
+    "target": "ws.ID.String()",
+    "sentence": "\"workspace not found\""
+  },
+  {
+    "reason": "reason",
+    "target": "r.URL.Path",
+    "sentence": "(audit only)"
+  },
+  {
+    "reason": "run_quota",
+    "target": "\"runs.quota\"",
+    "sentence": "fmt.Sprintf(\"too many runs at once (max %d) — your governance profile %q caps how many runs you can have going, and %d are still active. Stop one first.\", limit, ceiling.Profile.Name, active)"
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "envEgressSecondHuman + \" is set: a second human must decide this — you created this run, so someone else approves or denies its egress\""
+  },
+  {
+    "reason": "security_admin_surface",
+    "target": "ap.ID.String()",
+    "sentence": "\"decision_scope always is operator-only\""
+  },
+  {
+    "reason": "security_admin_surface",
+    "target": "r.URL.Path",
+    "sentence": "\"requires admin role\" (registry)"
+  },
+  {
+    "reason": "user_type_unknown",
+    "target": "\"user_type\"",
+    "sentence": "userTypeUnknownMsg"
+  },
+  {
+    "reason": "user_view_type_deleted",
+    "target": "r.URL.Path",
+    "sentence": "userViewTypeDeleted(typeID)"
+  }
+]

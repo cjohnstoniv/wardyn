@@ -630,6 +630,9 @@ func (s *Server) routes() chi.Router {
 			r.Post("/internal/decisions", s.handlePostDecision)
 			r.Post("/internal/approvals", s.handleInternalRequestApproval)
 			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
+			// wardyn-toolgate's own give-up signal (#811): closes the row it
+			// raised instead of leaving it PENDING for the sweep.
+			r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 			r.Post("/internal/credentials/mint", s.handleInternalMint)
 
 			// Token renew: POST /api/v1/internal/token/renew
@@ -726,7 +729,7 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// namespace, so neither route can reach anyone else's credential whatever
 	// tier the caller holds.
 	s.mountAzureDevOpsSignInRoutes(r)
-	// The user view (membermode.go), renamed in 0.8 from "view as member" /
+	// The user view (user_view.go), renamed in 0.8 from "view as member" /
 	// POST /me/member-mode (docs/OPERATIONS.md's "Renamed in 0.8" appendix; a
 	// clean break — the old path is not aliased). Registered HERE rather than
 	// beside the ssh-keys block in routes() only because routes() sits exactly
@@ -762,6 +765,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Post("/permissions/grants", s.handleUpsertCapabilityGrant)
 	securityOps.Delete("/permissions/grants/{id}", s.handleDeleteCapabilityGrant)
 	securityOps.Put("/permissions/enforcement", s.handlePutCapabilityEnforcement)
+	// The value is the rest of the path: an image ref carries slashes.
+	securityOps.Get("/permissions/availability/{kind}/*", s.handleGetAvailability)
+	securityOps.Put("/permissions/availability/{kind}/*", s.handlePutAvailability)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,
@@ -781,7 +787,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
-	// User types (migration 0069_user_types): defining a type is the same
+	// User types (migration 0071_user_types): defining a type is the same
 	// security-tier duty as authoring a governance profile; deciding who IS a
 	// type stays on the operatorOnly /access routes.
 	s.mountUserTypeRoutes(securityOps)

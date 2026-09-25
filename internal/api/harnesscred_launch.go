@@ -163,6 +163,10 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
 			return
 		}
+		if errors.Is(err, errSignInBusy) {
+			writeError(w, http.StatusServiceUnavailable, signInBusyRefusal)
+			return
+		}
 		writeServerError(w, r, "launch login sandbox", err)
 		return
 	}

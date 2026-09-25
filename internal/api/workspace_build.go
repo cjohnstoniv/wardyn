@@ -280,7 +280,7 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 	// GET /workspaces{,/{id}} and the Log below is already blanked for. The
 	// three STATIC Details stay at every tier: a member launching against this
 	// workspace needs to know the host has no builder wired
-	// (TestF287_BuildKeepsWhatTheMemberNeeds pins that they do).
+	// (TestBuildKeepsWhatTheMemberNeeds pins that they do).
 	builderError := func(msg string) string {
 		if tier == workspaceReadFull {
 			return msg
