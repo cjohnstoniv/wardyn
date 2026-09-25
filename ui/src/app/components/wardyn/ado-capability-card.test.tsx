@@ -71,9 +71,9 @@ describe("AdoCapabilityCard — the escalation states", () => {
       within(card).getByText("Push commits and move branches that no policy protects (code_write) in acme/payments-api"),
     ).toBeInTheDocument();
     // Not protected — no Ref class row.
-    expect(within(card).queryByText("Ref class")).not.toBeInTheDocument();
+    expect(within(card).queryByText(ADO.REQ_FIELD_REF_CLASS)).not.toBeInTheDocument();
     // F8 — Acts as, from run.created_by.
-    expect(within(card).getByText("Acts as")).toBeInTheDocument();
+    expect(within(card).getByText(ADO.REQ_FIELD_ACTS_AS)).toBeInTheDocument();
     expect(within(card).getByText("dana@acme.example")).toBeInTheDocument();
   });
 
@@ -101,9 +101,9 @@ describe("AdoCapabilityCard — the escalation states", () => {
       />,
     );
     const card = await screen.findByTestId("ado-capability-card");
-    expect(within(card).getByText("Push past a branch policy")).toBeInTheDocument();
-    expect(within(card).getByText("Ref class")).toBeInTheDocument();
-    expect(within(card).getByText("Protected by a branch policy")).toBeInTheDocument();
+    expect(within(card).getByText(ADO.CAP_POLICY_BYPASS)).toBeInTheDocument();
+    expect(within(card).getByText(ADO.REQ_FIELD_REF_CLASS)).toBeInTheDocument();
+    expect(within(card).getByText(ADO.REQ_REF_CLASS_PROTECTED)).toBeInTheDocument();
   });
 
   it("falls back to the raw wire capability, in mono, for a capability with no §7.4 label", async () => {
@@ -544,9 +544,9 @@ describe("AdoCapabilityCard — the Entra-consent state", () => {
       />,
     );
     const card = await screen.findByTestId("ado-consent-card");
-    expect(within(card).getByText("Needs your Microsoft consent")).toBeInTheDocument();
+    expect(within(card).getByText(ADO.REQ_CONSENT_CHIP)).toBeInTheDocument();
     // F8 — Acts as, from the consent row's own owner field.
-    expect(within(card).getByText("Acts as")).toBeInTheDocument();
+    expect(within(card).getByText(ADO.REQ_FIELD_ACTS_AS)).toBeInTheDocument();
     expect(within(card).getByText("dana@acme.example")).toBeInTheDocument();
     const cta = within(card).getByRole("link", { name: ADO.REQ_CONSENT_CTA });
     expect(cta).toHaveAttribute("href", "/account#azure-devops");
