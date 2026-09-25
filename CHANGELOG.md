@@ -508,6 +508,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Security
 
+- **Security-API follow-ups (#724).** The sign-in help link is `https://` only: a new `http://`
+  link is refused at save, and one already stored surfaces as the setup warning
+  `sign_in_help_url` (#489). A second enabled Azure DevOps (Entra) row stored before the write
+  refused it is the setup warning `ado_entra_rows` (#603). The SSH keys screen marks a key added in
+  the user view with a "Member access" chip (#584). With the site config unreadable, an escaped
+  repository name on a self-hosted host is refused with a 400 that names the site configuration,
+  not the address's shape. Review's preflight now reads the secret list where launch does, and
+  `TestPreflightMirrorsLaunchGates` pins the gate order, not only the set (#515).
+
 - **Security hardening from the early 0.8 review (#505).** A sign-in launch or credential capture
   that cannot take the per-person sign-in lock inside its 5s budget is now refused `503` ("another
   sign-in is in progress…"), with nothing started or stored, instead of proceeding unlocked — the

@@ -909,7 +909,8 @@ row's fields, and what a member sees.
 A deployment carries at most **one enabled** row on the `entra` lane: each person signs in to one
 Azure DevOps organisation. Both write doors refuse a second enabled one with a 400
 (`git[N].lanes: git[M] already carries the "entra" lane …`); a disabled second row is accepted,
-and enabling it later is refused the same way.
+and enabling it later is refused the same way. A document stored before that rule can still hold
+two; the setup checklist then warns (row `ado_entra_rows`, not blocking) until one is disabled.
 
 0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
 paths a run may clone from, which credential lanes it may use there, and the
@@ -2165,9 +2166,12 @@ the reader has, by definition, not signed in — so name your request process, n
 your internal systems. The text is plain text (at most 1,000 characters; no
 line breaks, control characters, line/paragraph separators or invisible format
 characters such as bidi overrides and zero-width spaces; quotes are fine) and is
-rendered as text, never markup. The link must be an `http://` or `https://`
-address with a real host name — no spaces, no `user:pass@`, none of those
-hidden characters, a query string is fine — and always reads "Request access".
+rendered as text, never markup. The link must be an `https://` address with a
+real host name — no spaces, no `user:pass@`, none of those hidden characters, a
+query string is fine — and always reads "Request access". A link saved as
+`http://` before 0.8 keeps working and is published unchanged, but the setup
+checklist warns about it (row `sign_in_help_url`) until you change it; a save
+that sends it back unchanged is accepted, and a new `http://` link is refused.
 Every write records both values in the clear on `site_config.write`. A write outside those bounds is refused with a 400 naming the
 field, and a stored value that no longer passes is dropped from `/healthz`
 rather than published. Like the provider blocks, a body that does not name a

@@ -380,6 +380,24 @@ describe("step-bodies.tsx — smoke", () => {
     expect(screen.queryByText("Optional — not blocking")).not.toBeInTheDocument();
   });
 
+  // #603 and #489: the two warnings /setup/status sends, byte for byte
+  // (setup_checks_siteconfig.go), are 'Worth a look' — never 'Blocking'.
+  it("#603/#489: the ado_entra_rows and sign_in_help_url warnings land under 'Worth a look'", () => {
+    const ado = "More than one Azure DevOps connection is enabled. Keep one enabled so runs sign in to a single organization.";
+    const help =
+      "The sign-in help link uses http://. Change it to an https:// address so people who can't sign in aren't sent to an unencrypted page.";
+    renderReview(
+      reviewStatus([
+        { id: "ado_entra_rows", label: "Azure DevOps", status: "warn", detail: ado },
+        { id: "sign_in_help_url", label: "When someone can't sign in", status: "warn", detail: help },
+      ]),
+    );
+    const worth = screen.getByText("Worth a look").closest("section");
+    expect(worth).toHaveTextContent(ado);
+    expect(worth).toHaveTextContent(help);
+    expect(screen.queryByText("Blocking")).not.toBeInTheDocument();
+  });
+
   it("#161: no actionable checks renders none of the four groups", () => {
     renderReview(reviewStatus([]));
     expect(screen.queryByText("Blocking")).not.toBeInTheDocument();

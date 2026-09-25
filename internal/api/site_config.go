@@ -10,6 +10,7 @@
 package api
 
 import (
+	"cmp"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -776,8 +777,10 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
 	// After the carry-forward: the roster's defaults are checked against the
-	// providers this document will actually hold, whichever side was named.
-	if err := validateDefaultProviders(cfg.AgentProviders, cfg.ModelProviders); err != nil {
+	// providers this document will actually hold, whichever side was named; the
+	// sign-in help link against the stored one (signInHelpURLHTTPS).
+	if err := cmp.Or(validateDefaultProviders(cfg.AgentProviders, cfg.ModelProviders),
+		signInHelpURLHTTPS(cfg.SignInHelpURL, existing.SignInHelpURL)); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}

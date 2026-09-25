@@ -13,6 +13,8 @@ strings; this table is where a reviewer checks them. It supersedes the `sso_rbac
 | Q457-6 | The admin's help shows on exactly four refusals — the ones a person cannot clear alone: `no_role`, `email_domain`, `claims_overage`, `email_verified_absent`. Timeouts, configuration errors and the generic arm get nothing. Wardyn's own sentence always comes first. |
 | Q457-7 | Two fields, text and URL. The link's label is fixed: "Request access". |
 | Q457-8 | The text limit is **1,000 characters**. This is an owner change from the mock's 280. Counted as characters, not bytes. |
+| #489 (2026-09-25) | The sign-in help link is **https:// only**. A new http:// link is refused at save with the scheme error. A link already stored as http:// surfaces as a setup warning. |
+| #584 (2026-09-25) | The SSH keys screen shows a chip on a capped key (one added in the user view). |
 
 ## Frozen strings
 
@@ -33,13 +35,17 @@ strings; this table is where a reviewer checks them. It supersedes the `sso_rbac
 | `SIGNIN_HELP.COUNTER` | {n} / 1000 | card, shown once typing |
 | `SIGNIN_HELP.URL_LABEL` | Link | card, URL field |
 | `SIGNIN_HELP.URL_PLACEHOLDER` | https:// | card, URL field |
-| `SIGNIN_HELP.URL_HINT` | Optional. Must start with http:// or https://. It shows as "Request access" — the address itself is public. | card, URL field |
+| `SIGNIN_HELP.URL_HINT` | Optional. Must start with https://. It shows as "Request access" — the address itself is public. | card, URL field (#489 dropped "http:// or ") |
 | `SIGNIN_HELP.EMPTY_NOTE` | Nothing set. People see Wardyn's own sentence and are told to ask their Wardyn admin. | card, neither field set |
 | `SIGNIN_HELP.PREVIEW_HEADING` | What a signed-out person sees | card preview (the no-role sentence + text + link) |
 | `SIGNIN_HELP.APPLIES_NOTE` | Shown on the four refusals a person can't clear themselves: no role, an email domain that isn't allowed, too many groups to list, and a missing email claim. | card preview |
 | `SIGNIN_HELP_LINK_LABEL` | Request access | sign-in page and card preview (`people-access-copy.ts`; the card re-exports it as `SIGNIN_HELP.LINK_LABEL`) |
 | refusal: too long | sign_in_help_text: longer than 1,000 characters — it renders under a refusal on the sign-in page | `PUT /site-config` 400 (`validateSignInHelp`) |
-| refusal: bad URL | sign_in_help_url: must be an http:// or https:// address — it is shown to people who have not signed in | `PUT /site-config` 400, scheme failures only |
+| refusal: bad URL | sign_in_help_url: must be an https:// address — it is shown to people who have not signed in | `PUT /site-config` 400, scheme failures only, a new http:// link included (#489 dropped "http:// or ") |
+| `sign_in_help_url.label` | When someone can't sign in | `/setup/status` row label (`signInHelpHTTPCheck`), the card's own title |
+| `sign_in_help_url.warn` | The sign-in help link uses http://. Change it to an https:// address so people who can't sign in aren't sent to an unencrypted page. | setup row `detail`, warn, never blocking (#489) |
+| SSH keys chip | Member access | SSH keys screen, a key whose `capped` is true (#584) |
+| SSH keys chip tooltip | Added while you were a member, so it keeps member rights. Add a new key to use admin access over SSH. | the chip's `title` (#584) |
 
 ## Implementation strings (not in the mock)
 

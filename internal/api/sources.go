@@ -213,7 +213,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	ado := s.adoHostsLoader(r.Context()).forAddresses(req.Locator)
+	ado, adoErr := s.adoHostsLoader(r.Context()).forAddresses(req.Locator)
 	if req.Kind == types.SourceRepo {
 		req.Locator = canonicalRepoAddress(strings.TrimSpace(req.Locator), ado)
 	}
@@ -233,7 +233,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: s.cfg.Now().UTC(), UpdatedAt: s.cfg.Now().UTC(),
 	}
 	if msg := validateSourceWrite(src, ado); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeError(w, http.StatusBadRequest, storeNamedLocatorRefusal(msg, "locator", src.Locator, adoErr))
 		return
 	}
 	// Provider admission on the LIBRARY door, not only the workspace one. This is
@@ -437,9 +437,12 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 		}
 		locator, ref := canonicalSourceIdentity(kind, locator, src.Ref)
 		newID := uuid.New()
+		// Only the default display name: decodeWorkspaceRequest already refused an
+		// address the read error left undecided.
+		hosts, _ := ado.forAddresses(locator)
 		row, err := s.cfg.Store.UpsertSource(ctx, types.Source{
 			ID: newID, Kind: kind, Locator: locator, Ref: ref,
-			Name: lastPathSegment(locator, ado.forAddresses(locator)), Status: types.WorkspacePendingScan,
+			Name: lastPathSegment(locator, hosts), Status: types.WorkspacePendingScan,
 			CreatedAt: now, UpdatedAt: now,
 		})
 		if err != nil {

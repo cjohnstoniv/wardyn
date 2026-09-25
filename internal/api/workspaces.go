@@ -102,7 +102,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 			repos = append(repos, src.Source)
 		}
 	}
-	adoServerHosts := ado.forAddresses(repos...)
+	adoServerHosts, hostsErr := ado.forAddresses(repos...)
 	for i := range req.Sources {
 		req.Sources[i].Admitted = nil
 		if req.Sources[i].Type == types.WorkspaceSourceTypeRepo {
@@ -117,7 +117,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request, ado adoHosts
 	seenTargets := make(map[string]int, len(req.Sources))
 	for i, src := range req.Sources {
 		if msg := validateWorkspaceSource(src, adoServerHosts); msg != "" {
-			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, msg)
+			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, storeNamedLocatorRefusal(msg, "source", src.Source, hostsErr))
 		}
 		// (Mirrors validatePolicyWorkspaces' own unique-target
 		// invariant, policy.go): an EXPLICIT target shared by two sources

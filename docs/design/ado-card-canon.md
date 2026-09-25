@@ -82,3 +82,16 @@ does.
 See `ado-entra-prompt.md` §10.7 for the byte-exact frozen rows this packet added or changed
 (`NOT_APPLICABLE_BODY`, `REQ_OWNER_FALLBACK`, and the `REQ_CONSENT_CTA` row edited in place in
 §7.6) — that table, not this one, is what `ado-entra-copy.test.ts` parses and checks against.
+
+## #603 — more than one enabled Azure DevOps connection (owner decision 2026-09-25)
+
+**Decision: a setup warning, not a blocker, on the Review step.** The write already refuses a
+second enabled row on the `entra` lane (`validateOneEntraRow`); a document stored before that rule
+can still hold two, and only the first is served a sign-in. `/setup/status` row `ado_entra_rows`
+(`adoEntraRowsCheck`) appears only when more than one enabled row carries the lane; a disabled row
+does not count.
+
+| Key | String |
+|---|---|
+| `ado_entra_rows.label` | Azure DevOps |
+| `ado_entra_rows.warn` | More than one Azure DevOps connection is enabled. Keep one enabled so runs sign in to a single organization. |
