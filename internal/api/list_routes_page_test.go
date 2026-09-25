@@ -183,7 +183,7 @@ func TestHandleListAPITokens_PagedScope(t *testing.T) {
 		for i := 0; i < n; i++ {
 			raw := apiTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
 			tok, err := pg.CreateAPIToken(ctx, types.APIToken{
-				ID: uuid.New(), Principal: principal, Role: oidc.RoleUser,
+				ID: uuid.New(), Principal: principal, Role: oidc.RoleUser, UserType: types.UserTypeStandard,
 				GroupsTruncated: &notTruncated, Name: fmt.Sprintf("ci-%d", i),
 			}, raw)
 			if err != nil {

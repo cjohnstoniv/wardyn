@@ -154,7 +154,7 @@ func TestPG_ListAPITokensByPrincipalPage_LimitOffset(t *testing.T) {
 	var ids []uuid.UUID
 	for i := 0; i < n; i++ {
 		tok := types.APIToken{
-			ID: uuid.New(), Principal: principal, Role: "user", Name: "ci",
+			ID: uuid.New(), Principal: principal, Role: "user", UserType: types.UserTypeStandard, Name: "ci",
 		}
 		created, err := pg.CreateAPIToken(ctx, tok, "wdn_"+uuid.NewString())
 		if err != nil {
