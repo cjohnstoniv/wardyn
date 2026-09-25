@@ -1034,7 +1034,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   fails closed and is torn down (an outage run as `FAILED`): a headless run, one past its end and
   grace, a substrate that cannot keep a sandbox (Kubernetes), or a proxy that cannot be stopped. Every renew now stamps
   the run and hands out its token only once the stamp lands; a kept (ended or lost) run's renew
-  answers 403. Audited as `run.lost`. Migration `0076_agent_runs_token_renewed` adds
+  answers 403. Audited as `run.lost`. Migration `0083_agent_runs_token_renewed` adds
   `token_renewed_at`, starting every existing run with a fresh stamp so none is read as lapsed at
   upgrade.
 - **A run lost to a control-plane outage can be revived, and an admin can restart standing runs
@@ -1058,7 +1058,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and kept rather than removed, since its env is where the config a revive reads back rests;
   teardown removes it with the rest of the sandbox. A new contract test pins the internal API the
   previous minor's proxy calls. Kubernetes cannot revive (the agent pins the proxy pod's IP).
-  Migration `0077_agent_runs_proxy_release` adds `proxy_release`.
+  Migration `0084_agent_runs_proxy_release` adds `proxy_release`.
 - **A run lost to a reboot can be revived, and Claude Code continues its conversation (#576).**
   `POST /api/v1/runs/{id}/revive` now also takes a run lost to a `reboot` (Docker): it gets the
   same new proxy (a fresh run token, the owner's current profile denies), and only then is its

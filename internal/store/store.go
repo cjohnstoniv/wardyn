@@ -276,7 +276,7 @@ func (s PG) execRun(ctx context.Context, verb, query string, args ...any) error 
 
 // SetSandboxRef records the runner reference (container ID / pod name). A
 // non-empty ref also records this release as the one that started the run's
-// proxy (proxy_release, migration 0077).
+// proxy (proxy_release, migration 0084).
 func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
 	return s.execRun(ctx, "set sandbox ref",
 		`UPDATE agent_runs SET sandbox_ref=$1, updated_at=now(),

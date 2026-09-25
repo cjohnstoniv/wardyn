@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Revive and restart with current limits (long-holds design rev 4, RL-10 and
-// RL-11; migration 0077): the claim a revive makes before it replaces a run's
+// RL-11; migration 0084): the claim a revive makes before it replaces a run's
 // proxy, and the read the admin version-window listing makes.
 package store
 
@@ -33,7 +33,7 @@ type RunReviver interface {
 	// proxy, once a revive's new proxy runs.
 	SetRunProxyRelease(ctx context.Context, id uuid.UUID, release string) error
 	// ListRunProxyReleases returns every non-terminal run that has a sandbox,
-	// with the release that started its proxy ("" before migration 0077).
+	// with the release that started its proxy ("" before migration 0084).
 	ListRunProxyReleases(ctx context.Context) ([]RunProxyRelease, error)
 }
 
