@@ -1413,6 +1413,28 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The synchronous kill cascade inside the sign-in launch POST.** Superseding a person's older
   sign-in tears the old sandbox down inside the new launch request rather than after the response —
   tracked separately from this list. Still open at 0.8.
+- **A run's autonomy posture omits the egress dispatch adds after the gate.** `resolveRunAutonomy`
+  grades every lane `unionRunEgress` adds, but not the model-provider hosts egress dispatch resolves
+  from global configuration afterward — a Bedrock run's `bedrock-runtime.<region>.amazonaws.com`, for
+  one — nor the artifact-redirect substitution. A run whose model-provider host comes from global
+  configuration can therefore be graded `sealed` or `reviewed` while it reaches that host, so its
+  level can be more permissive. (The pre-veto superset the posture is graded on — a lane the
+  provider row's per-host veto later drops still counts — is a separate effect, and grades
+  conservatively.)
+- **A run's stored-credential residency is not a posture input for the autonomy rubric.** The rubric
+  grades egress reach, secret power and confinement class; where a model credential is held or
+  injected from plays no part in the resolved level, so two runs with identical reach and grants
+  resolve identically regardless of credential residency.
+- **codex-cli has no agent-side autonomy layer.** Managed settings are generated only for the one
+  agent that reads a managed-settings file; a codex-cli run under any resolved level gets no file and
+  runs on its CLI-flag levers alone — the honest signal is the launch warning on the 201 and the line
+  the image's launcher prints, not a `run.agent_policy` row.
+- **`L2`'s seeded auto tools do not yet mean unattended tool use.** At `L2` the rubric permits
+  `seed_auto_tools` (*"Let it use tools before I attach"*), but such a run boots
+  `claude --dangerously-skip-permissions`, which still parks on Claude Code's own Bypass Permissions
+  confirmation until a person attaches and answers it (`threatmodel/THREAT-MODEL.md` §4.7). Whether
+  ticking that box in the console counts as consent to the CLI's prompt is still an open owner
+  decision.
 
 ## [0.7.12] — 2026-09-23
 

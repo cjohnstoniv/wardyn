@@ -2143,6 +2143,40 @@ widening). Stated honestly: profiles narrow by omission — a profile that omits
 secret grants revokes them for its subjects (the editor warns); a member's
 long-lived API token keeps the group snapshot it was minted with until re-minted.
 
+**The autonomy rubric (0.8, #77).** A profile may also carry `limits.autonomy_rubric`,
+nine closed fields — three egress postures (`egress_open`, `egress_reviewed`,
+`egress_sealed`), three secret postures (`secrets_powerful`, `secrets_baseline`,
+`secrets_none`) and three enforced confinement classes (`confinement_cc1`,
+`confinement_cc2`, `confinement_cc3`) — each unset or one of four autonomy levels:
+`L0` attended (interactive only, supervised seeding), `L1` gated (adds
+non-interactive runs, but `tool_approvals` is derived to `hold`), `L2` unattended
+(adds `auto` approval and `seed_auto_tools`), and `L3` (adds `task_mode=exec`, the
+door that routes around every other gate, so it is the top rung). Below `L3`, an
+interactive run with a task must use `interactive_start=agent`: the shell startup
+form (`interactive_start` unset or `shell`) runs the task at sandbox boot the way
+exec does, and is refused (`runs.interactive_start`). `resolveRunAutonomy`
+(`internal/api/runs_autonomy.go`) grades the run's real posture — egress reach
+graded on the same union `unionRunEgress` builds, secret power, and the
+already-enforced confinement class — against the assigned profile's rubric and
+folds every field the posture matches to its **minimum** level; a nil rubric, or a
+posture none of the nine fields caps, binds nothing (today's behaviour, unchanged).
+The same function backs both `POST /runs` and `POST /runs/preflight`, so the level
+Review shows is the level launch enforces. A run whose declared shape exceeds its
+resolved level is refused `governance_profile` (see
+[§ Every denial that isn't a 404](#every-denial-that-isnt-a-404) for its `target`s). A
+non-interactive run resolved to exactly `L1` is not refused when its agent has a
+tool-approval lane (claude-code): it launches with its tool approvals derived to
+`hold`, and the 201 carries a warning saying so. Any other agent — codex-cli, a
+BYOA image — has no lane to derive a hold into, so the same run is refused with
+target `runs.agent`.
+The resolution — level, posture, and every rubric field that tied at that level
+(`bound_by`) — rides the create audit row's `autonomy` field and is frozen on
+`agent_runs.autonomy_level`. **Not in the posture:** the model-provider hosts
+egress dispatch resolves from global configuration after this gate runs (a Bedrock
+run's region, for one), and any stored-credential residency — a run's autonomy
+level is graded on what the run can reach and hold, not on where its model
+credential lives.
+
 ### When everyone is an admin, and what a refused person is told
 
 **The everyone-is-an-admin warning.** With SSO configured, a person nobody has
@@ -2210,7 +2244,7 @@ admin walking the member path, not an incident.
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
-| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` (`runs.task_mode`), an interactive run (`runs.interactive`), `seed_auto_tools` (`runs.seed_auto_tools`), codex-cli under hold-deriving rules (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyMemberGovernance`), since it runs at sandbox boot unattended the way exec does. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
+| `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyMemberDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyMemberGovernance`), since it runs at sandbox boot unattended the way exec does. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
