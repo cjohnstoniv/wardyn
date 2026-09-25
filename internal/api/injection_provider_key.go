@@ -5,7 +5,6 @@ package api
 
 import (
 	"bytes"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -56,17 +55,14 @@ func providerKeyDestination(p types.ModelProvider, agent string) (host, header, 
 
 // providerStoreReadRefusal is storeReadRefusal's split — 503 only when the
 // store did not answer, so the proxy drops the header at once on a refusal —
-// in the words of a person's own model provider credential.
+// in the words of a person's own model provider credential. No not-found
+// case: ownSecret answers ErrNotFound as found=false, never as an error.
 func providerStoreReadRefusal(name string, err error) (status int, reason, body string) {
 	status, _, _ = storeReadRefusal(name, err)
-	switch {
-	case status == http.StatusServiceUnavailable:
+	if status == http.StatusServiceUnavailable {
 		return status, "store_unavailable", sinkStoreUnreachable
-	case errors.Is(err, secretstore.ErrNotFound):
-		return status, "own_key_absent", providerKeyAbsent
-	default:
-		return status, "store_refused", providerKeyRefused
 	}
+	return status, "store_refused", providerKeyRefused
 }
 
 // resolveProviderKeyInjection is the wardyn-provider-<uid>-key arm of
