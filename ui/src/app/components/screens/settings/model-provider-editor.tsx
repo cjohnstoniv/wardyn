@@ -344,14 +344,22 @@ function ProviderFields({
       {bedrock && (
         <>
           <p className="text-xs font-medium text-foreground">{PROVIDER_EDITOR.IDC_GROUP}</p>
-          <Field label={PROVIDER_EDITOR.REGION} htmlFor="mp-region">
-            <Input id="mp-region" className="font-mono" placeholder="us-east-1" value={draft.region} onChange={(e) => set({ region: e.target.value })} />
+          <Field label={PROVIDER_EDITOR.REGION} htmlFor="mp-region" required={bedrock}>
+            <Input
+              id="mp-region"
+              required={bedrock}
+              className="font-mono"
+              placeholder="us-east-1"
+              value={draft.region}
+              onChange={(e) => set({ region: e.target.value })}
+            />
           </Field>
           {sso && (
             <>
-              <Field label={AGENTS.FIELD_SSO_START_URL} htmlFor="mp-sso-start-url">
+              <Field label={AGENTS.FIELD_SSO_START_URL} htmlFor="mp-sso-start-url" required={sso}>
                 <Input
                   id="mp-sso-start-url"
+                  required={sso}
                   className="font-mono"
                   placeholder="https://"
                   value={draft.ssoStartUrl}

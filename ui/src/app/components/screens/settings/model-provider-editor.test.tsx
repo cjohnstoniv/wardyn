@@ -288,7 +288,9 @@ describe("E3 — a new Bedrock provider (#538)", () => {
 
     expect(screen.getByText(E.IDC_GROUP)).toBeInTheDocument();
     expect(screen.getByLabelText(E.REGION)).toHaveValue("");
+    expect(screen.getByLabelText(E.REGION)).toBeRequired();
     expect(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL)).toHaveValue("");
+    expect(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeRequired();
     expect(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toHaveValue("");
     expect(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toHaveValue("");
     expect(screen.getByText(E.SSO_SETUP_HINT)).toBeInTheDocument();
@@ -343,6 +345,19 @@ describe("E3 — a new Bedrock provider (#538)", () => {
       },
       harnesses: [{ harness: "claude-code", model: "acme.claude-sonnet", path: undefined }],
     });
+  });
+
+  // Region is required for every Bedrock kind (validateProviderBedrock,
+  // model_providers.go: b.Region == "" fails before the SSO-only check even
+  // runs) — the browser's own required-field validation withholds submission,
+  // the same way an endpoint's empty Path already does.
+  it("Region required: Save is withheld when it's empty, even with everything else filled", async () => {
+    const { user } = renderEditor();
+    await user.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.bedrock_sso }));
+    await user.type(screen.getByLabelText(AGENTS.FIELD_SSO_START_URL), "https://acme.awsapps.com/start");
+    await user.type(screen.getByLabelText(E.MODEL), "acme.claude-sonnet");
+    await user.click(screen.getByRole("button", { name: E.SAVE }));
+    expect(putMock).not.toHaveBeenCalled();
   });
 
   it("editing a stored Bearer provider: Bearer is selected, no SSO-only fields, the id and kind stay put", async () => {
@@ -583,13 +598,27 @@ describe("E9 — changing where it sends requests", () => {
     expect(putMock).not.toHaveBeenCalled();
   });
 
-  it("switching How people sign in and confirming Save writes the new kind", async () => {
-    const { onSaved, user } = renderEditor({ editing: BEDROCK, list: list([BEDROCK], { "bedrock-prod": 3 }) });
+  it("switching How people sign in and confirming Save writes the new kind, dropping the SSO-only fields but keeping region and base_url", async () => {
+    const withEndpoint: ModelProvider = {
+      ...BEDROCK,
+      bedrock: { ...BEDROCK.bedrock, base_url: "https://vpce.us-east-1.bedrock.example" },
+    };
+    const { onSaved, user } = renderEditor({ editing: withEndpoint, list: list([withEndpoint], { "bedrock-prod": 3 }) });
     await user.click(screen.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER }));
     await user.click(screen.getByRole("button", { name: E.SAVE }));
     await user.click(within(alert()).getByRole("button", { name: E.SAVE }));
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
-    expect(putBody().providers[0]).toMatchObject({ id: "bedrock-prod", kind: "bedrock_bearer" });
+    expect(putBody().providers[0]).toMatchObject({
+      id: "bedrock-prod",
+      kind: "bedrock_bearer",
+      bedrock: {
+        region: "us-east-1",
+        base_url: "https://vpce.us-east-1.bedrock.example",
+        sso_start_url: undefined,
+        sso_account_id: undefined,
+        sso_role_name: undefined,
+      },
+    });
   });
 });
 
