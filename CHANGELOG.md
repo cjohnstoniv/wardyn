@@ -70,7 +70,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   an image built from a dirty tree or carrying no build commit. `scripts/check-image-pins.sh`
   now fails if the hand-listed websockify entry in `gpl-source-offer.sh`'s `MANUAL_ENTRIES`
   drifts from `deploy/images/novnc/Dockerfile`'s `WEBSOCKIFY_VERSION` pin or download URL.
-  `docs/CI.md` and `ROADMAP.md` now say seven images (a release now publishes
+  `docs/CI.md` now says seven images (a release now publishes
   `agent-vscode` and `agent-novnc` too).
 - **The drive editor's home-template rule for `k8s_pvc_static` now matches the server (#808).**
   The picker treated `k8s_pvc_static` as a plain share: it disabled `hash`, the server's default
