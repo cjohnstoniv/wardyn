@@ -507,7 +507,7 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 			// Do not name the allowlist/role-map's members — the caller learns
 			// only that they are not an admin.
 			// authz.denied: a member denied a reachable admin surface. Low-noise
-			// by design (see the audit doc in runs_create.go's denyMemberRequest) —
+			// by design (see the audit doc in runs_create.go's denyUserRequest) —
 			// this is the ONE universal chokepoint every admin-gated route funnels
 			// through (incl. the attach WS's ticketOrHumanAuth fallback lane), so
 			// one audit call here covers all of them.
@@ -576,7 +576,7 @@ func (s *Server) isOperator(ctx context.Context) bool {
 // why (approvals.go carries only same-line pointers — it sits two lines under
 // the file-size gate):
 //
-//   - approvals.go's list, authorizeMemberDecision and the
+//   - approvals.go's list, authorizeUserDecision and the
 //     decision_scope=always gate. The latter two are a LOCKSTEP PAIR: deciding
 //     an approval and persisting that decision are the same authority, one
 //     merely durable, and a tier that may decide but not record would re-decide

@@ -109,7 +109,7 @@ type SetupStatus struct {
 	// decides llmProvenance's detail (resident CLI login, a secret-name
 	// heuristic, Bedrock, a managed harness token) OR'd with an AI-provider
 	// Integration being configured. It exists
-	// because a MEMBER'S redacted response (redactSetupStatusForMember) drops
+	// because a MEMBER'S redacted response (redactSetupStatusForUser) drops
 	// the checks/providers/secret-name detail that would otherwise let the
 	// console derive this itself — LLMReady is computed BEFORE redaction and
 	// deliberately left untouched BY it, so the console's readiness chip / new-run
@@ -134,7 +134,7 @@ type SetupStatus struct {
 	// second boot-time field — see handleSetupStatus. Go + test only: no
 	// console reader exists yet (the ui/src/app/lib/types.ts mirror is
 	// hand-maintained, added when the Network step renders it) and
-	// redactSetupStatusForMember does not zero it — a bare count carries no
+	// redactSetupStatusForUser does not zero it — a bare count carries no
 	// PEM content, host name, or other detail members are barred from.
 	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
 	// ModelProviders is the model providers THIS PRINCIPAL may use, in the
@@ -228,7 +228,7 @@ type SetupRunner struct {
 	// The Workspace Providers screen renders it beside default_disk_mib so an
 	// admin setting a number can see whether anything will hold it.
 	//
-	// Operator-only: redactSetupStatusForMember rebuilds this struct with
+	// Operator-only: redactSetupStatusForUser rebuilds this struct with
 	// ConfinementClasses alone, so the word never reaches a member. It is
 	// deliberately absent from the ANONYMOUS /healthz, which composes its own body
 	// field by field.
@@ -502,7 +502,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// AI-provider Integration being configured, computed ONCE here and reused
 	// below for resp.Integrations so effectiveIntegrations() is not walked
 	// twice. Computed BEFORE redaction and left untouched by it (see
-	// redactSetupStatusForMember) — a member's console needs the ANSWER even
+	// redactSetupStatusForUser) — a member's console needs the ANSWER even
 	// though it can no longer see the detail that produced it.
 	//
 	// PLATFORM-API-7: use the *Using form, reusing the present/providers/bedrock
@@ -663,7 +663,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// setup mutation, which stays super-only. A security admin sees the same
 	// summary a member does because there is nothing here they could act on.
 	if !s.isOperator(ctx) {
-		resp = redactSetupStatusForMember(resp, ssoScope.perUser, ssoScope.perUser && ssoScope.bearer)
+		resp = redactSetupStatusForUser(resp, ssoScope.perUser, ssoScope.perUser && ssoScope.bearer)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -682,7 +682,7 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 	return err == nil && len(rows) > 0
 }
 
-// redactSetupStatusForMember drops the operator/admin-facing DIAGNOSTIC detail
+// redactSetupStatusForUser drops the operator/admin-facing DIAGNOSTIC detail
 // a member has no route to act on — the environment/credential checklist rows,
 // resident-CLI login detection, and secret NAMES — the explicit drop list
 // (checks/providers/secret names/runner detail), plus the integration rows' OWN
@@ -712,7 +712,7 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // ownBearerRow (#337) is narrower: per_user AND bedrock_bearer specifically,
 // false under a per_user bedrock_sso row (which has no bearer lane of its
 // own to read). It decides one field too — see Bedrock.
-func redactSetupStatusForMember(st SetupStatus, ownAWSRow, ownBearerRow bool) SetupStatus {
+func redactSetupStatusForUser(st SetupStatus, ownAWSRow, ownBearerRow bool) SetupStatus {
 	st.Checks = []SetupCheck{}
 	// Say the strip happened, so a reader never takes [] for "nothing is wired".
 	st.ChecksRedacted = true
@@ -767,7 +767,7 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow, ownBearerRow bool) Se
 	// contradiction: one credential-ref list withheld, an equivalent one beside
 	// it passed through, together with the internal egress hosts and the
 	// operator's connection config.
-	st.Integrations = memberSafeIntegrations(st.Integrations)
+	st.Integrations = userSafeIntegrations(st.Integrations)
 	// ModelAccess is KEPT, deliberately, and it is the reason a member's chip can
 	// stop reading llm_ready (a DEPLOYMENT fact that read green over their own
 	// lapsed session). It carries a state name, a wire mechanism value and one
@@ -777,8 +777,8 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow, ownBearerRow bool) Se
 	// PROJECTED, not passed through: under `shared` the graded blob is the
 	// OPERATOR's, and the `expiring` arm's action line carried their lapse
 	// timestamp verbatim — a credential deadline put back into a body this
-	// function had just stripped it from. See memberModelAccess (modelaccess.go).
-	st.ModelAccess = memberModelAccess(st.ModelAccess)
+	// function had just stripped it from. See userModelAccess (modelaccess.go).
+	st.ModelAccess = userModelAccess(st.ModelAccess)
 	if len(st.Harness) > 0 {
 		reduced := make([]SetupHarness, len(st.Harness))
 		for i, h := range st.Harness {

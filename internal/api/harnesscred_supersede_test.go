@@ -312,8 +312,8 @@ func TestMemberPreview_SignInRefusalPrecedesTheSupersede(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("harness-login in the preview = %d, want 409: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), memberPreviewSignInRefusal) {
-		t.Errorf("body = %q, want %q", w.Body.String(), memberPreviewSignInRefusal)
+	if !strings.Contains(w.Body.String(), userViewPreviewSignInRefusal) {
+		t.Errorf("body = %q, want %q", w.Body.String(), userViewPreviewSignInRefusal)
 	}
 	if got := f.store.stateOf(t, live.ID.String()); got != types.RunRunning {
 		t.Errorf("the admin's own sign-in sandbox is %s, want RUNNING — a refused launch must not "+

@@ -22,7 +22,7 @@ package api
 //     still leaves no question in front of a human that nobody's run is
 //     waiting on.
 //
-// Who may DECIDE one is authorizeMemberDecision's, unchanged: members are kept
+// Who may DECIDE one is authorizeUserDecision's, unchanged: members are kept
 // to egress_domain (and their own Azure DevOps escalations), so push_content
 // is admin-decidable only. A member approving their own run's workflow-file
 // edit is the exfiltration the rule exists to stop. A decision carries no

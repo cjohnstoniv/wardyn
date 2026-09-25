@@ -524,11 +524,10 @@ var routeMatrix = map[string]classifiedRoute{
 	// (admin token / local mode / no IdP) is refused inside the handler, which
 	// is a 400 rather than a tier.
 	//
-	// No `body` override: the generic "{}" bodyFor sends decodes to
-	// enabled:false and the handler answers 200, which is what classMember's
+	// No `body` override: the generic "{}" bodyFor sends decodes to an empty
+	// View (off) and the handler answers 200, which is what classMember's
 	// assertNotBlocked probe needs.
-	"POST /api/v1/me/member-mode":              {class: classMember},
-	"POST /api/v1/me/view":                     {class: classMember, body: `{"view":"admin"}`},
+	"POST /api/v1/me/view":                     {class: classMember},
 	"POST /api/v1/policies/grade":              {class: classMember},
 	"POST /api/v1/runs":                        {class: classMember},
 	"POST /api/v1/runs/preflight":              {class: classMember},

@@ -141,17 +141,17 @@ type SandboxSpec struct {
 	// deny-list defense-in-depth (see runner/docker/driver.go) even though the
 	// values came from policy. Default ReadOnly.
 	Mounts []Mount
-	// MemberMountRoots, when non-nil, marks this run as one whose mounts were
+	// UserMountRoots, when non-nil, marks this run as one whose mounts were
 	// authored by a MEMBER (a member-owned workspace's local_dir) and carries
 	// the operator/MDM-set roots those mounts must resolve inside. Resolved at
-	// create-run from the owning member's principal (MemberMountPolicy.RootsFor)
+	// create-run from the owning member's principal (UserMountPolicy.RootsFor)
 	// and re-checked by the driver at BIND time — the last moment this process
-	// can resolve the real path — via ValidateMemberMountSource.
+	// can resolve the real path — via ValidateUserMountSource.
 	//
 	// NIL for every operator/non-member run, and nil means the driver does
 	// EXACTLY what it does today: the member gate is purely additive and can
 	// never narrow an operator mount. See member_mount.go for the threat model.
-	MemberMountRoots []string
+	UserMountRoots []string
 	// Drive is the acting principal's USER DRIVE (migration 0054), already
 	// resolved, folded and narrowed by the control plane — nil for every run
 	// that did not ask for one. It is NOT a Mount: it never rides
@@ -219,7 +219,7 @@ type Mount struct {
 	ReadOnly bool   `json:"read_only"`
 	// MemberAuthored marks a bind whose SOURCE a MEMBER chose — a member-owned
 	// workspace's local_dir. ONLY these are re-checked against
-	// SandboxSpec.MemberMountRoots at bind time, because the roots bound what a
+	// SandboxSpec.UserMountRoots at bind time, because the roots bound what a
 	// MEMBER may name and nothing else: the same spec also carries binds WARDYN
 	// ITSELF authored (the subscription ~/.claude credential staging, the Bedrock
 	// ~/.aws dir) and an operator-owned workspace's dirs, none of which live
@@ -228,7 +228,7 @@ type Mount struct {
 	// subscription or Bedrock deployment.
 	//
 	// Set by internal/api dispatch from the run's member-owned workspaces
-	// (memberMountPosture); false — the operator default — everywhere else.
+	// (userMountPosture); false — the operator default — everywhere else.
 	MemberAuthored bool `json:"member_authored,omitempty"`
 	// DriveAuthored marks the ONE bind a driver synthesizes from
 	// SandboxSpec.Drive: the host_path user drive's per-person subdirectory.

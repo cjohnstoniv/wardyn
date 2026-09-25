@@ -39,7 +39,7 @@ import (
 var entityGateFuncs = map[routeEntity][]string{
 	entityRun:       {"ownsRunOrAdmin", "ownsRunOrSuperAdmin", "getRunAuthorized", "getRunAuthorizedBy"},
 	entityWorkspace: {"ownsWorkspaceOrAdmin", "ownsWorkspaceOrSecurityAdmin", "getWorkspaceAuthorized", "denyForeignWorkspace"},
-	entityApproval:  {"authorizeMemberDecision"},
+	entityApproval:  {"authorizeUserDecision"},
 }
 
 // authzGuardExceptions names a classOwner route whose handler reaches no

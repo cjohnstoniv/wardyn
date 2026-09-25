@@ -46,7 +46,7 @@ const (
 	// not a thing to hand out one row at a time.
 	capImage = "image"
 	// capAgent NARROWS: it bounds which agent/harness a member may launch —
-	// req.Agent, the member's own free-text choice, gated at denyMemberRequest.
+	// req.Agent, the member's own free-text choice, gated at denyUserRequest.
 	// Values are the exact `--agent` string plus `*`.
 	//
 	// DELIBERATELY narrowing rather than widening, and the direction is decided
@@ -71,7 +71,7 @@ const (
 	// appears on ("a capability bounds what a member chose, never what an admin
 	// pre-authorized", permissions-copy.ts PERM.DOCTRINE) and would let one `all`
 	// deny row strip the site's model access deployment-wide. So the gate lives
-	// at denyMemberRequest, on the one member-authored input, and never inside
+	// at denyUserRequest, on the one member-authored input, and never inside
 	// resolveRunIntegration — which operator callers reach too.
 	capIntegration = "integration"
 	// capWorkspaceProvider NARROWS: it bounds which git provider row a member's
@@ -296,7 +296,7 @@ var capKinds = map[string]capKind{
 	capEgressHost:        {direction: capNarrowing, hostSet: true, reason: authz.ReasonCapabilityEgressHost},
 	capSecret:            {direction: capNarrowing, reason: authz.ReasonCapabilitySecret},
 	capWorkspace:         {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspace},
-	capImage:             {direction: capWidening, restrictable: true, reason: authz.ReasonBYOIMember},
+	capImage:             {direction: capWidening, restrictable: true, reason: authz.ReasonBYOIUser},
 	capAgent:             {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityAgent},
 	capIntegration:       {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityIntegration},
 	capWorkspaceProvider: {direction: capNarrowing, restrictable: true, reason: authz.ReasonCapabilityWorkspaceProvider},
@@ -825,7 +825,7 @@ type ownedSecretMemoKey struct{}
 // maxAllowedDomainsPerSpec capped that list — but the member pipeline's OTHER
 // caller-sized list, spec.eligible_grants, has no count cap at all and bought an
 // unmemoized For(owner).List per grant at THREE sites in one request:
-// filterMemberGrants' 6c own-key arm, narrowMemberInlinePolicy's ownership
+// filterUserGrants' 6c own-key arm, narrowUserInlinePolicy's ownership
 // exemption (twice per grant, secret_ref and known_hosts_ref) and
 // validateInlineSecretRefs' unknown-name arm. Measured on this tree with a
 // counting store double: 3N+1 owner-scoped reads for N grants, N chosen entirely

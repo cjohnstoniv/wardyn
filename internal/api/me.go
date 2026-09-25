@@ -68,41 +68,42 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// never-a-second-copy rule as "operator" directly above. True for an
 		// admin too: the tiers overlap on this surface.
 		"security_operator": s.isSecurityOperator(r.Context()),
-		// "View as member": this admin has asked to be treated as a
-		// member for the rest of the session, so the console can say so in a
-		// persistent banner. Every field ABOVE is already clamped — role reads
-		// "member", both predicates read false — which is the point: the console
-		// needs no second rule, it needs to know the state it is in so the way
-		// OUT is always on screen.
+		// The user view (renamed in 0.8 from "view as member"/member_mode —
+		// docs/OPERATIONS.md's "Renamed in 0.8" appendix): this admin has
+		// asked to be treated as a user for the rest of the session, so the
+		// console can say so in a persistent banner. Every field ABOVE is
+		// already clamped — role reads "user", both predicates read false —
+		// which is the point: the console needs no second rule, it needs to
+		// know the state it is in so the way OUT is always on screen.
 		//
-		// false for a real member and for every non-SSO caller, so an older
+		// false for a real user and for every non-SSO caller, so an older
 		// client reading an absent key and a newer one reading false agree.
-		"member_mode": oidc.MemberModeFromContext(r.Context()),
-		// WHICH POSTURE of that mode: the no-credential
+		"user_view": oidc.MemberModeFromContext(r.Context()),
+		// WHICH POSTURE of that view: the no-credential
 		// preview, in which this caller's own per-user model credential reads as
-		// absent. It implies member_mode above, so the console reads it only to
+		// absent. It implies user_view above, so the console reads it only to
 		// choose which banner sentence to paint — the ceilings differ, and the
 		// one nobody may misread is that sign-in is refused until they exit.
-		"member_mode_no_credential": oidc.MemberPreviewNoCredential(r.Context()),
+		"user_view_no_credential": oidc.MemberPreviewNoCredential(r.Context()),
 		// Whether the preview is worth offering on this deployment: the
 		// posture hides something only where the model-access agent's roster row
 		// is per_user, so on a `shared` install the console must not offer an
 		// entry whose banner would assert a state that deployment contradicts.
-		// The server refuses to GRANT it there either (handleSetMemberMode); this
+		// The server refuses to GRANT it there either (handleSetUserView); this
 		// field is what keeps the control from appearing, and that refusal is the
 		// defence in depth behind it.
 		//
-		// ANDed with the two admin tiers — a member has nothing to pause — while
+		// ANDed with the two admin tiers — a user has nothing to pause — while
 		// the console still applies the "SSO session" half of the rule, the same
 		// predicate that hides the plain entry.
 		//
 		// The tiers are the left operand, deliberately. They are context reads;
-		// memberPreviewApplies is a GetSiteConfig. In this order the roster is read
+		// userPreviewApplies is a GetSiteConfig. In this order the roster is read
 		// only for the tier the key exists for — the other way round it put a store
-		// read on EVERY caller of the console's most-polled route, members included,
+		// read on EVERY caller of the console's most-polled route, users included,
 		// to compute an answer that is false for them by construction.
-		"member_preview_available": (s.isOperator(r.Context()) || s.isSecurityOperator(r.Context())) &&
-			s.memberPreviewApplies(r.Context(), r),
+		"user_preview_available": (s.isOperator(r.Context()) || s.isSecurityOperator(r.Context())) &&
+			s.userPreviewApplies(r.Context(), r),
 	}
 	body["user_type"] = s.meUserType(r)
 	// The type whose deletion turned the user view off, until the next
@@ -112,7 +113,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for
 	// an operator (the dialog never renders the hint for one) and for a member
 	// with no configured root either way (RootsFor's own empty-means-unavailable
-	// contract). Presentational only — ValidateMemberMountSource, not this
+	// contract). Presentational only — ValidateUserMountSource, not this
 	// value, is what actually enforces the boundary at bind time.
 	//
 	// Keyed on !isOperator, NOT on role == RoleUser: the constraint follows
@@ -123,7 +124,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// would be silently clamped at bind time with no hint ever shown.
 	body["member_local_dir_root"] = nil
 	if !s.isOperator(r.Context()) {
-		body["member_local_dir_root"] = memberLocalDirRootLabel(s.cfg.MemberMounts.RootsFor(principal))
+		body["member_local_dir_root"] = memberLocalDirRootLabel(s.cfg.UserMounts.RootsFor(principal))
 	}
 	// The caller's USER DRIVE (migration 0054), nil-means-none — the same
 	// convention member_local_dir_root above uses, so the console's "you have

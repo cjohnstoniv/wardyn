@@ -522,7 +522,7 @@ const (
 	// an admin decides (internal/egress/proxy/push_hold.go). Its requested
 	// scope is a PushContentScope. Admin-decidable only: a member deciding
 	// their own run's workflow-file edit is the exfiltration the rule stops,
-	// so authorizeMemberDecision keeps members to egress_domain.
+	// so authorizeUserDecision keeps members to egress_domain.
 	ApprovalPushContent ApprovalKind = "push_content"
 )
 

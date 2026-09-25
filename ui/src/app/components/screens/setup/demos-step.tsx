@@ -66,7 +66,7 @@ export default function DemoDetail({
   // Local open-state only — ProfileReview needs nothing but a runId.
   const [profileRunId, setProfileRunId] = useState<string | null>(null);
   // Member vs operator: this gate reads a SECRETS field, and a member's /setup
-  // status has Secrets zeroed by redactSetupStatusForMember — so it reads
+  // status has Secrets zeroed by redactSetupStatusForUser — so it reads
   // closed for a member whether or not an App exists. Telling them to go
   // configure one would be doubly false (they cannot write secrets either), so
   // the copy says what is actually true for them.

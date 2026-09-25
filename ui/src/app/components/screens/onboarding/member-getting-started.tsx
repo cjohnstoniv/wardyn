@@ -85,7 +85,7 @@ type Variant = "default" | "outline";
 
 // U-1 (W6 blind lens) — WHOSE credential the state describes, which the label
 // table alone cannot say. Under a row that is NOT per_user the server still
-// projects `live`/`expiring` (memberModelAccess, internal/api/modelaccess.go):
+// projects `live`/`expiring` (userModelAccess, internal/api/modelaccess.go):
 // that is the ADMIN's shared credential, graded for this member. Rendering
 // MODEL_ACCESS_LIVE ("Your AWS sign-in") there claimed a sign-in the member does
 // not have, directly above a card reading "Provided by your admin" and a New Run

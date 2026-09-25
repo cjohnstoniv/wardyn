@@ -79,7 +79,7 @@ export function GettingStarted({
   // Deliberately `!== "admin"`, not `role === "user"`, for the reason
   // setupGateActive (setup/setup-gate.ts) is written the same way now that role
   // is three-valued: GET /setup/status is redacted for every non-operator
-  // (handleSetupStatus -> redactSetupStatusForMember zeroes Checks, Providers
+  // (handleSetupStatus -> redactSetupStatusForUser zeroes Checks, Providers
   // and Secrets, internal/api/setup.go), and every mutation the deployer funnel
   // drives is super-admin-only server-side. A security admin falling through
   // here would get the operator funnel built from a status they cannot act on

@@ -701,7 +701,7 @@ rather than re-worded, because the shipped wording is the better wording:
   (`internal/api/runs_create_validate.go`) verbatim — the **seeded-image door**, closing the gap
   §1 names: a workspace's own `base_image` sets `req.Image` *after* `denyMemberRequest` has
   already run, so the explicit `--image` branch could not catch it. Same target and reason
-  (`runs.image` / `byoi_member`) as that branch, because it is the same capability answered
+  (`runs.image` / `byoi_user`) as that branch, because it is the same capability answered
   about the same value; only the door differs, and the message says which one.
 - **`DENIED_WORKSPACE_LLM_CRED`** is `handleCreateWorkspace`'s refusal
   (`internal/api/workspaces.go`) verbatim — a member naming an `llm_cred` binding on workspace

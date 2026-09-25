@@ -11,7 +11,7 @@ reason admin_surface
 reason security_admin_surface
 reason not_owner
 reason attach_ticket_foreign_run
-reason byoi_member
+reason byoi_user
 reason capability_agent
 reason capability_egress_host
 reason capability_feature

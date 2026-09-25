@@ -184,7 +184,7 @@ export async function mockMemberRole(page: Page): Promise<void> {
 // ever arrived UNREDACTED, so the member specs could not exercise any of them,
 // which is how W6-3's security-admin twin survived a green suite.
 //
-// A MIRROR of redactSetupStatusForMember's structural drops, not a re-derivation
+// A MIRROR of redactSetupStatusForUser's structural drops, not a re-derivation
 // of its value projections: `integrations`, `harness` and `model_access` are
 // reduced server-side by rules whose inputs (own-AWS-row scoping, the graded
 // blob's tier) this side cannot see, and inventing them here would prove a

@@ -41,7 +41,7 @@ func TestForeignMemberWorkspaceNotLaunchable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, project := memberProjectRoot(t)
-			srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
+			srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 			foreign := memberOwnedWorkspace(st, ownerMemberSub, project)
 			caller := ssoSession(t, tc.sub, tc.email, tc.role)
 
@@ -73,7 +73,7 @@ func TestForeignMemberWorkspaceNotLaunchable(t *testing.T) {
 func TestForeignMemberSourceRefusedOnResolvedSpec(t *testing.T) {
 	// ticket: F335
 	root, project := memberProjectRoot(t)
-	srv, st, _ := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
+	srv, st, _ := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 	memberOwnedWorkspace(st, ownerMemberSub, project) // the OTHER member's onboarded dir
 
 	spec := types.RunPolicySpec{
@@ -109,7 +109,7 @@ func TestOwnAndOperatorWorkspacesStillLaunch(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, project := memberProjectRoot(t)
-			srv, st, fr := memberDispatchHarness(t, runner.MemberMountPolicy{Roots: []string{root}})
+			srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
 			member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser)
 			createMemberRun(t, srv, fr, member, memberOwnedWorkspace(st, tc.owner, project))
 		})

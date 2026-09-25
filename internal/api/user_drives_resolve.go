@@ -41,7 +41,7 @@ import (
 // different answers to the caller: the stale one is "we cannot tell whether you
 // have a drive" (403, sign in again), this one is "you are authorized and there
 // is simply nothing mountable" (422, no audit) — the split
-// denyMemberRunQuota already draws between a refusal and an unmet precondition.
+// denyUserRunQuota already draws between a refusal and an unmet precondition.
 // The wrapped cause names the field an admin has to fix.
 var errDriveUnmountable = errors.New("drive_unmountable")
 
@@ -299,7 +299,7 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, us
 		// context, and auditing at the write sites would mean one emit per seam.
 		// This is the only place the drive refusal is DECIDED.
 		//
-		// runs.drive is the target, matching denyMemberDrive — the other refusal
+		// runs.drive is the target, matching denyUserDrive — the other refusal
 		// this seam writes — rather than governance.ceiling. The two rows say
 		// different things: one is "your profile shuts the drive door", the
 		// other "nobody can tell whether it is shut", and an operator filtering

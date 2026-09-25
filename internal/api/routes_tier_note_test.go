@@ -47,7 +47,7 @@ func routesNoteFor(t *testing.T, reg string) string {
 //
 // The finding is two claims in one title: GET /integrations served credential
 // refs and internal egress hosts to any member (closed by
-// memberSafeIntegration), AND routes.go's own justification for the wide tier
+// userSafeIntegration), AND routes.go's own justification for the wide tier
 // — "Read-only, same RBAC posture as site-config's GET: Credentials only ever
 // holds secret NAMES" — went false when site-config's GET moved to
 // operatorOnly. Both halves are load-bearing: the sentence is what the next
@@ -86,8 +86,8 @@ func TestIntegrationsRouteNoteMatchesItsRealTier(t *testing.T) {
 	}
 	// A wider tier is honest only because of the projection; the note has to
 	// say so, or the next reader re-derives the deleted justification.
-	if !strings.Contains(note, "memberSafeIntegration") {
-		t.Errorf("routes.go's note for GET /integrations never names memberSafeIntegration — the projection is the "+
+	if !strings.Contains(note, "userSafeIntegration") {
+		t.Errorf("routes.go's note for GET /integrations never names userSafeIntegration — the projection is the "+
 			"whole reason a member-class route may serve rows whose document is operator-only.\nnote=%s", note)
 	}
 

@@ -99,7 +99,7 @@ func reSigned(t *testing.T, w *httptest.ResponseRecorder) (*http.Cookie, oidc.Se
 type uvMe struct {
 	Role            string            `json:"role"`
 	Operator        bool              `json:"operator"`
-	MemberMode      bool              `json:"member_mode"`
+	MemberMode      bool              `json:"user_view"`
 	UserType        *meUserTypeView   `json:"user_type"`
 	UserViewDropped map[string]string `json:"user_view_dropped"`
 }

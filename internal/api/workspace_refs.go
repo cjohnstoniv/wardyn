@@ -127,7 +127,7 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 		// where the operator narrowed the roots (or the source was repointed at
 		// a symlink) AFTER the workspace was created. An operator-owned source
 		// (OwnedBy == "") is untouched.
-		if err := memberMountAllowed(s.cfg.MemberMounts, ws.OwnedBy, wm); err != nil {
+		if err := userMountAllowed(s.cfg.UserMounts, ws.OwnedBy, wm); err != nil {
 			return http.StatusUnprocessableEntity, err
 		}
 	}
@@ -140,28 +140,28 @@ func (s *Server) validateWorkspaceSources(ctx context.Context, spec types.RunPol
 	return 0, nil
 }
 
-// memberMountAllowed re-checks ONE resolved mount against its owning member's
+// userMountAllowed re-checks ONE resolved mount against its owning member's
 // mount policy. owner=="" (operator-owned) is always fine — the member gate is
 // additive and never narrows an operator mount.
-func memberMountAllowed(policy runner.MemberMountPolicy, owner string, wm types.WorkspaceMount) error {
+func userMountAllowed(policy runner.UserMountPolicy, owner string, wm types.WorkspaceMount) error {
 	if owner == "" {
 		return nil
 	}
-	if err := policy.ValidateMemberMount(owner, wm.Source, !wm.ReadOnlyOrDefault()); err != nil {
+	if err := policy.ValidateUserMount(owner, wm.Source, !wm.ReadOnlyOrDefault()); err != nil {
 		return fmt.Errorf("member workspace mount: %w", err)
 	}
 	return nil
 }
 
-// memberMountPosture is ONE run's member-mount posture, resolved once at
+// userMountPosture is ONE run's member-mount posture, resolved once at
 // create-run and carried to the driver: the roots the run's member-authored
 // binds must resolve inside, plus WHICH mount sources those are. The two are one
 // value because they are only ever correct together — roots without sources
 // gates operator/Wardyn-authored binds (the subscription creds, the Bedrock
 // ~/.aws dir) that live under no member root, and sources without roots gates
 // nothing.
-type memberMountPosture struct {
-	// Roots is runner.SandboxSpec.MemberMountRoots: nil for an operator run,
+type userMountPosture struct {
+	// Roots is runner.SandboxSpec.UserMountRoots: nil for an operator run,
 	// empty-but-non-nil for a member run on a deployment with no roots.
 	Roots []string
 	// Sources are the member-owned workspaces' local_dir paths — the exact
@@ -170,10 +170,10 @@ type memberMountPosture struct {
 	Sources map[string]bool
 }
 
-// memberMountPosture resolves a run's member-mount posture, or the zero value
+// userMountPosture resolves a run's member-mount posture, or the zero value
 // when the run has NO member-owned workspace — which is every operator run, and
 // which the driver reads as "do exactly what you do today"
-// (runner.SandboxSpec.MemberMountRoots).
+// (runner.SandboxSpec.UserMountRoots).
 //
 // wsRefs is the already-resolved referencedWorkspaces list, so this costs no
 // extra store read. The FIRST member-owned workspace decides the ROOTS: a run
@@ -184,15 +184,15 @@ type memberMountPosture struct {
 // two members' workspaces into one run, the second member's dir is gated against
 // the first's roots — refused, which is the fail-closed answer — rather than
 // binding unchecked because it belonged to nobody the roots came from.
-func (s *Server) memberMountPosture(wsRefs []types.Workspace) memberMountPosture {
-	var p memberMountPosture
+func (s *Server) userMountPosture(wsRefs []types.Workspace) userMountPosture {
+	var p userMountPosture
 	for _, ws := range wsRefs {
 		if ws.OwnedBy == "" {
 			continue
 		}
 		if p.Sources == nil {
 			p.Sources = map[string]bool{}
-			p.Roots = s.cfg.MemberMounts.RootsFor(ws.OwnedBy)
+			p.Roots = s.cfg.UserMounts.RootsFor(ws.OwnedBy)
 			if p.Roots == nil {
 				// Non-nil, empty: "member run, no roots" must still reach the driver
 				// as a member run so every member bind fails closed there, rather

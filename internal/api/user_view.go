@@ -26,32 +26,86 @@ import (
 // type, so the switch preselects it on any device.
 const userViewTypePref = "user_view.type"
 
-// userViewRequest is POST /me/view's body.
+// userViewRequest is POST /me/view's body. View is "user" to enter the view,
+// "admin" (or the zero value — an ABSENT/empty body, or one that omits the
+// key) to leave it, and answers 200 either way — deliberately, because an
+// empty body is what authz_test.go's routeMatrix probe sends and because
+// "turn it off" is the request that must never be hard to make. Any other
+// value is refused 400. Clean break from the 0.7 boolean `enabled` shape (no
+// alias — docs/OPERATIONS.md's "Renamed in 0.8" appendix).
 type userViewRequest struct {
-	View string `json:"view"` // "user" or "admin"
+	View string `json:"view"`
 	// UserType is the type to view as; empty means the previous choice, then
-	// the admin's own type, then the built-in type.
-	UserType     string `json:"user_type"`
-	NoCredential bool   `json:"no_credential"`
+	// the admin's own type, then the built-in type. Meaningful only with
+	// View:"user".
+	UserType string `json:"user_type"`
+	// NoCredential selects the "view as a NEW user (not signed in)" posture —
+	// see membermode_preview.go. Meaningful only with View:"user", and stored
+	// as the AND of the two, so there is no body that turns the view off and
+	// leaves the preview on.
+	//
+	// decodeStrict sets DisallowUnknownFields (helpers.go), so an old console
+	// POSTing this key to an older replica gets a 400 and does NOT enter the
+	// view — the fail-safe direction during a rolling upgrade, and the reason
+	// the console sends the key only when it is true.
+	NoCredential bool `json:"no_credential"`
 }
 
-// handleSetUserView is POST /api/v1/me/view. It shares handleSetMemberMode's
-// guards and posture rules; what it adds is the type the view looks through,
-// validated here and again on every request (userViewGate).
+// handleSetUserView is POST /api/v1/me/view.
+//
+// Registered on the PLAIN authenticated router group beside POST /me/ssh-keys,
+// never on operatorOnly: inside the view the caller's effective role IS user,
+// so an operator-gated exit would be a door that locks from the inside. A real
+// user toggling ON is a no-op 200 for the same reason — they are already what
+// they asked to be, and a 4xx would only teach them the control exists for
+// someone else. It is a no-op in FACT as well as in status code: SetUserView
+// writes no cookie for that caller, because everything downstream reads the
+// FLAG rather than the stamped tier — a user carrying mm:1 would be shown a
+// banner naming an admin role they do not hold and refused their own
+// credential mint by the door below.
+//
+// Guard order is load-bearing, and it is TWO conditions, not one. The obvious
+// arm is "no per-human identity": the admin token and local mode are one
+// shared credential that isOperator answers true for with no session role to
+// demote.
+//
+// `s.cfg.OIDC == nil` is a SEPARATE condition and cannot be folded into the
+// first. The `wdn_` API-token lane publishes a human identity through the
+// same withHumanIdentity the SSO branch uses (apitokens.go), and http.go
+// mounts that lane REGARDLESS of OIDC — deliberately, so an operator who
+// never configured SSO can still hold a personal token. So
+// `oidcHumanFromContext(ctx) != ""` is reachable with a nil *Authenticator,
+// and a token caller who also attaches any `wardyn_session` cookie at all
+// would reach sessionHMAC on it: a nil deref, caught by chi's Recoverer as a
+// 500 plus a stack dump per request. Both conditions, one arm, one sentence —
+// there is nothing to pause in either case.
 func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	sub := oidcHumanFromContext(ctx)
 	if sub == "" || s.cfg.OIDC == nil {
-		writeError(w, http.StatusBadRequest, memberModeNoHumanRefusal)
+		writeError(w, http.StatusBadRequest, userViewNoHumanRefusal)
 		return
 	}
 	var req userViewRequest
-	if !decodeStrict(w, r, &req) {
+	// An empty body is not an error here: http.NoBody decodes to the zero
+	// struct, whose View is "" — off, the same as View:"admin".
+	//
+	// `!= 0`, never `> 0` (record.go's optional-body handler is the
+	// precedent): a chunked or otherwise unknown-length body reports
+	// ContentLength == -1, and `> 0` would skip the decode and silently
+	// answer 200 {"user_view":false} to a request that asked to ENTER the
+	// view.
+	if r.ContentLength != 0 && !decodeStrict(w, r, &req) {
 		return
 	}
-	on := req.View == "user"
-	if !on && req.View != "admin" {
-		writeError(w, http.StatusBadRequest, `The view must be "user" or "admin".`)
+	var on bool
+	switch req.View {
+	case "", "admin":
+		on = false
+	case "user":
+		on = true
+	default:
+		writeError(w, http.StatusBadRequest, `The "view" field must be "user" or "admin".`)
 		return
 	}
 	typeID := ""
@@ -68,18 +122,49 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	preview := on && req.NoCredential && s.memberPreviewApplies(ctx, r)
+	// The posture is granted by the server, never taken from the body. The
+	// no-credential preview only does anything where the model-access agent's
+	// roster row is per_user (userPreviewApplies, membermode_preview.go);
+	// asking for it anywhere else would enter a view whose banner asserts a
+	// state the same deployment immediately contradicts. On `shared` this
+	// silently downgrades to the plain view — the honest answer, and no new
+	// string.
+	preview := on && req.NoCredential && s.userPreviewApplies(ctx, r)
 	realRole, err := s.cfg.OIDC.SetUserView(w, r, on, typeID, preview)
 	if err != nil {
+		// decodeSession's own errors: the cookie went missing or stopped
+		// verifying between the middleware and here. Not a 500 — there is
+		// nothing wrong with the server, the caller simply has no session left
+		// to re-sign.
+		//
+		// Defence in depth rather than a live lane: Middleware publishes no
+		// principal for an expired, revoked or tampered cookie, so those
+		// requests land on the no-human 400 above and never get here. Kept
+		// because the guard above proves the caller HAS a human identity, not
+		// that it came from a cookie this Authenticator can re-sign.
 		writeError(w, http.StatusUnauthorized, "no session to change: sign in again")
 		return
 	}
-	// A real user asking for the user view is already in it: SetUserView wrote
-	// nothing, so nothing is remembered, audited as entered, or reported.
+	// Actor is the admin's OWN sub, from the untouched actorFromRequest: the
+	// whole value of the view over a shared second login is that the trail
+	// still names the person. real_role is the STAMPED role SetUserView read
+	// off the cookie — never oidcRoleFromContext, which is already clamped to
+	// user while the view is on and would record the wrong tier on the
+	// turning-OFF row (and would flatten a security_admin into an admin).
+	//
+	// A real user asking for the user view is already in it: SetUserView
+	// wrote nothing, so nothing is remembered, audited as entered, or
+	// reported — the REAL-USER case AUDIT-ACTIONS' "only on a row that turned
+	// the view ON with it" sentence describes.
 	entered := on && realRole != oidc.RoleUser
 	if entered {
 		s.rememberUserViewType(ctx, sub, typeID)
 	}
+	// no_credential rides the datum ONLY when the view was turned ON with the
+	// preview posture asked for: every row a pre-0.8 deployment could write
+	// stays byte-identical, and the key is a MARKER of which posture was
+	// entered rather than a field every row answers — the same rule
+	// internal/authz.Datum's user_view marker follows.
 	datum := map[string]any{"enabled": on, "real_role": realRole}
 	if entered {
 		datum["user_type"] = typeID
@@ -87,8 +172,15 @@ func (s *Server) handleSetUserView(w http.ResponseWriter, r *http.Request) {
 			datum["no_credential"] = true
 		}
 	}
+	// Dual-emit for one minor (0.8.x, OD-18): every toggle writes BOTH the new
+	// action name and, for SIEM stability, the old one it replaces — same
+	// datum, so a dashboard still filtering on auth.member_mode keeps seeing
+	// rows until it is repointed. docs/OPERATIONS.md's "Renamed in 0.8"
+	// appendix says so; removed in 0.9.
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"auth.user_view", "/api/v1/me/view", "success", mustJSON(datum)))
+	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"auth.member_mode", "/api/v1/me/view", "success", mustJSON(datum)))
 	resp := map[string]any{"user_view": entered, "user_type": nil, "user_view_no_credential": entered && preview}
 	if entered {
 		resp["user_type"] = typeID
@@ -196,8 +288,7 @@ func (s *Server) userViewGate(w http.ResponseWriter, r *http.Request, typeID str
 	if !oidc.MemberModeFromContext(ctx) {
 		return r
 	}
-	switch r.URL.Path {
-	case "/api/v1/me/view", "/api/v1/me/member-mode":
+	if r.URL.Path == "/api/v1/me/view" {
 		return r
 	}
 	// refusalEvent's rows name the viewed type through the api's own key.

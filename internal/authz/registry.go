@@ -21,7 +21,7 @@ const (
 	ReasonSecurityAdminSurface           Reason = "security_admin_surface"
 	ReasonNotOwner                       Reason = "not_owner"
 	ReasonAttachTicketForeignRun         Reason = "attach_ticket_foreign_run"
-	ReasonBYOIMember                     Reason = "byoi_member"
+	ReasonBYOIUser                       Reason = "byoi_user"
 	ReasonCapabilityAgent                Reason = "capability_agent"
 	ReasonCapabilityEgressHost           Reason = "capability_egress_host"
 	ReasonCapabilityFeature              Reason = "capability_feature"
@@ -69,7 +69,7 @@ var refusals = map[Reason]Refusal{
 	ReasonSecurityAdminSurface:           {Effect: EffectDeny, Audit: true, Sentence: requiresAdminRole},
 	ReasonNotOwner:                       {Effect: EffectHidden, Audit: true},
 	ReasonAttachTicketForeignRun:         {Effect: EffectHidden, Audit: true},
-	ReasonBYOIMember:                     {Effect: EffectDeny, Audit: true},
+	ReasonBYOIUser:                       {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityAgent:                {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityEgressHost:           {Effect: EffectDeny, Audit: true},
 	ReasonCapabilityFeature:              {Effect: EffectDeny, Audit: true},

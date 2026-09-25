@@ -220,7 +220,7 @@ func (s *Server) isModelProviderHost(h string) bool {
 	}
 	// An operator-configured internal gateway host counts too — it IS the
 	// model-provider host for every run under the api-key lane (6c's
-	// filterMemberGrants arm and denyAlwaysReject below both need this).
+	// filterUserGrants arm and denyAlwaysReject below both need this).
 	for _, base := range s.cfg.LLMGateways {
 		if gatewayHost(base) == hl {
 			return true

@@ -483,7 +483,7 @@ inline `api_key` grant naming a model-provider host (the anthropic.com/
 openai.com convention, or a configured internal gateway) that pairs with a
 secret the member OWNS is admitted with no operator eligible-grant pairing
 at all — see [MEMBERS.md § Your model key](MEMBERS.md#your-model-key). The
-secret-exfil guard `filterMemberGrants` exists for is unaffected: the arm
+secret-exfil guard `filterUserGrants` exists for is unaffected: the arm
 requires PROVABLE ownership (a names-only `Store.For(<member>).List`, never a
 value read, never another member's row) and a model-provider host the run's
 own already-clamped egress allows — an arbitrary stored secret paired with
@@ -516,14 +516,14 @@ credential is never resident: a Bedrock API key is a static `Authorization`
 header, so the proxy TLS-MITMs `bedrock-runtime` and injects it, and the
 sandbox holds only a placeholder — the same trust parity as the api-key and
 subscription lanes. No member grant, no workspace requirement, and nothing that
-`filterMemberGrants` can drop.
+`filterUserGrants` can drop.
 
 **Constraint:** Bedrock resolution is scoped to the `claude-code` agent. A
 member running `codex-cli` on m′ still needs an operator-provided OpenAI
 credential.
 
 **Superseded on the record:** an earlier draft of this page rejected re-running
-the provider-convention model grant after `filterMemberGrants` as reopening
+the provider-convention model grant after `filterUserGrants` as reopening
 the secret-exfil guard. Per-principal secrets closed that: the own-key arm
 requires PROVABLE ownership of the exact secret name, not merely that it
 matches the convention, so a member still cannot pair an arbitrary stored

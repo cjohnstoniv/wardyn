@@ -181,7 +181,7 @@ describe("GettingStarted (the view decides the page, not role)", () => {
   // R4/F034 (pre-M-6, when this read `role` alone): the guard was two-valued
   // (`role === "user"`) after role became three-valued, so a security
   // admin fell THROUGH to the deployer funnel — built from a SetupStatus the
-  // server redacts for them (redactSetupStatusForMember zeroes
+  // server redacts for them (redactSetupStatusForUser zeroes
   // Checks/Providers/Secrets, internal/api/setup.go), driving mutations that
   // are super-admin-only.
   it("/setup shows the User Getting Started for a security admin too, not the deployer funnel", async () => {

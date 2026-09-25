@@ -383,7 +383,7 @@ test("the view switch: an admin drops to the User view, is refused, and comes ba
   await expect(segment(CONSOLE_VIEW.USER)).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
 
   await expect.poll(async () => (await me(page)).operator, { timeout: 30_000 }).toBe(false);
-  expect((await me(page)).member_mode).toBe(true);
+  expect((await me(page)).user_view).toBe(true);
 
   // The flag is enforced SERVER-SIDE: reading ANOTHER principal's secret
   // namespace is an operator act, and this session no longer has that authority.

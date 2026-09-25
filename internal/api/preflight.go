@@ -35,7 +35,7 @@ type preflightResponse struct {
 	OverallRisk    composer.RiskLevel  `json:"overall_risk"`
 	// Warnings is resolveRunPolicy's clamp-warning list — non-empty only when a
 	// MEMBER authored an inline_policy that composer.Clamp bounded or
-	// filterMemberGrants dropped a grant from. Surfaced here (never at launch, per
+	// filterUserGrants dropped a grant from. Surfaced here (never at launch, per
 	// resolveRunPolicy's doc comment) so Review tells the member WHY their
 	// inline_policy differs from what they typed, before they launch.
 	Warnings []string `json:"warnings,omitempty"`
@@ -151,7 +151,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// BYOI/devcontainer_repo/ungranted-workspace request with the SAME 403
 	// create would, not preview a rosier checklist for a request that would be
 	// denied at launch.
-	ceiling, denied := s.denyMemberRequest(w, r, req)
+	ceiling, denied := s.denyUserRequest(w, r, req)
 	if denied {
 		return
 	}

@@ -528,7 +528,7 @@ func (enforcementWordRunner) Capabilities(context.Context) (runner.Capabilities,
 }
 
 // TestHealthz_OmitsTheEnforcementWord pins the half healthz.go states only in a
-// comment: the word is OPERATOR DETAIL, redactSetupStatusForMember strips it
+// comment: the word is OPERATOR DETAIL, redactSetupStatusForUser strips it
 // from /setup/status for a member (setup_test.go), and /healthz is ANONYMOUS —
 // so it must not carry it at all. handleHealthz composes its body field by
 // field precisely so a field added to the setup status never appears here by

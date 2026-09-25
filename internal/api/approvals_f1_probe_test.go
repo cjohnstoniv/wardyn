@@ -269,7 +269,7 @@ func f1Do(t *testing.T, f *scopeFixture, c f1Caller, path, body string) *httptes
 
 // f1Want is the decide-authz matrix in ONE readable function: who may decide
 // what, on whose run, at which scope. It is the executable form of
-// authorizeMemberDecision (the member gate, whose security-tier arm passes
+// authorizeUserDecision (the member gate, whose security-tier arm passes
 // every kind on every run) and resolveAlwaysTarget (`always` is operator-only),
 // both in approvals.go, plus isSecurityOperator in http.go (its no-OIDC-human
 // arm = admin token).

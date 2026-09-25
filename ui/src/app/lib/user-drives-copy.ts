@@ -423,8 +423,8 @@ export const DRIVE_MEMBER = {
 
   // ---- §7.7 refusals (server-composed) ----
   // DENIED_DRIVE is the one 403 (audited authz.denied, reason
-  // governance_profile, target runs.drive — denyMemberDrive beside
-  // denyMemberRunQuota); the six REFUSED_NO_GRANT..REFUSED_BACKEND keys are
+  // governance_profile, target runs.drive — denyUserDrive beside
+  // denyUserRunQuota); the six REFUSED_NO_GRANT..REFUSED_BACKEND keys are
   // 422s with no audit (seedRequestDrive, run create and preflight both).
   // REFUSED_TARGET_RESERVED is the 400 validatePolicySpec's unique-target arm
   // raises when a policy or workspace source names the reserved target — met

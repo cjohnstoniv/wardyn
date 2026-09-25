@@ -73,7 +73,7 @@ type Config struct {
 	// the same operator-set list.
 	//
 	// It is DRIVER CONFIG rather than a SandboxSpec field — the opposite of
-	// MemberMountRoots, deliberately. Member roots are resolved PER PRINCIPAL
+	// UserMountRoots, deliberately. Member roots are resolved PER PRINCIPAL
 	// (a `_MAP` entry replaces the shared list for one member), so only the
 	// control plane knows which roots bound a given run. A drive's ceiling is
 	// per DEPLOYMENT: it says where this daemon's operator has mounted shares,

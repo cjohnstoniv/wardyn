@@ -53,7 +53,7 @@ type bootFlags struct {
 	// operator authority lives elsewhere (an org IdP / MDM): it refuses to start
 	// unless that is actually true. The four member*Roots knobs bound what a
 	// member may bind into a sandbox from their own machine — parsed by
-	// runner.ParseMemberMountPolicy, which fails boot closed on a malformed value
+	// runner.ParseUserMountPolicy, which fails boot closed on a malformed value
 	// and returns the O4 posture warnings.
 	memberMode          *bool
 	memberRoots         *string
@@ -469,7 +469,7 @@ func parseBootFlags() *bootFlags {
 		// provenance, and flipping that off by default would silently narrow
 		// egress for every existing workspace on upgrade. An operator in a
 		// higher-trust posture (repo content is reviewed, or the exfil risk
-		// inline_policy.go's filterMemberGrants comment names matters more than
+		// inline_policy.go's filterUserGrants comment names matters more than
 		// the convenience) opts in here.
 		requireOpSetEgress: flagBool("require-operator-set-egress", "WARDYN_REQUIRE_OPERATOR_SET_EGRESS", true, "require a workspace egress requirement's provenance to be operator_set before it is auto-added at launch; a scan_seeded egress host is skipped instead"),
 		gitPATBroker:       flagEnv("git-pat-broker", "WARDYN_GIT_PAT_BROKER", "on", `never-resident git_pat lane: "on" mints a non-GitHub forge's PAT proxy-side so it never enters the sandbox; "off" mints it into the sandbox process instead, for a forge that misbehaves under the broker's rewrite`),

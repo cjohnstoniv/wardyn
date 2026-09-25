@@ -36,7 +36,7 @@ const ssoAdmin = (page: Page) => patchJSON(page, "**/api/v1/me", (j) => { j.meth
 /** An SSO admin in the User view: the server answers them as a user, and says so. */
 const ssoAdminInUserView = (page: Page) =>
   patchJSON(page, "**/api/v1/me", (j) => {
-    Object.assign(j, { method: "sso", member_mode: true, role: "user", operator: false, security_operator: false });
+    Object.assign(j, { method: "sso", user_view: true, role: "user", operator: false, security_operator: false });
   });
 
 function auditRequests(page: Page): string[] {
@@ -65,9 +65,9 @@ test.describe("view routing", () => {
     await ssoAdminInUserView(page);
     const audit = auditRequests(page);
     const bodies: unknown[] = [];
-    await page.route("**/api/v1/me/member-mode", async (route) => {
+    await page.route("**/api/v1/me/view", async (route) => {
       bodies.push(route.request().postDataJSON());
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ member_mode: false }) });
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user_view: false }) });
     });
     await page.goto("/admin/audit");
 
@@ -76,7 +76,7 @@ test.describe("view routing", () => {
     expect(audit).toEqual([]);
 
     await page.getByRole("button", { name: VIEW_TO_ADMIN.GO }).click();
-    await expect.poll(() => bodies).toEqual([{ enabled: false }]);
+    await expect.poll(() => bodies).toEqual([{ view: "admin" }]);
   });
 
   test("staying in the User view goes to your runs", async ({ page }) => {

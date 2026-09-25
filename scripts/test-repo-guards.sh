@@ -34,6 +34,8 @@
 #      upload silently gets an empty path forever (#372/SD-8; actionlint
 #      does not catch this, since a present-but-empty `path:` is still a
 #      valid input).
+#  11. no Go name OPERATIONS.md's "Renamed in 0.8" table retires is still cited
+#      outside that table, CHANGELOG.md or docs/design/ (#617).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -312,6 +314,21 @@ else
     done
     if [ "$empty_upload_fail" = 0 ]; then ok "every upload-artifact step across .github/workflows/*.yml has a non-empty path"; fi
 fi
+
+# ── 11. retired 0.8 Go names stay retired (#617) ────────────────────────────
+# The names come from the table's own "| Go:" rows (Pre-0.8 column), so a row
+# added there is guarded without touching this script. docs/design/ is a
+# point-in-time planning record and CHANGELOG.md is history; both keep them.
+retired="$(awk -F'|' '/^## Renamed in 0.8/{f=1;next} f&&/^## /{exit} f&&$2~/^ Go:/{print $3}' docs/OPERATIONS.md \
+    | grep -oE '`[A-Za-z_.]+`' | tr -d '`' | sed 's/.*\.//' | sort -u)"
+[ -n "$retired" ] || bad "docs/OPERATIONS.md's 'Renamed in 0.8' table has no Go: rows — guard 11 is pointing at nothing"
+stale=0
+for name in $retired; do
+    hits="$(git grep -nw "$name" -- ':!CHANGELOG.md' ':!docs/design/' | grep -v '^docs/OPERATIONS.md:[0-9]*:| Go:' || true)"
+    [ -z "$hits" ] || { stale=1; bad "retired 0.8 name '$name' is still cited (see docs/OPERATIONS.md 'Renamed in 0.8'):
+$hits"; }
+done
+if [ -n "$retired" ] && [ "$stale" = 0 ]; then ok "no retired 0.8 Go name is cited outside the rename table, CHANGELOG.md or docs/design/"; fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

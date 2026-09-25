@@ -755,7 +755,7 @@ describe("MemberGettingStarted", () => {
     });
 
     // U-1 (W6 blind lens) — the wire shape the server really emits for a shared
-    // bedrock_sso row: memberModelAccess (internal/api/modelaccess.go) projects
+    // bedrock_sso row: userModelAccess (internal/api/modelaccess.go) projects
     // `live` for the ADMIN's credential, so the fixture above (no model_access at
     // all) never exercises the branch that actually renders. Without this, the
     // chip row would read "Model access · Your AWS sign-in" — a sign-in this

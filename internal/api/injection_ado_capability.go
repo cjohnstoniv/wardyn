@@ -19,7 +19,7 @@ package api
 // (migration-free) and carries the grant it belongs to in grant_id, which the
 // sandbox's own approval route can never set. That column — not a key inside
 // the scope — is what makes the row decidable by the run's owner
-// (authorizeMemberDecision). kind `credential` is deliberately NOT used:
+// (authorizeUserDecision). kind `credential` is deliberately NOT used:
 // selectGrantApprovalForUpdate adopts the newest credential row for a grant as
 // that grant's own mint approval.
 //

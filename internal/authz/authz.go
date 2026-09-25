@@ -153,16 +153,20 @@ type Origin struct {
 	Placement string     `json:"placement,omitempty"`
 }
 
-var reservedDatumKeys = []string{"reason", "method", "member_mode", "device_channel", "dropped", "user_type"}
+var reservedDatumKeys = []string{"reason", "method", "user_view", "device_channel", "dropped", "user_type"}
 
 // Datum is the data of d's audit row, refused to p over method (empty when no
 // request carried it). A detail never stands in for a reserved key, so it can
 // never forge the reason or a marker.
 //
-// member_mode is a marker, present only when true. user_type (the caller's
-// stamped type, or the type a member view looks through) rides on its own,
+// user_view is a marker, present only when true — renamed in 0.8 from
+// member_mode (docs/OPERATIONS.md's "Renamed in 0.8" appendix; history not
+// rewritten, and no dual-emit here unlike auth.user_view's own action row:
+// this key lives inside authz.denied's own Data map, not on a separate audit
+// row, so there is no old-key row to keep landing). user_type (the caller's
+// stamped type, or the type a user view looks through) rides on its own,
 // whenever the principal carries one — a stamped type refused on its own
-// (user_type_unknown) is not a member view. device_channel is a sibling of the
+// (user_type_unknown) is not a user view. device_channel is a sibling of the
 // ingest marker device_origin, never that key: device_origin stays the mark of
 // a row a laptop hashed and forwarded.
 func Datum(d Decision, p Principal, method string) map[string]any {
@@ -177,7 +181,7 @@ func Datum(d Decision, p Principal, method string) map[string]any {
 		m["method"] = method
 	}
 	if p.MemberView {
-		m["member_mode"] = true
+		m["user_view"] = true
 	}
 	if p.UserType != "" {
 		m["user_type"] = p.UserType

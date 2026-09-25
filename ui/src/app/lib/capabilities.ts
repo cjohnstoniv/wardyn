@@ -7,7 +7,7 @@
 // capability set, and the two questions the why-denied surfaces ask of it.
 //
 // This is ADVISORY ONLY. The enforcement points are server-side —
-// authorizeMemberDecision, resolveRunPolicy's member branch, denyMemberRequest
+// authorizeUserDecision, resolveRunPolicy's member branch, denyUserRequest
 // and handleListSecrets — and every one of them re-resolves the grants itself.
 // What lives here exists so a member is told WHY before they click, instead of
 // discovering it as a bare 403.

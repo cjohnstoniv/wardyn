@@ -400,7 +400,7 @@ describe("ModelProviderCard — #337: a member's own bearer field under a per_us
 
   // PR #352 review, finding 1: this fixture used to carry region/model/
   // creds_present alongside bearer_present in a MEMBER render — a shape the
-  // server's own redaction (redactSetupStatusForMember, setup.go) never
+  // server's own redaction (redactSetupStatusForUser, setup.go) never
   // sends, since those three are always dropped for a non-operator. Shaped
   // the way a member's response actually reads now: Ready survives always,
   // BearerPresent survives only under their own per_user bearer row.

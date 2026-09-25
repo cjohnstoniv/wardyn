@@ -286,7 +286,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
   });
 
   // 0.7 §B: a SECURITY ADMIN (operator:false, security_operator:true) decides
-  // ANY kind on ANY run — authorizeMemberDecision early-returns for
+  // ANY kind on ANY run — authorizeUserDecision early-returns for
   // isSecurityOperator (approvals.go:392) BEFORE both the kind check and the
   // egress_host capability leg. Gating this card on useOperator would refuse
   // them a decision the server would have honoured.
@@ -376,7 +376,7 @@ describe("ApprovalsScreen — empty-state copy by role", () => {
 
 // 0.6 pillar 2: the ONE member why-denied moment on this screen. A member may
 // decide an egress_domain approval on their own run — unless `egress_host` is
-// enforced and the host isn't granted to them (authorizeMemberDecision). The
+// enforced and the host isn't granted to them (authorizeUserDecision). The
 // copy is read from the canon, never retyped.
 describe("ApprovalsScreen — egress host not granted (member)", () => {
   beforeEach(() => {

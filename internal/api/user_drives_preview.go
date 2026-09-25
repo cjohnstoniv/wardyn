@@ -148,7 +148,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // absent: it folds a run request's read_only, and a preview has no run request.
 //
 // Still not audited. Running the door here does not make this an authorization
-// event: nothing is minted and nothing changes, and denyMemberDrive's
+// event: nothing is minted and nothing changes, and denyUserDrive's
 // authz.denied row is about a member's own attempt to launch.
 //
 // And that is enforced, not merely stated. Both of this handler's
@@ -280,7 +280,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 // drivePreviewDoorIsOpen runs the profile DOOR against the claims an admin
 // typed, writing the launch path's own 403 and returning false once it has.
 //
-// The door at launch keys on the CALLER (denyMemberDrive → driveDoorProfile,
+// The door at launch keys on the CALLER (denyUserDrive → driveDoorProfile,
 // which exempts an operator). Here the caller is always an operator — every
 // /drives route is SUPER — so asking about them would answer "open" for every
 // previewed principal and the preview would keep saying "this person mounts

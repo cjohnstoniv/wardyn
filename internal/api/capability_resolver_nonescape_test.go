@@ -393,7 +393,7 @@ func TestCapKindTableIsTheClosedSet(t *testing.T) {
 }
 
 // denyReadCountStore counts the two per-resolution reads over capStore, which
-// answers every other read denyMemberRequest makes (the governance ceiling).
+// answers every other read denyUserRequest makes (the governance ceiling).
 type denyReadCountStore struct {
 	*capStore
 	grantsReads, enfReads int
@@ -411,7 +411,7 @@ func (s *denyReadCountStore) GetCapabilityEnforcement(ctx context.Context) (map[
 
 // TestDenyMemberRequest_OneSnapshotForEveryField: a member request naming an
 // image, a workspace, an agent and an integration is decided on ONE capability
-// snapshot — denyMemberRequest installs the ctx memo. Without it each field
+// snapshot — denyUserRequest installs the ctx memo. Without it each field
 // re-reads grants (4) and the switch (3).
 func TestDenyMemberRequest_OneSnapshotForEveryField(t *testing.T) {
 	const ref = "ghcr.io/acme/agent:1.4.2"

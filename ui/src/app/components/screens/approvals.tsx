@@ -618,7 +618,7 @@ function PendingCard({
   // regardless of ownership — see canDecideApproval's doc for why. This list
   // is already scoped to rows the caller owns (or every row, for an admin),
   // so ownership itself needs no re-check here.
-  // useSecurityOperator, not useOperator (0.7 §B): authorizeMemberDecision
+  // useSecurityOperator, not useOperator (0.7 §B): authorizeUserDecision
   // early-returns for isSecurityOperator (approvals.go:392) — the security
   // tier decides ANY kind on ANY run, org-wide. Deciding a verdict is that
   // tier's whole purpose; the caps fetch above stays on useOperator because
@@ -626,7 +626,7 @@ function PendingCard({
   const securityOperator = useSecurityOperator();
   const kindDecidable = canDecideApproval(securityOperator, item.kind);
   // The `egress_host` capability bounds which hosts a member may DECIDE on —
-  // the authorizeMemberDecision seam (approvals.go). Advisory here: the server
+  // the authorizeUserDecision seam (approvals.go). Advisory here: the server
   // refuses it anyway, this just says so before the click instead of after.
   // Guarded on the security tier in the same ORDER the server checks: its
   // early return happens BEFORE this capability leg, so a security admin is

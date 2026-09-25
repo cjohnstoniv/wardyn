@@ -111,7 +111,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	// hides their credential, it does not hand them a second identity — so this
 	// is the one door the preview has to close rather than let fail closed.
 	if previewHidesOwnCredential(r.Context()) {
-		writeError(w, http.StatusConflict, memberPreviewSignInRefusal)
+		writeError(w, http.StatusConflict, userViewPreviewSignInRefusal)
 		return
 	}
 	// AWS: `aws sso login` cannot run at all without an sso_start_url + sso_region

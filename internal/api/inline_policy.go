@@ -32,7 +32,7 @@ const (
 	inlineSecretStoreMissingRefusal = "the %s grant requires a secret store, but none is configured"
 )
 
-// boundMemberSpec is THE member bounding pipeline — the three stages that turn
+// boundUserSpec is THE member bounding pipeline — the three stages that turn
 // a spec a member chose into one an admin authorized, in the one order that is
 // correct:
 //
@@ -41,11 +41,11 @@ const (
 //     stored-secret grant's SCOPE (which operator secret is paired with which
 //     host) — that stays member-authored, and on its own would be a
 //     secret-exfil primitive. Hence stage 2.
-//  2. filterMemberGrants drops any api_key/git_pat/ssh_key grant whose pairing
+//  2. filterUserGrants drops any api_key/git_pat/ssh_key grant whose pairing
 //     the operator did not eligible-list. The run's own model-access grant is
 //     re-added at launch by foldRunIntegration (an operator integration) or
 //     applyWorkspaceRequirements (a workspace requirement).
-//  3. narrowMemberInlinePolicy bounds what survived to what THIS member
+//  3. narrowUserInlinePolicy bounds what survived to what THIS member
 //     personally holds: stage 1 is the OPERATOR's deployment-wide ceiling,
 //     stage 3 is this member's own capability grants. A pairing clears BOTH.
 //
@@ -68,9 +68,9 @@ const (
 // request-shape limits beside the spec too (GovernanceLimits.MaxEphemeralDiskMiB,
 // which dispatch is the authority on — this call is what makes the member's
 // PREVIEW of it agree, see composer.Clamp).
-func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling, errPrefix string, dryRun bool) (types.RunPolicySpec, []string, bool) {
+func (s *Server) boundUserSpec(ctx context.Context, w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling, errPrefix string, dryRun bool) (types.RunPolicySpec, []string, bool) {
 	spec, warns := composer.Clamp(spec, ceiling.Spec, ceiling.Limits.MaxEphemeralDiskMiB)
-	kept, grantWarns, code, gerr := s.filterMemberGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
+	kept, grantWarns, code, gerr := s.filterUserGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
 	if gerr != nil {
 		writeError(w, code, errPrefix+gerr.Error())
 		return types.RunPolicySpec{}, nil, false
@@ -81,14 +81,14 @@ func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *
 	for _, gw := range grantWarns {
 		drops = append(drops, capDrop{reason: authz.ReasonGrantPairingNotEligible, detail: gw})
 	}
-	capWarns, capDrops, cerr := s.narrowMemberInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
+	capWarns, capDrops, cerr := s.narrowUserInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
 	if cerr != nil {
 		writeServerError(w, r, "resolve capability", cerr)
 		return types.RunPolicySpec{}, nil, false
 	}
 	warns = append(warns, capWarns...)
 	if !dryRun {
-		s.auditMemberPolicyDrops(ctx, r, append(drops, capDrops...))
+		s.auditUserPolicyDrops(ctx, r, append(drops, capDrops...))
 	}
 	return spec, warns, true
 }
@@ -147,7 +147,7 @@ func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *
 func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r *http.Request, req *createRunRequest, dryRun bool) (types.RunPolicySpec, *uuid.UUID, []string, bool) {
 	// The caller's OWN secret names, resolved at most once for this whole
 	// resolution rather than once per eligible_grant at each of the three sites
-	// that ask (filterMemberGrants' 6c arm, narrowMemberInlinePolicy's ownership
+	// that ask (filterUserGrants' 6c arm, narrowUserInlinePolicy's ownership
 	// exemption, validateInlineSecretRefs' unknown-name arm). eligible_grants is
 	// request-body-sized and uncapped, so an unmemoized read per grant let one
 	// member choose how many store round trips this handler made — see
@@ -182,8 +182,8 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// clamp bounds a member without blocking them.)
 		spec := *req.InlinePolicy
 		// Count-capped first, before any narrowing. validatePolicySpec below
-		// applies the same cap, but it runs AFTER boundMemberSpec, and
-		// boundMemberSpec's narrowing is the per-entry work an unbounded
+		// applies the same cap, but it runs AFTER boundUserSpec, and
+		// boundUserSpec's narrowing is the per-entry work an unbounded
 		// allowed_domains buys with a single request body (see
 		// maxAllowedDomainsPerSpec and capBatch). A cap that only fires
 		// afterwards bounds the stored policy and not the request.
@@ -195,11 +195,11 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// env_secret's admin-only posture, applied FIRST and unconditionally for
 		// a non-operator — it is a role check, not a ceiling check, so it must
 		// not sit behind the ceiling-scoped gate below (see
-		// memberEnvSecretIsAdminOnly).
+		// userEnvSecretIsAdminOnly).
 		spec, envWarns := s.boundEnvSecretPosture(ctx, r, spec, dryRun)
 		clampWarnings = append(clampWarnings, envWarns...)
 		// Deliberately isOperator (three-tier doctrine, internal/auth/oidc's
-		// RoleSecurityAdmin), in lockstep with denyMemberRequest: a security
+		// RoleSecurityAdmin), in lockstep with denyUserRequest: a security
 		// admin's OWN run is clamped like anyone else's. They author the
 		// ceiling; they do not stand outside it.
 		if !s.isOperator(r.Context()) {
@@ -214,7 +214,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			// by runs.go/preflight.go AFTER this function returns.
 			var warns []string
 			var bounded bool
-			spec, warns, bounded = s.boundMemberSpec(ctx, w, r, spec, ceiling, "invalid inline_policy: ", dryRun)
+			spec, warns, bounded = s.boundUserSpec(ctx, w, r, spec, ceiling, "invalid inline_policy: ", dryRun)
 			if !bounded {
 				return types.RunPolicySpec{}, nil, nil, false
 			}
@@ -307,11 +307,11 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// member every operator-secret pairing the row happened to carry — the "one
 	// rule whether body or row id" claim would be false at exactly the
 	// grant-bearing rows, which are the ones that matter. Dropping the unlisted
-	// pairing is filterMemberGrants' job, stage 2.
+	// pairing is filterUserGrants' job, stage 2.
 	if policyID != nil && ceiling.Profile != nil && !s.isOperator(r.Context()) {
 		var warns []string
 		var bounded bool
-		spec, warns, bounded = s.boundMemberSpec(ctx, w, r, spec, ceiling, "invalid policy: ", dryRun)
+		spec, warns, bounded = s.boundUserSpec(ctx, w, r, spec, ceiling, "invalid policy: ", dryRun)
 		if !bounded {
 			return types.RunPolicySpec{}, nil, nil, false
 		}
@@ -355,14 +355,14 @@ func capEphemeralDiskPreview(spec *types.RunPolicySpec, maxEphemeralDiskMiB int)
 	return true
 }
 
-// memberEnvSecretIsAdminOnly is THE env_secret posture rule, in one place: a
+// userEnvSecretIsAdminOnly is THE env_secret posture rule, in one place: a
 // NON-OPERATOR does not hold an env_secret grant unless the deployment opened
 // envAllowMemberEnvSecret.
 //
 // It takes no ceiling and no principal's assignment, because the rule needs
 // neither — it is a role check plus an env switch. That is exactly what made
-// the original placement wrong: the drop lived only inside filterMemberGrants,
-// which is reached only from boundMemberSpec, whose stored/default invocation is
+// the original placement wrong: the drop lived only inside filterUserGrants,
+// which is reached only from boundUserSpec, whose stored/default invocation is
 // scoped to `ceiling.Profile != nil`. A member with NO governance assignment —
 // the default posture, and every pre-0.7 deployment upgrading into 0.7 — ran no
 // member pipeline at all, so the control the docs state UNCONDITIONALLY
@@ -371,7 +371,7 @@ func capEphemeralDiskPreview(spec *types.RunPolicySpec, maxEphemeralDiskMiB int)
 // operator's raw secret value reached their sandbox env at
 // resolveEnvSecretGrants. A ceiling-scoped gate must never carry a rule that is
 // not about the ceiling.
-func memberEnvSecretIsAdminOnly() bool { return !envEnabled(os.Getenv(envAllowMemberEnvSecret)) }
+func userEnvSecretIsAdminOnly() bool { return !envEnabled(os.Getenv(envAllowMemberEnvSecret)) }
 
 // envSecretAdminOnlyWarning is the one message both drop sites use, so the
 // member sees the same sentence in Review whichever path bounded their run.
@@ -380,7 +380,7 @@ func envSecretAdminOnlyWarning(secretRef string) string {
 		secretRef, envAllowMemberEnvSecret)
 }
 
-// dropAdminOnlyEnvSecretGrants applies memberEnvSecretIsAdminOnly to a spec a
+// dropAdminOnlyEnvSecretGrants applies userEnvSecretIsAdminOnly to a spec a
 // non-operator is putting on their own run, and returns the warnings + audit
 // drops the removal owes.
 //
@@ -393,7 +393,7 @@ func envSecretAdminOnlyWarning(secretRef string) string {
 // than for every other kind, so it is not the statement this rule rests on.
 //
 // The drop is AUDITED, not merely warned, under the SAME authz.denied reason
-// filterMemberGrants' drops already carry (`grant_pairing_not_eligible`, a
+// filterUserGrants' drops already carry (`grant_pairing_not_eligible`, a
 // closed vocabulary docs/OPERATIONS.md is the source of record for): an operator
 // reading the stream must be able to see that a member's grant went, and the
 // inline path already recorded it that way — adding a second reason value for
@@ -404,7 +404,7 @@ func envSecretAdminOnlyWarning(secretRef string) string {
 // authority is not clamped by its own ceiling. A SECURITY admin is, deliberately
 // — same three-tier doctrine as resolveRunPolicy's inline clamp.
 func dropAdminOnlyEnvSecretGrants(grants []types.GrantSpec) ([]types.GrantSpec, []string, []capDrop) {
-	if !memberEnvSecretIsAdminOnly() || !slices.ContainsFunc(grants,
+	if !userEnvSecretIsAdminOnly() || !slices.ContainsFunc(grants,
 		func(g types.GrantSpec) bool { return g.Kind == types.GrantEnvSecret }) {
 		return grants, nil, nil
 	}
@@ -418,7 +418,7 @@ func dropAdminOnlyEnvSecretGrants(grants []types.GrantSpec) ([]types.GrantSpec, 
 		}
 		// The env var NAME sits in the host slot for this kind
 		// (storedSecretGrantPairing); the SECRET name is what the warning names,
-		// matching filterMemberGrants' wording. An undecodable scope is NOT an
+		// matching filterUserGrants' wording. An undecodable scope is NOT an
 		// error here — it is dropped like any other env_secret, and the caller's
 		// later validatePolicySpec/validateInlineSecretRefs still see a spec
 		// with nothing left to be malformed about.
@@ -446,7 +446,7 @@ func (s *Server) boundEnvSecretPosture(ctx context.Context, r *http.Request, spe
 	}
 	spec.EligibleGrants = kept
 	if !dryRun {
-		s.auditMemberPolicyDrops(ctx, r, drops)
+		s.auditUserPolicyDrops(ctx, r, drops)
 	}
 	return spec, warns
 }
@@ -460,9 +460,9 @@ type capDrop struct {
 	detail string
 }
 
-// narrowMemberInlinePolicy bounds a MEMBER's own inline policy by the
+// narrowUserInlinePolicy bounds a MEMBER's own inline policy by the
 // capability grants that member holds. It runs after composer.Clamp and
-// filterMemberGrants, and the difference between them is the whole doctrine:
+// filterUserGrants, and the difference between them is the whole doctrine:
 // the clamp bounds a member to what the OPERATOR authorized deployment-wide,
 // this bounds what survived to what THIS member was granted personally. A
 // stored-secret pairing therefore has to clear BOTH — operator-eligible AND
@@ -476,7 +476,7 @@ type capDrop struct {
 // already authorized would brick workspace runs at scale, and a member who
 // cannot be trusted with a workspace should not be granted the workspace.
 //
-// Drops, never rejects, exactly as filterMemberGrants does — with a warning per
+// Drops, never rejects, exactly as filterUserGrants does — with a warning per
 // drop, so preflight/Review names what will not be there before launch, and a
 // capDrop so the audit stream records it. A member whose whole allowlist is
 // ungranted gets a run with no member-authored egress, not a 403: the run's
@@ -487,7 +487,7 @@ type capDrop struct {
 // non-denied public host), so egress_host narrowing does nothing there. That is
 // the operator's own posture, named here so nobody reads a green switch as a
 // bound that deployment does not have.
-func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spec *types.RunPolicySpec) ([]string, []capDrop, error) {
+func (s *Server) narrowUserInlinePolicy(ctx context.Context, owner string, spec *types.RunPolicySpec) ([]string, []capDrop, error) {
 	var warns []string
 	var drops []capDrop
 
@@ -533,7 +533,7 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 
 	keptGrants := spec.EligibleGrants[:0:0]
 	for _, g := range spec.EligibleGrants {
-		// filterMemberGrants 422s an undecodable stored-secret scope — and, since
+		// filterUserGrants 422s an undecodable stored-secret scope — and, since
 		// the pairing switch closed, an unknown kind too — before this runs, and
 		// it is the only order that exists. The error is still HONORED here
 		// rather than discarded: relying on that ordering is what let the old
@@ -588,7 +588,7 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 	}
 	spec.EligibleGrants = keptGrants
 
-	// Workspace repos. denyMemberRequest gates the req.workspace_id door, but an
+	// Workspace repos. denyUserRequest gates the req.workspace_id door, but an
 	// inline workspace_repos entry naming an ONBOARDED repo is a second door to
 	// the same room: composer.Clamp drops only WorkspaceMounts, referencedWorkspaces
 	// matches the entry by URL, and applyWorkspaceRequirements then folds that
@@ -632,13 +632,13 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 	return warns, drops, nil
 }
 
-// auditMemberPolicyDrops records what a member's inline policy LOST — one event
+// auditUserPolicyDrops records what a member's inline policy LOST — one event
 // per REASON, not one per dropped item. A spec naming twenty ungranted hosts is
 // one authorization outcome, not twenty, and a stream that flooded on it is the
 // first thing an operator would filter away. Grouping by reason (rather than
 // blending every drop into one event) keeps `reason` the single value every
 // authz.denied consumer already reads, with the affected values beside it.
-func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, drops []capDrop) {
+func (s *Server) auditUserPolicyDrops(ctx context.Context, r *http.Request, drops []capDrop) {
 	byReason := map[authz.Reason][]string{}
 	for _, d := range drops {
 		byReason[d.reason] = append(byReason[d.reason], d.detail)
@@ -663,7 +663,7 @@ func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, dr
 // Other grant kinds are skipped here — the structural validity of a grant scope
 // is the job of validatePolicySpec / the broker; this check is solely about
 // secret existence.
-// filterMemberGrants drops a MEMBER's inline stored-secret grant (api_key /
+// filterUserGrants drops a MEMBER's inline stored-secret grant (api_key /
 // git_pat / ssh_key) whose {host, secret} pairing the operator did not
 // eligible-list. composer.Clamp bounds egress, confinement, TTL and grant
 // KINDS, but the SCOPE of a non-github grant — which stored credential is
@@ -698,7 +698,7 @@ func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, dr
 // present or future, can pass the wrong ceiling to. effectiveCeiling memoizes
 // per request (governance.go), so asking here is free AND cannot disagree with
 // the caller's own clamp.
-func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDomains []string, grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
+func (s *Server) filterUserGrants(ctx context.Context, owner string, allowedDomains []string, grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
 	resolved, cerr := s.effectiveCeiling(ctx)
 	if cerr != nil {
 		// Fail CLOSED, and never by silently substituting the deployment list:
@@ -752,10 +752,10 @@ func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDo
 		// Defence in depth only: resolveRunPolicy already ran
 		// dropAdminOnlyEnvSecretGrants over the same spec on EVERY member path,
 		// so by the time a grant reaches here there is nothing left for this arm
-		// to drop. It stays because filterMemberGrants is the grant gate and a
+		// to drop. It stays because filterUserGrants is the grant gate and a
 		// gate that trusts its caller to have already applied half its rule is
 		// one refactor away from applying none of it.
-		if g.Kind == types.GrantEnvSecret && memberEnvSecretIsAdminOnly() {
+		if g.Kind == types.GrantEnvSecret && userEnvSecretIsAdminOnly() {
 			warns = append(warns, envSecretAdminOnlyWarning(secretRef))
 			continue
 		}

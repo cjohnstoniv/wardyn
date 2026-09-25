@@ -80,7 +80,7 @@ func TestPreflight_ExecTaskModeSkipsLLMAccess(t *testing.T) {
 // — dropping it would leave a member launching a silently-narrowed policy
 // with no explanation. The exfil pairing
 // (a real operator secret pinned to an allowlisted attacker host) is dropped by
-// filterMemberGrants for the member and kept for the admin, so warnings are
+// filterUserGrants for the member and kept for the admin, so warnings are
 // present for one and absent for the other.
 func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
 	h, _ := newSecretsHarness(t) // memSecrets seeded with "anthropic-api-key"

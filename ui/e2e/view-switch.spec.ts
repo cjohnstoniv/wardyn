@@ -15,8 +15,8 @@ import { PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-c
 // The seeded backend authenticates with a bare admin bearer and no identity
 // provider, which is a single-operator install: the switch only navigates. An
 // SSO admin is a stateful splice at the CONTEXT level, so every tab in it sees
-// one session: POST /me/member-mode flips the state and /me answers from it,
-// clamped as the server clamps (role member, both tiers false). What the
+// one session: POST /me/view flips the state and /me answers from it,
+// clamped as the server clamps (role user, both tiers false). What the
 // server itself refuses inside the User view is pinned in Go
 // (membermode_test.go's TestMemberMode_DeniedOnEveryOperatorOnlyRoute) and on a
 // real OIDC session in live/sso-member.spec.ts.
@@ -32,20 +32,20 @@ async function ssoAdminSession(context: BrowserContext, extra: Record<string, un
   await context.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
-    Object.assign(json, { method: "sso", member_mode: session.userView }, extra);
+    Object.assign(json, { method: "sso", user_view: session.userView }, extra);
     if (session.userView) Object.assign(json, { role: "user", operator: false, security_operator: false });
     await route.fulfill({ response, json });
   });
-  await context.route("**/api/v1/me/member-mode", async (route) => {
-    const body = route.request().postDataJSON() as { enabled: boolean };
+  await context.route("**/api/v1/me/view", async (route) => {
+    const body = route.request().postDataJSON() as { view: string; no_credential?: boolean };
     session.posts.push(body);
     if (session.failNext) {
       session.failNext = false;
       await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) });
       return;
     }
-    session.userView = body.enabled;
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ member_mode: body.enabled }) });
+    session.userView = body.view === "user";
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ user_view: session.userView }) });
   });
   return session;
 }
@@ -90,7 +90,7 @@ test.describe("the view switch", () => {
     await segment(page, CONSOLE_VIEW.ADMIN).click();
     await expect(page).toHaveURL(/\/admin\/runs$/);
     await expectAdminChrome(page);
-    expect(session.posts).toEqual([{ enabled: true }, { enabled: false }]);
+    expect(session.posts).toEqual([{ view: "user" }, { view: "admin" }]);
   });
 
   test("a failed switch says so beside the switch and stays put", async ({ page, context }) => {
@@ -124,7 +124,7 @@ test.describe("the view switch", () => {
     await segment(page, CONSOLE_VIEW.USER).click();
     await page.getByRole("alertdialog").getByRole("button", { name: UNSAVED_GUARD.LEAVE }).click();
     await expect(page).toHaveURL(/\/runs$/);
-    expect(session.posts).toEqual([{ enabled: true }]);
+    expect(session.posts).toEqual([{ view: "user" }]);
   });
 
   test("cross-tab: switch in tab A, and tab B reloads into the same view", async ({ page, context }) => {
@@ -161,7 +161,7 @@ test.describe("the view switch", () => {
 
   test("a single-operator install switches by URL alone", async ({ page }) => {
     const posts: string[] = [];
-    await page.route("**/api/v1/me/member-mode", (route) => {
+    await page.route("**/api/v1/me/view", (route) => {
       posts.push(route.request().url());
       return route.continue();
     });
@@ -236,13 +236,13 @@ test.describe("the slimmed avatar menu and the preview", () => {
   });
 
   test("Preview as a new user sits on the Permissions header; its band is the way out", async ({ page, context }) => {
-    const session = await ssoAdminSession(context, { member_preview_available: true });
+    const session = await ssoAdminSession(context, { user_preview_available: true });
     await context.route("**/api/v1/me", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
-      Object.assign(json, { method: "sso", member_mode: session.userView, member_preview_available: !session.userView });
+      Object.assign(json, { method: "sso", user_view: session.userView, user_preview_available: !session.userView });
       if (session.userView) {
-        Object.assign(json, { role: "user", operator: false, security_operator: false, member_mode_no_credential: true });
+        Object.assign(json, { role: "user", operator: false, security_operator: false, user_view_no_credential: true });
       }
       await route.fulfill({ response, json });
     });
@@ -255,7 +255,7 @@ test.describe("the slimmed avatar menu and the preview", () => {
     await page.getByRole("button", { name: USER_PREVIEW.EXIT }).click();
     await expect(page).toHaveURL(/\/admin\/runs$/);
     await expect(page.getByText(USER_PREVIEW.BANNER)).toHaveCount(0);
-    expect(session.posts).toEqual([{ enabled: true, no_credential: true }, { enabled: false }]);
+    expect(session.posts).toEqual([{ view: "user", no_credential: true }, { view: "admin" }]);
   });
 
   test("the plain User view has no band", async ({ page, context }) => {

@@ -255,7 +255,7 @@ func TestGovernanceToolApprovalsOnCreate(t *testing.T) {
 //
 // req.Interactive is COERCED from the request shape — a task-less request
 // becomes interactive at runs_create_validate.go's coercion, which runs AFTER
-// denyMemberRequest — so a gate reading the raw field is evaded by simply
+// denyUserRequest — so a gate reading the raw field is evaded by simply
 // omitting the task, which is exactly the request a deny_interactive profile
 // most needs to refuse.
 func TestGovernanceLimits(t *testing.T) {
@@ -331,7 +331,7 @@ func TestGovernanceLimits(t *testing.T) {
 	})
 
 	t.Run("an OPERATOR short-circuits before the limits are ever read", func(t *testing.T) {
-		// denyMemberRequest's first line. An admin under an `all` assignment must
+		// denyUserRequest's first line. An admin under an `all` assignment must
 		// not be bound by a row a security admin can write — and the exemption has
 		// to be the FIRST thing, not a check after the resolve.
 		srv, _, _ := govEscapeFixture(t, assignedStore(limitsProfile("everyone",
@@ -395,7 +395,7 @@ func baseImageWorkspace(owner, image string) types.Workspace {
 // TestSeededImageCapabilityBypass is G3 (PF-34), live since 0.6.0: a member
 // creates a workspace whose base_image is any ref they like, launches against
 // it, and seedRequestWorkspace copies that ref into req.Image AFTER
-// denyMemberRequest has already run — reaching the product's one WIDENING
+// denyUserRequest has already run — reaching the product's one WIDENING
 // capability with no grant for it. The follow-up re-validation only re-checks
 // the XOR and the builder, never capGranted.
 //
@@ -414,7 +414,7 @@ func TestSeededImageCapabilityBypass(t *testing.T) {
 			`{"agent":"claude-code","task":"t","workspace_id":"`+ws.ID.String()+`"}`)
 	}
 
-	t.Run("enforced + no grant: 403 byoi_member (the bug)", func(t *testing.T) {
+	t.Run("enforced + no grant: 403 byoi_user (the bug)", func(t *testing.T) {
 		// Without the gate this is a 201 and the member is running an
 		// arbitrary image they hold no grant for.
 		ws := baseImageWorkspace(memberSub, ref)
@@ -423,8 +423,8 @@ func TestSeededImageCapabilityBypass(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("create = %d, want 403 — a member's own workspace base_image reached req.Image ungated: %s", w.Code, w.Body.String())
 		}
-		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "byoi_member") {
-			t.Errorf("authz.denied reasons = %v, want byoi_member — the SAME answer the explicit --image door gives", r)
+		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "byoi_user") {
+			t.Errorf("authz.denied reasons = %v, want byoi_user — the SAME answer the explicit --image door gives", r)
 		}
 		if !strings.Contains(w.Body.String(), ref) {
 			t.Errorf("body = %s, want the refused image ref named", w.Body.String())
@@ -605,7 +605,7 @@ func TestCeilingDeniedWorkspaceEgressWarning(t *testing.T) {
 // REFUSED, never silently dropped: a member who sees a 201 believes the
 // workspace is bound to the integration they named.
 func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 	const body = `{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
@@ -686,7 +686,7 @@ func capKindLaunch(t *testing.T, cs *capStore, body string) (*Server, *httptest.
 }
 
 // TestCapabilityAgentKind is PF-32: `agent` is a NARROWING kind, gated on
-// req.Agent at denyMemberRequest.
+// req.Agent at denyUserRequest.
 //
 // The FIRST leg is why the kind narrows rather than widens. capGranted refuses
 // on !enforced, so a widening `agent` would 403 every member run on every

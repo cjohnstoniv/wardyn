@@ -30,17 +30,17 @@
     "sentence": "\"run not found\""
   },
   {
-    "reason": "byoi_member",
+    "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"a custom devcontainer repo (devcontainer_repo) is operator-only; launch with the agent's convention image or an onboarded workspace's base image\""
   },
   {
-    "reason": "byoi_member",
+    "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"image \" + image + \" comes from your own workspace's base image and is not granted to you — \" + \"ask an admin to grant the exact image ref, or launch with the agent's convention image\""
   },
   {
-    "reason": "byoi_member",
+    "reason": "byoi_user",
     "target": "\"runs.image\"",
     "sentence": "\"image \" + req.Image + \" is not granted to you — ask an admin to grant the exact image ref, \" + \"or launch with the agent's convention image or an onboarded workspace's base image\""
   },

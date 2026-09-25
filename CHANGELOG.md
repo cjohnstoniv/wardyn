@@ -378,6 +378,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
   and every truncated-snapshot token, whoever holds it. A type change made in the chart reaches a token only at
   its holder's next sign-in (threat model #38). `DELETE /user-types/{id}` is refused (`409`) while
   a live token carries the type, and the database now refuses a token with an empty `user_type`.
+- **Server rename sweep: "view as member" is the user view (#617).** The route is
+  `POST /me/view {"view":"user"|"admin","user_type":"…"}` (a clean break — `POST /me/member-mode`'s
+  `{"enabled":bool}` shape is not aliased); `/me` reports `user_view`, `user_view_no_credential`
+  and `user_preview_available` in place of `member_mode`, `member_mode_no_credential` and
+  `member_preview_available`. The audit action is `auth.user_view` (dual-emitted alongside
+  `auth.member_mode` for one minor for SIEM stability, removed in 0.9); the `authz.denied`
+  marker is `user_view`; the BYOI refusal reason is `byoi_user`. `runner.MemberMountPolicy` is
+  `UserMountPolicy` and 29 more `*Member*` server functions (`denyMember*`, `filterMemberGrants`,
+  …) are renamed to their `*User*` counterparts (`SetMemberMode`/`handleSetMemberMode` were
+  already renamed to `SetUserView`/`handleSetUserView` by #835's type-selecting `/me/view` route,
+  which this sweep folds into rather than duplicating). See docs/OPERATIONS.md's "Renamed in 0.8"
+  appendix for the full old-name/new-name table. Refusal sentences now say "the user view": the
+  no-SSO `400` ("The user view needs a signed-in SSO human…"), the API-token mint `409` ("Exit
+  the user view to mint a token."), and "Exit the user view to sign in to AWS…"; an unrecognised
+  `view` value refuses `400` with `The "view" field must be "user" or "admin".` The SSH-key door
+  no longer refuses inside the view — a key registered there is stored capped instead (migration
+  0070), re-stamped to the caller's real role at their next sign-in.
 - **Six `WARDYN_MEMBER_*` desktop/env-secret env vars are renamed to `WARDYN_USER_*` (#616).**
   `WARDYN_MEMBER_MODE` → `WARDYN_USER_DESKTOP`; `WARDYN_MEMBER_WORKSPACE_ROOTS` (+ `_MAP`) →
   `WARDYN_USER_WORKSPACE_ROOTS` (+ `_MAP`); `WARDYN_MEMBER_WRITABLE_ROOTS` →

@@ -61,7 +61,7 @@ func memberStatusFor(t *testing.T, ma SetupModelAccess, blob awsSSOBlob, now tim
 		Secrets: SetupSecrets{Present: []string{"bedrock-api-key"}},
 		Checks:  []SetupCheck{{ID: "harness_credential_aws", Detail: "operator detail"}},
 	}
-	out := redactSetupStatusForMember(full, false, false)
+	out := redactSetupStatusForUser(full, false, false)
 	raw, err := json.Marshal(out)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func TestMemberModelAccess_SharedAndDeadNamesTheAdmin(t *testing.T) {
 	// Every shared-lane state a member can be shown collapses to one of exactly
 	// two answers — never a sign-in action, never a deadline.
 	for _, state := range []string{modelAccessExpiredSignin, modelAccessNotConfigured, modelAccessSharedExpired} {
-		got := memberModelAccess(SetupModelAccess{State: state, Action: modelAccessAction(state, "2026-01-01T00:00:00Z"), Deadline: "2026-01-01T00:00:00Z"})
+		got := userModelAccess(SetupModelAccess{State: state, Action: modelAccessAction(state, "2026-01-01T00:00:00Z"), Deadline: "2026-01-01T00:00:00Z"})
 		if got.State != modelAccessSharedExpired || got.Action != modelAccessSharedExpiredAction || got.Deadline != "" {
 			t.Errorf("shared %q collapses to %+v, want shared_expired with the admin sentence and no deadline", state, got)
 		}
@@ -172,9 +172,9 @@ func TestMemberModelAccess_PerUserKeepsItsOwnersDeadline(t *testing.T) {
 	scope := awsSSOScope{perUser: true, owner: "member@corp.example"}
 	ma := setupModelAccess(agentRoster(row), blob, true, false, scope, true, now)
 	if !ma.PerUser {
-		t.Fatal("a per_user grading must say so — memberModelAccess reads it")
+		t.Fatal("a per_user grading must say so — userModelAccess reads it")
 	}
-	out := redactSetupStatusForMember(SetupStatus{ModelAccess: ma}, false, false)
+	out := redactSetupStatusForUser(SetupStatus{ModelAccess: ma}, false, false)
 	if out.ModelAccess != ma {
 		t.Fatalf("a per_user member's own answer = %+v, want it kept verbatim (%+v)", out.ModelAccess, ma)
 	}
@@ -184,7 +184,7 @@ func TestMemberModelAccess_PerUserKeepsItsOwnersDeadline(t *testing.T) {
 	// And with nothing captured they are still offered the sign-in they can
 	// actually complete.
 	none := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, false, scope, true, now)
-	if got := memberModelAccess(none); got.State != modelAccessNotConfigured || got.Action != modelAccessSignInAction {
+	if got := userModelAccess(none); got.State != modelAccessNotConfigured || got.Action != modelAccessSignInAction {
 		t.Errorf("per_user first run = %+v, want not_configured + %q", got, modelAccessSignInAction)
 	}
 }
@@ -199,7 +199,7 @@ func TestMemberModelAccess_PerUserKeepsItsOwnersDeadline(t *testing.T) {
 // with the reader's own clock, and it needs the instant to do it.
 //
 // That is SAFE for exactly one reason, and this test is that reason written
-// down: memberModelAccess builds a FRESH struct for a member under a `shared`
+// down: userModelAccess builds a FRESH struct for a member under a `shared`
 // row, so the operator's deadline cannot ride along in a new field the way it
 // once rode along inside a composed English sentence.
 func TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember(t *testing.T) {
@@ -217,7 +217,7 @@ func TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember(t *testi
 	if own.State != modelAccessExpiring || own.Deadline != deadline {
 		t.Fatalf("owner grading = %+v, want %q with deadline %q", own, modelAccessExpiring, deadline)
 	}
-	raw, err := json.Marshal(redactSetupStatusForMember(SetupStatus{ModelAccess: own}, false, false))
+	raw, err := json.Marshal(redactSetupStatusForUser(SetupStatus{ModelAccess: own}, false, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember(t *testi
 
 	// (c) …and the dead shared state the member CAN be shown carries none
 	// either, in either direction: no field, no sentence.
-	dead := memberModelAccess(SetupModelAccess{
+	dead := userModelAccess(SetupModelAccess{
 		State: modelAccessSharedExpired, Deadline: deadline,
 		Action: modelAccessAction(modelAccessSharedExpired, deadline),
 	})
