@@ -125,8 +125,11 @@ request, and reviewed before it reaches `main`.
 - Title in conventional-commit form (`feat(broker): …`, `fix(console): …`,
   `docs: …`, `chore(deps): …`). The body links the issue: `Closes #N` on the PR
   that finishes it, `Refs #N` on the others.
-- Every commit is DCO-signed (`git commit -s`) and authored by the person who
-  submits it.
+- `make dco` audits every commit, merges included, that reaches `main` after
+  #1074 — including a merge made earlier on an open branch. Merges already on
+  `main` before #1074 were never checked and are not rewritten. Merge main
+  with `git merge --signoff` (not `-s`, which selects a merge strategy); after
+  a conflicted merge, commit with `git commit -s --no-edit`.
 - Docs land in the same PR as the code they describe: the CHANGELOG
   `[Unreleased]` entry, `docs/AUDIT-ACTIONS.md` rows for new audit actions,
   `docs/ENV.md` rows for new variables.
