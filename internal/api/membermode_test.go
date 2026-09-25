@@ -3,7 +3,7 @@
 
 package api
 
-// The server half of "view as member" (v0.7.4, field-report P2): the toggle
+// The server half of "view as member": the toggle
 // route, the two mint doors it closes, the audit rows it writes, and — the one
 // test that proves the mode is real rather than cosmetic — the whole gated-route
 // walk driven by an ADMIN cookie carrying the flag.
@@ -40,7 +40,7 @@ const (
 func memberModeSSOSession(t *testing.T, sub, email, role string, mm bool) *http.Cookie {
 	t.Helper()
 	payload, err := json.Marshal(oidc.Session{
-		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role,
+		V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: role, UserType: "standard",
 		MemberMode: mm,
 		Expiry:     time.Now().UTC().Add(time.Hour),
 	})
@@ -181,8 +181,8 @@ func TestMemberMode_Toggle(t *testing.T) {
 	if body["operator"] != false || body["security_operator"] != false {
 		t.Errorf("operator/security_operator = %v/%v, want false/false", body["operator"], body["security_operator"])
 	}
-	if body["role"] != oidc.RoleMember {
-		t.Errorf("role = %v, want %q", body["role"], oidc.RoleMember)
+	if body["role"] != oidc.RoleUser {
+		t.Errorf("role = %v, want %q", body["role"], oidc.RoleUser)
 	}
 	if body["principal"] != memberModeAdminSub {
 		t.Errorf("principal = %v, want %q — the mode never changes who you are", body["principal"], memberModeAdminSub)
@@ -203,7 +203,7 @@ func TestMemberMode_Toggle(t *testing.T) {
 	// classMember precisely so that toggling OFF is always reachable, and a
 	// member who finds the control must not meet a 4xx for asking to be what
 	// they already are.
-	member := ssoSession(t, "sub-real-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-real-member", "member@corp.example", oidc.RoleUser)
 	w = doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("a real member toggling on = %d, want 200: %s", w.Code, w.Body.String())
@@ -255,7 +255,7 @@ func TestMemberMode_DeniedOnEveryOperatorOnlyRoute(t *testing.T) {
 	// uses it.
 	matrixSrv, _, _, _ := newAuthzMatrixServer(t)
 	mmAdmin := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
-	realMember := ssoSession(t, "sub-control-member", "control@corp.example", oidc.RoleMember)
+	realMember := ssoSession(t, "sub-control-member", "control@corp.example", oidc.RoleUser)
 
 	adminTierRoutes := 0
 	for key, rc := range routeMatrix {
@@ -404,7 +404,7 @@ func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
 
 	// An ORDINARY member's denial carries no member_mode key at all — the flag
 	// is a marker, not a field every row now has to answer.
-	member := ssoSession(t, "sub-plain-member", "plain@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-plain-member", "plain@corp.example", oidc.RoleUser)
 	if d := doSSO(t, srv, http.MethodPost, "/api/v1/policies", member, "{}"); d.Code != http.StatusForbidden {
 		t.Fatalf("POST /policies as a member = %d, want 403", d.Code)
 	}
@@ -463,15 +463,14 @@ func TestMemberMode_RefusesTokenMint(t *testing.T) {
 	}
 }
 
-// TestMemberMode_ExistingAPITokenKeepsItsOwnRole is ceiling 4, made executable
-// (R-05). The mode is per-SESSION: a `wdn_` token the human already holds
+// TestMemberMode_ExistingAPITokenKeepsItsOwnRole is ceiling 4, made
+// executable. The mode is per-session: a `wdn_` token the human already holds
 // replays its own DB-stamped role (apitokens.go), so it still reaches
 // operator-only routes while the very same human's browser cookie is clamped.
 // The 409 mint doors stop NEW credentials; they cannot reach into old ones.
 //
-// This is a REGRESSION PIN as much as a ceiling: it is the shape of the bug
-// where somebody "fixes" the ceiling by teaching the token lane to read the
-// session, which would clamp a CLI caller by the state of an unrelated browser.
+// It also pins against the tempting wrong fix: teaching the token lane to read
+// the session would clamp a CLI caller by the state of an unrelated browser.
 func TestMemberMode_ExistingAPITokenKeepsItsOwnRole(t *testing.T) {
 	h := newHarness(t)
 	st := newTokenMemStore()
@@ -511,18 +510,18 @@ func sessionCookieFrom(t *testing.T, cookies []*http.Cookie) *http.Cookie {
 	return nil
 }
 
-// TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker is W6-1, the two
-// admin-tier refusals the marker was missing.
+// TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker pins the marker on the
+// two in-handler admin-tier refusals.
 //
-// TestMemberMode_AuditRowsNameTheAdmin above pins FOUR sites and the doc
+// TestMemberMode_AuditRowsNameTheAdmin above pins four sites, and the doc
 // comment on authzDeniedDatum names those four as "every admin-tier refusal".
-// Two more emitters hand-rolled their own Data map and so carried no marker at
-// all: resolveAlwaysTarget's rule 6 (`always` is security-admin-only) and
-// denyMemberField (the `workspaces.llm_cred` arm is `admin_surface`). Both are
-// reachable INSIDE the mode by an admin doing exactly what the member Getting
-// Started card invites — deciding their own run's held egress, creating a
-// workspace — so a reviewer filtering the denial stream read an admin's own
-// member walk as a member incident, the one outcome the field exists to prevent.
+// Two more emitters build their own Data map: resolveAlwaysTarget's rule 6
+// (`always` is security-admin-only) and denyMemberField (the
+// `workspaces.llm_cred` arm is `admin_surface`). Both are reachable inside the
+// mode by an admin doing exactly what the member Getting Started card invites —
+// deciding their own run's held egress, creating a workspace — so without the
+// marker a reviewer filtering the denial stream reads an admin's own member walk
+// as a member incident, the one outcome the field exists to prevent.
 //
 // `method` rides along for the same reason: a marker on a row whose shape
 // differs from the middleware's is still a row the same filter cannot group.
@@ -586,7 +585,7 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 		f := newScopeFixture(t)
 		id := f.seedEgress(t, "registry.npmjs.org")
 		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve",
-			ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember),
+			ssoSession(t, f.memberID, "member@corp.example", oidc.RoleUser),
 			decideBody(t, types.ScopeAlways, nil))
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("member picking always = %d, want 403: %s", w.Code, w.Body.String())
@@ -601,7 +600,7 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 	})
 }
 
-// TestMemberMode_RealMemberTogglingOnChangesNothing is W6-4's other half, at
+// TestMemberMode_RealMemberTogglingOnChangesNothing is other half, at
 // the layer the defect is actually felt: the mint doors and /me.
 //
 // handleSetMemberMode's only guard is "is there an SSO human", and its comment
@@ -622,7 +621,7 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 	cfg := baseTestConfig(h, newTokenMemStore())
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
-	member := ssoSession(t, "sub-w6-member", "w6-member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-w6-member", "w6-member@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true}`)
 	if w.Code != http.StatusOK {
@@ -652,7 +651,7 @@ func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
 	// The audit row is still written — the request WAS made and answered, and
 	// real_role records the tier it was made from.
 	ev := lastAuditEvent(t, h.audit.events, "auth.member_mode")
-	if data := auditData(t, ev); data["real_role"] != oidc.RoleMember {
-		t.Errorf("real_role = %v, want %q", data["real_role"], oidc.RoleMember)
+	if data := auditData(t, ev); data["real_role"] != oidc.RoleUser {
+		t.Errorf("real_role = %v, want %q", data["real_role"], oidc.RoleUser)
 	}
 }

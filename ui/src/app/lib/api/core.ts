@@ -84,6 +84,13 @@ export function onUnauthorized(fn: (reason: string, path: string) => void): void
   _unauthorized = fn;
 }
 
+// Any 403 may mean this tab's view went stale (another tab switched the session
+// under it), so the view re-sync re-reads /me at once (view-switch.tsx).
+let _forbidden: (() => void) | null = null;
+export function onForbidden(fn: (() => void) | null): void {
+  _forbidden = fn;
+}
+
 export class HttpError extends Error {
   status: number;
   /** The envelope's machine-readable class, "" when the body carries none.
@@ -241,6 +248,7 @@ export async function wfetch(
     _unauthorized?.(SESSION_ENDED_REASON, safeReturnPath(window.location.pathname));
     throw new HttpError(401, "Unauthorized");
   }
+  if (res.status === 403) _forbidden?.();
   return res;
 }
 

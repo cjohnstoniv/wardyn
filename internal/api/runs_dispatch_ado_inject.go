@@ -43,6 +43,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -329,7 +330,7 @@ type adoEntraLane struct {
 	// exact hosts. The injection alone would attach the person's credential with
 	// nothing narrowing it — the token bounds nothing — so the two always travel
 	// together; nil exactly when no injection was authored.
-	gate []proxy.ADOGrantConfig
+	gate *proxy.ADOGrantConfig
 }
 
 // adoEntraGrade is what the autonomy gate RESOLVED about this run's per-person
@@ -448,9 +449,9 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	if !ok {
 		return adoEntraLane{injections: injections}, false
 	}
-	return adoEntraLane{injections: inj, mitmHosts: mitm, gate: []proxy.ADOGrantConfig{{
+	return adoEntraLane{injections: inj, mitmHosts: mitm, gate: &proxy.ADOGrantConfig{
 		Organization: ado.org, Capabilities: slices.Clone(ado.caps), Hosts: adoEntraHosts(ado.org),
-	}}}, true
+	}}, true
 }
 
 // authorADOEntraInjection authors the whole lane for one run.
@@ -486,7 +487,9 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_not_grantable",
 			"this run's Azure DevOps provider row grants a capability Wardyn will not mint a credential for: "+err.Error())
 	}
-	if !adoCapabilitiesWithin(ado.caps, ado.ceiling) {
+	// Empty is NOT within anything: a run granted nothing has no business
+	// holding a credential.
+	if len(ado.caps) == 0 || !subsetOf(ado.caps, ado.ceiling) {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_ceiling",
 			"this run's Azure DevOps default profile names a capability outside the provider row's own ceiling")
 	}
@@ -556,25 +559,31 @@ func (s *Server) createADOEntraGrants(ctx context.Context, run types.AgentRun,
 			"snapshot":    snapshot,
 		})
 		if merr != nil {
-			return nil, s.refuseADOEntraDispatch(ctx, run, "grant_scope",
-				"could not author the Azure DevOps credential injection: "+merr.Error())
+			return nil, s.refuseADOEntraGrant(ctx, run, "grant_scope", "could not author the Azure DevOps credential injection", merr)
 		}
 		grantID := uuid.New()
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: adoEntraGrantTTLSeconds},
 		}); gerr != nil {
-			return nil, s.refuseADOEntraDispatch(ctx, run, "grant_write",
-				"could not author the Azure DevOps credential injection: "+gerr.Error())
+			return nil, s.refuseADOEntraGrant(ctx, run, "grant_write", "could not record the Azure DevOps credential grant", gerr)
 		}
 		rule, derr := injectionRuleFromScope(scope)
 		if derr != nil {
-			return nil, s.refuseADOEntraDispatch(ctx, run, "grant_scope",
-				"could not author the Azure DevOps credential injection: "+derr.Error())
+			return nil, s.refuseADOEntraGrant(ctx, run, "grant_scope", "could not author the Azure DevOps credential injection", derr)
 		}
 		out = append(out, runner.InjectionGrant{GrantID: grantID, Rule: rule})
 	}
 	return out, true
+}
+
+// refuseADOEntraGrant refuses a run whose grant could not be authored. The
+// hint becomes the member-visible failure hint and the audit detail, so it is
+// a fixed sentence; err (store/driver text) goes to the log only.
+func (s *Server) refuseADOEntraGrant(ctx context.Context, run types.AgentRun, reason, hint string, err error) bool {
+	slog.ErrorContext(ctx, "wardynd: "+hint,
+		slog.String("run_id", run.ID.String()), slog.String("reason", reason), slog.Any("err", err))
+	return s.refuseADOEntraDispatch(ctx, run, reason, hint)
 }
 
 // refuseADOEntraDispatch marks the run FAILED and records why. It always
@@ -590,20 +599,4 @@ func (s *Server) refuseADOEntraDispatch(ctx context.Context, run types.AgentRun,
 			"error": "azure devops entra inject: " + reason, "reason": reason, "detail": detail,
 		})))
 	return false
-}
-
-// adoCapabilitiesWithin reports whether every capability in caps is inside
-// ceiling. An empty caps is NOT within anything: a run granted nothing has no
-// business holding a credential, and "the empty set is inside every set" is
-// exactly the reading adoscope refuses for scopes.
-func adoCapabilitiesWithin(caps, ceiling []adoscope.Capability) bool {
-	if len(caps) == 0 {
-		return false
-	}
-	for _, c := range caps {
-		if !slices.Contains(ceiling, c) {
-			return false
-		}
-	}
-	return true
 }
