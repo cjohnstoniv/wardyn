@@ -136,7 +136,7 @@ func TestPG_UpgradeFrom_0_7_12(t *testing.T) {
 		t.Fatal(err)
 	}
 	seedV0Row(t, pool, id, secretSigningKey, signingPEM)
-	store0712, err := buildSecretStore(ctx, pool, id.String(), "")
+	store0712, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatalf("0.7.12 boot: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestPG_UpgradeFrom_0_7_12(t *testing.T) {
 		if err := db.Migrate(ctx, pool); err != nil {
 			t.Fatalf("%s: migrate a 0.7.12 database: %v", label, err)
 		}
-		secrets, err := buildSecretStore(ctx, pool, id.String(), "")
+		secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
 		if err != nil {
 			t.Fatalf("%s: secret store over a 0.7.12 database: %v", label, err)
 		}

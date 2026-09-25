@@ -69,7 +69,7 @@ func TestPG_OldBinaryAgainstV1Store(t *testing.T) {
 		t.Fatal(err)
 	}
 	id, _ := age.GenerateX25519Identity()
-	secrets, err := buildSecretStore(ctx, pool, id.String(), "")
+	secrets, err := buildSecretStore(ctx, pool, id.String(), nil, "", nil, 0, &capturingRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
