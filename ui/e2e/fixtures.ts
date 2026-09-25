@@ -30,11 +30,15 @@ const TOKEN_KEY = "wardyn_admin_token";
 // shown it. Every spec importing `test` from here gets it collected and
 // checked for free.
 //
-// Named by spec basename (no extension) — a debt list, not a convenience:
-// a spec belongs here only when it has its own, narrower reason to expect
-// noise (recording.spec.ts's WASM-player test already asserts on a filtered
-// CSP/WASM pattern itself; adding this file-wide gate on top would just
-// double-report the same finding), never as a way to silence a real bug.
+// Named by spec basename (no extension) — a debt list, not a convenience: a
+// spec joins it only when it has no narrower way to explain ITS OWN noise.
+// A spec that already asserts on the same CSP/console noise itself does NOT
+// belong here even though it trips the same page-health signal — adding this
+// file-wide gate on top would just double-report the same finding. That is
+// why the set below does NOT include recording.spec.ts: its WASM-player test
+// already asserts on a filtered CSP/WASM pattern of its own, so the finding
+// stays scoped to that one assertion instead of failing every check in the
+// spec.
 //
 // episode-catalog: its "configured video source" describe block DELIBERATELY
 // drives an unadmitted media-src host so the browser's own CSP blocks it —

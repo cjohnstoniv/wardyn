@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
@@ -108,6 +108,16 @@ function renderDetail(id = "ws-1", operator = true, securityOperator = operator)
 beforeEach(() => {
   vi.clearAllMocks();
   getSetupStatusMock.mockResolvedValue(setupStatus());
+});
+
+// The F031 case below queues two mockResolvedValueOnce answers on
+// getWorkspaceMock. vi.clearAllMocks() above clears calls/results, not a
+// queued ONCE implementation, so a failure before both are consumed (e.g. the
+// first findByTestId times out) would otherwise leave the second queued and
+// leak it into the very next test's first getWorkspace() call, failing it for
+// an unrelated reason. Reset it every time, pass or fail.
+afterEach(() => {
+  getWorkspaceMock.mockReset();
 });
 
 describe("WorkspaceDetailScreen — not found", () => {

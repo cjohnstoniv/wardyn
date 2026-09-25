@@ -698,8 +698,15 @@ test.describe("T-68 — a seeded PENDING credential_reauth row on /approvals", (
       // under the Decided tab, not Pending.
       await gotoApprovals(page);
       await page.getByRole("tab", { name: "Decided" }).click();
-      await expect(page.getByText(APPROVAL.STATE_CANCELLED, { exact: true })).toBeVisible({ timeout: 15_000 });
-      await expect(page.getByRole("button", { name: REAUTH_ROW.ariaLabel })).toHaveCount(0);
+      // Scoped to THIS reauth's own row — the Decided tab can hold rows from
+      // other kinds/runs, and an unscoped STATE_CANCELLED text match or an
+      // unscoped ariaLabel toHaveCount(0) would pass even if this row still
+      // showed a live control (the ariaLabel is only ever rendered by
+      // ReauthAction, which never renders for a Decided row anyway, so an
+      // unscoped check there passes for a reason unrelated to this assertion).
+      const reauthCard = page.getByText(REAUTH_TITLE, { exact: true }).locator("xpath=..");
+      await expect(reauthCard.getByText(APPROVAL.STATE_CANCELLED, { exact: true })).toBeVisible({ timeout: 15_000 });
+      await expect(reauthCard.getByRole("button", { name: REAUTH_ROW.ariaLabel })).toHaveCount(0);
     } finally {
       deleteApproval(reauthId);
     }
