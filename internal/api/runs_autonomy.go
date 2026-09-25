@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -32,7 +33,7 @@ import (
 // dispatchParams literal is built, or the audit row and the sandbox env would
 // say `auto` while the resolution said `hold`.
 //
-// Returns ok=false once it has written its own 403 (denyMemberField, the
+// Returns ok=false once it has written its own 403 (refuse, the
 // existing member-refusal shape carrying the existing `governance_profile`
 // reason — the closed reason enum stays closed), or its own 500 when the site
 // config could not be read. The warnings ride the 201.
@@ -43,10 +44,14 @@ import (
 // again could disagree — a dropped connection or an admin's edit between the
 // two would grade a run `sealed` and dispatch it to a forge. Review discards
 // it, as it discards the derived field.
+//
+// modelCred is the door's ONE resolution of the run's model credential
+// (enforceCreateLLMMechanism, which both doors now call first); the Bedrock
+// credential it names is graded here and frozen for dispatch (bedrockCredGrade).
 func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req *createRunRequest,
 	spec types.RunPolicySpec, wsRefs []types.Workspace, enforced types.ConfinementClass,
-	ceiling governanceCeiling,
-) (types.AutonomyResolution, []string, types.SiteConfig, adoEntraGrade, bool) {
+	ceiling governanceCeiling, modelCred modelCredentialFacts,
+) (types.AutonomyResolution, []string, types.SiteConfig, adoEntraGrade, bedrockCredGrade, bool) {
 	// Read for EVERY run that declares a repo, bound or not, because launch
 	// dispatches from this snapshot whether or not a rubric graded it. Fail
 	// closed, as admitRepoSources and siteConfigForLaneVeto do on the same
@@ -54,7 +59,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	scmSite, err := s.scmLaneSiteConfig(r.Context(), spec, req.Repo)
 	if err != nil {
 		writeServerError(w, r, "get site config", err)
-		return types.AutonomyResolution{}, nil, types.SiteConfig{}, adoEntraUngraded(), false
+		return types.AutonomyResolution{}, nil, types.SiteConfig{}, adoEntraUngraded(), bedrockCredUngraded(), false
 	}
 	// No profile, or a profile with no rubric: the zero value and no bound. An
 	// UNASSIGNED member — and every operator — is byte-for-byte what they were
@@ -63,7 +68,7 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	if ceiling.Profile == nil || ceiling.Limits.AutonomyRubric == nil {
 		// adoEntraUngraded: nothing capped this run, so dispatch has no grade to
 		// be held to and resolves the lane exactly as it always did.
-		return types.AutonomyResolution{}, nil, scmSite, adoEntraUngraded(), true
+		return types.AutonomyResolution{}, nil, scmSite, adoEntraUngraded(), bedrockCredUngraded(), true
 	}
 	// THE PER-PERSON AZURE DEVOPS LANE, resolved ONCE here and used twice: the
 	// posture is graded on it, and the frozen answer travels to dispatch on the
@@ -80,7 +85,8 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	adoRun, adoOn := resolveADOEntraRun(scmSite, repoLocatorsOf(spec.WorkspaceRepos),
 		runIdentitySubject(r.Context(), principalFromRequest(r)))
 	grade := adoEntraGradedAs(adoRun, adoOn)
-	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade), enforced)
+	bedrock := bedrockCredGradedAs(modelCred)
+	posture := composer.AutonomyPostureOf(autonomyPostureSpec(spec, wsRefs, req.Repo, scmSite, grade, bedrock), enforced)
 	level, boundBy := composer.FoldAutonomy(*ceiling.Limits.AutonomyRubric, posture)
 	res := types.AutonomyResolution{Level: level, Posture: posture, BoundBy: boundBy}
 	// An all-unset rubric — or one that leaves this posture's three fields
@@ -88,10 +94,18 @@ func (s *Server) resolveRunAutonomy(w http.ResponseWriter, r *http.Request, req 
 	// doc). The posture still travels, so the audit row and Review record what
 	// was graded even when nothing bound it.
 	if level == "" {
-		return res, nil, scmSite, grade, true
+		return res, nil, scmSite, grade, bedrock, true
 	}
-	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade), ceiling.Profile.Name)
-	return res, warnings, scmSite, grade, ok
+	warnings, ok := s.autonomyLadder(w, r, req, level, autonomyBoundList(boundBy, grade, bedrock), ceiling.Profile.Name)
+	// Here rather than in the ladder: whether the managed settings land depends
+	// on the ENFORCED class's substrate, which only this function holds. No
+	// agent process on an exec run to say it about.
+	if ok && req.TaskMode != "exec" {
+		if msg := s.managedSettingsUndeliveredWarning(r.Context(), req.Agent, level, enforced); msg != "" {
+			warnings = append(warnings, msg)
+		}
+	}
+	return res, warnings, scmSite, grade, bedrock, ok
 }
 
 // autonomyLadder enforces a resolved level on the request: the refusals, then
@@ -119,10 +133,10 @@ func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *cre
 	//	seed_auto_tools   L2   the pre-attach span runs before any human is at the pane
 	//	non-interactive   L1   unattended at all
 	if level.Rank() < types.AutonomyL3.Rank() && req.TaskMode == "exec" {
-		s.denyMemberField(w, r, "runs.task_mode", "governance_profile", fmt.Sprintf(
+		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.task_mode", fmt.Sprintf(
 			"`task_mode=exec` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.",
-			name, level, bound))
+			name, level, bound)))
 		return nil, false
 	}
 	// The shell boot seed ranks WITH exec, not with seed_auto_tools, because it
@@ -134,25 +148,25 @@ func (s *Server) autonomyLadder(w http.ResponseWriter, r *http.Request, req *cre
 	// The agent form (`claude "$seed"`) is left alone: it parks its own
 	// approval prompt until a human joins, unless seed_auto_tools says otherwise.
 	if level.Rank() < types.AutonomyL3.Rank() && req.InteractiveStart != "agent" && interactiveBootSeed(interactive, req.Task) != "" {
-		s.denyMemberField(w, r, "runs.interactive_start", "governance_profile", fmt.Sprintf(
+		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive_start", fmt.Sprintf(
 			"a startup command is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and with `interactive_start` unset or `shell` an interactive run's task runs as a shell command at sandbox boot, before anyone attaches — "+
 				"what `task_mode=exec` does. Launch with `interactive_start=agent` to hand the task to the agent as its first prompt, or without a task.",
-			name, level, bound))
+			name, level, bound)))
 		return nil, false
 	}
 	if level.Rank() < types.AutonomyL2.Rank() && req.SeedAutoTools {
-		s.denyMemberField(w, r, "runs.seed_auto_tools", "governance_profile", fmt.Sprintf(
+		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.seed_auto_tools", fmt.Sprintf(
 			"`seed_auto_tools` is not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"and the pre-attach seed runs before any human is at the pane. Launch without it.",
-			name, level, bound))
+			name, level, bound)))
 		return nil, false
 	}
 	if level.Rank() < types.AutonomyL1.Rank() && !interactive {
-		s.denyMemberField(w, r, "runs.interactive", "governance_profile", fmt.Sprintf(
+		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.interactive", fmt.Sprintf(
 			"unattended runs are not allowed by your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), "+
 				"which requires a human at the pane. Launch with `--interactive`, or narrow the run's egress, secrets or confinement.",
-			name, level, bound))
+			name, level, bound)))
 		return nil, false
 	}
 	return s.autonomyDerive(w, r, req, level, bound, name, interactive)
@@ -192,10 +206,10 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 	// there ships the unsupervised run the explicit-hold 400 already rejects —
 	// the same contradiction, arriving through a field the caller never set.
 	if !agentHasHoldLane(req.Agent) {
-		s.denyMemberField(w, r, "runs.agent", "governance_profile", fmt.Sprintf(
+		s.refuse(w, r, authz.Deny(authz.ReasonGovernanceProfile, "runs.agent", fmt.Sprintf(
 			"%s is not supported under your governance profile %q at this run's posture: it permits autonomy level %s (bound by %s), which routes an "+
 				"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.",
-			autonomyAgentLabel(req.Agent), name, level, bound))
+			autonomyAgentLabel(req.Agent), name, level, bound)))
 		return nil, false
 	}
 	if req.ToolApprovals == "hold" {
@@ -221,7 +235,7 @@ func (s *Server) autonomyDerive(w http.ResponseWriter, r *http.Request, req *cre
 // The empty case is UNREACHABLE — resolveRunAutonomy returns before the ladder
 // when nothing bound the level — and degrades to a readable phrase rather than
 // to an empty parenthetical.
-func autonomyBoundList(boundBy []string, ado adoEntraGrade) string {
+func autonomyBoundList(boundBy []string, ado adoEntraGrade, bedrock bedrockCredGrade) string {
 	var list string
 	switch len(boundBy) {
 	case 0:
@@ -231,7 +245,7 @@ func autonomyBoundList(boundBy []string, ado adoEntraGrade) string {
 	default:
 		list = strings.Join(boundBy[:len(boundBy)-1], ", ") + " and " + boundBy[len(boundBy)-1]
 	}
-	return list + autonomyPowerfulSecretCause(boundBy, ado)
+	return list + autonomyPowerfulSecretCause(boundBy, ado) + bedrockPowerfulSecretCause(boundBy, bedrock)
 }
 
 // autonomyPowerfulSecretCause names the per-person Azure DevOps credential when
@@ -312,7 +326,9 @@ func autonomyAgentLabel(agent string) string {
 //   - the PER-PERSON AZURE DEVOPS lane (unionADOEntraLane), which is the one
 //     lane here that carries a CREDENTIAL and not only reach: dispatch writes
 //     its api_key grants, so the secrets axis has to see them at create or the
-//     level is frozen a rung too high.
+//     level is frozen a rung too high;
+//   - the Amazon Bedrock MODEL credential (unionBedrockCredential), for the
+//     same reason: it is handed to the run at dispatch, and it is a credential.
 //
 // Graded BEFORE the launch-side decisions that can drop a lane — the provider
 // row's per-host veto in persistRunGrants and codex-cli's missing SSH lane —
@@ -323,13 +339,14 @@ func autonomyAgentLabel(agent string) string {
 // on reach it will not get. Lanes added later still, at dispatch, are not
 // here: the model-provider hosts resolved from global configuration and the
 // artifact-redirect substitution. The per-person Azure DevOps lane is authored
-// at dispatch too and IS here, because it is the only one of the three that
-// hands the run a credential — see unionADOEntraLane.
+// at dispatch too and IS here, because it hands the run a credential — see
+// unionADOEntraLane. So is the Bedrock model credential, on the secrets axis
+// only: its hosts stay with the model-provider hosts above.
 //
 // Works on a copy with both domain slices cloned: spec is the one the caller
 // goes on to persist and dispatch, and unionDomains appends in place.
 func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, legacyRepo string,
-	scmSite types.SiteConfig, ado adoEntraGrade,
+	scmSite types.SiteConfig, ado adoEntraGrade, bedrock bedrockCredGrade,
 ) types.RunPolicySpec {
 	out := spec
 	out.AllowedDomains = slices.Clone(spec.AllowedDomains)
@@ -348,6 +365,7 @@ func autonomyPostureSpec(spec types.RunPolicySpec, wsRefs []types.Workspace, leg
 		unionAllowedDomains(&out, grantLaneEgress(g))
 	}
 	unionADOEntraLane(&out, spec, ado)
+	unionBedrockCredential(&out, bedrock)
 	return out
 }
 

@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── the store double ─────────────────────────────────────────────────────────
+// the store double
 
 // noGovernanceStore is store.Store with the two governance-resolver reads AND
 // the two user-drive-resolver reads answered as "this deployment has adopted
@@ -43,6 +43,37 @@ func (noGovernanceStore) ResolveGovernanceProfile(context.Context, []string, []s
 }
 
 func (noGovernanceStore) HasGroupTierAssignments(context.Context) (bool, error) { return false, nil }
+
+// seededUserTypes is the user_types table as the migration leaves it: the
+// built-in type alone. The two methods below answer from it for the base
+// doubles most handler tests compose (/me names the session's type, GET
+// /access lists them).
+var seededUserTypes = []types.UserType{{ID: types.UserTypeStandard, Name: "Standard user", BuiltIn: true}}
+
+func seededUserType(id string) (types.UserType, error) {
+	for _, t := range seededUserTypes {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return types.UserType{}, store.ErrNotFound
+}
+
+func (noGovernanceStore) ListUserTypes(context.Context) ([]types.UserType, error) {
+	return seededUserTypes, nil
+}
+
+func (noGovernanceStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	return seededUserType(id)
+}
+
+func (*capStore) ListUserTypes(context.Context) ([]types.UserType, error) {
+	return seededUserTypes, nil
+}
+
+func (*capStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
+	return seededUserType(id)
+}
 
 func (noGovernanceStore) ResolveUserDrive(context.Context, []string, []string) (
 	*types.UserDrive, *types.UserDriveGrant, types.CapabilitySubjectType, error) {
@@ -220,9 +251,9 @@ func (s *capStore) HasGroupTierAssignments(context.Context) (bool, error) {
 	return s.govHasGroupTier, nil
 }
 
-// ListCapabilityGrants is the WHOLE fake table — the ADMIN LISTING, and now
-// nothing else. The resolver used to reach it on every unanswerable-snapshot
-// check; the counter is what keeps it from creeping back. Embedding store.Store
+// ListCapabilityGrants is the whole fake table — the admin listing, and nothing
+// else. The resolver must not reach it on an unanswerable-snapshot check; the
+// counter is what keeps it from creeping back. Embedding store.Store
 // makes an unimplemented method a nil-pointer panic rather than a silent
 // answer, which is why this one is spelled out here rather than left to the
 // embed.
@@ -284,7 +315,7 @@ func (s *capStore) GetCapabilityEnforcement(context.Context) (map[string]bool, e
 	return s.enf, nil
 }
 
-// ─── fixtures ─────────────────────────────────────────────────────────────────
+// fixtures
 
 const (
 	capSub   = "sub-bob"
@@ -294,7 +325,7 @@ const (
 // memberCtx is what humanOrAdminAuth publishes for a signed-in MEMBER, group
 // snapshot included. Passing nil groups models a pre-0.6 cookie.
 func memberCtx(groups []string) context.Context {
-	return withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleMember), groups)
+	return withOIDCGroups(operatorCtx(capSub, capEmail, oidc.RoleUser), groups)
 }
 
 func grant(st types.CapabilitySubjectType, subject, kind, value string, effect types.CapabilityEffect) types.CapabilityGrant {
@@ -306,7 +337,7 @@ func grant(st types.CapabilitySubjectType, subject, kind, value string, effect t
 
 func capServer(st store.Store) *Server { return &Server{cfg: Config{Store: st}} }
 
-// ─── the matrix ───────────────────────────────────────────────────────────────
+// the matrix
 
 // TestCapAllowedMatrix walks the precedence rules capAllowed documents. Each
 // row names the real-world outcome, because every one of them is either a
@@ -564,13 +595,13 @@ func TestCapAllowedEnforcementReadIsSkippedOnAllow(t *testing.T) {
 	}
 }
 
-// ─── subjects ─────────────────────────────────────────────────────────────────
+// subjects
 
 // TestCapabilitySubjects: both identities are offered, lowercased, and never
 // duplicated — an admin who wrote the grant against the email must get the same
 // answer as one who wrote it against the sub.
 func TestCapabilitySubjects(t *testing.T) {
-	ctx := withOIDCGroups(operatorCtx("Sub-BOB", "BOB@Corp.Example", oidc.RoleMember), []string{"eng"})
+	ctx := withOIDCGroups(operatorCtx("Sub-BOB", "BOB@Corp.Example", oidc.RoleUser), []string{"eng"})
 	users, groups, stale := capabilitySubjects(ctx)
 	if !slices.Equal(users, []string{"sub-bob", "bob@corp.example"}) {
 		t.Errorf("users = %v, want the lowercased sub then email", users)
@@ -585,7 +616,7 @@ func TestCapabilitySubjects(t *testing.T) {
 	// A session whose sub and email are the same string must not offer it twice
 	// — a duplicated subject would double-count nothing today but makes the
 	// eventual /me/capabilities listing lie about where a grant came from.
-	same := withOIDCGroups(operatorCtx("bob@corp.example", "bob@corp.example", oidc.RoleMember), []string{})
+	same := withOIDCGroups(operatorCtx("bob@corp.example", "bob@corp.example", oidc.RoleUser), []string{})
 	users, _, _ = capabilitySubjects(same)
 	if len(users) != 1 {
 		t.Errorf("users = %v, want one entry when sub and email are identical", users)
@@ -606,7 +637,7 @@ func TestCapabilitySubjectsStaleSnapshot(t *testing.T) {
 	}
 }
 
-// ─── the closed kind set ──────────────────────────────────────────────────────
+// the closed kind set
 
 // TestCapabilityKindsAreTheClosedSet: with no CHECK in the schema, this slice
 // IS the validation, so it has to stay in step with the console's own list

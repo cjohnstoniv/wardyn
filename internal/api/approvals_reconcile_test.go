@@ -157,16 +157,16 @@ func rcRequireEgress(f *scopeFixture, wsID uuid.UUID, host string) {
 }
 
 // TestReconcileSkipsAVerdictTheLivePathWouldRefuse pins the parity
-// alwaysEgressDecision's doc comment used to CLAIM: the heal must not write
+// alwaysEgressDecision's doc comment claims: the heal must not write
 // something the live API answers 400 for.
 //
 // The heal replays a verdict recorded at t0 against the workspace as it is at
 // BOOT, and the two diverge: mark `egress:<host>` required after an older
-// deny-always on that host and every restart re-wrote the deny. Its only
-// newer-action guard is EgressEditedAt, which the requirements PUT does not
-// stamp — so nothing caught it, and the M1 guard exists because a deny on a
-// required host makes "the workspace declare a need it can never satisfy" in
-// every confined replay. Re-broken on each boot, with nothing saying why.
+// deny-always on that host, and a naive heal re-writes the deny on every
+// restart. Its only newer-action guard is EgressEditedAt, which the
+// requirements PUT does not stamp — and the M1 guard exists because a deny on
+// a required host makes "the workspace declare a need it can never satisfy"
+// in every confined replay, re-broken on each boot with nothing saying why.
 //
 // Both halves are asserted on ONE run: the durable list is untouched AND the
 // skip is audited. Auditing is not decoration here — the live twin audits even

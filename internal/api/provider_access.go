@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -55,11 +56,15 @@ type SetupProviderAccess struct {
 // the handler to one statement (its own funlen ratchet, setup.go's doc comment).
 func (s *Server) setupModelProviderState(ctx context.Context, sc types.SiteConfig, owner string) ([]SetupModelProvider, []SetupProviderAccess, []SetupCheck) {
 	mp := s.setupModelProviders(ctx, sc)
-	access := s.setupProviderAccess(ctx, sc, mp, owner)
+	access := s.setupProviderAccess(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sc, mp, owner)
+	defaultFor := map[string][]string{}
+	for _, sp := range mp {
+		defaultFor[sp.ID] = sp.DefaultFor
+	}
 	checks := make([]SetupCheck, 0, len(access))
 	for _, a := range access {
 		p, _ := modelProviderByID(sc.ModelProviders, a.Provider)
-		checks = append(checks, providerAccessCheck(p, a))
+		checks = append(checks, providerAccessCheck(p, a, len(defaultFor[a.Provider]) > 0))
 	}
 	return mp, access, checks
 }
@@ -84,8 +89,11 @@ const (
 // row, in the checklist's grammar. Its fix is the provider_access action
 // verbatim, so the checklist and the member's own console never disagree about
 // one credential. Graded through the caller's own credential, so never
-// Blocking (SetupCheck's doc).
-func providerAccessCheck(p types.ModelProvider, a SetupProviderAccess) SetupCheck {
+// Blocking (SetupCheck's doc). isDefault is whether this provider is the
+// roster default for at least one of the caller's harnesses (5.4): an
+// unconnected NON-default provider is not an alarm, since nothing routes to
+// it unless the caller chooses it themselves.
+func providerAccessCheck(p types.ModelProvider, a SetupProviderAccess, isDefault bool) SetupCheck {
 	chk := SetupCheck{ID: "llm_provider:" + a.Provider, Label: "LLM access: " + cmp.Or(p.Name, a.Provider), Fix: a.Action}
 	noun := providerCredentialNoun(p.Kind)
 	switch a.State {
@@ -99,6 +107,9 @@ func providerAccessCheck(p types.ModelProvider, a SetupProviderAccess) SetupChec
 		chk.Status, chk.Detail, chk.Fix = "info", providerAccessMechanismDetail, bedrockMechanismFix
 	default:
 		chk.Status, chk.Detail = "warn", fmt.Sprintf(providerAccessMissingDetail, noun)
+		if !isDefault {
+			chk.Status = "info"
+		}
 	}
 	return chk
 }
@@ -145,13 +156,19 @@ func providerAccessLLMCheck(access []SetupProviderAccess) (SetupCheck, bool) {
 // setupProviderAccess is SetupStatus.ProviderAccess: one row per provider in
 // providers (already filtered to this caller's launchable harnesses by
 // setupModelProviders), graded against the caller's OWN credential for it.
-// nil with no provider block, same as its input.
+// A disabled provider gets no row: dispatch refuses it outright (mp.Disabled,
+// provider_subscription.go/provider_bedrock.go), so grading it live or warn
+// would tell the caller connecting/reconnecting a credential helps when it
+// cannot. nil with no provider block, same as its input.
 func (s *Server) setupProviderAccess(ctx context.Context, sc types.SiteConfig, providers []SetupModelProvider, owner string) []SetupProviderAccess {
 	if len(providers) == 0 {
 		return nil
 	}
 	out := make([]SetupProviderAccess, 0, len(providers))
 	for _, sp := range providers {
+		if sp.Disabled {
+			continue
+		}
 		p, ok := modelProviderByID(sc.ModelProviders, sp.ID)
 		if !ok {
 			continue

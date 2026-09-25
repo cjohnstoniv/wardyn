@@ -51,9 +51,11 @@ import { cn } from "../ui/utils";
 import { Field, Switch } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { PageHeader } from "../wardyn/page-header";
+import { PreviewAsNewUser } from "../wardyn/user-preview";
 import { Chip } from "../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
 import { SECURITY_ONLY_REASON } from "../wardyn/copy";
+import { UNSAVED } from "../../lib/unsaved-copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 
 // The audit actor a bare admin-bearer caller is recorded as (actorFromRequest,
@@ -137,7 +139,14 @@ export function Segmented<T extends string>({
   disabled,
 }: {
   value: T;
-  options: { value: T; label: string }[];
+  options: {
+    value: T;
+    label: string;
+    /** #460 — this option's own draft differs from what loaded; renders the
+     *  dirty chip beside its label, the tab's own "title". Optional: only
+     *  providers-screen.tsx's Git/Storage/Agents options set it today. */
+    dirty?: boolean;
+  }[];
   onChange: (v: T) => void;
   disabled?: boolean;
 }) {
@@ -151,7 +160,7 @@ export function Segmented<T extends string>({
           disabled={disabled}
           onClick={() => onChange(o.value)}
           className={cn(
-            "border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 disabled:cursor-not-allowed disabled:opacity-50",
+            "flex items-center gap-1.5 border-l border-border px-3 py-1.5 text-xs transition-colors first:border-l-0 disabled:cursor-not-allowed disabled:opacity-50",
             value === o.value
               ? o.value === "deny"
                 ? "bg-danger-subtle font-medium text-danger"
@@ -160,6 +169,16 @@ export function Segmented<T extends string>({
           )}
         >
           {o.label}
+          {/* aria-hidden: the chip is a VISUAL echo of a fact already
+              announced elsewhere (the PageHeader chip, the beside-Save
+              marker) — folding its text into this button's accessible name
+              would silently break every exact-string `getByRole(...,
+              {name: o.label})` lookup the moment the tab it names is dirty. */}
+          {o.dirty && (
+            <span aria-hidden="true" data-testid={`tab-dirty-chip-${o.value}`}>
+              <Chip tone="warning">{UNSAVED.DIRTY_CHIP}</Chip>
+            </span>
+          )}
         </button>
       ))}
     </div>
@@ -247,7 +266,7 @@ export function PermissionsScreen() {
 
   return (
     <div className="mx-auto max-w-[1120px] px-6 py-6">
-      <PageHeader title={PERM.TITLE} description={PERM.LEAD} />
+      <PageHeader title={PERM.TITLE} description={PERM.LEAD} actions={<PreviewAsNewUser />} />
 
       <div className="space-y-2">
         <Fact icon={ShieldCheck}>{PERM.DOCTRINE}</Fact>
@@ -401,7 +420,7 @@ export function PermissionsScreen() {
               className="bg-danger text-danger-foreground hover:bg-danger/90"
               onClick={(e) => {
                 e.preventDefault();
-                if (toRemove) removeGrant(toRemove);
+                if (toRemove) void removeGrant(toRemove);
               }}
             >
               {busy ? <Loader2 className="size-4 animate-spin" /> : null}

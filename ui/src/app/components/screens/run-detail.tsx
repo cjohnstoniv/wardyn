@@ -75,6 +75,7 @@ import { TerminalPlayer } from "../wardyn/terminal-player";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { AdoCapabilityCard } from "../wardyn/ado-capability-card";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { APPROVALS } from "../../lib/approvals-copy";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import {
   RECORDING_DISABLED_DESC,
@@ -208,11 +209,13 @@ export function RunDetailScreen() {
           // on THIS tick's own fresh state (not a stale last-known ref), so
           // the exact tick a run turns terminal is the one that catches it.
           if (r.value && isTerminalRunState(r.value.state)) {
-            Promise.all([
+            // Best-effort like the allSettled above: a rejected listAudit
+            // leaves endingAudit at its last-good value, never unhandled.
+            void Promise.all([
               auditApi.listAudit(id, "run.complete"),
               auditApi.listAudit(id, "run.kill"),
               auditApi.listAudit(id, "run.autostop"),
-            ]).then((lists) => setEndingAudit(lists.flat()));
+            ]).then((lists) => setEndingAudit(lists.flat())).catch(() => {});
           }
           setStatus("ready");
         })
@@ -236,7 +239,7 @@ export function RunDetailScreen() {
     setRecording(null);
     setRecState("idle");
     setRecKey(id);
-    load(true);
+    void load(true);
   }, [id, load]);
 
   const terminal = run ? isTerminalRunState(run.state) : true;
@@ -285,7 +288,7 @@ export function RunDetailScreen() {
     // Only confirm success if the write actually resolves — writeText rejects
     // asynchronously (a sync try/catch misses it), and navigator.clipboard is
     // undefined in insecure contexts — so a bare success toast would lie.
-    copyAsync(url).then((ok) => {
+    void copyAsync(url).then((ok) => {
       if (ok) toast.success("Link copied");
       else toast.error("Couldn't copy the link — copy it from the address bar.");
     });
@@ -300,7 +303,7 @@ export function RunDetailScreen() {
         description: getErrorMessage(err),
       });
     } finally {
-      load(false);
+      void load(false);
     }
   };
 
@@ -314,7 +317,7 @@ export function RunDetailScreen() {
       toast.warning(CLONE_UNREADABLE);
       return;
     }
-    navigate("/runs/new", { state: { prefill } });
+    void navigate("/runs/new", { state: { prefill } });
   };
 
   const submitDecision = async (reason: string, scope: ApprovalScope, until?: string): Promise<boolean> => {
@@ -323,12 +326,12 @@ export function RunDetailScreen() {
       const args = decisionArgs(scope, until);
       if (decide.action === "approve") await approvalsApi.approve(decide.id, reason, ...args);
       else await approvalsApi.deny(decide.id, reason, ...args);
-      toast.success(decide.action === "approve" ? "Request approved" : "Request denied");
+      toast.success(decide.action === "approve" ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
       setDecide(null);
-      load(false);
+      void load(false);
       return true;
     } catch (err) {
-      toast.error(decide.action === "approve" ? "Failed to approve" : "Failed to deny", {
+      toast.error(decide.action === "approve" ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(err),
       });
       return false;
@@ -346,10 +349,10 @@ export function RunDetailScreen() {
     try {
       if (approve) await approvalsApi.approve(id, "approved", ...opts);
       else await approvalsApi.deny(id, "denied", ...opts);
-      toast.success(approve ? "Request approved" : "Request denied");
-      load(false);
+      toast.success(approve ? APPROVALS.TOAST_APPROVED : APPROVALS.TOAST_DENIED);
+      void load(false);
     } catch (err) {
-      toast.error(approve ? "Failed to approve" : "Failed to deny", { description: getErrorMessage(err) });
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(err) });
     }
   };
 
@@ -692,7 +695,10 @@ function ApprovalsTab({
   // for the security tier (approvals.go:392).
   const securityOperator = useSecurityOperator();
   const principal = usePrincipal();
-  const [adoBusyId, setAdoBusyId] = React.useState<string | null>(null);
+  // The id of the row currently deciding, and which of its two actions
+  // (#458) — see AdoCapabilityCard's own `busy` doc for why a single
+  // boolean isn't enough.
+  const [adoBusy, setAdoBusy] = React.useState<{ id: string; action: "approve" | "deny" } | null>(null);
   if (approvals.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card">
@@ -730,16 +736,16 @@ function ApprovalsTab({
               securityOperator={securityOperator}
               viewerPrincipal={principal}
               run={run}
-              busy={adoBusyId === a.id}
+              busy={adoBusy?.id === a.id ? adoBusy.action : null}
               onApprove={async (opts) => {
-                setAdoBusyId(a.id);
+                setAdoBusy({ id: a.id, action: "approve" });
                 await onAdoDecide(a.id, true, opts);
-                setAdoBusyId(null);
+                setAdoBusy(null);
               }}
               onDeny={async (opts) => {
-                setAdoBusyId(a.id);
+                setAdoBusy({ id: a.id, action: "deny" });
                 await onAdoDecide(a.id, false, opts);
-                setAdoBusyId(null);
+                setAdoBusy(null);
               }}
             />
           );
@@ -819,21 +825,24 @@ function AuditTab({
   runId: string;
   onMakePolicy: () => void;
 }) {
+  const securityOperator = useSecurityOperator();
   return (
     <div className="max-w-4xl">
       <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <ScrollText className="size-3.5" />
         Append-only · {events.length} event{events.length === 1 ? "" : "s"} for this run
-        {/* W25-W25.2-3: carry the run. A bare /audit is permanently EMPTY for a
-            member — the server scopes non-admins to ?run_id= of a run they own
-            (internal/api/audit.go handleQueryAudit) — so an unqualified link
-            would drop them on a feed that can never fill. */}
-        <Link
-          to={`/audit?run_id=${runId}`}
-          className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
-        >
-          open full Audit <ArrowRight className="size-3" />
-        </Link>
+        {/* W25-W25.2-3: carry the run, so the full feed opens scoped to it.
+            M-1b: the full-page Audit screen is Admin view only now
+            (/admin/audit), so the link renders only for the tier that screen
+            serves; a user's own events are already inline above. */}
+        {securityOperator && (
+          <Link
+            to={`/admin/audit?run_id=${runId}`}
+            className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
+          >
+            open full Audit <ArrowRight className="size-3" />
+          </Link>
+        )}
         {/* Beside the record it is synthesized FROM, not on the command bar:
             what this run actually did is the whole basis of the proposal. */}
         <Button variant="outline" size="sm" className="ml-auto h-7" onClick={onMakePolicy}>
@@ -911,6 +920,10 @@ function RecordingTab({
   onSelect: (key: string) => void;
   onRetry: () => void;
 }) {
+  // M-1b: the Recordings library is Admin view only (/admin/recordings) and,
+  // until F1, not offered to a security admin either — a user reaches a
+  // recording only through their own run's tab, this one.
+  const operator = useOperator();
   return (
     <div className="max-w-4xl">
       {/* The picker sits ABOVE the body on purpose: a run whose OWN cast is
@@ -969,10 +982,15 @@ function RecordingTab({
         <>
           <TerminalPlayer recording={recording} />
           <div className="mt-2 text-xs text-muted-foreground">
-            Recorded when the run's runner supports session capture ·{" "}
-            <Link to="/recordings" className="text-primary hover:underline">
-              Recordings library
-            </Link>
+            Recorded when the run's runner supports session capture
+            {operator && (
+              <>
+                {" "}·{" "}
+                <Link to="/admin/recordings" className="text-primary hover:underline">
+                  Recordings library
+                </Link>
+              </>
+            )}
           </div>
         </>
       )}

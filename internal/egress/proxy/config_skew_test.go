@@ -23,9 +23,10 @@ import (
 // every one.
 func TestLoadConfigBytesRefusesUnknownKeys(t *testing.T) {
 	base := map[string]any{
-		"run_id":            uuid.New().String(),
-		"control_plane_url": "http://wardynd:8080",
-		"run_token":         "tok",
+		"run_id":               uuid.New().String(),
+		"control_plane_url":    "https://wardynd:8443",
+		"control_plane_ca_pem": testCPCAPEM,
+		"run_token":            "tok",
 	}
 	// Sanity: the same config WITHOUT the unknown key loads.
 	b, err := json.Marshal(base)
@@ -71,7 +72,8 @@ func TestLoadConfigBytesRefusesUnknownKeys(t *testing.T) {
 func TestLoadConfigBytesAcceptsEveryShippedKey(t *testing.T) {
 	cfg := map[string]any{
 		"run_id":                  uuid.New().String(),
-		"control_plane_url":       "http://wardynd:8080",
+		"control_plane_url":       "https://wardynd:8443",
+		"control_plane_ca_pem":    testCPCAPEM,
 		"run_token":               "tok",
 		"upstream_proxy_url":      "http://corp-proxy.internal:3128",
 		"upstream_proxy_no_proxy": []string{"10.0.0.0/8", ".internal"},

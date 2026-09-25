@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, sql } from "./fixtures";
 import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { APPROVALS } from "../src/app/lib/approvals-copy";
 
 // ---------------------------------------------------------------------------
 // Approvals screen e2e (lane: approvals, port 8088, db wardyn_e2e).
@@ -306,7 +307,7 @@ test.describe("Approvals — decision flows (mutating, self-seeded)", () => {
       await dialog.getByRole("button", { name: "Approve", exact: true }).click();
 
       // Success toast, dialog closes, and the now-decided request leaves Pending.
-      await expect(page.getByText("Request approved")).toBeVisible();
+      await expect(page.getByText(APPROVALS.TOAST_APPROVED)).toBeVisible();
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect(page.getByText(markerRe(marker))).toHaveCount(0);
 
@@ -361,7 +362,7 @@ test.describe("Approvals — decision flows (mutating, self-seeded)", () => {
 
       await dialog.getByRole("button", { name: "Approve", exact: true }).click();
 
-      await expect(page.getByText("Request approved")).toBeVisible();
+      await expect(page.getByText(APPROVALS.TOAST_APPROVED)).toBeVisible();
       await expect(page.getByRole("dialog")).toHaveCount(0);
 
       // It re-surfaces in Decided as Approved, carrying an "until <time>"
@@ -395,7 +396,7 @@ test.describe("Approvals — decision flows (mutating, self-seeded)", () => {
       await dialog.getByLabel(/Reason/).fill("Domain not on the egress allowlist");
       await dialog.getByRole("button", { name: "Confirm deny" }).click();
 
-      await expect(page.getByText("Request denied")).toBeVisible();
+      await expect(page.getByText(APPROVALS.TOAST_DENIED)).toBeVisible();
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect(page.getByText(markerRe(marker))).toHaveCount(0);
 
@@ -429,7 +430,7 @@ test.describe("Approvals — decision flows (mutating, self-seeded)", () => {
 
       await dialog.getByRole("button", { name: "Approve", exact: true }).click();
 
-      await expect(page.getByText("Failed to approve request")).toBeVisible();
+      await expect(page.getByText(APPROVALS.TOAST_APPROVE_FAILED)).toBeVisible();
       // Dialog stays open and the confirm button is interactive again (not a
       // permanently-disabled spinner) so the operator can cancel/retry.
       await expect(dialog).toBeVisible();
@@ -556,11 +557,12 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
 // cancels its still-PENDING approvals rather than stranding them until
 // ExpireStale's 24h sweep.
 // ---------------------------------------------------------------------------
-test.describe("B3 — the egress widget's held chip and the Approvals tab badge count LIVE holds", () => {
+test.describe("the egress widget's held chip and the Approvals tab badge count LIVE holds", () => {
+  // ticket: B3
   test("1 PENDING + 1 APPROVED on the same run reads '1 held', never 2", async ({ page }) => {
     clearPending();
     const runId = runningRunId();
-    // tool_call is ALWAYS held (isHeld's unconditional true arm) — the
+    // tool_call is ALWAYS held (isHeld is true for any PENDING tool_call) — the
     // cleanest way to seed a guaranteed hold without also depending on
     // requested_scope.mode/timing (the egress_domain wait_for_review arm).
     const heldId = randomUUID();
@@ -597,7 +599,8 @@ test.describe("B3 — the egress widget's held chip and the Approvals tab badge 
   });
 });
 
-test.describe("B4 — killing a run cancels its still-PENDING approvals", () => {
+test.describe("killing a run cancels its still-PENDING approvals", () => {
+  // ticket: B4
   test("kill ⇒ the PENDING approval becomes CANCELLED with no decision buttons, and the nav badge returns to 0", async ({
     page,
   }) => {

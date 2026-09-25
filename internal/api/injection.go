@@ -4,10 +4,16 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -89,6 +95,50 @@ func (s *Server) oauthProviderForSentinel(secretName string) (provider subscript
 // both sides agree — see types.ResolvedInjection for why.
 type injectionResponse = types.ResolvedInjection
 
+// withStoreRow adds the row a SiteAudited read reported — its store, ref and
+// owner (secretstore.Row.AuditData) — to a site's secret.read data. A read that
+// found no row adds nothing.
+func withStoreRow(data map[string]any, row *secretstore.Row) map[string]any {
+	for k, v := range row.AuditData() {
+		data[k] = v
+	}
+	return data
+}
+
+// mintInjectionGrant is handleInternalInjection's prelude, extracted for its
+// funlen ratchet: the run's claims, the grant id, and the broker's mint of an
+// api_key injection grant. ok=false means the refusal is already written.
+func (s *Server) mintInjectionGrant(w http.ResponseWriter, r *http.Request) (*identity.Claims, uuid.UUID, broker.Minted, bool) {
+	claims, err := claimsFromContext(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "missing run claims")
+		return nil, uuid.Nil, broker.Minted{}, false
+	}
+	if s.cfg.Broker == nil {
+		writeError(w, http.StatusServiceUnavailable, "broker not configured")
+		return nil, uuid.Nil, broker.Minted{}, false
+	}
+	grantID, ok := parseIDParam(w, r, "grantID", "grant")
+	if !ok {
+		return nil, uuid.Nil, broker.Minted{}, false
+	}
+
+	// The broker enforces run ownership, kind dispatch, and audit (jti).
+	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, grantID)
+	if err != nil {
+		s.writeMintError(w, r, err)
+		return nil, uuid.Nil, broker.Minted{}, false
+	}
+	if minted.Kind != types.GrantAPIKey || minted.Injection == nil {
+		// Only api_key grants resolve here: github/cloud credentials are
+		// minted via the regular mint endpoint and never resolved to raw
+		// platform secrets.
+		writeError(w, http.StatusUnprocessableEntity, "grant is not an api_key injection grant")
+		return nil, uuid.Nil, broker.Minted{}, false
+	}
+	return claims, grantID, minted, true
+}
+
 // handleInternalInjection resolves an api_key grant to its injectable header
 // value for the run's wardyn-proxy sidecar (startup mint).
 //
@@ -100,31 +150,8 @@ type injectionResponse = types.ResolvedInjection
 // brokered forward for it. Every resolve emits credential.mint (broker) and
 // secret.read audit events.
 func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request) {
-	claims, err := claimsFromContext(r)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "missing run claims")
-		return
-	}
-	if s.cfg.Broker == nil {
-		writeError(w, http.StatusServiceUnavailable, "broker not configured")
-		return
-	}
-	grantID, ok := parseIDParam(w, r, "grantID", "grant")
+	claims, grantID, minted, ok := s.mintInjectionGrant(w, r)
 	if !ok {
-		return
-	}
-
-	// The broker enforces run ownership, kind dispatch, and audit (jti).
-	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, grantID)
-	if err != nil {
-		s.writeMintError(w, r, err)
-		return
-	}
-	if minted.Kind != types.GrantAPIKey || minted.Injection == nil {
-		// Only api_key grants resolve here: github/cloud credentials are
-		// minted via the regular mint endpoint and never resolved to raw
-		// platform secrets.
-		writeError(w, http.StatusUnprocessableEntity, "grant is not an api_key injection grant")
 		return
 	}
 
@@ -299,18 +326,38 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// operator's writes under "" only, so no row ever exists under those
 	// strings and the lookup falls back to the operator row: today's single
 	// namespace, unchanged, for every pre-0.7 deployment.
-	secret, err := s.cfg.Secrets.For(claims.Sub).Get(r.Context(), minted.Injection.SecretName)
+	rctx, row := secretstore.SiteAudited(r.Context())
+	secret, err := s.cfg.Secrets.For(claims.Sub).Get(rctx, minted.Injection.SecretName)
 	if err != nil {
-		// Fail closed; the proxy refuses to start without its injections.
+		// Fail closed; the proxy refuses to start without its injections. The
+		// reason tells a store outage from a credential that is gone or refused.
+		reason := "refused"
+		switch {
+		case errors.Is(err, secretstore.ErrUnavailable):
+			reason = "store-unavailable"
+		case errors.Is(err, secretstore.ErrNotFound):
+			reason = "not-found"
+		}
 		s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
-			"secret.read", minted.Injection.SecretName, "failure", nil))
-		writeError(w, http.StatusFailedDependency,
-			"secret "+minted.Injection.SecretName+" is not in the store (set it with `wardyn secret set`)")
+			"secret.read", minted.Injection.SecretName, "failure",
+			mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "reason": reason, "grant_id": grantID, "owner": claims.Sub}, row))))
+		if reason == "store-unavailable" {
+			// Transient: the organisation's store did not answer. A distinct
+			// status, so it is never mistaken for a credential that is gone.
+			writeError(w, http.StatusServiceUnavailable,
+				"Wardyn couldn't reach the service that holds this run's credential, so it couldn't unlock it. Nothing was substituted. Try again in a moment.")
+			return
+		}
+		msg := "secret " + minted.Injection.SecretName + " is not in the store (set it with `wardyn secret set`)"
+		if reason == "refused" { // the row exists: re-setting it would overwrite what an operator may need to inspect
+			msg = "secret " + minted.Injection.SecretName + " exists but could not be used: the store refused it (its value is gone, or bound to another row). Nothing was substituted; ask an admin to check it."
+		}
+		writeError(w, http.StatusFailedDependency, msg)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", minted.Injection.SecretName, "success",
-		mustJSON(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub})))
+		mustJSON(withStoreRow(map[string]any{"purpose": "proxy-injection", "grant_id": grantID, "jti": minted.JTI, "owner": claims.Sub}, row))))
 
 	formattedValue := formatInjectionValue(minted.Injection.Format, secret)
 

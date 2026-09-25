@@ -27,7 +27,7 @@ var cryptoRequire = regexp.MustCompile(`(?m)^\s*golang\.org/x/crypto\s+(v\S+)`)
 // not yet established) and GO-2026-6355 (crafted messages after establishment).
 // Both fixed in v0.56.0.
 //
-// `make govulncheck` catches a regression here too, but only with a network and
+// `make govulncheck` catches a slipped pin too, but only with a network and
 // the live Go vulnerability database, and only on the branch where CI runs it.
 // This test fails offline, in a plain `go test`, the moment the pin slips back.
 func TestSSHCryptoAdvisoryFloor(t *testing.T) {

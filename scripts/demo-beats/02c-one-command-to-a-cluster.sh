@@ -64,7 +64,13 @@ preflight() {
   command -v kind   >/dev/null || die "kind not on PATH"
   command -v helm   >/dev/null || die "helm not on PATH"
   command -v kubectl >/dev/null || die "kubectl not on PATH"
-  if kind get clusters 2>/dev/null | grep -qx "wardyn-quickstart"; then
+  # CAPTURE, THEN MATCH — never `kind get clusters | grep -q` under
+  # `pipefail`: `grep -q` exits on its first match while kind is still
+  # writing, kind takes SIGPIPE, and pipefail reports the pipeline failed
+  # even though the match was found.
+  local _clusters
+  _clusters="$(kind get clusters 2>/dev/null)"
+  if grep -qx "wardyn-quickstart" <<<"${_clusters}"; then
     die "a wardyn-quickstart cluster already exists — this video films the install; run 'make kind-down' first"
   fi
   local p

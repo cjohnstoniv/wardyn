@@ -43,6 +43,9 @@ vi.mock("../../../lib/api/health", () => ({
   health: {
     health: (...a: unknown[]) => healthMock(...a),
     getSiteConfig: (...a: unknown[]) => getSiteConfigMock(...a),
+    // #492: setup-screen.tsx's reloadSiteConfig now reads the ETag-carrying
+    // snapshot — routed through the SAME mock these tests already drive.
+    getSiteConfigSnapshot: async (...a: unknown[]) => ({ siteConfig: await getSiteConfigMock(...a), etag: null }),
     putSiteConfig: (...a: unknown[]) => putSiteConfigMock(...a),
     testProxy: (...a: unknown[]) => testProxyMock(...a),
     testRedirect: (...a: unknown[]) => testRedirectMock(...a),
@@ -88,11 +91,11 @@ function baseStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   });
 }
 
-function renderScreen(operator: boolean) {
+function renderScreen(operator: boolean, initialStatus?: SetupStatus) {
   return render(
     <MemoryRouter initialEntries={["/setup"]}>
       <OperatorProvider operator={operator}>
-        <SetupScreen onDone={() => {}} />
+        <SetupScreen onDone={() => {}} initialStatus={initialStatus} />
       </OperatorProvider>
     </MemoryRouter>,
   );
@@ -142,5 +145,23 @@ describe("SetupScreen — operatorResolved && operator guard on admin-only reads
     await waitFor(() => expect(getSiteConfigMock).toHaveBeenCalled());
     await waitFor(() => expect(listSecretsMock).toHaveBeenCalled());
     await waitFor(() => expect(getWorkspaceProvidersMock).toHaveBeenCalled());
+  });
+});
+
+// #806: a gated install lands here straight from App.tsx's own /setup/status
+// read. The funnel's rail must paint from that status, not wait on the
+// screen's second read of the same endpoint — held forever here, so the only
+// way the rail can appear is from the status handed in.
+describe("SetupScreen — paints from the status it is handed (#806)", () => {
+  it("renders the step rail while its own /setup/status read is still pending", async () => {
+    getSetupStatusMock.mockReset().mockReturnValue(new Promise(() => {}));
+    listSecretsMock.mockReset().mockResolvedValue([]);
+    listWorkspacesMock.mockReset().mockResolvedValue([]);
+    getSiteConfigMock.mockReset().mockResolvedValue({});
+    getWorkspaceProvidersMock.mockReset().mockResolvedValue({ providers: {}, etag: null });
+    renderScreen(/* operator */ true, baseStatus());
+    expect((await screen.findAllByRole("navigation", { name: "Setup steps" })).length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
+    expect(getSetupStatusMock).toHaveBeenCalled();
   });
 });

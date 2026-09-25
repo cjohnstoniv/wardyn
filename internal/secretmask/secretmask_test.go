@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 )
 
-// ─── Registry tests ──────────────────────────────────────────────────────────
+// Registry tests
 
 func TestRegistry_Add_Snapshot(t *testing.T) {
 	r := secretmask.NewRegistry()
@@ -115,7 +115,7 @@ func TestRegistry_NilSafe(t *testing.T) {
 	r.Evict(runID)
 }
 
-// ─── Masker tests ────────────────────────────────────────────────────────────
+// Masker tests
 
 func TestMasker_SingleSecret_Replaced(t *testing.T) {
 	secret := []byte("my-api-key-12345")
@@ -233,7 +233,7 @@ func TestMasker_NoSecrets_PassThrough(t *testing.T) {
 	}
 }
 
-// ─── MaskingWriter tests ─────────────────────────────────────────────────────
+// MaskingWriter tests
 
 // TestMaskingWriter_BufferBoundarySplit feeds a secret one byte at a time
 // through MaskingWriter and verifies it is still masked.
@@ -379,14 +379,14 @@ func TestMaskingWriter_NoSecrets_PassThrough(t *testing.T) {
 	}
 }
 
-// ─── Fail-CLOSED-on-panic tests (invariant-1) ────────────────────────────────
+// Fail-closed-on-panic tests (invariant-1)
 
 // TestSafeMask_PanicFailsClosed proves that when Masker.Mask panics, the
 // recovered path does NOT forward the raw input bytes (which could contain
 // secrets) — it substitutes the placeholder and returns the panic as an error.
 //
-// Red-first: against the old fail-OPEN code this asserts the leaked raw bytes
-// are absent, which fails because the old code returned the original input.
+// A fail-open recovery would return the original input, so the leaked raw bytes
+// would be present and this assertion would fail.
 func TestMaskingWriter_PanicFailsClosed_NoRawLeak(t *testing.T) {
 	// Inject a masker that panics on every call (simulates a crash inside Mask).
 	orig := secretmask.MaskCallForTest
