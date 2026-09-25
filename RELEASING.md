@@ -177,10 +177,11 @@ another maintainer. Use the chosen version throughout this checklist.
 
    **Also add a `ROADMAP.md` Shipped row for the release you are cutting**
    (a past review found the Shipped table stuck on "Built, awaiting release" for
-   three released versions in a row) — a new row plus flipping that release's
-   own `### What vX.Y shipped` intro from "Built, awaiting release" to
-   "Shipped as `vX.Y.Z`", pointing at the CHANGELOG's now-dated entry instead
-   of `[Unreleased]`.
+   three released versions in a row) — a new row in the `## Shipped` table,
+   its Status cell reading "**Shipped (pre-alpha)** — `vX.Y.Z`, <date> (see
+   [CHANGELOG.md](CHANGELOG.md))", pointing at the CHANGELOG's now-dated entry
+   instead of `[Unreleased]`. ROADMAP.md carries no per-version narrative to
+   flip any more — CHANGELOG.md is the only per-release detail.
 
    **Also regenerate `docs/TEST-GAPS.md`: `make test-gaps`** (needs the union
    coverage profile `make ci`/`cover-check` already produced this run) —
