@@ -81,6 +81,9 @@ type Config struct {
 	// is. Empty — the zero value, and the default — refuses every host_path
 	// drive, which is the whole posture (see runner.UserDriveHostRootCheck).
 	UserDriveHostRoots []string
+	// DriveProbeImage is the OCI image ProbeDrive runs its short-lived
+	// readability check in. Empty uses defaultDriveProbeImage (busybox-class).
+	DriveProbeImage string
 }
 
 // RecordingMountTarget is where RecordingMount appears inside the agent
@@ -209,6 +212,8 @@ func newWithClient(cli dockerAPI, cfg Config) *Driver {
 		creating:   make(map[string]bool),
 	}
 }
+
+// PrewarmImages is defined in prewarm.go (SF-14).
 
 func (d *Driver) Name() string { return driverName }
 

@@ -262,7 +262,7 @@ unchanged.
   a paused allocation shows `GS_DRIVE_CHIP_PAUSED`. One sentence in the **"Add your workspace"**
   card (`GS_DRIVE_BODY`) says a drive is not a workspace — placed there because that card is where
   the two get conflated (`DESIGN.md` §5.4).
-- **Refusals** — the eight server messages in §7.7, rendered verbatim on the launch path.
+- **Refusals** — the nine server messages in §7.7, rendered verbatim on the launch path.
   Backend-unavailable is **post-attempt only**: nothing client-side can know whether the cluster
   will let the runner create a claim.
 
@@ -883,6 +883,7 @@ after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
 | `REFUSED_PAUSED` | drive: your allocation is paused by an admin |
 | `REFUSED_HOME_INVALID(claim)` | drive: your {claim} cannot name a directory (lowercase letters and digits, then `. _ -`, up to 63 characters) — ask an admin to set your directory name |
 | `REFUSED_HOME_MISSING(name)` | drive: directory `{name}` does not exist on the share — ask an admin to create it |
+| `REFUSED_HOME_UNREADABLE(name)` | drive: directory `{name}` exists but is not readable by your run — ask an admin to fix its permissions |
 | `REFUSED_WRITABLE` | drive: your allocation is read-only; `read_only:false` cannot widen it |
 | `REFUSED_BACKEND(reason)` | drive: this deployment cannot mount your drive ({reason}) |
 | `REFUSED_TARGET_RESERVED` | workspace_mounts[0]: target `/home/agent/drive` is reserved for the user drive |
@@ -891,7 +892,7 @@ after `WORKSPACE_BODY`, only when `/me.user_drive` is non-null.
 feature adds is here. It is complete about **doors**, not about the whole path — a drive that
 passes every door can still be refused by the RUNNER, and those strings are §7.9. `DENIED_DRIVE` is the one **403** (audited `authz.denied`,
 reason `governance_profile`, target `runs.drive` — `denyMemberDrive` beside
-`denyMemberRunQuota`); the six `REFUSED_*` are **422s with no audit** (`seedRequestDrive`, run
+`denyMemberRunQuota`); the seven `REFUSED_*` are **422s with no audit** (`seedRequestDrive`, run
 create and preflight both). **Nothing here names an unprovisioned `k8s_pvc_static` claim**: no
 door this feature adds can see that condition — the row is valid and the allocation resolves;
 the claim's absence is discovered by the k8s driver at *dispatch* — so a frozen sentence for it
@@ -982,7 +983,7 @@ carries all three with the operator recipe.
   mode sentence, toggle and reason line (§7.6); `wizard-spec.ts` emits `run.drive`.
 - **Member Getting Started** — the chip and the sentence (§7.6); `lib/api/health.ts`'s `/me`
   type gains `user_drive`.
-- **Run create + preflight** — the eight server strings (§7.7) beside the gates that raise them;
+- **Run create + preflight** — the nine server strings (§7.7) beside the gates that raise them;
   `/me.user_drive.denied_by_profile` (Q6).
 - **Run rail** — `RAIL_*` (§7.8), with run-row persistence in 0.7.1.
 - **`docs/OPERATIONS.md` known gaps, `docs/MEMBERS.md` "Your drive"** — `HONESTY` verbatim; the

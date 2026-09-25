@@ -230,6 +230,7 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore, driveHostRoo
 	}
 	sub, err := substrate.New(*f.runnerSel, substrate.Deps{
 		ProxyImage:          *f.proxyImage,
+		DriveProbeImage:     *f.driveProbeImage,
 		ConfinementRuntimes: confRuntimes,
 		UserDriveHostRoots:  driveHostRoots,
 	})

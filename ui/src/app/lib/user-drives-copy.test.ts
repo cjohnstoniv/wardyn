@@ -65,7 +65,7 @@ const SIZE_HELPERS = ["SIZE_MIB(n)", "SIZE_GIB(n)"];
 const NAMESPACES: Record<string, unknown>[] = [DRIVES, DRIVE_MEMBER, DRIVE_RUN];
 
 // ONE lookup across the three namespaces is safe because none of their keys
-// collide (122 / 22 / 2); the completeness test below is what keeps that true.
+// collide (122 / 23 / 2); the completeness test below is what keeps that true.
 const render = (docKey: string) => renderFromNamespaces(docKey, NAMESPACES);
 
 // The six keys that cannot go through the placeholder path get their own tests
@@ -400,7 +400,7 @@ describe("user-drives-prompt §7.1 — the server-composed table matches the Go 
 //
 // The suite above proves TS == doc for all 141 keys. §7.7 is titled
 // "DRIVE_MEMBER — refusals (server-composed)", and that title is the hole this
-// block closes: no production TypeScript renders those eight constants. The
+// block closes: no production TypeScript renders those nine constants. The
 // bytes a member is actually refused with are composed in Go (user_drives_run.go,
 // user_drives_resolve.go, runner/mount.go), so before this block the canon pin
 // compared TS to the doc while the SHIPPED string came from a third copy nothing
@@ -414,7 +414,7 @@ describe("user-drives-prompt §7.1 — the server-composed table matches the Go 
 // doc {placeholder} both become one hole, %q brings the quotes it renders, and
 // the two envelopes the server adds around the frozen sentence are stripped from
 // the doc side rather than pretended away —
-//   - `drive: ` — driveRefusal() (internal/api/user_drives_me.go since the size-cap split), on all six
+//   - `drive: ` — driveRefusal() (internal/api/user_drives_me.go since the size-cap split), on all seven
 //     REFUSED_* that go through refuseDrive / errDriveUnmountable;
 //   - `workspace_mounts[0]: ` — the caller's own field prefix, which the canon
 //     spells because §7.7 says it does (`[0]` is the mount's position).
@@ -478,13 +478,14 @@ function docCandidates(text: string): string[] {
 describe("user-drives-prompt §7.7 — the member refusals match the Go source", () => {
   const shapes = literals.map(goShape);
 
-  it("finds all 8 refusal rows", () => {
+  it("finds all 9 refusal rows", () => {
     expect([...sec77.keys()].sort()).toEqual(
       [
         "DENIED_DRIVE(name)",
         "REFUSED_BACKEND(reason)",
         "REFUSED_HOME_INVALID(claim)",
         "REFUSED_HOME_MISSING(name)",
+        "REFUSED_HOME_UNREADABLE(name)",
         "REFUSED_NO_GRANT",
         "REFUSED_PAUSED",
         "REFUSED_TARGET_RESERVED",

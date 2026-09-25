@@ -424,7 +424,7 @@ export const DRIVE_MEMBER = {
   // ---- §7.7 refusals (server-composed) ----
   // DENIED_DRIVE is the one 403 (audited authz.denied, reason
   // governance_profile, target runs.drive — denyUserDrive beside
-  // denyUserRunQuota); the six REFUSED_NO_GRANT..REFUSED_BACKEND keys are
+  // denyUserRunQuota); the seven REFUSED_NO_GRANT..REFUSED_BACKEND keys are
   // 422s with no audit (seedRequestDrive, run create and preflight both).
   // REFUSED_TARGET_RESERVED is the 400 validatePolicySpec's unique-target arm
   // raises when a policy or workspace source names the reserved target — met
@@ -445,6 +445,13 @@ export const DRIVE_MEMBER = {
   REFUSED_HOME_INVALID: (claim: string) =>
     `drive: your ${claim} cannot name a directory (lowercase letters and digits, then . _ -, up to 63 characters) — ask an admin to set your directory name`,
   REFUSED_HOME_MISSING: (name: string) => `drive: directory ${name} does not exist on the share — ask an admin to create it`,
+  // #165: the home directory EXISTS (REFUSED_HOME_MISSING's own check already
+  // passed) but the sandbox's own agent uid — not wardynd's root process —
+  // cannot read it. A distinct sentence from REFUSED_HOME_MISSING because the
+  // remedy differs: fix permissions, not create a directory that is already
+  // there.
+  REFUSED_HOME_UNREADABLE: (name: string) =>
+    `drive: directory ${name} exists but is not readable by your run — ask an admin to fix its permissions`,
   REFUSED_WRITABLE: "drive: your allocation is read-only; read_only:false cannot widen it",
   // {reason} is driveMountFor's own prose, composed in internal/api/
   // user_drives_run.go — the backend/runner mismatch ("it is a %q drive and

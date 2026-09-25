@@ -680,3 +680,60 @@ type ImageRemover interface {
 	// NOT an error — same idempotent-teardown contract as StopSandbox.
 	ImageRemove(ctx context.Context, ref string) error
 }
+
+// DriveProbeResult is the closed set of answers a DriveProber gives about one
+// resolved drive mount. Three states, not a bool, because "I checked and it
+// is fine" and "I could not tell" are different claims with different
+// remedies — see DriveProbeUnknown.
+type DriveProbeResult string
+
+const (
+	// DriveProbeReadable: the probe ran AS THE AGENT'S OWN UID (never the
+	// daemon's process, which is root) and that uid could read the mount.
+	DriveProbeReadable DriveProbeResult = "readable"
+	// DriveProbeUnreadable: the probe ran as the agent's own uid and that uid
+	// could NOT read the mount — the exact failure a daemon-side os.Stat (run
+	// as root) cannot see, because root can read almost anything the agent
+	// user cannot.
+	DriveProbeUnreadable DriveProbeResult = "unreadable"
+	// DriveProbeUnknown: the probe could not be run to a conclusion — e.g. the
+	// Kubernetes substrate has no filesystem of its own to stat and can only
+	// Get the claim and read its phase, which is a fact about provisioning,
+	// not about whether the agent uid can read it once mounted. A caller MUST
+	// NOT treat Unknown as DriveProbeReadable: a probe that cannot see the
+	// storage has not proved anything, and reading Unknown as a pass would
+	// re-introduce the exact bug this interface exists to close.
+	DriveProbeUnknown DriveProbeResult = "unknown"
+)
+
+// DriveProbe is a DriveProber's answer for one resolved mount.
+type DriveProbe struct {
+	Result DriveProbeResult
+	// Detail is operator-facing context on why the probe landed here (an exec
+	// exit code, a claim phase) — logged, never shown to the member.
+	Detail string
+}
+
+// DriveProber is an OPTIONAL Runner capability, modelled on ImageChecker: a
+// substrate that can ask whether the SANDBOX'S OWN USER — not the daemon's own
+// process, which is root — can actually read a resolved user-drive mount.
+//
+// It exists because the inline os.Stat a daemon runs itself
+// (internal/api/user_drives_run.go, pre-#165) always runs as root, so a share
+// readable by root but not by the agent uid passed create, preflight and /me
+// and only failed once the run was already inside the sandbox — and on
+// Kubernetes there was no filesystem for the daemon to stat at all.
+//
+// An OPTIONAL capability rather than a widening of Runner: five
+// implementations satisfy Runner today, mounting a drive five different ways,
+// and a new required method would have to be stubbed everywhere it means
+// nothing. Callers type-assert the wired Runner and treat "does not
+// implement" the same as ImageChecker's absence — the check simply does not
+// run, which is exactly what the code answered before this interface existed.
+type DriveProber interface {
+	// ProbeDrive answers whether mount would be readable by the uid the
+	// sandbox actually runs as, bounded by ctx. It is called BEFORE a sandbox
+	// exists (create, preflight, a /me poll) and MUST honour ctx's deadline —
+	// the caller is a request thread, not a background sweep.
+	ProbeDrive(ctx context.Context, mount types.DriveMount) (DriveProbe, error)
+}
