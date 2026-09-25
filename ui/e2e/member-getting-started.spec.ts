@@ -19,6 +19,7 @@ import { CONNECTIONS } from "../src/app/components/wardyn/copy/door";
 const MEMBER_SECTION_TITLES = [
   "What's set up for you",
   "Add your workspace",
+  "Your model key",
   "Your first run",
   "Approvals you can decide",
   "Connect your tools",
@@ -115,18 +116,14 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect.poll(() => mp4Requests, { timeout: 5000 }).toBeGreaterThanOrEqual(1);
   });
 
-  // #541: Getting Started never offers an in-page sign-in any more — every
-  // provider's own button lives on Your model connections (Your account),
-  // reached through the link below the summary chip. Regression pins for the
-  // retired card's own bugs (Appendix A finding 5's not_applicable guard, U-1's
-  // shared-row chip owner, U-13's duplicate accessible name, the codex-only
-  // roster's key name, and the P1 ticket-mint fix) moved with the sign-in
-  // surface itself: sso-member.spec.ts / sso-member-recovery.spec.ts (the live
-  // per-user AWS walk) now open it from /account instead of /setup, and
-  // one-door.spec.ts's "Your model connections and the strip open the same
-  // provider door" pins the provider-mode door entrance this page used to
-  // carry.
-  test("no sign-in button ever renders on Getting Started, whatever the model-access state", async ({ page }) => {
+  // #541 fix review: a legacy install (no model-providers block) keeps "Your
+  // model key" as Getting Started's own door until #548 converts every
+  // install to a provider block — its button is what this pins now. Once a
+  // real provider block exists, Your model connections (Your account) is the
+  // only door (the test below pins its absence here); one-door.spec.ts's
+  // "Your model connections and the strip open the same provider door" pins
+  // that provider-mode entrance.
+  test("a legacy per_user AWS lane keeps its own Sign-in button on Getting Started", async ({ page }) => {
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
@@ -141,18 +138,22 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await gotoConsole(page);
     await navToRoute(page, "/setup");
     await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Your model key" })).toBeVisible();
     // No model-providers block on this fixture: legacySummary
-    // (lib/model-connections.ts) is the fallback, reading the same
-    // not_configured state model_access carries: Needs you — with no button,
-    // since this page (since #541) offers no in-page action at all.
+    // (lib/model-connections.ts) is the summary chip's fallback, reading the
+    // same not_configured state model_access carries: Needs you.
     await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible();
+    expect(await page.getByRole("button", { name: "Sign in to AWS" }).count()).toBeGreaterThan(0);
   });
 
   // The provider-mode chip: Ready when the granted harness's default provider
   // is connected — computed by the SAME predicate Your account's own header
-  // chip reads (lib/model-connections.ts's connectionsSummary).
-  test("the summary chip reads Ready with a connected default provider", async ({ page }) => {
+  // chip reads (lib/model-connections.ts's connectionsSummary). A real
+  // provider block also retires "Your model key" for THIS install: Your
+  // account is the only door (MP-D's own drawing).
+  test("the summary chip reads Ready with a connected default provider, and Your model key is gone", async ({
+    page,
+  }) => {
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
@@ -172,6 +173,8 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await gotoConsole(page);
     await navToRoute(page, "/setup");
     await expect(page.getByText(CONNECTIONS.SUMMARY_READY)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your model key" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
   });
 
   // member-cold-load lane (plan P3, absorbs F3-F7): a COLD document load of
@@ -183,15 +186,15 @@ test.describe("member Getting Started (mocked /me role)", () => {
   // required to reproduce the cold-load window at all.
   //
   // GET /api/v1/site-config and GET /api/v1/workspace-providers are
-  // unambiguous — no member surface ever calls either. GET /api/v1/secrets
-  // used to be the ambiguous one: secrets.ts's listSecrets() (the admin
-  // orchestrator's operator-wide read) and listSecretsMine() (the since-
-  // retired "Your model key" card's own read, #541) hit the IDENTICAL URL, so
-  // this pinned the request COUNT at exactly one rather than a zero-count that
-  // would false-fail on the member's own legitimate read. #541 removed that
-  // read outright — Getting Started's own connections chip reads
-  // model_providers/provider_access off the SAME /setup/status this test
-  // already awaits, not a second endpoint — so all three now pin zero.
+  // unambiguous — no member surface ever calls either. GET /api/v1/secrets is
+  // NOT: secrets.ts's listSecrets() (the admin orchestrator's operator-wide
+  // read) and listSecretsMine() ("Your model key"'s own read, restored in the
+  // #541 fix review — it is the legacy install's only door until #548 lands)
+  // hit the IDENTICAL URL — the server tells the two apart by caller identity,
+  // not the request. So instead of a zero-count on that path (which would
+  // false-fail on the member's OWN legitimate read), this pins the request
+  // COUNT at exactly one: the leaked admin-orchestrator read this fix removes
+  // would have shown up as a second, earlier GET before role resolved.
   test("a direct cold page.goto(\"/setup\") fires no admin-only reads", async ({ page }) => {
     const requests: { method: string; url: string }[] = [];
     page.on("request", (req) => requests.push({ method: req.method(), url: req.url() }));
@@ -217,7 +220,7 @@ test.describe("member Getting Started (mocked /me role)", () => {
     };
     expect(requests.filter((r) => isGet(r, "/api/v1/site-config"))).toEqual([]);
     expect(requests.filter((r) => isGet(r, "/api/v1/workspace-providers"))).toEqual([]);
-    expect(requests.filter((r) => isGet(r, "/api/v1/secrets"))).toEqual([]);
+    expect(requests.filter((r) => isGet(r, "/api/v1/secrets"))).toHaveLength(1);
 
     // The admin welcome hero and the funnel's barrier-step heading — first
     // paint never shows either, whichever of the two an admin cold load would

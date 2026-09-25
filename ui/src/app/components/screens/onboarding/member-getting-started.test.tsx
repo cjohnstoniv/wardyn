@@ -196,11 +196,12 @@ describe("MemberGettingStarted", () => {
     expect(screen.queryByText(/Your runs are bounded by/)).not.toBeInTheDocument();
   });
 
-  it("renders the five member sections and never the admin barrier picker", async () => {
+  it("renders the six member sections (legacy: no model-providers block) and never the admin barrier picker", async () => {
     renderPage();
     for (const title of [
       "What's set up for you",
       "Add your workspace",
+      "Your model key",
       "Your first run",
       "Approvals you can decide",
       "Connect your tools",
@@ -481,6 +482,31 @@ describe("MemberGettingStarted", () => {
       renderPage(baseMe(), s);
       expect(await screen.findByText(T.SETUP_SUMMARY_HELPER_PER_USER)).toBeInTheDocument();
       expect(screen.queryByText(T.SETUP_SUMMARY_HELPER)).not.toBeInTheDocument();
+    });
+  });
+
+  // Restored (fix review on #541): "Your model key" is the legacy install's
+  // ONLY door until #548 converts every install to a provider block — pinned
+  // in both directions so neither regresses silently again.
+  describe("Your model key — the legacy door, gone once a real provider block exists", () => {
+    it("legacy (no model_providers): the card renders, and Save calls secrets.setSecret", async () => {
+      const user = userEvent.setup();
+      getSetupStatusMock.mockResolvedValue(status({ llm_ready: true }));
+      renderPage();
+      expect(await screen.findByRole("heading", { name: "Your model key" })).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Use my own key instead" }));
+      await user.type(screen.getByPlaceholderText("sk-ant-…"), "sk-ant-abcdefgh");
+      await user.click(screen.getByRole("button", { name: "Save key" }));
+      await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("anthropic-api-key", "sk-ant-abcdefgh"));
+    });
+
+    it("a real provider block: the card is absent — Your account is the only door", async () => {
+      const s = providerStatus([{ provider: MODEL_PROVIDERS.bedrock, defaultFor: ["claude-code"], state: "live" }]);
+      getSetupStatusMock.mockResolvedValue(s);
+      renderPage(baseMe(), s);
+      await screen.findByText(CONNECTIONS.SUMMARY_READY);
+      expect(screen.queryByRole("heading", { name: "Your model key" })).not.toBeInTheDocument();
     });
   });
 

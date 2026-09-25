@@ -5,9 +5,10 @@
 
 // The member's own Getting Started — replaces MemberSetupNotice's one-line
 // bounce. A single scrolling page of SectionCards (no rail, no stepper): what
-// an admin already set up for you, then three things a member can actually DO
-// (add a workspace, launch a run, connect a terminal), plus two purely
-// informational notes (approvals, and — since #541 — model connections).
+// an admin already set up for you, then the things a member can actually DO
+// (add a workspace, bring your own key on a LEGACY install, launch a run,
+// connect a terminal), plus two purely informational notes (approvals, and —
+// since #541 — model connections).
 //
 // Colour budget (CONSOLE-RULES): exactly one `default` (teal) action at a
 // time — the first not-done actionable section's — everything else outline;
@@ -15,12 +16,17 @@
 // and "Approvals you can decide" are informational (no done state) and never
 // enter that computation.
 //
-// #541 retired "Your model key" (your-model-key.tsx, model-key-state.ts): its
-// hardcoded single claude-code lane is now every provider a person may use,
-// one row each, on a SEPARATE page (Your account — the existing link below
-// this card already pointed there). This page keeps only the glance-level
-// summary chip (connectionsSummary, lib/model-connections.ts) — the same
-// predicate that page's own header reads — with no in-page action of its own.
+// #541 (fix review) — "Your model key" (your-model-key.tsx, model-key-state.ts)
+// is NOT retired: a real provider block makes every provider a person may use
+// a row on a SEPARATE page (Your account, packet MP-D's own drawing), and
+// this page then keeps only the glance-level summary chip
+// (connectionsSummary, lib/model-connections.ts) with no in-page action. But
+// #548 has not yet converted every install to a provider block, so a legacy
+// install (no `model_providers` at all — every shared or per_user roster
+// install main still carries) keeps "Your model key" as the ONLY door it ever
+// had, and the summary chip falls back to legacySummary, the retired-in-name-
+// only card's own model_access/llm_ready reading. `providerMode` decides
+// which world a given load is in.
 import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
@@ -41,6 +47,7 @@ import {
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
 import { connectionRows, connectionsSummary, legacySummary } from "../../../lib/model-connections";
 import { MODEL_ACCESS_AGENT, isPerUserSsoRow } from "../../../lib/model-access";
+import { useModelAccessDoor } from "../../wardyn/model-access-context";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { useAdoConnect } from "../../../lib/hooks/use-ado-connect";
 import { scmAccessCause, scmAccessChip, scmAccessNeedsConnect } from "../../../lib/scm-access-display";
@@ -49,6 +56,7 @@ import { strongestAvailable } from "../../wardyn/default-confinement";
 import { useMemberLocalDirRoot, useUserDrive } from "../../wardyn/operator-context";
 import { setup as setupApi } from "../../../lib/api/setup";
 import type { MeUserDrive } from "../../../lib/api/health";
+import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { sshKeys as sshKeysApi } from "../../../lib/api/ssh-keys";
@@ -59,6 +67,8 @@ import { driveModeWord, driveSizeLabel } from "../../../lib/user-drives-display"
 import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
 import { EPISODES } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
+import { YourModelKey, modelKeyProvider } from "./your-model-key";
+import { modelKeyState } from "./model-key-state";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 import { DEMOS, type Demo } from "../demos/demo-catalog";
 import { ceilingNarrows, walkableDemos } from "../setup/steps";
@@ -89,6 +99,13 @@ export function MemberGettingStarted() {
   const ceilingApplies = useViewAccess() !== "url";
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [retryTick, setRetryTick] = React.useState(0);
+  // The legacy (no model-providers block) member's own AWS sign-in (C4.3)
+  // opens the shell's one door (#544 — this page mounted its own pane
+  // before). Restored (fix review on #541): "Your model key" is the ONLY
+  // legacy install's door until #548 converts every install to a provider
+  // block, and the door is what its own Sign-in button opens.
+  const door = useModelAccessDoor();
+  const openAwsDoor = () => door.openDoor({ for: { login: "aws" }, onSignedIn: () => setRetryTick((n) => n + 1) });
 
   React.useEffect(() => {
     let active = true;
@@ -113,6 +130,18 @@ export function MemberGettingStarted() {
     reloadWorkspaces();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount; reload is stable (useCallback([]))
   }, []);
+
+  // The member's own secret names, for the restored "Your model key" card
+  // (legacy path only) — fetched once here so a Save/Remove inside it calls
+  // back to re-fetch, one source of truth.
+  const [mine, setMine] = React.useState<string[] | null>(null);
+  const loadSecrets = React.useCallback(() => {
+    secretsApi
+      .listSecretsMine()
+      .then((r) => setMine(r.mine))
+      .catch(() => setMine([]));
+  }, []);
+  React.useEffect(loadSecrets, [loadSecrets]);
 
   const [ownRuns, setOwnRuns] = React.useState<AgentRun[] | null>(null);
   React.useEffect(() => {
@@ -181,17 +210,45 @@ export function MemberGettingStarted() {
   }, []);
 
   const unreachable = status?.unreachable === true;
+  const llmReady = !unreachable && status?.llm_ready === true;
+
+  // Restored (fix review on #541): a real provider block makes Your account's
+  // Your model connections the ONLY door (MP-D's own drawing) — every legacy
+  // install (no provider block, since the admin funnel writes none until
+  // #548 lands) keeps "Your model key" as the door it always had. Computed
+  // before `actionable` and `connectionsChip` below since both branch on it.
+  const providerMode = !!status?.model_providers;
+
+  // X3-F3: the summary chip and the pane must agree on WHICH key — the name
+  // follows the org's agent roster, not a hardcoded provider. Unused (and the
+  // card unrendered) under a real provider block.
+  const modelKeyProviderRow = modelKeyProvider(status?.harnesses);
+  const hasOwnKey = mine?.includes(modelKeyProviderRow.secretName) ?? false;
+  // Appendix A finding 2 — a per_user roster row is graded on THIS caller's
+  // own model_access, never the deployment-wide llmReady.
+  const modelKeyDone =
+    !unreachable &&
+    modelKeyState({
+      hasOwn: hasOwnKey,
+      llmReady,
+      modelAccess: status?.model_access,
+      credentialSource: modelKeyProviderRow.credentialSource,
+      mechanism: modelKeyProviderRow.mechanism,
+    }).done;
 
   const workspaceDone = !unreachable && !wsLoading && workspaces.length > 0;
   const firstRunDone = !unreachable && (ownRuns?.length ?? 0) > 0;
   const connectDone = !unreachable && (sshKeyCount ?? 0) > 0;
 
-  // Colour budget over the three ACTIONABLE sections, in page order. The
-  // others (setup summary, approvals, and — since #541 — model connections,
-  // which sends the person to a SEPARATE page rather than an in-page action)
-  // are informational and never win the one `default` slot.
+  // Colour budget over the ACTIONABLE sections, in page order. "model-key"
+  // enters the rotation only while its own card is actually on screen (the
+  // legacy path) — under a provider block it has no card to hand the one
+  // `default` slot to. The others (setup summary, approvals, and — since
+  // #541 — model connections, which sends the person to a SEPARATE page
+  // rather than an in-page action) are informational and never win it.
   const actionable: { key: string; done: boolean }[] = [
     { key: "workspace", done: workspaceDone },
+    ...(providerMode ? [] : [{ key: "model-key", done: modelKeyDone }]),
     { key: "first-run", done: firstRunDone },
     { key: "connect-tools", done: connectDone },
   ];
@@ -207,14 +264,11 @@ export function MemberGettingStarted() {
   // header chip reads (model-connections-card.tsx) — one Ready/Needs
   // you/Not-set-up answer, never two independently-computed copies, WHEN
   // there is a provider block to read. Fix review: an install with none
-  // (every legacy shared or per_user roster install, since the admin funnel
-  // writes no provider block until #548 lands) falls back to legacySummary,
-  // the retired "Your model key" card's own model_access/llm_ready reading —
-  // connectionsSummary's rows are always empty there, and "Not set up by
-  // your admin" over a working shared credential was the regression this
-  // fixes. null while `status` itself hasn't loaded yet: no claim before
-  // there is an answer to make one from.
-  const providerMode = !!status?.model_providers;
+  // falls back to legacySummary, the "Your model key" card's own
+  // model_access/llm_ready reading — connectionsSummary's rows are always
+  // empty there, and "Not set up by your admin" over a working shared
+  // credential was the regression this fixes. null while `status` itself
+  // hasn't loaded yet: no claim before there is an answer to make one from.
   const connectionsChip = status ? (providerMode ? connectionsSummary(connectionRows(status)) : legacySummary(status)) : null;
   // The per_user roster row (the pre-provider per-person AWS-SSO lane) —
   // SETUP_SUMMARY_HELPER's "shared credentials" claim is false under it, same
@@ -420,6 +474,26 @@ export function MemberGettingStarted() {
             </Button>
           )}
         </SectionCard>
+
+        {/* Restored (fix review on #541): the legacy install's own door — a
+            real provider block makes Your account's Your model connections
+            the only one (MP-D's own drawing), so this never renders beside
+            it. */}
+        {!providerMode && (
+          <YourModelKey
+            llmReady={llmReady}
+            mine={mine}
+            harnesses={status?.harnesses}
+            modelAccess={status?.model_access}
+            onSignInAws={openAwsDoor}
+            /* U-13: while the door is open the card's own button is a second,
+               live-looking way into the same one door. */
+            signInOpen={door.open}
+            known={!unreachable}
+            variant={variantFor("model-key")}
+            onChanged={loadSecrets}
+          />
+        )}
 
         <SectionCard
           title={T.FIRST_RUN_TITLE}

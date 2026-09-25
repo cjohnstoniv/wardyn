@@ -81,9 +81,11 @@ import { STARTING_UNSCHEDULABLE } from "../../src/app/components/screens/run-sta
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
 import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
 import {
+  MEMBER_GETTING_STARTED,
   RAIL_CREDENTIAL,
   RAIL_RECORDING_ON,
   RECORDING_DISABLED_TITLE,
+  YOUR_MODEL_KEY,
 } from "../../src/app/components/wardyn/copy";
 import { AGENTS, AGENTS_DRAFT, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
 import {
@@ -327,23 +329,29 @@ test.afterEach(() => {
 
 // ── B — the member's own card, while they are still signed in ───────────────
 
-test("B (ui-member-model-key): a per_user member's strip names their OWN AWS sign-in", async ({ page }) => {
+test("B (ui-member-model-key): a per_user member's card names their OWN AWS sign-in", async ({ page }) => {
   // FIRST, and that is not cosmetic: the member is `live` only until case A's
   // console save moves the pin. The before-sign-in half of this card is proven
   // by sso-member.spec.ts's second case plus the lane's own vitest matrix — the
   // ONE thing only a live walk can show is the SIGNED-IN branch under a real
   // per_user roster row, with a real captured session behind it.
   //
-  // #541 retired Getting Started's own "Your model key" card; the one surface
-  // left for a per_user, non-provider member's sign-in state is the shell
-  // strip on /account (openLoginPane's own comment has the full reasoning).
-  // `live` carries no sentence there — its ABSENCE is the assertion.
+  // #541 fix review: this install has no model-providers block, which keeps
+  // "Your model key" as Getting Started's own door (and this card) until #548
+  // converts every install to a provider block.
   await dexSignIn(page, MEMBER_EMAIL);
   expect((await modelAccess(page)).state, "sso-member.spec.ts must leave the member live").toBe("live");
 
-  await page.goto("/account");
-  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
-  await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED)).toHaveCount(0);
+  await page.goto("/setup");
+  await expect(page.getByText(YOUR_MODEL_KEY.SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(YOUR_MODEL_KEY.SIGNED_IN_BODY)).toBeVisible();
+  // The 0.7.4 sentence this replaced — "Model access is already configured for
+  // you", under the chip "Provided by your admin" — is the field report's
+  // finding 2 verbatim. Its ABSENCE is the assertion.
+  await expect(page.getByText(YOUR_MODEL_KEY.PROVIDED_BODY)).toHaveCount(0);
+  await expect(page.getByText(YOUR_MODEL_KEY.PROVIDED_CHIP)).toHaveCount(0);
+  // …and the page lede names whose sign-in it is.
+  await expect(page.getByText(MEMBER_GETTING_STARTED.SETUP_SUMMARY_HELPER_PER_USER)).toBeVisible();
   await dexSignOut(page);
 });
 
@@ -1112,11 +1120,13 @@ test("F (member-preview): an admin previews the state a member is in before they
   // per-principal credential lookup still finds the admin's own session.
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("not_configured");
-  // #541 fix review: Getting Started's own "Your model key" card is retired,
-  // but its model_access reading moved to legacySummary
-  // (lib/model-connections.ts) — this deployment has no model-providers block
-  // (a per_user roster row alone), so the connections-summary chip reads the
-  // same not_configured state: Needs you.
+  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
+  // #541 fix review: this deployment has no model-providers block (a per_user
+  // roster row alone), which keeps "Your model key" as Getting Started's own
+  // door until #548 converts every install to a provider block; its own
+  // connections-summary chip falls back to legacySummary
+  // (lib/model-connections.ts), reading the same not_configured state: Needs
+  // you.
   await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
 
   // …and the one door that could WRITE inside the preview is refused, because a

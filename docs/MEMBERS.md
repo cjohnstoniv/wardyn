@@ -232,9 +232,11 @@ action vocabulary is [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
 
 If your admin has set up per-provider model records (#551), add your own
 credential for a provider from Your account ▸ Your model connections in the
-console. Otherwise (today's more common shape), store your own key under the
-provider-convention name yourself: `anthropic-api-key` for Claude,
-`openai-api-key` for Codex, via `PUT /secrets/<name>` — `GET /secrets` shows it
+console. Otherwise (today's more common shape, until #548 converts every
+install), the console's entry point is Getting Started ▸ Your model key —
+either way, store your own key under the provider-convention name
+(`anthropic-api-key` for Claude, `openai-api-key` for Codex) via `PUT
+/secrets/<name>` or the console. `GET /secrets` shows it
 under `mine`, never under a name another member wrote. Pick it under Model access
 when you launch a run; your run then uses YOUR key, injected proxy-side
 exactly like an operator's own (the value is never resident in the sandbox).

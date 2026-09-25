@@ -309,9 +309,8 @@ export async function otherPin(request: APIRequestContext): Promise<{ account: s
  * Put the member back into a state where the "Sign in to AWS" CTA EXISTS.
  *
  * A `live` member has NO such button, and that is not a bug to work around:
- * the strip and the door-opening controls it shares (#541 retired the last
- * page-local one, Getting Started's "Your model key" card) all render it only
- * for MODEL_ACCESS_ACTIONABLE = {not_configured, expired_signin, expiring}
+ * your-model-key.tsx and the chip row both render it only for
+ * MODEL_ACCESS_ACTIONABLE = {not_configured, expired_signin, expiring}
  * (workspace-providers-copy.ts). sso-member.spec.ts leaves the member `live`,
  * so every case in the recovery file that needs to DRIVE a sign-in has to make
  * one legitimately available first.
@@ -338,15 +337,15 @@ export async function makeMemberActionable(request: APIRequestContext): Promise<
 }
 
 /**
- * Open the member's sign-in pane from Your account and wait for its terminal.
+ * Open the member's sign-in pane from Getting Started and wait for its terminal.
  *
- * #541 moved this off Getting Started: that page's own "Your model key" card
- * (and its duplicate "Sign in to AWS" button) is retired, so the one button
- * left for a per_user, non-provider member is the shell strip's — not
- * suppressed on /account for a non-operator (model-access-banner.tsx's
- * `suppressed` gates the /account branch on `operator` alone). `.first()`
- * stays defensive under Playwright's strict mode rather than a bare
- * getByRole, in case a future state ever draws a second one there.
+ * #541 fix review: this walk's fixture is a per_user roster row with NO
+ * model-providers block, which keeps "Your model key" as its ONLY door until
+ * #548 converts every install to a provider block. The member-getting-started
+ * page renders TWO "Sign in to AWS" buttons when the state is actionable (the
+ * chip row's and the "Your model key" card's, lane ui-member-model-key's
+ * handoff says so in as many words) and BOTH open the same HarnessLoginPane —
+ * so `.first()` under Playwright's strict mode, never a bare getByRole.
  *
  * The pane launches the login sandbox on open. The start URL is roster-managed
  * here (the admin set sso_start_url), so the pane goes straight to "Start login"
@@ -359,7 +358,7 @@ export async function makeMemberActionable(request: APIRequestContext): Promise<
  * no page — least of all an about:blank placeholder — opened on the click.
  */
 export async function openLoginPane(page: Page): Promise<void> {
-  await page.goto("/account");
+  await page.goto("/setup");
   const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
   await expect(cta).toBeVisible({ timeout: 60_000 });
   await cta.click();

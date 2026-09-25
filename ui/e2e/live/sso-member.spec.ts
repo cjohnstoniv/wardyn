@@ -48,6 +48,7 @@
 import { expect, test } from "@playwright/test";
 import { CONSOLE_VIEW } from "../../src/app/components/wardyn/copy/console-view";
 import { CONNECTIONS } from "../../src/app/components/wardyn/copy/door";
+import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../../src/app/components/wardyn/copy";
 // 0.7.6 lanes ui-model-access-door and ui-new-run-model-access, handed over by
 // constant name in local/v076/canon/*-docs.md. Both modules are plain constant
 // tables with no CSS import — the rule ui/e2e/live/helpers.ts states for
@@ -185,15 +186,17 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
 
   // (5) THE ONE SUPPRESSION A MEMBER GETS, and the one they deliberately do
-  // NOT. Getting Started IS the door, so the strip is withheld there.
+  // NOT. Getting Started IS the door, so the strip is withheld there — the
+  // card below is what says it instead.
   //
-  // #541 fix review: Getting Started's own "Your model key" card (which used
-  // to say this half in the door's place) is retired, but its own
-  // model_access reading moved with it — legacySummary (lib/model-connections.ts)
-  // is the fallback for an install with no model-providers block (this one: a
-  // pure per_user roster row), so the connections-summary chip reads the
-  // SAME not_configured state as the strip: Needs you.
+  // #541 fix review: this install has no model-providers block (a pure
+  // per_user roster row), which keeps "Your model key" as Getting Started's
+  // own door until #548 converts every install to a provider block; the
+  // page's own connections-summary chip falls back to legacySummary
+  // (lib/model-connections.ts), reading the SAME not_configured state as the
+  // strip: Needs you.
   await page.goto("/setup");
+  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
   // …and on /account a MEMBER keeps it, deliberately: that card's AWS button
@@ -216,16 +219,23 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
   expect(before.state).toBe("not_configured");
   expect(before.action).toBe("Sign in to AWS");
 
-  // The member's own account page carries the CTA (P3 / lane
+  // The member's own Getting Started carries the CTA (P3 / lane
   // member-cold-load: the member's page must not call an admin-only endpoint).
-  // #541 retired Getting Started's own "Your model key" card and its per_user
-  // lede (openLoginPane now opens the sign-in from /account, where the shell
-  // strip — not suppressed for a non-operator there — carries this state; see
-  // that helper's own comment). This is the one live seat that can read the
-  // NOT-SIGNED-IN half — it needs a real second identity under a real
-  // per_user roster row, which the lane's own vitest matrix cannot produce.
-  await page.goto("/account");
-  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
+  //
+  // 0.7.5 BUILD 0(a), lane ui-member-model-key (merged): the "Your model key"
+  // card no longer tells a per_user member their model access is already done.
+  // This is the one live seat that can read the NOT-SIGNED-IN half — it needs a
+  // real second identity under a real per_user roster row, which the lane's own
+  // vitest matrix cannot produce. Asserted THROUGH the merged constants.
+  await page.goto("/setup");
+  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_BODY)).toBeVisible();
+  // …and the page's own lede names whose sign-in it is (finding 2b). The old
+  // SETUP_SUMMARY_HELPER — "shared credentials … your runs inherit them" — is
+  // the sentence this deployment contradicts, so its ABSENCE is the assertion
+  // that the branch actually took.
+  await expect(page.getByText(MEMBER_GETTING_STARTED.SETUP_SUMMARY_HELPER_PER_USER)).toBeVisible();
+  await expect(page.getByText(MEMBER_GETTING_STARTED.SETUP_SUMMARY_HELPER)).toHaveCount(0);
   // P1 + P5: the member must REACH their own sign-in from their own seat, and
   // must not block on a cold image pull.
   //
@@ -241,10 +251,10 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
   await signInThroughPane(page, openLoginPane);
 
   // THE MEMBER'S OWN STATUS, from the member's own session.
-  await page.goto("/account");
+  await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
-  // …and the strip now says nothing — live carries no sentence.
-  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
+  // …and the card now reads the signed-in half of the same pair of constants.
+  await expect(page.getByText(YOUR_MODEL_KEY.SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
 });
 
 test("the capture belongs to the member alone", async ({ page }) => {
