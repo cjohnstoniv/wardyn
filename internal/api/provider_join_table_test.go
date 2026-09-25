@@ -408,7 +408,8 @@ func TestProviderJoin_DoorsEveryKind(t *testing.T) {
 // block is driven at enforceRunModelProvider, which both doors call: every
 // earlier create step reads the same site config, so the door would never see
 // this read fail alone.
-func joinCreate(t *testing.T, k joinKind, sc joinScenario, path, body string) *httptest.ResponseRecorder {
+// policies are stored first, for a body that names one by policy_id.
+func joinCreate(t *testing.T, k joinKind, sc joinScenario, path, body string, policies ...types.RunPolicy) *httptest.ResponseRecorder {
 	t.Helper()
 	p := k.record(sc)
 	if !sc.chosen {
@@ -416,6 +417,9 @@ func joinCreate(t *testing.T, k joinKind, sc joinScenario, path, body string) *h
 		p.Harnesses = []types.ProviderHarness{{Harness: map[string]string{"claude-code": "codex-cli", "codex-cli": "claude-code"}[k.agent]}}
 	}
 	srv := providerRunFixture(t, types.SiteConfig{ModelProviders: providerBlock(p)}, &capStore{}, nil)
+	for _, pol := range policies {
+		srv.cfg.Store.(*integStore).policies[pol.ID] = pol
+	}
 	srv.cfg.AgentImages = map[string]string{"claude-code": "wardyn/agent-claude-code:local"}
 	srv.cfg.Runner = nil
 	sec := srv.cfg.Secrets.(*memSecrets)

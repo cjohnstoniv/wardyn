@@ -2804,7 +2804,12 @@ Nor may an `env_secret` grant: one that would set a variable a model credential
 rides in or a provider arm sets (`modelEnvNames`, `internal/api/provider_env.go`:
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`,
 `CLAUDE_CODE_OAUTH_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID`,
-and each arm's base-URL, model, region and config variables) is
+`ANTHROPIC_CUSTOM_HEADERS`, the Foundry, Vertex and Anthropic-on-AWS variables
+(`ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`,
+`ANTHROPIC_FOUNDRY_BASE_URL`, `ANTHROPIC_FOUNDRY_RESOURCE`,
+`CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_BASE_URL`,
+`ANTHROPIC_VERTEX_PROJECT_ID`, `ANTHROPIC_AWS_API_KEY`, `ANTHROPIC_AWS_BASE_URL`,
+`ANTHROPIC_PROFILE`), and each arm's base-URL, model, region and config variables) is
 refused with a 422 at create and Review, naming the grant and the variable, and
 dispatch refuses the run again if one arrives another way. Every other
 `env_secret` grant is placed as before, and with no block nothing changes.

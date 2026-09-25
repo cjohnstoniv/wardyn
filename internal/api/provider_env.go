@@ -46,6 +46,21 @@ var (
 	_ = modelEnvVar("ANTHROPIC_AUTH_TOKEN")
 	_ = modelEnvVar("CLAUDE_CODE_OAUTH_TOKEN")
 	_ = modelEnvVar("AWS_ACCESS_KEY_ID")
+	// What else Claude Code reads that carries a model credential or re-points
+	// it past the brokered route: extra request headers, and the Foundry,
+	// Vertex and Anthropic-on-AWS lanes (code.claude.com/docs/en/env-vars).
+	_ = modelEnvVar("ANTHROPIC_CUSTOM_HEADERS")
+	_ = modelEnvVar("ANTHROPIC_FOUNDRY_API_KEY")
+	_ = modelEnvVar("ANTHROPIC_FOUNDRY_AUTH_TOKEN")
+	_ = modelEnvVar("ANTHROPIC_FOUNDRY_BASE_URL")
+	_ = modelEnvVar("ANTHROPIC_FOUNDRY_RESOURCE")
+	_ = modelEnvVar("CLAUDE_CODE_USE_FOUNDRY")
+	_ = modelEnvVar("CLAUDE_CODE_USE_VERTEX")
+	_ = modelEnvVar("ANTHROPIC_VERTEX_BASE_URL")
+	_ = modelEnvVar("ANTHROPIC_VERTEX_PROJECT_ID")
+	_ = modelEnvVar("ANTHROPIC_AWS_API_KEY")
+	_ = modelEnvVar("ANTHROPIC_AWS_BASE_URL")
+	_ = modelEnvVar("ANTHROPIC_PROFILE")
 )
 
 // modelEnvSecretGrant reports the first env_secret grant in spec that would set

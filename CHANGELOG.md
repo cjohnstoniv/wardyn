@@ -551,7 +551,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   ruling 2026-09-25).** A run's model credential comes only from its provider, so a grant that
   would set a variable a model credential rides in, or one a provider arm sets —
   `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`,
-  `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID` and each arm's own base-URL, model, region and
+  `AWS_BEARER_TOKEN_BEDROCK`, `AWS_ACCESS_KEY_ID`, what else Claude Code reads that carries a model
+  credential or re-points it past the brokered route (`ANTHROPIC_CUSTOM_HEADERS`,
+  `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `ANTHROPIC_FOUNDRY_BASE_URL`,
+  `ANTHROPIC_FOUNDRY_RESOURCE`, `CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_VERTEX`,
+  `ANTHROPIC_VERTEX_BASE_URL`, `ANTHROPIC_VERTEX_PROJECT_ID`, `ANTHROPIC_AWS_API_KEY`,
+  `ANTHROPIC_AWS_BASE_URL`, `ANTHROPIC_PROFILE`) and each arm's own base-URL, model, region and
   config variables — is refused at create and Review (a 422 carrying `provider` and `kind` when one
   was chosen and a sentence naming the grant and the variable; no `reason`, since no sign-in
   repairs it), and dispatch refuses the run again before anything is authored (`run.create`

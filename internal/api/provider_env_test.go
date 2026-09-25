@@ -23,13 +23,15 @@ import (
 // model-credential variable is refused at create, Review and dispatch; any
 // other env_secret grant is placed as before, and with no block nothing changes.
 
-// joinModelEnvVars is, per arm, two variables the table refuses: the harness's
-// own API key variable, and one no arm of that harness sets.
+// joinModelEnvVars is, per arm, three variables the table refuses: the
+// harness's own API key variable, one no arm of that harness sets, and one an
+// arm of that harness sets that is not in the ruling's list, so only the
+// table, never a hard-coded list of credential names, refuses it.
 func joinModelEnvVars(agent string) []string {
 	if agent == "codex-cli" {
-		return []string{"OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN"}
+		return []string{"OPENAI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_BASE_URL"}
 	}
-	return []string{"ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID"}
+	return []string{"ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "ANTHROPIC_BASE_URL"}
 }
 
 // TestModelEnvNames_TheOwnersNamesAndEveryArmsOwn: the table holds the names
@@ -37,7 +39,10 @@ func joinModelEnvVars(agent string) []string {
 // setting a variable a grant could then set beside it.
 func TestModelEnvNames_TheOwnersNamesAndEveryArmsOwn(t *testing.T) {
 	for _, name := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
-		"AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID"} {
+		"AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID",
+		"ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_FOUNDRY_AUTH_TOKEN", "ANTHROPIC_FOUNDRY_BASE_URL",
+		"ANTHROPIC_FOUNDRY_RESOURCE", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_VERTEX_BASE_URL",
+		"ANTHROPIC_VERTEX_PROJECT_ID", "ANTHROPIC_AWS_API_KEY", "ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_PROFILE"} {
 		if !modelEnvNames[name] {
 			t.Errorf("%s is not in modelEnvNames", name)
 		}
@@ -177,6 +182,25 @@ func TestProviderEnvSecret_DoorsEveryArm(t *testing.T) {
 					if w.Code != map[string]int{"/api/v1/runs": http.StatusCreated, "/api/v1/runs/preflight": http.StatusOK}[path] {
 						t.Errorf("%s with an ordinary env_secret = %d %s", path, w.Code, w.Body.String())
 					}
+					// The same grant on a STORED policy the request names by
+					// policy_id: the check reads the resolved spec, however it came.
+					t.Run(path+" via policy_id", func(t *testing.T) {
+						stored := types.RunPolicy{ID: uuid.New(), Name: "stored", Spec: types.RunPolicySpec{
+							MinConfinementClass: types.CC2,
+							EligibleGrants:      []types.GrantSpec{envSecretGrant(name, "operator-model-key")},
+						}}
+						body := map[string]any{"agent": k.agent, "task": "t", "policy_id": stored.ID}
+						if sc.chosen {
+							body["model_provider"] = k.p.ID
+						}
+						b, _ := json.Marshal(body)
+						w := joinCreate(t, k, sc, path, string(b), stored)
+						var got errorBody
+						_ = json.Unmarshal(w.Body.Bytes(), &got)
+						if w.Code != http.StatusUnprocessableEntity || got != want {
+							t.Errorf("%s = %d %s\nwant 422 %+v", path, w.Code, w.Body.String(), want)
+						}
+					})
 				}
 			})
 		}
