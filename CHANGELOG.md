@@ -71,6 +71,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   pre-provisions the claim, but Wardyn still names it — so the editor now enables `hash` and `sub`
   there and disables only `email_local`, mirroring `ManagedBackendRejectsTemplate` /
   `ShareBackendRejectsTemplate` (`internal/types/user_drive.go`) through one shared predicate.
+- **`make lint` replayed golangci-lint findings from a deleted sibling worktree (#480).** The
+  linter's cache was shared machine-wide, keyed by absolute path, so a stale entry for a worktree
+  that no longer exists could fail a lint run that never touched that file. `make lint` now points
+  `GOLANGCI_LINT_CACHE` at a `.golangci-cache/` directory inside the current worktree (gitignored),
+  so one worktree's cache can never leak into another's.
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
