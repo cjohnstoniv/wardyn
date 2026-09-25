@@ -533,9 +533,10 @@ endpoint before launching.
 
 `wardynd` publishes to `ghcr.io/cjohnstoniv/wardynd` after CI passes on `main`
 ([.github/workflows/publish-image.yml](../.github/workflows/publish-image.yml));
-every release tag publishes all five images (`wardynd`, `wardyn-proxy`,
-`agent-base`, `agent-codex-cli`, `agent-aws-sso`) cosign-signed, each with an
-attested SBOM and build provenance — see [VERIFY.md](VERIFY.md) to check them —
+every release tag publishes all seven images (`wardynd`, `wardyn-proxy`,
+`agent-base`, `agent-codex-cli`, `agent-aws-sso`, `agent-vscode`,
+`agent-novnc`) cosign-signed, each with an attested SBOM and build
+provenance — see [VERIFY.md](VERIFY.md) to check them —
 ([.github/workflows/release.yml](../.github/workflows/release.yml) — see
 [RELEASING.md](../RELEASING.md) and the Helm chart's
 [README](../deploy/helm/wardyn/README.md)). This BYOA pipeline (`ci-run.sh`)

@@ -51,6 +51,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   model credential is not per person) has written `authz.denied` rows since 0.7.2 under a reason the
   documented closed enum did not list. It is now in `docs/OPERATIONS.md` and `docs/AUDIT-ACTIONS.md`,
   and the enum is checked from the registry instead of a source scanner that missed it (#736).
+- **GPL offer and image-doc follow-ups from the UI-image publishing PR (#357).** The
+  0.6.6–0.7.7 note in `deploy/images/third-party-gpl-historical.md` sat under a heading
+  whose opening sentence said conveyance had ceased, while the tags it covers are still
+  pullable; it now has its own heading stating the offer stands while they remain
+  pullable. The Makefile's image targets now stamp the build commit on every local image
+  (`org.opencontainers.image.revision`, suffixed `-dirty` when tracked files differed), and
+  `scripts/gpl-source-offer.sh` names that commit in a pre-publication (bootstrap) section,
+  read from the image's SBOM, instead of whatever HEAD was when the script ran. It refuses
+  an image built from a dirty tree or carrying no build commit. `scripts/check-image-pins.sh`
+  now fails if the hand-listed websockify entry in `gpl-source-offer.sh`'s `MANUAL_ENTRIES`
+  drifts from `deploy/images/novnc/Dockerfile`'s `WEBSOCKIFY_VERSION` pin or download URL.
+  `docs/CI.md` and `ROADMAP.md` now say seven images (a release now publishes
+  `agent-vscode` and `agent-novnc` too).
 - **The egress sidecar holds one Azure DevOps grant, and refuses to boot on more.** Its
   configuration carried a list of grants keyed by host, and every organisation shares
   `dev.azure.com`, so a second grant would silently overwrite the first one's organisation pin.
