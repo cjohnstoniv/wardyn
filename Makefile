@@ -171,9 +171,19 @@ test-race: cover-check ## Alias: race coverage now rides along inside the test-r
 # than the whole pg suite: -race over every pg package would multiply the job's
 # runtime for tests that are sequential by construction. -p 1 for test-report-pg's
 # reason — one shared database.
+#
+# ./internal/api/... gets its own narrower line: its pg suite is large and
+# mostly sequential, so -run picks only the goroutine-spawning proofs
+# (harnesscred_supersede_pg_test.go's TestPG_LoginSupersede… and
+# devices_ingest_pg_test.go's TestPG_DeviceIngest_…ConcurrentPushes…), which
+# were never raced by any gate (I-3). The F137 guard checks every
+# goroutine-spawning TestPG_ function matches some line's package AND -run.
+# ./internal/secretstore/pg/ rides the first line: its pg suite is small and
+# convert_pg_test.go's TestPG_ConvertV0_IsSingleWriter converts in a goroutine.
 test-race-pg: ## Race-detector pass over the Postgres-gated concurrency proofs (needs WARDYN_TEST_PG)
 	@echo "Running the Postgres-gated concurrency proofs under the race detector (requires WARDYN_TEST_PG)..."
-	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/broker/... ./internal/store/...
+	go test -race -p 1 -count=1 -run 'TestPG_' ./internal/broker/... ./internal/store/... ./internal/secretstore/pg/...
+	go test -race -p 1 -count=1 -run 'TestPG_.*(Concurrent|Supersede)' ./internal/api/...
 
 test-docker: ## Run all Go tests with -tags docker
 	@echo "Running Go tests (-tags docker)..."
