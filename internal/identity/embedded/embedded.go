@@ -227,7 +227,7 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 		// presented string: a healthy long run whose renews were refused through
 		// a control-plane outage holds a dead token and 401s every /internal/*
 		// call from then on, forever, with nothing in the audit trail naming the
-		// run (see internal/api's run.identity.expired). Expiry is checked here,
+		// run (see internal/api's run.identity.expire). Expiry is checked here,
 		// BEFORE revocation below, so an expired token never reads as a revoked
 		// one; the run id comes from the actor claim, which the signature above
 		// already covered. Everything else — a forged signature, a wrong
@@ -284,6 +284,22 @@ func (p *Provider) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 		return fmt.Errorf("embedded identity: revoke run %s: %w", runID, err)
 	}
 	p.audit(ctx, runID, p.spiffeIDString(runID), "identity.revoke", "", "success")
+	return nil
+}
+
+// RevokeJTI revokes a single token by its own jti, without revoking the
+// whole run (O2, least-privilege credentials): a revive uses this to retire
+// a run's OLD token the moment a fresh one is minted, distinct from RevokeRun
+// (the run-wide kill-switch cascade). Not part of identity.Provider — callers
+// reach it through their own narrow capability interface (internal/api's
+// jtiRevoker), the way every other optional capability in this tree is
+// reached, rather than widening the Provider contract for one caller.
+func (p *Provider) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error {
+	if err := p.revocations.RevokeJTI(ctx, jti, runID); err != nil {
+		p.audit(ctx, runID, p.spiffeIDString(runID), "identity.jti.revoke", jti, "failure")
+		return fmt.Errorf("embedded identity: revoke jti for run %s: %w", runID, err)
+	}
+	p.audit(ctx, runID, p.spiffeIDString(runID), "identity.jti.revoke", jti, "success")
 	return nil
 }
 

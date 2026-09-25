@@ -157,7 +157,8 @@ describe("SecretsScreen — Standing chip (SCM ladder rungs 2/3)", () => {
   });
 });
 
-describe("AddSecretDialog — provider chips (F5)", () => {
+describe("AddSecretDialog — provider chips", () => {
+  // ticket: F5
   it("offers provider chips on a blank-name open and prefills the Name field on click", async () => {
     render(<AddSecretDialog open onOpenChange={() => {}} />);
     const user = userEvent.setup();
@@ -202,7 +203,8 @@ describe("AddSecretDialog — provider chips (F5)", () => {
 // ladder/Credentials quick-add open this with lockName+host+lane instead of a
 // blank editable dialog. The blank-name/rotate paths above are pinned to their
 // EXISTING behavior and must stay green untouched by this mode.
-describe("AddSecretDialog — locked, host-aware mode (L2)", () => {
+describe("AddSecretDialog — locked, host-aware mode", () => {
+  // ticket: L2
   beforeEach(() => {
     setSecretMock.mockReset();
     setSecretMock.mockResolvedValue(undefined);
@@ -500,7 +502,8 @@ describe("AddSecretDialog — required fields + error announcement (ui-secretsPo
   });
 });
 
-describe("AddSecretDialog — reveal state (G3/P4)", () => {
+describe("AddSecretDialog — reveal state", () => {
+  // ticket: G3/P4
   // The dialog component stays mounted across close/open — only Radix's content
   // unmounts — so `reveal` survives unless the open-effect resets it. Without
   // that reset, the next Add/Rotate opens showing the previous plaintext.

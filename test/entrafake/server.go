@@ -191,6 +191,8 @@ type Server struct {
 	consentRequired     bool
 	interactionRequired bool
 	invalidGrant        bool
+	// omitIDToken answers the code grant without an id_token (SetOmitIDToken).
+	omitIDToken bool
 
 	codes   map[string]codeGrant
 	access  map[string][]string
@@ -373,6 +375,11 @@ func (s *Server) SetInteractionRequired(v bool) { s.set(func() { s.interactionRe
 // the shape a revoked or consumed grant has, and the only one a control plane
 // can read as "this credential is dead".
 func (s *Server) SetInvalidGrant(v bool) { s.set(func() { s.invalidGrant = v }) }
+
+// SetOmitIDToken makes the authorization_code grant answer 200 with tokens but
+// no id_token: a token endpoint that is not speaking OIDC, which a relying
+// party must refuse rather than sign anyone in on.
+func (s *Server) SetOmitIDToken(v bool) { s.set(func() { s.omitIDToken = v }) }
 
 func (s *Server) set(f func()) {
 	s.mu.Lock()
@@ -667,7 +674,10 @@ func (s *Server) tokenFromCode(w http.ResponseWriter, r *http.Request) {
 			"AADSTS50011: the redirect URI does not match the one the code was issued for")
 		return
 	}
-	s.issueTokens(w, grant.scopes, grant.scopes, grant.nonce, true, grant.who)
+	s.mu.Lock()
+	withIDToken := !s.omitIDToken
+	s.mu.Unlock()
+	s.issueTokens(w, grant.scopes, grant.scopes, grant.nonce, withIDToken, grant.who)
 }
 
 // tokenFromRefresh redeems a refresh token, and is where the two properties the

@@ -47,6 +47,13 @@ export const PEOPLE_STEP = {
 // header chip was their only consumer) — the netpol verdict lives on the
 // setup Environment step alone; see docs/design/workspace-providers-prompt.md
 // §7.6 for the retired rows.
+// M-6 (QM-8/§4.8, admin-member-modes-design.md, modes-b.html) — the admin
+// funnel's Finish step, once the demos and the "Your work" name both left it.
+export const SETUP = {
+  FINISH_TITLE: "Finish",
+  FINISH_SWITCH: "Switch to user view",
+} as const;
+
 export const SITE = {
   // B2: the site-config save path's own note — a change here does not reach a
   // run already going (the egress sidecar compiles its config once at sandbox
@@ -55,5 +62,13 @@ export const SITE = {
   // F22: the Network step's trusted-CA count, from /setup/status
   // (trusted_ca_certs) — the inline ternary (§5 #9), never a second helper.
   TRUSTED_CA_COUNT: (n: number) => `${n} trusted CA certificate${n === 1 ? "" : "s"}`,
+  // #492 — the same If-Match discipline sign-in-help-card.tsx's own
+  // SIGNIN_HELP.SAVED_ELSEWHERE names for its card, worded for a step rather
+  // than a card: setup-screen.tsx's saveSiteConfig throws this in place of
+  // the server's raw "If-Match does not match…" refusal on a 412, so the
+  // toast every corp-network save already shows (useSiteConfigStep's mutate)
+  // reads as a sentence an admin acts on, not an HTTP precondition.
+  SAVED_ELSEWHERE:
+    "Someone else saved this deployment's site config since this step last loaded it. Reloaded the latest — your change here wasn't saved; make it again if it still applies.",
 } as const;
 

@@ -16,13 +16,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// B4 — killing (or otherwise ending) a run used to strand its PENDING approvals:
-// the header read "1 waiting", the nav badge counted it, and the Approvals tab
-// rendered live Approve/Deny buttons on a run the same screen labelled Killed,
-// until the 24h stale sweeper eventually aged the row out. The terminal cascade
-// now cancels them. These tests drive BOTH call sites of the one function —
-// handleKillRun (which does not route through finalizeRunTail) and
-// finalizeRunTail itself — plus the deliberate exemption on failAndRevoke.
+// Killing (or otherwise ending) a run cancels its PENDING approvals. Stranded,
+// they would keep the header reading "1 waiting", the nav badge counting it, and
+// the Approvals tab rendering live Approve/Deny buttons on a run the same screen
+// labels Killed, until the 24h stale sweeper aged the row out. These tests drive
+// both call sites of the one function — handleKillRun (which does not route
+// through finalizeRunTail) and finalizeRunTail itself — plus the deliberate
+// exemption on failAndRevoke.
 
 // seedPendingApproval puts one PENDING approval on runID and returns its id.
 func seedPendingApproval(t *testing.T, fa *fakeApprovals, runID uuid.UUID) uuid.UUID {
@@ -38,7 +38,7 @@ func seedPendingApproval(t *testing.T, fa *fakeApprovals, runID uuid.UUID) uuid.
 	return ap.ID
 }
 
-// cancelledRows returns the approval.cancelled events recorded for runID.
+// cancelledRows returns the approval.cancel events recorded for runID.
 //
 // The row itself is written by approval.CancelForRun over the approval store's
 // own recorder (the same place approval.decide/approval.expire are written), so
@@ -49,12 +49,12 @@ func seedPendingApproval(t *testing.T, fa *fakeApprovals, runID uuid.UUID) uuid.
 // terminal writer calls the cascade, with the right reason, exactly once, and
 // that the exempt one does not call it at all.
 func cancelledRows(a *syncAudit, runID uuid.UUID) []types.AuditEvent {
-	return a.eventsFor(runID, "approval.cancelled")
+	return a.eventsFor(runID, "approval.cancel")
 }
 
 // TestKillRun_CancelsPendingApprovalsAndIsIdempotent: one kill of a RUNNING run
 // with one PENDING approval moves that approval to CANCELLED with
-// decided_by=system / reason=run_killed and emits exactly one approval.cancelled
+// decided_by=system / reason=run_killed and emits exactly one approval.cancel
 // audit row carrying count:1 — and a re-kill of the now-KILLED run re-runs the
 // cascade without moving or recording anything a second time.
 func TestKillRun_CancelsPendingApprovalsAndIsIdempotent(t *testing.T) {
@@ -200,7 +200,7 @@ func TestFailAndRevoke_FromRunningCancelsPendingApprovals(t *testing.T) {
 	if ap.Reason != "run_failed" {
 		t.Errorf("reason = %q, want run_failed (the transition that actually won)", ap.Reason)
 	}
-	// ONE cascade call, one row moved. The approval.cancelled audit row itself is
+	// ONE cascade call, one row moved. The approval.cancel audit row itself is
 	// emitted inside approval.CancelForRun (internal/approval), which this double
 	// stands in for — so the call is what this package can witness, exactly as the
 	// kill and completion cases above witness it.
@@ -244,7 +244,7 @@ func TestFailAndRevoke_EmitsNoApprovalCancellation(t *testing.T) {
 		t.Fatalf("state = %q, want FAILED", got)
 	}
 	if rows := cancelledRows(audit, runID); len(rows) != 0 {
-		t.Errorf("failAndRevoke emitted %d approval.cancelled rows; a run that never reached RUNNING has "+
+		t.Errorf("failAndRevoke emitted %d approval.cancel rows; a run that never reached RUNNING has "+
 			"no approval to cancel", len(rows))
 	}
 	if len(fa.cancelledCalls()) != 0 {
@@ -256,7 +256,7 @@ func TestFailAndRevoke_EmitsNoApprovalCancellation(t *testing.T) {
 	}
 }
 
-// ─── V1-D1: the THIRD terminal writer, and the decide-side backstop ──────────
+// V1-D1: the third terminal writer, and the decide-side backstop
 
 // TestIdleStopSeam_CancelsWithRunStopped drives CancelTerminalRunApprovals — the
 // exported seam cmd/wardynd's idle reaper (lifecycleStopper.StopRun) calls after

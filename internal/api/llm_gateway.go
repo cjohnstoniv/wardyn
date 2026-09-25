@@ -163,8 +163,9 @@ func ValidateBedrockBaseURL(raw, region string, allowTestEndpoints bool) (string
 // validateOneLLMGateway enforces the gateway URL's seven rules and returns its
 // normalized form (one trailing "/" trimmed; path prefix and port preserved
 // otherwise) for storage in api.Config.LLMGateways.
-// allowPlainHTTP relaxes rule 1 alone, and ONLY ValidateBedrockBaseURL ever
-// passes it true (gated on WARDYN_ALLOW_TEST_ENDPOINTS — see there). Every other
+// allowPlainHTTP relaxes rule 1 alone, and only the two Bedrock base URLs —
+// ValidateBedrockBaseURL and a model provider's (validateProviderBedrock) — ever
+// pass it true (gated on WARDYN_ALLOW_TEST_ENDPOINTS — see there). Every other
 // rule below applies identically in both postures.
 func validateOneLLMGateway(publicHost, raw string, allowPlainHTTP bool) (string, error) {
 	u, err := url.Parse(raw)
@@ -284,6 +285,12 @@ func (s *Server) anthropicGatewayHostPort() string {
 	if !ok {
 		return ""
 	}
+	return gatewayHostPort(base)
+}
+
+// gatewayHostPort is gatewayHost with its port attached (default 443), or ""
+// when base has no host.
+func gatewayHostPort(base string) string {
 	u, err := url.Parse(base)
 	if err != nil || u.Hostname() == "" {
 		return ""

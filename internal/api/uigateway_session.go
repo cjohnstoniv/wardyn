@@ -49,7 +49,7 @@ import (
 // SAME sentence a stale cookie already gets ("open the app again from its run
 // page"), because the human's next action is identical and the difference —
 // off-boarded, revoked, or simply expired — is the audit log's to record (the
-// ui.auth/denied `reason`), not the refused browser's to learn.
+// ui.authorize/denied `reason`), not the refused browser's to learn.
 const (
 	// uiSessionNoLongerAuthorizedMsg is the 403 body when role/ownership or the
 	// revoke cutoff turns a still-valid cookie down at connect time.
@@ -61,7 +61,7 @@ const (
 	uiSessionUnverifiableMsg = "could not verify this UI session; try again"
 )
 
-// The ui.auth/denied `reason` values a refused re-check writes. Not DRAFT
+// The ui.authorize/denied `reason` values a refused re-check writes. Not DRAFT
 // strings: they are audit DATA, read by a SIEM rule, never rendered to a human
 // — so they are stable identifiers rather than copy.
 const (
@@ -246,7 +246,7 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // own role is not — WARDYN_UI_SANDBOX_SESSION_TTL is the bound on it, the same
 // bound WARDYN_SSH_ROLE_TTL is for the SSH admin override.
 //
-// Every refusal writes one ui.auth/denied naming which arm refused: "someone is
+// Every refusal writes one ui.authorize/denied naming which arm refused: "someone is
 // driving a revoked relay credential" is exactly the thing an operator must be
 // able to see in the trail, and it is otherwise invisible between that
 // session's last ui.open and its ui.close.
@@ -290,11 +290,11 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg string) *uiDialError {
 	// The refusal itself is never bounded; only its audit emit is. A refused
 	// session that keeps retrying (an editor tab polling on a revoked cookie)
-	// would otherwise append one identical ui.auth/denied row per request —
-	// the same token bucket that bounds auth.failed keeps the append-only log
+	// would otherwise append one identical ui.authorize/denied row per request —
+	// the same token bucket that bounds auth.fail keeps the append-only log
 	// honest here too.
 	if s.authFailedLimiter.allow(s.cfg.Now()) {
-		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.auth", sess.App, "denied",
+		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.authorize", sess.App, "denied",
 			map[string]any{"app": sess.App, "port": sess.Port, "reason": reason})
 	}
 	return &uiDialError{status: status, msg: msg}

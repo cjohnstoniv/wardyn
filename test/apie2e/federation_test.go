@@ -34,6 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -275,6 +276,9 @@ func laptopCursor(t *testing.T, laptop *pgxpool.Pool) int64 {
 }
 
 func TestFederation_OneAuditStream(t *testing.T) {
+	// the one-audit-stream proof (#104), falsifiable only with a database it can
+	// create and a role that can edit and purge the laptop's table.
+	testfloor.Mark(t, "pg")
 	ctx := context.Background()
 	orgDSN, laptopDSN := throwawayDSN(t), throwawayDSN(t)
 
@@ -356,7 +360,7 @@ func TestFederation_OneAuditStream(t *testing.T) {
 		if n := len(orgOrigins(t, org, cred.DeviceID)); n != fedRows {
 			t.Fatalf("organisation holds %d rows for the device after a full re-send, want %d", n, fedRows)
 		}
-		if n := orgAuditCount(t, org, "device.audit.chain_reset", cred.DeviceID, "success", ""); n != 0 {
+		if n := orgAuditCount(t, org, "device.chain.reset", cred.DeviceID, "success", ""); n != 0 {
 			t.Fatalf("a re-send recorded %d chain resets", n)
 		}
 		requireChainOK(t, "organisation", org, fedRows)
@@ -425,7 +429,7 @@ func TestFederation_OneAuditStream(t *testing.T) {
 			return s.AckedSeq == newHead && s.LastError == ""
 		})
 
-		if n := orgAuditCount(t, org, "device.audit.chain_reset", cred.DeviceID, "success", ""); n != resets {
+		if n := orgAuditCount(t, org, "device.chain.reset", cred.DeviceID, "success", ""); n != resets {
 			t.Fatalf("organisation recorded %d chain resets, want %d", n, resets)
 		}
 		got := orgOrigins(t, org, cred.DeviceID)

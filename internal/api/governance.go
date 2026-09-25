@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -186,7 +187,7 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 			return "limits.autonomy_rubric." + err.Error()
 		}
 	}
-	return ""
+	return runLimitsRefusal(l.RunLimits)
 }
 
 // writeGovernanceProfile is the shared body of POST and PUT: bound the eligible
@@ -344,6 +345,12 @@ func validateGovernanceAssignment(a *types.GovernanceAssignment) error {
 			return fmt.Errorf("subject: must be printable ASCII — a group subject is matched against the login-time group snapshot, which carries printable ASCII only, so this value can never match anyone")
 		}
 		a.Subject = subject
+	} else if a.SubjectType == types.CapabilitySubjectUserType {
+		// Verbatim, as validateCapabilityGrant keeps it: a type id is never
+		// folded, and existence is the handler's check.
+		if !oidc.UserTypeIDWellFormed(a.Subject) {
+			return fmt.Errorf("subject: %q is not a user type id", a.Subject)
+		}
 	} else {
 		// The USER half is canonicalUserSubject for the same guard-before-fold
 		// reason (capabilities.go): a bare ToLower folds U+212A onto ASCII 'k'
@@ -378,6 +385,9 @@ func (s *Server) handleUpsertGovernanceAssignment(w http.ResponseWriter, r *http
 	}
 	if err := validateGovernanceAssignment(&a); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid assignment: "+err.Error())
+		return
+	}
+	if !s.userTypeSubjectExists(w, r, a.SubjectType, a.Subject) {
 		return
 	}
 	a.ID = uuid.New()
@@ -462,6 +472,8 @@ const maxGovernancePreviewClaims = 256
 type governancePreviewRequest struct {
 	UserSubjects []string `json:"user_subjects,omitempty"`
 	Groups       []string `json:"groups,omitempty"`
+	// UserType is the previewed person's type id; "" previews no type tier.
+	UserType string `json:"user_type,omitempty"`
 }
 
 // governancePreviewResponse names the profile that would bind a principal
@@ -519,7 +531,7 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups)
+	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(r.Context(), users, groups, strings.TrimSpace(req.UserType))
 	if errors.Is(err, store.ErrNotFound) || (err == nil && p == nil) {
 		writeJSON(w, http.StatusOK, governancePreviewResponse{})
 		return
@@ -647,14 +659,15 @@ const groupsSnapshotStaleMsg = "groups_snapshot_stale: your group membership sna
 	"and this deployment assigns governance profiles by group — sign in again (or re-mint your API token) so your ceiling can be resolved"
 
 // writeCeilingError answers an effectiveCeiling failure at an HTTP site: 403
-// for the stale/truncated snapshot, 500 for everything else.
+// for the stale/truncated snapshot or an unknown user type, 500 for everything
+// else.
 //
 // 500 is the point for the everything-else arm. A store failure means the
 // ceiling is unknown, and the adjacent GetSiteConfig idiom — log it, carry on
 // with the zero value — must NOT be copied here: carrying on means silently
 // substituting the deployment ceiling for a profile that may be far narrower,
 // which is a widening triggered by a database hiccup.
-func writeCeilingError(w http.ResponseWriter, err error) {
+func writeCeilingError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errGroupsSnapshotStale) {
 		// Identical to err.Error() now that the sentinel carries the message;
 		// spelled out because THIS is the site that defines what the body is,
@@ -662,7 +675,7 @@ func writeCeilingError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), "resolve governance ceiling", err))
+	writeServerError(w, r, "resolve governance ceiling", err)
 }
 
 // writeCeilingErrorPrefixed is writeCeilingError for a seam that has its own
@@ -680,12 +693,12 @@ func writeCeilingError(w http.ResponseWriter, err error) {
 //
 // Everything else keeps the seam's own prefix over the underlying error, which
 // is the 500 an operator reads, not the member.
-func writeCeilingErrorPrefixed(w http.ResponseWriter, prefix string, err error) {
+func writeCeilingErrorPrefixed(w http.ResponseWriter, r *http.Request, prefix string, err error) {
 	if errors.Is(err, errGroupsSnapshotStale) {
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), strings.TrimRight(prefix, ": "), err))
+	writeServerError(w, r, strings.TrimRight(prefix, ": "), err)
 }
 
 // ceilingErrorStatus is writeCeilingError's status half, for the two seams that
@@ -693,7 +706,7 @@ func writeCeilingErrorPrefixed(w http.ResponseWriter, prefix string, err error) 
 // One mapping, so a resolver failure cannot answer 403 at one site and 500 at
 // the next for the same cause.
 func ceilingErrorStatus(err error) int {
-	if errors.Is(err, errGroupsSnapshotStale) {
+	if errors.Is(err, errGroupsSnapshotStale) || errors.Is(err, errUserTypeUnknown) {
 		return http.StatusForbidden
 	}
 	return http.StatusInternalServerError
@@ -742,7 +755,7 @@ func ceilingErrorStatus(err error) int {
 // grounds — "the alternative buys latency at the cost of the one property
 // that matters here, which is that no site can forget to ask." Latency was
 // never the real cost: three independent, untransacted reads per member
-// create (denyMemberGovernance, resolveRunPolicy, filterMemberGrants) plus
+// create (denyUserGovernance, resolveRunPolicy, filterUserGrants) plus
 // dispatch's fourth can return DIFFERENT ANSWERS if a security admin narrows
 // a profile mid-request, and resolveRunPolicy asserts the opposite in words
 // ("a create must never resolve two different ceilings for one request").
@@ -751,7 +764,7 @@ func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error
 	// One ceiling per request. The memo is checked first and filled on the way
 	// out, so every site in one request sees the SAME answer. A member create
 	// alone takes THREE independent, uncached, untransacted reads
-	// (denyMemberGovernance -> resolveRunPolicy -> filterMemberGrants) plus
+	// (denyUserGovernance -> resolveRunPolicy -> filterUserGrants) plus
 	// dispatch a fourth, so without the memo a security admin narrowing a
 	// profile mid-flight — the incident-response
 	// action — could land a run whose egress was clamped under the PRE-narrowing
@@ -779,30 +792,37 @@ func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling
 		return deployment, nil
 	}
 
-	users, groups, stale := capabilitySubjects(ctx)
+	subj, err := s.callerSubjects(ctx)
+	if err != nil {
+		return governanceCeiling{}, err
+	}
 	// Truncated counts as stale. sessionGroups sorts the snapshot and
 	// drops its alphabetically-last entries at the cookie byte cap, so a member
 	// in enough groups holds a snapshot that is present, non-nil and INCOMPLETE
 	// — and the group whose assignment walls them is exactly as likely to be
 	// missing as any other. Without this the tier evaporates in silence: no
 	// refusal, no audit, just the deployment ceiling.
-	if stale || oidcGroupsTruncatedFromContext(ctx) {
+	if subj.stale || oidcGroupsTruncatedFromContext(ctx) {
 		// The unusable half must not be MATCHED against. Passing a truncated
 		// list would still let a surviving group's row win, which is not wrong
 		// on its own — but it makes the refusal below depend on which groups
 		// happened to fit, so the same human with the same claims could be
 		// refused or served depending on alphabetical luck. Resolve on the
 		// answerable identity only, and let the refusal cover the rest.
-		return s.ceilingWithUnusableGroups(ctx, users, deployment)
+		return s.ceilingWithUnusableGroups(ctx, subj.users, subj.userType, deployment)
 	}
 
-	p, _, err := s.cfg.Store.ResolveGovernanceProfile(ctx, users, groups)
+	p, _, err := s.cfg.Store.ResolveGovernanceProfile(ctx, subj.users, subj.groups, subj.userType)
 	return s.ceilingFromProfile(p, err, deployment)
 }
 
 // ceilingWithUnusableGroups is effectiveCeiling's step 4: the caller's group
 // identity cannot be evaluated, so resolve on their user subjects alone and
 // decide whether that answer is trustworthy anyway.
+//
+// The user type is answerable (it is stamped, not a snapshot), so it is matched;
+// but its tier sits BELOW group, so a type-tier winner is untrustworthy for the
+// same reason an all-tier one is — a group row could have outranked it.
 //
 // It is trustworthy in exactly two shapes, and the scoping is the whole point
 // (a blanket 403 here would lock out every pre-0.6 cookie on every deployment,
@@ -822,8 +842,8 @@ func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling
 // HasGroupTierAssignments stays a SEPARATE read, deliberately: the case that
 // most needs it is the one where the resolver matched NOTHING, and a zero-row
 // result carries no columns to have piggybacked the answer on.
-func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, deployment governanceCeiling) (governanceCeiling, error) {
-	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(ctx, users, nil)
+func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, userType string, deployment governanceCeiling) (governanceCeiling, error) {
+	p, tier, err := s.cfg.Store.ResolveGovernanceProfile(ctx, users, nil, userType)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return governanceCeiling{}, fmt.Errorf("api: resolve governance profile: %w", err)
 	}
@@ -857,21 +877,13 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 		// Once per request, not once per seam, because effectiveCeiling memoizes
 		// (ceilingMemo): a create that asks three times is one denial, which is
 		// what an operator counting denials means.
-		// Guarded on the SINK, not merely handed to recordAudit's own nil check:
-		// auditEvent is evaluated as recordAudit's ARGUMENT, so a server with no
-		// recorder would still build the event — and stamp it from cfg.Now,
-		// which a Server assembled without New() does not have. Nothing records
-		// on such a build by definition, so the cheapest correct thing is not to
-		// build the row at all.
 		// Not for a display read (isDisplayRead, user_drives_resolve.go). GET
 		// /me resolves the ceiling to answer user_drive_denied_by_profile, which
 		// would otherwise write this row once per console poll for a member who
 		// never asked for a run — a denial count that grows with page views.
 		// Every enforcement caller reaches here unmarked and still records.
-		if s.cfg.Audit != nil && !isDisplayRead(ctx) {
-			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
-				"authz.denied", "governance.ceiling", "denied",
-				mustJSON(map[string]any{"reason": "groups_snapshot_stale"})))
+		if !isDisplayRead(ctx) {
+			s.recordRefusal(ctx, nil, authz.Deny(authz.ReasonGroupsSnapshotStale, "governance.ceiling", ""))
 		}
 		return governanceCeiling{}, errGroupsSnapshotStale
 	}
@@ -900,7 +912,29 @@ func (s *Server) ceilingFromProfile(p *types.GovernanceProfile, err error, deplo
 	spec := p.Ceiling.Clone()
 	kept, warns := reintersectGovernanceGrants(spec.EligibleGrants, s.cfg.DefaultPolicy.EligibleGrants, p.Name)
 	spec.EligibleGrants = kept
+	warns = append(warns, droppedPushRulesWarning(spec, s.cfg.DefaultPolicy, p.Name)...)
 	return governanceCeiling{Spec: spec, Limits: p.Limits, Profile: p, Warnings: warns}, nil
+}
+
+// droppedPushRulesWarning is ceilingFromProfile's push_rules mirror of
+// reintersectGovernanceGrants's grant-kind drop: when the deployment default
+// carries push_rules and this profile's own ceiling does not, the deployment's
+// content rules silently stop applying to this profile's members.
+//
+// clampPushRules itself cannot say this — it clamps an already-resolved
+// ceiling and never sees what the deployment default would have said — and a
+// bare ceiling with no push_rules is otherwise indistinguishable from "the
+// operator deliberately left this narrower". This is the one seam where
+// resolving a profile assignment sees BOTH specs at once, so it is the one
+// place the drop can be said out loud (see #272).
+func droppedPushRulesWarning(profile, deployment types.RunPolicySpec, profileName string) []string {
+	if deployment.PushRules.IsSet() && !profile.PushRules.IsSet() {
+		return []string{fmt.Sprintf(
+			"governance profile %q: push_rules dropped — this profile's ceiling sets none, "+
+				"so the deployment default's content rules do not apply to members of it",
+			profileName)}
+	}
+	return nil
 }
 
 // reintersectGovernanceGrants re-applies the monotone-⊆ bound at RESOLVE time,

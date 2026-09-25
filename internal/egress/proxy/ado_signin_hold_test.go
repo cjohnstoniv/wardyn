@@ -142,12 +142,16 @@ func TestMITMHold_BodyAfterAHoldGetsAFreshReadDeadline(t *testing.T) {
 	p.mitmPlaintext = map[string]bool{plaintextKey(host, 443): true}
 	cp := newSignInControlPlane(t, "renewed")
 	// 25 polls of 50 ms: a hold past both the 250 ms ReadTimeout below and
-	// the one-second deadline the gate's re-arm set before it.
+	// the one-second deadline the gate's re-arm set before it. holdDone
+	// closes on the 25th (APPROVED) poll, so the test writes the body the
+	// instant the hold ends instead of guessing how long that takes.
 	pending := make([]types.ApprovalState, 24)
 	for i := range pending {
 		pending[i] = types.ApprovalPending
 	}
-	lapse(t, inj, host, cp, &fakeApprovalReader{steps: steps(append(pending, types.ApprovalApproved)...)})
+	holdDone := make(chan struct{})
+	reader := &fakeApprovalReader{steps: steps(append(pending, types.ApprovalApproved)...), notifyAfter: 25, notifyCh: holdDone}
+	lapse(t, inj, host, cp, reader)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -168,7 +172,11 @@ func TestMITMHold_BodyAfterAHoldGetsAFreshReadDeadline(t *testing.T) {
 	if _, err := io.WriteString(conn, "POST /upload HTTP/1.1\r\nHost: "+host+"\r\nContent-Length: 14\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(1500 * time.Millisecond) // the body follows the hold, as a streamed upload does
+	select {
+	case <-holdDone: // the body follows the hold, as a streamed upload does
+	case <-time.After(10 * time.Second):
+		t.Fatal("the credential hold never reached its final poll")
+	}
 	if _, err := io.WriteString(conn, payload); err != nil {
 		t.Fatal(err)
 	}

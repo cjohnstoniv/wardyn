@@ -8,7 +8,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { EpisodeRow, StepEpisodes, EpisodeList, catalogSummary } from "./episode-card";
 import { EPISODES, type Episode } from "../../../lib/demo-videos";
-import * as useDemoVideoBaseUrlModule from "../../../lib/hooks/use-demo-video-base-url";
+import * as useDemoVideoBaseUrlModule from "../../wardyn/operator-context";
 
 const shipped: Episode = {
   id: "01",

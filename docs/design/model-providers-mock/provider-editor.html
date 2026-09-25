@@ -1,0 +1,327 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Provider editor mock</title>
+<!--
+  Model-providers mock, the provider editor (#537, MP-19a) · static, for owner review.
+  Draws design §5.2 states E1, E2, E5, E6, E7, E8 and E9 for the key and endpoint kinds, plus
+  the kind step, saving and saved. Every PRODUCT string is canon.html's row, byte for byte:
+  most rows are packet B's frozen strings (approved 2026-09-22); rows tagged New there are
+  this packet's and wait on the decisions on index.html.
+
+  SCAFFOLD vs PRODUCT: the sticky bar, the `.tag` state labels, the `.varlabel` strips and
+  these comments are review scaffolding. Everything inside a `.frame` is the product.
+  One teal button per surface: Save in the editor; Remove (destructive) in E7.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Model providers — the provider editor (#537)</h1>
+    <div class="sub">Key and endpoint kinds, "Use with", and every state #537 names. Static: nothing here is wired.</div>
+  </div>
+  <nav><a href="index.html">Packet</a><a class="cur" href="provider-editor.html">Provider editor</a><a href="door-cards.html">Refusals and doors</a><a href="canon.html">Canon</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- ===== KIND STEP ===== -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>State 1</span><b>The kind step — "Add model provider" on Settings → Model providers opens it. Picking a kind moves on; there is no Next.</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add model provider</h3>
+        <div class="f" style="margin-top:14px;display:flex;flex-direction:column;gap:6px">
+          <label style="font-size:12px;font-weight:500">What kind of model provider?</label>
+          <div class="opts">
+            <div class="o">Anthropic API key</div>
+            <div class="o">OpenAI API key</div>
+            <div class="o">Your own endpoint</div>
+          </div>
+        </div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Decision 1, the other option</b> — hold #537 until #538 ships, so the step opens with all five kinds at once (packet B's list and its E4 row)</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add model provider</h3>
+        <div class="f" style="margin-top:14px;display:flex;flex-direction:column;gap:6px">
+          <label style="font-size:12px;font-weight:500">What kind of model provider?</label>
+          <div class="opts">
+            <div class="o off">Claude subscription<span class="why">Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet. See Operations → Claude sign-in image.</span></div>
+            <div class="o">Amazon Bedrock</div>
+            <div class="o">Anthropic API key</div>
+            <div class="o">OpenAI API key</div>
+            <div class="o">Your own endpoint</div>
+          </div>
+        </div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== E1 ===== -->
+<section class="state">
+  <div class="tag"><span>State 2 · E1</span><b>A new key provider, empty then filled. No key field: each person adds their own. The name starts as the kind label (packet A, QA-5); the one compatible agent starts ticked.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Empty</b> — straight after the kind step</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add model provider</h3>
+        <p class="provides">Each person adds their own key.</p>
+        <div class="form one">
+          <div class="f"><label>Name</label><div class="ctl">Anthropic API key</div><div class="hint wide">What people see when they choose it.</div></div>
+          <div class="f"><label>Route through a gateway (optional)</label><div class="ctl mono ph">https://</div><div class="hint wide">Send requests to your gateway instead of <span class="mono">api.anthropic.com</span>. Each person's key goes with them, and they are told where it goes.</div></div>
+        </div>
+        <p class="fieldset-t">Use with</p>
+        <div class="hx"><div class="hh"><span class="box on" aria-hidden="true"></span><span class="nm">Claude Code</span><span class="chev">▸</span></div></div>
+        <div class="hx off"><div class="hh"><span class="box" aria-hidden="true"></span><span class="nm">Codex CLI<span class="why">Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.</span></span></div></div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Filled</b> — routed through a gateway, Claude Code opened to set a model</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add model provider</h3>
+        <p class="provides">Each person adds their own key.</p>
+        <div class="form one">
+          <div class="f"><label>Name</label><div class="ctl">Anthropic via LLM gateway</div><div class="hint wide">What people see when they choose it.</div></div>
+          <div class="f"><label>Route through a gateway (optional)</label><div class="ctl mono">https://llm.corp.example</div><div class="hint wide">Send requests to your gateway instead of <span class="mono">api.anthropic.com</span>. Each person's key goes with them, and they are told where it goes.</div></div>
+        </div>
+        <p class="fieldset-t">Use with</p>
+        <div class="hx">
+          <div class="hh"><span class="box on" aria-hidden="true"></span><span class="nm">Claude Code</span><span class="chev">▾</span></div>
+          <div class="hb"><div class="form one"><div class="f"><label>Model</label><div class="ctl mono">acme-claude-large</div><div class="hint wide">Leave empty for the agent's own default.</div></div></div></div>
+        </div>
+        <div class="hx off"><div class="hh"><span class="box" aria-hidden="true"></span><span class="nm">Codex CLI<span class="why">Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.</span></span></div></div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== E2 ===== -->
+<section class="state">
+  <div class="tag"><span>State 3 · E2</span><b>A new endpoint serving both agents (case c), empty then filled. No token field: each person's token is sent the way the header and format say. Each harness speaks its own API, so there is no dialect setting.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Empty</b> — both compatible agents start ticked; their settings are open because Path is required and empty (packet B, QB-2)</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add model provider</h3>
+        <p class="provides">Each person adds their own token. You set how it is sent.</p>
+        <div class="form one">
+          <div class="f"><label>Name</label><div class="ctl">Your own endpoint</div><div class="hint wide">What people see when they choose it.</div></div>
+          <div class="f"><label>Base URL<span class="req" aria-hidden="true">*</span></label><div class="ctl mono ph">https://</div><div class="hint wide">https only. Wardyn sends this provider's requests here.</div></div>
+        </div>
+        <div class="form two">
+          <div class="f"><label>Auth header</label><div class="ctl mono">Authorization</div></div>
+          <div class="f"><label>Value format</label><div class="ctl mono">Bearer {token}</div></div>
+        </div>
+        <p class="fieldset-t">Use with</p>
+        <div class="hx">
+          <div class="hh"><span class="box on" aria-hidden="true"></span><span class="nm">Claude Code</span><span class="chev">▾</span></div>
+          <div class="hb"><div class="form two">
+            <div class="f"><label>Model</label><div class="ctl mono ph"></div><div class="hint">Leave empty for the agent's own default.</div></div>
+            <div class="f"><label>Path<span class="req" aria-hidden="true">*</span></label><div class="ctl mono ph">/</div><div class="hint">Where your endpoint serves the Anthropic Messages API for Claude Code, e.g. /anthropic.</div></div>
+          </div></div>
+        </div>
+        <div class="hx">
+          <div class="hh"><span class="box on" aria-hidden="true"></span><span class="nm">Codex CLI</span><span class="chev">▾</span></div>
+          <div class="hb"><div class="form two">
+            <div class="f"><label>Model</label><div class="ctl mono ph"></div><div class="hint">Leave empty for the agent's own default.</div></div>
+            <div class="f"><label>Path<span class="req" aria-hidden="true">*</span></label><div class="ctl mono ph">/</div><div class="hint">Where your endpoint serves the OpenAI Responses API for Codex CLI, e.g. /v1.</div></div>
+          </div></div>
+        </div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Filled</b> — packet B's E2, as approved</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add model provider</h3>
+        <p class="provides">Each person adds their own token. You set how it is sent.</p>
+        <div class="form one">
+          <div class="f"><label>Name</label><div class="ctl">Corp gateway</div><div class="hint wide">What people see when they choose it.</div></div>
+          <div class="f"><label>Base URL<span class="req" aria-hidden="true">*</span></label><div class="ctl mono">https://gateway.corp.example</div><div class="hint wide">https only. Wardyn sends this provider's requests here.</div></div>
+        </div>
+        <div class="form two">
+          <div class="f"><label>Auth header</label><div class="ctl mono">Authorization</div></div>
+          <div class="f"><label>Value format</label><div class="ctl mono">Bearer {token}</div></div>
+        </div>
+        <p class="fieldset-t">Use with</p>
+        <div class="hx">
+          <div class="hh"><span class="box on" aria-hidden="true"></span><span class="nm">Claude Code</span><span class="chev">▾</span></div>
+          <div class="hb"><div class="form two">
+            <div class="f"><label>Model</label><div class="ctl mono ph"></div><div class="hint">Leave empty for the agent's own default.</div></div>
+            <div class="f"><label>Path<span class="req" aria-hidden="true">*</span></label><div class="ctl mono">/anthropic</div><div class="hint">Where your endpoint serves the Anthropic Messages API for Claude Code, e.g. /anthropic.</div></div>
+          </div></div>
+        </div>
+        <div class="hx">
+          <div class="hh"><span class="box on" aria-hidden="true"></span><span class="nm">Codex CLI</span><span class="chev">▾</span></div>
+          <div class="hb"><div class="form two">
+            <div class="f"><label>Model</label><div class="ctl mono">acme-codex-large</div><div class="hint">Leave empty for the agent's own default.</div></div>
+            <div class="f"><label>Path<span class="req" aria-hidden="true">*</span></label><div class="ctl mono">/v1</div><div class="hint">Where your endpoint serves the OpenAI Responses API for Codex CLI, e.g. /v1.</div></div>
+          </div></div>
+        </div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== E5 ===== -->
+<section class="state">
+  <div class="tag"><span>State 4 · E5</span><b>An agent that can't be ticked — disabled with the catalog's reason, word for word, never hidden</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add model provider</h3>
+        <p class="provides">Each person adds their own key.</p>
+        <div class="form one">
+          <div class="f"><label>Name</label><div class="ctl">OpenAI API key</div><div class="hint wide">What people see when they choose it.</div></div>
+          <div class="f"><label>Route through a gateway (optional)</label><div class="ctl mono ph">https://</div><div class="hint wide">Send requests to your gateway instead of <span class="mono">api.openai.com</span>. Each person's key goes with them, and they are told where it goes.</div></div>
+        </div>
+        <p class="fieldset-t">Use with</p>
+        <div class="hx off"><div class="hh"><span class="box" aria-hidden="true"></span><span class="nm">Claude Code<span class="why">Claude Code speaks the Anthropic API only — an OpenAI key can't drive it. Not a setting.</span></span></div></div>
+        <div class="hx"><div class="hh"><span class="box on" aria-hidden="true"></span><span class="nm">Codex CLI</span><span class="chev">▸</span></div></div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== SAVING / SAVED ===== -->
+<section class="state">
+  <div class="tag"><span>State 5</span><b>Saving, then saved. Saving: Save is disabled at once, with a spinner after ~200ms and no label swap (CONSOLE-RULES §7). Saved: the editor closes back to the list, with a toast (decision 4).</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Saving</b> — the footer only; the form above it is unchanged</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add model provider</h3>
+        <p class="provides">Each person adds their own token. You set how it is sent.</p>
+        <div class="form one"><div class="f"><label>Name</label><div class="ctl">Corp gateway</div></div></div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button" disabled><span class="spin" aria-hidden="true"></span>Save</button></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Saved</b> — the toast over Settings → Model providers</div>
+    <div class="pad"><div class="toast"><b>Provider saved.</b></div></div>
+  </div>
+</section>
+
+<!-- ===== E6 ===== -->
+<section class="state">
+  <div class="tag"><span>State 6 · E6</span><b>Save refused — the console's heading over the server's 400, verbatim. The editor stays open with what was typed. Three real 400s from <span class="mono">internal/api/model_providers.go</span>.</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <h3>Add model provider</h3>
+        <p class="provides">Each person adds their own token. You set how it is sent.</p>
+        <div class="form one">
+          <div class="f"><label>Name</label><div class="ctl">Corp gateway</div></div>
+          <div class="f"><label>Base URL<span class="req" aria-hidden="true">*</span></label><div class="ctl mono">http://gateway.corp.example</div><div class="hint wide">https only. Wardyn sends this provider's requests here.</div></div>
+        </div>
+        <div class="note red" style="max-width:none;margin-top:16px"><b>This provider can't be saved as written</b><span>model_providers: "corp-gateway": base_url: must be https:// (got "http://gateway.corp.example")</span></div>
+        <div class="foot"><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Two more 400s</b> — same heading, the server's body under it</div>
+    <div class="pad">
+      <div class="note red" style="max-width:none;margin-top:0"><b>This provider can't be saved as written</b><span>model_providers: "corp-gateway": codex-cli: path "v1" must start with a single / and carry no query, fragment, backslash, whitespace or .. segment</span></div>
+      <div class="note red" style="max-width:none"><b>This provider can't be saved as written</b><span>model_providers: "corp-gateway": claude-code: model "acme large" is not a model id — letters, digits and ._:/@+[]- , at most 256 characters</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== EDIT + E7 + E8 ===== -->
+<section class="state">
+  <div class="tag"><span>State 7 · E7 / E8</span><b>Editing an existing provider, and removing it. Title: the provider's name, its kind label beside it as a chip; the provider id is never shown (decision 3). Remove is outline; its confirm carries the weight.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Edit</b> — the same form, with Remove on the left of the footer</div>
+    <div class="dlgwrap">
+      <div class="dlg lg">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center"><h3>Corp gateway</h3><span class="chip neutral">Your own endpoint</span></div>
+        <p class="provides">Each person adds their own token. You set how it is sent.</p>
+        <div class="form one"><div class="f"><label>Name</label><div class="ctl">Corp gateway</div><div class="hint wide">What people see when they choose it.</div></div></div>
+        <div class="foot"><button class="btn" type="button">Remove</button><span class="grow"></span><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>E7 · Remove confirm</b> — only when it is no agent's default. Token wording (approved), then the key wording (decision 2)</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Remove Corp gateway?</h3>
+        <p>Runs that chose it are refused until they choose another. Everyone's tokens for it are deleted.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button">Remove</button></div>
+      </div>
+      <div class="dlg" style="margin-top:16px">
+        <h3>Remove Anthropic API key?</h3>
+        <p>Runs that chose it are refused until they choose another. Everyone's keys for it are deleted.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button">Remove</button></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>E8 · Remove blocked</b> — it is still an agent's default. Turning it off stays possible from the list (packet A, A7); only removing is blocked</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Remove Corp gateway?</h3>
+        <p>Corp gateway is the default for Claude Code — choose another default first.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button" disabled>Remove</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== E9 ===== -->
+<section class="state">
+  <div class="tag"><span>State 8 · E9</span><b>Changing where it sends requests, or how (rule 8) — raised on Save by a change to the base URL, the route-through URL, a path or the auth header. Everyone's credential for it is deleted.</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Tokens</b> — packet B's approved wording, with the count (QB-4)</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Change where Corp gateway sends requests?</h3>
+        <p>The tokens 12 people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Decision 2</b> — the key wording, the one-person wording, and no confirm when nobody has connected yet</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Change where Anthropic API key sends requests?</h3>
+        <p>The keys 12 people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+      <div class="dlg" style="margin-top:16px">
+        <h3>Change where Corp gateway sends requests?</h3>
+        <p>The token 1 person added was given for the old address, so it is deleted. They add it again.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+      <div class="dlg" style="margin-top:16px">
+        <h3>Change where Anthropic API key sends requests?</h3>
+        <p>The key 1 person added was given for the old address, so it is deleted. They add it again.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn primary" type="button">Save</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  var dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+});
+</script>
+</body>
+</html>

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -15,9 +16,9 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -27,11 +28,41 @@ func (m hybridSecrets) Get(_ context.Context, name string) ([]byte, error) {
 	if v, ok := m[name]; ok {
 		return v, nil
 	}
-	return nil, fmt.Errorf("secret %q not found: %w", name, pgx.ErrNoRows)
+	return nil, fmt.Errorf("secret %q not found: %w", name, secretstore.ErrNotFound)
 }
 
 func (m hybridSecrets) Put(_ context.Context, name string, v []byte) error {
 	m[name] = v
+	return nil
+}
+
+// failingPutSecrets fails every Put while failPut is set, otherwise behaves
+// like hybridSecrets. It isolates loadOrCreateSecret's Put failure from the
+// Get failure paths hybridSecrets already covers.
+type failingPutSecrets struct {
+	mu      sync.Mutex
+	data    map[string][]byte
+	failPut bool
+}
+
+func newFailingPutSecrets() *failingPutSecrets { return &failingPutSecrets{data: map[string][]byte{}} }
+
+func (m *failingPutSecrets) Get(_ context.Context, name string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if v, ok := m.data[name]; ok {
+		return v, nil
+	}
+	return nil, fmt.Errorf("secret %q not found: %w", name, secretstore.ErrNotFound)
+}
+
+func (m *failingPutSecrets) Put(_ context.Context, name string, v []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failPut {
+		return errors.New("put failed")
+	}
+	m.data[name] = v
 	return nil
 }
 
@@ -255,5 +286,25 @@ func TestBootHybrid_RevokedLaptopBootsStillRefusing(t *testing.T) {
 	defer st.mu.Unlock()
 	if status().Revoked || st.revoked {
 		t.Fatal("re-enrolment did not clear the revoked mark")
+	}
+}
+
+// TestBootHybrid_FailedPutLeavesTheRevokedMarkSet: Put-then-Reset (F2) — a
+// re-enrolling laptop must not have its revoked mark cleared before the new
+// credential is durably stored. If storing it fails, the boot refuses and the
+// mark from the prior revocation stays set.
+func TestBootHybrid_FailedPutLeavesTheRevokedMarkSet(t *testing.T) {
+	org := &hybridOrg{}
+	srv := org.serve(t)
+	secrets := newFailingPutSecrets()
+	secrets.failPut = true
+	st, rec := &hybridStore{revoked: true}, &hybridRecorder{}
+	if _, err := bootHybrid(context.Background(), t.Context(), srv.URL, "wde_first", secrets, st, rec); err == nil {
+		t.Fatal("a failed Put must refuse the boot")
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !st.revoked {
+		t.Fatal("a failed Put cleared the revoked mark before the new credential was stored")
 	}
 }

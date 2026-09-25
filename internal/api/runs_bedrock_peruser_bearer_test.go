@@ -335,7 +335,7 @@ func TestFilterMemberGrants_DropsAMemberAuthoredBedrockBearerGrant(t *testing.T)
 		owned: map[string]map[string][]byte{"bob": {bedrockAPIKeySecret: []byte("bob-own-bearer-123")}}}
 	g := types.GrantSpec{Kind: types.GrantAPIKey, Scope: mustJSON(map[string]any{
 		"host": "api.openai.com", "secret_name": bedrockAPIKeySecret, "header": "X-Member-Chosen", "format": "%s"})}
-	kept, warns, code, err := h.srv.filterMemberGrants(context.Background(), "bob", []string{"api.openai.com"}, []types.GrantSpec{g})
+	kept, warns, code, err := h.srv.filterUserGrants(context.Background(), "bob", []string{"api.openai.com"}, []types.GrantSpec{g})
 	t.Logf("kept=%d warns=%v code=%d err=%v", len(kept), warns, code, err)
 	if len(kept) == 1 {
 		t.Errorf("member-authored bedrock-api-key grant to api.openai.com with a custom header was admitted")

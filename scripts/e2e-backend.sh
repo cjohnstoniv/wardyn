@@ -34,6 +34,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
+WARDYN_LOG_TAG="[e2e]"
 source "${REPO_ROOT}/scripts/lib/common.sh"
 
 # Provision + exec wardyn-test-pg on the same daemon as up.sh pg (dual-daemon boxes).
@@ -71,7 +72,7 @@ _PORT="${ADDR#*:}"
 PID_FILE="${BIN_DIR}/wardynd-${_PORT}.pid"
 LOG_FILE="${BIN_DIR}/wardynd-${_PORT}.log"
 
-log()  { printf '\033[1;34m[e2e]\033[0m %s\n' "$*"; }
+# log() uses WARDYN_LOG_TAG="[e2e]" set before sourcing common.sh above.
 die()  { printf '\033[1;31m[e2e:err]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # psql helper against the seeding container.
@@ -337,14 +338,14 @@ SQL
   # UI's workspace-wizard/picker render against.
   api POST /api/v1/workspaces '{"name":"payments","sources":[{"type":"local_dir","path":"/home/me/projects/payments"}]}' >/dev/null 2>&1 || true
   # Run detail's UI-apps lane (docs/UI-SANDBOXES.md) reads ui_apps off the
-  # run.policy.effective envelope DISPATCH records (effectiveUIApps) — and the
+  # run.policy.resolve envelope DISPATCH records (effectiveUIApps) — and the
   # `none` runner never dispatches, so the envelope goes in here exactly as
   # dispatch would write it. Attached to the RUNNING fixture rather than a new
   # run on purpose: the lane is owner-and-RUNNING-only, and the seeded run
   # count is load-bearing for other specs (runs, recording).
   psql_e2e >/dev/null 2>&1 <<'SQL' || true
 INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
-SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.effective', id::text, 'success',
+SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.resolve', id::text, 'success',
        '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb
 FROM agent_runs WHERE task = 'e2e fixture 2';
 SQL

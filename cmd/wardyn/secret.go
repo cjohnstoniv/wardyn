@@ -32,7 +32,7 @@ func secretCmd(client clientFn) *cobra.Command {
 			// path for every platform secret (SSH private keys, git PATs, LLM API
 			// keys, Bedrock credentials). Same call `subscription connect` makes.
 			if isTerminal(os.Stdin) {
-				fmt.Fprintf(os.Stderr, "value for %q — type it, then press Ctrl-D on a new line to finish (input is NOT hidden; prefer piping): ", args[0])
+				fmt.Fprintf(cmd.ErrOrStderr(), "value for %q — type it, then press Ctrl-D on a new line to finish (input is NOT hidden; prefer piping): ", args[0])
 			}
 			v, err := readSecretValue(cmd.InOrStdin())
 			if err != nil {
@@ -44,7 +44,7 @@ func secretCmd(client clientFn) *cobra.Command {
 			if err := client().SetSecret(cmd.Context(), args[0], v); err != nil {
 				return err
 			}
-			fmt.Printf("secret %q stored\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "secret %q stored\n", args[0])
 			return nil
 		},
 	}
@@ -61,10 +61,10 @@ func secretCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			if asJSON {
-				return emitJSON(names)
+				return emitJSON(cmd.OutOrStdout(), names)
 			}
 			for _, n := range names {
-				fmt.Println(n)
+				fmt.Fprintln(cmd.OutOrStdout(), n)
 			}
 			return nil
 		},
@@ -80,7 +80,7 @@ func secretCmd(client clientFn) *cobra.Command {
 			if err := client().DeleteSecret(cmd.Context(), args[0]); err != nil {
 				return err
 			}
-			fmt.Printf("secret %q deleted\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "secret %q deleted\n", args[0])
 			return nil
 		},
 	}

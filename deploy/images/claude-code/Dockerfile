@@ -317,8 +317,7 @@ ENV ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic
 # version-pinned image must not self-update mid-run; `claude update` still works
 # when a human asks for it. CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 removes
 # the changelog fetch from raw.githubusercontent.com and the telemetry/error
-# intake. All three measured host-by-host through a real proxy — see
-# local/v075/evidence/agent-boot-egress/.
+# intake. All three measured host-by-host through a real proxy.
 #
 # agent-run-lib.sh exports the same three vars with `:-` defaults, and that is
 # NOT a duplicate of this ENV — nor a substitute for it. On the DEFAULT

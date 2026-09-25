@@ -263,4 +263,24 @@ describe("usePoll — refocus coalescing", () => {
     refocus();
     expect(fn).toHaveBeenCalledTimes(1);
   });
+
+  // #510-F5: a refocus that arrived while a read was in flight, followed by an
+  // unmount BEFORE that read settled, still ran the coalesced follow-up —
+  // against a dead component. The cleanup now marks the hook disposed so
+  // settle() skips the follow-up instead.
+  it("does not run the coalesced follow-up if the hook unmounted before the in-flight read settled", async () => {
+    let settle: (() => void) | null = null;
+    const fn = vi.fn(() => new Promise<void>((res) => (settle = res)));
+    const { unmount } = renderHook(() => usePoll(fn, 1000, false));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fn).toHaveBeenCalledTimes(1); // the read that's now in flight
+
+    refocus(); // coalesced follow-up armed
+    unmount();
+
+    settle!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fn).toHaveBeenCalledTimes(1); // no follow-up against the unmounted hook
+  });
 });

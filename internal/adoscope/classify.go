@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"unicode"
 )
 
 // Request is ONE candidate Azure DevOps request, as much of it as a classifier
@@ -97,8 +96,8 @@ var writeMethods = []string{http.MethodPost, http.MethodPut, http.MethodPatch, h
 // GIT-OVER-HTTP IS OUT OF SCOPE and is refused by name rather than classified.
 // The ref names a push carries live in a pack protocol this catalogue does not
 // parse, so no answer here could tell a clone from a push onto a protected
-// branch; both used to land on CapUnclassifiedWrite, which told a caller
-// nothing about which it had. The transport is gated on its own.
+// branch; distinguishing them here would only be a guess. The transport is
+// gated on its own.
 func Classify(req Request) (Verdict, error) {
 	method, err := effectiveMethod(req.Method, req.Header)
 	if err != nil {
@@ -400,147 +399,20 @@ func azureDevOpsHost(h string) bool {
 func isPathSeparator(c rune) bool { return c == '/' || c == '\\' }
 
 // decodeSegments splits rawPath into decoded, lowercased, non-empty segments,
-// refusing the shapes parseRoute documents.
+// refusing the shapes parseRoute documents. Each segment is decoded by
+// UnescapeName (names.go) — the one rule every door that reads an Azure DevOps
+// name shares, so this gate and the control plane cannot disagree about which
+// spelling is which name.
 func decodeSegments(rawPath string) ([]string, error) {
 	var out []string
 	for _, raw := range strings.FieldsFunc(rawPath, isPathSeparator) {
-		seg, err := unescapeSegment(raw)
+		seg, err := UnescapeName(raw)
 		if err != nil {
 			return nil, err
 		}
-		if hazard := segmentHazard(seg); hazard != "" {
-			return nil, fmt.Errorf("adoscope: path segment %q %s", raw, hazard)
-		}
-		if hidesStructure(seg) {
-			return nil, fmt.Errorf("adoscope: path segment %q is encoded more than once around structure — a layer that decodes again would route it differently", raw)
-		}
-		out = append(out, seg)
+		out = append(out, strings.ToLower(seg))
 	}
 	return out, nil
-}
-
-// unescapeSegment percent-decodes one segment and lowercases it, refusing a
-// segment that decodes into a separator.
-//
-// It decodes by hand rather than through url.PathUnescape for one reason:
-// PathUnescape leaves an encoded "/" as a literal slash in its output, which
-// then has to be re-detected, and the two-step version of that rule is exactly
-// where a laundering bug hides. Here the byte is refused where it is decoded.
-func unescapeSegment(raw string) (string, error) {
-	var b strings.Builder
-	for i := 0; i < len(raw); i++ {
-		if raw[i] != '%' {
-			b.WriteByte(raw[i])
-			continue
-		}
-		if i+2 >= len(raw) {
-			return "", fmt.Errorf("adoscope: path segment %q is not decodable", raw)
-		}
-		hi, lo := unhex(raw[i+1]), unhex(raw[i+2])
-		if hi < 0 || lo < 0 {
-			return "", fmt.Errorf("adoscope: path segment %q is not decodable", raw)
-		}
-		c := byte(hi<<4 | lo)
-		if isPathSeparator(rune(c)) {
-			return "", fmt.Errorf("adoscope: path segment %q decodes to a second segment", raw)
-		}
-		b.WriteByte(c)
-		i += 2
-	}
-	return strings.ToLower(b.String()), nil
-}
-
-// segmentHazard names why a decoded segment would not be routed the way it
-// reads, or "" when it would.
-//
-// Every case is a spelling the SERVICE normalises before it routes, so the
-// text here and the route there disagree:
-//   - "." and ".." are resolved outright;
-//   - leading or trailing whitespace, and a trailing dot, are trimmed first —
-//     Windows path canonicalisation — so ".. " is "..", "..." is "..", and
-//     "hooks." is the denied "hooks" area. Refusing the edge characters is the
-//     fail-closed reading, and no name on this API legitimately ends in one;
-//   - a separator still inside the segment. While the split in decodeSegments
-//     is correct nothing reaches this case: the split removed every raw
-//     separator and unescapeSegment refuses every decoded one. It is a SECOND,
-//     INDEPENDENT LINE — with the split reverted to "/" alone and this kept,
-//     every separator evasion is still refused, and the only cost is that a
-//     legitimate backslash-delimited path is refused too.
-func segmentHazard(seg string) string {
-	switch {
-	case seg == "." || seg == "..":
-		return "is a dot segment — the service resolves it to a different route"
-	case strings.TrimFunc(seg, unicode.IsSpace) != seg:
-		return "has leading or trailing whitespace — the service trims it before routing"
-	case strings.HasSuffix(seg, "."):
-		return "ends in a dot — the service trims it before routing"
-	case strings.ContainsFunc(seg, isPathSeparator):
-		return "still holds a separator"
-	}
-	return ""
-}
-
-// maxDecodeDepth bounds hidesStructure. Nothing legitimate on this API is
-// percent-encoded more than once, so a segment still changing after this many
-// further rounds is refused rather than followed.
-const maxDecodeDepth = 4
-
-// hidesStructure reports whether decoding seg AGAIN — as any layer between here
-// and the service that decodes once more would — yields any segmentHazard at
-// any depth.
-//
-// It exists because "%252F" decodes once to the literal text "%2F": harmless
-// to a service that decodes once, and a separator to anything that decodes
-// twice. Whether such a layer sits in the path is not knowable from here, so
-// the answer that cannot be wrong is to refuse the segment.
-//
-// The re-decode is LENIENT on purpose — valid escapes decoded, malformed ones
-// kept as literal text — because that is the most dangerous decoder a request
-// could meet: a strict one refuses "%2F%zz" outright, a lenient one decodes it
-// to "/%zz". Assuming the lenient one is the fail-closed reading, and it costs
-// no legitimate name anything: "100%" and "50%off" reach a fixpoint unchanged.
-func hidesStructure(seg string) bool {
-	for range maxDecodeDepth {
-		next := percentDecodeLenient(seg)
-		if next == seg {
-			return false
-		}
-		if segmentHazard(next) != "" {
-			return true
-		}
-		seg = next
-	}
-	return true
-}
-
-// percentDecodeLenient decodes every valid %XY in s once and keeps every
-// malformed one as literal text. See hidesStructure for why lenient.
-func percentDecodeLenient(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '%' && i+2 < len(s) {
-			if hi, lo := unhex(s[i+1]), unhex(s[i+2]); hi >= 0 && lo >= 0 {
-				b.WriteByte(byte(hi<<4 | lo))
-				i += 2
-				continue
-			}
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
-
-// unhex is one hex digit's value, or -1.
-func unhex(c byte) int {
-	switch {
-	case c >= '0' && c <= '9':
-		return int(c - '0')
-	case c >= 'a' && c <= 'f':
-		return int(c-'a') + 10
-	case c >= 'A' && c <= 'F':
-		return int(c-'A') + 10
-	}
-	return -1
 }
 
 // pinOrg checks the request's organisation against the row's and returns the

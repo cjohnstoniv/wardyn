@@ -26,7 +26,6 @@ const AUTH = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 // and the four __ws* helpers below are how the test drives them (open a
 // connect, drop one abnormally, push a PTY output frame, read the count).
 function installFakeWebSocket() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any;
   class FakeSocket {
     static OPEN = 1;
@@ -140,7 +139,7 @@ test.describe("Attach terminal — reconnect budget (#216)", () => {
     // above never pushed it out of view.
     await expect(page.getByText(`[closed] ${runId}`)).toHaveCount(0);
     await expect(page.getByText(TERMINAL.CLOSED_TITLE)).toBeVisible();
-    await expect(page.getByText(TERMINAL.CLOSED_BODY)).toBeVisible();
+    await expect(page.getByText(TERMINAL.CLOSED_BODY(4))).toBeVisible();
     const reconnectButton = page.getByRole("button", { name: TERMINAL.RECONNECT });
     await expect(reconnectButton).toBeVisible();
 

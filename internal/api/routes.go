@@ -50,7 +50,9 @@ func (s *Server) routes() chi.Router {
 	// here: it is POST /api/v1/auth/logout below, inside humanOrAdminAuth.
 	if s.cfg.OIDC != nil {
 		r.Get("/auth/login", s.cfg.OIDC.LoginHandler)
-		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandler)
+		// A sign-in refused over its user type (ambiguous or unknown) is an
+		// auth.fail row; the oidc package stays audit-agnostic.
+		r.Get("/auth/callback", s.cfg.OIDC.CallbackHandlerWithDenials(s.auditSignInDenied))
 	}
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -87,7 +89,8 @@ func (s *Server) routes() chi.Router {
 			//   direct registrations in this body   (both groups)
 			//   mountPermissionRoutes  (this file)  securityOps
 			//   mountAccountRoutes     (this file)  securityOps
-			//   adminRoutes            (this file)  one per group
+			//   adminRoutes            (this file)  one per group, plus
+			//       mountUserTypeRoutes (user_types.go) securityOps
 			//   mountLibraryRoutes     (sources.go) operatorOnly (+ member reads on r)
 			//   mountSetupMutationRoutes            operatorOnly
 			//   mountAccessRoutes      (access.go)  operatorOnly
@@ -99,8 +102,12 @@ func (s *Server) routes() chi.Router {
 			//       (workspace_providers.go)
 			//   mountAgentProviderRoutes            operatorOnly
 			//       (agent_providers.go)
+			//   mountModelProviderRoutes            split: 2 operatorOnly,
+			//       4 authenticated (model_providers_api.go)
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
+			//   mountSecretRoutes (routes.go) split: the /secrets
+			//       self-service routes on r, the credential erase securityOps
 			operatorOnly := r.With(s.requireOperator)
 			// securityOps is the second admin tier: admin OR security_admin, via
 			// requireSecurityOperator / isSecurityOperator (http.go). What the tier
@@ -187,8 +194,8 @@ func (s *Server) routes() chi.Router {
 			r.Post("/runs/preflight", s.handlePreflightRun)
 			r.Get("/runs", s.handleListRuns)
 			r.Get("/runs/{id}", s.handleGetRun)
+			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
-			r.Post("/runs/{id}/kill", s.handleKillRun)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
@@ -294,7 +301,7 @@ func (s *Server) routes() chi.Router {
 			// to model access at all. A member with no such row still gets 403 —
 			// from authorizeHarnessLogin, which also requires capAgent on the row's
 			// agent. Every connect/disconnect is audited
-			// (harness.credential.captured/disconnected).
+			// (harness.credential.capture/disconnected).
 			s.mountSetupMutationRoutes(r, operatorOnly)
 
 			// Policy management (gated to authenticated humans — a valid SSO
@@ -429,24 +436,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/workspaces/{id}/env-as-code", s.handleGetEnvAsCode)
 			operatorOnly.Post("/workspaces/{id}/env-as-code/write", s.handleWriteEnvAsCode)
 
-			// Secret management: write/delete/list only. Values are NEVER
-			// readable through the API (read paths are the broker and the
-			// internal injection-resolve endpoint, both audited).
-			//
-			// WRITE/DELETE are self-service (migration `0050`), not
-			// admin-only: any signed-in human manages their OWN row
-			// (handlePutSecret/handleDeleteSecret scope by
-			// secretOwnerFromRequest) — an operator's own row is the ""
-			// namespace, exactly today's behavior. A member can never reach
-			// another member's row (Store.For(owner) never resolves it) or
-			// the four Bedrock/SigV4 names (still operator-only). Admin
-			// cross-principal reads/deletes go through ?owner=. The LIST
-			// stays viewer-readable — it returns names only, never values.
-			if s.cfg.Secrets != nil {
-				r.Put("/secrets/{name}", s.handlePutSecret)
-				r.Delete("/secrets/{name}", s.handleDeleteSecret)
-				r.Get("/secrets", s.handleListSecrets)
-			}
+			s.mountSecretRoutes(r, securityOps)
 
 			// Site config: the operator-wide, admin-authored baseline every run
 			// inherits (upstream proxy secret ref, per-ecosystem artifact-registry
@@ -494,11 +484,10 @@ func (s *Server) routes() chi.Router {
 			// (.golangci.yml, 150 non-comment lines): a new route family here has
 			// to free its line by extracting an existing block first.
 			s.mountSiteConfigProbeRoutes(securityOps)
-			// Workspace providers — see mountWorkspaceProviderRoutes, and
-			// the agent roster beside it (agent_providers.go). Both MOUNTS,
-			// attached with no blank line, for the ratchet reason just above.
-			s.mountWorkspaceProviderRoutes(operatorOnly)
-			s.mountAgentProviderRoutes(operatorOnly)
+			// Workspace providers, the agent roster and the model providers it
+			// defaults to — see mountProviderRoutes. One MOUNT, attached with no
+			// blank line, for the ratchet reason just above.
+			s.mountProviderRoutes(r, operatorOnly)
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /
@@ -511,7 +500,7 @@ func (s *Server) routes() chi.Router {
 			//
 			// What makes the wider tier honest is the PROJECTION, not a claim
 			// about the payload: a non-operator is answered
-			// memberSafeIntegration's view (setup_integrations.go) — identity,
+			// userSafeIntegration's view (setup_integrations.go) — identity,
 			// kind, disabled, default_for and the live capability matrix, its
 			// reasons scrubbed of anything withheld — with secrets[], egress[],
 			// config and docs dropped. The tier stays wide because the launch
@@ -627,6 +616,9 @@ func (s *Server) routes() chi.Router {
 			r.Post("/internal/decisions", s.handlePostDecision)
 			r.Post("/internal/approvals", s.handleInternalRequestApproval)
 			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
+			// wardyn-toolgate's own give-up signal (#811): closes the row it
+			// raised instead of leaving it PENDING for the sweep.
+			r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
 			r.Post("/internal/credentials/mint", s.handleInternalMint)
 
 			// Token renew: POST /api/v1/internal/token/renew
@@ -685,6 +677,16 @@ func (s *Server) routes() chi.Router {
 	return r
 }
 
+// mountRunLeaseRoutes registers a run's end/wait change, its kill and its
+// revive on r — carved out of routes() purely for funlen.
+func (s *Server) mountRunLeaseRoutes(r chi.Router) {
+	// The run's end and wait (#569): owner or SUPER admin, clamped to the
+	// run's captured limits — handleSetRunEndAndWait.
+	r.Patch("/runs/{id}", s.handleSetRunEndAndWait)
+	r.Post("/runs/{id}/kill", s.handleKillRun)
+	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go)
+}
+
 // mountAccountRoutes registers the caller's own account surfaces — per-user
 // API tokens (self-service on r; the two admin twins on securityOps) and the
 // run-detail layout — carved out of routes() purely for funlen; the routes()
@@ -723,16 +725,41 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// namespace, so neither route can reach anyone else's credential whatever
 	// tier the caller holds.
 	s.mountAzureDevOpsSignInRoutes(r)
-	// "View as member" (membermode.go). Registered HERE rather than
+	// The user view (user_view.go), renamed in 0.8 from "view as member" /
+	// POST /me/member-mode (docs/OPERATIONS.md's "Renamed in 0.8" appendix; a
+	// clean break — the old path is not aliased). Registered HERE rather than
 	// beside the ssh-keys block in routes() only because routes() sits exactly
 	// on the funlen ratchet — this is the /me self-service family either way.
 	//
 	// On r and never operatorOnly: the toggle acts on the CALLER's own session
-	// and nobody else's, and inside the mode the caller's effective role IS
-	// member, so an operator-gated exit would be a door that locks from the
+	// and nobody else's, and inside the view the caller's effective role IS
+	// user, so an operator-gated exit would be a door that locks from the
 	// inside. The no-per-human-role lane (admin token, local mode, no IdP) is
 	// refused inside the handler — a 400, not a tier.
-	r.Post("/me/member-mode", s.handleSetMemberMode)
+	r.Post("/me/view", s.handleSetUserView)
+}
+
+// mountSecretRoutes mounts secret management: write/delete/list only. Values
+// are NEVER readable through the API (read paths are the broker and the
+// internal injection-resolve endpoint, both audited).
+//
+// WRITE/DELETE are self-service (migration `0050`), not admin-only: any
+// signed-in human manages their OWN row (handlePutSecret/handleDeleteSecret
+// scope by secretOwnerFromRequest) — an operator's own row is the ""
+// namespace, exactly today's behavior. A member can never reach another
+// member's row (Store.For(owner) never resolves it) or the four Bedrock/SigV4
+// names (still operator-only). Admin cross-principal reads/deletes go through
+// ?owner=; a PUT refuses it (K7-A). The LIST stays viewer-readable — names
+// only, never values. Erasing a person's credentials is on the security tier:
+// it only removes reach, and returns no credential material.
+func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
+	if s.cfg.Secrets == nil {
+		return
+	}
+	r.Put("/secrets/{name}", s.handlePutSecret)
+	r.Delete("/secrets/{name}", s.handleDeleteSecret)
+	r.Get("/secrets", s.handleListSecrets)
+	securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
 }
 
 // mountPermissionRoutes registers the capability-grant family: which of the
@@ -757,6 +784,9 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Post("/permissions/grants", s.handleUpsertCapabilityGrant)
 	securityOps.Delete("/permissions/grants/{id}", s.handleDeleteCapabilityGrant)
 	securityOps.Put("/permissions/enforcement", s.handlePutCapabilityEnforcement)
+	// The value is the rest of the path: an image ref carries slashes.
+	securityOps.Get("/permissions/availability/{kind}/*", s.handleGetAvailability)
+	securityOps.Put("/permissions/availability/{kind}/*", s.handlePutAvailability)
 }
 
 // adminRoutes registers the two admin-gated maintenance routes — one per tier,
@@ -776,6 +806,10 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// whole-fleet audit VOLUME is the same disclosure that keeps /metrics
 	// gated. Operator-INVOKED by design: wardynd never verifies at boot.
 	securityOps.Get("/audit/chain/verify", s.handleVerifyAuditChain)
+	// User types (migration 0071_user_types): defining a type is the same
+	// security-tier duty as authoring a governance profile; deciding who IS a
+	// type stays on the operatorOnly /access routes.
+	s.mountUserTypeRoutes(securityOps)
 	// Sandbox sweep. SUPER, and the reason matters because an operator deciding
 	// who to trust with RoleSecurityAdmin reads exactly these lines: the sweep
 	// drives the RUNNER — Status then StopSandbox — across every run in the
@@ -800,4 +834,9 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// case — see reconcile.go) and deliberately not a ticker; see
 	// handleSweepSandboxes for the cost argument.
 	operatorOnly.Post("/admin/sandboxes/sweep", s.handleSweepSandboxes)
+	// Standing runs (run_revive.go). SUPER: a restart replaces the proxy of
+	// runs the caller does not own, under each owner's own ceiling, and the
+	// listing reads the whole fleet.
+	operatorOnly.Get("/admin/runs/proxy-window", s.handleAdminProxyWindow)
+	operatorOnly.Post("/admin/runs/restart", s.handleAdminRestartRuns)
 }

@@ -74,10 +74,15 @@ func envSlice(env map[string]string) []string {
 // docker-Env-slice shape and the operator-knob forwarding below.
 func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) []string {
 	cfgJSON, _ := runner.BuildProxyConfig(runID, pc, port)
+	return proxyEnvFromJSON(runID, cfgJSON, pc.ControlPlaneURL)
+}
+
+// proxyEnvFromJSON is proxyEnv for a config already rendered (ReplaceProxy).
+func proxyEnvFromJSON(runID uuid.UUID, cfgJSON []byte, controlPlaneURL string) []string {
 	env := []string{
-		"WARDYN_PROXY_CONFIG_JSON=" + string(cfgJSON),
+		proxyConfigEnv + "=" + string(cfgJSON),
 		"WARDYN_RUN_ID=" + runID.String(),
-		"WARDYN_CONTROL_PLANE_URL=" + pc.ControlPlaneURL,
+		"WARDYN_CONTROL_PLANE_URL=" + controlPlaneURL,
 	}
 	// Operator knobs the sidecar reads from ITS environment, forwarded from
 	// wardynd's when set. The LIST is runner.ProxySidecarEnvKnobs — shared with
@@ -99,4 +104,23 @@ func isNotRunning(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "is not running")
+}
+
+// isAlreadyPaused / isNotPaused detect the daemon's redundant-pause-state
+// errors so FreezeSandbox/ThawSandbox stay idempotent on a retried call (a
+// pause request that lands twice, or a thaw after a lost response) instead of
+// surfacing the daemon's conflict as a caller-visible error.
+func isAlreadyPaused(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already paused")
+}
+
+func isNotPaused(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "is not paused") || strings.Contains(msg, "already unpaused")
 }

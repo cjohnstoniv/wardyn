@@ -238,7 +238,7 @@ async function freshCapture(page: Page, request: APIRequestContext): Promise<num
 }
 
 /** The ADMIN's own AWS sign-in, which is NOT on /setup — and NEVER a bare
- *  `page.goto("/providers")`.
+ *  `page.goto("/admin/providers")`.
  *
  *  App.tsx's RequireSetup bounces the FIRST gated-route render of every full
  *  document load into /setup while any setup check grades fail or warn, which a
@@ -255,11 +255,11 @@ async function freshCapture(page: Page, request: APIRequestContext): Promise<num
 async function openAdminLoginPane(page: Page): Promise<void> {
   await page.goto("/runs");
   await expect(async () => {
-    if (!/\/providers$/.test(page.url())) {
+    if (!/\/admin\/providers$/.test(page.url())) {
       await page.evaluate((path) => {
         window.history.pushState({}, "", path);
         window.dispatchEvent(new PopStateEvent("popstate"));
-      }, "/providers");
+      }, "/admin/providers");
     }
     await expect(page.getByRole("button", { name: AGENTS.AGENTS_TITLE })).toBeVisible({ timeout: 5_000 });
   }).toPass({ timeout: 90_000 });
@@ -415,8 +415,8 @@ test("K (credential-reauth-hold): a session retired mid-run HOLDS the model call
     // The audit row is the only place the RAISE explains itself, and it carries
     // whose credential it was and which lane raised it.
     const auditAtHold = await auditFor(page, run.id);
-    const raised = auditAtHold.find((e) => e.action === "credential.reauth.requested");
-    expect(raised, "no credential.reauth.requested row on the held run").toBeTruthy();
+    const raised = auditAtHold.find((e) => e.action === "credential.reauth.request");
+    expect(raised, "no credential.reauth.request row on the held run").toBeTruthy();
     holdOpenedAt = Date.parse(raised?.time ?? "");
     expect(Number.isFinite(holdOpenedAt), "the raise row carries no readable timestamp").toBe(true);
     grantIDsAtHold = auditAtHold
@@ -554,7 +554,7 @@ test("K(resume) (credential-reauth-hold): the member signs in and the SAME run c
     freshGrantIDs.filter((g) => !grantIDsAtHold.includes(g)),
     "the resume minted a grant this run did not already hold",
   ).toEqual([]);
-  expect(freshActions, "the resolve is audited").toContain("credential.reauth.resolved");
+  expect(freshActions, "the resolve is audited").toContain("credential.reauth.resolve");
 
   // …and the console is back to an ordinary cockpit: no strip, because the
   // member's session is live again.
@@ -701,7 +701,7 @@ async function fastHold(
 // drove it in time to see it.
 //
 // Two attempts, both of which raised a REAL hold (a PENDING credential_reauth
-// row and a credential.reauth.requested audit row, every time) and neither of
+// row and a credential.reauth.request audit row, every time) and neither of
 // which ever produced the decision:
 //   * 30 s budget: the sidecar carried WARDYN_CREDENTIAL_REAUTH_TIMEOUT=30s
 //     (read back off the run's own proxy pod), the hold opened three seconds

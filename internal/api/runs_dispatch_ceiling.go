@@ -75,6 +75,18 @@ type dispatchCeiling struct {
 	// authored on POLICIES (a refusal would break every stored policy the day an
 	// admin first writes a limit — internal/types/governance.go says so).
 	maxEphemeralDiskMiB int
+	// adoEntra is what the autonomy gate RESOLVED about this run's per-person
+	// Azure DevOps lane at create (adoEntraGrade, runs_dispatch_ado_inject.go).
+	//
+	// It rides HERE, on the required positional argument, for the reason the
+	// type comment above already argues: the gate freezes a level from one
+	// site-config read and dispatch authors the credential from a later one, so
+	// the resolution has to travel, and a dispatchParams field that a lane can
+	// silently leave unset is the defect class this struct exists to close.
+	adoEntra adoEntraGrade
+	// bedrock is the same freeze for the Amazon Bedrock model credential
+	// (bedrockCredGrade, runs_autonomy_bedrock.go), on the same argument.
+	bedrock bedrockCredGrade
 }
 
 // ceilingForDispatch is the ONE translation from a resolved ceiling into the
@@ -89,17 +101,26 @@ type dispatchCeiling struct {
 // earlier still, at effectiveCeiling's step 1. Either way the result is
 // resolved: "this principal has no profile" is an answer, and the zero value is
 // not.
-func ceilingForDispatch(c governanceCeiling) dispatchCeiling {
+//
+// ado is the SECOND thing every lane must now decide: what the autonomy gate
+// resolved about the per-person Azure DevOps lane for this run. It is a
+// parameter and not a field for the same reason the ceiling itself is — a lane
+// that could leave it unset would be back to authoring a credential nobody
+// graded — and adoEntraUngraded() is the honest answer for the four lanes that
+// run no gate, not a way of skipping the question. bedrock is the third, for
+// the Bedrock model credential, and bedrockCredUngraded() answers it for the
+// same lanes.
+func ceilingForDispatch(c governanceCeiling, ado adoEntraGrade, bedrock bedrockCredGrade) dispatchCeiling {
 	if c.Profile == nil {
-		return dispatchCeiling{resolved: true}
+		return dispatchCeiling{resolved: true, adoEntra: ado, bedrock: bedrock}
 	}
 	return dispatchCeiling{
 		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
-		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB,
+		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB, adoEntra: ado, bedrock: bedrock,
 	}
 }
 
-// effectivePolicyDatum is the run.policy.effective snapshot: the audited policy
+// effectivePolicyDatum is the run.policy.resolve snapshot: the audited policy
 // plus one fact about it that is not a policy field.
 //
 // The spec is EMBEDDED, so the JSON object stays byte-for-byte the policy
@@ -143,7 +164,7 @@ type effectivePolicyDatum struct {
 // an admin-authored STORED policy, and resourceLimitsToRunner is a pure mapper
 // with neither the ceiling nor the site config in scope. Dispatch is the one seam
 // holding all three — after every widening phase, before resourceLimitsToRunner
-// and before the run.policy.effective envelope, which is what discloses the
+// and before the run.policy.resolve envelope, which is what discloses the
 // effective number to every caller. A profile's own clamp is additionally
 // disclosed in run.ceiling.reassert below.
 //
@@ -239,7 +260,7 @@ func orgEphemeralOf(siteCfg types.SiteConfig) types.EphemeralProvider {
 // PREVIEW (dryRun) gets the WHOLE dispatch expression, org fill and org clamp
 // included, so POST /runs/preflight reports the number the run will get. LAUNCH
 // gets the clamp half only, and there it is a provable no-op: composer.Clamp (or
-// the stored arm's boundMemberSpec) already applied the same profile min(), and
+// the stored arm's boundUserSpec) already applied the same profile min(), and
 // applyEphemeralDisk applies all of it again at dispatch. The FILL is dispatch's
 // alone — written into a spec that goes on to launch it would reach the driver
 // as a POLICY-AUTHORED size and be refused at create on every overlay2-over-ext4
@@ -316,7 +337,10 @@ func (s *Server) resolveDispatchCeiling(ctx context.Context) (dispatchCeiling, g
 	if err != nil {
 		return dispatchCeiling{}, governanceCeiling{}, fmt.Errorf("resolve governance ceiling: %w", err)
 	}
-	return ceilingForDispatch(c), c, nil
+	// adoEntraUngraded: every lane that resolves its own ceiling here — the scan,
+	// the probe and the harness login — runs no autonomy gate, so no rubric
+	// capped the run and there is no grade for dispatch to be held to.
+	return ceilingForDispatch(c, adoEntraUngraded(), bedrockCredUngraded()), c, nil
 }
 
 // ceilingDenies reports whether the CEILING's deny list covers host — an exact
@@ -483,7 +507,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	}
 	// ALWAYS audited when a profile applies, even with nothing to drop: "which
 	// ceiling did this run actually run under" is the question the envelope at
-	// run.policy.effective cannot answer (it records a policy, not whose walls
+	// run.policy.resolve cannot answer (it records a policy, not whose walls
 	// they are), and the drops themselves are invisible there — injections and
 	// broker grants ride ProxyConfig, not the spec. A profile with an EMPTY
 	// denied_domains is exactly where that question is hardest to answer any
@@ -501,7 +525,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	// The SIZE half of the profile, present only when the profile sets one — so a
 	// profile written before 0.7.2 produces a byte-identical row. applyEphemeralDisk
 	// ran just above this phase, so ephemeral_disk_mib is the effective number the
-	// sandbox gets; run.policy.effective discloses it to everyone, and this says
+	// sandbox gets; run.policy.resolve discloses it to everyone, and this says
 	// whose ceiling shaped it.
 	if c.maxEphemeralDiskMiB > 0 {
 		data["max_ephemeral_disk_mib"] = c.maxEphemeralDiskMiB

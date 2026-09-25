@@ -18,12 +18,12 @@ import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
 // types.GovernanceLimits. ALL are `omitempty` on the wire, so an unrestricted
 // profile arrives with the keys absent — optional here for the same reason,
 // and `!!limits.deny_x` is how every read is written.
-export interface GovernanceLimits {
+export interface GovernanceLimits extends RunLimits {
   deny_task_mode_exec?: boolean;
   deny_interactive?: boolean;
   // types.GovernanceLimits.DenyUserDrive (0.7 user drives) — the door the
   // profile editor's third LimitRow writes. A run under this profile mounts no
-  // user drive even when one is allocated to the person; denyMemberDrive's 403
+  // user drive even when one is allocated to the person; denyUserDrive's 403
   // is what enforces it, and this is only what the editor authors.
   deny_user_drive?: boolean;
   // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
@@ -42,6 +42,20 @@ export interface GovernanceLimits {
   // still marshals `limits: {}`. Resolution/enforcement land in #97; this
   // mirror exists so the type is in step from the day the field appears.
   autonomy_rubric?: AutonomyRubric;
+}
+
+// types.RunLimits (long-holds rev 4 §2.2) — embedded in GovernanceLimits, so
+// the seven keys sit flat on `limits`; a run carries the same set, captured at
+// create (AgentRun.run_limits). Absent/0/false keeps today's behaviour: no end,
+// the deployment's approval expiry as the wait, no idle pause.
+export interface RunLimits {
+  max_end_ahead_sec?: number;
+  default_end_sec?: number;
+  allow_no_end?: boolean;
+  max_wait_sec?: number;
+  default_wait_sec?: number;
+  user_changes_limits?: boolean;
+  pause_idle_after_sec?: number;
 }
 
 // types.AutonomyLevel — L0 (most supervised) through L3 (least). The codes

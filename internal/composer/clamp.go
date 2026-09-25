@@ -362,6 +362,7 @@ func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 		warns = append(warns, "push_rules inherited from the operator's policy")
 		cp := *ceiling.PushRules
 		cp.DenyPaths = append([]string(nil), ceiling.PushRules.DenyPaths...)
+		cp.RequireReviewPaths = append([]string(nil), ceiling.PushRules.RequireReviewPaths...)
 		out.PushRules = &cp
 		return warns
 	}
@@ -369,9 +370,15 @@ func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns
 	if len(ceiling.PushRules.DenyPaths) > 0 {
 		merged.DenyPaths = unionPaths(merged.DenyPaths, ceiling.PushRules.DenyPaths)
 	}
+	if len(ceiling.PushRules.RequireReviewPaths) > 0 {
+		merged.RequireReviewPaths = unionPaths(merged.RequireReviewPaths, ceiling.PushRules.RequireReviewPaths)
+	}
 	if ceil := ceiling.PushRules.MaxInspectPackMiB; ceil > 0 && (merged.MaxInspectPackMiB <= 0 || merged.MaxInspectPackMiB > ceil) {
 		warns = append(warns, fmt.Sprintf("push_rules.max_inspect_pack_mib capped to operator maximum %d", ceil))
 		merged.MaxInspectPackMiB = ceil
+	}
+	if ceil := ceiling.PushRules.HoldSeconds; ceil > 0 && (merged.HoldSeconds <= 0 || merged.HoldSeconds > ceil) {
+		merged.HoldSeconds = ceil // the shorter of two authored holds, silently: it widens nothing
 	}
 	out.PushRules = &merged
 	return warns
@@ -466,6 +473,7 @@ func cloneProposal(s types.RunPolicySpec) types.RunPolicySpec {
 	if s.PushRules != nil {
 		pr := *s.PushRules
 		pr.DenyPaths = slices.Clone(s.PushRules.DenyPaths)
+		pr.RequireReviewPaths = slices.Clone(s.PushRules.RequireReviewPaths)
 		out.PushRules = &pr
 	}
 	return out
@@ -584,7 +592,7 @@ func normalizeClampTTL(ttl int) int {
 // This is the SELECTION half of "is this grant within the ceiling", and it is
 // exported because internal/api's write-time comparator
 // (governanceGrantWithinCeiling) must select from the same set the runtime clamp
-// bounds against (F014): one definition, not two independent searches that can
+// bounds against: one definition, not two independent searches that can
 // drift on a kind like github_token, whose scope names no pairing at all.
 //
 // Identity, never bounds: approval, TTL and github scope are what a clamp
@@ -640,7 +648,7 @@ func grantDominatedBy(g, cg types.GrantSpec) bool {
 // covers it, and drops any whose KIND the ceiling does not carry.
 //
 // WHICH ceiling grant supplies the bound is a two-step answer, and the steps are
-// the whole of F014:
+// the whole of it:
 //
 //  1. SELECT the ceiling grants whose identity covers the proposal
 //     (CeilingGrantsCovering: same kind, same pairing where the kind names a
@@ -666,8 +674,8 @@ func grantDominatedBy(g, cg types.GrantSpec) bool {
 // A proposal whose pairing NO ceiling entry names falls back to the meet of every
 // same-kind entry (ceilingGrantsBounding, whose paired branch this caller has
 // already pre-empted). It is still KEPT, bounded to the strictest same-kind
-// bound: the pairing gate is filterMemberGrants' job (stage 2 of
-// boundMemberSpec), not the clamp's, and the write-time comparator refuses such a
+// bound: the pairing gate is filterUserGrants' job (stage 2 of
+// boundUserSpec), not the clamp's, and the write-time comparator refuses such a
 // grant outright — the one deliberate asymmetry between the two, pinned in
 // grantbound_test.go and internal/api/grant_clamp_agreement_test.go.
 func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[]string) []types.GrantSpec {

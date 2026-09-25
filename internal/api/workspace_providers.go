@@ -19,13 +19,17 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -73,7 +77,7 @@ const maxProviderBaseURLPathSegments = 2
 // base URL names corporate topology (the org's forge hosts and org paths), so the
 // GET is the same disclosure the sibling GET was narrowed for. A member never
 // needs it — a member's refusal names the provider KIND only, never the allowed
-// addresses — and the member-safe projection (memberSafeIntegration's shape) is
+// addresses — and the member-safe projection (userSafeIntegration's shape) is
 // the later one-line widening, the safe direction routes.go's tier note
 // describes. There is no DELETE: removing a row is a PUT without it.
 func (s *Server) mountWorkspaceProviderRoutes(operatorOnly chi.Router) {
@@ -90,11 +94,74 @@ func gitProviderRows(sc types.SiteConfig) []types.GitProvider {
 	return sc.WorkspaceProviders.Git
 }
 
+// adoServerHosts is every host an azure_devops provider row names — the Azure
+// DevOps Server hosts this install knows to be Azure DevOps, which adoscope's
+// name rule cannot tell from any other forge by name alone (the service hosts
+// it knows itself). A disabled row counts: the question is what a host IS, not
+// whether it admits.
+func adoServerHosts(sc types.SiteConfig) []string {
+	var out []string
+	for _, row := range gitProviderRows(sc) {
+		if row.Kind != types.GitProviderAzureDevOps {
+			continue
+		}
+		for _, raw := range row.BaseURLs {
+			if h := hostrules.HostOf(raw); h != "" && !slices.Contains(out, h) {
+				out = append(out, h)
+			}
+		}
+	}
+	return out
+}
+
+// adoHostsLoader answers adoServerHosts for one request, reading the stored
+// site config at most once and only for an address that could need it (see
+// forAddresses), so a write naming no such address costs no read. A config
+// that cannot be read yields none — the narrower answer: only the Azure DevOps
+// service hosts then take the name rule, and an escaped name on any other host
+// is refused as it always was — together with the read error, so a write door
+// can say the store, not the address, is what it could not check
+// (storeNamedLocatorRefusal). A nil loader answers none.
+type adoHostsLoader func() ([]string, error)
+
+func (s *Server) adoHostsLoader(ctx context.Context) adoHostsLoader {
+	var once sync.Once
+	var hosts []string
+	var readErr error
+	return func() ([]string, error) {
+		once.Do(func() {
+			if s.cfg.Store == nil {
+				return
+			}
+			sc, err := s.cfg.Store.GetSiteConfig(ctx)
+			if err != nil {
+				slog.WarnContext(ctx, "wardynd: could not read the site config for the Azure DevOps Server hosts", slog.Any("error", err))
+				readErr = err
+				return
+			}
+			hosts = adoServerHosts(sc)
+		})
+		return hosts, readErr
+	}
+}
+
+// forAddresses is the Azure DevOps Server hosts to canonicalise and validate
+// values with. Only a "%" or whitespace makes the answer matter — the name
+// rule leaves every other address as written — so without one nothing is read.
+func (l adoHostsLoader) forAddresses(values ...string) ([]string, error) {
+	if l == nil || !slices.ContainsFunc(values, func(v string) bool {
+		return strings.ContainsFunc(v, func(r rune) bool { return r == '%' || unicode.IsSpace(r) })
+	}) {
+		return nil, nil
+	}
+	return l()
+}
+
 // providersConfigured reports whether this install has ANY git-provider row —
 // the ONE place "legacy open mode" is decided. Every predicate in this file
 // answers "admitted" when it is false, BEFORE any other read, so an upgraded
 // 0.7.1 install behaves byte-identically to what it did before this feature
-// existed (the absent-row doctrine capEnforced and every GovernanceLimits zero
+// existed (the absent-row doctrine capBatch.enforced and every GovernanceLimits zero
 // value already follow).
 //
 // It counts rows enabled or disabled: a disabled row is still configuration —
@@ -129,6 +196,14 @@ func normalizeWorkspaceProviders(p *types.WorkspaceProviders) *types.WorkspacePr
 	}
 	for i := range p.Git {
 		for j, raw := range p.Git[i].BaseURLs {
+			// An Azure DevOps row may be scoped to a PROJECT, whose name can
+			// carry a space: its path takes the one spelling adoscope's name
+			// rule gives, so the match rule compares one string per project.
+			if p.Git[i].Kind == types.GitProviderAzureDevOps {
+				if c, ok := adoscope.CanonicalURL(strings.TrimSpace(raw)); ok {
+					raw = c
+				}
+			}
 			p.Git[i].BaseURLs[j] = normalizeProviderBaseURL(raw)
 		}
 	}
@@ -136,59 +211,6 @@ func normalizeWorkspaceProviders(p *types.WorkspaceProviders) *types.WorkspacePr
 		return nil
 	}
 	return p
-}
-
-// normalizeProviderBaseURL puts a base URL in the ONE form the match rule
-// compares against: lowercase scheme and authority, the path rebuilt from its
-// non-empty segments, and — on github.com only — the path folded to lowercase.
-//
-// It is STRING SURGERY rather than a url.Parse/String round trip on purpose:
-// re-serializing percent-ENCODES the characters shellSafeSiteString exists to
-// refuse, so a base URL carrying a backtick normalized into one that passed the
-// injection gate. Normalization must never launder a string past the validator
-// that runs after it — and the path is therefore never DECODED here either; a
-// percent-escape in it is refused by validateProviderBaseURLs instead.
-//
-// Rebuilding the path from segments is what keeps "stored" and "canonical" the
-// same string: "https://github.com//acme" counted as one segment at the write
-// boundary and was then matched RAW, so it claimed github.com kind-wide while
-// admitting nothing anyone would ever clone.
-//
-// The github.com fold is the one case-INSENSITIVE forge the tree knows about:
-// GitHub treats /Acme and /acme as one org, so a base URL written /Acme that
-// refused every /acme clone URL would read as a working policy and silently
-// stop every repo. Azure DevOps project paths ARE case-sensitive and are left
-// alone, as is any self-hosted host (whose rule nothing here can know).
-func normalizeProviderBaseURL(raw string) string {
-	s := strings.TrimSpace(raw)
-	i := strings.Index(s, "://")
-	if i < 0 {
-		return strings.TrimSuffix(s, "/")
-	}
-	end := len(s)
-	if j := strings.IndexByte(s[i+3:], '/'); j >= 0 {
-		end = i + 3 + j
-	}
-	authority := strings.ToLower(s[:end])
-	segs := baseURLPathSegments(s[end:])
-	if len(segs) == 0 {
-		return authority
-	}
-	path := "/" + strings.Join(segs, "/")
-	if foldsPathCase(hostrules.HostOf(authority)) {
-		path = strings.ToLower(path)
-	}
-	return authority + path
-}
-
-// foldsPathCase reports whether a host's repository paths are case-INSENSITIVE,
-// which decides whether the match rule (and normalization) folds the path.
-// github.com is the only one the tree can claim this about; everything else —
-// Azure DevOps, GHES, ADO Server, any self-hosted forge — stays case-sensitive,
-// the safe direction (refuse a case the admin did not write, never admit one
-// they did not).
-func foldsPathCase(host string) bool {
-	return canonicalProviderHost(host) == "github.com"
 }
 
 // validateWorkspaceProviders is the ONE write-boundary gate both doors run
@@ -236,96 +258,10 @@ func validateWorkspaceProviders(p *types.WorkspaceProviders, refuseSSHPathScope 
 			return err
 		}
 	}
+	if err := validateOneEntraRow(p.Git); err != nil {
+		return err
+	}
 	return validateStorageProviders(p.Storage)
-}
-
-// validateProviderBaseURLs holds every base URL of one row to the shape a
-// persisted site-config URL is already held to (validSiteURL ->
-// shellSafeSiteString + hostrules.ValidApprovedHost), plus the four narrowings a
-// provider address needs beyond that gate — https only, no userinfo, no query or
-// fragment, a bounded path — and then the kind's own host rule.
-func validateProviderBaseURLs(i int, row types.GitProvider) error {
-	for j, raw := range row.BaseURLs {
-		u, err := url.Parse(raw)
-		switch {
-		case err != nil, !validSiteURL(raw),
-			// https ONLY. validSiteURL accepts both schemes for its other
-			// callers; a base URL is matched against a clone URL scheme-for-
-			// scheme, and an http:// provider address would admit a cleartext
-			// clone of the org's own source.
-			u.Scheme != "https",
-			// No userinfo — verbatim the upstream_proxy_url rule: a credential
-			// in a URL is a credential in every log and config dump of it.
-			u.User != nil,
-			// No query or fragment: neither participates in the match, so one
-			// here is a base URL the admin thinks is narrower than it is.
-			u.RawQuery != "", u.ForceQuery, u.Fragment != "",
-			// No port. HostOf (and so the egress allowlist) discards it, so a
-			// port here scopes nothing while reading as though it did.
-			u.Port() != "",
-			// No percent-encoding in the path. It is the same laundering
-			// normalizeProviderBaseURL refuses to do: "%60id%60" DECODES to a
-			// backtick that shellSafeSiteString would have refused on sight, and
-			// "acme%2Fevil" decodes to a second path segment the segment count
-			// above cannot see in the stored string. One escape hatch closed at
-			// the boundary beats two readers disagreeing about the same bytes.
-			u.Path != u.EscapedPath():
-			return fmt.Errorf(providers400BaseURL, j)
-		}
-		segs := baseURLPathSegments(u.Path)
-		if len(segs) > maxProviderBaseURLPathSegments {
-			return fmt.Errorf(providers400BaseURL, j)
-		}
-		if err := validateProviderHostForKind(j, row.Kind, strings.ToLower(u.Hostname()), len(segs)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// baseURLPathSegments splits a base URL path into its non-empty segments.
-func baseURLPathSegments(path string) []string {
-	var out []string
-	for _, seg := range strings.Split(strings.Trim(path, "/"), "/") {
-		if seg != "" {
-			out = append(out, seg)
-		}
-	}
-	return out
-}
-
-// validateProviderHostForKind is the kind x host table. The two WELL-KNOWN
-// hosts belong to exactly one kind each, so a row claiming the other kind's host
-// is refused — the claim rule admission uses is kind-wide on those hosts, and a
-// mislabelled row would claim a host whose repos it can never admit. Any OTHER
-// valid host is accepted for either kind: it is a GHES, an ADO Server or a
-// GitLab host indistinguishably (nothing on the tree can tell them apart by
-// name), so the admin's own label is the only fact available.
-func validateProviderHostForKind(j int, kind types.GitProviderKind, host string, pathSegments int) error {
-	// adoEgressDomains is the tree's own ADO-host classifier: dev.azure.com or
-	// any *.visualstudio.com.
-	switch kind {
-	case types.GitProviderGitHub:
-		if adoEgressDomains(host) != nil {
-			return fmt.Errorf(providers400HostKind, j, host, string(kind))
-		}
-		// github.com takes an optional single /<org>; a deeper path there names
-		// a repository, not an org.
-		if host == "github.com" && pathSegments > 1 {
-			return fmt.Errorf(providers400HostKind, j, host, string(kind))
-		}
-	case types.GitProviderAzureDevOps:
-		if host == "github.com" {
-			return fmt.Errorf(providers400HostKind, j, host, string(kind))
-		}
-		// dev.azure.com is shared by every org on the planet, so the
-		// organization segment is REQUIRED there — "https://dev.azure.com" as a
-		// base URL is not a policy.
-		if host == "dev.azure.com" && pathSegments != 1 {
-			return fmt.Errorf(providers400HostKind, j, host, string(kind))
-		}
-	}
-	return nil
 }
 
 // validateProviderLanes refuses a lane the row's own addresses can never carry.
@@ -423,7 +359,7 @@ type cloneTarget struct {
 // The port is deliberately not part of the comparison: hostrules.HostOf discards
 // it and so does the egress allowlist, so treating it as a scoping boundary here
 // would claim a narrowing the rest of the system does not implement.
-func parseCloneTarget(cloneURL string) (cloneTarget, bool) {
+func parseCloneTarget(cloneURL string, adoServerHosts []string) (cloneTarget, bool) {
 	raw := strings.TrimSpace(cloneURL)
 	if raw == "" {
 		return cloneTarget{}, false
@@ -434,7 +370,7 @@ func parseCloneTarget(cloneURL string) (cloneTarget, bool) {
 	// operator/member sentences every other unreadable target earns. See
 	// repoLocatorPathSafe (runs_scm.go) for why no spelling of pathAdmits
 	// survives one.
-	if !repoLocatorPathSafe(raw) {
+	if !repoLocatorPathSafe(raw, adoServerHosts) {
 		return cloneTarget{}, false
 	}
 	// sshCloneHost answers only for ssh:// and scp-form strings (it refuses
@@ -600,7 +536,7 @@ func admitRepoURL(sc types.SiteConfig, cloneURL string) providerVerdict {
 	if len(rows) == 0 {
 		return providerVerdict{Admitted: true, Unconfigured: true}
 	}
-	t, ok := parseCloneTarget(cloneURL)
+	t, ok := parseCloneTarget(cloneURL, adoServerHosts(sc))
 	if !ok {
 		return providerVerdict{}
 	}
@@ -742,7 +678,7 @@ type workspaceProvidersPutResponse struct {
 // handleGetWorkspaceProviders returns the stored provider block.
 //
 // operatorOnly, for the same reason GET /site-config is (routes.go): base URLs
-// name corporate topology. A member-safe projection (the memberSafeIntegration
+// name corporate topology. A member-safe projection (the userSafeIntegration
 // shape) is the later one-line widening — the safe direction.
 //
 // The response carries an ETag so a caller that means to base a later PUT on
@@ -925,7 +861,7 @@ func storageProvidersConfigured(sc types.SiteConfig) bool {
 const capProvider403 = "you are not granted this deployment's %s provider — ask an admin to grant it, " +
 	"or launch against a repository on a provider you hold"
 
-// denyMemberWorkspaceProviders is the member half of provider admission: of the
+// denyUserWorkspaceProviders is the member half of provider admission: of the
 // repositories this request brings in, is every one on a provider row the
 // caller holds? Reports true — having written the 403 and an authz.denied row
 // carrying `capability_workspace_provider` — when the caller must stop.
@@ -945,14 +881,14 @@ const capProvider403 = "you are not granted this deployment's %s provider — as
 // for a grant to name and the capability has nothing to say about it.
 //
 // Operators are exempt in one line, before the site-config read, exactly as
-// denyMemberRequest is: nothing below ever costs them a store round-trip. A
+// denyUserRequest is: nothing below ever costs them a store round-trip. A
 // build with no store at all answers "allowed", which is capSeamAllowed's own
 // documented rule for a seam running in a harness that holds no rows.
 //
 // repos are RAW sources (a slug, an https URL or an scp-form SSH target); the
 // derived clone URL is computed HERE, once, so no call site can compare a bare
 // <org>/<name> against a base URL and miss.
-func (s *Server) denyMemberWorkspaceProviders(w http.ResponseWriter, r *http.Request, target string, repos ...string) bool {
+func (s *Server) denyUserWorkspaceProviders(w http.ResponseWriter, r *http.Request, target string, repos ...string) bool {
 	if len(repos) == 0 || s.cfg.Store == nil || s.isOperator(r.Context()) {
 		return false
 	}
@@ -971,7 +907,7 @@ func (s *Server) denyMemberWorkspaceProviders(w http.ResponseWriter, r *http.Req
 			continue
 		}
 		seen[row.ID] = true
-		if s.denyMemberCapability(w, r, capWorkspaceProvider, row.ID, target,
+		if s.denyUserCapability(w, r, capWorkspaceProvider, row.ID, target,
 			fmt.Sprintf(capProvider403, row.Kind)) {
 			return true
 		}
@@ -980,7 +916,7 @@ func (s *Server) denyMemberWorkspaceProviders(w http.ResponseWriter, r *http.Req
 }
 
 // repoSourceLocators is the raw repo source of every repo entry in sources —
-// the shape denyMemberWorkspaceProviders takes, and the one every workspace
+// the shape denyUserWorkspaceProviders takes, and the one every workspace
 // door already holds.
 func repoSourceLocators(sources []types.WorkspaceSource) []string {
 	var out []string

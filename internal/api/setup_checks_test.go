@@ -25,35 +25,74 @@ func TestSsoRBACCheck(t *testing.T) {
 		oidcConfigured    bool
 		roleMapConfigured bool
 		consoleRows       bool
+		adminList         bool
+		defaultRoleAdmin  bool
 		wantOK            bool
 		wantStatus        string
+		wantCause         string
 	}{
-		{"OIDC off: absent regardless of role map", false, true, false, false, ""},
-		{"OIDC off, everything unset: still absent", false, false, false, false, ""},
-		{"OIDC on, chart map set: ok", true, true, false, true, "ok"},
-		{"OIDC on, chart+console both unset: warn", true, false, false, true, "warn"},
-		// The widened case this signature exists for: no chart map, but the
-		// People step has at least one console row — still ok, not warn.
-		{"OIDC on, env unset + console rows: ok", true, false, true, true, "ok"},
-		{"OIDC on, chart AND console both set: still ok", true, true, true, true, "ok"},
+		{"OIDC off: absent regardless of role map", false, true, false, false, false, false, "", ""},
+		{"OIDC off, everything unset: still absent", false, false, false, false, false, false, "", ""},
+		// Q457-5: the warn fires ONLY when neither a role map nor an admin list
+		// is set — the one state in which everyone who signs in is an admin.
+		{"none: no role map, no admin list: warn", true, false, false, false, false, true, "warn", ""},
+		{"admin list only: ok", true, false, false, true, false, true, "ok", ""},
+		{"role map only (chart): ok", true, true, false, false, false, true, "ok", ""},
+		{"role map only (People-step rows): ok", true, false, true, false, false, true, "ok", ""},
+		{"both role map and admin list: ok", true, true, true, true, false, true, "ok", ""},
+		// #491/Q491-1: a role map is set, but the default role is admin — an
+		// unmatched sign-in is still an admin, so the row must not read ok.
+		{"role map (chart) + default role admin: warn, default_role cause", true, true, false, false, true, true, "warn", "default_role"},
+		{"role map (People-step) + default role admin: warn, default_role cause", true, false, true, false, true, true, "warn", "default_role"},
+		// F1: deriveRole ignores defaultRole when the merged role map is
+		// empty (derive.go's DefaultRole doc) and the admin list is never
+		// folded into that map — so an admin list alone plus a default role
+		// of admin still leaves an unmatched person deriving user. ok, not warn.
+		{"admin list only + default role admin: ok (deriveRole ignores the default role with no role map)", true, false, false, true, true, true, "ok", ""},
+		{"admin list + chart role map + default role admin: warn, default_role cause", true, true, false, true, true, true, "warn", "default_role"},
+		// Q491-1: the combination case (neither role map nor admin list, AND
+		// default role admin) reads as #484's ORIGINAL case, not the new one —
+		// the packet shows one banner, not two competing ones.
+		{"none set + default role admin: #484's own warn, no cause", true, false, false, false, true, true, "warn", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			chk, ok := ssoRBACCheck(tc.oidcConfigured, tc.roleMapConfigured, tc.consoleRows)
+			chk, ok := ssoRBACCheck(tc.oidcConfigured, tc.roleMapConfigured, tc.consoleRows, tc.adminList, tc.defaultRoleAdmin)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
 			}
 			if !ok {
 				return
 			}
-			if chk.ID != "sso_rbac" {
-				t.Errorf("ID = %q, want %q", chk.ID, "sso_rbac")
+			if chk.ID != "sso_rbac" || chk.Label != "Who is an admin" {
+				t.Errorf("ID/Label = %q/%q, want sso_rbac/Who is an admin", chk.ID, chk.Label)
 			}
 			if chk.Status != tc.wantStatus {
 				t.Errorf("Status = %q, want %q", chk.Status, tc.wantStatus)
 			}
-			if tc.wantStatus == "warn" && chk.Fix == "" {
-				t.Error("warn status must carry a Fix")
+			if chk.Cause != tc.wantCause {
+				t.Errorf("Cause = %q, want %q", chk.Cause, tc.wantCause)
+			}
+			// The frozen strings (docs/design/admin-access-canon.md), byte for byte.
+			switch {
+			case tc.wantStatus == "warn" && tc.wantCause == "default_role":
+				if chk.Detail != "A role map is set, but the default role is admin, so a sign-in the map doesn't match is still an admin." ||
+					chk.Fix != "Set WARDYN_OIDC_DEFAULT_ROLE to user or a user type (chart: env.WARDYN_OIDC_DEFAULT_ROLE), so a sign-in the role map doesn't match becomes a user, not an admin." {
+					t.Errorf("warn_default_role strings drifted from the canon: %+v", chk)
+				}
+				if !chk.Blocking {
+					t.Error("warn must stay Blocking")
+				}
+			case tc.wantStatus == "warn":
+				if chk.Detail != "Nobody is mapped to a role and no admin list is set, so everyone who signs in is an admin." ||
+					chk.Fix != "Map people to admin or user on the People step, so only the people you name can change this deployment." {
+					t.Errorf("warn strings drifted from the canon: %+v", chk)
+				}
+				if !chk.Blocking {
+					t.Error("warn must stay Blocking")
+				}
+			case chk.Detail != "People are mapped to admin or user, so a person's role comes from their sign-in." || chk.Blocking:
+				t.Errorf("ok row drifted from the canon or blocks: %+v", chk)
 			}
 		})
 	}
@@ -149,14 +188,14 @@ func TestTlsCookiePostureCheck(t *testing.T) {
 // success) and "" (indeterminate — an old daemon build, or in principle any
 // unproven state; see the field's doc for why a genuinely indeterminate LIVE
 // canary can never reach here). Never confuses Indeterminate with Enforcing.
-// TestSiteConfigCheck_DanglingSecretRef pins W26-S1-2: on base 763beb5,
-// siteConfigCheck graded "info" ("every run inherits it") purely off whether
-// UpstreamProxySecretRef/EgressRedirects/ScmHosts were SET — never whether the
-// secret they name is actually present. After the documented reset+apply
-// recovery (`wardyn site-config get > f` before a reset, `wardyn site-config
-// apply f` after) with the referenced secret never restored, that read as
-// fully configured while the credentialed path was dead. It must now grade
-// "warn" and name the missing secret.
+// TestSiteConfigCheck_DanglingSecretRef pins that siteConfigCheck grades on
+// whether the secret UpstreamProxySecretRef/EgressRedirects/ScmHosts name is
+// actually present, not only on whether those fields are set. After the
+// documented reset+apply recovery (`wardyn site-config get > f` before a
+// reset, `wardyn site-config apply f` after) with the referenced secret never
+// restored, "info" ("every run inherits it") would read as fully configured
+// while the credentialed path is dead. It must grade "warn" and name the
+// missing secret.
 func TestSiteConfigCheck_DanglingSecretRef(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -217,11 +256,11 @@ func TestSiteConfigCheck_DanglingSecretRef(t *testing.T) {
 	}
 }
 
-// TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured is B7-F5: a document
+// TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured: a document
 // declaring ONLY InternalHosts (the one override that LIFTS the proxy's
-// private/reserved-IP SSRF guard) used to read as "No operator-wide site
-// config yet (optional)" — the emptiness test never looked at InternalHosts,
-// UpstreamProxyNoProxy or WorkspaceProviders.
+// private/reserved-IP SSRF guard) must not read as "No operator-wide site
+// config yet (optional)" — the emptiness test has to look at InternalHosts,
+// UpstreamProxyNoProxy and WorkspaceProviders too.
 func TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured(t *testing.T) {
 	cases := []struct {
 		name string
@@ -273,8 +312,8 @@ func TestInternalHostsCheck(t *testing.T) {
 	}
 }
 
-// TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly is B7-F10:
-// every redirect network-only used to render "(ecosystems: ; 2
+// TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly: when every
+// redirect is network-only, the row must not render "(ecosystems: ; 2
 // network-only)" — a bare, truncated-looking clause. The ecosystems: segment
 // must be OMITTED, not empty, when there are no ecosystem-tagged rows.
 func TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly(t *testing.T) {
@@ -373,12 +412,12 @@ func TestK8sEgressContainmentCheck_Acknowledged(t *testing.T) {
 	}
 }
 
-// TestRunnerCheckCC1OnlyFixIsDriverAware (W4-S1-5/W27-S1-4): a CC1-only host's
-// Fix used to unconditionally read "run `wardyn setup wall` (or `wardyn setup
-// vault`)" — a DOCKER host command that means nothing on a k8s runner, where
-// the actual lever is pinning a cluster-registered RuntimeClass via Helm
-// (k8s.runtimeClasses.CC2/.CC3). The docker driver keeps the original command;
-// only k8s swaps to the Helm-shaped fix.
+// TestRunnerCheckCC1OnlyFixIsDriverAware: a CC1-only host's Fix must not
+// unconditionally read "run `wardyn setup wall` (or `wardyn setup vault`)" — a
+// Docker host command that means nothing on a k8s runner, where the actual
+// lever is pinning a cluster-registered RuntimeClass via Helm
+// (k8s.runtimeClasses.CC2/.CC3). The docker driver keeps that command; only
+// k8s swaps to the Helm-shaped fix.
 func TestRunnerCheckCC1OnlyFixIsDriverAware(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -407,7 +446,7 @@ func TestRunnerCheckCC1OnlyFixIsDriverAware(t *testing.T) {
 	}
 }
 
-// TestPermissionsPostureCheck is the #19b regression: the row must always be
+// TestPermissionsPostureCheck: the row must always be
 // "info" (a posture choice, never a misconfiguration to warn/fail about — an
 // operator may legitimately leave every kind fail-open) and must name exactly
 // which of the four capability kinds are enforced vs left at the fail-open
@@ -533,14 +572,75 @@ func TestSetupFixHelmCommandsAreRunnable(t *testing.T) {
 	}
 }
 
-// TestAgeKeyCheckFixSteersToASecretBackedKey is R5 F159/F190. The warn arm's Fix
-// used to offer `helm: env.WARDYN_AGE_KEY` — which renders the secret store's
-// MASTER key as a plaintext literal in the Deployment object, readable by
-// anything with `get deploy` and captured in every `helm get manifest`. The
-// chart has two Secret-backed doors (deploy/helm/wardyn/values.yaml's
-// secrets.ageKeyFromSecret over the postgres.dsn.secretRef Secret's `age-key`
-// entry, and secrets.ageKeySecretRef.name for a separate Secret), and the
-// console's own remedy has to name them.
+// In store mode there is no local key to be durable: the age-key row gives
+// way to store_external, which names the store (design §3).
+func TestSecretStoreCheck_StoreModeReplacesTheAgeKeyRow(t *testing.T) {
+	chks := secretStoreChecks("Vault at vault.example:8200", "", true, true, false)
+	if len(chks) != 1 || chks[0].ID != "store_external" || chks[0].Status != "ok" || !strings.Contains(chks[0].Detail, "Vault at vault.example:8200") {
+		t.Fatalf("store mode rows = %+v", chks)
+	}
+	if got := secretStoreChecks("", "", false, false, true); len(got) != 1 || got[0].ID != "age_key" || got[0].Status != "warn" {
+		t.Fatalf("local mode rows = %+v, want the age-key warning unchanged", got)
+	}
+}
+
+// A key service replaces the age-key row; the local key on a multi-user
+// install adds the amber kek_local row (design §3, K3), and a single-user one
+// does not.
+func TestSecretStoreChecks_KeyServiceAndLocalKey(t *testing.T) {
+	chks := secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false)
+	// SETUP_CHECK.KEK_SERVICE (owner decision 2026-09-25), byte for byte.
+	if len(chks) != 1 || chks[0].ID != "kek_service" || chks[0].Status != "ok" ||
+		chks[0].Detail != "Credentials stay sealed in Wardyn's database; the key that unlocks them is held in Vault Transit at vault.example:8200 and never leaves it. Wardyn holds no copy; each unlock is a Transit decrypt in Vault's audit log." {
+		t.Fatalf("key service rows = %+v", chks)
+	}
+	chks = secretStoreChecks("", "", true, true, true)
+	if len(chks) != 2 || chks[0].ID != "age_key" || chks[1].ID != "kek_local" || chks[1].Status != "warn" ||
+		chks[1].Detail != "Credentials are encrypted with a key this deployment holds. Anyone with both the database and that key can read them. Connect a key service to keep the two apart." {
+		t.Fatalf("multi-user local key rows = %+v", chks)
+	}
+	if got := secretStoreChecks("", "", true, false, true); len(got) != 1 || got[0].ID != "age_key" {
+		t.Fatalf("single-user local key rows = %+v, want the age-key row alone", got)
+	}
+}
+
+// TestSecretStoreRows_PlatformShared is SETUP_CHECK.PLATFORM_SHARED (design
+// §3): amber in local mode while the age key protects the boot keys too, gone
+// once they have a key of their own, live in the organisation's store, or are
+// wrapped by a key service.
+func TestSecretStoreRows_PlatformShared(t *testing.T) {
+	rows := secretStoreChecks("", "", true, false, false)
+	if len(rows) != 2 || rows[0].ID != "age_key" {
+		t.Fatalf("local mode, one key = %+v, want the age-key row then platform_shared", rows)
+	}
+	chk := rows[1]
+	if chk.ID != "platform_shared" || chk.Status != "warn" ||
+		chk.Detail != "Wardyn's own signing and session keys are protected by the same key as people's credentials." ||
+		!strings.Contains(chk.Fix, "WARDYN_PLATFORM_KEY_FILE") || !strings.Contains(chk.Fix, "wardynd -rewrap") {
+		t.Fatalf("platform_shared = %+v", chk)
+	}
+	for label, c := range map[string]struct {
+		external, keyService string
+		separate             bool
+	}{
+		"a separate platform key": {"", "", true},
+		"store mode":              {"Vault at vault.example:8200", "", false},
+		"a key service":           {"", "Vault Transit at vault.example:8200", false},
+	} {
+		if rows := secretStoreChecks(c.external, c.keyService, true, false, c.separate); len(rows) != 1 {
+			t.Errorf("%s: rows %+v, want only the store's own row", label, rows)
+		}
+	}
+}
+
+// TestAgeKeyCheckFixSteersToASecretBackedKey: the warn arm's Fix must not offer
+// `helm: env.WARDYN_AGE_KEY` — that renders the secret store's master key as a
+// plaintext literal in the Deployment object, readable by anything with `get
+// deploy` and captured in every `helm get manifest`. The chart has two
+// Secret-backed doors (deploy/helm/wardyn/values.yaml's secrets.ageKeyFromSecret
+// over the postgres.dsn.secretRef Secret's `age-key` entry, and
+// secrets.ageKeySecretRef.name for a separate Secret), and the console's own
+// remedy has to name them.
 func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	if fix := ageKeyCheck(true).Fix; fix != "" {
 		t.Errorf("durable arm carries a Fix (%q) — an ok row has nothing to fix", fix)
@@ -573,7 +673,23 @@ func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	}
 }
 
-// ── finding 3: bedrock_provider / llm_provider under a per-principal caller ──
+// TestAgeKeyCheckDetailNamesUnrecoverableConsequence (#755): the warn arm's
+// Detail must not read as a one-time, future event ("become unreadable after a
+// restart"). The row only shows while wardynd runs on an ephemeral key, and
+// convertSecretStore refuses that boot whenever age-sealed rows exist, so no
+// earlier ephemeral key's rows can be present here: what the operator must hear
+// is that what is stored now is lost at the next restart, and that the next
+// boot refuses to start over it.
+func TestAgeKeyCheckDetailNamesUnrecoverableConsequence(t *testing.T) {
+	detail := ageKeyCheck(false).Detail
+	for _, want := range []string{"lost at the next restart", "no key set afterward", "next boot refuses to start"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("Detail does not say %q — Detail = %q", want, detail)
+		}
+	}
+}
+
+// finding 3: bedrock_provider / llm_provider under a per-principal caller
 
 // bedrockRowVia is bedrockProviderCheck fed the SAME setupBedrock a real
 // request would compute for scope — real per_user zeroing included — so
@@ -626,9 +742,8 @@ func TestBedrockProviderCheck_MechanismPrincipalIsInfoNotWarn(t *testing.T) {
 	}
 }
 
-// TestBedrockProviderCheck_SharedRowUnchanged pins the load-bearing regression:
-// the ORIGINAL shared-row text, byte-for-byte, through the per_user/mechanism
-// refactor.
+// TestBedrockProviderCheck_SharedRowUnchanged pins the load-bearing shared-row
+// text, byte-for-byte, through the per_user/mechanism split.
 func TestBedrockProviderCheck_SharedRowUnchanged(t *testing.T) {
 	chk := bedrockRowVia(t, awsSSOScope{})
 	want := SetupCheck{
@@ -642,10 +757,10 @@ func TestBedrockProviderCheck_SharedRowUnchanged(t *testing.T) {
 }
 
 // TestLLMProviderCheck_NoBedrockRowUnchanged pins the OTHER load-bearing
-// regression: an install with no Bedrock row at all keeps today's exact
+// text: an install with no Bedrock row at all keeps the exact
 // optional-provider sentence.
 func TestLLMProviderCheck_NoBedrockRowUnchanged(t *testing.T) {
-	got := llmProviderCheck("", SetupBedrock{})
+	got := llmProviderCheck("", SetupBedrock{}, nil)
 	want := SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
 		Detail: "No model/harness provider configured (optional): needed only for agent-harness runs. Bring-your-own-container and interactive runs work without one.",
@@ -662,7 +777,7 @@ func TestLLMProviderCheck_NoBedrockRowUnchanged(t *testing.T) {
 // IS configured.
 func TestLLMProviderCheck_PerUserBedrockRowDoesNotSayNoProviderConfigured(t *testing.T) {
 	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true}
-	got := llmProviderCheck("", b)
+	got := llmProviderCheck("", b, nil)
 	if strings.Contains(got.Detail, "No model/harness provider configured") {
 		t.Errorf("detail = %q, must not claim no provider when Bedrock IS configured per_user", got.Detail)
 	}
@@ -675,7 +790,7 @@ func TestLLMProviderCheck_PerUserBedrockRowDoesNotSayNoProviderConfigured(t *tes
 // info-not-warn rule for the same caller.
 func TestLLMProviderCheck_MechanismPrincipalIsInfo(t *testing.T) {
 	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true, Mechanism: true}
-	got := llmProviderCheck("", b)
+	got := llmProviderCheck("", b, nil)
 	if got.Status != "info" {
 		t.Errorf("status = %q, want info", got.Status)
 	}
@@ -699,7 +814,7 @@ func TestLLMProviderCheck_MechanismPrincipalIsInfo(t *testing.T) {
 var setupCheckBlockingStatus = map[string]string{
 	"runner":            "fail", // no live confinement class: runs cannot launch at all
 	"confinement_floor": "warn", // every run on the default policy refused before launch
-	"sso_rbac":          "warn", // no role mapping: every SSO user is an admin
+	"sso_rbac":          "warn", // no role map and no admin list: everyone who signs in is an admin
 }
 
 // setupCheckNeverBlocks is every OTHER id /setup/status can emit. NOT the
@@ -711,13 +826,16 @@ var setupCheckBlockingStatus = map[string]string{
 // Blocking decision recorded here must fail the build, not default quietly
 // to non-blocking.
 var setupCheckNeverBlocks = map[string]bool{
-	"env_builder": true, "k8s_egress_containment": true, "age_key": true,
+	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_shared": true,
+	"kek_service": true, "kek_local": true,
 	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
 	"claude_subscription_staging": true, "agent_image": true,
 	"harness_credential": true, "harness_credential_aws": true,
 	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true,
+	// providerAccessCheck's llm_provider:<provider id>, as its test names it.
+	"llm_provider:corp-gateway": true,
 }
 
 // assertSetupCheckBlocking is the one gate every case in TestSetupCheckBlocking
@@ -745,7 +863,9 @@ func assertSetupCheckBlocking(t *testing.T, chk SetupCheck) {
 // which needs a DefaultPolicy no golden fixture sets) across every arm/status
 // each one can produce, and asserts Blocking through assertSetupCheckBlocking.
 func TestSetupCheckBlocking(t *testing.T) {
-	// The three blocking-capable ids: the blocking arm, and their other arms.
+	// The three blocking-capable ids: the blocking arm(s), and their other
+	// arms — ssoRBACCheck has two distinct warn causes (#484's original and
+	// #491's default-role cause), both exercised below.
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "none"}))
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1"}}))
 	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1", "CC2"}}))
@@ -756,12 +876,24 @@ func TestSetupCheckBlocking(t *testing.T) {
 		t.Fatal("confinementFloorCheck absent, want a floor-mismatch row")
 	}
 
-	if chk, ok := ssoRBACCheck(true, false, false); ok {
+	if chk, ok := ssoRBACCheck(true, false, false, false, false); ok {
 		assertSetupCheckBlocking(t, chk)
 	} else {
 		t.Fatal("ssoRBACCheck absent")
 	}
-	if chk, ok := ssoRBACCheck(true, true, false); ok {
+	if chk, ok := ssoRBACCheck(true, true, false, false, false); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("ssoRBACCheck absent")
+	}
+	if chk, ok := ssoRBACCheck(true, false, false, true, false); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("ssoRBACCheck absent")
+	}
+	// #491: the default-role-admin warn arm blocks too (Q457-6's canon treats
+	// Blocking as this row's own concern, not the banner's).
+	if chk, ok := ssoRBACCheck(true, true, false, false, true); ok {
 		assertSetupCheckBlocking(t, chk)
 	} else {
 		t.Fatal("ssoRBACCheck absent")
@@ -781,6 +913,15 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, ageKeyCheck(true))
 	assertSetupCheckBlocking(t, ageKeyCheck(false))
+	for _, chks := range [][]SetupCheck{
+		secretStoreChecks("Vault at vault.example:8200", "", true, true, false),
+		secretStoreChecks("", "Vault Transit at vault.example:8200", true, true, false),
+		secretStoreChecks("", "", true, true, false),
+	} {
+		for _, chk := range chks {
+			assertSetupCheckBlocking(t, chk)
+		}
+	}
 
 	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{}, nil))
 	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{UpstreamProxySecretRef: "x"}, map[string]bool{}))
@@ -813,10 +954,10 @@ func TestSetupCheckBlocking(t *testing.T) {
 
 	assertSetupCheckBlocking(t, permissionsPostureCheck(nil))
 
-	assertSetupCheckBlocking(t, llmProviderCheck("a model provider is connected", SetupBedrock{}))
-	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{}))
+	assertSetupCheckBlocking(t, llmProviderCheck("a model provider is connected", SetupBedrock{}, nil))
+	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{}, nil))
 	// per_user warn — one of the four per-person rows; must stay non-blocking.
-	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{Region: "us-east-1", Model: "m", PerUser: true}))
+	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{Region: "us-east-1", Model: "m", PerUser: true}, nil))
 
 	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m", CredsPresent: true}); ok {
 		assertSetupCheckBlocking(t, chk)

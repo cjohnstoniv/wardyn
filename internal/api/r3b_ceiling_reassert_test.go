@@ -31,13 +31,13 @@ func r3bWalledRun(t *testing.T, profile string, deny []string) ([]types.AuditEve
 	if profile != "" {
 		gc.Profile = &types.GovernanceProfile{Name: profile}
 	}
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(gc, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 	})
 	return audit.events, run.ID
 }
 
-// TestR3BCeilingReassertAuditsEveryAssignedProfile is F175's pin.
+// TestCeilingReassertAuditsEveryAssignedProfile is F175's pin.
 //
 // reassertCeilingDenies documents itself as "ALWAYS audited when a profile
 // applies, even with nothing to drop", and docs/AUDIT-ACTIONS.md says the same
@@ -46,9 +46,10 @@ func r3bWalledRun(t *testing.T, profile string, deny []string) ([]types.AuditEve
 // skipped the ceiling". The function opened with `if len(c.deny) == 0 { return }`,
 // which made that false for the commonest assigned shape there is — a profile
 // that grants rather than denies. Nothing else in the dispatch says which
-// ceiling the run stood inside: run.policy.effective records a policy, not
+// ceiling the run stood inside: run.policy.resolve records a policy, not
 // whose walls they are.
-func TestR3BCeilingReassertAuditsEveryAssignedProfile(t *testing.T) {
+func TestCeilingReassertAuditsEveryAssignedProfile(t *testing.T) {
+	// ticket: R3B
 	t.Run("assigned profile with EMPTY denied_domains still records the row", func(t *testing.T) {
 		events, runID := r3bWalledRun(t, "grants-only", nil)
 		ev := findAudit(events, runID, "run.ceiling.reassert", "success")
@@ -63,7 +64,7 @@ func TestR3BCeilingReassertAuditsEveryAssignedProfile(t *testing.T) {
 			t.Fatalf("row data is not an object: %v (%s)", err, ev.Data)
 		}
 		// Naming the profile is the whole point: it is the one fact the
-		// run.policy.effective envelope cannot carry.
+		// run.policy.resolve envelope cannot carry.
 		if data.Profile != "grants-only" {
 			t.Errorf("row names profile %q, want %q", data.Profile, "grants-only")
 		}

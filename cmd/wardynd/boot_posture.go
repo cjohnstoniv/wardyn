@@ -19,7 +19,7 @@ import (
 // it serves anything. Carved out of main.go by seam (file-size gate), not by
 // behaviour: every function here is byte-identical to its previous home.
 
-// validateMemberModePosture enforces WARDYN_MEMBER_MODE's two preconditions.
+// validateMemberModePosture enforces WARDYN_USER_DESKTOP's two preconditions.
 //
 // Member mode is an ASSERTION about topology, not a new authorization tier: it
 // claims the human driving this daemon is a member and the operator authority
@@ -45,16 +45,16 @@ func validateMemberModePosture(memberMode, localMode, oidcConfigured bool) error
 		return nil
 	}
 	if localMode {
-		return errors.New("refusing to start: WARDYN_MEMBER_MODE is set but local mode is active — " +
+		return errors.New("refusing to start: WARDYN_USER_DESKTOP is set but local mode is active — " +
 			"local mode bypasses public-API auth entirely and makes the loopback developer an ADMIN, " +
 			"which is precisely what member mode asserts is impossible; unset WARDYN_LOCAL_MODE " +
-			"(or WARDYN_MEMBER_MODE if this really is a single-developer machine that owns its own policy)")
+			"(or WARDYN_USER_DESKTOP if this really is a single-developer machine that owns its own policy)")
 	}
 	if !oidcConfigured {
-		return errors.New("refusing to start: WARDYN_MEMBER_MODE is set but no OIDC issuer is configured — " +
+		return errors.New("refusing to start: WARDYN_USER_DESKTOP is set but no OIDC issuer is configured — " +
 			"with no signed-in identity there is no role to derive, so every caller is an admin; " +
 			"configure WARDYN_OIDC_ISSUER (plus WARDYN_OIDC_ROLE_MAP or WARDYN_OIDC_OPERATOR_EMAILS " +
-			"so the developer derives the member role) or unset WARDYN_MEMBER_MODE")
+			"so the developer derives the member role) or unset WARDYN_USER_DESKTOP")
 	}
 	return nil
 }
@@ -96,10 +96,10 @@ func validateHybridPosture(orgURL, enrolToken string, memberMode, allowPlaintext
 		return nil
 	}
 	if !memberMode {
-		return errors.New("refusing to start: WARDYN_ORG_URL is set but WARDYN_MEMBER_MODE is not — " +
+		return errors.New("refusing to start: WARDYN_ORG_URL is set but WARDYN_USER_DESKTOP is not — " +
 			"a daemon pointed at an org control plane with no member-mode assertion still treats the human at the " +
 			"keyboard as its own admin, which is precisely the incoherence member mode exists to refuse; " +
-			"set WARDYN_MEMBER_MODE=true or unset WARDYN_ORG_URL")
+			"set WARDYN_USER_DESKTOP=true or unset WARDYN_ORG_URL")
 	}
 	u, err := url.Parse(orgURL)
 	if err != nil {
@@ -112,20 +112,6 @@ func validateHybridPosture(orgURL, enrolToken string, memberMode, allowPlaintext
 			"loopback host for local testing, or set WARDYN_ALLOW_PLAINTEXT_LISTEN=true to override", orgURL)
 	}
 	return nil
-}
-
-// checkMemberAndHybridBootPosture runs validateMemberModePosture then
-// validateHybridPosture in sequence, folded into ONE function call so run()
-// (cmd/wardynd/main.go) gains no extra `if err != nil` branch for the second,
-// adjacent refusal — gocyclo's function-complexity gate is already at its
-// ceiling there. The two validators stay separate on purpose (see
-// validateHybridPosture's own doc comment on why it does not extend
-// validateMemberModePosture); this is only the call site folded together.
-func checkMemberAndHybridBootPosture(memberMode, localMode, oidcConfigured bool, orgURL, enrolToken string, allowPlaintextListen bool) error {
-	if err := validateMemberModePosture(memberMode, localMode, oidcConfigured); err != nil {
-		return err
-	}
-	return validateHybridPosture(orgURL, enrolToken, memberMode, allowPlaintextListen)
 }
 
 // validateSSOOnlyPosture enforces WARDYN_SSO_ONLY's precondition: SSO must
@@ -141,7 +127,7 @@ func checkMemberAndHybridBootPosture(memberMode, localMode, oidcConfigured bool,
 //     door the posture claims does not exist.
 //  3. WARDYN_LOCAL_MODE set — local mode bypasses public-API auth entirely,
 //     which is precisely what sso-only asserts is impossible.
-//  4. WARDYN_MEMBER_MODE set — member mode's own precondition
+//  4. WARDYN_USER_DESKTOP set — member mode's own precondition
 //     (validateMemberModePosture above) already requires OIDC, but its
 //     desktop profile (deploy/desktop/wardyn.env.m-prime.example) relies on
 //     the admin token as a PROCESS credential the daemon authenticates
@@ -170,9 +156,9 @@ func validateSSOOnlyPosture(ssoOnly, oidcConfigured bool, adminToken string, loc
 			"unset WARDYN_LOCAL_MODE or unset WARDYN_SSO_ONLY")
 	}
 	if memberMode {
-		return errors.New("refusing to start: WARDYN_SSO_ONLY is set but so is WARDYN_MEMBER_MODE — " +
+		return errors.New("refusing to start: WARDYN_SSO_ONLY is set but so is WARDYN_USER_DESKTOP — " +
 			"member mode requires the admin token as a process credential (see deploy/desktop/wardyn.env.m-prime.example), " +
-			"which sso-only forbids outright; unset WARDYN_MEMBER_MODE or unset WARDYN_SSO_ONLY")
+			"which sso-only forbids outright; unset WARDYN_USER_DESKTOP or unset WARDYN_SSO_ONLY")
 	}
 	if allowNoOperatorList {
 		return errors.New("refusing to start: WARDYN_SSO_ONLY is set but so is WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST — " +
@@ -211,7 +197,7 @@ func validateOperatorPosture(oidcConfigured bool, operatorEmails []string, allow
 	return errors.New("refusing to start: OIDC SSO is configured but the operator allowlist is empty — " +
 		"EVERY human the IdP signs in would be admin-equivalent (rewrite policies/workspaces/site-config, connect the shared harness credential, " +
 		"write and delete secrets, decide approvals, and open an interactive shell in any running sandbox) — absent a role map — " +
-		"set WARDYN_OIDC_OPERATOR_EMAILS to the humans who may do that — everyone else becomes a member who reads their OWN runs and can launch runs — " +
+		"set WARDYN_OIDC_OPERATOR_EMAILS to the humans who may do that — everyone else becomes a user who reads their OWN runs and can launch runs — " +
 		"or set WARDYN_OIDC_ROLE_MAP for claim-based roles instead, " +
 		"or explicitly set WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true to override")
 }
@@ -380,6 +366,29 @@ func validateUISandboxConfig(uiListen, listen, sshListen, originTemplate string,
 	return nil
 }
 
+// validateBootPosture runs the flag-only posture refusals (UI-sandbox gateway,
+// hybrid org control plane) — neither depends on anything db.Migrate, secrets,
+// identity, the broker or the runner resolve — in one call, right beside
+// validateConfig in run() and before connectAndMigrate. Other flag-only checks
+// (validateModelEndpoints, validateOIDCRedirectURL, the demo-video URL) still
+// run after migration. Folded into one function, not one `if err != nil` branch
+// per validator, for the same reason the deleted checkMemberAndHybridBootPosture
+// wrapper existed: run()'s gocyclo budget (.golangci.yml) is already at its
+// ceiling, and a misconfigured posture belongs at the FIRST validation step,
+// not discovered after the daemon has done real work.
+//
+// validateMemberModePosture stays OUT of this list on purpose: it needs
+// lm.enabled (local mode's RESOLVED fact, not the raw flag — local mode
+// auto-enables) and feats.authn != nil (OIDC actually configured, which a
+// failed OIDC discovery leaves nil), and neither exists this early in boot.
+// It is still called directly, at its own later point in run().
+func validateBootPosture(f *bootFlags, posture tlsPosture) error {
+	if err := validateUISandboxConfig(*f.uiListen, *f.listen, *f.sshListen, *f.uiOriginTemplate, posture, *f.allowPlaintextListen); err != nil {
+		return err
+	}
+	return validateHybridPosture(*f.orgURL, *f.orgEnrolToken, *f.memberMode, *f.allowPlaintextListen)
+}
+
 // subscriptionInjectPosture decides whether this deployment may resolve a SHARED
 // subscription credential into an agent run at all.
 //
@@ -439,7 +448,7 @@ func subscriptionInjectPosture(runnerTarget string, oidcConfigured, localMode, a
 
 // parseMountCeilings parses the TWO operator/MDM-set mount ceilings at boot and
 // logs their posture warnings: what a MEMBER may bind from their own machine
-// (WARDYN_MEMBER_WORKSPACE_ROOTS + its three siblings) and where an ADMIN may
+// (WARDYN_USER_WORKSPACE_ROOTS + its three siblings) and where an ADMIN may
 // point a host_path USER DRIVE (WARDYN_USER_DRIVE_HOST_ROOTS).
 //
 // Together rather than inline, and together rather than apart, because they are
@@ -473,18 +482,18 @@ func subscriptionInjectPosture(runnerTarget string, oidcConfigured, localMode, a
 // that consults no drive allocation. This function is where both lists exist at
 // once, so the comparison is made here and warned about in the same voice
 // (runner.MountCeilingOverlapWarnings).
-func parseMountCeilings(f *bootFlags) (runner.MemberMountPolicy, []string, error) {
-	memberMounts, memberWarns, err := runner.ParseMemberMountPolicy(
+func parseMountCeilings(f *bootFlags) (runner.UserMountPolicy, []string, error) {
+	memberMounts, memberWarns, err := runner.ParseUserMountPolicy(
 		*f.memberRoots, *f.memberRootsMap, *f.memberWritableRoots, *f.memberWritableDeny)
 	if err != nil {
-		return runner.MemberMountPolicy{}, nil, err
+		return runner.UserMountPolicy{}, nil, err
 	}
 	for _, warn := range memberWarns {
 		slog.Warn("wardynd: member workspace roots — " + warn)
 	}
 	driveHostRoots, driveWarns, err := runner.ParseUserDriveHostRoots(*f.userDriveHostRoots)
 	if err != nil {
-		return runner.MemberMountPolicy{}, nil, err
+		return runner.UserMountPolicy{}, nil, err
 	}
 	for _, warn := range driveWarns {
 		slog.Warn("wardynd: user drive host roots — " + warn)

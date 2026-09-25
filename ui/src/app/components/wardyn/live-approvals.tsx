@@ -32,8 +32,11 @@ import {
 } from "../../lib/types";
 import { AdoCapabilityCard, type AdoCardRun } from "./ado-capability-card";
 import { ADO } from "../../lib/ado-entra-copy";
+import { APPROVALS } from "../../lib/approvals-copy";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
-import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
+import { useModelAccessDoor, useClaimModelAccessDoor, useShellSetupStatus } from "./model-access-context";
+import { resolveDoor } from "../../lib/model-access";
+import { OpenInUserView, viewOfPath } from "./console-view";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
@@ -167,6 +170,12 @@ export function LiveApprovals({
   // finished once, and every test mount is exactly that "never resolves"
   // shape if it defaulted to undefined instead.
   run = null,
+  // M-7 (admin-member-modes-design.md §4.6): the admin monitor's own mount
+  // (run-detail.tsx) passes true. The demo runner is a user act (D5). Record
+  // (record-pane.tsx) is an Admin-view sandbox (QM-10) and still passes
+  // nothing: its door moves with its dependency line and switch link in M-6
+  // (#637).
+  adminView = false,
 }: {
   runId: string;
   reasonApprove?: string;
@@ -174,13 +183,14 @@ export function LiveApprovals({
   idleHint?: string;
   hasWorkspace?: boolean;
   run?: AdoCardRun | null;
+  adminView?: boolean;
 }) {
   // Decides here go straight to the API with no ReasonDialog stop, so this is
   // the one gate for all FOUR mount sites (run detail, demo screen, and
   // record-pane.tsx's two) — see approvals.tsx's PendingCard for the
   // queue-screen equivalent.
   //
-  // useSecurityOperator, not useOperator (0.7 §B): authorizeMemberDecision
+  // useSecurityOperator, not useOperator (0.7 §B): authorizeUserDecision
   // early-returns for isSecurityOperator (approvals.go:392) and
   // decision_scope=always is its lockstep pair (approvals.go:604), so the
   // security tier decides any kind, on any run, at any scope.
@@ -190,6 +200,11 @@ export function LiveApprovals({
   const principal = usePrincipal();
   const [pending, setPending] = React.useState<ApprovalRequest[]>([]);
   const [busy, setBusy] = React.useState<string | null>(null);
+  // Which of the busy row's two actions is in flight (#458) — `busy` alone
+  // (a row id) is shared with every non-ADO row's own decide(), which never
+  // needed the distinction; only the ADO card's split Approve/Deny does. See
+  // AdoCapabilityCard's own `busy` doc for why a single boolean isn't enough.
+  const [busyAction, setBusyAction] = React.useState<"approve" | "deny" | null>(null);
   // A misclick on Deny (any scope) can't silently poison a host the operator
   // meant to keep — a confirm stop, mirroring DeleteConfirmDialog's pattern.
   // Approve's DEFAULT scope stays a single click: it is the low-risk,
@@ -324,7 +339,7 @@ export function LiveApprovals({
       }
       await refresh();
     } catch (e) {
-      toast.error(approve ? "Approve failed" : "Deny failed", {
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, {
         description: getErrorMessage(e),
       });
     } finally {
@@ -338,14 +353,16 @@ export function LiveApprovals({
   // ado-capability-card.tsx), never decisionArgs()'s omit-for-"run" shape.
   const decideAdo = async (a: ApprovalRequest, approve: boolean, opts: [DecisionOptions]) => {
     setBusy(a.id);
+    setBusyAction(approve ? "approve" : "deny");
     try {
       if (approve) await api.approve(a.id, reasonApprove, ...opts);
       else await api.deny(a.id, reasonDeny, ...opts);
       await refresh();
     } catch (e) {
-      toast.error(approve ? "Approve failed" : "Deny failed", { description: getErrorMessage(e) });
+      toast.error(approve ? APPROVALS.TOAST_APPROVE_FAILED : APPROVALS.TOAST_DENY_FAILED, { description: getErrorMessage(e) });
     } finally {
       setBusy(null);
+      setBusyAction(null);
     }
   };
 
@@ -465,7 +482,7 @@ export function LiveApprovals({
               // proves this viewer may decide it, `run` or no `run`. See the
               // card's own doc for what this does and does not change.
               ownershipScopedList
-              busy={busy === a.id}
+              busy={busy === a.id ? busyAction : null}
               onApprove={(opts: [DecisionOptions]) => decideAdo(a, true, opts)}
               onDeny={(opts: [DecisionOptions]) => decideAdo(a, false, opts)}
             />
@@ -477,7 +494,7 @@ export function LiveApprovals({
         const scoped = a.kind === "egress_domain";
         const telemetry = scoped && isKnownTelemetryHost(label);
         if (a.kind === "credential_reauth") {
-          return <ReauthRow key={a.id} request={a} />;
+          return <ReauthRow key={a.id} request={a} adminView={adminView} runId={runId} />;
         }
         return (
           <div key={a.id} className="flex items-center gap-2" data-testid="live-approval-row">
@@ -501,7 +518,7 @@ export function LiveApprovals({
                 exactly "Approve"/"Deny" for e2e; this caret's own accessible
                 name must never contain "approve" (an unanchored /approve/i
                 query in the suite would then match two buttons). */}
-            {/* F-12: align with server truth (authorizeMemberDecision,
+            {/* F-12: align with server truth (authorizeUserDecision,
                 internal/api/approvals.go) instead of a blanket !operator —
                 canDecideApproval mirrors decide() exactly: a member may
                 decide an egress_domain approval (this strip only ever shows
@@ -608,7 +625,7 @@ export function LiveApprovals({
               disabled={busy === denyTarget?.request.id}
               onClick={(e) => {
                 e.preventDefault();
-                confirmDeny();
+                void confirmDeny();
               }}
               className="bg-danger text-danger-foreground hover:bg-danger/90"
             >
@@ -657,6 +674,13 @@ function ScopeMenu({
 }) {
   const [open, setOpen] = React.useState(false);
   const [untilMode, setUntilMode] = React.useState(false);
+  // The sub-view's first control ("← Back") — focused when untilMode opens,
+  // since swapping PopoverContent's children does not move focus on its own
+  // and it would otherwise drop to the page body (#481).
+  const backRef = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    if (untilMode) backRef.current?.focus();
+  }, [untilMode]);
   // The custom datetime-local's picked value, held here until the operator
   // explicitly confirms it — see the "Use this time" button below. A preset
   // click is already one deliberate, atomic action and commits straight
@@ -726,6 +750,7 @@ function ScopeMenu({
         ) : (
           <>
             <button
+              ref={backRef}
               type="button"
               onClick={() => {
                 setUntilMode(false);
@@ -796,15 +821,50 @@ function ScopeMenu({
  * non-owner (the admin reading a member's held run) the sentence that names
  * whose sign-in is awaited — and no button the server would refuse (Codex #7
  * risk (d); round-2 general S5).
+ *
+ * M-7 (admin-member-modes-design.md §4.6, §6) — `adminView` narrows `canAct`
+ * further, for the per_user lane only: the admin monitor carries no personal
+ * door, even on the admin's OWN run, where `reauthAudience` would otherwise
+ * grade this viewer able to act. The shared lane is untouched — a
+ * shared-credential re-sign stays an admin-mode control until MP-4b — and on
+ * the admin's own row the sentence gets a switch link back to the door
+ * instead (packet M-B, QM-7).
  */
-function ReauthRow({ request }: { request: ApprovalRequest }) {
+function ReauthRow({
+  request,
+  runId,
+  adminView = false,
+}: {
+  request: ApprovalRequest;
+  /** This strip's own run — the switch link's target on the admin's own row
+   *  (§below) needs no `useLocation()`: it is always this exact run's user
+   *  twin, `/runs/{id}`, whatever admin subpath this strip happens to be
+   *  mounted under. (The row itself does read `window.location` directly,
+   *  for `viewOfPath` below — never the `useLocation()` hook, since this row
+   *  is mounted without a router in its suites.) */
+  runId: string;
+  adminView?: boolean;
+}) {
   const door = useModelAccessDoor();
   // door.operator / door.principal, never useOperator() / usePrincipal():
   // those answer the FAIL-OPEN default while /me is in flight, which is exactly
   // the window in which this row would paint a door for the wrong audience.
   // The door grades nothing until the viewer is known, and so does this.
-  const audience = reauthAudience(request, { operator: door.operator, principal: door.principal });
-  const canAct = audience.canAct;
+  const audience = reauthAudience(request, {
+    operator: door.operator,
+    principal: door.principal,
+    // The path, not useLocation(), as the door's own context reads it: this
+    // row is mounted without a router in its suites.
+    view: viewOfPath(window.location.pathname),
+  });
+  // M-7 narrows who is offered a door, and so which sentence the row reads.
+  const mayAct = adminView && !audience.shared ? false : audience.canAct;
+  // A hold whose provider this person has no door for any more gets its hint
+  // alone, never a button that opens nothing (#543) — the sentence stays
+  // `mayAct`'s, as /approvals' card keeps it.
+  const { status } = useShellSetupStatus();
+  const canAct = mayAct && (!audience.provider || !!resolveDoor(status, { provider: audience.provider }, "user"));
+  const ownRow = adminView && !audience.shared && audience.mine;
   // Nobody should claim the door for a control they are not rendering.
   useClaimModelAccessDoor(canAct);
   return (
@@ -815,7 +875,7 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
           {REAUTH_ROW.label}
         </Mono>
         <span className="text-meta font-normal normal-case text-muted-foreground">
-          {reauthRowHint(audience)}
+          {reauthRowHint(mayAct === audience.canAct ? audience : { ...audience, canAct: mayAct })}
         </span>
       </div>
       {canAct && (
@@ -824,11 +884,14 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
           variant="outline"
           className="h-7 shrink-0"
           aria-label={REAUTH_ROW.ariaLabel}
-          onClick={() => door.openDoor()}
+          // The hold's OWN provider's door (#543): the claude-code default
+          // may be another AWS provider, whose sign-in cannot clear it.
+          onClick={() => door.openDoor(audience.provider ? { for: { provider: audience.provider } } : undefined)}
         >
           {REAUTH_ROW.action}
         </Button>
       )}
+      {ownRow && <OpenInUserView runId={runId} className="h-7 shrink-0" />}
     </div>
   );
 }

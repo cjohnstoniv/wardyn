@@ -54,7 +54,7 @@ Comment the *why*, never the *what*. The test for keeping one:
 - **Console:** `docs/design/CONSOLE-RULES.md` is binding; a "simplification" that reintroduces an ad-hoc size,
   a fourth elevation, a hex literal or a second copy of a rule is a regression, not a cleanup. Visual
   changes go through a mock round first.
-- **Docs that cite code:** `docs/AUDIT-ACTIONS.md` and `docs/MEMBERS.md` are guarded — re-point a citation,
+- **Docs that cite code:** `docs/AUDIT-ACTIONS.md` and `docs/USERS.md` are guarded — re-point a citation,
   never delete it.
 
 ## 4. Before you delete

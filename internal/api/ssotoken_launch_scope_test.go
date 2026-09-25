@@ -40,18 +40,19 @@ func sharedClaudeRow() types.SiteConfig {
 	return agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO})
 }
 
-// TestUploadSSOToken_ScopeIsBoundToLaunchNotUploadTime is finding 3.
+// TestUploadSSOToken_ScopeIsBoundToLaunchNotUploadTime pins that the scope is
+// fixed at launch time, not re-resolved at upload time.
 //
-// handleUploadSSOToken used to re-resolve the credential scope from the LIVE
+// handleUploadSSOToken must not re-resolve the credential scope from the live
 // roster. A login run stays alive to harnessLoginIdleCap, so an admin flipping
-// the row from per_user to shared inside that window turned a member's
+// the row from per_user to shared inside that window would turn a member's
 // still-running sandbox's PUT into a write of the OPERATOR-WIDE reserved
 // harness name — the one credential every later Bedrock run inherits, with an
 // account_id and role_name the blob is free to name (repoFieldSafe only).
 //
 // Region and start_url were already bound to launch-time state; the scope is
 // the third field, and it now rides the same carrier (this run's own
-// harness.login.started row).
+// harness.login.start row).
 func TestUploadSSOToken_ScopeIsBoundToLaunchNotUploadTime(t *testing.T) {
 	// mintRunToken mints the identity with this subject; launchHarnessLoginRun
 	// stamps the same value as the launch-time owner.

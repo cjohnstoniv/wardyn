@@ -10,11 +10,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest } from "../../lib/types";
+import { makeApproval } from "../../../test/factories";
 import { OperatorProvider } from "./operator-context";
 import { ModelAccessProvider } from "./model-access-context";
 import { SECURITY_ONLY_REASON } from "./copy";
-import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { MODEL_ACCESS_BANNER, REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { MODEL_PROVIDERS, providerStatus } from "../../lib/test-fixtures";
+import { WithDoor } from "../../../test/door-harness";
+import { OPEN_IN_USER_VIEW } from "./copy/console-view";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -29,10 +34,14 @@ vi.mock("../../lib/api/approvals", () => ({
 const toastSuccess = vi.fn();
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: (...a: unknown[]) => toastSuccess(...a), info: vi.fn() } }));
 
+vi.mock("../screens/settings/harness-login-pane", () => ({
+  HarnessLoginPane: (p: { modelProvider?: string }) => <div data-testid="fake-pane" data-model-provider={p.modelProvider ?? ""} />,
+}));
+
 import { LiveApprovals, isHeld } from "./live-approvals";
 
 function reauthRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
-  return {
+  return makeApproval({
     id: "reauth-1",
     run_id: "r1",
     kind: "credential_reauth",
@@ -40,20 +49,23 @@ function reauthRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
     state: "PENDING",
     requested_at: new Date().toISOString(),
     ...over,
-  } as ApprovalRequest;
+  });
 }
 
 // The viewer, named: every row below is OWNED BY alice@corp, so the default
 // principal is alice's — the "owner" cell each of these cases was written for.
 // A case that means a different viewer passes one: the door is the VIEWER's
-// own sign-in, and only the row's owner can resolve it.
-function mount(operator: boolean, principal = "alice@corp") {
+// own sign-in, and only the row's owner can resolve it. The router is for the
+// Admin view's switch link (OpenInUserView navigates).
+function mount(operator: boolean, principal = "alice@corp", adminView = false) {
   return render(
-    <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
-      <ModelAccessProvider status={null} onRefresh={() => {}}>
-        <LiveApprovals runId="r1" />
-      </ModelAccessProvider>
-    </OperatorProvider>,
+    <MemoryRouter>
+      <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
+        <ModelAccessProvider status={null} onRefresh={() => {}}>
+          <LiveApprovals runId="r1" adminView={adminView} />
+        </ModelAccessProvider>
+      </OperatorProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -205,5 +217,96 @@ describe("LiveApprovals — the mid-run AWS sign-in row", () => {
     await screen.findByText(REAUTH_ROW.label);
     await new Promise((r) => setTimeout(r, 50));
     expect(toastSuccess).not.toHaveBeenCalled();
+  });
+});
+
+// #543 (the #991 review's F2): the cockpit row opens the door of the provider
+// the hold names — with two AWS providers, the claude-code default's sign-in is
+// accepted by the server and leaves the hold unresolved.
+describe("LiveApprovals — a provider run's hold opens its own provider's door", () => {
+  const { bedrock } = MODEL_PROVIDERS;
+  const bedrockDev = { ...bedrock, id: "bedrock-dev", name: "Bedrock (dev)" };
+
+  it("opens the hold's provider, not the claude-code default", async () => {
+    listApprovalsMock.mockReset().mockResolvedValue([
+      reauthRow({
+        requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: "alice@corp", provider: bedrock.id },
+      }),
+    ]);
+    render(
+      <WithDoor
+        principal="alice@corp"
+        operator={false}
+        status={providerStatus([{ provider: bedrockDev, defaultFor: ["claude-code"] }, { provider: bedrock }])}
+      >
+        <LiveApprovals runId="r1" />
+      </WithDoor>,
+    );
+    const panel = await screen.findByTestId("live-approvals");
+    await userEvent.click(within(panel).getByRole("button", { name: REAUTH_ROW.ariaLabel }));
+    const dialog = await screen.findByRole("dialog", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE });
+    expect(dialog).toHaveTextContent(`For ${bedrock.name}`);
+    expect(await screen.findByTestId("fake-pane")).toHaveAttribute("data-model-provider", bedrock.id);
+  });
+});
+
+describe("LiveApprovals — a hold whose provider is gone", () => {
+  it("states the hint alone — no button that opens nothing", async () => {
+    listApprovalsMock.mockReset().mockResolvedValue([
+      reauthRow({
+        requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: "alice@corp", provider: "removed-provider" },
+      }),
+    ]);
+    render(
+      <WithDoor principal="alice@corp" operator={false} status={providerStatus([{ provider: MODEL_PROVIDERS.bedrock }])}>
+        <LiveApprovals runId="r1" />
+      </WithDoor>,
+    );
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByText(REAUTH_ROW.hint)).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeNull();
+  });
+});
+
+// M-7 (admin-member-modes-design.md §4.6, §6) — the admin monitor carries no
+// personal door, even on the admin's OWN row: it reads exactly like a
+// non-owner reading a member's row (the door gone, the not-yours sentence),
+// plus a switch link back to it. The shared lane is untouched.
+describe("LiveApprovals — the reauth row in the admin view (M-7)", () => {
+  beforeEach(() => {
+    listApprovalsMock.mockReset().mockResolvedValue([]);
+  });
+
+  it("gives the admin's own row the not-yours sentence and no door", async () => {
+    listApprovalsMock.mockResolvedValue([reauthRow({ requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: "admin@corp" } })]);
+    mount(true, "admin@corp", true);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).queryByRole("button", { name: REAUTH_ROW.ariaLabel })).not.toBeInTheDocument();
+    expect(within(panel).getByText(REAUTH_ROW.notYoursHint("admin@corp"))).toBeInTheDocument();
+  });
+
+  it("…and offers the switch link back to it, only on that own row", async () => {
+    listApprovalsMock.mockResolvedValue([reauthRow({ requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: "admin@corp" } })]);
+    mount(true, "admin@corp", true);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByRole("button", { name: OPEN_IN_USER_VIEW })).toBeInTheDocument();
+  });
+
+  it("gives a member's row no switch link — it is not the admin's own", async () => {
+    listApprovalsMock.mockResolvedValue([reauthRow()]); // owner alice@corp
+    mount(true, "admin@corp", true);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
+    expect(within(panel).getByText(REAUTH_ROW.notYoursHint("alice@corp"))).toBeInTheDocument();
+  });
+
+  it("leaves the shared lane's door alone — it stays an admin-mode control", async () => {
+    listApprovalsMock.mockResolvedValue([
+      reauthRow({ requested_scope: { mechanism: "bedrock_sso", credential_source: "shared", owner: "" } }),
+    ]);
+    mount(true, "admin@corp", true);
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: OPEN_IN_USER_VIEW })).not.toBeInTheDocument();
   });
 });

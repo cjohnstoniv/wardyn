@@ -18,6 +18,12 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// WebhookTimeout bounds every delivery attempt (including the final flush
+// Fanout.Close awaits on graceful shutdown), so callers sizing a shutdown
+// grace period around it don't have to hard-code a second copy of this
+// number (internal/api TestShutdownGraceCoversTheBudget).
+const WebhookTimeout = 15 * time.Second
+
 // WebhookConfig holds the configuration for a WebhookSink.
 type WebhookConfig struct {
 	// URL is the HTTP endpoint that receives JSON-lines batches (required).
@@ -37,6 +43,12 @@ type WebhookConfig struct {
 	MaxRetries int `json:"max_retries,omitempty"`
 	// RetryBaseDelay is the initial backoff delay (default 200ms).
 	RetryBaseDelay string `json:"retry_base_delay,omitempty"`
+	// Timeout bounds the HTTP client's per-request wait, including a Close()
+	// drain against a wedged collector (default and maximum WebhookTimeout).
+	// Parsed as a duration string; must be positive, since a zero http.Client
+	// timeout means none, and at most WebhookTimeout, which wardynd's shutdown
+	// grace is sized on.
+	Timeout string `json:"timeout,omitempty"`
 }
 
 func (c *WebhookConfig) withDefaults() WebhookConfig {
@@ -55,6 +67,9 @@ func (c *WebhookConfig) withDefaults() WebhookConfig {
 	}
 	if out.RetryBaseDelay == "" {
 		out.RetryBaseDelay = "200ms"
+	}
+	if out.Timeout == "" {
+		out.Timeout = WebhookTimeout.String()
 	}
 	return out
 }
@@ -113,12 +128,22 @@ func NewWebhookSink(cfg WebhookConfig) (*WebhookSink, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sinks.webhook: invalid retry_base_delay %q: %w", cfg.RetryBaseDelay, err)
 	}
+	timeout, err := time.ParseDuration(cfg.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("sinks.webhook: invalid timeout %q: %w", cfg.Timeout, err)
+	}
+	if timeout <= 0 {
+		return nil, fmt.Errorf("sinks.webhook: timeout %q must be positive (zero would never time out a wedged collector)", cfg.Timeout)
+	}
+	if timeout > WebhookTimeout {
+		return nil, fmt.Errorf("sinks.webhook: timeout %q exceeds %s, the final flush wardynd's shutdown grace waits for", cfg.Timeout, WebhookTimeout)
+	}
 	return &WebhookSink{
 		cfg:       cfg,
 		interval:  interval,
 		baseDelay: base,
 		queue:     make(chan types.AuditEvent, cfg.BufferSize),
-		client:    &http.Client{Timeout: 15 * time.Second},
+		client:    &http.Client{Timeout: timeout},
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 	}, nil

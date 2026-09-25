@@ -27,33 +27,13 @@ import (
 	"testing"
 )
 
-// ─── shared helpers ──────────────────────────────────────────────────────────
+// shared helpers
 
 // readRepoFile reads one repo-relative file, failing the test if it is missing —
 // a guard that silently skips its own subject passes vacuously forever.
 func readRepoFile(t *testing.T, rel string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(repoRoot(t), filepath.FromSlash(rel)))
-	if err != nil {
-		t.Fatalf("read %s: %v", rel, err)
-	}
-	return string(b)
-}
-
-// funcBody returns the source of the named top-level func, from its `func` line
-// to the next top-level `func` (or EOF). Crude on purpose: these guards ask
-// "does this function mention X at all", which does not need an AST.
-func funcBody(t *testing.T, src, name string) string {
-	t.Helper()
-	start := strings.Index(src, "\nfunc "+name+"(")
-	if start < 0 {
-		t.Fatalf("func %s not found — the guard's anchor moved, so it is asserting nothing", name)
-	}
-	rest := src[start+1:]
-	if end := strings.Index(rest[1:], "\nfunc "); end >= 0 {
-		return rest[:end+1]
-	}
-	return rest
+	return readRepo(t, rel)
 }
 
 // numberWord spells a small count the way the prose does, so a guard can demand
@@ -63,12 +43,15 @@ var numberWord = map[int]string{
 	6: "Six", 7: "Seven", 8: "Eight", 9: "Nine", 10: "Ten",
 }
 
-// ─── F003: the capability kinds are a closed set, and the doc states its size ──
+// F003: the capability kinds are a closed set, and the doc states its size
 
 var (
 	capKindsDecl  = regexp.MustCompile(`(?m)^var capabilityKinds = \[\]string\{([^}]*)\}`)
 	capKindConst  = regexp.MustCompile(`(?m)^\t(cap[A-Za-z]+) = "([a-z_]+)"`)
 	closedKindsRe = regexp.MustCompile(`(?m)^(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten) closed kinds`)
+	// docs/OPERATIONS.md's "**The ten kinds**" heading and its wildcard sentence.
+	opsKindsHeadRe     = regexp.MustCompile(`\*\*The ([a-z]+) kinds\*\*`)
+	opsKindsWildcardRe = regexp.MustCompile("`\\*` as a value matches everything of that kind, spelled the same way for all\\s+([a-z]+)\\.")
 )
 
 func TestThreatModelDocCapabilityKindsMatchCode(t *testing.T) {
@@ -110,6 +93,13 @@ func TestThreatModelDocCapabilityKindsMatchCode(t *testing.T) {
 			t.Errorf("capability kind %q ships in capabilityKinds but is named nowhere in threatmodel/THREAT-MODEL.md", k)
 		}
 	}
+	// OPERATIONS' capability table states the count twice, in words.
+	ops := readRepoFile(t, "docs/OPERATIONS.md")
+	for _, re := range []*regexp.Regexp{opsKindsHeadRe, opsKindsWildcardRe} {
+		if got := re.FindStringSubmatch(ops); got == nil || !strings.EqualFold(got[1], want) {
+			t.Errorf("docs/OPERATIONS.md %s: got %q, want %q — internal/api/capabilities.go ships %d kinds", re, got, want, len(kinds))
+		}
+	}
 	// The §4 attack row states the same number in words; it drifted separately.
 	if strings.Contains(doc, "four closed kinds") {
 		t.Error(`threatmodel/THREAT-MODEL.md still says "four closed kinds" in the §4 attack table`)
@@ -121,7 +111,7 @@ func TestThreatModelDocCapabilityKindsMatchCode(t *testing.T) {
 	}
 }
 
-// ─── F006: every fail-closed boot gate that ships an operator override ────────
+// F006: every fail-closed boot gate that ships an operator override
 
 // overrideEnv finds the WARDYN_* env vars a substrate register.go reads into a
 // fail-closed override field. These are the knobs that let a deployment boot
@@ -148,7 +138,7 @@ func TestThreatModelDocNamesFailClosedOverrides(t *testing.T) {
 	}
 }
 
-// ─── F014/F017/F019: the role set is closed, and three documents state it ─────
+// F014/F017/F019: the role set is closed, and three documents state it
 
 var rolesDecl = regexp.MustCompile(`(?m)^var Roles = \[\]string\{([^}]*)\}`)
 
@@ -186,7 +176,7 @@ func TestSecurityDocsNameEveryRole(t *testing.T) {
 	}
 }
 
-// ─── F020/F021: the CSP the docs quote is the CSP the server sends ────────────
+// F020/F021: the CSP the docs quote is the CSP the server sends
 
 func TestSecurityDocsQuoteServedCSP(t *testing.T) {
 	code := readRepoFile(t, "internal/api/security_headers.go")
@@ -268,7 +258,7 @@ func TestSecurityDocsCiteTheFileThatDeclaresSecurityHeaders(t *testing.T) {
 	}
 }
 
-// ─── F023: the sandbox sweep is mounted on a route ───────────────────────────
+// F023: the sandbox sweep is mounted on a route
 
 func TestThreatModelDocSweepIsWired(t *testing.T) {
 	routes := readRepoFile(t, "internal/api/routes.go")
@@ -287,7 +277,7 @@ func TestThreatModelDocSweepIsWired(t *testing.T) {
 	}
 }
 
-// ─── F024/F025: the tool-enforcement plane partly ships ──────────────────────
+// F024/F025: the tool-enforcement plane partly ships
 
 func TestThreatModelDocToolPlaneIsPartlyShipped(t *testing.T) {
 	rules := readRepoFile(t, "internal/egress/proxy/tool_rules.go")
@@ -329,7 +319,7 @@ func TestArchitectureDocListsShippedSandboxBinaries(t *testing.T) {
 	}
 }
 
-// ─── F026: residual #14's route table vs. the router ─────────────────────────
+// F026: residual #14's route table vs. the router
 
 func TestThreatModelDocRouteTableMatchesRouter(t *testing.T) {
 	routes := readRepoFile(t, "internal/api/routes.go")
@@ -355,7 +345,7 @@ func TestThreatModelDocRouteTableMatchesRouter(t *testing.T) {
 	}
 }
 
-// ─── F027/F028: the git_pat lane is never-resident by default ────────────────
+// F027/F028: the git_pat lane is never-resident by default
 
 var gitPATDefault = regexp.MustCompile(`flagEnv\("git-pat-broker", "(WARDYN_GIT_PAT_BROKER)", "([a-z]+)"`)
 
@@ -423,7 +413,7 @@ func TestArchitectureDocDoesNotCopyTheResidentSecretTable(t *testing.T) {
 	}
 }
 
-// ─── F039/F040: PROVENANCE's claims are checkable, and true ──────────────────
+// F039/F040: PROVENANCE's claims are checkable, and true
 
 // provenanceExclusions are the paths that legitimately carry a FOREIGN copyright
 // line: vendored upstream licence texts and the generated attribution notices
@@ -522,7 +512,7 @@ func TestProvenanceDocDCOMatchesCI(t *testing.T) {
 	}
 }
 
-// ─── F050: a named CVE has to be one this tree actually reasons about ────────
+// F050: a named CVE has to be one this tree actually reasons about
 
 var (
 	cveRe = regexp.MustCompile(`CVE-\d{4}-\d{4,7}`)
@@ -561,7 +551,7 @@ func TestThreatModelDocCVEsAreBackedByTheTree(t *testing.T) {
 	}
 }
 
-// ─── F051: RFC 8707 belongs to the identity mint, not the GitHub one ─────────
+// F051: RFC 8707 belongs to the identity mint, not the GitHub one
 
 func TestThreatModelDocRFC8707NotOnTheGitHubMint(t *testing.T) {
 	mint := readRepoFile(t, "internal/broker/github.go")
@@ -594,7 +584,7 @@ func TestThreatModelDocRFC8707NotOnTheGitHubMint(t *testing.T) {
 	}
 }
 
-// ─── F055: every runtime family that is auto-granted CC3 ─────────────────────
+// F055: every runtime family that is auto-granted CC3
 
 var cc3Decl = regexp.MustCompile(`(?m)^var cc3Runtimes = \[\]string\{([^}]*)\}`)
 
@@ -637,7 +627,7 @@ func TestThreatModelDocCC3RuntimeFamilies(t *testing.T) {
 	}
 }
 
-// ─── F056: the rootless refusal's real owner ─────────────────────────────────
+// F056: the rootless refusal's real owner
 
 func TestThreatModelDocRootlessRefusalOwner(t *testing.T) {
 	body := funcBody(t, readRepoFile(t, "internal/runner/docker/hardening.go"), "classToRuntime")
@@ -657,7 +647,7 @@ func TestThreatModelDocRootlessRefusalOwner(t *testing.T) {
 	}
 }
 
-// ─── F062: resource caps, per substrate ──────────────────────────────────────
+// F062: resource caps, per substrate
 
 func TestAgentThreatModelDocResourceCaps(t *testing.T) {
 	k8s := readRepoFile(t, "internal/runner/k8s/sandbox.go")
@@ -677,7 +667,7 @@ func TestAgentThreatModelDocResourceCaps(t *testing.T) {
 	}
 }
 
-// ─── F068: an unanswerable group snapshot no longer fails open ───────────────
+// F068: an unanswerable group snapshot no longer fails open
 
 func TestThreatModelDocGroupDenyNotFailOpen(t *testing.T) {
 	caps := readRepoFile(t, "internal/api/capabilities.go")
@@ -694,7 +684,7 @@ func TestThreatModelDocGroupDenyNotFailOpen(t *testing.T) {
 	}
 }
 
-// ─── F032: a pre-0.7 session cookie is not a session ─────────────────────────
+// F032: a pre-0.7 session cookie is not a session
 
 func TestThreatModelDocSessionCodecForcesOneRelogin(t *testing.T) {
 	codec := readRepoFile(t, "internal/auth/oidc/session_codec.go")
@@ -723,7 +713,7 @@ func TestThreatModelDocSessionCodecForcesOneRelogin(t *testing.T) {
 	}
 }
 
-// ─── F069: the desktop deployment tier exists ────────────────────────────────
+// F069: the desktop deployment tier exists
 
 func TestArchitectureDocNamesTheDesktopTier(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repoRoot(t), "deploy", "desktop", "docker-compose.yaml")); err != nil {
@@ -736,7 +726,7 @@ func TestArchitectureDocNamesTheDesktopTier(t *testing.T) {
 	}
 }
 
-// ─── F070: the reserved drive target is pinned on both substrates ────────────
+// F070: the reserved drive target is pinned on both substrates
 
 func TestThreatModelDocDriveTargetPin(t *testing.T) {
 	dockerPins := strings.Contains(readRepoFile(t, "internal/runner/docker/driver_mounts.go"),

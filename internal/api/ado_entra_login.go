@@ -103,13 +103,7 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 	// granted string rather than assuming the request was honoured is the whole
 	// discipline of this lane: the tenant decides, and it routinely grants a
 	// different set than was asked for.
-	granted := adoEntraSplitScope(grant.Scope)
-	var usable []string
-	for _, sc := range cfg.Scopes {
-		if slices.Contains(granted, sc) {
-			usable = append(usable, sc)
-		}
-	}
+	usable := adoCaptureScopes(grant.Scope, cfg.Scopes)
 	if len(usable) == 0 {
 		// CONSENT DECLINED, or a tenant that will not issue these scopes. The
 		// login has already succeeded and stays succeeded; there is simply
@@ -126,8 +120,9 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		return
 	}
 
-	// Mask BEFORE anything can log or persist it.
-	s.cfg.MaskRegistry.AddGlobal([]byte(grant.RefreshToken))
+	// Mask BEFORE anything can log or persist it, merged until the store write
+	// succeeds: a failed write leaves the credential already stored live.
+	s.cfg.MaskRegistry.MergeGlobal(subject, adoEntraSecretName(cfg.RowID), []byte(grant.RefreshToken))
 
 	now := s.cfg.Now()
 	expiresAt := grant.Expiry.UTC()
@@ -152,11 +147,12 @@ func (s *Server) CaptureLoginGrant(ctx context.Context, subject string, grant oi
 		slog.ErrorContext(ctx, "wardynd: storing the Azure DevOps credential this login earned failed; the person is signed in without one",
 			slog.String("row", cfg.RowID), slog.Any("err", err))
 		s.auditADOCapture(ctx, subject, cfg.RowID, "failure", map[string]any{
-			"reason": "store_error", "error": err.Error(), "source": adoEntraSourceLogin,
+			"reason": "store_error", "source": adoEntraSourceLogin,
 			"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		})
 		return
 	}
+	s.cfg.MaskRegistry.AddGlobal(subject, adoEntraSecretName(cfg.RowID), s.cfg.Now(), []byte(grant.RefreshToken))
 	s.auditADOCapture(ctx, subject, cfg.RowID, "success", map[string]any{
 		"tenant_id": cfg.TenantID, "client_id": cfg.ClientID,
 		"scopes": usable, "source": adoEntraSourceLogin,

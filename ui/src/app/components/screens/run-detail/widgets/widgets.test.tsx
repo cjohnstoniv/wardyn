@@ -23,6 +23,7 @@ import { FilesChangedWidget } from "./files-changed";
 import { SandboxWidget } from "./sandbox";
 import { CredentialsWidget } from "./credentials";
 import { IdentityWidget } from "./identity";
+import { aheadByHours } from "../../../../lib/test-clock";
 
 beforeEach(() => {
   getFilesMock.mockReset();
@@ -110,7 +111,7 @@ describe("CredentialsWidget", () => {
     const audit: AuditEvent[] = [
       {
         id: "e1",
-        time: "2026-08-16T12:00:00Z",
+        time: aheadByHours(-1),
         actor_type: "system",
         actor: "broker",
         action: "credential.mint",
@@ -129,7 +130,7 @@ describe("CredentialsWidget", () => {
     const audit: AuditEvent[] = [
       {
         id: "e2",
-        time: "2026-08-16T12:00:00Z",
+        time: aheadByHours(-1),
         actor_type: "system",
         actor: "broker",
         action: "credential.mint",
@@ -156,12 +157,12 @@ describe("EgressWidget", () => {
   });
 
   // B3 — the finding, written as the case that used to fail. The audit trail is
-  // APPEND-ONLY (0001_init.sql, chained by 0047), so an egress.pending row is a
+  // APPEND-ONLY (0001_init.sql, chained by 0047), so an egress.hold row is a
   // historical EVENT and never stops being one: deriving the chip from those
   // rows counted a request approved an hour ago, forever, on the one surface
   // whose entire job is to be the alarm. The row still renders as history; only
   // the NUMBER moved to the live derivation (isHeld, live-approvals.tsx).
-  it("does not count an egress.pending ROW whose approval has since been APPROVED", () => {
+  it("does not count an egress.hold ROW whose approval has since been APPROVED", () => {
     const egress: EgressDecision[] = [
       {
         id: "e1",

@@ -326,7 +326,7 @@ type userDriveRequest = client.DriveRequest
 //     request that no deployment state can make true.
 //  3. The ENV CEILING over host_root — a 422, because the request is
 //     well-formed and it is the DEPLOYMENT that cannot accept it. The
-//     distinction is the one denyMemberRunQuota draws: a 400 says "you wrote
+//     distinction is the one denyUserRunQuota draws: a 400 says "you wrote
 //     this wrong", a 422 says "there is nothing here to write it into".
 //  4. NESTING against the other stored host_path roots (driveHostRootNesting)
 //     — a 422 for the same reason as 3, and LAST because it is the only gate
@@ -809,6 +809,9 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		g.Subject = subject
+	}
+	if !s.userTypeSubjectExists(w, r, g.SubjectType, g.Subject) {
+		return
 	}
 	// The backend-aware home check, run at the moment the admin types it rather
 	// than at every launch afterwards.

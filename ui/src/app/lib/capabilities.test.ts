@@ -15,6 +15,7 @@ import {
   capabilityValueOverlaps,
 } from "./capabilities";
 import type { CapabilityGrant, MeCapabilities } from "./types";
+import { aheadByHours } from "./test-clock";
 
 function g(over: Partial<CapabilityGrant>): CapabilityGrant {
   return {
@@ -24,7 +25,7 @@ function g(over: Partial<CapabilityGrant>): CapabilityGrant {
     capability: "egress_host",
     value: "*",
     effect: "allow",
-    created_at: "2026-08-01T00:00:00Z",
+    created_at: aheadByHours(-1),
     ...over,
   };
 }
