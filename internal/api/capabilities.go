@@ -138,7 +138,9 @@ const (
 	// by the caller's ceiling in resolveRunPolicy, and a run that names no
 	// policy is not gated at all (its spec is the caller's own ceiling). Checked
 	// before resolvePolicy reads the row, so an ungranted id is refused the same
-	// way whether or not the row exists.
+	// way whether or not the row exists. Re-checked for the owner at revive and
+	// extension (run_owner_authority.go), so a withdrawn selection also ends the
+	// run's lease.
 	capPolicy = "policy"
 )
 
