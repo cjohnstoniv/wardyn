@@ -14,16 +14,19 @@ import (
 	"testing"
 )
 
-// strictProviderReaders may hand a per-person model-provider credential name
-// (wardyn-provider-<uid>-*) to a namespaced store view, each for the reason
-// given. Store.For(owner).Get FALLS BACK to the operator's row by contract, so
+// strictProviderReaders may read a per-person model-provider credential name
+// (wardyn-provider-<uid>-*) through a namespaced store view, or hand the view
+// to a helper, each for the reason given. Store.For(owner).Get FALLS BACK to the operator's row by contract, so
 // anything else would serve the operator's credential to a person who stored
 // none (multi-provider rule 10).
 var strictProviderReaders = map[string]string{
-	"ownSecret":             "List-then-Get under the owner's scope: the strict reader itself",
-	"readAWSSSOBlob":        "List-then-Get under a per-user scope, the -sso twin of ownSecret",
-	"deleteSpentAWSSSOBlob": "hands the view to deleteDeadCredential, a Delete, which never falls back",
-	"readADOEntraBlob":      "List-then-Get under a per-user scope, the Azure DevOps twin of ownSecret",
+	"ownSecret":               "List-then-Get under the owner's scope: the strict reader itself",
+	"readAWSSSOBlob":          "List-then-Get under a per-user scope, the -sso twin of ownSecret",
+	"deleteSpentAWSSSOBlob":   "hands the view to deleteDeadCredential, a Delete, which never falls back",
+	"readADOEntraBlob":        "List-then-Get under a per-user scope, the Azure DevOps twin of ownSecret",
+	"noteADOEntraSignInEnded": "hands the view to deleteDeadCredential, a Delete, which never falls back",
+	"handleListSecrets":       "hands the view to reservedFilteredSecretNames, a List of the owner's own rows",
+	"presentSecretNamesFor":   "hands the view to reservedFilteredSecretNames, a List of the owner's own rows",
 }
 
 // readersThatMustRefuseProviderNames is the register of every bare
@@ -41,8 +44,10 @@ var readersThatMustRefuseProviderNames = map[string]string{
 // TestProviderCredentialReadsAreStrict walks internal/api and
 // internal/secretstore and fails, outside the two registers above, on any Get
 // through a For(...) store view (directly, through a local, or through a method
-// value), any other Get of a provider-derived name, or any call handing a
-// For(...) view and a provider-derived name to a helper. "Provider-derived" is
+// value), any call handing a For(...) view or a local holding one to a helper,
+// whatever name goes with it, and any other Get of a provider-derived name. A
+// helper that takes a view cannot be followed, so its caller is listed with the
+// reason the helper is safe (a List, Put or Delete, or a strict read). "Provider-derived" is
 // static: providerSecretName, the prefix constants, a "wardyn-provider-"
 // literal, awsSSOScope.ssoSecret, or a local assigned from one. For("") is the
 // operator's own namespace, which has nothing to fall back to, so it is not a
@@ -98,8 +103,8 @@ func TestProviderCredentialReadsAreStrict(t *testing.T) {
 }
 
 // bareProviderReads returns the position of every call in fn that may read a
-// provider name through a fallback: any Get on a For(...) view, a Get of a
-// provider-derived name, or a call carrying both a view and such a name.
+// provider name through a fallback: any Get on a For(...) view, any call
+// handing a view to a helper, or a Get of a provider-derived name.
 func bareProviderReads(fn *ast.FuncDecl) []token.Pos {
 	provider, views, getters := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	// Taint locals to a fixpoint: name := providerSecretName(...), st := x.For(o),
@@ -140,13 +145,14 @@ func bareProviderReads(fn *ast.FuncDecl) []token.Pos {
 			named = named || providerName(a, provider)
 			viewArg = viewArg || storeView(a, views)
 		}
-		// Every Get on a view counts, whatever its name argument: a name that
-		// reaches it through a parameter, a struct field or a helper is
-		// invisible here, so each such site is listed and reviewed instead.
+		// Every Get on a view, and every view handed to a helper, counts
+		// whatever its name argument: a name that reaches the read through a
+		// parameter, a struct field or a helper is invisible here, so each such
+		// site is listed and reviewed instead.
 		getter, isIdent := call.Fun.(*ast.Ident)
 		sel, isSel := call.Fun.(*ast.SelectorExpr)
-		if viewGet(call.Fun, views) || isIdent && getters[getter.Name] ||
-			named && (viewArg || isSel && sel.Sel.Name == "Get") {
+		if viewGet(call.Fun, views) || isIdent && getters[getter.Name] || viewArg ||
+			named && isSel && sel.Sel.Name == "Get" {
 			out = append(out, call.Pos())
 		}
 		return true
