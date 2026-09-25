@@ -592,6 +592,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (#536) opens it from "Add model provider" or a provider's row, replacing that list's stub page
   (`settings/model-provider-editor.tsx`).
 
+- **A regression fixture pins `scripts/nightly-migration-merge-check.sh` (#864).**
+  `make test-scripts` now runs `scripts/test-nightly-migration-merge-check.sh`,
+  covering a clean candidate set, two PRs claiming the same migration prefix, a
+  PR whose prefix is at or below `origin/main`'s max, the binary search that
+  isolates and drops a single bad PR out of several good ones, and the
+  difference between a conflict under `internal/db/migrations` (fails the job)
+  and one elsewhere (does not): a union-merged `CHANGELOG.md` edit and a real
+  `.go` conflict, which is listed but not fatal. It also checks that the gate
+  deletes its scratch refs and worktree.
 - **An admin editor with unsaved work now guards against losing it, and Settings joins the
   sidebar (#460).** Every draft-tracking admin editor (the Providers screen's Git/Storage tabs and
   its Agents tab) shows an "Unsaved changes" chip beside its title while dirty; navigating away
