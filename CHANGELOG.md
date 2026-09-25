@@ -41,6 +41,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "Sign in to AWS"** on a deployment that also has a working Bedrock SSO Claude Code row — a
   sign-in that repairs nothing for the agent that was actually refused. The door now opens only
   for a refused Claude Code launch (#725).
+- **A `tool_approvals=hold` run no autonomy rubric bound could still have its approval gate
+  bypassed by the agent's own user-level settings (#358).** Only runs with a rubric-resolved level
+  of L0 or L1 got Claude Code's managed settings, whose `allowManagedPermissionRulesOnly` stops a
+  repository or user `permissions.allow` rule from running a tool before `wardyn-toolgate` is asked.
+  Every claude-code hold run now gets that managed file (the L1 document), including a run at L2,
+  at L3, or with no level. Its `run.agent_policy` audit row carries `"tool_approvals": "hold"`, and
+  on a runner that cannot deliver the file the create response says so, as it does for a gated run.
+
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
