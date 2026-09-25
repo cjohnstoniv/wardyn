@@ -43,6 +43,7 @@ func init() {
 		// network's name (deploy/compose: both derive from WARDYN_NS).
 		s, err := New(Config{
 			ProxyImage:      d.ProxyImage,
+			DriveProbeImage: d.DriveProbeImage,
 			Record:          true,
 			RecordingMount:  recordingMount,
 			InternalNetwork: os.Getenv("WARDYN_INTERNAL_NETWORK"),

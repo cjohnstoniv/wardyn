@@ -169,6 +169,7 @@ type bootFlags struct {
 	ageKey                 *string
 	platformKeyFile        *string
 	proxyImage             *string
+	driveProbeImage        *string
 
 	recordingDir       *string
 	recordingRetention *int
@@ -411,8 +412,8 @@ func parseBootFlags() *bootFlags {
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty"),
 		platformKeyFile:         flagEnv("platform-key-file", "WARDYN_PLATFORM_KEY_FILE", "", "path of a SECOND age identity file that alone protects wardynd's own signing, session and SSH host keys in local mode, apart from WARDYN_AGE_KEY. Empty (default) = the age key protects both. Setting it on an existing install needs `wardynd -rewrap` once. See docs/OPERATIONS.md"),
 		proxyImage:              flagEnv("proxy-image", "WARDYN_PROXY_IMAGE", "", "OCI image for the wardyn-proxy sidecar (docker runner)"),
-
-		recordingDir: flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); "fs" store only — empty disables replay there, but is ignored by the default "pg" store (set -recording-store=fs too)`),
+		driveProbeImage:         flagEnv("drive-probe-image", "WARDYN_DRIVE_PROBE_IMAGE", "", "OCI image for the host_path drive-readability probe container (docker runner). Empty (default) keeps the pinned busybox-class default"),
+		recordingDir:            flagEnv("recording-dir", "WARDYN_RECORDING_DIR", "./data/recordings", `directory for stored PTY session recordings (asciicast); "fs" store only — empty disables replay there, but is ignored by the default "pg" store (set -recording-store=fs too)`),
 		// OFF by default (0 = keep forever): a session recording is the governance
 		// evidence this product exists to produce, so nothing deletes one unless
 		// the operator asks for a retention window.

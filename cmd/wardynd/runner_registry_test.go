@@ -22,11 +22,11 @@ import (
 // dereference. runnerTargetOverride is empty here — the unset default, i.e. no
 // override — and boot_runner_target_test.go sets it on its own flags.
 func rrFlags(runnerSel string) *bootFlags {
-	sel, cmap, img := runnerSel, "", "wardyn-proxy:test"
+	sel, cmap, img, probeImg := runnerSel, "", "wardyn-proxy:test", ""
 	id, sec, rec := "embedded", "pg", "pg" // the defaults; componentsInfo derefs them
 	target := ""
 	return &bootFlags{
-		runnerSel: &sel, runnerTargetOverride: &target, confinementMap: &cmap, proxyImage: &img,
+		runnerSel: &sel, runnerTargetOverride: &target, confinementMap: &cmap, proxyImage: &img, driveProbeImage: &probeImg,
 		identitySel: &id, secretStoreSel: &sec, recordingSel: &rec,
 	}
 }
