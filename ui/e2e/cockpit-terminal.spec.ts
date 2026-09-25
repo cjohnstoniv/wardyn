@@ -222,6 +222,59 @@ test.describe("Run cockpit terminal", () => {
     expect(opens()).toBe(2);
   });
 
+  test("a take-over that promoted the caller's own socket in place does not re-dial (#507)", async ({ page }) => {
+    const { id: runId } = await findRunningFixture(page);
+    await stubInteractiveRun(page, runId);
+    await stubAttachTicket(page, runId);
+    // The server's real shape when it flipped our own queued observer socket
+    // to writer in place, rather than evicting-then-reconnecting.
+    await stubTakeover(page, runId, { promoted: true, previousHolder: "bob@e2e.example" });
+
+    let serverWs: WebSocketRoute | null = null;
+    const { opens } = await stubAttachSocket(page, (_n, ws) => {
+      serverWs = ws;
+      ws.send(attachModeFrame(true, { principal: "bob@e2e.example" }));
+      // Echo a binary (PTY input) frame straight back as PTY OUTPUT — same
+      // round trip the in-place-promotion case above proves writability with.
+      ws.onMessage((msg) => {
+        if (Buffer.isBuffer(msg)) ws.send(msg);
+      });
+    });
+
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${runId}`);
+    const pane = page.getByTestId("run-terminal-pane");
+    const screen = pane.locator(".xterm-screen").first();
+    await expect(screen).toBeVisible();
+    await expect(pane.getByRole("button", { name: RUN_COCKPIT.takeOver })).toBeVisible();
+
+    await pane.getByRole("button", { name: RUN_COCKPIT.takeOver }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: RUN_COCKPIT.takeOver }).click();
+
+    // doTakeover reads promoted:true and returns early while wsRef is still
+    // OPEN (#507) — no evict, no reconnect, so opens() never grows past 1.
+    // Assert against the SAME text the reclaim test polls up to 2, so this is
+    // a genuine "stays at 1" bound, not just "never checked".
+    await expect
+      .poll(() => opens(), { timeout: 3_000, message: "a promoted take-over must not open a second socket" })
+      .toBe(1);
+
+    // The server's own promotion notice: an in-flight attach-mode frame,
+    // read_only:false, on the SAME socket doTakeover left open.
+    serverWs!.send(attachModeFrame(false, { principal: "me@e2e.example" }));
+
+    await expect(pane.getByRole("button", { name: RUN_COCKPIT.takeOver })).toHaveCount(0);
+    await expect(pane.getByText(RUN_COCKPIT.heldHint)).toHaveCount(0);
+    await expect(pane.getByText(RUN_COCKPIT.driving)).toBeVisible();
+    expect(opens()).toBe(1);
+
+    // Writable proof, same technique as the in-place-promotion case above.
+    await screen.click();
+    const marker = "reclaim-promoted-input-ok";
+    await page.keyboard.type(marker);
+    await pollScreen(screen, new RegExp(marker), "typed input after a promoted take-over never echoed back to the screen");
+  });
+
   // SF-31: unit tests cover decideKey (attach-terminal-keys.test.ts's per-layout
   // matrix) and a mocked handler (attach-terminal.test.tsx's F144 describe) —
   // the advertised chord was never pressed against a REAL xterm, the one
