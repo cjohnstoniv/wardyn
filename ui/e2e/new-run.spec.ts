@@ -224,7 +224,8 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
 // all). The failure block no longer has its own clone button, so
 // `getByRole("button", { name: RUN.CLONE_CTA })` below resolves to exactly
 // one element (a second door would be a Playwright strict-mode violation).
-test.describe("New run — B4b clone from a killed run", () => {
+test.describe("New run — clone from a killed run", () => {
+  // ticket: B4b
   test("clones task/agent/barrier from the killed run, and Launch enables once titled", async ({ page }) => {
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     // "e2e fixture 7" is the seeded backend's KILLED run (scripts/e2e-backend.sh)
@@ -322,7 +323,8 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
 // itself (Go-tested). ui/new-run-rail.tsx's primitive-level
 // lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto (this lane) is what keeps
 // Launch/Open run reachable here.
-test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F2-F7/F3-F1)", () => {
+test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650", () => {
+  // ticket: F2-F7/F3-F1
   test("Launch, then Open run, stay in viewport with every rail section showing at once", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 650 });
 

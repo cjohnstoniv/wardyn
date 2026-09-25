@@ -379,7 +379,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       expect(screen.getByRole("button", { name: /^back to required steps$/i })).toBeEnabled();
     });
 
-    it("HIGH-1: from a demo, Back into Integrations works while Workspaces stays gated", async () => {
+    it("from a demo, Back into Integrations works while Workspaces stays gated", async () => {
+      // ticket: HIGH-1
       renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sealed-box");
       await screen.findByRole("heading", { name: /the sealed box/i });
       const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
@@ -540,7 +541,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // configuring it reads "Skipped" in the rail instead of a perpetual "Optional".
   // Exercised via Integrations, since the corporate-network steps are folded
   // into it and this is where that coverage now lives.
-  describe("A4 — Skipped state", () => {
+  describe("Skipped state", () => {
+    // ticket: A4
     it("navigating past Integrations without connecting anything marks its rail badge Skipped", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
@@ -778,7 +780,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
   // E2 — setup-check provenance
 
-  it("environment step names the concrete substrate each ready tier runs as (E2)", async () => {
+  it("environment step names the concrete substrate each ready tier runs as", async () => {
+    // ticket: E2
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // render settled
     // baseStatus runner has CC1+CC2 ready with a substrate map; each ready column
@@ -796,7 +799,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
   // E3 — default barrier tier selection
 
-  it("preselects the resolved default barrier, moves on a click (in-session only), and keeps a todo card's setup command working (E3)", async () => {
+  it("preselects the resolved default barrier, moves on a click (in-session only), and keeps a todo card's setup command working", async () => {
+    // ticket: E3
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByRole("heading", { name: /pick your barrier/i });
 

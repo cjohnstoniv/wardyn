@@ -1,22 +1,17 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// If-Match/ETag optimistic concurrency for the two whole-document-replace
-// admin surfaces that had none: PUT /permissions/enforcement and PUT
-// /site-config. Both already serialize their own writers with an in-process
-// mutex (see handlePutSiteConfig's siteConfigMu and
-// handlePutCapabilityEnforcement's capEnforcementMu), which already stops two
-// concurrent PUTs from silently clobbering each other on this process — what
-// If-Match adds on top is a CLIENT-side guarantee: a caller that read the
-// document, means to change it based on what it read, and wants to be told
-// (412) rather than silently overwrite a write that landed in between its GET
-// and its PUT. A caller that sends no If-Match keeps working exactly as
-// before — this is additive, not a new requirement.
+// If-Match/ETag optimistic concurrency for the whole-document-replace surfaces
+// PUT /permissions/enforcement and PUT /site-config. Their in-process mutexes
+// (handlePutSiteConfig's siteConfigMu, handlePutCapabilityEnforcement's
+// capEnforcementMu) already stop two concurrent PUTs clobbering each other;
+// If-Match adds a CLIENT-side guarantee: a caller that read the document is
+// told 412 rather than silently overwriting a write that landed between its GET
+// and its PUT. A caller that sends no If-Match works as before (additive).
 //
-// The ETag is a content hash, never a stored version column: no migration,
-// and it is automatically correct for any writer that goes through the same
-// Get/Put pair the handlers already use — including `wardyn site-config
-// apply` and a hand-authored admin console, with nothing new to keep in sync.
+// The ETag is a content hash, never a stored version column: no migration, and
+// correct for any writer through the same Get/Put pair (including `wardyn
+// site-config apply`), with nothing new to keep in sync.
 package api
 
 import (

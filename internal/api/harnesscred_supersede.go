@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/google/uuid"
@@ -45,12 +46,27 @@ const (
 	// reason put in it would audit every supersede as a failed kill and add a
 	// run.revoke row for a run that was torn down perfectly.
 	supersedeReasonNewLogin = "superseded_by_new_login"
+	// signInCapturedReason rides the run.kill DATA of a sign-in run the server
+	// ended itself once its capture was stored (ssotoken.go), for the same
+	// reason as supersedeReasonNewLogin: outside the error map, so a clean kill
+	// audits success.
+	signInCapturedReason = "sign_in_captured"
 	// supersedeCASAttempts bounds the re-read below. The only way the KILLED CAS
 	// loses is a dispatch forward-transition (PENDING->STARTING->RUNNING) landing
 	// between the read and the write, which can happen at most twice for one run
 	// and never repeatedly — a bound, not a retry policy.
 	supersedeCASAttempts = 3
+	// signInBusyRefusal is the 503 a sign-in launch or capture answers when the
+	// per-person lock could not be taken in time. DRAFT (M2 canon pending)
+	signInBusyRefusal = "another sign-in is in progress, so this one was not started or saved; try again in a moment"
+	// signInUnserializedReasonNoCapacity is auth.signin_unserialized's one
+	// reason: the pool could not spare a connection for the lock.
+	signInUnserializedReasonNoCapacity = "lock_no_capacity"
 )
+
+// errSignInBusy is lockLoginSupersede's refusal: the lock exists and could not
+// be taken, so the work it guards must not run.
+var errSignInBusy = errors.New(signInBusyRefusal)
 
 // lockLoginSupersede serializes ONE person's sign-in launches — and the
 // credential capture that belongs to one — across replicas, and returns the
@@ -78,15 +94,17 @@ const (
 // the whole deployment and still not serialize one person's two launches any
 // better.
 //
-// FAILS OPEN, on every arm, and every arm is BOUNDED so that "fails open"
-// means promptly rather than eventually: a store without the seam, a pool that
-// cannot spare a connection (checked before one is borrowed, then bounded again
-// at 250ms on the borrow itself), and a wait that expires
-// (db.LoginSupersedeLockWait — 5s in total across the in-process slot and the
-// lock). Each proceeds exactly as 0.7.8 did, with one warning line and no new
-// refusal: a person locked out of signing in because a lock was busy is worse
-// off than the two-sandbox residue this closes, and the capture PUT's KILLED
-// guard is still the belt underneath.
+// FAILS CLOSED on a wait (#505). Every arm is BOUNDED — the in-process slot
+// and the lock itself share db.LoginSupersedeLockWait (5s), the pool borrow is
+// held to 250ms — and when one runs out the answer is errSignInBusy: nothing
+// is started and nothing is stored. A wait that expires is the concurrent
+// burst this lock exists to serialize, and letting it through unlocked is how
+// two live credential-bearing sandboxes come back. Two arms still proceed
+// unlocked, and neither is a wait: a store without the seam (test doubles —
+// PG implements it) and store.ErrLoginLockNoCapacity, the pool that cannot
+// spare a connection for the hold, which at the documented pool floor is every
+// call. That one is written to the trail as auth.signin_unserialized, so the
+// unserialized pass is evidence rather than one WARN line.
 //
 // AVAILABILITY, because this runs on a request path in a daemon that sets no
 // http.Server WriteTimeout and mounts no TimeoutHandler — a wedged request here
@@ -98,23 +116,30 @@ const (
 // connection per concurrent sign-in starved the very queries this guards, and
 // at pool_max_conns=3 two DIFFERENT people — who never contend on the key at
 // all — were enough to wedge every database-backed request in the daemon.
-func (s *Server) lockLoginSupersede(ctx context.Context, actor string) (release func()) {
+func (s *Server) lockLoginSupersede(ctx context.Context, actor string, runID uuid.UUID) (release func(), err error) {
 	noop := func() {}
 	if s.cfg.Store == nil || actor == "" {
-		return noop
+		return noop, nil
 	}
 	locker, ok := s.cfg.Store.(store.LoginLocker)
 	if !ok {
 		slog.WarnContext(ctx, "wardynd: this store cannot serialize concurrent sign-ins; proceeding unlocked")
-		return noop
+		return noop, nil
 	}
 	unlock, err := locker.LockLoginSupersede(ctx, actor)
-	if err != nil {
+	if errors.Is(err, store.ErrLoginLockNoCapacity) {
 		slog.WarnContext(ctx, "wardynd: could not serialize this person's concurrent sign-ins; proceeding unlocked",
 			slog.Any("error", err))
-		return noop
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "auth.signin_unserialized",
+			actor, "failure", mustJSON(map[string]any{"reason": signInUnserializedReasonNoCapacity})))
+		return noop, nil
 	}
-	return unlock
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not serialize this person's concurrent sign-ins; refusing",
+			slog.Any("error", err))
+		return nil, errSignInBusy
+	}
+	return unlock, nil
 }
 
 // supersedeCallerLoginRuns kills actor's other non-terminal login runs on this

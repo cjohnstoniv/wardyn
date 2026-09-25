@@ -155,7 +155,8 @@ describe("PhaseRail", () => {
   // rail shows it as visible text, the icon-only compact rail (no room for a
   // caption) folds it into the button's accessible name and keeps the title
   // for a sighted mouse user (in the lg band it is the only rail rendered).
-  it("F3-F3: a step refused by refuseNext renders disabled, its reason visible/accessible — never title-only, on both rails", () => {
+  it("a step refused by refuseNext renders disabled, its reason visible/accessible — never title-only, on both rails", () => {
+    // ticket: F3-F3
     cleanup();
     const refuseNext = (next: SetupStepId) =>
       next === "workspaces" || next === "review" ? "Prove network access first." : undefined;
@@ -194,7 +195,8 @@ describe("PhaseRail", () => {
     }
   });
 
-  it("F3-F3 negative control: with no refuseNext, no button in either rail is ever disabled", () => {
+  it("negative control: with no refuseNext, no button in either rail is ever disabled", () => {
+    // ticket: F3-F3
     renderRail("environment");
     for (const btn of screen.getAllByRole("button")) {
       expect(btn).not.toBeDisabled();

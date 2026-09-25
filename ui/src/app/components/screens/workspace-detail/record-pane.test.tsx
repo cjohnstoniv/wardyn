@@ -197,7 +197,7 @@ describe("RecordPane — open-record session lifecycle", () => {
     renderPane(
       {
         record_results: { "build-test": rr },
-        profile: { setup_commands: [{ stage: "install", command: "npm ci" }] } as unknown as Workspace["profile"],
+        profile: { setup_commands: [{ stage: "install", command: "npm ci" }] },
       },
       { onDoneRecording },
     );
