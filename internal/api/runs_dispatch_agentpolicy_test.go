@@ -95,7 +95,7 @@ func agentPolicyDispatchParams(t *testing.T, fr *fakeRunner, agent string, level
 	run.Task = task
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
-		Interactive: p.Interactive, ToolApprovals: p.ToolApprovals,
+		Interactive: p.Interactive, ToolApprovals: p.ToolApprovals, TaskMode: p.TaskMode,
 	})
 	ev := findAudit(audit.snapshot(), run.ID, "run.agent_policy", "success")
 	if ev == nil {
@@ -323,16 +323,38 @@ func TestAgentPolicyDispatchHoldRunGetsTheGatedFile(t *testing.T) {
 		})
 	}
 	// Not the hold lane: an interactive run never carries the hold env, so a
-	// ToolApprovals value on it changes nothing, and an auto run no rubric
-	// bound stays byte for byte as before.
+	// ToolApprovals value on it changes nothing, an auto run no rubric bound
+	// stays byte for byte as before, and an exec run (BYOA/CI plain-command
+	// lane) has no agent process to hold — maybe_exec_task_mode execs the
+	// command and never reaches the harness launch that would read the hold
+	// env, so the file would sit unread while, on a custom image whose USER is
+	// root, the Docker driver refuses the launch outright for it (#358 review).
 	for name, p := range map[string]dispatchParams{
 		"interactive":  {Interactive: true, ToolApprovals: "hold"},
 		"auto unbound": {ToolApprovals: "auto"},
+		"exec":         {ToolApprovals: "hold", TaskMode: "exec"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			spec, data, _ := agentPolicyDispatchParams(t, &fakeRunner{}, "claude-code", "", "", p)
 			if len(spec.ManagedFiles) != 0 || data != nil {
 				t.Errorf("spec.ManagedFiles = %d, row = %+v, want neither off the hold lane", len(spec.ManagedFiles), data)
+			}
+			if spec.Env["WARDYN_TOOL_APPROVALS"] != "" {
+				t.Errorf("Env[WARDYN_TOOL_APPROVALS] = %q, want unset off the hold lane", spec.Env["WARDYN_TOOL_APPROVALS"])
+			}
+		})
+	}
+	// Same exec exclusion at an L2/L3 level, which (unlike the "" case above)
+	// brings its own document off the hold lane — an exec run must not get the
+	// HOLD LANE's L1 substitution merely because ToolApprovals says hold.
+	for _, level := range []types.AutonomyLevel{types.AutonomyL2, types.AutonomyL3} {
+		t.Run("exec level "+string(level), func(t *testing.T) {
+			spec, data, _ := agentPolicyDispatchParams(t, &fakeRunner{}, "claude-code", level, "", dispatchParams{ToolApprovals: "hold", TaskMode: "exec"})
+			if data != nil && data.ToolApprovals == "hold" {
+				t.Errorf("row = %+v, want no tool_approvals=hold row for an exec run", data)
+			}
+			if len(spec.ManagedFiles) == 1 && bytes.Equal(spec.ManagedFiles[0].Content, golden) {
+				t.Errorf("spec.ManagedFiles = %+v, want no HOLD-LANE (L1) substitution on an exec run", spec.ManagedFiles)
 			}
 		})
 	}

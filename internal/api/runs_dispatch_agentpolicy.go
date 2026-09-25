@@ -38,13 +38,22 @@ type runAgentPolicy struct {
 // holdLane is whether a run launches agent-run's hold lane: the one predicate
 // the sandbox env (WARDYN_TOOL_APPROVALS), the managed settings and the 201's
 // undelivered warning all read, so a run cannot get one without the other.
-func holdLane(interactive bool, toolApprovals string) bool {
-	return !interactive && toolApprovals == "hold"
+//
+// Excludes task_mode=exec: maybe_exec_task_mode (agent-run-lib.sh) execs the
+// plain shell command and never reaches the harness launch or its
+// WARDYN_TOOL_APPROVALS check, so an exec run has no agent process to hold —
+// delivering the hold lane's L1 managed-settings file to one anyway (#358's
+// hold&&HoldTakesOver case, for a level that alone brings no document) hands a
+// custom image's root-owned USER a file no agent reads, and the Docker driver
+// refuses the launch outright (managed_files.go) on an image that worked
+// before.
+func holdLane(interactive bool, toolApprovals, taskMode string) bool {
+	return !interactive && toolApprovals == "hold" && taskMode != "exec"
 }
 
 // holdLane is holdLane for this dispatch.
 func (p dispatchParams) holdLane() bool {
-	return holdLane(p.Interactive, p.ToolApprovals)
+	return holdLane(p.Interactive, p.ToolApprovals, p.TaskMode)
 }
 
 // agentPolicyBasis names what a run's managed settings were generated from,
@@ -140,7 +149,7 @@ func managedFilesGap(caps runner.Capabilities, class types.ConfinementClass) (re
 // requestIsInteractive: preflight never runs the no-task coercion, so the raw
 // field would disagree with the launch about which lane a task-less run takes.
 func (s *Server) managedSettingsUndeliveredWarning(ctx context.Context, req *createRunRequest, level types.AutonomyLevel, class types.ConfinementClass) []string {
-	hold := holdLane(requestIsInteractive(*req), req.ToolApprovals)
+	hold := holdLane(requestIsInteractive(*req), req.ToolApprovals, req.TaskMode)
 	if _, _, ok := agentpolicy.ForAgent(req.Agent, level, hold); !ok || s.cfg.Runner == nil || req.TaskMode == "exec" {
 		return nil
 	}
