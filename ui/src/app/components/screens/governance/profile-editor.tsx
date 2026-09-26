@@ -22,7 +22,7 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api, isGrantBoundError, type GovernanceLimits, type GovernanceProfile } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
-import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, RUN_LIMITS as RL, RUN_LIMIT_UNITS, runLimitUnit } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import type { RunPolicySpec } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
@@ -30,6 +30,7 @@ import { isUncappedEnforcement } from "../drives/display";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Mono } from "../../wardyn/code-block";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { POLICY_TEMPLATES, PolicyPanel, parseSpec } from "../../wardyn/policy-panel";
@@ -40,6 +41,13 @@ import { ProfileRubric } from "./profile-rubric";
 // rows below, not a value worth spelling out in the input (storage-tab.tsx's
 // numberField precedent).
 const numberField = (v: number | undefined): number | "" => (v ? v : "");
+
+// RL-14: the run-limit fields are seconds on the wire (types.RunLimits) but
+// the packet's own examples are whole days/hours/minutes, so LimitDurationRow
+// below converts between the two rather than asking an admin to type seconds.
+const SEC_PER_MINUTE = 60;
+const SEC_PER_HOUR = 3600;
+const SEC_PER_DAY = 86400;
 
 // The prefill for a NEW profile is the panel's own Minimal template — the same
 // const policies.tsx's create editor starts from, so there is no second
@@ -204,6 +212,71 @@ export function ProfileEditor({
         />
       </section>
 
+      {/* RL-14 (0.8, #579): the lease and wait bounds (long-holds-design.md
+          rev 4 §2.2). A separate section from Limits above — those are doors
+          and quotas a run either may or may not open; these are TIME bounds,
+          and share one gate (user_changes_limits) none of the doors do. */}
+      <section className="mt-6">
+        <h4 className="text-body font-medium text-foreground">{RL.SECTION_TITLE}</h4>
+        <LimitDurationRow
+          id="governance-limit-max-end"
+          label={RL.MAX_END_LABEL}
+          hint={RL.MAX_END_HINT}
+          unitSec={SEC_PER_DAY}
+          valueSec={limits.max_end_ahead_sec}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, max_end_ahead_sec: v }))}
+        />
+        <LimitDurationRow
+          id="governance-limit-default-end"
+          label={RL.DEFAULT_END_LABEL}
+          unitSec={SEC_PER_DAY}
+          valueSec={limits.default_end_sec}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, default_end_sec: v }))}
+        />
+        <LimitRow
+          label={RL.ALLOW_NO_END_LABEL}
+          hint={RL.ALLOW_NO_END_HINT}
+          checked={!!limits.allow_no_end}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, allow_no_end: v }))}
+        />
+        <LimitDurationRow
+          id="governance-limit-max-wait"
+          label={RL.MAX_WAIT_LABEL}
+          hint={RL.MAX_WAIT_HINT}
+          unitSec={SEC_PER_HOUR}
+          valueSec={limits.max_wait_sec}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, max_wait_sec: v }))}
+        />
+        <LimitDurationRow
+          id="governance-limit-default-wait"
+          label={RL.DEFAULT_WAIT_LABEL}
+          unitSec={SEC_PER_HOUR}
+          valueSec={limits.default_wait_sec}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, default_wait_sec: v }))}
+        />
+        <LimitRow
+          label={RL.USER_CHANGES_LABEL}
+          hint={RL.USER_CHANGES_HINT}
+          checked={!!limits.user_changes_limits}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, user_changes_limits: v }))}
+        />
+        <LimitDurationRow
+          id="governance-limit-pause-idle"
+          label={RL.PAUSE_IDLE_LABEL}
+          hint={RL.PAUSE_IDLE_HINT}
+          unitSec={SEC_PER_MINUTE}
+          valueSec={limits.pause_idle_after_sec}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, pause_idle_after_sec: v }))}
+        />
+      </section>
+
       <ProfileRubric
         value={limits.autonomy_rubric ?? {}}
         disabled={disabled}
@@ -300,6 +373,76 @@ function LimitNumberRow({
         />
       </Field>
       {warning && <p className="mt-1.5 max-w-[62ch] text-meta leading-snug text-warning">{warning}</p>}
+    </div>
+  );
+}
+
+// RL-14: one run-limit duration (0 = unlimited, the same rule LimitNumberRow's
+// three rows follow). The wire is seconds; the input takes a whole number of
+// the unit picked beside it. The picker opens on the row's own unit (the
+// packet's example for that field) unless the stored value is not a whole
+// number of it — then on the largest unit it is (runLimitUnit, the chip's
+// rule), so the input never shows a rounded or blank value for a stored one.
+// Seconds are offered only when a stored value needs them. A hint is optional
+// — two of the seven rows (Default end, Default wait) are paired with a row
+// just above that already explains the pair.
+function LimitDurationRow({
+  id,
+  label,
+  hint,
+  valueSec,
+  unitSec,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint?: React.ReactNode;
+  valueSec: number | undefined;
+  unitSec: number;
+  disabled: boolean;
+  onChange: (nextSec: number) => void;
+}) {
+  const [unit, setUnit] = React.useState(() =>
+    valueSec && valueSec % unitSec !== 0 ? runLimitUnit(valueSec).sec : unitSec,
+  );
+  const [offerSeconds] = React.useState(unit === 1);
+  const count = valueSec ? valueSec / unit : undefined;
+  return (
+    <div className="mt-3 border-t border-border pt-3 first-of-type:border-t-0" data-testid={id}>
+      <Field label={label} htmlFor={id} hint={hint} className="max-w-[28rem]">
+        <div className="flex items-center gap-2">
+          <Input
+            id={id}
+            type="number"
+            min={0}
+            className="max-w-[8rem] font-mono"
+            disabled={disabled}
+            value={numberField(count)}
+            onChange={(e) => onChange(nonNegativeInt(e.target.value) * unit)}
+          />
+          {/* Changing the unit keeps the number typed: "30", then minutes. */}
+          <Select
+            value={String(unit)}
+            disabled={disabled}
+            onValueChange={(v) => {
+              setUnit(Number(v));
+              if (count) onChange(count * Number(v));
+            }}
+          >
+            <SelectTrigger aria-label={RL.UNIT_PICKER_LABEL(label)} className="w-[8rem]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {RUN_LIMIT_UNITS.filter((u) => u.sec > 1 || offerSeconds).map((u) => (
+                <SelectItem key={u.sec} value={String(u.sec)}>
+                  {u.many}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </Field>
     </div>
   );
 }
