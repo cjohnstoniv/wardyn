@@ -358,6 +358,49 @@ func TestExpireStale(t *testing.T) {
 	}
 }
 
+// TestExpireStaleByKind_TalliesByTallyKeyNotBareKind pins #971: a
+// credential_reauth row is either an Azure DevOps sign-in/consent or an AWS
+// SSO re-auth, and the sweep's tally must split them the same way
+// CancelForRun's own tally already does (approval.TallyKey), so a caller
+// counting only the AWS SSO population (cmd/wardynd's sweeper, and
+// wardyn_credential_reauth_total's HELP) does not fold the Azure DevOps row
+// into it.
+func TestExpireStaleByKind_TalliesByTallyKeyNotBareKind(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+
+	aws, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalCredentialReauth,
+		json.RawMessage(`{"mechanism":"bedrock_sso","credential_source":"per_user","owner":"alice"}`)))
+	adoSignIn, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalCredentialReauth,
+		json.RawMessage(`{"lane":"azure_devops","mechanism":"entra_signin","owner":"bob","provider_id":"p"}`)))
+
+	// Back-date both past the cutoff.
+	for i, r := range st.records {
+		if r.ID == aws.ID || r.ID == adoSignIn.ID {
+			st.records[i].RequestedAt = time.Now().UTC().Add(-10 * time.Hour)
+		}
+	}
+
+	expired, byKind, err := approval.ExpireStaleByKind(ctx, st, 5*time.Hour)
+	if err != nil {
+		t.Fatalf("expire stale by kind: %v", err)
+	}
+	if expired != 2 {
+		t.Fatalf("expired = %d, want 2 (both rows are stale credential_reauth workflows)", expired)
+	}
+	if got := byKind[approval.TallyReauthAWSSSO]; got != 1 {
+		t.Errorf("byKind[%q] = %d, want 1 (the AWS SSO row)", approval.TallyReauthAWSSSO, got)
+	}
+	if got := byKind[approval.TallyReauthADOSignIn]; got != 1 {
+		t.Errorf("byKind[%q] = %d, want 1 (the Azure DevOps sign-in row)", approval.TallyReauthADOSignIn, got)
+	}
+	if got := byKind[string(types.ApprovalCredentialReauth)]; got != 0 {
+		t.Errorf("byKind[%q] = %d, want 0 — both rows have their own tally key, so the bare kind must "+
+			"stay empty (folding them together is exactly the #971 bug)", string(types.ApprovalCredentialReauth), got)
+	}
+}
+
 func TestExpireStale_AlreadyDecidedRace(t *testing.T) {
 	// If a concurrent Decide wins, ExpireStale should not error.
 	ctx := context.Background()

@@ -1212,7 +1212,7 @@ migration `0050`)** are the second and third owned nouns after runs.
   member OWNS a secret by that exact name (a names-only
   `Store.For(<member>).List`, never a value read). Every other grant kind, and
   any pairing failing one of those, stays ceiling-paired exactly as before. See
-  [USERS.md § Your model key](USERS.md#your-model-key).
+  [USERS.md § Your model connections](USERS.md#your-model-connections).
 
 **Deciding an approval is kind-restricted, not just owner-restricted**
 (`decide()`, `internal/api/approvals.go`): a member may approve or deny an

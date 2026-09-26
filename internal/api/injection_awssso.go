@@ -305,6 +305,22 @@ const (
 	awsSSOReauthReasonNotFound    = "not_found"
 )
 
+// awsSSOReauthScopeBody is the requested_scope of an AWS SSO re-auth request
+// (kind credential_reauth), the same shape adoSignInScopeBody
+// (injection_ado_signin.go) is for its own lane: the dedup key, so it carries
+// identity only — the reason lives on the audit row, not here (see the
+// comment above). No `lane` key, so approval.TallyKey and reauthResolvableBy
+// can always tell an AWS SSO row apart from an Azure DevOps sign-in or
+// consent one. Provider and ProviderUID are omitted (not empty-stringed) for
+// a roster run, matching the map literal this replaced byte-for-byte.
+type awsSSOReauthScopeBody struct {
+	Mechanism        string `json:"mechanism"`
+	CredentialSource string `json:"credential_source"`
+	Owner            string `json:"owner"`
+	Provider         string `json:"provider,omitempty"`
+	ProviderUID      string `json:"provider_uid,omitempty"`
+}
+
 // holdOrRefuseCredentialReauth answers the DEAD-credential path: 423 while a
 // request is open, 403 once one has been refused, cancelled or aged out.
 //
@@ -368,15 +384,15 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 	// its provider — the id to show, the UID to match (reauthResolvableBy) — so
 	// only a sign-in for that provider answers it; a roster run's scope stays
 	// byte-for-byte what it was.
-	scopeFields := map[string]string{
-		"mechanism":         snapshot.Mechanism,
-		"credential_source": snapshot.CredentialSource,
-		"owner":             snapshot.OwnerSubject,
+	scope := awsSSOReauthScopeBody{
+		Mechanism:        snapshot.Mechanism,
+		CredentialSource: snapshot.CredentialSource,
+		Owner:            snapshot.OwnerSubject,
 	}
 	if snapshot.ProviderUID != "" {
-		scopeFields["provider"], scopeFields["provider_uid"] = modelProvider, snapshot.ProviderUID
+		scope.Provider, scope.ProviderUID = modelProvider, snapshot.ProviderUID
 	}
-	reqScope, _ := json.Marshal(scopeFields)
+	reqScope, _ := json.Marshal(scope)
 	// The id is minted HERE so this caller can tell whether it RAISED the request
 	// or merely found one. RequestApproval's dedup — the pre-insert
 	// scan and the partial unique index's loser alike — answers with the WINNER'S

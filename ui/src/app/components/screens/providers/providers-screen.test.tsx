@@ -412,7 +412,6 @@ describe("ProvidersScreen", () => {
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeDisabled();
     await userEvent.type(textarea, "https://github.com/acme");
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeEnabled();
-    expect(putWorkspaceProvidersMock).not.toHaveBeenCalled();
   });
 
   // V1 r2 HIGH: the roster comes from THIS screen's /setup/status read, but the

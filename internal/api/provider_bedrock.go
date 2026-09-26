@@ -143,16 +143,27 @@ func (s *Server) providerBedrockRefusal(ctx context.Context, p types.ModelProvid
 	return blob, providerDenial{}, nil
 }
 
-// modelCredential is the create door's model-credential fact for a run that
-// chose a provider, which skips enforceCreateLLMMechanism: a Bedrock provider's
-// run carries its owner's Bedrock credential, so the autonomy gate grades it
-// WITH that credential, as it does every legacy Bedrock lane (#504,
-// bedrockCredGradeHolds). Zero for every other choice.
+// modelCredential is the model-credential fact both doors read for a run that
+// chose a provider, which skips enforceCreateLLMMechanism, so this is the only
+// place its facts come from (#983): Review publishes them, and the confinement
+// advisory keys on Mechanism. The kind names the one lane its arm authors,
+// always the owner's own credential. Only bedrock_sso is resident (its SDK
+// mints role credentials inside the sandbox, perUserRowResidency); every other
+// arm leaves a placeholder the proxy replaces. A Bedrock provider's run also
+// carries its host, so the autonomy gate grades it WITH that credential, as it
+// does every legacy Bedrock lane (#504, bedrockCredGradeHolds). Zero when no
+// provider was chosen.
 func (c runProviderChoice) modelCredential() modelCredentialFacts {
-	if !c.chosen || !c.provider.Kind.IsBedrock() {
+	if !c.chosen {
 		return modelCredentialFacts{}
 	}
-	return modelCredentialFacts{bedrockHost: providerBedrockRuntimeHost(c.provider)}
+	f := modelCredentialFacts{Mechanism: string(c.provider.Kind), Residency: residencyProxy,
+		CredentialSource: string(types.CredentialSourcePerUser)}
+	if c.provider.Kind.IsBedrock() {
+		f.Residency = perUserRowResidency(types.AgentMechanism(c.provider.Kind))
+		f.bedrockHost = providerBedrockRuntimeHost(c.provider)
+	}
+	return f
 }
 
 // providerBedrockTransport is the Bedrock arms' env (applyProviderEnv): the

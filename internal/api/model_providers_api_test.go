@@ -496,20 +496,29 @@ func TestSetupStatusModelProviders(t *testing.T) {
 		}
 	})
 
-	t.Run("an agent the roster turns off is not offered", func(t *testing.T) {
+	// #541 fix review: the block exists (an admin set one up), it just grants
+	// THIS caller nothing — `[]`, never the same wire shape as no block at
+	// all (TestSetupStatusNilBlockIsToday's `null`). No `omitempty` on the
+	// field is what keeps the two apart.
+	t.Run("an agent the roster turns off is not offered — the empty-grant shape, not the no-block one", func(t *testing.T) {
 		off := site
 		off.AgentProviders = agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, Disabled: true})
 		off.ModelProviders = providerBlock(keyProvider("anthropic", "claude-code"))
 		w := do(t, modelProvidersStatusSrv(t, off, &capStore{}), http.MethodGet, "/api/v1/setup/status", adminToken, "")
-		if strings.Contains(w.Body.String(), `"model_providers"`) {
-			t.Errorf("a provider serving only a turned-off agent was offered: %s", w.Body.String())
+		if !strings.Contains(w.Body.String(), `"model_providers":[]`) {
+			t.Errorf("a provider serving only a turned-off agent should still publish the empty-grant shape: %s", w.Body.String())
+		}
+		if got := statusModelProviders(t, w.Body.Bytes()); len(got) != 0 {
+			t.Errorf("model_providers = %+v, want empty", got)
 		}
 	})
 }
 
-// TestSetupStatusNilBlockIsToday is the golden for "additive only" on the one
-// document every person reads: with no provider block there is no new key, for
-// either tier, and the member body keeps exactly the keys it had.
+// TestSetupStatusNilBlockIsToday is the golden for "no provider block": the
+// ONE thing the console tells that shape apart from an empty grant by (#541
+// fix review — model_providers carries no `omitempty`, deliberately) is
+// `null`, never `[]`, and every other key stays exactly what it had — no
+// new key besides this one, for either tier.
 func TestSetupStatusNilBlockIsToday(t *testing.T) {
 	srv := modelProvidersStatusSrv(t, types.SiteConfig{}, &capStore{})
 	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
@@ -517,8 +526,11 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 		"admin":  do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, "").Body.String(),
 		"member": doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "").Body.String(),
 	} {
-		if strings.Contains(body, "model_providers") {
-			t.Errorf("%s /setup/status grew model_providers with no provider block: %s", name, body)
+		if !strings.Contains(body, `"model_providers":null`) {
+			t.Errorf("%s /setup/status: model_providers should be null with no provider block: %s", name, body)
+		}
+		if strings.Contains(body, "provider_access") {
+			t.Errorf("%s /setup/status grew provider_access with no provider block: %s", name, body)
 		}
 	}
 	var st map[string]any
@@ -527,11 +539,54 @@ func TestSetupStatusNilBlockIsToday(t *testing.T) {
 	}
 	want := []string{
 		"age_key", "auth", "bedrock", "checks", "checks_redacted", "deployment", "harnesses", "has_runs", "host_proxy",
-		"llm_ready", "onboarding_complete", "platform", "providers", "ready", "runner", "scm", "secrets",
+		"llm_ready", "model_providers", "onboarding_complete", "platform", "providers", "ready", "runner", "scm", "secrets",
 	}
 	if got := slices.Sorted(maps.Keys(st)); !slices.Equal(got, want) {
 		t.Errorf("member /setup/status keys = %v\nwant today's %v", got, want)
 	}
+}
+
+// TestSetupStatusModelProvidersNullVsEmpty pins both shapes side by side
+// (#541 fix review): a caller granted nothing under a REAL provider block
+// reads `[]` (an admin who set providers up, just not for them); a caller
+// under no block at all reads `null` (an admin who has not started). Both
+// grade to CONNECTIONS.SUMMARY_NOT_SET_UP client-side, but the console's own
+// providerMode (`!= null`) — whether "Your model key" (the legacy BYOK door)
+// still applies — depends on telling the two facts apart on the wire.
+func TestSetupStatusModelProvidersNullVsEmpty(t *testing.T) {
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+
+	t.Run("no block at all: null", func(t *testing.T) {
+		srv := modelProvidersStatusSrv(t, types.SiteConfig{}, &capStore{})
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "")
+		var st struct {
+			ModelProviders json.RawMessage `json:"model_providers"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		if string(st.ModelProviders) != "null" {
+			t.Errorf("model_providers = %s, want null", st.ModelProviders)
+		}
+	})
+
+	t.Run("a block exists, granting this caller nothing: empty array", func(t *testing.T) {
+		site := types.SiteConfig{
+			ModelProviders: providerBlock(keyProvider("anthropic", "claude-code")),
+			AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey, Disabled: true}),
+		}
+		srv := modelProvidersStatusSrv(t, site, &capStore{})
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "")
+		var st struct {
+			ModelProviders json.RawMessage `json:"model_providers"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		if string(st.ModelProviders) != "[]" {
+			t.Errorf("model_providers = %s, want []", st.ModelProviders)
+		}
+	})
 }
 
 // TestRunCreateUnderAnUnservingProviderBlock pins the transition (#528): once

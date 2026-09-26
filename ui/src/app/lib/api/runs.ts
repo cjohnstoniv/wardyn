@@ -69,6 +69,8 @@ type RunWireInput = (Partial<AgentRun> | CreateRunInput) & {
   // read_only NARROWS a writable allocation; false is a no-op the server
   // refuses as a widening, so buildSpec omits it rather than sending it.
   drive?: { enabled: boolean; read_only?: boolean };
+  // #542/#526 — this run's chosen model provider (CreateRunRequest.ModelProvider).
+  model_provider?: string;
 };
 
 // The ONE projection from wizard input to the POST /runs wire body. createRun
@@ -126,6 +128,7 @@ function runWireBody(input: RunWireInput): Record<string, unknown> {
   // whether the member asked for it. A whitelist that re-decided would be the
   // second answer to that question.
   if (input.drive) body.drive = input.drive;
+  if (input.model_provider) body.model_provider = input.model_provider;
   return body;
 }
 

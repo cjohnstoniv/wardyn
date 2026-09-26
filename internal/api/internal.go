@@ -116,8 +116,10 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// A hold that ran out is counted on its OWN series, at the one moment the
 	// control plane learns of it: the expiry happens in the sidecar, and the
 	// approval row deliberately stays PENDING (the sign-in is still wanted), so
-	// this decision row is the only signal that reaches here.
-	if dl.Decision == egress.Deny && dl.RuleSource == ruleSourceCredentialReauthTimeout {
+	// this decision row is the only signal that reaches here. An Azure DevOps
+	// hold writes the same rule source; isADOEntraHost says why it is excluded.
+	if dl.Decision == egress.Deny && dl.RuleSource == ruleSourceCredentialReauthTimeout &&
+		!isADOEntraHost(dl.Request.Host) {
 		s.metrics.credentialReauthRecorded(credentialReauthOutcomeTimeout)
 	}
 

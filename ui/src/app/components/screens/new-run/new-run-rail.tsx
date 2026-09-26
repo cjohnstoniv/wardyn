@@ -20,11 +20,12 @@ import { Link } from "react-router-dom";
 import { Loader2, TriangleAlert } from "lucide-react";
 import type {
   ConfinementClass,
-  ModelCredential,
   PreflightResult,
   RunPolicySpec,
   SCMAccess,
   SetupHarnessTool,
+  SetupModelProvider,
+  SetupProviderAccess,
 } from "../../../lib/types";
 import { Button, buttonVariants } from "../../ui/button";
 import { AutonomyChip, Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
@@ -33,10 +34,12 @@ import { AUTONOMY_RAIL, autonomyBoundSentence, GOVERNANCE as GOV, MEMBER } from 
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
-import { RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { RAIL, RAIL_PROVIDER, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
+import { CredentialFacts, ModelProviderSection } from "./new-run-rail-credentials";
 import { MODEL_ACCESS_AGENT } from "../../../lib/model-access";
+import type { ProviderGate } from "./model-provider-lane";
 import { absoluteTime, relativeTime } from "../../../lib/format";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import {
@@ -118,6 +121,34 @@ interface RunRailProps {
    * rendered "AWS credentials sign inside the sandbox" over a Claude sign-in.
    */
   agentRow?: SetupHarnessTool;
+  /**
+   * #542 (design §5.6) — this run's model-provider picker, when a provider
+   * block exists and at least one provider serves the picked agent (states
+   * R1–R4, R6–R8; empty `candidates` or an absent prop both fall back to
+   * today's CredentialFacts/showModelWarning shape, R9's existing path).
+   * `candidates` and `access` are the screen's OWN /setup/status read —
+   * mirrors agentRow's own withholding pattern — never the shell's, so a rail
+   * mounted with no provider block above it renders exactly what it always
+   * has. Selection is owned by the SCREEN (model-provider-lane.ts's
+   * resolveProviderSelection): this rail renders and asks, it never picks.
+   */
+  modelProvider?: {
+    candidates: SetupModelProvider[];
+    access: SetupProviderAccess[] | undefined;
+    selectedId: string | undefined;
+    onChange: (id: string) => void;
+    /** R7's info line, naming what the last agent switch changed; null every
+     *  other state (R1/R2/R6/R8 stay silent — see resolveProviderSelection). */
+    changeNote: string | null;
+    /** R5c (#542 rail-gap packet) — model-provider-lane.ts's providerGate,
+     *  undefined for the ordinary R1-R4/R6-R8 shapes, R9, AND R5b (not drawn
+     *  — see providerGate's own doc comment). */
+    gate?: ProviderGate;
+    /** The picked agent's human label (wizard-types.ts's agentLabel), for
+     *  DEFAULT_OFF/DEFAULT_OFF_ONLY — the same label CHANGED already names in
+     *  changeNote. */
+    harnessLabel: string;
+  };
   /** The Connect Azure DevOps launch-door dialog (§2.4, #386): owned by the
    *  screen (use-ado-launch-door.ts), rendered here. `org` comes from the
    *  422 body itself (review finding F1), never from a preflight fact — a
@@ -138,95 +169,20 @@ interface RunRailProps {
   };
 }
 
-// CredentialFacts states where the model credential lands, and nothing wider —
-// "Credentials" as a heading over "never written into the sandbox" was a
-// universal claim only the model credential ever supported.
-//
-// The precedence, and why it is only two rungs. A current preflight verdict
-// describes the exact body about to be launched, resolved lane and all, so it
-// wins and everything below is read off it. Otherwise the only claim available
-// is the one the roster row settles by itself — a per-user Bedrock SSO row,
-// resident whatever the run carries — and that row is also the one case whose
-// precise answer cannot be fetched, since Preflight 422s a member who has not
-// signed in. Anything else is unresolved, and says so: there is no third rung
-// that guesses.
-function CredentialFacts({
-  cred,
-  agentRow,
-  preflightRun,
-}: {
-  cred?: ModelCredential;
-  agentRow?: SetupHarnessTool;
-  /** Whether a current preflight verdict is on screen. */
-  preflightRun: boolean;
-}) {
-  if (cred) {
-    // Keyed on the resolved mechanism, never on the row's declared one.
-    const bedrock = cred.residency === "sandbox" && cred.mechanism !== "anthropic_subscription";
-    return (
-      <>
-        <CredentialLine>{credentialSentence(cred)}</CredentialLine>
-        {bedrock && <AWSSignInChip perUser={cred.credential_source === "per_user"} />}
-      </>
-    );
-  }
-  if (agentRow?.credential_residency === "sandbox") {
-    // The row-fixed case. per_user by construction — it is the only shape the
-    // server publishes this field for.
-    return (
-      <>
-        <CredentialLine>{RAIL_CREDENTIAL.SANDBOX_BEDROCK}</CredentialLine>
-        <AWSSignInChip perUser />
-      </>
-    );
-  }
-  return (
-    <>
-      <CredentialLine>{RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH}</CredentialLine>
-      {/* …and the way to find out, only while there is nothing to find it
-          in. A current verdict that carries no `model_credential` — always so
-          against a 0.7.4 daemon, and on 0.7.5 whenever the roster read failed or
-          there is no store — puts this hint beside the result of pressing it: a
-          promise that is false the moment it is followed. */}
-      {!preflightRun && <CredentialLine>{RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT}</CredentialLine>}
-    </>
-  );
-}
-
-function CredentialLine({ children }: { children: React.ReactNode }) {
-  return <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground first:mt-0">{children}</p>;
-}
-
-// Whose AWS sign-in is resident — the difference between "my own session is in
-// there" and "the admin's is", in the Barrier chip + tagline shape.
-function AWSSignInChip({ perUser }: { perUser: boolean }) {
-  return (
-    <div className="mt-1.5">
-      <Chip tone="neutral">
-        {perUser
-          ? RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER
-          : RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_SHARED}
-      </Chip>
-    </div>
-  );
-}
-
-// credentialSentence maps a resolved grade to the one sentence true of it.
-function credentialSentence(cred: ModelCredential): string {
-  switch (cred.residency) {
-    case "proxy":
-      return cred.staged_placeholder ? RAIL_CREDENTIAL.PROXY_STAGED : RAIL_CREDENTIAL.PROXY;
-    case "sandbox":
-      // The only two families that ever grade `sandbox`: every SigV4 Bedrock
-      // lane, and the ~/.claude mount with proxy-side injection off.
-      return cred.mechanism === "anthropic_subscription"
-        ? RAIL_CREDENTIAL.SANDBOX_SUBSCRIPTION
-        : RAIL_CREDENTIAL.SANDBOX_BEDROCK;
-    case "image":
-      return RAIL_CREDENTIAL.IMAGE;
-    default:
-      return RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH;
-  }
+/** The exact sentence R5c's gate names — DEFAULT_OFF_ONLY with no other
+ *  candidate, DEFAULT_OFF otherwise — shared by ModelProviderSection's own
+ *  inline line (new-run-rail-credentials.tsx) and RunRail's launch-problem caption (F4, Opus review
+ *  round 2): the caption is suppressed ONLY when launch.problem is exactly
+ *  this string, never for some OTHER, higher-priority problem (an empty
+ *  title, …) that happens to be showing while a gate is also active.
+ *  undefined with no gate (R9's shape, or the ordinary R1-R4/R6-R8 ones). */
+function gateSentence(modelProvider: RunRailProps["modelProvider"]): string | undefined {
+  const gate = modelProvider?.gate;
+  if (!modelProvider || gate?.kind !== "default_off") return undefined;
+  const name = gate.provider.name ?? gate.provider.id;
+  return modelProvider.candidates.length === 0
+    ? RAIL_PROVIDER.DEFAULT_OFF_ONLY(name, modelProvider.harnessLabel)
+    : RAIL_PROVIDER.DEFAULT_OFF(name, modelProvider.harnessLabel);
 }
 
 // ModelAccessLine — Finding 1: the rail states who (this launcher) needs to
@@ -351,6 +307,7 @@ export function RunRail({
   launch,
   preflight,
   agentRow,
+  modelProvider,
   adoDialog,
 }: RunRailProps) {
   // Both of finding 1's facts, read rather than asserted: where the model
@@ -380,6 +337,13 @@ export function RunRail({
   // trap cannot reliably win either. Passing Launch explicitly as `returnTo`
   // makes it the captured opener directly.
   const launchRef = React.useRef<HTMLButtonElement>(null);
+
+  // #542 — a provider block with at least one candidate for the picked agent,
+  // OR a gate to name (R5c — the rail-gap packet), supersedes
+  // CredentialFacts/showModelWarning entirely; with neither (no block, or none
+  // serving this agent — R9) that legacy path is unchanged below.
+  const hasProviderCandidates = !!modelProvider && (modelProvider.candidates.length > 0 || !!modelProvider.gate);
+  const onProviderSignIn = (p: SetupModelProvider) => door.openDoor({ for: { provider: p.id }, returnTo: launchRef.current });
 
   // The server refused this click for the person's own model credential (422,
   // reason model_credential — the class failure-block.tsx grades a dead run by).
@@ -437,7 +401,8 @@ export function RunRail({
   // actually renders something for it (state "not_configured") — a `live`
   // gitCredential (nothing to say, see GitCredentialLine above) must not by
   // itself open an empty heading over a shell run with nothing else to show.
-  const showCredentials = showModelWarning || !!cred || !!agentRow || showModelAccess || gitCredential?.state === "not_configured";
+  const showCredentials =
+    hasProviderCandidates || showModelWarning || !!cred || !!agentRow || showModelAccess || gitCredential?.state === "not_configured";
   // With no provider connected and nothing resolved, "Resolved at launch."
   // and the Preflight hint must not sit directly under "No model provider is
   // connected. This run launches; its first model call fails." Nothing
@@ -547,7 +512,23 @@ export function RunRail({
               specific fact whenever it applies; the deployment sentence
               still covers every other no-model-path shape (no per_user row
               at all, a shared credential nobody set up, a legacy daemon). */}
-          {showModelWarning && !showModelAccess && (
+          {/* #542 — a provider block with a candidate for this agent (R1–R4,
+              R6–R8) supersedes the legacy no-provider banner and
+              CredentialFacts below entirely; R9 (no candidate at all) keeps
+              exactly today's shape. */}
+          {hasProviderCandidates && modelProvider && (
+            <ModelProviderSection
+              candidates={modelProvider.candidates}
+              access={modelProvider.access}
+              selectedId={modelProvider.selectedId}
+              onChange={modelProvider.onChange}
+              changeNote={modelProvider.changeNote}
+              onSignIn={onProviderSignIn}
+              gate={modelProvider.gate}
+              harnessLabel={modelProvider.harnessLabel}
+            />
+          )}
+          {!hasProviderCandidates && showModelWarning && !showModelAccess && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* The action that fills the gap rides next to the
@@ -557,7 +538,7 @@ export function RunRail({
               </Link>
             </p>
           )}
-          {showCredentialFacts && (
+          {!hasProviderCandidates && showCredentialFacts && (
             <CredentialFacts cred={cred} agentRow={agentRow} preflightRun={!!preflight.result} />
           )}
           <GitCredentialLine cred={gitCredential} />
@@ -666,8 +647,15 @@ export function RunRail({
       </div>
       {/* A disabled button that doesn't say why is a dead end: without
           client-side validation, an empty form would launch and the server's
-          rejection would arrive after the fact. */}
-      {launch.problem && !launch.inFlight && (
+          rejection would arrive after the fact. Suppressed ONLY when
+          launch.problem IS the gate's (R5c's) own sentence — Opus review
+          round 2, F4: ModelProviderSection above already names that exact
+          fact inline, beside the select itself, so repeating it below would
+          only echo it — but a DIFFERENT, higher-priority problem (an empty
+          title, an unparseable policy, …) must still show here even while a
+          gate is also active, since it's a separate reason nothing has
+          launched yet. */}
+      {launch.problem && !launch.inFlight && launch.problem !== gateSentence(modelProvider) && (
         <p className="mt-2 text-center text-xs text-muted-foreground">{launch.problem}</p>
       )}
 

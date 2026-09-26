@@ -72,9 +72,18 @@ func envSlice(env map[string]string) []string {
 // (the substrate-agnostic field-mapping + marshal core, hoisted so a k8s
 // substrate builds byte-identical sidecar config): this function adds only the
 // docker-Env-slice shape and the operator-knob forwarding below.
-func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) []string {
-	cfgJSON, _ := runner.BuildProxyConfig(runID, pc, port)
-	return proxyEnvFromJSON(runID, cfgJSON, pc.ControlPlaneURL)
+//
+// The error is BuildProxyConfig's own (a plain json.Marshal, so practically
+// unreachable with today's Config shape) — but it used to be silently
+// discarded, which would hand the sidecar NO config at all and let it fail
+// LATER, opaquely, at its own decode rather than failing sandbox creation
+// with the actual cause (#894).
+func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) ([]string, error) {
+	cfgJSON, err := runner.BuildProxyConfig(runID, pc, port)
+	if err != nil {
+		return nil, err
+	}
+	return proxyEnvFromJSON(runID, cfgJSON, pc.ControlPlaneURL), nil
 }
 
 // proxyEnvFromJSON is proxyEnv for a config already rendered (ReplaceProxy).

@@ -10,6 +10,34 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **`make release-check` now propagates a Postgres-suite failure (#1068).** The Postgres-gated
+  `if` chained `test-report-pg` and `test-race-pg` with plain `;` in one shell, so the `if`'s
+  exit status was whichever submake ran last — a `test-report-pg` failure was silently swallowed
+  whenever `test-race-pg` then passed, and release-check printed "release-check PASSED" anyway.
+  The two submakes now chain on `&&`, so a Postgres failure stops the run there and its status
+  survives.
+- **Review states where a chosen model provider's credential lives (#983).** A run that chose a
+  model provider got no `model_credential` from `POST /runs/preflight`, so the New Run rail said
+  "Resolved at launch." even after Preflight, and the CC3 confinement advisory never fired for an
+  AWS sign-in provider. The chosen provider's kind now sets the facts at both doors: mechanism
+  (the kind), `per_user`, and `sandbox` for `bedrock_sso` or `proxy` for every other kind. A
+  `bedrock_sso` provider run below CC3 now carries the advisory warning and the `run.create` row's
+  `credential_confinement: below_floor`, as the legacy AWS SSO lane already did.
+- **`wardyn_credential_reauth_total` counted Azure DevOps sign-in/consent requests too (#971).**
+  The metric's HELP promises the AWS SSO re-auth population alone, but its `requested`,
+  `resolved`, `expired` and `timeout` outcomes all folded in the per-person Azure DevOps lane's
+  own credential_reauth rows. Each is now scoped to the AWS SSO lane, the same split `cancelled`
+  already used (#968).
+- **Getting Started's model-access chip read "Not set up by your admin" for every legacy install
+  (#541 fix review).** #541's new per-provider connections chip graded only `model_providers`/
+  `provider_access`, which are empty for any install predating provider records — every shared or
+  per_user-roster install still on main, since the admin funnel writes no provider block until
+  #548 lands. `legacySummary` (`lib/model-connections.ts`) restores the old per-principal
+  `model_access`/`llm_ready` reading as Getting Started's own fallback whenever there is no
+  provider block, and the per_user lede is back for a per_user roster row; a real provider block
+  shows Your model connections' own lede. The expiring row's own line
+  (`Your account`'s connections list) now reads a clock time, matching packet MP-D's own drawn
+  text, instead of a relative offset.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
@@ -392,6 +420,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`GET /setup/status`'s `model_providers` no longer omits itself when a provider block exists but
+  grants the caller nothing (#541 fix review).** It now reads `[]` for that shape and `null` (or is
+  absent, from an older daemon) only when there is no provider block at all — the two are different
+  facts, and collapsing them into the same missing key made a real "not connected to anything" grant
+  indistinguishable from an admin who has not started setting providers up.
 - **The boot conversion of pre-envelope secrets records `purpose` `boot`, not `migrate` (#717).**
   Each row the first boot converts to envelope v1 still writes one `secret.read`, naming the row
   and never its value; its `purpose` is now `boot`, so `migrate` is left to
@@ -612,6 +645,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Your account ▸ Your model connections (#541).** Every person — admins included, by switching to
+  Member view — now connects their own credential for each model provider their admin enabled for
+  them, one row per provider: an AWS or Claude sign-in, or an API key/token, each with its own
+  live/expiring/signed-out state and a "Ready" / "Needs you" / "Not set up by your admin" summary
+  chip. Reached from Getting Started, which keeps only that summary chip and a link. This is
+  additive: an install with no per-provider model records (#551) at all is unaffected, and keeps
+  "Your model key" on Getting Started as its own credential door until #548 converts it.
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.

@@ -446,6 +446,82 @@ func TestCreateSandbox_RequiresProxyImage(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_ProxyExitsAtConfigLoad pins #894/#984: when the proxy
+// sidecar exits right back out after start (it refused its own rendered
+// config — a strict-decode error under the docker-Env-slice delivery),
+// CreateSandbox must fail with the NAMED cause instead of pressing on to the
+// IP lookup and reporting only the generic "proxy has no IP…" while the run
+// sits at STARTING forever. Both the proxy and the per-run network must come
+// back down, and the agent must never have been started on top of a dead
+// proxy.
+//
+// exitAfterInspects=2 (Running for two inspects, THEN exited) pins F1: Docker
+// reports a container Running the instant ContainerStart returns, but a real
+// proxy that refuses its config dies a beat later — a watch that trusted the
+// first Running sighting would return nil here and miss the failure entirely.
+func TestCreateSandbox_ProxyExitsAtConfigLoad(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	d.proxySettle = proxyStartSettle // a fake-backed driver defaults to 0; exercise the real settle window here
+	runID := testSpec().RunID
+	f.exitAfterInspects = map[string]int{proxyContainerName(runID): 2}
+	f.logs = map[string][]byte{proxyContainerName(runID): muxFrame(1, `unknown field "x"`)}
+
+	_, err := d.CreateSandbox(context.Background(), testSpec())
+	if err == nil {
+		t.Fatal("expected the proxy's config-load failure")
+	}
+	if !strings.Contains(err.Error(), "proxy exited at config load (exit 1)") || !strings.Contains(err.Error(), `unknown field "x"`) {
+		t.Errorf("error = %v; want the named cause and log tail", err)
+	}
+	// The log tail must be stdcopy-demuxed clean text, not the raw
+	// multiplexed frame (byte 0x01 is stdout's stream-type header byte, which
+	// never appears in the plain-text log line itself).
+	if strings.ContainsRune(err.Error(), '\x01') {
+		t.Errorf("error = %q; want the stdcopy frame header stripped from the log tail", err.Error())
+	}
+	if p := f.containers[proxyContainerName(runID)]; p != nil && !p.removed {
+		t.Error("the dead proxy must be removed")
+	}
+	if _, ok := f.networks[internalNetName(runID)]; ok {
+		t.Error("the per-run network must be rolled back")
+	}
+	agentName := agentContainerName(runID)
+	if slices.Contains(f.startedNames, agentName) {
+		t.Errorf("the agent must never start behind a proxy that died at config load (started: %v)", f.startedNames)
+	}
+}
+
+// TestCreateSandbox_ProxyExitsAtConfigLoad_ClockSkew pins L1 (PR #1051's
+// second review): a daemon whose clock lags the host's — a remote daemon, or
+// Docker Desktop's VM clock after the host sleeps — can report a StartedAt
+// already SEVERAL SECONDS in the past on the very first inspect. Measuring the
+// settle window from that skewed StartedAt alone would make the proxy look
+// already "settled" immediately, reopening F1 exactly the way a genuinely-fast
+// exit does. watchProxyExit must measure from max(StartedAt, the watch's own
+// start) instead, so a skewed clock never counts time before the watch itself
+// began.
+func TestCreateSandbox_ProxyExitsAtConfigLoad_ClockSkew(t *testing.T) {
+	f := newFakeDocker()
+	f.images["busybox:latest"] = true
+	d := newTestDriver(f)
+	d.proxySettle = proxyStartSettle // exercise the real settle window
+	runID := testSpec().RunID
+	name := proxyContainerName(runID)
+	f.startedAtOverride = map[string]time.Time{name: time.Now().Add(-5 * time.Second)}
+	f.exitAfterInspects = map[string]int{name: 1} // Running once, then exited
+	f.logs = map[string][]byte{name: muxFrame(1, `unknown field "z"`)}
+
+	_, err := d.CreateSandbox(context.Background(), testSpec())
+	if err == nil {
+		t.Fatal("expected the proxy's config-load failure despite a clock-skewed StartedAt")
+	}
+	if !strings.Contains(err.Error(), "proxy exited at config load (exit 1)") {
+		t.Errorf("error = %v; want the named cause", err)
+	}
+}
+
 func TestTeardown_Idempotent(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true

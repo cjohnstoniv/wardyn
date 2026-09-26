@@ -181,6 +181,29 @@ type fakeDocker struct {
 	// bind mount, so a ProbeDrive test scripts the answer this way instead.
 	// Zero (readable) unless a test overrides it.
 	probeExitCode int64
+
+	// exitAfterInspects, keyed by container name, makes ContainerInspect report
+	// Running for that many calls and then flip the container to exited(1) on
+	// every call after — the shape of a real wardyn-proxy that Docker already
+	// reports Running (the daemon flips State.Running the INSTANT
+	// ContainerStart returns) but which dies a beat later refusing its own
+	// config: against a real daemon, a watch that trusted the FIRST Running
+	// sighting caught that failure only ~2/10 times (F1). 0 means "already
+	// exited by the first inspect". inspectCounts is this field's own
+	// per-container call counter. logs pairs the same container names to what
+	// ContainerLogs answers, so startProxy's exit-watch log tail is
+	// exercisable.
+	exitAfterInspects map[string]int
+	inspectCounts     map[string]int
+	logs              map[string][]byte
+
+	// startedAtOverride, keyed by container name, overrides ContainerStart's
+	// default (real, current-time) StartedAt for that container — used to
+	// simulate a daemon whose clock lags the host's (L1): a test sets an
+	// in-the-past value before Start to prove watchProxyExit measures its
+	// settle window from the watch's own start, never from a skewed
+	// StartedAt (driver_proxy_revive.go's proxySettleSince).
+	startedAtOverride map[string]time.Time
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -437,7 +460,18 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 		// this fast would leave ContainerWait to observe.
 		c.state = &container.State{Status: "exited", ExitCode: int(f.probeExitCode)}
 	} else {
-		c.state = &container.State{Status: "running", Running: true}
+		// StartedAt defaults to real, current time — a Driver's proxySettle
+		// defaults to 0 for every fake-backed test driver (newWithClient),
+		// so the settle check is trivially satisfied regardless of this value
+		// UNLESS a test explicitly sets proxySettle back to a real duration,
+		// in which case the true current time is exactly what a real daemon
+		// would report. startedAtOverride lets a specific test (the L1 clock-
+		// skew regression) simulate a daemon whose clock lags the host's.
+		startedAt := time.Now()
+		if t, ok := f.startedAtOverride[id]; ok {
+			startedAt = t
+		}
+		c.state = &container.State{Status: "running", Running: true, StartedAt: startedAt.Format(time.RFC3339Nano)}
 	}
 	f.startedNames = append(f.startedNames, id)
 	return client.ContainerStartResult{}, nil
@@ -449,6 +483,16 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 	c := f.containers[id]
 	if c == nil || c.removed {
 		return client.ContainerInspectResult{}, fakeNotFound{msg: "no such container: " + id}
+	}
+	if n, ok := f.exitAfterInspects[id]; ok {
+		if f.inspectCounts == nil {
+			f.inspectCounts = map[string]int{}
+		}
+		count := f.inspectCounts[id]
+		f.inspectCounts[id] = count + 1
+		if count >= n {
+			c.state = &container.State{Status: "exited", ExitCode: 1}
+		}
 	}
 	// Synthesize NetworkSettings from the container's known networks (primary
 	// NetworkMode + explicit endpoints + NetworkConnect'd nets) with a
@@ -486,6 +530,18 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 		HostConfig:      c.host,
 		NetworkSettings: &container.NetworkSettings{Networks: nets},
 	}}, nil
+}
+
+// ContainerLogs answers f.logs[id] verbatim (a test scripts it pre-framed with
+// muxFrame when the reader under test demuxes it, as startProxy's exit watch
+// does). Options are ignored: no fake here models Tail/Follow/Since filtering.
+func (f *fakeDocker) ContainerLogs(ctx context.Context, id string, _ client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.containers[id] == nil {
+		return nil, fakeNotFound{msg: "no such container: " + id}
+	}
+	return io.NopCloser(bytes.NewReader(f.logs[id])), nil
 }
 
 func (f *fakeDocker) ContainerStop(ctx context.Context, id string, _ client.ContainerStopOptions) (client.ContainerStopResult, error) {

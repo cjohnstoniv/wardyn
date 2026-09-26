@@ -393,13 +393,20 @@ export interface SetupStatus {
   // declares a lane for claude-code and no session is captured), in which case
   // the console renders today's chip.
   model_access?: SetupModelAccess;
-  // The model providers the caller may use. Absent with no provider block
-  // (today), or when none serves an agent the caller may launch.
-  model_providers?: SetupModelProvider[];
+  // The model providers the caller may use. `null` (or absent, from an older
+  // daemon) with NO provider block at all — an admin who has not started;
+  // `[]` when a block exists but grants this caller nothing — an admin who
+  // set providers up, just not for them. #541 fix review: the two are
+  // different facts and the wire keeps no `omitempty` on this field so they
+  // never collapse into one — the console's own providerMode read (`!= null`)
+  // depends on the distinction (a real block retires the legacy BYOK door,
+  // an absent one does not).
+  model_providers?: SetupModelProvider[] | null;
   // THIS PRINCIPAL's own connection state for each provider in
   // `model_providers` (MP-12) — one row per provider, graded against the
-  // caller's own credential. Same absence rule as `model_providers`: absent
-  // with no provider block, or when it lists none.
+  // caller's own credential. Absent with no provider block, or when it lists
+  // none — unlike `model_providers`, this field still carries `omitempty`,
+  // so the two shapes above are not distinguished here.
   provider_access?: SetupProviderAccess[];
   // The CALLER's own Azure DevOps access state — ModelAccess's sibling.
   // Absent when no Azure DevOps row is configured at all.

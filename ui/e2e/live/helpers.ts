@@ -339,11 +339,13 @@ export async function makeMemberActionable(request: APIRequestContext): Promise<
 /**
  * Open the member's sign-in pane from Getting Started and wait for its terminal.
  *
- * The member-getting-started page renders TWO "Sign in to AWS" buttons when the
- * state is actionable (the chip row's and the "Your model key" card's, lane
- * ui-member-model-key's handoff says so in as many words) and BOTH open the same
- * HarnessLoginPane — so `.first()` under Playwright's strict mode, never a bare
- * getByRole.
+ * #541 fix review: this walk's fixture is a per_user roster row with NO
+ * model-providers block, which keeps "Your model key" as its ONLY door until
+ * #548 converts every install to a provider block. The member-getting-started
+ * page renders TWO "Sign in to AWS" buttons when the state is actionable (the
+ * chip row's and the "Your model key" card's, lane ui-member-model-key's
+ * handoff says so in as many words) and BOTH open the same HarnessLoginPane —
+ * so `.first()` under Playwright's strict mode, never a bare getByRole.
  *
  * The pane launches the login sandbox on open. The start URL is roster-managed
  * here (the admin set sso_start_url), so the pane goes straight to "Start login"
