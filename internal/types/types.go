@@ -319,6 +319,7 @@ type AgentRun struct {
 	HasRecording         bool    `json:"has_recording"`
 	RecordingBytes       int64   `json:"recording_bytes,omitempty"`
 	RecordingDurationSec float64 `json:"recording_duration_sec,omitempty"`
+	DiskMiB              int     `json:"disk_mib,omitempty"` // effective ephemeral disk cap MiB, set by SetRunDiskMiB at dispatch (RL-13); 0 = no cap resolved
 }
 
 // GrantKind enumerates broker-mintable credential kinds.

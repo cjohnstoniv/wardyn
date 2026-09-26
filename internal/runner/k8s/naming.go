@@ -270,8 +270,8 @@ const (
 	scratchTmpVolumeName   = "wardyn-tmp"
 	scratchWorkVolumeName  = "wardyn-work"
 	scratchCacheVolumeName = "wardyn-cache"
-	scratchTmpPath         = "/tmp"
-	scratchWorkPath        = "/home/agent/work"
+	scratchTmpPath         = runner.ScratchTmpPath
+	scratchWorkPath        = runner.ScratchWorkPath
 	// scratchCachePath is also the path the full image's
 	// /etc/profile.d/toolchains.sh unconditionally re-exports GOCACHE/GOTMPDIR/
 	// GOMODCACHE under (deploy/images/full/Dockerfile) — a login-shell task
@@ -281,7 +281,7 @@ const (
 	// (image rebuild required) rather than leaving the emptyDir at a path the
 	// profile doesn't name, so both a plain and a login shell agree on where
 	// the cache lives.
-	scratchCachePath = "/home/agent/.cache"
+	scratchCachePath = runner.ScratchCachePath
 )
 
 // ephemeralScratchVolumes is what brings the agent's /tmp, workdir and

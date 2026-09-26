@@ -1071,6 +1071,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `false` until that pause path is verified. Kubernetes does not implement `Freezer`; a router in
   front of one answers `ErrFreezeUnsupported`. No wiring yet decides when to pause a run — that is
   #572.
+- **The run page shows disk used, with a warning at 80% where a cap is enforced (#578).**
+  `GET /api/v1/runs/{id}/resources` gains `disk_used_bytes` (space occupied now, read through the
+  same in-sandbox exec as its other metrics — not `disk_written_bytes`' running write total) and
+  `disk_cap_bytes`. The reading counts what the run's cap counts: on Docker with an enforced size
+  quota, `df` on the writable layer's project quota (image layers excluded); on Kubernetes, the
+  scratch volumes the kubelet evicts on (`/tmp`, the workdir, `~/.cache`); with no enforced cap, the
+  sandbox's root filesystem, image included, with no cap beside it. `disk_cap_bytes` is sent only
+  beside a reading taken that way. Each walk is bounded to 2 seconds and runs last, so a slow
+  filesystem costs only the disk reading. The Sandbox widget's Disk row shows a used/cap bar and
+  colors amber at 80% or more, and falls back to bytes written, labeled as such, when there is no
+  used reading. A run's resolved ephemeral disk cap is now captured on the run row (`disk_mib`,
+  migration `0086_agent_runs_disk_mib`) at dispatch, the same way its resolved image is.
 - **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
   agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
   suspend) is no longer failed and deleted: it is kept, `RUNNING` with `lost_reason: "reboot"`, its

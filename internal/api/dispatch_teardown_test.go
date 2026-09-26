@@ -65,6 +65,14 @@ func (s *dispatchTestStore) State() types.RunState {
 }
 
 func (s *dispatchTestStore) SetSandboxRef(context.Context, uuid.UUID, string) error { return nil }
+
+// SetRunDiskMiB records onto run, so GetRun shows what dispatch persisted.
+func (s *dispatchTestStore) SetRunDiskMiB(_ context.Context, _ uuid.UUID, mib int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.run.DiskMiB = mib
+	return nil
+}
 func (s *dispatchTestStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error {
 	return nil
 }

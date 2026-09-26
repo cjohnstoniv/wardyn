@@ -37,6 +37,7 @@ func (s *runWarnStore) GetSiteConfig(context.Context) (types.SiteConfig, error) 
 }
 
 func (s *runWarnStore) SetRunImage(context.Context, uuid.UUID, string) error { return nil }
+func (s *runWarnStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error  { return nil }
 
 func (s *runWarnStore) CreateGrant(_ context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
 	return g, nil
