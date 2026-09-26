@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Pause and resume (long-holds design rev 4, §3, RL-7; migration 0085): the
+// Pause and resume (long-holds design rev 4, §3, RL-7; migration 0088): the
 // presence clock, the reads the pause sweep needs and its conditional writes.
 // Kept out of store.go for the same size reason as store_run_lease.go.
 package store

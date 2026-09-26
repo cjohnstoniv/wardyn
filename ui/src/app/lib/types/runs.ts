@@ -203,7 +203,7 @@ export interface AgentRun {
   // banner. Cleared when a person moves the end again.
   end_tightened_at?: string;
   // Set while the run's agent is frozen because nobody is there (migration
-  // 0085, #572): "waiting" = parked on an open request, "idle" = unused past
+  // 0088, #572): "waiting" = parked on an open request, "idle" = unused past
   // its profile's pause_idle_after_sec. The run stays RUNNING; typing, an
   // exec, the request closing or POST /runs/{id}/resume thaws it. active_at is
   // the presence clock (absent = nothing stamped since create).

@@ -5933,7 +5933,7 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
 `api_tokens.user_type` with its CHECK. The long-holds runs add five more on `agent_runs`:
 `0083` adds `token_renewed_at`, `0084` adds `proxy_release`, `0086` adds `end_tightened_at`,
-`0087` adds `disk_mib` and `0085` adds the pause columns
+`0087` adds `disk_mib` and `0088` adds the pause columns
 (`paused_at`, `paused_reason`, `active_at`).
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the

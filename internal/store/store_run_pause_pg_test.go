@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_RunPause pins migration 0085 through the pause surface: the presence
+// TestPG_RunPause pins migration 0088 through the pause surface: the presence
 // stamp, the pause mark's compare on the presence clock, on a still-open
 // request (waiting) and on no open request (idle), the columns reading back on
 // the run, clearing, and an end clearing a pause.
