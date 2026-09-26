@@ -350,6 +350,14 @@ func agentRequirementError(req createRunRequest) string {
 	if strings.TrimSpace(req.Image) != "" || len(req.Workspaces) > 0 {
 		return ""
 	}
+	// The singular workspace_id door: its base_image isn't resolved until
+	// seedRequestWorkspace runs (it needs a store read), which happens well
+	// after this check. Admit it here and defer to that later validation —
+	// "workspace <id> has no base image to run a command in" — rather than
+	// refuse a workspace-backed command before its image was ever looked at.
+	if req.WorkspaceID != nil {
+		return ""
+	}
 	return "agent is required unless the run names an image to run in: pass --image, attach a workspace, or pass --agent"
 }
 
