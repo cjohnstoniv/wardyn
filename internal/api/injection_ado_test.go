@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -176,6 +177,23 @@ func TestResolveADOInjection_EraseEvictsTheCachedToken(t *testing.T) {
 	}
 	if d := rf.failureReason(t); d["reason"] != string(ADOEntraFailureNotCaptured) {
 		t.Errorf("reason = %v, want %s", d["reason"], ADOEntraFailureNotCaptured)
+	}
+}
+
+// forget drops one person's tokens and refusals, and nobody else's — not even
+// an owner whose subject merely starts with theirs.
+func TestADOEntraAccessCache_ForgetIsPerOwner(t *testing.T) {
+	var c adoEntraAccessCache
+	for _, owner := range []string{"al", "alice"} {
+		c.put(owner+"\x00row\x00t\x00c\x00s", ADOEntraAccess{ExpiresAt: adoTestNow.Add(time.Hour)})
+	}
+	c.refused = map[string]time.Time{"al\x00row\x00t\x00c\x00s": adoTestNow, "alice\x00row\x00t\x00c\x00s": adoTestNow}
+	c.forget("al")
+	if _, ok := c.get("al\x00row\x00t\x00c\x00s", adoTestNow); ok || !c.refused["al\x00row\x00t\x00c\x00s"].IsZero() {
+		t.Fatalf("al still cached (token %v, refusals %v)", ok, c.refused)
+	}
+	if _, ok := c.get("alice\x00row\x00t\x00c\x00s", adoTestNow); !ok || c.refused["alice\x00row\x00t\x00c\x00s"].IsZero() {
+		t.Fatal("forgetting al evicted alice")
 	}
 }
 
