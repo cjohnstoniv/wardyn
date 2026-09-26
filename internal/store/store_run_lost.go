@@ -32,8 +32,11 @@ type RunLoser interface {
 	// it is RUNNING and not already kept. With tokenLife > 0 it also requires
 	// the token to be lapsed by that much still, so a renew that lands between
 	// the list and the mark wins. Exactly one caller sees true. It clears a
-	// pause, like MarkRunEnded: the agent is stopped or unreachable once lost,
-	// paused or not, and a revive must not read a resurrected run as paused.
+	// pause ONLY for a reboot: that is the one reason whose agent container is
+	// actually gone (docker start on revive, run_revive.go), so a stale
+	// pause mark would otherwise survive on an unfrozen agent. An outage's
+	// agent keeps running, frozen or not — clearing its mark here would have
+	// resume (run_pause.go) skip the thaw a still-frozen agent still needs.
 	MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error)
 }
 
@@ -64,10 +67,12 @@ func (s PG) ListLapsedTokenRuns(ctx context.Context, life time.Duration) ([]type
 // MarkRunLost — see RunLoser.
 func (s PG) MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=$2, lost_reason=$3, paused_at=NULL, paused_reason=''
+		UPDATE agent_runs SET lost_at=$2, lost_reason=$3,
+			paused_at=CASE WHEN $3=$6 THEN NULL ELSE paused_at END,
+			paused_reason=CASE WHEN $3=$6 THEN '' ELSE paused_reason END
 		WHERE id=$1 AND state=$4 AND lost_at IS NULL
 		  AND ($5::interval = interval '0' OR token_renewed_at < now() - $5::interval)`,
-		id, now, string(reason), string(types.RunRunning), tokenLife.String())
+		id, now, string(reason), string(types.RunRunning), tokenLife.String(), string(types.LostReboot))
 	if err != nil {
 		return false, fmt.Errorf("store: mark run lost: %w", err)
 	}

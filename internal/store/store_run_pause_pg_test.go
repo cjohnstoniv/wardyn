@@ -195,6 +195,72 @@ func TestPG_RunPause_ClearedByLostAndRevive(t *testing.T) {
 	}
 }
 
+// TestPG_RunPause_SurvivesAnOutageLoss pins the narrower fix a second review
+// found: an outage loss must NOT clear a pause, unlike a reboot. The agent
+// keeps running (frozen or not) through an outage — only its proxy is cut —
+// so a cleared mark would have resume (run_pause.go) skip the thaw a still
+// frozen agent still needs, and the run gets stuck paused forever.
+func TestPG_RunPause_SurvivesAnOutageLoss(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	run := newRun(types.RunRunning)
+	run.SandboxRef, run.WaitBudgetSec = "ref-pause-outage", 3600
+	persistRun(t, ctx, pool, run)
+	if _, err := pg.StampRunActive(ctx, run.ID); err != nil {
+		t.Fatalf("StampRunActive: %v", err)
+	}
+	stamped, _ := pg.GetRun(ctx, run.ID)
+	if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, stamped.ActiveAt); err != nil || !ok {
+		t.Fatalf("MarkRunPaused = %v, %v; want true", ok, err)
+	}
+
+	now := time.Now().UTC()
+	if ok, err := pg.MarkRunLost(ctx, run.ID, types.LostOutage, now, 0); err != nil || !ok {
+		t.Fatalf("MarkRunLost(outage) = %v, %v; want true", ok, err)
+	}
+	lost, err := pg.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if lost.PausedAt == nil || lost.PausedReason != types.PauseIdle {
+		t.Errorf("an outage loss cleared the pause: %v %q; want it to survive — the agent is still frozen", lost.PausedAt, lost.PausedReason)
+	}
+}
+
+// TestPG_RunPause_SurvivesALiveRestart: an admin's "restart with current
+// limits" (MarkRunRevived(id, "")) never touches the agent's own process — it
+// only replaces the proxy — so a pause on a live run must survive it exactly
+// like an outage loss survives above.
+func TestPG_RunPause_SurvivesALiveRestart(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	run := newRun(types.RunRunning)
+	run.SandboxRef, run.WaitBudgetSec = "ref-pause-restart", 3600
+	persistRun(t, ctx, pool, run)
+	if _, err := pg.StampRunActive(ctx, run.ID); err != nil {
+		t.Fatalf("StampRunActive: %v", err)
+	}
+	stamped, _ := pg.GetRun(ctx, run.ID)
+	if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, stamped.ActiveAt); err != nil || !ok {
+		t.Fatalf("MarkRunPaused = %v, %v; want true", ok, err)
+	}
+
+	if ok, err := pg.MarkRunRevived(ctx, run.ID, ""); err != nil || !ok {
+		t.Fatalf("MarkRunRevived(live) = %v, %v; want true", ok, err)
+	}
+	restarted, err := pg.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if restarted.PausedAt == nil || restarted.PausedReason != types.PauseIdle {
+		t.Errorf("a live restart cleared the pause: %v %q; want it to survive — the agent's own process is untouched", restarted.PausedAt, restarted.PausedReason)
+	}
+}
+
 // TestPG_RunPause_ReauthCountsOnceItsHoldIsOver: a credential re-auth request
 // is open from the start, but it counts toward a waiting pause only once it is
 // older than the longest re-auth connection hold.
