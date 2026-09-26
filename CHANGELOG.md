@@ -1059,6 +1059,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   colors amber at 80% or more, and falls back to bytes written, labeled as such, when there is no
   used reading. A run's resolved ephemeral disk cap is now captured on the run row (`disk_mib`,
   migration `0086_agent_runs_disk_mib`) at dispatch, the same way its resolved image is.
+- **The governance profile editor gets a Run limits section (#579).** The seven run-limit fields
+  (#567) — longest and default end, allow no end, longest and default wait, whether people may
+  change either, and pause-after-idle — are now editable on the profile editor, alongside the
+  existing doors and quotas: a whole number and a unit picker (days, hours or minutes; each field
+  opens on its own unit, or on the largest unit a stored value is a whole number of, so 1800 seconds
+  reads "30 minutes"), converted to seconds on save, and a switch for each of the two booleans.
+  Zero/blank keeps today's behaviour on every field, the same rule the profile's other numeric
+  limits already follow. The profiles list's Limits column gains a summary chip ("Ends within 30
+  days · waits up to 8 hours · people may change these") built from whichever of those three fields
+  the profile sets, and reads "None" only when none of the seven is set.
 - **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
   agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
   suspend) is no longer failed and deleted: it is kept, `RUNNING` with `lost_reason: "reboot"`, its
