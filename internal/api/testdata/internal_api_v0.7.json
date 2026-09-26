@@ -1,5 +1,6 @@
 {
   "_comment": "The internal API as the wardyn-proxy of the previous minor (v0.7.12, release/0.7) calls it: every route it dials, the bodies it sends and the response keys it reads. Taken from that release's internal/egress/proxy (renew.go, decisions.go, approvals.go, credhold.go, git_broker.go, inject.go, local_routes.go). Frozen: wardynd N must keep serving it while runs started under N-1 are alive. Replace it with the N-1 release's shapes when the minor moves on, never edit it to match a change.",
+  "_decision_variants_comment": "decision_variants are ADDED beside the frozen decision body above, never folded into it. Each is the v0.7.12 proxy's own wire vocabulary, captured verbatim from f031df9a7's internal/egress/proxy/{llm_routes.go,decisions.go,credhold.go} unless noted: scan_error (llm_routes.go's scanSummaryFrom, ~:489, Action \"error\", rule_source ruleSourceLLM \"brokered:llm\"), blind (llm_routes.go's emitLLMBlindOnce, ~:997, Action \"blind\"), skipped (llm_routes.go's skipSummary call sites ~:509,546,658 and mitm.go:554, Action \"skipped\"), pending (approvals.go's approvalPendingReason, Decision \"pending\"), dropped (decisions.go's droppedSummaryLog, rule_source \"egress.decisions.dropped:<n>\"), and reauth_timeout (credhold.go/mitm.go, rule_source \"credential:reauth-timeout\", unchanged on both sides — a regression pin; its request is SHAPED AFTER the AWS-SSO credential-hold lane mitm.go describes rather than captured verbatim, since that lane relays whatever real AWS request the sandbox sent, not a fixed path). wardynd normalizes each into the 0.8 names at ingress (internal/api/internal.go's normalizeN1Decision) before it is ever audited or counted; expect states what the normalized row must look like.",
   "release": "0.7.12",
   "routes": [
     {"method": "POST", "path": "/api/v1/internal/token/renew"},
@@ -18,6 +19,65 @@
     "decision": "allow",
     "rule_source": "policy"
   },
+  "decision_variants": [
+    {
+      "name": "scan_error",
+      "body": {
+        "request": {"RunID": "00000000-0000-0000-0000-000000000000", "Host": "api.anthropic.com", "Port": 443, "Method": "POST", "Path": "/v1/messages", "Time": "2026-09-01T12:00:00Z"},
+        "decision": "allow",
+        "rule_source": "brokered:llm",
+        "scan": {"scanned": true, "coverage": "inspectable", "mode": "block", "action": "error", "channel": "anthropic.messages"}
+      },
+      "expect": {"audit_action": "llm.scan.fail", "outcome": "failure"}
+    },
+    {
+      "name": "skipped",
+      "body": {
+        "request": {"RunID": "00000000-0000-0000-0000-000000000000", "Host": "api.anthropic.com", "Port": 443, "Method": "POST", "Path": "/v1/messages", "Time": "2026-09-01T12:00:00Z"},
+        "decision": "allow",
+        "rule_source": "brokered:llm",
+        "scan": {"scanned": false, "coverage": "inspectable", "mode": "alert", "action": "skipped", "skipped": true, "skip_reason": "body_oversize", "channel": "anthropic.messages"}
+      },
+      "expect": {"audit_action": "llm.scan.skip", "outcome": "success"}
+    },
+    {
+      "name": "blind",
+      "body": {
+        "request": {"RunID": "00000000-0000-0000-0000-000000000000", "Host": "api.anthropic.com", "Port": 443, "Method": "CONNECT", "Path": "", "Time": "2026-09-01T12:00:00Z"},
+        "decision": "allow",
+        "rule_source": "scan:opaque-tunnel",
+        "scan": {"scanned": false, "coverage": "tunneled-opaque", "mode": "alert", "action": "blind"}
+      },
+      "expect": {"audit_action": "llm.scan.bypass", "egress_action_count": 0, "scan_action_count": 1}
+    },
+    {
+      "name": "pending",
+      "body": {
+        "request": {"RunID": "00000000-0000-0000-0000-000000000000", "Host": "files.example.org", "Port": 443, "Method": "CONNECT", "Path": "", "Time": "2026-09-01T12:00:00Z"},
+        "decision": "pending",
+        "rule_source": "approval:pending"
+      },
+      "expect": {"audit_action": "egress.hold"}
+    },
+    {
+      "name": "dropped",
+      "body": {
+        "request": {"RunID": "00000000-0000-0000-0000-000000000000", "Host": "", "Port": 0, "Method": "", "Path": "", "Time": "2026-09-01T12:00:00Z"},
+        "decision": "deny",
+        "rule_source": "egress.decisions.dropped:42"
+      },
+      "expect": {"audit_action": "egress.deny", "denies_delta": 0}
+    },
+    {
+      "name": "reauth_timeout",
+      "body": {
+        "request": {"RunID": "00000000-0000-0000-0000-000000000000", "Host": "bedrock-runtime.us-east-1.amazonaws.com", "Port": 443, "Method": "POST", "Path": "/model/anthropic.claude-3-sonnet-20240229-v1:0/invoke", "Time": "2026-09-01T12:00:00Z"},
+        "decision": "deny",
+        "rule_source": "credential:reauth-timeout"
+      },
+      "expect": {"audit_action": "egress.deny", "denies_delta": 0, "reauth_timeout_delta": 1}
+    }
+  ],
   "approval_raises": [
     {"kind": "egress_domain", "requested_scope": {"host": "files.example.org", "mode": "run"}},
     {"kind": "tool_call", "requested_scope": {"tool": "Bash", "cmd": "make deploy"}}

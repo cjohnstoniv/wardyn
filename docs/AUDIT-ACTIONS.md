@@ -518,9 +518,9 @@ segment like `test_proxy` — and the three `run.workspace.requirement.*`
 names had four segments. Where several old names became one, the third
 column names the `Data` field that tells the merged rows apart. The `egress.*` and `llm.scan.*` suffixes are wire values
 the egress proxy sends the control plane, so `egress.Decision`'s held value
-is now `hold` (was `pending`) and `egress.ScanSummary.Action` sends `fail`
-and `bypass` (were `error` and `blind`); the proxy and `wardynd` ship from
-one release and move together.
+is now `hold` (was `pending`) and `egress.ScanSummary.Action` sends `fail`,
+`bypass` and `skip` (were `error`, `blind` and `skipped`); wardynd N accepts
+proxy N−1's spellings and records them under the N names.
 
 | Old (0.7) | New (0.8) | Tells the merged rows apart |
 |---|---|---|
