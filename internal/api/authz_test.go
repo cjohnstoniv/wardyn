@@ -1188,8 +1188,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// #569 added PATCH /runs/{id}; 19 since #575 added POST
 		// /runs/{id}/revive; 20 since #1066 added GET /approvals/{id}/paths;
 		// 21 since #572 added POST /runs/{id}/resume.
-		if probed != 20 {
-			t.Errorf("probed %d classOwner routes, want 20 — a route that left classOwner takes its tier "+
+		if probed != 21 {
+			t.Errorf("probed %d classOwner routes, want 21 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
