@@ -133,7 +133,7 @@ export interface AgentRun {
   auto_stop_after_sec?: number;
   // The run's EFFECTIVE ephemeral disk cap in MiB (internal/types/types.go's
   // AgentRun.DiskMiB, RL-13), written by a scoped update at dispatch — see
-  // store.go's SetRunDiskMiB (and migration 0086) for why this can't be
+  // store.go's SetRunDiskMiB (and migration 0087) for why this can't be
   // captured at create like auto_stop_after_sec above it. 0/absent = no cap
   // resolved. No console reader today (the /runs/{id}/resources endpoint
   // computes the Sandbox widget's disk_cap_bytes from it server-side); kept

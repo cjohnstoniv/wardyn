@@ -1101,7 +1101,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   filesystem costs only the disk reading. The Sandbox widget's Disk row shows a used/cap bar and
   colors amber at 80% or more, and falls back to bytes written, labeled as such, when there is no
   used reading. A run's resolved ephemeral disk cap is now captured on the run row (`disk_mib`,
-  migration `0086_agent_runs_disk_mib`) at dispatch, the same way its resolved image is.
+  migration `0087_agent_runs_disk_mib`) at dispatch, the same way its resolved image is.
 - **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
   agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
   suspend) is no longer failed and deleted: it is kept, `RUNNING` with `lost_reason: "reboot"`, its
