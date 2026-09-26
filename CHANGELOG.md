@@ -1089,7 +1089,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `run.end.set` / `run.wait_budget.set` by the system with `reason: "limits_tightened"`, and the run
   carries `end_tightened_at` for the run page's banner until a person moves the end again. A
   `PATCH /runs/{id}` decided against limits a re-clamp has since tightened now answers 409 instead of
-  landing. Migration `0085_agent_runs_end_tightened` adds the column.
+  landing. Migration `0086_agent_runs_end_tightened` adds the column.
 - **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
   agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
   suspend) is no longer failed and deleted: it is kept, `RUNNING` with `lost_reason: "reboot"`, its

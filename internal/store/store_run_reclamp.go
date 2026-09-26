@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Tightened limits reach live runs (long-holds design rev 4, §2.2, RL-8;
-// migration 0085): the read and the conditional write the re-clamp sweep
+// migration 0086): the read and the conditional write the re-clamp sweep
 // needs. Kept out of store.go for the same size reason as store_run_lease.go.
 package store
 

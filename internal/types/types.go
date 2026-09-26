@@ -284,7 +284,7 @@ type AgentRun struct {
 	// grace makes it terminal. Nil / "" is a live run. Migration 0073.
 	LostAt         *time.Time `json:"lost_at,omitempty"`
 	LostReason     LostReason `json:"lost_reason,omitempty"`
-	EndTightenedAt *time.Time `json:"end_tightened_at,omitempty"` // profile re-clamp (RL-8) shortened the end; migration 0085
+	EndTightenedAt *time.Time `json:"end_tightened_at,omitempty"` // profile re-clamp (RL-8) shortened the end; migration 0086
 	// ModelProviderID freezes the id of the model provider chooseModelProvider
 	// (internal/api's run_model_provider.go, MP-6a #526) resolved this run to
 	// at create time — multi-provider design §2.4 step 5, "Persist and

@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_ReclampRunLimits pins migration 0085 through the re-clamp surface:
+// TestPG_ReclampRunLimits pins migration 0086 through the re-clamp surface:
 // which runs the sweep lists, the write landing only against the limits, end
 // and wait read (never on a kept or terminal run), end_tightened_at reading
 // back, and a person moving the end clearing it.
