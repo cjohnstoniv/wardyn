@@ -400,11 +400,15 @@ would save the 40 s and give up the per-spec isolation `scripts/run-ui-e2e.sh`
 exists to provide.
 
 **Per-job budget.** A job's budget is its `timeout-minutes`, at least twice its
-measured maximum with a ten-minute floor. Minutes, successful runs only:
+measured maximum with a ten-minute floor. Minutes, successful runs only. The old
+`build` samples (26 runs, median 18.4, maximum 18.9 minutes) preceded the tag-set
+split below; timings for the current aggregator and the new jobs remain pending:
 
 | Check | Runs | Median | Max | Timeout |
 |---|---|---|---|---|
-| `build` | 26 | 18.4 | 18.9 | 40 |
+| `changes` | – | pending | pending | 10 |
+| `go` (lint, unit, docker, k8s matrix) | – | pending | pending | 40 |
+| `build` | – | pending | pending | 10 |
 | `conformance-k8s` | 58 | 11.2 | 12.8 | 35 |
 | `ui-e2e` | 42 | 9.2 | 10.1 | 25 |
 | `test-pg` | 31 | 5.0 | 5.2 | 15 |
