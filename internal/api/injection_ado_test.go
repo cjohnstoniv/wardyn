@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
@@ -117,6 +119,81 @@ func TestResolveADOInjection_LiveRecordsGrantedScope(t *testing.T) {
 	}
 	if strings.Contains(string(rows[0].Data), strings.TrimPrefix(resp.Value, "Bearer ")) {
 		t.Fatal("the access token reached the audit row")
+	}
+}
+
+// §2.8 (#1083): an access token lasting an hour is still advertised for no
+// longer than the stored-key lease, so the proxy re-resolves within it.
+func TestResolveADOInjection_AdvertisesTheStoredKeyLease(t *testing.T) {
+	rf := newADOResolveFixture(t)
+	w := rf.resolve(t, rf.subject, "dev.azure.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %q", w.Code, w.Body.String())
+	}
+	var resp types.ResolvedInjection
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if lease := adoTestNow.Add(storedKeyTTL).UnixMilli(); resp.ExpiresAt == 0 || resp.ExpiresAt > lease {
+		t.Fatalf("expires_at = %d, want at most now + storedKeyTTL (%d): the token's own hour outlives a deleted sign-in", resp.ExpiresAt, lease)
+	}
+}
+
+// erasePerson drives DELETE /people/{principal}/credentials.
+func erasePerson(t *testing.T, srv *Server, principal string) {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/people/"+principal+"/credentials", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("principal", principal)
+	r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	srv.handleErasePersonCredentials(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("erase %s: status %d body %q", principal, w.Code, w.Body.String())
+	}
+}
+
+// Erasing the person's credentials evicts the access token cached from their
+// sign-in: the next resolve reads the store and is refused, not served.
+func TestResolveADOInjection_EraseEvictsTheCachedToken(t *testing.T) {
+	rf := newADOResolveFixture(t)
+	rf.srv.cfg.Store = secretOwnerDirectory{Store: rf.st, toks: []types.APIToken{{Principal: rf.subject}}}
+	issued := 0
+	rf.fake.OnIssue(func(entrafake.IssuedToken) { issued++ })
+	for range 2 {
+		if w := rf.resolve(t, rf.subject, "dev.azure.com"); w.Code != http.StatusOK {
+			t.Fatalf("warm: status %d body %q", w.Code, w.Body.String())
+		}
+	}
+	if issued != 1 {
+		t.Fatalf("redemptions = %d, want 1: the second resolve must come from the cache", issued)
+	}
+
+	erasePerson(t, rf.srv, rf.subject)
+	rf.audit.rows = nil
+	w := rf.resolve(t, rf.subject, "dev.azure.com")
+	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "fake-entra-access-") {
+		t.Fatalf("after erase: status %d body %q, want 403 with no token: the cached token outlived the sign-in", w.Code, w.Body.String())
+	}
+	if d := rf.failureReason(t); d["reason"] != string(ADOEntraFailureNotCaptured) {
+		t.Errorf("reason = %v, want %s", d["reason"], ADOEntraFailureNotCaptured)
+	}
+}
+
+// forget drops one person's tokens and refusals, and nobody else's — not even
+// an owner whose subject merely starts with theirs.
+func TestADOEntraAccessCache_ForgetIsPerOwner(t *testing.T) {
+	var c adoEntraAccessCache
+	for _, owner := range []string{"al", "alice"} {
+		c.put(owner+"\x00row\x00t\x00c\x00s", ADOEntraAccess{ExpiresAt: adoTestNow.Add(time.Hour)})
+	}
+	c.refused = map[string]time.Time{"al\x00row\x00t\x00c\x00s": adoTestNow, "alice\x00row\x00t\x00c\x00s": adoTestNow}
+	c.forget("al")
+	if _, ok := c.get("al\x00row\x00t\x00c\x00s", adoTestNow); ok || !c.refused["al\x00row\x00t\x00c\x00s"].IsZero() {
+		t.Fatalf("al still cached (token %v, refusals %v)", ok, c.refused)
+	}
+	if _, ok := c.get("alice\x00row\x00t\x00c\x00s", adoTestNow); !ok || c.refused["alice\x00row\x00t\x00c\x00s"].IsZero() {
+		t.Fatal("forgetting al evicted alice")
 	}
 }
 
