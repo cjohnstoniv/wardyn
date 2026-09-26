@@ -10,6 +10,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **Session revocation also removes registered SSH keys (#154).** Admins and security admins
+  can remove a person's keys through `DELETE /people/{principal}/ssh-keys`. Deleted or changed
+  keys cannot open new SSH channels on an existing connection; already-open channels continue
+  until they close or their run is torn down. Registrations in flight cannot escape the session
+  cutoff. Partial revocations audit the completed counts.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

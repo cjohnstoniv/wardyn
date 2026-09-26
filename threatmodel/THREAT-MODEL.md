@@ -1056,13 +1056,15 @@ hiding them would repeat the failure mode we are designed to avoid.
     `0046_ssh_key_role_checked_at.sql` narrows the staleness from unbounded to
     bounded: every successful OIDC login re-stamps BOTH `role` and
     `role_checked_at` for that principal's keys (`oidc.Config.OnLogin`, wired in
-    `cmd/wardynd/boot_deps.go` to `store.RefreshSSHKeyRoles`), and `sshAuth` refuses
-    the override once `role_checked_at` exceeds `WARDYN_SSH_ROLE_TTL` (default
+    `cmd/wardynd/boot_deps.go` to `store.RefreshSSHKeyRoles`), and `sshAuth` and
+    `sshCurrentKey` refuse the override once `role_checked_at` exceeds
+    `WARDYN_SSH_ROLE_TTL` (default
     `24h`) — including when never stamped (`NULL`, infinitely stale, the fail-closed
     reading for every pre-`0046` row). Still bounded-stale, never live: a demoted
     admin's key keeps granting the override until their next login (re-stamping
     `role=member`), the TTL aging out on its own, or the key being deleted
-    (`DELETE /me/ssh-keys/{fingerprint}`, or direct store access). A member's key
+    (`DELETE /me/ssh-keys/{fingerprint}`, `DELETE /people/{principal}/ssh-keys`,
+    or session revocation). A member's key
     never satisfies the override regardless of drift — only `role==admin` does,
     reachable only by holding the admin role at a stamping moment. Audited
     distinctly (`ssh.authenticate` success carries `override:true` when the owner check
@@ -1070,14 +1072,19 @@ hiding them would repeat the failure mode we are designed to avoid.
     with its own reason string). No in-place role-update endpoint exists; the
     re-register path is still immediate.
 
-    **Session/token revocation does not revoke SSH keys.** The supported
-    `wardyn ssh-key ensure` workflow may register a key using a per-user API
-    token. The registration has no link to that token's later revocation, and
-    `sshAuth` does not consult the session cutoff. The owner check has no role
-    TTL. Removing a key stops subsequent authentications but does not disconnect
-    established SSH connections, whose new channels remain usable while the
-    run is running. See [SSH incident response](../docs/SSH.md#revoking-access-during-an-incident)
-    for separate key removal and affected-run termination.
+    **Already-open SSH channels survive key removal.** Registration timestamps
+    are taken before reading the request body; `sshKeyRevocationRefusal` checks
+    the session cutoff at authentication and before new channels, so an in-flight
+    INSERT cannot escape revocation. Session revocation now
+    removes registered SSH keys along with API tokens. `handleSSHConn` rechecks
+    the authenticated key registration through `sshCurrentKey` before every
+    new session or forwarding channel; deletion, changed registration or key
+    material, unreadable storage and a stale or removed admin override refuse
+    the new channel. Existing shells, transfers and forwards continue until
+    they close or the run is torn down. Deleting a single API token still does
+    not remove a key it registered, and the owner check has no role TTL. See
+    [SSH incident response](../docs/SSH.md#revoking-access-during-an-incident)
+    for credential removal and affected-run termination.
 
 16. **SSH key fingerprint squatting has no self-service remediation.** The
     `ssh_public_keys.fingerprint` primary key is GLOBAL by design — a key must

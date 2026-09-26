@@ -967,6 +967,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
+| `DELETE /people/{principal}/ssh-keys` — removing every registered SSH key for a resolved subject or email; returns the removed-key count | ⛔ admin or `security_admin` |
 | `GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}` — the enrolment tokens still redeemable and cancelling one before a laptop redeems it: the same pair for tokens, returning neither a token nor its hash | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach-ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
@@ -2096,35 +2097,40 @@ its own.
 | `DELETE /api/v1/tokens/{id}` | admin or `security_admin` | revoke anyone's |
 
 Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn sessions revoke`) also
-revokes every unrevoked token that principal holds — a token is their session in
-another form. The `all` arm is deployment-wide for tokens too: EVERY live token
-goes, the calling admin's own included — plan to re-mint after a global revoke.
+revokes their API tokens and removes their registered SSH keys. The `all` arm
+applies all three actions deployment-wide, including the calling admin's own
+credentials. Plan to re-mint tokens and register SSH keys again after a global
+revoke.
 
 **No `role` parameter on `POST /me/tokens`.** A token always mints at the
 caller's own current role; there is no deliberately-downgraded mint. Still
 open at 0.8.
 
-**Registered SSH keys are separate.** An API token can register one through
-`wardyn ssh-key ensure`. Neither deleting the token nor revoking sessions
-removes that key, and key deletion does not disconnect an established SSH
-connection. For incident response or offboarding, also follow
-[SSH access revocation](SSH.md#revoking-access-during-an-incident): remove the
-key registrations and terminate affected runs when existing access must end.
+**Deleting one API token leaves its registered SSH keys in place.** Use session
+revocation to remove the person's tokens and keys together, or
+`DELETE /api/v1/people/{principal}/ssh-keys` (admin or `security_admin`) to remove
+only their keys and receive `{"count": N}`. A deleted key cannot authenticate
+again or open a new channel on an established SSH connection. Existing channels
+continue until they close or their run is torn down. Follow
+[SSH access revocation](SSH.md#revoking-access-during-an-incident) for the full
+offboarding sequence, including stored credentials and affected-run teardown.
 
-**Name them by either identity.** `--sub` takes the OIDC `sub` **or** the email,
-and both halves of the revoke honour both — the session cutoff and the token
-sweep — so you do not have to know which one your IdP made authoritative. This
-matters on Entra, where the `sub` is an opaque per-app identifier that appears
-nowhere a responder would naturally read it; the email is matched
-case-insensitively, the `sub` exactly. It is the same rule a
-`subject_type=user` capability grant already follows.
+**Name them by either identity.** `--sub` takes the OIDC `sub` **or** the email.
+The session cutoff and token sweep match an exact subject or a case-insensitive
+email. SSH-key removal resolves the stored principal, giving an exact known
+subject precedence over an email alias; an ambiguous name or unresolved email cannot
+be reported as completed key removal. Session revocation also stamps the resolved
+subject's cutoff, because SSH keys carry a subject without an email. SSH registration
+and access check the cutoff so a registration in flight cannot outlive the revoke.
 
-What the API cannot tell you is whether the name matched anybody. Sessions are
-stateless signed cookies with no row to count, so a target that names nobody is
-indistinguishable from one whose sessions have already expired, and both answer
-`204`. The `session.revoke` audit row carries `tokens_revoked` for the half that
-*is* countable — a zero there, against a human you believe holds tokens, is the
-signal that the identifier was wrong.
+A complete revoke answers `204`. A `500` may follow a successful session cutoff
+if token revocation, SSH-principal resolution, canonical-subject cutoff or key
+deletion then fails. Both
+credential operations are attempted, and the `session.revoke` audit records
+`tokens_revoked`, `ssh_keys_deleted` and outcome `failure` for partial work.
+Resolve the reported failure and retry; each count describes that call only.
+Sessions remain stateless signed cookies, so the audit cannot count active
+browser sessions or prove that a person has no already-open SSH channels.
 
 Use one as an ordinary bearer: `Authorization: Bearer wdn_…`. Downstream it is
 indistinguishable from that human's console session — run ownership, the

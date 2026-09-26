@@ -188,6 +188,8 @@ type Store interface {
 	ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]types.SSHPublicKey, error)
 	GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (types.SSHPublicKey, error)
 	DeleteSSHKey(ctx context.Context, fingerprint, principal string) error
+	// DeleteSSHKeys removes one principal's keys, or all keys when principal is empty.
+	DeleteSSHKeys(ctx context.Context, principal string) (int, error)
 	RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error
 	// RefreshAPITokenIdentity re-stamps role, user type AND the group snapshot
 	// (plus its completeness bit) on every unrevoked api_tokens row a principal

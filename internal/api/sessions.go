@@ -4,6 +4,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -31,10 +32,11 @@ type revokeSessionsRequest struct {
 // logout, an IdP role demotion, or an IdP account disablement could not
 // otherwise force before this existed.
 //
-// It also revokes every unrevoked per-user API token the target holds: a
-// wdn_ bearer authenticates AS that human (apiTokenAuth) and never consults
-// the session cutoff, so leaving it alive would make "revoke a human now" a
-// half-measure the operator has to know to finish by hand.
+// It also deletes the target's registered SSH keys and revokes every
+// unrevoked per-user API token the target holds: a
+// wdn_ bearer authenticates AS that human (apiTokenAuth). Both credential
+// lanes also check the cutoff, so a registration that races the sweep cannot
+// leave usable access behind.
 //
 // "sub" names either identity — the OIDC sub or the email — and both halves
 // below honour that: the cutoff is matched against both by IsSessionRevoked,
@@ -49,7 +51,9 @@ type revokeSessionsRequest struct {
 // What CANNOT be answered here is "did that name anybody" — sessions are
 // stateless signed cookies with no row to count, so a target that matches
 // nobody is indistinguishable from one whose sessions have all expired. The
-// audit row carries tokens_revoked for the half that IS countable; a zero
+// audit row carries tokens_revoked and ssh_keys_deleted for the countable
+// credentials; unresolved or ambiguous SSH principal lookups fail rather than
+// pretending to have removed that access. A zero
 // there against a human you believe holds tokens is the signal that the
 // identifier was wrong.
 //
@@ -87,9 +91,9 @@ type revokeSessionsRequest struct {
 // whose session is the compromised one, at 3am, with the security admin the
 // only person on call.
 //
-// API tokens are the asymmetric half and the reason the All arm is an incident
+// API tokens and SSH keys are the reason the All arm is an incident
 // lever rather than a routine one: unlike sessions they do not self-heal, and
-// every automation credential in the deployment must be re-minted by hand.
+// every automation credential must be re-minted and SSH key re-registered.
 // Pinned by TestSecurityAdminRevokesSuperAdmin; stated for operators in
 // docs/OPERATIONS.md's security-admin section.
 func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
@@ -98,46 +102,48 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Sub = strings.TrimSpace(body.Sub)
-
-	switch {
-	case body.All && body.Sub != "":
-		writeError(w, http.StatusBadRequest, `body must set exactly one of "sub" or "all", not both`)
+	if body.All == (body.Sub != "") {
+		writeError(w, http.StatusBadRequest, `body must set exactly one of "sub" or "all"`)
 		return
-	case body.All:
-		if err := s.cfg.SessionRevocations.RevokeAll(r.Context()); err != nil {
-			writeServerError(w, r, "revoke all sessions", err)
-			return
-		}
-		n, err := s.revokeAPITokensFor(r, "")
-		if err != nil {
-			// The sessions ARE revoked and 0..n tokens with them — a bare 500
-			// would hide a partially-applied security action from the
-			// append-only log. Record what happened, then fail; the call is
-			// idempotent, so a retry converges on whatever is still live.
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"session.revoke", "*", "failure", mustJSON(map[string]any{"scope": "all", "tokens_revoked": n, "error": err.Error()})))
-			writeServerError(w, r, "revoke api tokens", err)
-			return
-		}
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"session.revoke", "*", "success", mustJSON(map[string]any{"scope": "all", "tokens_revoked": n})))
-	case body.Sub != "":
-		if err := s.cfg.SessionRevocations.RevokeSub(r.Context(), body.Sub); err != nil {
-			writeServerError(w, r, "revoke sessions", err)
-			return
-		}
-		n, err := s.revokeAPITokensFor(r, body.Sub)
-		if err != nil {
-			// Same partial-application honesty as the all arm above.
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"session.revoke", body.Sub, "failure", mustJSON(map[string]any{"scope": "sub", "sub": body.Sub, "tokens_revoked": n, "error": err.Error()})))
-			writeServerError(w, r, "revoke api tokens", err)
-			return
-		}
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"session.revoke", body.Sub, "success", mustJSON(map[string]any{"scope": "sub", "sub": body.Sub, "tokens_revoked": n})))
-	default:
-		writeError(w, http.StatusBadRequest, `body must be {"sub":"<principal>"} or {"all":true}`)
+	}
+	scope, target := "sub", body.Sub
+	var err error
+	if body.All {
+		scope, target = "all", "*"
+		err = s.cfg.SessionRevocations.RevokeAll(r.Context())
+	} else {
+		err = s.cfg.SessionRevocations.RevokeSub(r.Context(), body.Sub)
+	}
+	if err != nil {
+		writeServerError(w, r, "revoke sessions", err)
+		return
+	}
+
+	// Each credential lane still runs if the other fails. The cutoff has already
+	// committed, so the audit records the completed work before returning failure.
+	tokens, tokenErr := s.revokeAPITokensFor(r, body.Sub)
+	keys, keyPrincipal, refusal, keyErr := s.deleteSSHKeysFor(r, body.Sub)
+	// SSH keys have no email column. Preserve the named cutoff for sessions and
+	// tokens, and stamp the resolved subject to catch registrations the DELETE missed.
+	if body.Sub != "" && keyPrincipal != "" && keyPrincipal != body.Sub {
+		keyErr = errors.Join(keyErr, s.cfg.SessionRevocations.RevokeSub(r.Context(), keyPrincipal))
+	}
+	if refusal != "" {
+		keyErr = errors.New(refusal)
+	}
+	err = errors.Join(tokenErr, keyErr)
+	data := map[string]any{"scope": scope, "tokens_revoked": tokens, "ssh_keys_deleted": keys}
+	if !body.All {
+		data["sub"] = body.Sub
+	}
+	outcome := "success"
+	if err != nil {
+		outcome, data["error"] = "failure", err.Error()
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"session.revoke", target, outcome, mustJSON(data)))
+	if err != nil {
+		writeServerError(w, r, "revoke credentials", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
