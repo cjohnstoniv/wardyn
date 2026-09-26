@@ -10,11 +10,13 @@ package azurekv
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -649,5 +651,146 @@ func TestStoreMode_EraseAndSweepSayWhatTheVaultKept(t *testing.T) {
 	rc, err := s.Reconcile(ctx)
 	if err != nil || rc.Checked != 0 || len(rc.Dangling) != 0 || len(rc.Orphans) != 0 || len(rc.SoftDeleted) != 2 {
 		t.Fatalf("reconcile = (%+v, %v), want no rows, no orphans, and the two soft-deleted values", rc, err)
+	}
+}
+
+// deleteBarrier holds a store-mode delete right after its external delete
+// succeeds, until release: the window a concurrent Put must not land in.
+type deleteBarrier struct {
+	secretstore.External
+	deleted, resume chan struct{}
+	hit, once       sync.Once
+}
+
+func (b *deleteBarrier) Delete(ctx context.Context, owner, name, ref string) error {
+	if err := b.External.Delete(ctx, owner, name, ref); err != nil {
+		return err
+	}
+	b.hit.Do(func() { close(b.deleted) })
+	select {
+	case <-b.resume:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *deleteBarrier) release() { b.once.Do(func() { close(b.resume) }) }
+
+// deleteOp removes alice's "review-key" the way op does.
+func deleteOp(ctx context.Context, st *secretstorepg.Store, op string) error {
+	switch op {
+	case "Delete":
+		return st.For("alice").Delete(ctx, "review-key")
+	case "DeleteEverywhere":
+		n, err := st.DeleteEverywhere(ctx, []string{"review-key"})
+		if err == nil && n != 1 {
+			err = fmt.Errorf("DeleteEverywhere removed %d rows, want 1", n)
+		}
+		return err
+	default:
+		rep, err := secretstore.EraseOwner(ctx, st, "alice")
+		if rep.Count != 1 {
+			err = errors.Join(err, fmt.Errorf("EraseOwner deleted %d rows, want 1", rep.Count))
+		}
+		return err
+	}
+}
+
+// waitOnRowLock waits until a session of pool's database is blocked on an
+// advisory lock: the row lock a store-mode Put takes.
+func waitOnRowLock(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		var n int
+		if err := pool.QueryRow(t.Context(),
+			`SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='advisory'`,
+		).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the concurrent Put never waited on the row's lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// #1057: a delete and a concurrent Put of the same row serialise. The delete
+// is held right after its external delete (soft delete and purge); a Put of
+// the row waits on the row's lock until the delete commits, then lands. The
+// end state is one row pointing at the replacement, or no row and no value —
+// never a live value with no row. EraseOwner's re-list may see the
+// replacement, which it reports.
+func TestStoreMode_DeleteRacesPutWithoutOrphan(t *testing.T) {
+	for _, op := range []string{"Delete", "DeleteEverywhere", "EraseOwner"} {
+		t.Run(op, func(t *testing.T) {
+			ctx := t.Context()
+			pool := throwawayDB(t)
+			ext := newFakeStore(t, newFakeKV(t))
+			barrier := &deleteBarrier{External: ext, deleted: make(chan struct{}), resume: make(chan struct{})}
+			t.Cleanup(barrier.release)
+			st := storeMode(t, pool, barrier, nil)
+			view := st.For("alice")
+			if err := view.Put(ctx, "review-key", []byte("before-delete")); err != nil {
+				t.Fatal(err)
+			}
+			ref := strings.TrimPrefix(kekID(t, pool, "alice", "review-key"), Name+":")
+
+			done := make(chan error, 1)
+			go func() { done <- deleteOp(ctx, st, op) }()
+			select {
+			case <-barrier.deleted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the external delete did not reach the barrier")
+			}
+			putDone := make(chan error, 1)
+			go func() { putDone <- view.Put(ctx, "review-key", []byte("concurrent-replacement")) }()
+			waitOnRowLock(t, pool)
+			barrier.release()
+
+			select {
+			case err := <-done:
+				if err != nil && (op != "EraseOwner" || !strings.Contains(err.Error(), "written while the erase ran")) {
+					t.Fatalf("%s: %v", op, err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("%s did not finish", op)
+			}
+			select {
+			case err := <-putDone:
+				if err != nil {
+					t.Fatalf("the concurrent Put, once the delete committed: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the concurrent Put did not finish")
+			}
+
+			names, err := view.List(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, err := ext.Walk(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch len(names) {
+			case 0:
+				if len(entries) != 0 {
+					t.Fatalf("no row, but Key Vault holds %d values: %+v", len(entries), entries)
+				}
+				if err := ext.Check(ctx, "alice", "review-key", ref); err == nil {
+					t.Fatal("no row, but the value is live in Key Vault")
+				}
+			case 1:
+				if v, err := view.Get(ctx, "review-key"); err != nil || string(v) != "concurrent-replacement" {
+					t.Fatalf("Get = (%q, %v), want the concurrent replacement", v, err)
+				}
+			default:
+				t.Fatalf("rows = %v", names)
+			}
+		})
 	}
 }

@@ -636,6 +636,24 @@ lever today**. Concretely:
   rows, or a single run's rows. Migration `0001_init.sql`'s row-level trigger and
   `0004_audit_truncate_guard.sql`'s statement-level trigger make this true at the
   database layer, so there is no admin-surface workaround either.
+- A held push's complete review-matched path list is kept the same way. Its
+  `push_content` approval names ten paths; migration `0085_push_content_paths`
+  keeps the rest, one row per approval, bounded at 10,000 paths or 1 MiB of
+  path text (`truncated: true` past either), verified against the approval's
+  `paths_total` and `paths_digest` before it is written, and refused UPDATE,
+  DELETE and TRUNCATE by its own triggers. A run keeps at most 32 such lists.
+  The run's audit trail records each as a small chained
+  `approval.push_paths.record` row carrying the list's SHA-256
+  (`stored_list_digest`); `GET /api/v1/audit/export` inlines the stored list
+  into that row as it streams, so the audit log and its SIEM sinks never carry
+  a megabyte row, and an exported list that no longer hashes to the chained
+  digest was altered in the table (AUDIT-ACTIONS.md). `GET
+  /api/v1/approvals/{id}/paths` reads the list back to whoever may see the
+  approval — the run's owner, an admin or a `security_admin` — whatever state
+  the run ended in. The route answers every
+  `push_content` approval: one raised by a previous-release proxy, which sent no
+  list, answers with the ten paths its scope names and `truncated: true` when
+  more matched.
 
 **This is asymmetric with session recordings**, which have the retention lever
 audit lacks: `WARDYN_RECORDING_RETENTION_DAYS` (`docs/ENV.md:47`) age-deletes
@@ -2423,9 +2441,9 @@ admin walking the member path, not an incident.
 | `capability_agent` | `agent`: a member named an agent they aren't granted (`denyUserRequest`, `internal/api/runs_create_validate.go`) | ⛔ `403` |
 | `capability_integration` | `integration_id`: a member named a model-provider integration they aren't granted (same seam). Tier 1 only — a workspace's own pin and the site default are never gated | ⛔ `403` |
 | `capability_workspace_provider` | a member's work would come from a git provider row they aren't granted — the row `admitRepoURL` resolves the repository's derived clone URL to (`internal/api/workspace_providers.go`). Six doors: `POST /runs` over the resolved spec's repos and over the legacy `repo` field (target `runs.workspace_provider`), and `POST /workspaces`, `PUT /workspaces/{id}`, `POST /workspaces/{id}/scan` and `POST /workspaces/{id}/build` (target `workspaces.source_provider`). The body names the provider KIND and nothing else — never a base URL, never the row id, because `GET /workspace-providers` is a security-tier door for exactly that reason. Silent on a deployment with no provider rows, and on a repository whose host no row CLAIMS (including one still admitted through the legacy `scm_hosts` list): there is no row for a grant to name | ⛔ `403` |
-| `capability_model_provider` | a member's run would use a model provider they aren't granted — the one they named (`model_provider`), the one the workspace pins, or, when no single granted provider is left, the ones serving the agent (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`). The body is the one sentence naming the provider; Review answers the same refusal | ⛔ `403` |
+| `capability_model_provider` | a member's run would use a model provider they aren't granted — the one they named (`model_provider`), the one the workspace pins, or, when no single granted provider is left, the ones serving the agent (`enforceRunModelProvider`, `internal/api/run_model_provider.go`; target `runs.model_provider`), and on revive/restart/extend as the owner (the run's recorded provider, `internal/api/run_owner_authority.go`). The body is the one sentence naming the provider; Review answers the same refusal | ⛔ `403` |
 | `capability_feature` | a member tried to add an SSH key (target `me.ssh_keys`) or mint an API token (target `me.tokens`) and that feature is not available to them. Checked before the key or token is validated or stored | ⛔ `403` |
-| `capability_policy` | `policy_id`: a member selected a stored policy they aren't granted (`denyUserRequest`, target `runs.policy`, on `POST /runs` and preflight alike) | ⛔ `403` |
+| `capability_policy` | `policy_id`: a member selected a stored policy they aren't granted (`denyUserRequest`, target `runs.policy`, on `POST /runs` and preflight alike), and on revive/restart/extend as the owner (`internal/api/run_owner_authority.go`) | ⛔ `403` |
 | `governance_profile` | the member's assigned governance profile refuses this run SHAPE. One cause per emitted `target`: `task_mode=exec` below autonomy level L3 (`runs.task_mode`), a non-interactive run below autonomy level L1 (`runs.interactive`), `seed_auto_tools` below autonomy level L2 (`runs.seed_auto_tools`), an agent with no tool-approval lane — BYOA (`agent` unset) or any agent other than `claude-code` — at a resolved level of exactly L1, where an unattended run's tool calls would otherwise be derived to `hold` (`runs.agent`), — 0.7 — `drive.enabled` under a profile carrying `DenyUserDrive` (`runs.drive`, `denyUserDrive`), and — 0.8 — an interactive run's shell startup command (a task with `interactive_start` unset or `shell`) below autonomy level L3 (`runs.interactive_start`, `resolveRunAutonomy`) or under a profile carrying `deny_task_mode_exec` (`runs.interactive_start`, `denyUserGovernance`), since it runs at sandbox boot unattended the way exec does. A profile refuses the shape, never the person: the same member launches fine without the refused field | ⛔ `403` |
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterUserGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_USER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
@@ -5915,6 +5933,9 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
 `api_tokens.user_type` with its CHECK. The long-holds runs add two more on `agent_runs`:
 `0083` adds `token_renewed_at` and `0084` adds `proxy_release`.
+`0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
+but it is not an instance of the hazard: it creates that function and the
+`push_content_paths` table in the same file, so the migrator owns both from the start.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does

@@ -653,6 +653,16 @@ func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, err
 	return a.raiseBytes(ctx, body)
 }
 
+// raiseRefusedError is a raise the control plane answered with a refusal that
+// the same raise will meet again — a request it will not accept (400), a run it
+// will not ask for (403), a per-run cap (429) — as opposed to a failure a retry
+// may clear.
+type raiseRefusedError struct{ status int }
+
+func (e *raiseRefusedError) Error() string {
+	return fmt.Sprintf("raise approval: refused, status %d", e.status)
+}
+
 // raiseBytes POSTs one marshalled raise body and returns the approval's id —
 // a new row, or the PENDING one the control plane deduplicated it to.
 func (a *approvalClient) raiseBytes(ctx context.Context, body []byte) (uuid.UUID, error) {
@@ -668,7 +678,11 @@ func (a *approvalClient) raiseBytes(ctx context.Context, body []byte) (uuid.UUID
 		return uuid.Nil, fmt.Errorf("raise approval: %w", err)
 	}
 	defer func() { _, _ = io.Copy(io.Discard, resp.Body); _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusCreated, http.StatusOK:
+	case http.StatusBadRequest, http.StatusForbidden, http.StatusTooManyRequests:
+		return uuid.Nil, &raiseRefusedError{status: resp.StatusCode}
+	default:
 		return uuid.Nil, fmt.Errorf("raise approval: status %d", resp.StatusCode)
 	}
 	var ar types.ApprovalRequest

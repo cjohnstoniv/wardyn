@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"net/http"
 	"slices"
 	"sync"
 	"testing"
@@ -17,8 +18,11 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+var _ store.RunLeaser = (*leaseStore)(nil)
 
 // leaseStore is dispatchTestStore plus store.RunLeaser, with the PG
 // conditions of MarkRunEnded and MarkRunEndingSoon.
@@ -33,7 +37,7 @@ type leaseStore struct {
 	site       types.SiteConfig
 	siteErr    error
 	credGrants []types.CredentialGrant
-	casErr     error // returned once by UpdateRunStateIf
+	casErr     error // returned once by UpdateRunStateIf or StopKeptRunIf
 	grantsErr  error // ListCapabilityGrants fails closed with this, never an implicit allow
 	restricted map[string]map[string]bool
 }
@@ -72,6 +76,11 @@ func (s *leaseStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.Creden
 	return s.credGrants, nil
 }
 
+// UpdateRunStateIf's own casErr branch is currently unexercised: the one test
+// that sets casErr (TestRunLease_AFailedEndIsRevokedOnReassert) drives it
+// through stopKeptRun, which now calls StopKeptRunIf (F04), not this method.
+// Left in place, one-shot and shared with StopKeptRunIf's own check below, for
+// a future test that fails a kill or completion-watcher CAS on this fixture.
 func (s *leaseStore) UpdateRunStateIf(ctx context.Context, id uuid.UUID, from, to types.RunState) (bool, error) {
 	s.mu.Lock()
 	err := s.casErr
@@ -123,6 +132,26 @@ func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromEnd *t
 		return false, nil
 	}
 	s.run.EndsAt, s.run.WaitBudgetSec = toEnd, toWait
+	return true, nil
+}
+
+// StopKeptRunIf mirrors the PG predicate (F04): RUNNING plus the EXACT
+// lostAt/lostReason/endsAt the caller read, all compared together. A stale
+// sweep row whose mark or deadline no longer matches the row's current one
+// must no-op, never win the destructive terminal transition.
+func (s *leaseStore) StopKeptRunIf(_ context.Context, _ uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.casErr; err != nil {
+		s.casErr = nil
+		return false, err
+	}
+	sameLostAt := (lostAt == nil) == (s.run.LostAt == nil) && (lostAt == nil || lostAt.Equal(*s.run.LostAt))
+	sameEndsAt := (endsAt == nil) == (s.run.EndsAt == nil) && (endsAt == nil || endsAt.Equal(*s.run.EndsAt))
+	if s.state != types.RunRunning || !sameLostAt || s.run.LostReason != lostReason || !sameEndsAt {
+		return false, nil
+	}
+	s.state = to
 	return true, nil
 }
 
@@ -529,5 +558,110 @@ func TestReconcileFinalize_LeavesAKeptRunAlone(t *testing.T) {
 	f.srv.reconcileFinalize(context.Background(), f.run.ID, types.RunFailed, f.run.SandboxRef, "reconciled exit")
 	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 {
 		t.Errorf("state %s, StopSandbox %d; want the kept run left alone", f.st.State(), f.rn.stopCount())
+	}
+}
+
+// TestReviewLeaseExpiryHonoursSuccessfulExtension is F04's red test from the
+// 0.8 independent review (verify-080 lifecycle.md, finding F04): a run lost to
+// an outage is listed by a stale sweep pass, then extended and revived before
+// that pass resumes. The resumed pass must see its own snapshot is stale (the
+// mark it read no longer matches the row) and leave the revived run alone,
+// never tear it down. Before StopKeptRunIf this used a plain state CAS
+// (RUNNING->terminal) with no comparison against the mark or the end the sweep
+// actually read, so the stale pass won and destroyed the revived run's files.
+func TestReviewLeaseExpiryHonoursSuccessfulExtension(t *testing.T) {
+	f := newReviveFixture(t)
+	ctx := context.Background()
+	oldEnd := f.now.Add(-f.srv.cfg.EndedRunGrace - time.Minute)
+	f.st.setEnd(oldEnd)
+	listed, err := f.rs.ListLeasedRuns(ctx)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list: %v %v", listed, err)
+	}
+	nextEnd := f.now.Add(24 * time.Hour)
+	w := do(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.run.ID.String(), adminToken, endsAtBody(nextEnd))
+	if w.Code != http.StatusOK {
+		t.Fatalf("extension failed: %d %s", w.Code, w.Body.String())
+	}
+	if code := f.revive(t); code != http.StatusOK {
+		t.Fatalf("revive after extension: %d", code)
+	}
+	f.srv.leaseRun(ctx, f.rs, listed[0])
+	if f.st.State() != types.RunRunning || f.rn.stopCount() != 0 {
+		t.Fatalf("successful extension+revive followed by stale expiry: state=%s teardown=%d, want RUNNING and no teardown", f.st.State(), f.rn.stopCount())
+	}
+}
+
+// TestReviewLeaseExpiryWinsFirstThenRevisionsRefuse is F04 CHECK (b), the
+// opposite-winner case: when the resumed stale-expiry sweep runs FIRST — before
+// any extension or revive lands — its snapshot still matches the row, so
+// StopKeptRunIf applies and the run is correctly torn down exactly once. A
+// PATCH extension or a revive that lands after that must then refuse with 409,
+// the same as for any other terminal run, and must cause no second teardown.
+func TestReviewLeaseExpiryWinsFirstThenRevisionsRefuse(t *testing.T) {
+	f := newReviveFixture(t)
+	ctx := context.Background()
+	oldEnd := f.now.Add(-f.srv.cfg.EndedRunGrace - time.Minute)
+	f.st.setEnd(oldEnd)
+	listed, err := f.rs.ListLeasedRuns(ctx)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list: %v %v", listed, err)
+	}
+
+	// The resumed expiry sweep runs on the row exactly as it read it, and wins.
+	f.srv.leaseRun(ctx, f.rs, listed[0])
+	if f.st.State() != types.RunStopped || f.rn.stopCount() != 1 {
+		t.Fatalf("expiry sweep: state=%s teardown=%d, want STOPPED and one teardown", f.st.State(), f.rn.stopCount())
+	}
+
+	nextEnd := f.now.Add(24 * time.Hour)
+	w := do(t, f.srv, http.MethodPatch, "/api/v1/runs/"+f.run.ID.String(), adminToken, endsAtBody(nextEnd))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("extend after expiry = %d %s, want 409", w.Code, w.Body.String())
+	}
+	if code := f.revive(t); code != http.StatusConflict {
+		t.Fatalf("revive after expiry = %d, want 409", code)
+	}
+	if f.rn.stopCount() != 1 {
+		t.Fatalf("stopCount = %d after the refused revisions, want 1 (no second teardown)", f.rn.stopCount())
+	}
+}
+
+// runsTerminalCount reads the wardyn_runs_total{state=...} counter directly
+// (same-package access, like the fakes' own unexported reads), under the
+// metrics struct's own lock.
+func runsTerminalCount(srv *Server, st types.RunState) int64 {
+	srv.metrics.mu.Lock()
+	defer srv.metrics.mu.Unlock()
+	return srv.metrics.runs[st]
+}
+
+// TestStopKeptRun_CountsTheTerminalTransitionItself is M6's pin (Opus review of
+// #1080): stopKeptRun stopped routing through casRunState when it moved to
+// StopKeptRunIf (F04), so casRunState's own runTerminal(to) call no longer
+// counts a kept run's stop. Deleting stopKeptRun's own s.metrics.runTerminal
+// call would silently stop counting every ended/lost run that gets torn down
+// — with nothing failing except the /metrics gauge going quiet. This pins
+// BOTH halves: the counter moves on an applying CAS, and it does NOT move on
+// a no-op one (the run already terminal from the first call).
+func TestStopKeptRun_CountsTheTerminalTransitionItself(t *testing.T) {
+	f := newLeaseFixture(t, -time.Minute)
+	f.srv.cfg.EndedRunGrace = 0 // fails closed: stopKeptRun runs, not the keep branch
+	before := runsTerminalCount(f.srv, types.RunStopped)
+
+	f.sweep(t) // applies: RUNNING -> STOPPED via stopKeptRun
+	if f.st.State() != types.RunStopped || f.rn.stopCount() != 1 {
+		t.Fatalf("state %s, StopSandbox %d; want STOPPED, 1", f.st.State(), f.rn.stopCount())
+	}
+	if got := runsTerminalCount(f.srv, types.RunStopped); got != before+1 {
+		t.Fatalf("wardyn_runs_total{state=STOPPED} = %d, want %d (one applying stopKeptRun)", got, before+1)
+	}
+
+	// A second stopKeptRun on the same (now-stale, pre-transition) run value:
+	// the row is already STOPPED, so state='RUNNING' fails and StopKeptRunIf
+	// no-ops. The counter must NOT move again.
+	f.srv.stopKeptRun(context.Background(), f.st, f.run, types.RunStopped, "test.reassert", nil)
+	if got := runsTerminalCount(f.srv, types.RunStopped); got != before+1 {
+		t.Fatalf("wardyn_runs_total{state=STOPPED} = %d after a no-op CAS, want unchanged at %d", got, before+1)
 	}
 }

@@ -127,6 +127,55 @@ func TestInjector_RecoversAfterTheOutage(t *testing.T) {
 	}
 }
 
+// The proxy half of the sink tables (internal/api
+// TestProviderKeySink_StoreReadFailures and
+// TestProviderSubscriptionSink_StoreReadFailures), keyed by the same case
+// names and the status the sinks answer each: only err_unavailable's 503 is
+// ridden out, and only until expiry + lastGoodGrace; every other answer drops
+// the header on the request that got it. A later 200 installs the new value.
+func TestInjector_StoreReadFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+	}{
+		{"not_found", http.StatusFailedDependency},
+		{"pointer_extant_value_absent", http.StatusFailedDependency},
+		{"http_401", http.StatusFailedDependency},
+		{"http_403", http.StatusFailedDependency},
+		{"disabled_or_retired_key", http.StatusFailedDependency},
+		{"binding_mismatch", http.StatusFailedDependency},
+		{"err_unavailable", http.StatusServiceUnavailable},
+		{"unknown_definitive", http.StatusFailedDependency},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var renewed atomic.Bool
+			inj, _ := lastGoodControlPlane(t, func() int {
+				if renewed.Load() {
+					return http.StatusOK
+				}
+				return tc.status
+			})
+			h, _, err := inj.resolve("api.test")
+			if tc.status == http.StatusServiceUnavailable {
+				if err != nil || h.value != "sk-last-good-value" {
+					t.Fatalf("transient failure = %q err=%v, want the last-good value", h.value, err)
+				}
+				e := inj.byHost["api.test"]
+				e.expiresAt, e.retryAt = time.Now().Add(-lastGoodGrace-time.Second).UnixMilli(), time.Time{}
+				if h, _, err := inj.resolve("api.test"); err == nil || h.value != "" {
+					t.Fatalf("past expiry + grace served %q, want the header gone", h.value)
+				}
+			} else if err == nil || h.value != "" {
+				t.Fatalf("definitive %d served %q, want the header gone on this request", tc.status, h.value)
+			}
+			renewed.Store(true)
+			if h, _, err := inj.resolve("api.test"); err != nil || h.value != "sk-fresh-value" {
+				t.Fatalf("renewal = %q err=%v, want the new value", h.value, err)
+			}
+		})
+	}
+}
+
 // A control-plane clock more than injectRefreshMargin behind the proxy's makes
 // every fresh answer look stale on arrival. It used to be re-resolved on every
 // request (a mint and a secret.read row each); it is paced like an outage.
