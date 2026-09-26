@@ -10,6 +10,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A transient stop failure no longer tears down a kept run (#1060, refs #1005).** When a run's
+  end or a lost-run cut could not stop its proxy (a Docker daemon timing out, say), the run was
+  torn down outright, removing the agent container and the files it was being kept for, on the
+  same failing daemon. Only a substrate that cannot keep a sandbox (Kubernetes) still tears down.
+  Any other failure keeps the run, with its approvals cancelled and broker credentials revoked,
+  and marks its containment unresolved: `run.lost` / `run.ended` carry `containment:
+  "unresolved"`, and the run's new `containment_error` / `containment_error_at` fields
+  (migration `0086_agent_runs_containment_error`) hold the error. The lease sweep retries the
+  stop every pass. `run.containment.reassert` records a repeat failure and the resolution, which
+  clears both fields. On Docker a failed proxy stop now escalates to a kill. If the proxy survives
+  that too, a lost run's agent is stopped. Neither step removes a container.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

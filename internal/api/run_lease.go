@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,12 +52,14 @@ func (s *Server) sweepRunLeases(ctx context.Context) error {
 		s.leaseRun(ctx, leaser, run)
 	}
 	// A run the sweep no longer lists (torn down, killed) needs no entry.
-	s.leaseEnded.Range(func(id, _ any) bool {
-		if !listed[id.(uuid.UUID)] {
-			s.leaseEnded.Delete(id)
-		}
-		return true
-	})
+	for _, m := range []*sync.Map{&s.leaseEnded, &s.containmentFailed} {
+		m.Range(func(id, _ any) bool {
+			if !listed[id.(uuid.UUID)] {
+				m.Delete(id)
+			}
+			return true
+		})
+	}
 	return nil
 }
 
@@ -121,10 +124,7 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 		}
 		// Any other failure is the daemon failing, and a teardown would fail
 		// on the same daemon, so it is retried next pass.
-		if err != nil {
-			slog.WarnContext(ctx, "wardynd: re-asserting a kept run's stop failed",
-				slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		}
+		s.settleContainment(ctx, leaser, run, err)
 	case run.EndsAt == nil:
 	case !now.Before(*run.EndsAt):
 		s.endRun(ctx, leaser, run, now)
@@ -137,8 +137,10 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 // replicas never both end it, and so the run is already marked kept when its
 // agent stops — the completion watcher reads that and leaves the run alone
 // instead of finalizing it. Fails closed: when the sandbox cannot be kept (no
-// grace, a substrate that cannot keep one, or a failed stop) the run is stopped
-// and torn down outright.
+// grace, or a substrate that cannot keep one) the run is stopped and torn down
+// outright. A stop that fails any other way keeps the run with its containment
+// unresolved for the re-assert to retry (#1060), never a teardown on the same
+// failing daemon.
 func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, now time.Time) {
 	applied, err := leaser.MarkRunEnded(ctx, run.ID, now)
 	if err != nil {
@@ -157,19 +159,24 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	data := map[string]any{"ends_at": run.EndsAt}
 	if _, canKeep := s.cfg.Runner.(runner.SandboxEnder); canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != "" {
 		err := s.endSandbox(ctx, run)
-		if err == nil {
-			// Cancel/revoke only once the end has actually succeeded: on failure
-			// this falls through to stopEndedRun, whose finalizeRunTail already
-			// runs the full cascade — calling it here too would revoke the
-			// broker credentials twice (a row per credential) on every substrate
-			// whose SandboxEnder answers ErrEndUnsupported.
+		if !errors.Is(err, runner.ErrEndUnsupported) {
+			// Cancel/revoke only once the run is sure to be kept: on
+			// ErrEndUnsupported this falls through to stopKeptRun, whose
+			// finalizeRunTail already runs the full cascade — calling it here
+			// too would revoke the broker credentials twice (a row per
+			// credential) on every substrate whose SandboxEnder answers it.
 			s.cancelRunApprovals(ctx, run.ID)
 			s.revokeRunBroker(ctx, run.ID)
 			s.leaseEnded.Store(run.ID, struct{}{})
+			outcome := "success"
+			if err != nil {
+				data["end_error"], data["containment"], outcome = err.Error(), "unresolved", "failure"
+				s.noteContainmentFailure(ctx, leaser, run.ID, err)
+			}
 			data["kept"] = true
 			data["kept_until"] = now.Add(s.cfg.EndedRunGrace)
 			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ended",
-				run.ID.String(), "success", mustJSON(data)))
+				run.ID.String(), outcome, mustJSON(data)))
 			return
 		}
 		data["end_error"] = err.Error()
@@ -186,6 +193,53 @@ func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) error {
 		return runner.ErrEndUnsupported
 	}
 	return ender.EndSandbox(ctx, run.SandboxRef)
+}
+
+// noteContainmentFailure records that a kept run's stop failed with err
+// (#1060): containment_error is set or refreshed for the run page and the
+// re-assert, and true means this process had not yet seen the failure, so the
+// caller audits it. A failed write is retried by the next pass's re-assert.
+func (s *Server) noteContainmentFailure(ctx context.Context, leaser store.RunLeaser, runID uuid.UUID, err error) bool {
+	if serr := leaser.SetRunContainmentError(ctx, runID, err.Error(), s.cfg.Now()); serr != nil {
+		slog.WarnContext(ctx, "wardynd: recording a kept run's unresolved containment failed",
+			slog.String("run_id", runID.String()), slog.Any("err", serr))
+	}
+	_, seen := s.containmentFailed.LoadOrStore(runID, struct{}{})
+	return !seen
+}
+
+// settleContainment is the re-assert's outcome (#1060). A failure keeps the
+// run, never tears it down, and audits run.containment.reassert (failure) the
+// first time this process sees it. A success clears a recorded
+// containment_error and audits the resolution once: only the clear that
+// found the error set writes the row.
+func (s *Server) settleContainment(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, err error) {
+	data := map[string]any{"reason": string(run.LostReason)}
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: re-asserting a kept run's stop failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		if s.noteContainmentFailure(ctx, leaser, run.ID, err) {
+			data["containment"], data["error"] = "unresolved", err.Error()
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.containment.reassert",
+				run.ID.String(), "failure", mustJSON(data)))
+		}
+		return
+	}
+	s.containmentFailed.Delete(run.ID)
+	if run.ContainmentError == "" {
+		return
+	}
+	cleared, cerr := leaser.ClearRunContainmentError(ctx, run.ID)
+	if cerr != nil {
+		slog.WarnContext(ctx, "wardynd: clearing a kept run's resolved containment failed",
+			slog.String("run_id", run.ID.String()), slog.Any("err", cerr))
+		return
+	}
+	if cleared {
+		data["containment"] = "resolved"
+		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.containment.reassert",
+			run.ID.String(), "success", mustJSON(data)))
+	}
 }
 
 // stopKeptRun makes an ended or lost run terminal (STOPPED at its end or

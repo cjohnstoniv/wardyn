@@ -181,3 +181,72 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 		t.Errorf("from No end: %v, %v; want true — a NULL end compares as the value read", got, err)
 	}
 }
+
+// TestPG_RunContainmentError pins migration 0086 (#1060): the error is set only
+// on a RUNNING kept run, refreshed with the first failure's time kept, read
+// back on the run, and cleared once — only the clear that found it set says so,
+// so the resolution is audited once. A revive's claim clears it too.
+func TestPG_RunContainmentError(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	end := now.Add(-time.Minute)
+	kept := newRun(types.RunRunning)
+	kept.EndsAt = &end
+	live := newRun(types.RunRunning)
+	for _, r := range []types.AgentRun{kept, live} {
+		persistRun(t, ctx, pool, r)
+	}
+	if _, err := pg.MarkRunEnded(ctx, kept.ID, now); err != nil {
+		t.Fatalf("MarkRunEnded: %v", err)
+	}
+	read := func(id uuid.UUID) types.AgentRun {
+		t.Helper()
+		r, err := pg.GetRun(ctx, id)
+		if err != nil {
+			t.Fatalf("GetRun: %v", err)
+		}
+		return r
+	}
+
+	for _, msg := range []string{"first", "second"} {
+		if err := pg.SetRunContainmentError(ctx, kept.ID, msg, now.Add(time.Duration(len(msg))*time.Second)); err != nil {
+			t.Fatalf("SetRunContainmentError(%s): %v", msg, err)
+		}
+		if err := pg.SetRunContainmentError(ctx, live.ID, msg, now); err != nil {
+			t.Fatalf("SetRunContainmentError(live): %v", err)
+		}
+	}
+	if r := read(kept.ID); r.ContainmentError != "second" || r.ContainmentErrorAt == nil || !r.ContainmentErrorAt.Equal(now.Add(5*time.Second)) {
+		t.Errorf("kept run = %q at %v; want the latest error at the first failure's time %v",
+			r.ContainmentError, r.ContainmentErrorAt, now.Add(5*time.Second))
+	}
+	if r := read(live.ID); r.ContainmentError != "" || r.ContainmentErrorAt != nil {
+		t.Errorf("live run = %q at %v; want nothing — only a kept run's containment is unresolved", r.ContainmentError, r.ContainmentErrorAt)
+	}
+
+	for i, want := range []bool{true, false} {
+		if got, err := pg.ClearRunContainmentError(ctx, kept.ID); err != nil || got != want {
+			t.Errorf("ClearRunContainmentError #%d = %v, %v; want %v", i+1, got, err, want)
+		}
+	}
+	if r := read(kept.ID); r.ContainmentError != "" || r.ContainmentErrorAt != nil {
+		t.Errorf("after the clear = %q at %v; want both NULL", r.ContainmentError, r.ContainmentErrorAt)
+	}
+
+	lost := newRun(types.RunRunning)
+	persistRun(t, ctx, pool, lost)
+	if _, err := pg.MarkRunLost(ctx, lost.ID, types.LostOutage, now, 0); err != nil {
+		t.Fatalf("MarkRunLost: %v", err)
+	}
+	if err := pg.SetRunContainmentError(ctx, lost.ID, "boom", now); err != nil {
+		t.Fatalf("SetRunContainmentError(lost): %v", err)
+	}
+	if got, err := pg.MarkRunRevived(ctx, lost.ID, types.LostOutage); err != nil || !got {
+		t.Fatalf("MarkRunRevived = %v, %v; want true", got, err)
+	}
+	if r := read(lost.ID); r.ContainmentError != "" || r.ContainmentErrorAt != nil {
+		t.Errorf("after a revive = %q at %v; want both NULL — the new proxy replaces the one it was about", r.ContainmentError, r.ContainmentErrorAt)
+	}
+}

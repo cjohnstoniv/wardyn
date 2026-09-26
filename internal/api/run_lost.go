@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -31,8 +32,10 @@ import (
 // end plus the grace, or until someone kills it when it has no end. Everything
 // that cannot be kept fails closed and is torn down as before: a headless run
 // (the completion watcher that would finish it skips kept runs), a run past
-// its end and grace, a substrate that cannot keep a sandbox (Kubernetes), or a
-// proxy stop that fails.
+// its end and grace, or a substrate that cannot keep a sandbox (Kubernetes).
+// A proxy stop that fails any other way keeps the run with its containment
+// unresolved (containment_error) for the lease sweep to retry (#1060): a
+// teardown on the same failing daemon would lose the files and contain nothing.
 
 // runTokenLapseAfter is how long a RUNNING run may go without a renew before
 // its identity is dead. The proxy renews at least every 30 minutes and gives
@@ -94,8 +97,9 @@ func (s *Server) keepRebootedRun(ctx context.Context, run types.AgentRun, st run
 
 // loseRun marks run lost for reason and stops its proxy. false means the run
 // cannot be kept, and the caller's fail-closed arm applies. true means it is
-// taken care of: kept, torn down (as terminal) because its proxy could not be
-// removed, or left alone because the claim did not land (another replica took
+// taken care of: kept (with its containment unresolved when the stop failed),
+// torn down (as terminal) because its substrate cannot keep a sandbox, or left
+// alone because the claim did not land (another replica took
 // it, a renew landed, or it went terminal) or could not be written (the next
 // pass retries). tokenLife > 0 also requires the run's token to be lapsed by
 // that much still (MarkRunLost), so the sweep's mark loses to a renew.
@@ -117,19 +121,26 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 	s.cancelRunApprovals(ctx, run.ID)
 	s.revokeRunBroker(ctx, run.ID)
 	s.leaseEnded.Store(run.ID, struct{}{})
-	data := map[string]any{"reason": string(reason)}
+	data, outcome := map[string]any{"reason": string(reason)}, "success"
 	if err := s.stopLostSandbox(ctx, run, now); err != nil {
-		data["kept"] = false
 		data["lost_error"] = err.Error()
-		s.stopKeptRun(ctx, leaser, run, terminal, "run.lost", data)
-		return true
+		if errors.Is(err, runner.ErrEndUnsupported) {
+			data["kept"] = false
+			s.stopKeptRun(ctx, leaser, run, terminal, "run.lost", data)
+			return true
+		}
+		// Any other failure leaves containment unconfirmed, and a teardown
+		// on the same failing daemon would only lose the files (#1060): the
+		// run stays kept and the lease sweep's re-assert retries the stop.
+		data["containment"], outcome = "unresolved", "failure"
+		s.noteContainmentFailure(ctx, leaser, run.ID, err)
 	}
 	data["kept"] = true
 	if until, ok := s.keptUntil(run); ok {
 		data["kept_until"] = until
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.lost",
-		run.ID.String(), "success", mustJSON(data)))
+		run.ID.String(), outcome, mustJSON(data)))
 	return true
 }
 
