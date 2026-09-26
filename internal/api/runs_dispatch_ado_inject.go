@@ -303,6 +303,15 @@ func adoEntraHosts(org string) []string {
 // bundle to open for a git_pat/ssh_key grant) and misses the *.dev.azure.com
 // service subdomains the Entra lane's own credential hold also gates and
 // times out on.
+//
+// handlePostDecision uses it to keep an Azure DevOps sign-in hold that ran out
+// off wardyn_credential_reauth_total's timeout outcome. The proxy writes the
+// SAME rule source for that hold (ado_hold.go's adoCredentialRefusalFor), on
+// the Azure DevOps host itself and never with an ApprovalID (decisionLog sets
+// none for this source, on either lane), so the host is the only signal the
+// ingest has to tell the two apart. The metric's HELP promises the AWS SSO
+// re-auth population alone (#971), and the Azure DevOps lane's
+// `requested`/`resolved` raises never call that recorder at all.
 func isADOEntraHost(host string) bool {
 	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	return h == "dev.azure.com" || strings.HasSuffix(h, ".dev.azure.com") || strings.HasSuffix(h, ".visualstudio.com")
