@@ -30,7 +30,7 @@ func (s *reclampStore) ListGovernanceProfiles(context.Context) ([]types.Governan
 
 func (s *reclampStore) ListProfiledLiveRuns(ctx context.Context) ([]types.AgentRun, error) {
 	run, _ := s.GetRun(ctx, s.run.ID)
-	if run.GovernanceProfileID == nil || run.LostAt != nil || run.State.IsTerminal() {
+	if run.GovernanceProfileID == nil || (run.LostAt != nil && run.LostReason == types.LostEnded) || run.State.IsTerminal() {
 		return nil, nil
 	}
 	return []types.AgentRun{run}, nil
@@ -40,7 +40,7 @@ func (s *reclampStore) ReclampRunLimits(_ context.Context, from types.AgentRun, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if from.RunLimits != s.run.RunLimits || !sameEnd(from.EndsAt, s.run.EndsAt) || from.WaitBudgetSec != s.run.WaitBudgetSec ||
-		s.run.LostAt != nil || s.state.IsTerminal() {
+		(s.run.LostAt != nil && s.run.LostReason == types.LostEnded) || s.state.IsTerminal() {
 		return false, nil
 	}
 	s.run.RunLimits, s.run.EndsAt, s.run.WaitBudgetSec = toLimits, toEnd, toWait
