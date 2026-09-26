@@ -354,7 +354,9 @@ func (s *Server) nextIdleSamples(runs []types.AgentRun) []types.AgentRun {
 func (s *Server) runCPUQuiet(ctx context.Context, run types.AgentRun) bool {
 	ctx, cancel := context.WithTimeout(ctx, runResourcesExecTimeout)
 	defer cancel()
-	kv, err := s.execRunResourcesScript(ctx, run)
+	// Only the cpu keys are read here; `filesystem` picks the script's disk
+	// arm that is one statfs, never the 2-second walk the others can take.
+	kv, err := s.execRunResourcesScript(ctx, run, types.StorageEnforcementFilesystem)
 	if err != nil {
 		return false
 	}
