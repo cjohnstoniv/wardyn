@@ -324,7 +324,7 @@ describe("RunCard — cloneRun behaviour (review C-01/C-06/C-07)", () => {
     await clickClone();
 
     await waitFor(() => expect(navigateMock).toHaveBeenCalled());
-    expect(listAuditMock).toHaveBeenCalledWith("run_3b7f10c4aa99", "run.create");
+    expect(listAuditMock).toHaveBeenCalledWith("run_3b7f10c4aa99", { action: "run.create" });
     const [path, opts] = navigateMock.mock.calls[0];
     expect(path).toBe("/runs/new");
     expect(opts.state.prefill.state.toolApprovals).toBe("hold");

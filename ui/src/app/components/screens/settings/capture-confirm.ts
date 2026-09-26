@@ -156,7 +156,7 @@ export async function confirmCaptureWithServer(
   // answer, not a blip, and retrying it would only delay the refusal.
   const read = async (): Promise<SetupStatus | null> => {
     if (modelProvider && runId && !audited) {
-      audited = await auditApi.listAudit(runId, CAPTURE_AUDIT_ACTION).then((r) => r.length > 0, () => false);
+      audited = await auditApi.listAudit(runId, { action: CAPTURE_AUDIT_ACTION }).then((r) => r.length > 0, () => false);
     }
     try {
       return await setupApi.getSetupStatus();
@@ -315,7 +315,7 @@ export async function watchForCapture({
 
     let hinted = false;
     try {
-      hinted = (await auditApi.listAudit(runId, CAPTURE_AUDIT_ACTION)).length > 0;
+      hinted = (await auditApi.listAudit(runId, { action: CAPTURE_AUDIT_ACTION })).length > 0;
     } catch {
       /* a read failure is a tick, never a verdict */
     }
