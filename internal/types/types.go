@@ -113,23 +113,6 @@ func (s RunState) IsTerminal() bool {
 // every constant scanned from this file, so the two cannot disagree.
 var NonTerminalRunStates = []RunState{RunPending, RunStarting, RunRunning, RunWaiting}
 
-// LostReason says why a kept run lost its sandbox (AgentRun.LostReason).
-type LostReason string
-
-const (
-	// LostEnded is a run whose lease ran out (AgentRun.EndsAt passed): stopped
-	// and kept for the ended-run grace.
-	LostEnded LostReason = "ended"
-	// LostReboot is an interactive run whose agent container exited under it
-	// (a host reboot, a Docker Desktop restart, a long suspend) but still
-	// exists: kept with its files and its proxy stopped.
-	LostReboot LostReason = "reboot"
-	// LostOutage is an interactive run whose run token lapsed because the
-	// control plane was unreachable past the token's life: its proxy is stopped
-	// so it has no egress, and its agent is left running.
-	LostOutage LostReason = "outage"
-)
-
 // ActorType distinguishes who performed an action in the audit stream.
 // This is the attribution field the incumbents lack.
 type ActorType string
@@ -284,6 +267,12 @@ type AgentRun struct {
 	// grace makes it terminal. Nil / "" is a live run. Migration 0073.
 	LostAt     *time.Time `json:"lost_at,omitempty"`
 	LostReason LostReason `json:"lost_reason,omitempty"`
+	// ContainmentError is set while a kept run's stop could not be confirmed
+	// (its proxy, or its agent, may still be up): the latest stop error, and
+	// ContainmentErrorAt the first failure. The lease sweep retries the stop
+	// every pass and clears both once it lands (#1060, migration 0086).
+	ContainmentError   string     `json:"containment_error,omitempty"`
+	ContainmentErrorAt *time.Time `json:"containment_error_at,omitempty"`
 	// ModelProviderID freezes the id of the model provider chooseModelProvider
 	// (internal/api's run_model_provider.go, MP-6a #526) resolved this run to
 	// at create time — multi-provider design §2.4 step 5, "Persist and

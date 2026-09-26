@@ -53,6 +53,15 @@ type RunLeaser interface {
 	// means the mark or the state changed since the read; the caller's re-assert
 	// on the next sweep pass is what makes that safe to just drop.
 	StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error)
+	// SetRunContainmentError records that a kept run's stop (its proxy, or its
+	// agent) failed with msg (#1060, migration 0086): only while it is RUNNING
+	// and kept. The message is refreshed on every call; containment_error_at
+	// keeps the first failure's time.
+	SetRunContainmentError(ctx context.Context, id uuid.UUID, msg string, now time.Time) error
+	// ClearRunContainmentError clears it once the stop is confirmed. true only
+	// for the call that cleared a recorded error, so the resolution is audited
+	// once across replicas.
+	ClearRunContainmentError(ctx context.Context, id uuid.UUID) (bool, error)
 }
 
 var _ RunLeaser = PG{}
@@ -120,6 +129,28 @@ func (s PG) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, 
 		id, string(to), lostAt, string(lostReason), endsAt)
 	if err != nil {
 		return false, fmt.Errorf("store: stop kept run if: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// SetRunContainmentError — see RunLeaser.
+func (s PG) SetRunContainmentError(ctx context.Context, id uuid.UUID, msg string, now time.Time) error {
+	if _, err := s.Pool.Exec(ctx, `
+		UPDATE agent_runs SET containment_error=$2, containment_error_at=COALESCE(containment_error_at, $3)
+		WHERE id=$1 AND state='RUNNING' AND lost_at IS NOT NULL`,
+		id, msg, now); err != nil {
+		return fmt.Errorf("store: set run containment error: %w", err)
+	}
+	return nil
+}
+
+// ClearRunContainmentError — see RunLeaser.
+func (s PG) ClearRunContainmentError(ctx context.Context, id uuid.UUID) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, `
+		UPDATE agent_runs SET containment_error=NULL, containment_error_at=NULL
+		WHERE id=$1 AND containment_error IS NOT NULL`, id)
+	if err != nil {
+		return false, fmt.Errorf("store: clear run containment error: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
 }
