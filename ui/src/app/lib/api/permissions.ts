@@ -8,12 +8,42 @@
 // effective set. Mirrors internal/api/permissions.go; every route is under
 // /api/v1 via wfetch.
 import type {
+  AccessUserType,
+  AvailabilityView,
   CapabilityGrant,
   CapabilityGrantInput,
   MeCapabilities,
   PermissionsSnapshot,
 } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch } from "./core";
+
+// {kind}/{value} — the server takes the value as the REST of the path (an
+// image ref carries slashes, permissions_availability.go's availabilityTarget),
+// so each segment is encoded on its own rather than encodeURIComponent-ing the
+// whole value, which would turn a real "/" into "%2F" and 400 as a different
+// value than the one on screen. The characters a Go path never escapes
+// ($&+,:;=@) are sent bare: escaped, they set URL.RawPath, the router hands the
+// handler "%3A" instead of ":", and an image ref's tag reads as another value.
+// !'()* are escaped as Go escapes them, so the path is always Go's canonical
+// form and RawPath stays empty.
+//
+// An empty, "." or ".." segment is refused before any request: the router
+// cleans the path, so a value such as "../policy/<id>" (an image ref a person
+// can plant in the catalog) would read and write another resource's list.
+function availabilityPath(kind: string, value: string): string {
+  const segs = value.split("/");
+  if (segs.some((s) => s === "" || s === "." || s === "..")) {
+    throw new HttpError(400, `Invalid availability target: ${JSON.stringify(value)}`);
+  }
+  const encodedValue = segs
+    .map((s) =>
+      encodeURIComponent(s)
+        .replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase())
+        .replace(/%(24|26|2B|2C|3A|3B|3D|40)/gi, (e) => decodeURIComponent(e)),
+    )
+    .join("/");
+  return `/permissions/availability/${encodeURIComponent(kind)}/${encodedValue}`;
+}
 
 // What an upsert actually did. The server distinguishes a genuinely new row
 // (201) from a re-grant that flipped an existing row's effect in place (200) —
@@ -68,6 +98,31 @@ export const permissions = {
       body: JSON.stringify(enforcement),
     });
     return (await asJson<Record<string, boolean> | null>(res)) ?? {};
+  },
+
+  // GET /api/v1/permissions/availability/{kind}/{value} -> one resource's
+  // "Available to" state (the restricted bit + who is named). securityOps.
+  async getAvailability(kind: string, value: string): Promise<AvailabilityView> {
+    const res = await wfetch(availabilityPath(kind, value), { method: "GET" });
+    return asJson<AvailabilityView>(res);
+  },
+
+  // GET /api/v1/user-types -> every user type (securityOps), so an audience
+  // chip can name a type rather than show its id.
+  async listUserTypes(): Promise<AccessUserType[]> {
+    const res = await wfetch("/user-types", { method: "GET" });
+    return unwrapList<AccessUserType>((await asJson<{ user_types?: unknown }>(res)).user_types);
+  },
+
+  // PUT /api/v1/permissions/availability/{kind}/{value} -> the same view, bit
+  // flipped. Turning "Only…" on with nobody already listed is refused (400);
+  // the server's message is surfaced verbatim by the caller, never reworded.
+  async putAvailability(kind: string, value: string, restricted: boolean): Promise<AvailabilityView> {
+    const res = await wfetch(availabilityPath(kind, value), {
+      method: "PUT",
+      body: JSON.stringify({ restricted }),
+    });
+    return asJson<AvailabilityView>(res);
   },
 
   // GET /api/v1/me/capabilities -> the caller's own grants + the enforcement

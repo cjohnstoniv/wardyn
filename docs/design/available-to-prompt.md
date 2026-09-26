@@ -239,7 +239,7 @@ someone off does.
 
 ### Owner answers
 
-_(empty — the owner fills this at the gate)_
+Approved by the owner 2026-09-25 (https://claude.ai/artifact/2Z5fMZHnYnpF8Z5LJiYtPG), all five decisions as drawn in index.html.
 
 ### Round notes (author, 2026-09-25)
 
