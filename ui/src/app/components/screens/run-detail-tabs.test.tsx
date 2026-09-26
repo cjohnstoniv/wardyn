@@ -45,6 +45,9 @@ const auditMocks = vi.hoisted(() => ({
 vi.mock("../../lib/api/audit", async (importOriginal) => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
+  // attachSessions (run-detail.tsx) canonicalizes before comparing — the
+  // REAL mapping, as in run-detail.test.tsx's mock (C-02).
+  canonicalAuditAction: (await importOriginal<typeof import("../../lib/api/audit")>()).canonicalAuditAction,
   // F6-F2: the REAL derivation, not a stub — every other test here leaves
   // listAuditMock at its default `[]`, which the real function already reads
   // as "no exit code" (identical to the old stub); only F6-F2's own test
@@ -244,7 +247,7 @@ describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, ()
   }
 
   it("shows a truncation cue when the per-run window hits the 1000 cap", async () => {
-    listAuditMock.mockImplementation((_id: string, action?: string) =>
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
       Promise.resolve(action ? [] : Array.from({ length: 1000 }, (_, i) => auditEvent(i))),
     );
     renderRun(RUN);
@@ -255,7 +258,7 @@ describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, ()
   });
 
   it("shows no truncation cue under the cap", async () => {
-    listAuditMock.mockImplementation((_id: string, action?: string) =>
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
       Promise.resolve(action ? [] : [auditEvent(1)]),
     );
     renderRun(RUN);
@@ -272,7 +275,7 @@ describe("RunDetailScreen — Audit tab truncation cue", { timeout: 15_000 }, ()
 // egress row whose target is the control plane. The tab must say who decided.
 describe("RunDetailScreen — Audit tab names a rule-decided tool call", () => {
   it("renders the decision and the rule, not the control-plane host", async () => {
-    listAuditMock.mockImplementation((_id: string, action?: string) =>
+    listAuditMock.mockImplementation((_id: string, action?: unknown) =>
       Promise.resolve(
         action
           ? []

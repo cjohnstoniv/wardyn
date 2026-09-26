@@ -465,7 +465,8 @@ func (s *Server) reloseRun(ctx context.Context, run types.AgentRun) {
 	}
 	run.LostAt, run.LostReason = nil, ""
 	loser, ok := s.cfg.Store.(store.RunLoser)
-	if ok && s.loseRun(ctx, loser, run, reason, types.RunFailed, 0) {
+	leaser, lok := s.cfg.Store.(store.RunLeaser)
+	if ok && lok && s.loseRun(ctx, loser, leaser, run, reason, types.RunFailed, 0) {
 		return
 	}
 	slog.WarnContext(ctx, "wardynd: a run whose proxy could not be replaced cannot be kept; tearing it down",

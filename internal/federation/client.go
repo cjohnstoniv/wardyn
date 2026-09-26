@@ -36,10 +36,23 @@ const requestTimeout = 60 * time.Second
 // device id the organisation's routes are keyed on, the wdd_ bearer, and the
 // SHA-256 of the enrolment token that bought them. The last is how boot tells
 // a fresh token (re-enrol) from the spent one MDM leaves in place (keep).
+//
+// ResetPending and Name make the post-enrolment reset (ResetFederation, the
+// device.local.enrol row, then clearing ResetPending) resumable across a
+// crash: they are set true/non-empty only when this credential is freshly
+// generated, and durably stored BEFORE the reset runs. A boot that reads a
+// credential with ResetPending still true (its own prior attempt was
+// interrupted between that Put and finishing the reset) resumes the reset
+// without spending the enrolment token again. Once the reset completes,
+// ResetPending is persisted false and never set again for this credential, so
+// a later genuine revocation of this same identity is never cleared by a
+// restart.
 type Credential struct {
 	DeviceID             uuid.UUID `json:"device_id"`
 	Token                string    `json:"token"`
 	EnrolmentTokenSHA256 string    `json:"enrolment_token_sha256"`
+	ResetPending         bool      `json:"reset_pending,omitempty"`
+	Name                 string    `json:"name,omitempty"`
 }
 
 // TokenSHA256 is hex(sha256(token)), the form Credential records.

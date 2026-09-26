@@ -206,7 +206,10 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 // UpdateRunStateIfIdle is UpdateRunStateIf plus an idleness guard: it transitions
 // a run from fromState to toState ONLY when the row is still in fromState, its
 // updated_at has NOT advanced past notAfter (the snapshot the caller observed),
-// AND the run has no open request within its wait (RL-5, hold-aware idle stop).
+// it has no lost/end mark (F04: a run the lease sweep just kept is not idle, it
+// is stopped — the ended-run grace decides when its files go, not the idle
+// reaper), AND the run has no open request within its wait (RL-5, hold-aware
+// idle stop).
 // This closes the reaper's idleness TOCTOU: the idle scan reads updated_at in a
 // snapshot, but an active `wardyn attach` TouchRun (which bumps updated_at while
 // leaving state=RUNNING) can land between snapshot and stop. Guarding only on
@@ -233,7 +236,7 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, toState types.RunState, notAfter time.Time) (bool, error) {
 	tag, err := s.Pool.Exec(ctx,
 		`UPDATE agent_runs SET state=$1, updated_at=now()
-		 WHERE id=$2 AND state=$3 AND updated_at <= $4 AND NOT (`+openHoldSQL+`)`,
+		 WHERE id=$2 AND state=$3 AND updated_at <= $4 AND lost_at IS NULL AND NOT (`+openHoldSQL+`)`,
 		string(toState), id, string(fromState), notAfter,
 	)
 	if err != nil {
