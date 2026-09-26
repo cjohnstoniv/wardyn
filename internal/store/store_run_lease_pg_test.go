@@ -138,11 +138,19 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 	kept.EndsAt = &end
 	finished := newRun(types.RunCompleted)
 	finished.EndsAt = &end
-	for _, r := range []types.AgentRun{live, kept, finished} {
+	rebootLost := newRun(types.RunRunning)
+	rebootLost.EndsAt, rebootLost.WaitBudgetSec = &end, 600
+	for _, r := range []types.AgentRun{live, kept, finished, rebootLost} {
 		persistRun(t, ctx, pool, r)
 	}
 	if _, err := pg.MarkRunEnded(ctx, kept.ID, end); err != nil {
 		t.Fatalf("MarkRunEnded: %v", err)
+	}
+	// A run lost to a reboot can still move its end — extending it is how it
+	// becomes revivable again (F1, long-holds design rev 4 §2.3). Only
+	// LostEnded (MarkRunEnded, above) blocks the write.
+	if _, err := pg.MarkRunLost(ctx, rebootLost.ID, types.LostReboot, time.Now().UTC(), 0); err != nil {
+		t.Fatalf("MarkRunLost: %v", err)
 	}
 
 	for _, tc := range []struct {
@@ -159,6 +167,7 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 		{"stale limits", live.ID, types.RunLimits{UserChangesLimits: true}, &end, 600, false},
 		{"a kept run", kept.ID, types.RunLimits{}, &end, 0, false},
 		{"a terminal run", finished.ID, types.RunLimits{}, &end, 0, false},
+		{"a reboot-lost run", rebootLost.ID, types.RunLimits{}, &end, 600, true},
 		{"the values read", live.ID, types.RunLimits{}, &end, 600, true},
 		{"the same values again", live.ID, types.RunLimits{}, &end, 600, false},
 	} {

@@ -15,7 +15,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_ReclampRunLimits pins migration 0071 through the re-clamp surface:
+// TestPG_ReclampRunLimits pins migration 0085 through the re-clamp surface:
 // which runs the sweep lists, the write landing only against the limits, end
 // and wait read (never on a kept or terminal run), end_tightened_at reading
 // back, and a person moving the end clearing it.
@@ -33,14 +33,21 @@ func TestPG_ReclampRunLimits(t *testing.T) {
 		r.EndsAt, r.WaitBudgetSec, r.RunLimits, r.GovernanceProfileID = &end, 3600, limits, &profile
 		return r
 	}
-	live, pending, kept, finished := profiled(types.RunRunning), profiled(types.RunPending),
-		profiled(types.RunRunning), profiled(types.RunCompleted)
+	live, pending, kept, finished, rebootLost := profiled(types.RunRunning), profiled(types.RunPending),
+		profiled(types.RunRunning), profiled(types.RunCompleted), profiled(types.RunRunning)
 	unprofiled := newRun(types.RunRunning)
-	for _, r := range []types.AgentRun{live, pending, kept, finished, unprofiled} {
+	for _, r := range []types.AgentRun{live, pending, kept, finished, rebootLost, unprofiled} {
 		persistRun(t, ctx, pool, r)
 	}
 	if _, err := pg.MarkRunEnded(ctx, kept.ID, end); err != nil {
 		t.Fatalf("MarkRunEnded: %v", err)
+	}
+	// A run lost to a reboot or an outage is not kept BY ITS OWN END — it is
+	// still profiled-live, the same way it can still have its end extended
+	// (F1, long-holds design rev 4 §2.3). Only LostEnded (MarkRunEnded, above)
+	// takes a run out of the sweep.
+	if _, err := pg.MarkRunLost(ctx, rebootLost.ID, types.LostReboot, now, 0); err != nil {
+		t.Fatalf("MarkRunLost: %v", err)
 	}
 
 	listed, err := pg.ListProfiledLiveRuns(ctx)
@@ -51,7 +58,7 @@ func TestPG_ReclampRunLimits(t *testing.T) {
 	for _, r := range listed {
 		ids = append(ids, r.ID)
 	}
-	for _, r := range []types.AgentRun{live, pending} {
+	for _, r := range []types.AgentRun{live, pending, rebootLost} {
 		if !slices.Contains(ids, r.ID) {
 			t.Errorf("ListProfiledLiveRuns misses %s", r.ID)
 		}
@@ -74,6 +81,7 @@ func TestPG_ReclampRunLimits(t *testing.T) {
 		{"stale limits", stale, false},
 		{"a kept run", kept, false},
 		{"a terminal run", finished, false},
+		{"a reboot-lost run", rebootLost, true},
 		{"the run as read", live, true},
 		{"the same run again", live, false},
 	} {

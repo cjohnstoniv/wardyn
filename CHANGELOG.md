@@ -1048,10 +1048,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   front of one answers `ErrFreezeUnsupported`. No wiring yet decides when to pause a run — that is
   #572.
 - **Tightened run limits reach live runs (#573).** When an admin tightens a profile's run limits,
-  every live run that captured that profile takes the tighter bound within a minute: its captured
-  limits (max end, max wait, idle pause, No end and the change gate), its end (cut to now + the new
-  max, or given one when No end is taken away) and its wait. Loosening never reaches a live run, and
-  moving a person to another profile does not re-clamp their runs. Each cut is audited as
+  every run that captured that profile and is not kept by its own end (a run lost to a reboot or a
+  control-plane outage is still reached, the same way its end can still be extended) takes the
+  tighter bound within a minute: its captured limits (max end, max wait, idle pause, No end and the
+  change gate), its end (cut to now + the new max, or given one when No end is taken away) and its
+  wait. Loosening never reaches a live run, and moving a person to another profile does not re-clamp
+  their runs. Each cut is audited as
   `run.end.set` / `run.wait_budget.set` by the system with `reason: "limits_tightened"`, and the run
   carries `end_tightened_at` for the run page's banner until a person moves the end again. A
   `PATCH /runs/{id}` decided against limits a re-clamp has since tightened now answers 409 instead of
