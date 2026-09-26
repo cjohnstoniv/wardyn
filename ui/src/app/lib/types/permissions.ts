@@ -61,3 +61,14 @@ export interface CapabilityGrantInput {
   value: string;
   effect: CapabilityEffect;
 }
+
+// GET/PUT /permissions/availability/{kind}/{value} — one resource's
+// "Available to" control (user-types design §2.6): the restricted bit, plus
+// the allow rows that already name this exact value (the "Only…" list).
+// Mirrors internal/api/permissions_availability.go's availabilityView.
+export interface AvailabilityView {
+  kind: string;
+  value: string;
+  restricted: boolean;
+  allowed_by: CapabilityGrant[];
+}

@@ -156,7 +156,13 @@ test.describe("Settings — the provider editor: Bedrock and Claude subscription
     await dialog.getByLabel("Region").fill("eu-west-1");
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
 
-    await expect(page.getByText("Provider saved.")).toBeVisible();
+    // The first save's sonner toast (8s default duration, sonner.tsx) is
+    // still on screen, so a plain getByText("Provider saved.") strict-mode
+    // violates on 2 matches. toHaveCount(2) still proves THIS save raised its
+    // own toast — going from the 1 asserted after the add-save above to 2
+    // only happens if the edit-save fired a second one, not merely that some
+    // toast (the stale one) exists.
+    await expect(page.getByText("Provider saved.")).toHaveCount(2);
     expect(puts).toHaveLength(2);
     expect(puts[1].body.providers[0]).toMatchObject({
       id: "bedrock-prod",

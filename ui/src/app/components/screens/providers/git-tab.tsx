@@ -16,6 +16,7 @@
 import * as React from "react";
 import type { GitLane, GitProvider, GitProviderKind, LegacyGitLane } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AVAILABILITY } from "../../../lib/availability-copy";
 import { PERM } from "../../../lib/permissions-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import { S as GIT_S, HostSummary, Lane as CredentialLane, LaneBody, SecretLane } from "../settings/connection-cards";
@@ -23,6 +24,7 @@ import { patLaneMeta, slugHost } from "../../../lib/scm-provider";
 import { Button, buttonVariants } from "../../ui/button";
 import { Textarea } from "../../ui/textarea";
 import { Checkbox } from "../../ui/checkbox";
+import { AvailabilityControl } from "../../wardyn/availability-control";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
@@ -255,6 +257,21 @@ function Row({
         <Button variant="outline" size="sm" disabled={!operator} onClick={() => setConfirmRemove(true)}>
           {PERM.REMOVE}
         </Button>
+      </div>
+
+      {/* UT-7b: kind workspace_provider, value = the row's own id (its
+          GitProviderKind) — §2.6's "Available to" is a securityOps fact
+          written through /permissions, independent of this row's own
+          operatorOnly draft/Save above. Present whether the row is on or
+          off: a provider disabled today can still carry a stale audience
+          list an admin needs to see and change. */}
+      <div className="border-b border-border p-3">
+        <AvailabilityControl
+          kind="workspace_provider"
+          value={row.id}
+          onlyHint={AVAILABILITY.PROVIDER_ONLY_HINT}
+          note={AVAILABILITY.PROVIDER_NOTE}
+        />
       </div>
 
       {row.disabled ? (

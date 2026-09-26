@@ -21,13 +21,15 @@ import { getErrorMessage } from "../../../lib/format";
 import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
 import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../../lib/workspace-copy";
+import { AVAILABILITY } from "../../../lib/availability-copy";
 import { Button } from "../../ui/button";
+import { AvailabilityControl } from "../../wardyn/availability-control";
 import { CopyButton } from "../../wardyn/copy-button";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
-import { useCanMutate } from "../../wardyn/operator-context";
+import { useCanMutate, useSecurityOperator } from "../../wardyn/operator-context";
 import { KIND_META, kindMetaOf, workspaceImage } from "../workspaces";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
@@ -75,6 +77,7 @@ export function WorkspaceDetailScreen() {
   // tier, and it fails closed on an absent owner or an unresolved /me. Every
   // OTHER control on this page keeps its own (security/operator) gate.
   const canMutate = useCanMutate(ws?.owned_by);
+  const securityOperator = useSecurityOperator();
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // F6-F3 (site 2): `null` means "don't know yet" (setup status unreachable),
   // distinct from a REAL false — the member-getting-started.tsx idiom.
@@ -423,6 +426,18 @@ export function WorkspaceDetailScreen() {
             }}
           />
         </DetailSectionCard>
+
+        {/* UT-7b: kind workspace, value = the workspace's own id — one more
+            resource editor carrying the §2.6 "Available to" control, wired
+            here rather than into the /workspaces list row (a table row has
+            no room for it; this detail page is the workspace's editor).
+            Security admins and super admins only, like the control itself:
+            a person opening their own workspace gets no empty card. */}
+        {securityOperator && (
+          <DetailSectionCard title={AVAILABILITY.WORKSPACE_CARD_TITLE} subtitle={AVAILABILITY.WORKSPACE_CARD_SUBTITLE}>
+            <AvailabilityControl kind="workspace" value={ws.id} />
+          </DetailSectionCard>
+        )}
 
         <AllowedHostsCard ws={ws} onWorkspaceUpdated={setWs} />
         <DeniedHostsCard ws={ws} onWorkspaceUpdated={setWs} />
