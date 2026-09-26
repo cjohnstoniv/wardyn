@@ -5931,8 +5931,8 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 0.8's user types add three more: `0079` re-adds the subject-type CHECKs on
 `capability_grants` (`0042`'s table), `governance_assignments` (`0052`'s) and
 `user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
-`api_tokens.user_type` with its CHECK. The long-holds runs add two more on `agent_runs`:
-`0083` adds `token_renewed_at` and `0084` adds `proxy_release`.
+`api_tokens.user_type` with its CHECK. The long-holds runs add three more on `agent_runs`:
+`0083` adds `token_renewed_at`, `0084` adds `proxy_release` and `0085` adds `end_tightened_at`.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.

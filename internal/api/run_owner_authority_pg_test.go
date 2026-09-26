@@ -150,7 +150,7 @@ func TestPG_ReviveAndExtendRecheckOwnerAuthority(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	end := now.Add(24 * time.Hour)
-	if ok, err := st.(store.RunLeaser).SetRunEndAndWait(ctx, run.ID, nil, 0, &end, 0); err != nil || !ok {
+	if ok, err := st.(store.RunLeaser).SetRunEndAndWait(ctx, run.ID, run.RunLimits, nil, 0, &end, 0); err != nil || !ok {
 		t.Fatalf("SetRunEndAndWait: %v %v", ok, err)
 	}
 	if _, err := st.PutCapabilityEnforcement(ctx, map[string]bool{capAgent: true}); err != nil {
