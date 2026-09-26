@@ -79,7 +79,7 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 					"grace_sec": int64(s.cfg.EndedRunGrace.Seconds()),
 				}
 			}
-			s.stopKeptRun(ctx, run, types.RunStopped, action, data)
+			s.stopKeptRun(ctx, leaser, run, types.RunStopped, action, data)
 			return
 		}
 		// A revive clears the lost mark before it starts the new proxy, and
@@ -109,11 +109,11 @@ func (s *Server) leaseRun(ctx context.Context, leaser store.RunLeaser, run types
 			// The substrate cannot keep a sandbox, for good: tear the run down
 			// as the first pass would have.
 			if ended {
-				s.stopKeptRun(ctx, run, types.RunStopped, "run.ended", map[string]any{
+				s.stopKeptRun(ctx, leaser, run, types.RunStopped, "run.ended", map[string]any{
 					"kept": false, "end_error": err.Error(), "ended_at": run.LostAt,
 				})
 			} else {
-				s.stopKeptRun(ctx, run, types.RunFailed, "run.lost", map[string]any{
+				s.stopKeptRun(ctx, leaser, run, types.RunFailed, "run.lost", map[string]any{
 					"kept": false, "lost_error": err.Error(), "reason": string(run.LostReason),
 				})
 			}
@@ -149,6 +149,11 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 	if !applied {
 		return
 	}
+	// The mark just landed in the store, at now — set it on our copy too (as
+	// run_lost.go's loseRun already does at its own claim), so a fall-through to
+	// stopKeptRun below compares StopKeptRunIf against the SAME mark the row now
+	// carries, not the pre-claim (nil) one it read before MarkRunEnded.
+	run.LostAt, run.LostReason = &now, types.LostEnded
 	data := map[string]any{"ends_at": run.EndsAt}
 	if _, canKeep := s.cfg.Runner.(runner.SandboxEnder); canKeep && s.cfg.EndedRunGrace > 0 && run.SandboxRef != "" {
 		err := s.endSandbox(ctx, run)
@@ -170,7 +175,7 @@ func (s *Server) endRun(ctx context.Context, leaser store.RunLeaser, run types.A
 		data["end_error"] = err.Error()
 	}
 	data["kept"] = false
-	s.stopKeptRun(ctx, run, types.RunStopped, "run.ended", data)
+	s.stopKeptRun(ctx, leaser, run, types.RunStopped, "run.ended", data)
 }
 
 // endSandbox is the runner half of the end. The caller has checked the runner
@@ -186,17 +191,27 @@ func (s *Server) endSandbox(ctx context.Context, run types.AgentRun) error {
 // stopKeptRun makes an ended or lost run terminal (STOPPED at its end or
 // grace, FAILED when a lost run cannot be kept) through the shared terminal
 // tail: the full revoke cascade, the approval cancel and the sandbox teardown.
-// The CAS keeps a concurrent kill's outcome.
-func (s *Server) stopKeptRun(ctx context.Context, run types.AgentRun, terminal types.RunState, action string, data map[string]any) {
-	applied, err := s.casRunState(ctx, run.ID, types.RunRunning, terminal)
+// StopKeptRunIf (F04) replaces the plain state CAS here: it compares run's
+// lost_at/lost_reason/ends_at atomically with the state guard, so a stale sweep
+// row — read before a successful extension, a revive, or a fresher end landed
+// — cannot win this destructive transition. state=RUNNING stays in the
+// predicate, so a concurrent kill's outcome is still preserved. Metrics counts
+// this transition itself, mirroring casRunState, since it no longer routes
+// through it.
+func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run types.AgentRun, terminal types.RunState, action string, data map[string]any) {
+	applied, err := leaser.StopKeptRunIf(ctx, run.ID, terminal, run.LostAt, run.LostReason, run.EndsAt)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: stopping a kept run failed",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
 		return
 	}
-	if applied {
-		s.finalizeRunTail(ctx, run.ID, run.SandboxRef, action, "success", data)
+	if !applied {
+		return
 	}
+	if terminal.IsTerminal() {
+		s.metrics.runTerminal(terminal)
+	}
+	s.finalizeRunTail(ctx, run.ID, run.SandboxRef, action, "success", data)
 }
 
 // revokeRunBroker is revokeRunCascade's broker half alone, for the end: a kept
