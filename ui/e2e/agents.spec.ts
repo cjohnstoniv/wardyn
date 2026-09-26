@@ -11,7 +11,15 @@ import {
   mockMemberRole,
   navToRoute,
 } from "./fixtures";
-import { AGENTS, AGENTS_DRAFT, MODEL_ACCESS_CHIP_LABEL, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
+import {
+  AGENTS,
+  AGENTS_DRAFT,
+  MODEL_ACCESS_CHIP_LABEL,
+  PROVIDERS,
+  modelAccessChipBare,
+} from "../src/app/lib/workspace-providers-copy";
+import { CONNECTIONS } from "../src/app/components/wardyn/copy/door";
+import { YOUR_MODEL_KEY } from "../src/app/components/wardyn/copy/model-key";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -279,13 +287,44 @@ test.describe("agents — the roster-unknown and empty-roster states withhold Sa
 // model_access field (this harness has no per-user AWS session to produce
 // any of these for real, per the file header). Only three states offer the
 // member's own Sign in to AWS action.
+//
+// #541 retired the dedicated per-state AGENTS.MODEL_ACCESS_* chip this
+// section used to carry: the summary chip at the top of "What's set up for
+// you" now reads legacySummary(status) (model-connections.ts), which
+// deliberately COLLAPSES live/expiring together (both "Model access ·
+// Ready") and expired_signin/not_configured together (both "Model access ·
+// Needs you") — shared_expired is the one state legacySummary still grades
+// on its own (round-3 Opus finding), so it keeps its old full label. The
+// fine distinction between the collapsed pairs now lives one level down, on
+// the restored "Your model key" card (your-model-key.tsx's per_user band of
+// modelKeyState), which is why each case below pins BOTH chips together.
 test.describe("agents — member Getting Started's Model access chip (spliced states)", () => {
-  const CASES: { state: string; chip: string; hasCta: boolean }[] = [
-    { state: "live", chip: AGENTS.MODEL_ACCESS_LIVE, hasCta: false },
-    { state: "expiring", chip: AGENTS.MODEL_ACCESS_EXPIRING, hasCta: true },
-    { state: "expired_signin", chip: AGENTS.MODEL_ACCESS_EXPIRED, hasCta: true },
-    { state: "not_configured", chip: AGENTS.MODEL_ACCESS_NOT_CONFIGURED, hasCta: true },
-    { state: "shared_expired", chip: AGENTS.MODEL_ACCESS_SHARED_EXPIRED, hasCta: false },
+  const CASES: { state: string; topChip: string; cardChip?: string; hasCta: boolean }[] = [
+    { state: "live", topChip: CONNECTIONS.SUMMARY_READY, cardChip: YOUR_MODEL_KEY.SIGNED_IN_CHIP, hasCta: false },
+    { state: "expiring", topChip: CONNECTIONS.SUMMARY_READY, cardChip: YOUR_MODEL_KEY.EXPIRING_CHIP, hasCta: true },
+    {
+      state: "expired_signin",
+      topChip: CONNECTIONS.SUMMARY_NEEDS_YOU,
+      // U-10: expired_signin still grades modelKeyState's "not_signed_in"
+      // result, but the card's own chip swaps in the bare "Signed out" form
+      // for that one state (expiredSignIn in your-model-key.tsx) so it never
+      // claims "nothing is configured" over a session that used to work.
+      cardChip: modelAccessChipBare("expired_signin"),
+      hasCta: true,
+    },
+    {
+      state: "not_configured",
+      topChip: CONNECTIONS.SUMMARY_NEEDS_YOU,
+      cardChip: YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP,
+      hasCta: true,
+    },
+    // shared_expired is the one state legacySummary still grades by itself
+    // (round-3 Opus HIGH finding), so the top chip keeps the old
+    // fully-qualified label. Under the per_user band, though, that state
+    // maps to modelKeyState's "unknown" result (model-key-state.ts: "shared_
+    // expired / not_applicable / absent ... ALL land here" for a per_user
+    // row), whose card claims nothing (U-14) — no chip below either.
+    { state: "shared_expired", topChip: AGENTS.MODEL_ACCESS_SHARED_EXPIRED, hasCta: false },
   ];
 
   for (const c of CASES) {
@@ -319,17 +358,23 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
       });
       await gotoConsole(page);
       await navToRoute(page, "/setup");
-      // FIX PASS 1 (REVIEW-1.md H2) — scoped to the chip row's own section:
-      // the shared_expired case's chip text now ALSO renders on the "Your
-      // model key" card below (Appendix A finding 2's R2(b) — a shared row
-      // with no roster still reports shared_expired there instead of the old
-      // silent "provided"/empty-form guess), so an unscoped getByText double-
-      // matches under Playwright's strict mode.
+      // The two chips live in separate SectionCards ("What's set up for
+      // you" vs "Your model key"), so there is no strict-mode collision
+      // between them — each locator is still scoped to its own section for
+      // the same reason the original test scoped the top chip: pinning
+      // WHICH card carries which fact, not just that the text exists
+      // somewhere on the page.
       const setupSummarySection = page
         .locator("section")
         .filter({ has: page.getByRole("heading", { name: "What's set up for you" }) });
+      const modelKeySection = page
+        .locator("section")
+        .filter({ has: page.getByRole("heading", { name: "Your model key" }) });
       await expect(setupSummarySection).toBeVisible();
-      await expect(setupSummarySection.getByText(c.chip)).toBeVisible();
+      await expect(setupSummarySection.getByText(c.topChip)).toBeVisible();
+      if (c.cardChip) {
+        await expect(modelKeySection.getByText(c.cardChip)).toBeVisible();
+      }
       // U-13: under the per_user fixture the CARD carries its own sign-in button
       // beside the chip row's, with its own accessible name — so this asks for
       // the FIRST of the two rather than a single match.
@@ -342,20 +387,24 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
     });
   }
 
-  // Appendix A finding 5 / #158: not_applicable carries its OWN neutral
-  // label in MODEL_ACCESS_CHIP_LABEL (AGENTS.MODEL_ACCESS_NOT_APPLICABLE) —
-  // real, not one of the CASES table's five actionable-or-live states above,
-  // and NO action either way. This harness's real llm_ready is TRUE
-  // deterministically, not environmentally: this e2e daemon now declares a
-  // Bedrock lane (the WARDYN_BEDROCK_REGION/_MODEL this file sets above), so
-  // `legacyIntegrations` reports an `ai_provider` integration of kind bedrock
-  // regardless of the host's own state — `computeLLMReady`'s AI-provider
-  // fallback returns true on that alone, on a bare CI box too. So the
-  // correct render is BOTH the deployment-wide fallback chip ("Model access
-  // · Provided by your admin") AND not_applicable's own chip beside it —
-  // never one of the OTHER five server-driven AGENTS.MODEL_ACCESS_* labels,
-  // and never the CTA a shared token cannot use.
-  test("model_access.state=not_applicable shows its own chip beside the deployment chip, never the sign-in CTA", async ({
+  // Appendix A finding 5 / #158: not_applicable is the admin-token principal
+  // reading an ENABLED per_user row (model-key-state.ts's own comment: "not
+  // a rare skew case ... reached in real traffic"). #541 retired the
+  // dedicated MODEL_ACCESS_NOT_APPLICABLE chip this test used to pin at the
+  // top of "What's set up for you": legacySummary has no not_applicable
+  // branch, so it falls to the llm_ready fallback — READY here, since this
+  // e2e daemon's Bedrock lane makes computeLLMReady's AI-provider fallback
+  // deterministically true (same reasoning the original comment gave).
+  // FINDING (flagged, not fixed — out of this round's scope): unlike every
+  // other state, not_applicable now leaves NO trace anywhere on the page
+  // that this is a shared/admin-token reading rather than an ordinary ready
+  // per_user session — the top chip reads plain "Ready", and the "Your
+  // model key" card (modelKeyState's per_user band maps not_applicable to
+  // "unknown", whose body is PER_PERSON_NA_BODY) is the one place that still
+  // names it. This test now pins exactly that: the top-level chip no longer
+  // distinguishes the state, but the card still says so in words, and no
+  // stale AGENTS.MODEL_ACCESS_* label or the sign-in CTA ever appears.
+  test("model_access.state=not_applicable reads Ready up top; the model key card is the one place that still names it", async ({
     page,
   }) => {
     await mockMemberRole(page);
@@ -370,6 +419,15 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
         const response = await route.fetch();
         const body = await response.json();
         body.model_access = { state: "not_applicable" };
+        // Same per_user roster override as the CASES loop above: not_applicable
+        // is only ever emitted for an admin-token principal on an ENABLED
+        // per_user row, so a fixture with no per_user row at all would not be
+        // the shape this state actually occurs in.
+        body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
+          h.id === "claude-code"
+            ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
+            : h,
+        );
         cached = body;
       }
       // TS can't narrow a `let` captured by this closure across the `await`
@@ -378,11 +436,18 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
     });
     await gotoConsole(page);
     await navToRoute(page, "/setup");
-    await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
-    await expect(page.getByText("Model access · Provided by your admin")).toBeVisible();
-    await expect(page.getByText(AGENTS.MODEL_ACCESS_NOT_APPLICABLE)).toBeVisible();
+    const setupSummarySection = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: "What's set up for you" }) });
+    const modelKeySection = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: "Your model key" }) });
+    await expect(setupSummarySection).toBeVisible();
+    await expect(setupSummarySection.getByText(CONNECTIONS.SUMMARY_READY)).toBeVisible();
+    await expect(modelKeySection.getByText(YOUR_MODEL_KEY.PER_PERSON_NA_BODY)).toBeVisible();
+    // Never one of the OTHER five server-driven AGENTS.MODEL_ACCESS_* labels,
+    // and the retired dedicated chip is gone for good, not just relabelled.
     for (const label of Object.values(MODEL_ACCESS_CHIP_LABEL)) {
-      if (label === AGENTS.MODEL_ACCESS_NOT_APPLICABLE) continue;
       await expect(page.getByText(label)).toHaveCount(0);
     }
     await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toHaveCount(0);
