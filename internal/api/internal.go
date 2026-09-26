@@ -227,12 +227,16 @@ type groundtruthBatch struct {
 }
 
 // maxGroundtruthBatchBytes caps the sensor's batch POST, and maxSidecarBody the
-// two tiny sidecar-authored bodies (approval request, mint). Both are DoS
-// ceilings on a compromised sidecar/sensor, not shape checks — the real bounds
-// are maxBatch below and the request structs themselves.
+// two small sidecar-authored bodies (an approval's requested_scope, mint). All
+// three are DoS ceilings on a compromised sidecar/sensor, not shape checks —
+// the real bounds are maxBatch below and the request structs themselves.
+// maxApprovalRaiseBody is a raise with a push's path list beside its scope:
+// the list's bytes, each JSON-escapable to six ("\u00XX"), plus three per
+// quoted, comma-separated entry.
 const (
 	maxGroundtruthBatchBytes = 8 << 20  // 8 MiB
 	maxSidecarBody           = 64 << 10 // 64 KiB
+	maxApprovalRaiseBody     = maxSidecarBody + 6*types.PushPathListMaxBytes + 3*types.PushPathListMaxPaths
 )
 
 // handleGroundtruthEvents ingests a batch of eBPF/Tetragon kernel events from
@@ -430,6 +434,9 @@ const maxApprovalsPerRun = 4096
 type internalApprovalRequest struct {
 	Kind           types.ApprovalKind `json:"kind"`
 	RequestedScope json.RawMessage    `json:"requested_scope"`
+	// PathList is a push_content raise's complete path list; a previous-release
+	// sidecar sends none. Refused on any other kind.
+	PathList *types.PushPathList `json:"path_list"`
 }
 
 // handleInternalRequestApproval raises (or dedups to an existing) approval on
@@ -442,7 +449,8 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 	var body internalApprovalRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSidecarBody)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxApprovalRaiseBody)).Decode(&body); err != nil ||
+		len(body.RequestedScope) > maxSidecarBody || (body.PathList != nil && body.Kind != types.ApprovalPushContent) {
 		writeError(w, http.StatusBadRequest, "invalid approval request")
 		return
 	}
@@ -477,7 +485,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	}
 	if body.Kind == types.ApprovalPushContent {
 		var ok bool
-		if body.RequestedScope, ok = s.admitPushContentRaise(w, r, claims, body.RequestedScope); !ok {
+		if body.RequestedScope, ok = s.admitPushContentRaise(w, r, claims, body.RequestedScope, body.PathList); !ok {
 			return
 		}
 	}
@@ -503,6 +511,9 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	created, err := s.cfg.Approvals.Request(r.Context(), req)
 	if err != nil {
 		writeServerError(w, r, "request approval", err)
+		return
+	}
+	if body.PathList != nil && !s.recordPushPathList(w, r, claims, created, *body.PathList) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)

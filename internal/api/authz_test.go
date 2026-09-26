@@ -576,6 +576,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/runs/{id}/attach/takeover": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/approvals/{id}/approve":    {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
 	"POST /api/v1/approvals/{id}/deny":       {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
+	"GET /api/v1/approvals/{id}/paths":       {class: classOwner, entity: entityApproval, ownerTier: tierSecurity},
 
 	// GET /runs/{id}/attach (the interactive PTY WebSocket) is a SPECIAL case:
 	// its ticket-LESS fallback lane (ticketOrHumanAuth) is plain admin-only
@@ -1181,9 +1182,9 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// classMember (its emitted files are the operator's authored
 		// environment, and its write twin was already operatorOnly); 18 since
 		// #569 added PATCH /runs/{id}; 19 since #575 added POST
-		// /runs/{id}/revive.
-		if probed != 19 {
-			t.Errorf("probed %d classOwner routes, want 19 — a route that left classOwner takes its tier "+
+		// /runs/{id}/revive; 20 since #1066 added GET /approvals/{id}/paths.
+		if probed != 20 {
+			t.Errorf("probed %d classOwner routes, want 20 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
