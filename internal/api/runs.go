@@ -285,6 +285,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Host capacity, the last refusal and before the mint, the same siting as
+	// the autonomy gate: a refusal leaves no identity and no run row.
+	if writeHostCapacityRefusal(w, r, s.cfg.HostCapacity.Admit()) {
+		return
+	}
+
 	createdByType, createdBy := actorFromRequest(r)
 	runID := uuid.New()
 	// Subject vs attribution: createdBy is the ATTRIBUTION — the run row's

@@ -393,6 +393,9 @@ func (s *Server) requestRepoProviderRefusals(w http.ResponseWriter, r *http.Requ
 // ONE call site rather than three because launchRecordRun sits at the funlen
 // ratchet, which is what its own comment there asks the next lane to do.
 func (s *Server) recordLaunchRefusals(ctx context.Context, ws types.Workspace, agent string) error {
+	if err := s.cfg.HostCapacity.Admit(); err != nil {
+		return err
+	}
 	if rerr := s.recordRosterRefusal(ctx, agent); rerr != nil {
 		return rerr
 	}

@@ -30,6 +30,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/directory"
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -528,6 +529,8 @@ type Config struct {
 	// the bounds that keep a burst from collapsing into one row. The same
 	// window folds the device routes' failure rows (device_audit_bounds.go).
 	AuditCoalesceWindow time.Duration
+	// HostCapacity refuses run launches over the WARDYN_HOST_* limits; nil admits all.
+	HostCapacity *hostcapacity.Guard
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
 	// OrgFederation is the hybrid audit forwarder's status (cmd/wardynd's

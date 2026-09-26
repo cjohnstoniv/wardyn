@@ -612,6 +612,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Runs can be refused while the host is short of memory or overloaded.** With
+  `WARDYN_HOST_MIN_MEM_AVAILABLE_MIB` or `WARDYN_HOST_MAX_LOAD1` set, every launch (new run, record,
+  harness sign-in, source scan, site-config probe) answers 503 `host_capacity_refused` with the
+  measured reason and `Retry-After` before any run exists. Both default to `0`, off.
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.

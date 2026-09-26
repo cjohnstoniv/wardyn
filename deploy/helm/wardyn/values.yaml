@@ -303,6 +303,11 @@ kek:
 # (WARDYN_OIDC_*), TLS (WARDYN_TLS_*), audit sinks (WARDYN_AUDIT_SINKS), the default
 # policy (WARDYN_DEFAULT_POLICY), etc. See cmd/wardynd/main.go for the full list.
 # Values render INLINE in the pod spec — anything secret belongs in extraEnv.
+# Host-capacity admission (docs/ENV.md), off by default; e.g. refuse new runs
+# under 8 GiB free or above load 100 on the node's host:
+#   env:
+#     WARDYN_HOST_MIN_MEM_AVAILABLE_MIB: "8192"
+#     WARDYN_HOST_MAX_LOAD1: "100"
 env: {}
 
 # Raw EnvVar entries appended to the container, for the WARDYN_* variables that
