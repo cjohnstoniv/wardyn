@@ -7,6 +7,7 @@ import { test, expect, gotoConsole, navToRoute, mockMemberRole, sql } from "./fi
 import { RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER } from "../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../src/app/lib/workspace-providers-copy";
+import { CONNECTIONS } from "../src/app/components/wardyn/copy/door";
 
 // The model-access strip (0.7.6, field-report finding 2) — the CLIENT half.
 //
@@ -103,8 +104,13 @@ test.describe("the model-access strip", () => {
 
     await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
     // The page's own action line is still there — this is a suppression of the
-    // duplicate, not of the fact.
-    await expect(page.getByText(AGENTS.MODEL_ACCESS_NOT_CONFIGURED)).toBeVisible();
+    // duplicate, not of the fact. #541 retired the dedicated
+    // AGENTS.MODEL_ACCESS_NOT_CONFIGURED chip this used to pin here: a
+    // per_user, no-model_providers-block fixture like this one now reads
+    // legacySummary(status)'s own "Model access · Needs you" chip instead
+    // (model-connections.ts's not_configured/expired_signin branch) — still
+    // the same fact, still on this page, just the surviving vocabulary.
+    await expect(page.getByText(CONNECTIONS.SUMMARY_NEEDS_YOU)).toBeVisible();
   });
 
   // Risk (a), settled in a real browser rather than by reading z-indices: the
