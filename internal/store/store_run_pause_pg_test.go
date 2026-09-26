@@ -14,7 +14,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// TestPG_RunPause pins migration 0071 through the pause surface: the presence
+// TestPG_RunPause pins migration 0085 through the pause surface: the presence
 // stamp, the pause mark's compare on the presence clock, on a still-open
 // request (waiting) and on no open request (idle), the columns reading back on
 // the run, clearing, and an end clearing a pause.
@@ -106,6 +106,92 @@ func TestPG_RunPause(t *testing.T) {
 	}
 	if pauseCandidate(t, pg, run.ID) != nil {
 		t.Error("a kept run must not be a pause candidate")
+	}
+}
+
+// TestPG_RunPause_RefusedOnAKeptRun pins MarkRunPaused's `lost_at IS NULL`
+// condition: a run already lost (kept) must never be marked paused, even when
+// every other condition (RUNNING, no open request, matching presence
+// snapshot) holds — a sweep racing a lose must lose.
+func TestPG_RunPause_RefusedOnAKeptRun(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	run := newRun(types.RunRunning)
+	run.SandboxRef, run.WaitBudgetSec = "ref-pause-kept", 3600
+	persistRun(t, ctx, pool, run)
+	if _, err := pg.StampRunActive(ctx, run.ID); err != nil {
+		t.Fatalf("StampRunActive: %v", err)
+	}
+	stamped, _ := pg.GetRun(ctx, run.ID)
+
+	now := time.Now().UTC()
+	if ok, err := pg.MarkRunLost(ctx, run.ID, types.LostReboot, now, 0); err != nil || !ok {
+		t.Fatalf("MarkRunLost = %v, %v; want true", ok, err)
+	}
+	if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, stamped.ActiveAt); err != nil || ok {
+		t.Errorf("MarkRunPaused on a kept run = %v, %v; want false", ok, err)
+	}
+	if kept, _ := pg.GetRun(ctx, run.ID); kept.PausedAt != nil {
+		t.Errorf("a kept run was marked paused: %v", kept.PausedAt)
+	}
+}
+
+// TestPG_RunPause_ClearedByLostAndRevive pins the fix for the defect a review
+// found: MarkRunLost and MarkRunRevived must clear a pause exactly like
+// MarkRunEnded does, above — a run paused when it is lost to a reboot (its
+// agent stopped from under it, paused or not) must not still read paused once
+// revived, or the run page's files/resources reads would keep 409ing an agent
+// that is actually running again.
+func TestPG_RunPause_ClearedByLostAndRevive(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	run := newRun(types.RunRunning)
+	run.SandboxRef, run.WaitBudgetSec = "ref-pause-revive", 3600
+	persistRun(t, ctx, pool, run)
+	if _, err := pg.StampRunActive(ctx, run.ID); err != nil {
+		t.Fatalf("StampRunActive: %v", err)
+	}
+	stamped, _ := pg.GetRun(ctx, run.ID)
+	if ok, err := pg.MarkRunPaused(ctx, run.ID, types.PauseIdle, stamped.ActiveAt); err != nil || !ok {
+		t.Fatalf("MarkRunPaused = %v, %v; want true", ok, err)
+	}
+	if paused, _ := pg.GetRun(ctx, run.ID); paused.PausedAt == nil {
+		t.Fatal("precondition: run is not paused")
+	}
+
+	now := time.Now().UTC()
+	if ok, err := pg.MarkRunLost(ctx, run.ID, types.LostReboot, now, 0); err != nil || !ok {
+		t.Fatalf("MarkRunLost = %v, %v; want true", ok, err)
+	}
+	if lost, _ := pg.GetRun(ctx, run.ID); lost.PausedAt != nil || lost.PausedReason != "" {
+		t.Errorf("a run lost while paused still reads paused: %v %q", lost.PausedAt, lost.PausedReason)
+	}
+
+	// Force a paused mark back onto the now-kept row directly (MarkRunPaused
+	// itself refuses a kept run — TestPG_RunPause_RefusedOnAKeptRun pins that —
+	// so this simulates a stale mark from before this fix, or a race), to pin
+	// MarkRunRevived's OWN clear independently of MarkRunLost's above.
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET paused_at=now(), paused_reason=$2 WHERE id=$1`,
+		run.ID, string(types.PauseIdle)); err != nil {
+		t.Fatalf("force a stale pause mark: %v", err)
+	}
+
+	if ok, err := pg.MarkRunRevived(ctx, run.ID, types.LostReboot); err != nil || !ok {
+		t.Fatalf("MarkRunRevived = %v, %v; want true", ok, err)
+	}
+	revived, err := pg.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if revived.PausedAt != nil || revived.PausedReason != "" {
+		t.Errorf("revived run still reads paused: %v %q; want the pause cleared like MarkRunEnded clears it", revived.PausedAt, revived.PausedReason)
+	}
+	if revived.LostAt != nil || revived.State != types.RunRunning {
+		t.Errorf("revived run = lost %v state %s; want live and RUNNING", revived.LostAt, revived.State)
 	}
 }
 

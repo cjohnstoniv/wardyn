@@ -406,6 +406,31 @@ func TestResumeRun_OwnerThawsAForeignMemberCannot(t *testing.T) {
 	}
 }
 
+// TestResumeRun_RefusesAKeptRun pins run_pause.go's runIsKept check: a run
+// lost to a reboot or an outage keeps RunState RUNNING (the kept-run design),
+// so resume must refuse it by its lost mark, not by state alone — dropping
+// that check would resume a run whose agent may not even exist any more,
+// resurrecting it outside the revive path's re-checks.
+func TestResumeRun_RefusesAKeptRun(t *testing.T) {
+	f := newPauseFixture(t, time.Hour)
+	paused := time.Now().UTC()
+	f.st.run.PausedAt, f.st.run.PausedReason = &paused, types.PauseIdle
+	lostAt := time.Now().UTC()
+	f.st.run.LostAt, f.st.run.LostReason = &lostAt, types.LostReboot
+	owner := ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser)
+	path := "/api/v1/runs/" + f.run.ID.String() + "/resume"
+
+	if w := doSSO(t, f.srv, http.MethodPost, path, owner, ""); w.Code != http.StatusConflict {
+		t.Fatalf("resume of a kept run = %d %s, want 409", w.Code, w.Body.String())
+	}
+	if _, thaws := f.rn.counts(); thaws != 0 {
+		t.Fatalf("thaws = %d after a refused kept-run resume, want 0 — must never touch a run the revive path owns", thaws)
+	}
+	if pausedAt, _ := f.st.paused(); pausedAt == nil {
+		t.Error("kept run's pause mark was cleared by a refused resume; only MarkRunLost/MarkRunRevived may clear it")
+	}
+}
+
 // TestPausedRun_WidgetsDoNotThawIt: the run page's polled reads answer 409 on
 // a paused run and never thaw it — an open tab is not a person.
 func TestPausedRun_WidgetsDoNotThawIt(t *testing.T) {

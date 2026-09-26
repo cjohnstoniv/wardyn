@@ -26,7 +26,10 @@ type RunReviver interface {
 	// the token as just renewed (the revive mints a fresh one, and the
 	// lapsed-token sweep must not read the old stamp) and refreshes the watcher
 	// lease (a rebooted agent is started only after the new proxy, and the
-	// watcher sweep must not probe it before then). false means the run went
+	// watcher sweep must not probe it before then). It also clears a pause: a
+	// run lost while paused (a reboot can catch it either way) must not read
+	// as paused once revived, or its files/resources reads would 409 with an
+	// agent that is actually running again. false means the run went
 	// terminal, ended, was lost or revived since, and must get no proxy.
 	MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason) (bool, error)
 	// SetRunProxyRelease records release as the one that started run id's
@@ -54,7 +57,8 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 		return false, nil
 	}
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=NULL, lost_reason='', token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
+		UPDATE agent_runs SET lost_at=NULL, lost_reason='', paused_at=NULL, paused_reason='',
+			token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
 		WHERE id=$1 AND state=$2 AND (lost_at IS NOT NULL) = ($3 <> '') AND lost_reason=$3`,
 		id, string(types.RunRunning), string(from))
 	if err != nil {

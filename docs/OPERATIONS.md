@@ -5887,7 +5887,7 @@ because PostgreSQL requires ownership for `ALTER TABLE` and for
 `CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade. Every 0.6.x release ships
 through `0049`, so this path applies `0050`–`0062`, and most of it is exactly
 this shape: `0050` (secrets), `0052` and `0060` (api_tokens, created back in
-`0045`), `0055` (workspaces) and `0062`, `0063`, `0064`, `0065`, `0072`, `0073`, `0085` (approvals and
+`0045`), `0055` (workspaces) and `0062`, `0063`, `0064`, `0065`, `0072`, `0073` (approvals and
 `agent_runs`, both created in `0001`) are
 `ALTER TABLE` on tables an earlier release created — `0050` also drops and
 re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
@@ -5895,8 +5895,7 @@ re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
 `approvals.kind` with `credential_reauth`), `0063` adds the
 `agent_runs.status_detail` column, `0065` adds `agent_runs.autonomy_level`, `0072` adds the
 run-limit columns (`ends_at`, `wait_budget_sec`, `run_limits`, `governance_profile_id`), `0073` the
-lease columns (`lost_at`, `lost_reason`, `ending_soon_for`, `ending_soon_sec`) and `0085` the pause
-columns (`paused_at`, `paused_reason`, `active_at`) — and `0056`, `0057` and `0058` are three successive
+lease columns (`lost_at`, `lost_reason`, `ending_soon_for`, `ending_soon_sec`) — and `0056`, `0057` and `0058` are three successive
 `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
 two migrations earlier in the same run, so it is not an instance of the hazard.)
@@ -5914,8 +5913,9 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 0.8's user types add three more: `0079` re-adds the subject-type CHECKs on
 `capability_grants` (`0042`'s table), `governance_assignments` (`0052`'s) and
 `user_drive_grants` (`0054`'s), `0080` adds `agent_runs.user_type`, and `0082` adds
-`api_tokens.user_type` with its CHECK. The long-holds runs add two more on `agent_runs`:
-`0083` adds `token_renewed_at` and `0084` adds `proxy_release`.
+`api_tokens.user_type` with its CHECK. The long-holds runs add three more on `agent_runs`:
+`0083` adds `token_renewed_at`, `0084` adds `proxy_release`, and `0085` adds the pause columns
+(`paused_at`, `paused_reason`, `active_at`).
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does

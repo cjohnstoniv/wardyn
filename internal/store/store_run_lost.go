@@ -31,7 +31,9 @@ type RunLoser interface {
 	// MarkRunLost marks run id kept and lost for reason at now, but only while
 	// it is RUNNING and not already kept. With tokenLife > 0 it also requires
 	// the token to be lapsed by that much still, so a renew that lands between
-	// the list and the mark wins. Exactly one caller sees true.
+	// the list and the mark wins. Exactly one caller sees true. It clears a
+	// pause, like MarkRunEnded: the agent is stopped or unreachable once lost,
+	// paused or not, and a revive must not read a resurrected run as paused.
 	MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error)
 }
 
@@ -62,7 +64,7 @@ func (s PG) ListLapsedTokenRuns(ctx context.Context, life time.Duration) ([]type
 // MarkRunLost — see RunLoser.
 func (s PG) MarkRunLost(ctx context.Context, id uuid.UUID, reason types.LostReason, now time.Time, tokenLife time.Duration) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=$2, lost_reason=$3
+		UPDATE agent_runs SET lost_at=$2, lost_reason=$3, paused_at=NULL, paused_reason=''
 		WHERE id=$1 AND state=$4 AND lost_at IS NULL
 		  AND ($5::interval = interval '0' OR token_renewed_at < now() - $5::interval)`,
 		id, now, string(reason), string(types.RunRunning), tokenLife.String())
