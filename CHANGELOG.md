@@ -43,6 +43,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
   failing nightly lane opened no issue. `GH_REPO: ${{ github.repository }}` is now set alongside
   the job's `GH_TOKEN`.
+- **Revive, admin restart and extending a run's end re-check its model provider and selected
+  stored policy (#1055, refs #679).** These keep a run alive on its owner's launch authority, and
+  re-checked the agent, workspaces and git provider rows but not the model provider or stored
+  policy recorded on the run, so a provider or policy withdrawn from the owner (a deny row, the
+  allow removed under enforcement, or "Available to" another user type) still let the run be
+  revived or extended. Both are now re-checked for the owner exactly as the create gate checks
+  them (`run.revive` / `run.end.set` denied with `capability_model_provider` or
+  `capability_policy`); a run recorded before either existed adds no check.
 - **The everyone-is-an-admin warning also fires when the default role is admin (#491).** A role
   map being set was previously enough to hide the "Who is an admin" setup row and the shell
   banner, even with `WARDYN_OIDC_DEFAULT_ROLE=admin` — every sign-in the map didn't match still
@@ -2310,9 +2318,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   "Renamed in 0.8" appendix (e.g. `auth.failed` → `auth.fail`, `egress.pending` → `egress.hold`,
   `kernel.sensor.heartbeat` → `kernel.sensor.ping`, `run.workspace.egress` → `run.egress.add` with
   `kind: workspace`). `authz.denied` is unchanged. The egress proxy's wire values moved with the
-  names (a held decision is sent as `hold`, a failed or opaque LLM scan as `fail` or `bypass`), so
-  run the proxy image from the same release as `wardynd`. The `egress.decisions.dropped:<n>`
-  `rule_source` value is now `egress:dropped-decisions-<n>`, and `secret.read`'s refusal reasons are
+  names (a held decision is sent as `hold`, a failed or opaque LLM scan as `fail` or `bypass`, or
+  a skipped one as `skip`); wardynd N accepts proxy N−1's spellings and records them under the N
+  names. The `egress.decisions.dropped:<n>` `rule_source` value is now
+  `egress:dropped-decisions-<n>`, and `secret.read`'s refusal reasons are
   snake_case (`host-not-organisation` → `host_not_organisation`, `sso-host-not-portal` →
   `sso_host_not_portal`, and six more the appendix lists); a consumer matching an old spelling needs
   the same update.

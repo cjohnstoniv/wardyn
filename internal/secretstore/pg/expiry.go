@@ -64,29 +64,18 @@ func (s *Store) deleteIfExpired(ctx context.Context, owner, name string) (secret
 	if err := lockRow(ctx, tx, owner, name); err != nil {
 		return e, false, err
 	}
-	var version int16
-	var kekID string
 	err = tx.QueryRow(ctx,
-		`SELECT enc_version, kek_id, expires_at FROM secrets WHERE owned_by=$1 AND name=$2 AND expires_at <= now() FOR UPDATE`,
+		`SELECT expires_at FROM secrets WHERE owned_by=$1 AND name=$2 AND expires_at <= now() FOR UPDATE`,
 		owner, name,
-	).Scan(&version, &kekID, &e.ExpiresAt)
+	).Scan(&e.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, false, nil // renewed or removed since the scan
 	}
 	if err != nil {
 		return e, false, fmt.Errorf("lock: %w", err)
 	}
-	if version == extVersion {
-		store, loc := splitRef(kekID)
-		if !s.reachable(store) {
-			return e, false, fmt.Errorf("it is stored in %q, which this wardynd is not configured to reach", store)
-		}
-		if err := s.ext.Delete(ctx, owner, name, loc); err != nil {
-			return e, false, fmt.Errorf("delete from %s: %w", store, err)
-		}
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM secrets WHERE owned_by=$1 AND name=$2`, owner, name); err != nil {
-		return e, false, fmt.Errorf("delete: %w", err)
+	if _, err := s.deleteLocked(ctx, tx, owner, name); err != nil {
+		return e, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return e, false, fmt.Errorf("commit: %w", err)

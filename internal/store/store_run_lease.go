@@ -41,6 +41,18 @@ type RunLeaser interface {
 	// false means the run changed since the caller read it; nil ends are "no
 	// end".
 	SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int) (bool, error)
+	// StopKeptRunIf makes a kept run (RUNNING with a lost/end mark) terminal, but
+	// only while the row still carries the EXACT kept mark the caller read:
+	// lostAt, lostReason and endsAt, compared atomically with the state guard in
+	// one UPDATE (F04, long-holds review). This closes the same class of TOCTOU
+	// UpdateRunStateIfIdle closes for the idle reaper: a stale lease-sweep row —
+	// read before a successful extension, a revive, or a fresher end landed —
+	// must never win the destructive RUNNING->terminal transition and tear down
+	// a run that is no longer the one it read. state='RUNNING' stays in the
+	// predicate too, so a concurrent kill's outcome is still preserved. false
+	// means the mark or the state changed since the read; the caller's re-assert
+	// on the next sweep pass is what makes that safe to just drop.
+	StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error)
 }
 
 var _ RunLeaser = PG{}
@@ -95,6 +107,19 @@ func (s PG) SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromEnd *time.Ti
 		id, fromEnd, fromWait, toEnd, toWait, states, string(types.LostEnded))
 	if err != nil {
 		return false, fmt.Errorf("store: set run end and wait: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// StopKeptRunIf — see RunLeaser.
+func (s PG) StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, `
+		UPDATE agent_runs SET state=$2, updated_at=now()
+		WHERE id=$1 AND state='RUNNING' AND lost_at IS NOT DISTINCT FROM $3
+		  AND lost_reason=$4 AND ends_at IS NOT DISTINCT FROM $5`,
+		id, string(to), lostAt, string(lostReason), endsAt)
+	if err != nil {
+		return false, fmt.Errorf("store: stop kept run if: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
 }

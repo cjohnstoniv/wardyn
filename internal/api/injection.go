@@ -327,6 +327,21 @@ func (s *Server) storedKeyExpiry(m broker.Minted) int64 {
 	return s.cfg.Now().Add(storedKeyTTL).UnixMilli()
 }
 
+// subscriptionLease is the ExpiresAt the sink gives a subscription token: the
+// stored-key lease, or the token's own expiry when that is sooner (or the
+// grant is approval-gated and so has no lease). A stored sign-in, the managed
+// setup-token and a person's own alike, is re-read on the stored-key clock.
+func (s *Server) subscriptionLease(minted broker.Minted, tok subscription.Token) int64 {
+	lease := s.storedKeyExpiry(minted)
+	if tok.ExpiresAt.IsZero() {
+		return lease
+	}
+	if exp := tok.ExpiresAt.UnixMilli(); lease == 0 || exp < lease {
+		return exp
+	}
+	return lease
+}
+
 // sinkStoreUnreachable is SINK.KEK_UNREACHABLE (credential-storage design §3).
 const sinkStoreUnreachable = "Wardyn couldn't reach the service that holds this run's credential, so it couldn't unlock it. Nothing was substituted. Try again in a moment."
 
@@ -453,22 +468,12 @@ func (s *Server) resolveSubscriptionSentinelInjection(w http.ResponseWriter, r *
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", sentinel, "success",
 		mustJSON(map[string]any{"purpose": "proxy-injection-subscription", "grant_id": grantID, "jti": minted.JTI, "source": source})))
-	resp := injectionResponse{
-		Host:   minted.Injection.Host,
-		Header: subHeader,
-		Value:  formatted,
-		JTI:    minted.JTI,
-	}
-	// The resident subscription token has a machine-readable expiry, and
-	// the proxy re-resolves ahead of it. The managed setup-token has none:
-	// it is a stored credential, so it gets a stored key's expiry and a
-	// disconnected or replaced token stops being injected on that clock.
-	switch {
-	case !tok.ExpiresAt.IsZero():
-		resp.ExpiresAt = tok.ExpiresAt.UnixMilli()
-	case sentinel == types.ManagedOAuthSecret:
-		resp.ExpiresAt = s.storedKeyExpiry(minted)
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, injectionResponse{
+		Host:      minted.Injection.Host,
+		Header:    subHeader,
+		Value:     formatted,
+		JTI:       minted.JTI,
+		ExpiresAt: s.subscriptionLease(minted, tok),
+	})
 	return true
 }

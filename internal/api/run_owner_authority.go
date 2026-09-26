@@ -25,11 +25,11 @@ import (
 // its owner was given at launch. Both re-check that authority as it stands
 // now, as the OWNER (never the caller, for run_revive.go's reason): the
 // captured profile still exists, and the launch doors the run can still be
-// read back for (its agent, its workspaces, the git provider rows of its
-// repos) are still open to the owner. A revive also re-checks the model
-// credential its proxy would inject, and rebuilds the deployment-wide parts
-// of the proxy config from the current configuration instead of reusing the
-// rendered copy.
+// read back for (its agent, its workspaces, its model provider, the stored
+// policy it selected, the git provider rows of its repos) are still open to
+// the owner. A revive also re-checks the model credential its proxy would
+// inject, and rebuilds the deployment-wide parts of the proxy config from the
+// current configuration instead of reusing the rendered copy.
 //
 // Two doors cannot be read back from the run, and are not re-checked: an
 // explicit integration_id (the run row does not record it) and an explicit
@@ -64,24 +64,11 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 	if !callerIsOwner && run.CreatedBy == adminTokenPrincipal {
 		return nil, nil
 	}
-	// label is what the refusal names: a provider row by its kind only, never
-	// its id or base URL, as at the create gate (capProvider403).
-	type door struct{ kind, value, label string }
-	var doors []door
-	if run.Agent != "" {
-		doors = append(doors, door{capAgent, run.Agent, run.Agent})
-	}
-	for _, id := range run.WorkspaceIDs {
-		doors = append(doors, door{capWorkspace, id.String(), id.String()})
-	}
 	rows, err := s.ownerProviderRows(ctx, repos)
 	if err != nil {
 		return nil, err
 	}
-	for _, row := range rows {
-		doors = append(doors, door{capWorkspaceProvider, row.ID, "this deployment's " + string(row.Kind) + " provider"})
-	}
-	for _, d := range doors {
+	for _, d := range persistedLaunchDoors(run, rows) {
 		var allowed bool
 		if callerIsOwner {
 			allowed, err = s.capSeamAllowed(ctx, d.kind, d.value)
@@ -97,6 +84,34 @@ func (s *Server) ownerCapabilityRefusal(ctx context.Context, run types.AgentRun,
 		}
 	}
 	return nil, nil
+}
+
+// door is one launch capability a run was admitted through. label is what a
+// refusal names: a provider row by its kind only, never its id or base URL, as
+// at the create gate (capProvider403).
+type door struct{ kind, value, label string }
+
+// persistedLaunchDoors is the launch doors the run row records, rows being the
+// git provider rows of its repos. A legacy row with no model provider or no
+// selected policy adds no door for it.
+func persistedLaunchDoors(run types.AgentRun, rows []types.GitProvider) []door {
+	var doors []door
+	if run.Agent != "" {
+		doors = append(doors, door{capAgent, run.Agent, run.Agent})
+	}
+	for _, id := range run.WorkspaceIDs {
+		doors = append(doors, door{capWorkspace, id.String(), id.String()})
+	}
+	if run.ModelProviderID != "" {
+		doors = append(doors, door{capModelProvider, run.ModelProviderID, run.ModelProviderID})
+	}
+	if run.PolicyID != nil {
+		doors = append(doors, door{capPolicy, run.PolicyID.String(), run.PolicyID.String()})
+	}
+	for _, row := range rows {
+		doors = append(doors, door{capWorkspaceProvider, row.ID, "this deployment's " + string(row.Kind) + " provider"})
+	}
+	return doors
 }
 
 // ownerProviderRows is the git provider rows repos resolve to, as the

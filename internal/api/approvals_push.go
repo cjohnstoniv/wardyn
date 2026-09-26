@@ -33,7 +33,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -41,17 +43,30 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // pushContentUnattendedBody is the refusal a raise for an unattended run gets.
 const pushContentUnattendedBody = "this run is unattended, so a push that needs review is refused rather than held"
 
+// maxPushPathListsPerRun bounds the path lists one run may store, each up to
+// types.PushPathListMaxBytes (owner ruling, #1087). admitPushPathList checks
+// it before the approval exists; the store enforces it atomically when the
+// list is written, which is what holds under a burst.
+const maxPushPathListsPerRun = 32
+
+// pushPathsAuditAction is the row recordPushPathList writes and the audit
+// export fills in (withPushPaths).
+const pushPathsAuditAction = "approval.push_paths.record"
+
 // admitPushContentRaise is handleInternalRequestApproval's push_content arm.
 // It returns the scope to store — the sidecar's, with acts_as_kind and
-// acts_as_label stamped — or writes its own 4xx and reports false.
+// acts_as_label stamped — or writes its own 4xx and reports false. list, when
+// the sidecar sent one, must be the complete path list the scope was built
+// from (types.PushPathList.VerifyAgainst).
 func (s *Server) admitPushContentRaise(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
-	raw json.RawMessage) (json.RawMessage, bool) {
+	raw json.RawMessage, list *types.PushPathList) (json.RawMessage, bool) {
 	var scope types.PushContentScope
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -67,8 +82,17 @@ func (s *Server) admitPushContentRaise(w http.ResponseWriter, r *http.Request, c
 		writeError(w, http.StatusBadRequest, "invalid push_content requested_scope: acts_as_kind and acts_as_label are set by the control plane")
 		return nil, false
 	}
+	if list != nil {
+		if err := list.VerifyAgainst(scope); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid push_content path_list: "+err.Error())
+			return nil, false
+		}
+	}
 	if s.cfg.Store == nil {
 		writeError(w, http.StatusServiceUnavailable, "run store unavailable")
+		return nil, false
+	}
+	if list != nil && !s.admitPushPathList(w, r, claims.RunID) {
 		return nil, false
 	}
 	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
@@ -140,4 +164,137 @@ func (s *Server) pushActsAs(ctx context.Context, run types.AgentRun, subject str
 		}
 	}
 	return "", "", fmt.Errorf("acts_as %q is not a credential a push authenticates with", actsAs)
+}
+
+// admitPushPathList refuses a path list the store cannot keep, or one past the
+// run's maxPushPathListsPerRun, before any approval row exists.
+func (s *Server) admitPushPathList(w http.ResponseWriter, r *http.Request, runID uuid.UUID) bool {
+	lists, ok := s.cfg.Store.(store.PushPathListStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "push path list store unavailable")
+		return false
+	}
+	n, err := lists.CountPushPathLists(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), "count push path lists for run", err))
+		return false
+	}
+	if n >= maxPushPathListsPerRun {
+		writeError(w, http.StatusTooManyRequests, pushPathListCapBody)
+		return false
+	}
+	return true
+}
+
+const pushPathListCapBody = "this run has held too many pushes for review; no more will be accepted"
+
+// recordPushPathList keeps a raise's verified list with the approval it raised
+// or was deduplicated to (the same push, so the same list), and the first time
+// records it in the run's audit trail. The audit row carries the list's
+// digest, not the list: it is chained and fans out to every SIEM sink, so it
+// stays small, and the audit export fills the paths in from the stored row
+// (withPushPaths).
+//
+// A raise that loses the per-run cap to a concurrent one expires the approval
+// it just raised, so no question is left in front of a human without its list.
+// Any other failure leaves the PENDING row without its list: the sidecar
+// refuses the push, and its next push dedups to the same row and records the
+// list then.
+func (s *Server) recordPushPathList(w http.ResponseWriter, r *http.Request, claims *identity.Claims,
+	ap types.ApprovalRequest, l types.PushPathList) bool {
+	stored, err := s.cfg.Store.(store.PushPathListStore).RecordPushPathList(r.Context(), ap.ID, ap.RunID, l, maxPushPathListsPerRun)
+	if errors.Is(err, store.ErrPushPathListCap) {
+		if xerr := s.cfg.Approvals.ExpireOne(r.Context(), ap.ID, claims.SPIFFEID, "push_path_list_cap"); xerr != nil {
+			writeServerError(w, r, "expire a push_content approval past the path-list cap", xerr)
+			return false
+		}
+		writeError(w, http.StatusTooManyRequests, pushPathListCapBody)
+		return false
+	}
+	if err != nil {
+		writeServerError(w, r, "store push path list", err)
+		return false
+	}
+	if stored {
+		var scope types.PushContentScope
+		_ = json.Unmarshal(ap.RequestedScope, &scope)
+		s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, types.ActorAgent, claims.SPIFFEID, pushPathsAuditAction,
+			ap.ID.String(), "success", mustJSON(map[string]any{
+				"approval_id": ap.ID.String(), "truncated": l.Truncated, "paths_total": scope.PathsTotal,
+				"paths_digest": scope.PathsDigest, "stored_list_digest": types.PushPathsDigest(l.Paths),
+			})))
+	}
+	return true
+}
+
+// withPushPaths is an approval.push_paths.record row as the audit export
+// shows it: the stored list inlined as data.paths, read one row at a time so
+// the export's memory stays one page plus one list. The chained row's
+// stored_list_digest was fixed when the list was stored, so a reader checks
+// the inlined paths against it (types.PushPathsDigest) and a list altered in
+// push_content_paths since no longer matches. A list that cannot be read
+// leaves the row as stored, without paths, and is logged.
+func (s *Server) withPushPaths(ctx context.Context, ev types.AuditEvent) types.AuditEvent {
+	lists, ok := s.cfg.Store.(store.PushPathListStore)
+	id, perr := uuid.Parse(ev.Target)
+	var data map[string]json.RawMessage
+	if !ok || perr != nil || json.Unmarshal(ev.Data, &data) != nil {
+		return ev
+	}
+	l, err := lists.GetPushPathList(ctx, id)
+	if err != nil {
+		slog.ErrorContext(ctx, "wardyn: audit export could not read a held push's path list",
+			slog.String("approval_id", ev.Target), slog.Any("err", err))
+		return ev
+	}
+	data["paths"] = mustJSON(l.Paths)
+	ev.Data = mustJSON(data)
+	return ev
+}
+
+// handleGetPushPathList returns a push_content approval's complete path list
+// (GET /approvals/{id}/paths) to whoever GET /approvals shows the approval to:
+// the security tier, or the run's owner. Anyone else gets the byte-identical
+// 404 a missing approval gets. The row is immutable and read whatever state
+// the run is in, so the list outlives the run.
+func (s *Server) handleGetPushPathList(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r, "id", "approval")
+	if !ok {
+		return
+	}
+	ap, err := s.cfg.Approvals.Get(r.Context(), id)
+	if notFoundIf(w, err, "approval") {
+		return
+	}
+	if err != nil {
+		writeServerError(w, r, "get approval", err)
+		return
+	}
+	if run, rerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); rerr != nil || !s.ownsRunOrAdmin(r, run) {
+		writeError(w, http.StatusNotFound, "approval not found")
+		return
+	}
+	if ap.Kind != types.ApprovalPushContent {
+		writeError(w, http.StatusBadRequest, "approval is not a held push")
+		return
+	}
+	lists, ok := s.cfg.Store.(store.PushPathListStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "push path lists require the Postgres store backend")
+		return
+	}
+	l, err := lists.GetPushPathList(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		// Raised by a previous-release sidecar, which sent no list: the
+		// scope's own paths are all there is.
+		var scope types.PushContentScope
+		if err = json.Unmarshal(ap.RequestedScope, &scope); err == nil {
+			l = types.PushPathList{Paths: scope.Paths, Truncated: scope.PathsTotal > len(scope.Paths)}
+		}
+	}
+	if err != nil {
+		writeServerError(w, r, "get push path list", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, l)
 }

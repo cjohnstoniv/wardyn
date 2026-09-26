@@ -63,7 +63,14 @@ export function impliedEgressHosts(
   workspaces: Workspace[] = [],
 ): ImpliedEgressHost[] {
   const out: ImpliedEgressHost[] = [];
-  const impliedLlmHost = state.llmSecretName ? llmHostForSecret(state.agent, state.llmSecretName) : undefined;
+  // A governed command never resolves model access (task_mode=exec runs no
+  // harness) — gated here too, or a stale llmSecretName from a toggle back
+  // from "agent" would still union its host into the egress allowlist even
+  // though buildSpec below never emits the grant that host was for.
+  const impliedLlmHost =
+    state.runType !== "command" && state.llmSecretName
+      ? llmHostForSecret(state.agent, state.llmSecretName)
+      : undefined;
   if (impliedLlmHost) {
     out.push({ host: impliedLlmHost, why: "model key" });
   }
@@ -163,10 +170,28 @@ export function buildSpec(
   // stays backward-compatible.
   if (state.runType === "command") {
     run.task_mode = "exec";
+    // A command whose target already carries a real base image — an explicit
+    // BYOI image, or a selected workspace with one — needs no agent: exec runs
+    // no harness, so naming one here was a formality that also fed the
+    // managed-subscription eligibility test for a harness this run never
+    // starts (agentRequirementError's own doc, server-side). Any OTHER
+    // command (no image, no image-backed workspace) still needs one — the
+    // server refuses those with nothing to run the command in.
+    const hasImageTarget =
+      state.image.trim() !== "" ||
+      state.workspaces.some((sel) => {
+        const w = resolveWorkspace(sel, workspaces);
+        return !!w?.base_image && w.base_image.kind !== "recommended";
+      });
+    if (hasImageTarget) {
+      delete run.agent;
+    }
   }
   // Run override: pins model/harness access to one specific integration,
   // overriding the workspace pin and server default (see step-access.tsx).
-  if (state.integrationId) {
+  // A governed command resolves no model/harness access at all, so a stale
+  // integrationId surviving a runType toggle must never ride along.
+  if (state.runType !== "command" && state.integrationId) {
     run.integration_id = state.integrationId;
   }
   // #542/#526 — this run's own model-provider pick, whatever the rail's
@@ -272,8 +297,12 @@ export function buildSpec(
   }
 
   // The LLM api_key grant — no manual picker in step-access.tsx (model access
-  // resolves from integrations instead).
-  const llmGrantHost = state.llmSecretName ? llmHostForSecret(state.agent, state.llmSecretName) : undefined;
+  // resolves from integrations instead). Never for a governed command: it
+  // resolves no model access, so a stale llmSecretName must not mint one.
+  const llmGrantHost =
+    state.runType !== "command" && state.llmSecretName
+      ? llmHostForSecret(state.agent, state.llmSecretName)
+      : undefined;
   if (llmGrantHost) {
     const host = llmGrantHost;
     const { header, format } = apiKeyInjectionFor(host);

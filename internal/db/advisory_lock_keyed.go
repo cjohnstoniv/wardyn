@@ -45,6 +45,11 @@ const LoginSupersedeLockClass int32 = 0x574C474E // ASCII "WLGN"
 // AdvisoryLockKeyed: it is released by the commit that writes the row.
 const SecretRowLockClass int32 = 0x57534543 // ASCII "WSEC"
 
+// PushPathListLockClass is the classid of the TRANSACTION-scoped two-argument
+// lock store.PG.RecordPushPathList takes, keyed to one run: that run's list
+// inserts serialize, so the per-run cap it counts is the cap it enforces.
+const PushPathListLockClass int32 = 0x57505054 // ASCII "WPPT"
+
 // LoginSupersedeLockWait is the TOTAL budget one caller spends trying to take a
 // keyed lock — the in-process slot, the pool connection and the lock itself —
 // before giving up. A caller that runs out of it is REFUSED (retry), not let

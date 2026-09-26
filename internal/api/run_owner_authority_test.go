@@ -89,40 +89,63 @@ func (f *reviveFixture) assertReviveRefused(t *testing.T, reason string) {
 }
 
 // TestRevive_RechecksOwnerGrants: for each launch door the run can be read
-// back for, revoking the owner's grant (a deny row on their email, or the
-// allow withdrawn from an enforced kind) refuses the revive, naming the kind,
-// whether the owner or an admin asks. With the grant in place both revive.
+// back for, revoking the owner's grant (a deny row on their email, the allow
+// withdrawn from an enforced kind, or the value made available to another
+// user type only) refuses the revive, naming the kind, whether the owner or an
+// admin asks. With the grant in place, or the value available to the owner's
+// stamped type, both revive.
 func TestRevive_RechecksOwnerGrants(t *testing.T) {
+	policyID := uuid.New()
 	for _, door := range []struct{ kind, value, named string }{
 		{capAgent, "claude-code", "claude-code"},
 		{capWorkspace, "", ""}, // the fixture's workspace id
 		{capWorkspaceProvider, capProviderRowID, "this deployment's github provider"},
+		{capModelProvider, "private-provider", "private-provider"},
+		{capPolicy, policyID.String(), policyID.String()},
 	} {
 		for _, caller := range []struct {
 			name  string
 			owner bool
 		}{{"owner", true}, {"admin", false}} {
 			for _, rev := range []struct {
-				name    string
-				revoked bool
-				caps    func(sub, value string) []types.CapabilityGrant
+				name     string
+				revoked  bool
+				restrict bool // "Available to" restricts the value
+				caps     func(sub, value string) []types.CapabilityGrant
 			}{
-				{"deny row on the owner's email", true, func(_, v string) []types.CapabilityGrant {
+				{"deny row on the owner's email", true, false, func(_, v string) []types.CapabilityGrant {
 					return []types.CapabilityGrant{grant(types.CapabilitySubjectUser, ownerEmail, door.kind, v, types.CapabilityDeny)}
 				}},
-				{"allow withdrawn", true, func(string, string) []types.CapabilityGrant { return nil }},
-				{"still granted", false, func(sub, v string) []types.CapabilityGrant {
+				{"allow withdrawn", true, false, func(string, string) []types.CapabilityGrant { return nil }},
+				{"still granted", false, false, func(sub, v string) []types.CapabilityGrant {
 					return []types.CapabilityGrant{grant(types.CapabilitySubjectUser, sub, door.kind, v, types.CapabilityAllow)}
+				}},
+				{"available to another type only", true, true, func(_, v string) []types.CapabilityGrant {
+					return []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, "contractor", door.kind, v, types.CapabilityAllow)}
+				}},
+				{"available to the owner's type", false, true, func(_, v string) []types.CapabilityGrant {
+					return []types.CapabilityGrant{grant(types.CapabilitySubjectUserType, types.UserTypeStandard, door.kind, v, types.CapabilityAllow)}
 				}},
 			} {
 				t.Run(door.kind+"/"+caller.name+"/"+rev.name, func(t *testing.T) {
 					f, ws := newOwnerFixture(t)
 					value, named := door.value, door.named
-					if door.kind == capWorkspace {
+					switch door.kind {
+					case capWorkspace:
 						value, named = ws.String(), ws.String()
+					case capModelProvider:
+						f.st.run.ModelProviderID = value
+					case capPolicy:
+						f.st.run.PolicyID = &policyID
 					}
 					f.st.caps = rev.caps(f.run.CreatedBy, value)
 					f.st.enf = map[string]bool{door.kind: true}
+					if rev.restrict {
+						// The owner's session resolves as the built-in type; an
+						// admin's revive reads the same type off the stamp.
+						f.st.run.UserType = types.UserTypeStandard
+						f.st.restricted = map[string]map[string]bool{door.kind: {value: true}}
+					}
 					code, body := f.reviveAs(t, caller.owner)
 					if !rev.revoked {
 						if code != http.StatusOK {
@@ -462,6 +485,15 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 	agentDenied := func(_ *endWaitFixture, st *profileStore) {
 		st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectUser, ownerEmail, capAgent, "claude-code", types.CapabilityDeny)}
 	}
+	providerDenied := func(_ *endWaitFixture, st *profileStore) {
+		st.run.ModelProviderID = "private-provider"
+		st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capModelProvider, "private-provider", types.CapabilityDeny)}
+	}
+	policyDenied := func(_ *endWaitFixture, st *profileStore) {
+		id := uuid.New()
+		st.run.PolicyID = &id
+		st.caps = []types.CapabilityGrant{grant(types.CapabilitySubjectAll, "", capPolicy, id.String(), types.CapabilityDeny)}
+	}
 	profileGone := func(_ *endWaitFixture, st *profileStore) { st.profiles = nil }
 	for _, tc := range []struct {
 		name    string
@@ -475,8 +507,11 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 		{"extend, agent denied", ownerSessionAs, week, agentDenied, http.StatusForbidden, "capability_agent"},
 		{"extend by a super admin, agent denied", admin, week, agentDenied, http.StatusForbidden, "capability_agent"},
 		{"no end, agent denied", ownerSessionAs, noEnd, agentDenied, http.StatusForbidden, "capability_agent"},
+		{"extend, model provider denied", ownerSessionAs, week, providerDenied, http.StatusForbidden, "capability_model_provider"},
+		{"extend, policy denied", ownerSessionAs, week, policyDenied, http.StatusForbidden, "capability_policy"},
 		{"extend, still granted", ownerSessionAs, week, func(*endWaitFixture, *profileStore) {}, http.StatusOK, ""},
 		{"shorten, agent denied", ownerSessionAs, soon, agentDenied, http.StatusOK, ""},
+		{"shorten, model provider denied", ownerSessionAs, soon, providerDenied, http.StatusOK, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newEndWaitFixture(t, types.RunLimits{MaxEndAheadSec: 30 * 86400, AllowNoEnd: true, UserChangesLimits: true})
@@ -505,6 +540,42 @@ func TestPatchRunEnds_RechecksOwnerStillResolves(t *testing.T) {
 
 func ownerSessionAs(t *testing.T) *http.Cookie {
 	return ssoSession(t, endWaitOwner, ownerEmail, oidc.RoleUser)
+}
+
+// TestPersistedDoorsClassifyEveryKind: every capability kind is either
+// re-checked for the owner at revive, restart and extension, a launch door the
+// run row cannot be read back for, or not a launch door at all. A new kind
+// fails here until it is classified, and a run recording every recoverable id
+// yields exactly the re-checked kinds.
+func TestPersistedDoorsClassifyEveryKind(t *testing.T) {
+	rechecked := []string{capAgent, capWorkspace, capWorkspaceProvider, capModelProvider, capPolicy}
+	unrecoverable := []string{capImage, capIntegration}
+	notALaunchDoor := []string{capEgressHost, capSecret, capFeature}
+	for _, kind := range capabilityKinds {
+		n := 0
+		for _, set := range [][]string{rechecked, unrecoverable, notALaunchDoor} {
+			if slices.Contains(set, kind) {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("capability kind %q is in %d of rechecked/unrecoverable/notALaunchDoor; classify it in exactly one", kind, n)
+		}
+	}
+
+	policyID := uuid.New()
+	run := types.AgentRun{Agent: "claude-code", WorkspaceIDs: []uuid.UUID{uuid.New()},
+		ModelProviderID: "private-provider", PolicyID: &policyID}
+	var got []string
+	for _, d := range persistedLaunchDoors(run, []types.GitProvider{{ID: capProviderRowID, Kind: "github"}}) {
+		got = append(got, d.kind)
+	}
+	if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(rechecked))) {
+		t.Errorf("persistedLaunchDoors kinds = %v, want exactly %v", got, rechecked)
+	}
+	if got := persistedLaunchDoors(types.AgentRun{Agent: "claude-code"}, nil); slices.ContainsFunc(got, func(d door) bool { return d.kind == capModelProvider || d.kind == capPolicy }) {
+		t.Errorf("a legacy row (no model provider, no policy) yields %v; want no model_provider or policy door", got)
+	}
 }
 
 // TestRecheck_AnAdminOwnedRunIsHeldToItsOwnersSubRows pins the by-sub rule for
