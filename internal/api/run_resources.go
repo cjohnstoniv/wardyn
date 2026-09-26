@@ -227,6 +227,10 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "run has no sandbox to inspect (state="+string(run.State)+")")
 		return
 	}
+	if run.PausedAt != nil {
+		writeError(w, http.StatusConflict, runPausedReadMsg)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), runResourcesExecTimeout)
 	defer cancel()

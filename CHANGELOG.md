@@ -1112,6 +1112,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   limits already follow. The profiles list's Limits column gains a summary chip ("Ends within 30
   days · waits up to 8 hours · people may change these") built from whichever of those three fields
   the profile sets, and reads "None" only when none of the seven is set.
+- **A run nobody is at pauses, and wakes when someone comes back (#572).** The agent container is
+  frozen in place (Docker `runc` only; every other confinement class, and Kubernetes, is never
+  paused) while the run stays `RUNNING` with its memory, files and proxy. A run with an open
+  request pauses after 15 minutes with nothing happening; with its profile's `pause_idle_after_sec`
+  set, a run with no open request pauses after that long (at least 630 seconds) once its CPU reads
+  quiet. "Nothing
+  happening" is a new presence clock, `active_at`: a person typing into it, the agent's egress
+  decisions (not the tool-call approval poll) and bytes its proxy moved on a tunnel or MITM stream,
+  which the proxy reports at most once a minute to the new internal `POST /internal/activity`.
+  Keepalives and a silent open tab do not count. Typing, attaching, an ssh channel or an in-sandbox
+  UI connection thaws a paused run first; so does `POST /api/v1/runs/{id}/resume` (owner or super
+  admin), and the last open request being decided, cancelled or expired. The run page's files and
+  resources reads answer 409 on a paused run rather than wake it. The run carries `paused_at`,
+  `paused_reason` (`waiting` or `idle`) and `active_at` on the wire. Audited as `run.pause` and
+  `run.resume`. A paused run is not contained: kill still is. Migration `0085_agent_runs_pause` adds
+  the three columns.
 - **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
   agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
   suspend) is no longer failed and deleted: it is kept, `RUNNING` with `lost_reason: "reboot"`, its

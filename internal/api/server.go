@@ -849,6 +849,8 @@ type Server struct {
 	dirLimiter       principalLimiter
 	deviceRouteState // the device routes' process state (server_devices.go)
 	runLeaseState    // the run lease sweep's process state (run_lease_server.go)
+	// pause is the pause sweep's process-local state (run_pause.go).
+	pause pauseClocks
 	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
 	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
 	// that encloses re-read -> expiry check -> CreateToken -> Put, so two

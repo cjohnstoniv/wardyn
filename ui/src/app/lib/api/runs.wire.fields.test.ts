@@ -359,7 +359,11 @@ describe("source parity — five more flat structs", () => {
   // ticket: F6-F14
   const root = repoRoot();
   const workspaceGo = readFileSync(join(root, "internal/types/workspace.go"), "utf8");
-  const typesGoFull = readFileSync(join(root, "internal/types/types.go"), "utf8");
+  // types.go plus types_capability.go (the CapabilityGrant/RoleMapping split,
+  // #572's merge): concatenated so goJSONTags still finds a struct that moved
+  // file when the split landed.
+  const typesGoFull = readFileSync(join(root, "internal/types/types.go"), "utf8") +
+    "\n" + readFileSync(join(root, "internal/types/types_capability.go"), "utf8");
   const siteConfigGo = readFileSync(join(root, "internal/types/site_config.go"), "utf8");
   const policyGo = readFileSync(join(root, "internal/types/policy.go"), "utf8");
   const workspacesTs = readFileSync(join(root, "ui/src/app/lib/types/workspaces.ts"), "utf8");

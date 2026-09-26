@@ -196,6 +196,8 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}", s.handleGetRun)
 			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
+			// Resume a paused run (#572): owner or SUPER admin — handleResumeRun.
+			r.Post("/runs/{id}/resume", s.handleResumeRun)
 			// Recording Mode: synthesize a reusable least-privilege sandbox profile
 			// from what this run actually did (advisory, read-only — mints nothing).
 			r.Post("/runs/{id}/profile", s.handleSynthesizeProfile)
@@ -613,56 +615,8 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/attach", s.handleAttachWS)
 		})
 
-		// Internal sidecar surface (run-token bearer).
-		r.Group(func(r chi.Router) {
-			r.Use(s.internalAuth)
-			r.Post("/internal/decisions", s.handlePostDecision)
-			r.Post("/internal/approvals", s.handleInternalRequestApproval)
-			r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
-			// wardyn-toolgate's own give-up signal (#811): closes the row it
-			// raised instead of leaving it PENDING for the sweep.
-			r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
-			r.Post("/internal/credentials/mint", s.handleInternalMint)
-
-			// Token renew: POST /api/v1/internal/token/renew
-			// The per-run proxy re-issues its own (short-TTL) run token before it
-			// lapses, authenticated by the CURRENT token. Without this producer a
-			// run outliving the 1h TTL loses every /internal/* call. NOT forwarded
-			// by any brokered local route — the sandbox cannot reach it.
-			r.Post("/internal/token/renew", s.handleInternalTokenRenew)
-
-			// Injection resolve: returns the formatted secret value for an
-			// api_key grant. SECURITY: this path must NEVER be forwarded by a
-			// wardyn-proxy brokered local route — the proxy calls it directly
-			// at startup; the sandbox has no network path to it (the brokered
-			// routes forward only mint/approvals/recordings, by construction).
-			if s.cfg.Secrets != nil {
-				r.Get("/internal/injection/{grantID}", s.handleInternalInjection)
-			}
-
-			// Recording upload: PUT /api/v1/internal/recordings/{runID}
-			// wardyn-rec POSTs the finished cast from inside the agent container.
-			if s.cfg.RecordingStore != nil {
-				r.Put("/internal/recordings/{runID}", s.handleUploadRecording)
-			}
-
-			// Scan-result upload: PUT /api/v1/internal/scan-results/{runID}
-			// wardyn-scan PUTs the workspace ScanFacts from inside a governed scan
-			// run (via the proxy's brokered scan-result route, which injects the
-			// run token). Cross-run uploads are rejected (token run id must match
-			// the path run id).
-			r.Put("/internal/scan-results/{runID}", s.handleUploadScanResult)
-
-			// SSO-token upload: PUT /api/v1/internal/sso-token/{runID}
-			// wardyn-aws-sso PUTs the captured AWS SSO token cache from inside the
-			// aws-sso container-login run (via the proxy's brokered sso-token
-			// route, which injects the run token). Same cross-run guard as scan;
-			// the run-kind check is harnessLoginTask + awsSSOAgent instead of a
-			// governed workspace run.
-			if s.cfg.Secrets != nil {
-				r.Put("/internal/sso-token/{runID}", s.handleUploadSSOToken)
-			}
-		})
+		// Internal sidecar surface (run-token bearer) — see mountInternalRoutes.
+		r.Group(s.mountInternalRoutes)
 
 		// Ground-truth ingest surface (host-sensor bearer, aud=wardyn-groundtruth).
 		// SEPARATE auth group from the run-token internal surface above: the
@@ -842,4 +796,58 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// listing reads the whole fleet.
 	operatorOnly.Get("/admin/runs/proxy-window", s.handleAdminProxyWindow)
 	operatorOnly.Post("/admin/runs/restart", s.handleAdminRestartRuns)
+}
+
+// mountInternalRoutes is the internal sidecar surface: every route here is
+// authenticated by a run token (internalAuth), and the run is the token's.
+func (s *Server) mountInternalRoutes(r chi.Router) {
+	r.Use(s.internalAuth)
+	r.Post("/internal/decisions", s.handlePostDecision)
+	// The proxy's "bytes moved" presence signal (#572), run from the token.
+	r.Post("/internal/activity", s.handleInternalActivity)
+	r.Post("/internal/approvals", s.handleInternalRequestApproval)
+	r.Get("/internal/approvals/{id}", s.handleInternalGetApproval)
+	// wardyn-toolgate's own give-up signal (#811): closes the row it
+	// raised instead of leaving it PENDING for the sweep.
+	r.Post("/internal/approvals/{id}/expire", s.handleInternalExpireApproval)
+	r.Post("/internal/credentials/mint", s.handleInternalMint)
+
+	// Token renew: POST /api/v1/internal/token/renew
+	// The per-run proxy re-issues its own (short-TTL) run token before it
+	// lapses, authenticated by the CURRENT token. Without this producer a
+	// run outliving the 1h TTL loses every /internal/* call. NOT forwarded
+	// by any brokered local route — the sandbox cannot reach it.
+	r.Post("/internal/token/renew", s.handleInternalTokenRenew)
+
+	// Injection resolve: returns the formatted secret value for an
+	// api_key grant. SECURITY: this path must NEVER be forwarded by a
+	// wardyn-proxy brokered local route — the proxy calls it directly
+	// at startup; the sandbox has no network path to it (the brokered
+	// routes forward only mint/approvals/recordings, by construction).
+	if s.cfg.Secrets != nil {
+		r.Get("/internal/injection/{grantID}", s.handleInternalInjection)
+	}
+
+	// Recording upload: PUT /api/v1/internal/recordings/{runID}
+	// wardyn-rec POSTs the finished cast from inside the agent container.
+	if s.cfg.RecordingStore != nil {
+		r.Put("/internal/recordings/{runID}", s.handleUploadRecording)
+	}
+
+	// Scan-result upload: PUT /api/v1/internal/scan-results/{runID}
+	// wardyn-scan PUTs the workspace ScanFacts from inside a governed scan
+	// run (via the proxy's brokered scan-result route, which injects the
+	// run token). Cross-run uploads are rejected (token run id must match
+	// the path run id).
+	r.Put("/internal/scan-results/{runID}", s.handleUploadScanResult)
+
+	// SSO-token upload: PUT /api/v1/internal/sso-token/{runID}
+	// wardyn-aws-sso PUTs the captured AWS SSO token cache from inside the
+	// aws-sso container-login run (via the proxy's brokered sso-token
+	// route, which injects the run token). Same cross-run guard as scan;
+	// the run-kind check is harnessLoginTask + awsSSOAgent instead of a
+	// governed workspace run.
+	if s.cfg.Secrets != nil {
+		r.Put("/internal/sso-token/{runID}", s.handleUploadSSOToken)
+	}
 }

@@ -559,6 +559,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/kill":             {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// Thawing a paused run keeps its sandbox busy: a write, so not the
+	// security tier's inspect-or-stop.
+	"POST /api/v1/runs/{id}/resume": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	// Revive gives a run egress again: a write, like PATCH above.
 	"POST /api/v1/runs/{id}/revive":  {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/profile": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
@@ -603,6 +606,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/internal/approvals/{id}/expire": {class: classInternal},
 	"POST /api/v1/internal/credentials/mint":      {class: classInternal},
 	"POST /api/v1/internal/decisions":             {class: classInternal},
+	"POST /api/v1/internal/activity":              {class: classInternal},
 	"POST /api/v1/internal/groundtruth":           {class: classInternal},
 	"POST /api/v1/internal/token/renew":           {class: classInternal},
 	"PUT /api/v1/internal/recordings/{runID}":     {class: classInternal},
@@ -1182,7 +1186,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// classMember (its emitted files are the operator's authored
 		// environment, and its write twin was already operatorOnly); 18 since
 		// #569 added PATCH /runs/{id}; 19 since #575 added POST
-		// /runs/{id}/revive; 20 since #1066 added GET /approvals/{id}/paths.
+		// /runs/{id}/revive; 20 since #1066 added GET /approvals/{id}/paths;
+		// 21 since #572 added POST /runs/{id}/resume.
 		if probed != 20 {
 			t.Errorf("probed %d classOwner routes, want 20 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)

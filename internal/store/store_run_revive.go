@@ -26,8 +26,15 @@ type RunReviver interface {
 	// the token as just renewed (the revive mints a fresh one, and the
 	// lapsed-token sweep must not read the old stamp) and refreshes the watcher
 	// lease (a rebooted agent is started only after the new proxy, and the
-	// watcher sweep must not probe it before then). false means the run went
-	// terminal, ended, was lost or revived since, and must get no proxy.
+	// watcher sweep must not probe it before then). It also clears a pause ONLY
+	// when from is a reboot: that revive starts the agent container again
+	// (docker start), so a stale pause mark left on it would 409 the run's
+	// files/resources reads over an agent that is actually running. A live
+	// restart (from "") or an outage revive never touch the agent's own
+	// process, frozen or not, so their pause mark — if any — must survive for
+	// the thaw an eventual resume still needs to actually perform. false means
+	// the run went terminal, ended, was lost or revived since, and must get no
+	// proxy.
 	MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostReason) (bool, error)
 	// SetRunProxyRelease records release as the one that started run id's
 	// proxy, once a revive's new proxy runs.
@@ -54,9 +61,12 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 		return false, nil
 	}
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=NULL, lost_reason='', token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
+		UPDATE agent_runs SET lost_at=NULL, lost_reason='',
+			paused_at=CASE WHEN $3=$4 THEN NULL ELSE paused_at END,
+			paused_reason=CASE WHEN $3=$4 THEN '' ELSE paused_reason END,
+			token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
 		WHERE id=$1 AND state=$2 AND (lost_at IS NOT NULL) = ($3 <> '') AND lost_reason=$3`,
-		id, string(types.RunRunning), string(from))
+		id, string(types.RunRunning), string(from), string(types.LostReboot))
 	if err != nil {
 		return false, fmt.Errorf("store: mark run revived: %w", err)
 	}

@@ -250,14 +250,16 @@ func (s PG) UpdateRunStateIfIdle(ctx context.Context, id uuid.UUID, fromState, t
 // expiry — an "open request within its wait" (long-holds-design.md §2.1). It
 // is a boolean expression, not a full statement, so UpdateRunStateIfIdle can
 // splice it straight into a WHERE clause under NOT().
-const openHoldSQL = `EXISTS (
-		SELECT 1 FROM approvals a
-		WHERE a.run_id = agent_runs.id AND a.state = 'PENDING'
+const openHoldSQL = `EXISTS (SELECT 1 FROM approvals a WHERE ` + openHoldCond + `)`
+
+// openHoldCond is openHoldSQL's WHERE body, over the approvals row "a", so
+// the pause (store_run_pause.go) can narrow the same definition of "open"
+// rather than keep a second copy of it.
+const openHoldCond = `a.run_id = agent_runs.id AND a.state = 'PENDING'
 		  AND (
 			LEAST(a.requested_at + make_interval(secs => NULLIF(agent_runs.wait_budget_sec, 0)), agent_runs.ends_at) IS NULL
 			OR LEAST(a.requested_at + make_interval(secs => NULLIF(agent_runs.wait_budget_sec, 0)), agent_runs.ends_at) > now()
-		  )
-	)`
+		  )`
 
 // execRun is the one body the scoped single-column agent_runs writers below
 // share: Exec, wrap a driver error as "store: <verb>", and translate "no row
@@ -378,7 +380,7 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids, autonomy_level, ` +
 	`ends_at, wait_budget_sec, run_limits, governance_profile_id, model_provider_id, user_type, disk_mib`
-const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, end_tightened_at`
+const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, paused_at, paused_reason, active_at, end_tightened_at`
 
 // scanRun is the ONE reader for runCols, which is now the ONE spelling of the
 // agent_runs column list. A new column is APPENDED to runInsertCols (or to
@@ -388,7 +390,7 @@ const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_re
 // set of pasted copies to keep in step by hand.
 func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
-	var cc, state, autonomyLevel, lostReason string
+	var cc, state, autonomyLevel, lostReason, pausedReason string
 	var limitsRaw []byte
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
@@ -396,7 +398,8 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
 		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &autonomyLevel,
 		&r.EndsAt, &r.WaitBudgetSec, &limitsRaw, &r.GovernanceProfileID, &r.ModelProviderID, &r.UserType, &r.DiskMiB,
-		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &r.EndTightenedAt,
+		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason,
+		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -408,6 +411,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.State = types.RunState(state)
 	r.AutonomyLevel = types.AutonomyLevel(autonomyLevel)
 	r.LostReason = types.LostReason(lostReason)
+	r.PausedReason = types.PauseReason(pausedReason)
 	if err := json.Unmarshal(limitsRaw, &r.RunLimits); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: unmarshal run limits: %w", err)
 	}
