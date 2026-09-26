@@ -128,7 +128,7 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if p.endChanged || p.waitChanged {
-		applied, err := leaser.SetRunEndAndWait(r.Context(), run.ID, run.EndsAt, run.WaitBudgetSec,
+		applied, err := leaser.SetRunEndAndWait(r.Context(), run.ID, run.RunLimits, run.EndsAt, run.WaitBudgetSec,
 			p.resp.EndsAt, p.resp.WaitBudgetSec)
 		if err != nil {
 			writeServerError(w, r, "set run end and wait", err)
