@@ -37,7 +37,7 @@ type internalAPIContract struct {
 // decisionVariant is one entry of decision_variants: a decision log body
 // captured verbatim from the N-1 (0.7.12) proxy's own wire vocabulary
 // (internal/egress/proxy's llm_routes.go/decisions.go/credhold.go at
-// f031df9a7), plus what wardynd's normalizeN1Decision (internal.go) must turn
+// f031df9a7), plus what wardynd's normalizeN1Decision (internal_n1.go) must turn
 // it into once it is ingested.
 type decisionVariant struct {
 	Name   string          `json:"name"`
