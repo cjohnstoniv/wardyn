@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -285,12 +286,14 @@ func (s *Server) resolveAWSSSOInjection(w http.ResponseWriter, r *http.Request,
 			"purpose": "proxy-injection-sso", "grant_id": grantID, "jti": minted.JTI,
 			"owner": snapshot.OwnerSubject, "credential_source": snapshot.CredentialSource,
 		})))
+	// ExpiresAt is the session's own expiry or the stored-key lease, whichever
+	// is sooner: a deleted sign-in stops being injected within storedKeyTTL (§2.8).
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host:      minted.Injection.Host,
 		Header:    minted.Injection.Header,
 		Value:     value,
 		JTI:       minted.JTI,
-		ExpiresAt: blob.ExpiresAt.UnixMilli(),
+		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: blob.ExpiresAt}),
 	})
 	return true
 }

@@ -316,11 +316,47 @@ func TestResolveAWSSSOInjection_LiveSessionInjectsAndMasksPerRun(t *testing.T) {
 	if resp.Value != reauthToken {
 		t.Errorf("value = %q, want the bare token (format %%s, no Bearer prefix)", resp.Value)
 	}
-	if resp.ExpiresAt != blob.ExpiresAt.UnixMilli() {
-		t.Errorf("expires_at = %d, want the blob's own expiry %d — the proxy re-resolves inside its refresh margin, so a 0 here would make it treat a rotating session as static", resp.ExpiresAt, blob.ExpiresAt.UnixMilli())
+	if resp.ExpiresAt == 0 {
+		t.Errorf("expires_at = 0 — the proxy re-resolves inside its refresh margin, so a 0 here would make it treat a rotating session as static")
 	}
 	if !f.audit.has("secret.read", "success") {
 		t.Error("no secret.read success row for a resolve that handed back a live session")
+	}
+}
+
+// §2.8 (#1083): a session lasting hours is still advertised for no longer than
+// the stored-key lease, so the proxy re-resolves within it.
+func TestResolveAWSSSOInjection_AdvertisesTheStoredKeyLease(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.putBlob(t, "alice@example.com", liveSSOBlob()) // two hours left
+	w := f.resolve(t)
+	if w.Code != http.StatusOK {
+		t.Fatalf("resolve: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp types.ResolvedInjection
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if lease := time.Now().Add(storedKeyTTL).UnixMilli(); resp.ExpiresAt == 0 || resp.ExpiresAt > lease {
+		t.Fatalf("expires_at = %d, want at most now + storedKeyTTL (%d): the session's own expiry outlives a deleted sign-in", resp.ExpiresAt, lease)
+	}
+}
+
+// Erasing the person's credentials stops the next resolve. This arm holds no
+// token in memory (the session is read from the store on every resolve), so
+// there is nothing to evict: the test pins that it stays that way.
+func TestResolveAWSSSOInjection_EraseRefusesTheNextResolve(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.srv.cfg.Store = secretOwnerDirectory{Store: f.st, toks: []types.APIToken{{Principal: "alice@example.com"}}}
+	f.putBlob(t, "alice@example.com", liveSSOBlob())
+	if w := f.resolve(t); w.Code != http.StatusOK {
+		t.Fatalf("warm: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	erasePerson(t, f.srv, "alice@example.com")
+	w := f.resolve(t)
+	if w.Code == http.StatusOK || strings.Contains(w.Body.String(), reauthToken) {
+		t.Fatalf("after erase: code = %d body=%s, want a refusal with no token", w.Code, w.Body.String())
 	}
 }
 
