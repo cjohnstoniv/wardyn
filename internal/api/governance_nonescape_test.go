@@ -96,6 +96,7 @@ func (s *govEscapeStore) GetSiteConfig(context.Context) (types.SiteConfig, error
 	return s.siteConfig, nil
 }
 func (s *govEscapeStore) SetRunImage(context.Context, uuid.UUID, string) error   { return nil }
+func (s *govEscapeStore) SetRunDiskMiB(context.Context, uuid.UUID, int) error    { return nil }
 func (s *govEscapeStore) SetSandboxRef(context.Context, uuid.UUID, string) error { return nil }
 func (s *govEscapeStore) SetRunAgentExecID(context.Context, uuid.UUID, string) error {
 	return nil
