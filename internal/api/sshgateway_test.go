@@ -154,11 +154,16 @@ type sshFakeRunner struct {
 	execFn   func(spec runner.ExecSpec) (*runner.ExecSession, error)
 	lastArgv []string
 	lastEnv  []string
+	// diskEnforcement lets a (sub)test model a substrate that actually binds
+	// disk_mib (run_resources_test.go's RL-13 cases). The zero value ("")
+	// reads as StorageEnforcementNone, unchanged from every test written before
+	// this field existed.
+	diskEnforcement types.StorageEnforcement
 }
 
 func (f *sshFakeRunner) Name() string { return "ssh-fake" }
 func (f *sshFakeRunner) Capabilities(context.Context) (runner.Capabilities, error) {
-	return runner.Capabilities{Driver: "ssh-fake"}, nil
+	return runner.Capabilities{Driver: "ssh-fake", EphemeralDiskEnforcement: f.diskEnforcement}, nil
 }
 func (f *sshFakeRunner) CreateSandbox(context.Context, runner.SandboxSpec) (runner.Sandbox, error) {
 	return runner.Sandbox{}, errors.New("not used by this test")
@@ -490,7 +495,7 @@ func TestSSHGateway_FreshRunRefusesAKeptRun(t *testing.T) {
 	})
 	srv := New(Config{Store: st, Runner: &sshFakeRunner{}})
 
-	if run, msg := srv.sshFreshRun(context.Background(), runID); msg == "" || !strings.Contains(msg, "run has ended") {
+	if run, msg := srv.sshFreshRun(context.Background(), runID, "alice"); msg == "" || !strings.Contains(msg, "run has ended") {
 		t.Fatalf("kept run: run=%+v msg=%q, want a \"run has ended\" refusal", run, msg)
 	}
 }

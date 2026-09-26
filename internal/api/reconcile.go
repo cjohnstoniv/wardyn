@@ -528,10 +528,21 @@ func (s *Server) runWatcherSweeper(ctx context.Context, every time.Duration) {
 				if err := s.sweepRunWatchers(ctx); err != nil {
 					slog.WarnContext(ctx, "wardynd: run watcher sweep", slog.Any("err", err))
 				}
+				// A tightened profile reaches its live runs on this cadence,
+				// before the lease reads their ends.
+				if err := s.sweepRunLimits(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: run limits re-clamp", slog.Any("err", err))
+				}
 				// The lease rides this cadence too: its warnings are minutes
 				// apart and the end is a minute late at worst.
 				if err := s.sweepRunLeases(ctx); err != nil {
 					slog.WarnContext(ctx, "wardynd: run lease sweep", slog.Any("err", err))
+				}
+				// And the pause, after the lease so a run ending this tick is
+				// not frozen first; its backstop resumes a run whose request
+				// closed without a writer calling approvalClosed.
+				if err := s.sweepRunPauses(ctx); err != nil {
+					slog.WarnContext(ctx, "wardynd: run pause sweep", slog.Any("err", err))
 				}
 				// A run whose token lapsed loses its proxy within a tick.
 				if err := s.sweepLapsedRunTokens(ctx); err != nil {

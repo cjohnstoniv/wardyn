@@ -35,7 +35,7 @@ import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api, type GovernanceProfile, type GovernanceSnapshot } from "../../../lib/api/governance";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import { foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP } from "../../../lib/governance-copy";
+import { foldAutonomyRubric, GOVERNANCE as GOV, LIMITS_CHIP, runLimitsChip, setsRunLimits } from "../../../lib/governance-copy";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import { ACCESS_STATE, PEOPLE } from "../../../lib/people-access-copy";
 import {
@@ -238,6 +238,7 @@ export function GovernanceScreen() {
                     {snap.profiles.map((p) => {
                       const n = assignedCount(p);
                       const autonomyLowest = foldAutonomyRubric(p.limits.autonomy_rubric).lowest;
+                      const runLimits = runLimitsChip(p.limits);
                       return (
                         <TableRow key={p.id}>
                           {/* A profile name is a human-chosen label, never mono. */}
@@ -257,6 +258,7 @@ export function GovernanceScreen() {
                                 !p.limits.deny_user_drive &&
                                 !((p.limits.max_concurrent_runs ?? 0) > 0) &&
                                 !autonomyLowest &&
+                                !setsRunLimits(p.limits) &&
                                 GOV.LIMITS_NONE}
                               {p.limits.deny_task_mode_exec && <Chip tone="neutral">{GOV.LIMIT_EXEC_LABEL}</Chip>}
                               {p.limits.deny_interactive && (
@@ -276,6 +278,9 @@ export function GovernanceScreen() {
                               {autonomyLowest && (
                                 <Chip tone="neutral">{LIMITS_CHIP.AUTONOMY(AUTONOMY_META[autonomyLowest].label)}</Chip>
                               )}
+                              {/* RL-14 (0.8, #579): the lease/wait summary,
+                                  the packet's "Summary chip" line. */}
+                              {runLimits && <Chip tone="neutral">{runLimits}</Chip>}
                             </span>
                           </TableCell>
                           <TableCell>

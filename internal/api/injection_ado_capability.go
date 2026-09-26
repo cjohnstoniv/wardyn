@@ -443,6 +443,7 @@ func (s *Server) reconcileADOReauthOnRead(ctx context.Context, ap types.Approval
 	}, ev); err != nil {
 		return ap
 	}
+	s.approvalClosed(ctx, ap.RunID)
 	s.metrics.credentialReauthResolved(s.cfg.Now().Sub(ap.RequestedAt))
 	if fresh, gerr := s.cfg.Approvals.Get(ctx, ap.ID); gerr == nil {
 		return fresh

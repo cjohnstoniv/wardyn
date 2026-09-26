@@ -632,6 +632,7 @@ func (s *Server) resolveReauth(ctx context.Context, ap types.ApprovalRequest, re
 	}, ev); err != nil {
 		return err
 	}
+	s.approvalClosed(ctx, ap.RunID)
 	s.metrics.credentialReauthResolved(s.cfg.Now().Sub(ap.RequestedAt))
 	return nil
 }

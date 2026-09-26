@@ -255,6 +255,13 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	principalType, principal := actorFromRequest(r)
 
+	// A paused run is thawed before the exec: the daemon refuses one into a
+	// paused container (run_pause.go).
+	if err := s.thawForExec(ctx, run, principalType, principal, "presence"); err != nil {
+		writeError(w, http.StatusBadGateway, "run is paused and could not be resumed; try again")
+		return
+	}
+
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
@@ -312,6 +319,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		actorType: principalType,
 		since:     s.cfg.Now().UTC(),
 		source:    attachSourceWeb,
+		onInput:   func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
 		cols:      opts.Cols,
 		rows:      opts.Rows,
 		// Promotion: the SAME socket is told it may now type. attach-terminal

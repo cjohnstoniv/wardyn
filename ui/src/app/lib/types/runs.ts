@@ -131,6 +131,14 @@ export interface AgentRun {
   // explicitly never (interactive). No console reader today — kept for mirror
   // parity, same reason as source_id above.
   auto_stop_after_sec?: number;
+  // The run's EFFECTIVE ephemeral disk cap in MiB (internal/types/types.go's
+  // AgentRun.DiskMiB, RL-13), written by a scoped update at dispatch — see
+  // store.go's SetRunDiskMiB (and migration 0087) for why this can't be
+  // captured at create like auto_stop_after_sec above it. 0/absent = no cap
+  // resolved. No console reader today (the /runs/{id}/resources endpoint
+  // computes the Sandbox widget's disk_cap_bytes from it server-side); kept
+  // for mirror parity, same reason as source_id above.
+  disk_mib?: number;
   // The docker exec id of the run's agent process (internal/types/types.go's
   // AgentRun.AgentExecID) — empty for exec-less substrates and before Exec
   // runs. Server/crash-recovery bookkeeping only; no console reader today, kept
@@ -190,6 +198,18 @@ export interface AgentRun {
   // meanwhile.
   lost_at?: string;
   lost_reason?: "ended" | "reboot" | "outage";
+  // When the re-clamp of a tightened profile last moved this run's end
+  // (migration 0086, #573): the run page's "Your admin shortened the limit"
+  // banner. Cleared when a person moves the end again.
+  end_tightened_at?: string;
+  // Set while the run's agent is frozen because nobody is there (migration
+  // 0088, #572): "waiting" = parked on an open request, "idle" = unused past
+  // its profile's pause_idle_after_sec. The run stays RUNNING; typing, an
+  // exec, the request closing or POST /runs/{id}/resume thaws it. active_at is
+  // the presence clock (absent = nothing stamped since create).
+  paused_at?: string;
+  paused_reason?: "waiting" | "idle";
+  active_at?: string;
   // internal/types/types.go's AgentRun.ModelProviderID (migration 0076, #527) —
   // the id of the model provider chooseModelProvider (#526) resolved this run
   // to at create time. The KIND is not here (it can change later on the
@@ -267,6 +287,15 @@ export interface RunResources {
    *  back to MemTotal, and stays absent if that was unreadable too. */
   memory_limit_bytes?: number;
   disk_written_bytes?: number;
+  /** Space occupied now, not disk_written_bytes' running write total. Beside
+   *  disk_cap_bytes it is the bytes that cap counts; without one, the
+   *  sandbox's root filesystem, image included (run_resources.go diskReading). */
+  disk_used_bytes?: number;
+  /** The run's ephemeral disk cap, present ONLY when a driver enforces it AND
+   *  disk_used_bytes was measured the way that enforcement counts — never a
+   *  denominator for a number about other bytes. Absent means: render
+   *  disk_used_bytes with no bar. */
+  disk_cap_bytes?: number;
   process_count?: number;
 }
 

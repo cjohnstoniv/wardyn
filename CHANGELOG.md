@@ -1079,6 +1079,55 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `false` until that pause path is verified. Kubernetes does not implement `Freezer`; a router in
   front of one answers `ErrFreezeUnsupported`. No wiring yet decides when to pause a run — that is
   #572.
+- **Tightened run limits reach live runs (#573).** When an admin tightens a profile's run limits,
+  every run that captured that profile and is not kept by its own end (a run lost to a reboot or a
+  control-plane outage is still reached, the same way its end can still be extended) takes the
+  tighter bound within a minute: its captured limits (max end, max wait, idle pause, No end and the
+  change gate), its end (cut to now + the new max, or given one when No end is taken away) and its
+  wait. Loosening never reaches a live run, and moving a person to another profile does not re-clamp
+  their runs. Each cut is audited as
+  `run.end.set` / `run.wait_budget.set` by the system with `reason: "limits_tightened"`, and the run
+  carries `end_tightened_at` for the run page's banner until a person moves the end again. A
+  `PATCH /runs/{id}` decided against limits a re-clamp has since tightened now answers 409 instead of
+  landing. Migration `0086_agent_runs_end_tightened` adds the column.
+- **The run page shows disk used, with a warning at 80% where a cap is enforced (#578).**
+  `GET /api/v1/runs/{id}/resources` gains `disk_used_bytes` (space occupied now, read through the
+  same in-sandbox exec as its other metrics — not `disk_written_bytes`' running write total) and
+  `disk_cap_bytes`. The reading counts what the run's cap counts: on Docker with an enforced size
+  quota, `df` on the writable layer's project quota (image layers excluded); on Kubernetes, the
+  scratch volumes the kubelet evicts on (`/tmp`, the workdir, `~/.cache`); with no enforced cap, the
+  sandbox's root filesystem, image included, with no cap beside it. `disk_cap_bytes` is sent only
+  beside a reading taken that way. Each walk is bounded to 2 seconds and runs last, so a slow
+  filesystem costs only the disk reading. The Sandbox widget's Disk row shows a used/cap bar and
+  colors amber at 80% or more, and falls back to bytes written, labeled as such, when there is no
+  used reading. A run's resolved ephemeral disk cap is now captured on the run row (`disk_mib`,
+  migration `0087_agent_runs_disk_mib`) at dispatch, the same way its resolved image is.
+- **The governance profile editor gets a Run limits section (#579).** The seven run-limit fields
+  (#567) — longest and default end, allow no end, longest and default wait, whether people may
+  change either, and pause-after-idle — are now editable on the profile editor, alongside the
+  existing doors and quotas: a whole number and a unit picker (days, hours or minutes; each field
+  opens on its own unit, or on the largest unit a stored value is a whole number of, so 1800 seconds
+  reads "30 minutes"), converted to seconds on save, and a switch for each of the two booleans.
+  Zero/blank keeps today's behaviour on every field, the same rule the profile's other numeric
+  limits already follow. The profiles list's Limits column gains a summary chip ("Ends within 30
+  days · waits up to 8 hours · people may change these") built from whichever of those three fields
+  the profile sets, and reads "None" only when none of the seven is set.
+- **A run nobody is at pauses, and wakes when someone comes back (#572).** The agent container is
+  frozen in place (Docker `runc` only; every other confinement class, and Kubernetes, is never
+  paused) while the run stays `RUNNING` with its memory, files and proxy. A run with an open
+  request pauses after 15 minutes with nothing happening; with its profile's `pause_idle_after_sec`
+  set, a run with no open request pauses after that long (at least 630 seconds) once its CPU reads
+  quiet. "Nothing
+  happening" is a new presence clock, `active_at`: a person typing into it, the agent's egress
+  decisions (not the tool-call approval poll) and bytes its proxy moved on a tunnel or MITM stream,
+  which the proxy reports at most once a minute to the new internal `POST /internal/activity`.
+  Keepalives and a silent open tab do not count. Typing, attaching, an ssh channel or an in-sandbox
+  UI connection thaws a paused run first; so does `POST /api/v1/runs/{id}/resume` (owner or super
+  admin), and the last open request being decided, cancelled or expired. The run page's files and
+  resources reads answer 409 on a paused run rather than wake it. The run carries `paused_at`,
+  `paused_reason` (`waiting` or `idle`) and `active_at` on the wire. Audited as `run.pause` and
+  `run.resume`. A paused run is not contained: kill still is. Migration `0088_agent_runs_pause` adds
+  the three columns.
 - **A run that loses its sandbox is kept, and loses its network (#574).** An interactive run whose
   agent container exits under it but still exists (a host reboot, a Docker Desktop restart, a long
   suspend) is no longer failed and deleted: it is kept, `RUNNING` with `lost_reason: "reboot"`, its

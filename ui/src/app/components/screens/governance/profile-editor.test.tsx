@@ -36,7 +36,7 @@ vi.mock("../../../lib/api/setup", () => ({
 }));
 
 import type { GovernanceProfile } from "../../../lib/api/governance";
-import { GOVERNANCE as GOV, RUBRIC } from "../../../lib/governance-copy";
+import { GOVERNANCE as GOV, RUBRIC, RUN_LIMITS as RL } from "../../../lib/governance-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
@@ -144,6 +144,130 @@ describe("ProfileEditor — the three integer LimitNumberRows", () => {
 
     await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
     expect(screen.queryByText(PROVIDERS.DOCKER_UNCAPPED_WARN)).not.toBeInTheDocument();
+  });
+});
+
+// RL-14 (0.8, #579) — the seven run-limit rows (long-holds-design.md rev 4
+// §2.2). Five carry a duration (seconds on the wire, days/hours/minutes in
+// the control) and two are switches sharing LimitRow with the doors above.
+describe("ProfileEditor — the seven run-limit rows", () => {
+  const unitPicker = (label: string) => screen.getByRole("combobox", { name: RL.UNIT_PICKER_LABEL(label) });
+
+  beforeEach(() => {
+    getSetupStatusMock.mockReset();
+    getSetupStatusMock.mockResolvedValue(baseStatus());
+    gradePolicyMock.mockReset();
+    gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
+  });
+
+  it("renders every label and hint", () => {
+    renderEditor();
+
+    expect(screen.getByText(RL.SECTION_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(RL.MAX_END_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(RL.MAX_END_HINT)).toBeInTheDocument();
+    expect(screen.getByText(RL.DEFAULT_END_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(RL.ALLOW_NO_END_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(RL.ALLOW_NO_END_HINT)).toBeInTheDocument();
+    expect(screen.getByText(RL.MAX_WAIT_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(RL.MAX_WAIT_HINT)).toBeInTheDocument();
+    expect(screen.getByText(RL.DEFAULT_WAIT_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(RL.USER_CHANGES_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(RL.USER_CHANGES_HINT)).toBeInTheDocument();
+    expect(screen.getByText(RL.PAUSE_IDLE_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(RL.PAUSE_IDLE_HINT)).toBeInTheDocument();
+  });
+
+  it("a profile with no run limits renders every duration row blank and every switch off", () => {
+    renderEditor({ ...GREENFIELD, limits: {} });
+
+    expect(screen.getByLabelText(RL.MAX_END_LABEL)).toHaveValue(null);
+    expect(screen.getByLabelText(RL.DEFAULT_END_LABEL)).toHaveValue(null);
+    expect(screen.getByLabelText(RL.MAX_WAIT_LABEL)).toHaveValue(null);
+    expect(screen.getByLabelText(RL.DEFAULT_WAIT_LABEL)).toHaveValue(null);
+    expect(screen.getByLabelText(RL.PAUSE_IDLE_LABEL)).toHaveValue(null);
+    expect(screen.getByRole("switch", { name: RL.ALLOW_NO_END_LABEL })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: RL.USER_CHANGES_LABEL })).not.toBeChecked();
+  });
+
+  it("a saved run limit shows converted to its display unit — days, hours, minutes", () => {
+    renderEditor({
+      ...GREENFIELD,
+      limits: {
+        max_end_ahead_sec: 30 * 86400,
+        default_end_sec: 86400,
+        max_wait_sec: 8 * 3600,
+        default_wait_sec: 4 * 3600,
+        pause_idle_after_sec: 30 * 60,
+        allow_no_end: true,
+        user_changes_limits: true,
+      },
+    });
+
+    expect(screen.getByLabelText(RL.MAX_END_LABEL)).toHaveValue(30);
+    expect(screen.getByLabelText(RL.DEFAULT_END_LABEL)).toHaveValue(1);
+    expect(screen.getByLabelText(RL.MAX_WAIT_LABEL)).toHaveValue(8);
+    expect(screen.getByLabelText(RL.DEFAULT_WAIT_LABEL)).toHaveValue(4);
+    expect(screen.getByLabelText(RL.PAUSE_IDLE_LABEL)).toHaveValue(30);
+    expect(unitPicker(RL.MAX_END_LABEL)).toHaveTextContent("days");
+    expect(unitPicker(RL.DEFAULT_END_LABEL)).toHaveTextContent("days");
+    expect(unitPicker(RL.MAX_WAIT_LABEL)).toHaveTextContent("hours");
+    expect(unitPicker(RL.DEFAULT_WAIT_LABEL)).toHaveTextContent("hours");
+    expect(unitPicker(RL.PAUSE_IDLE_LABEL)).toHaveTextContent("minutes");
+    expect(screen.getByRole("switch", { name: RL.ALLOW_NO_END_LABEL })).toBeChecked();
+    expect(screen.getByRole("switch", { name: RL.USER_CHANGES_LABEL })).toBeChecked();
+  });
+
+  // The API takes any number of seconds, so a stored value need not be a
+  // whole number of the row's unit. Rounding it to that unit showed 1800s as
+  // "1 hours" and 1200s as blank ("deployment ceiling") — a limit other than
+  // the one stored, which a retype would then save.
+  it("a stored value that is not a whole number of the row's unit shows in the largest unit it is", () => {
+    renderEditor({
+      ...GREENFIELD,
+      limits: { max_wait_sec: 1800, default_wait_sec: 1200, pause_idle_after_sec: 20 },
+    });
+
+    expect(screen.getByLabelText(RL.MAX_WAIT_LABEL)).toHaveValue(30);
+    expect(unitPicker(RL.MAX_WAIT_LABEL)).toHaveTextContent("minutes");
+    expect(screen.getByLabelText(RL.DEFAULT_WAIT_LABEL)).toHaveValue(20);
+    expect(unitPicker(RL.DEFAULT_WAIT_LABEL)).toHaveTextContent("minutes");
+    expect(screen.getByLabelText(RL.PAUSE_IDLE_LABEL)).toHaveValue(20);
+    expect(unitPicker(RL.PAUSE_IDLE_LABEL)).toHaveTextContent("seconds");
+  });
+
+  it("a sub-hour wait is entered with the unit picker, and the number typed is kept", async () => {
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+    renderEditor({ ...GREENFIELD, limits: {} });
+
+    await userEvent.type(screen.getByLabelText(RL.MAX_WAIT_LABEL), "30");
+    await userEvent.click(unitPicker(RL.MAX_WAIT_LABEL));
+    // Seconds are offered only when a stored value needs them.
+    expect(screen.queryByRole("option", { name: "seconds" })).toBeNull();
+    await userEvent.click(await screen.findByRole("option", { name: "minutes" }));
+    expect(screen.getByLabelText(RL.MAX_WAIT_LABEL)).toHaveValue(30);
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+
+    expect(updateProfileMock).toHaveBeenCalledWith(
+      GREENFIELD.id,
+      expect.objectContaining({ limits: { max_wait_sec: 30 * 60 } }),
+    );
+  });
+
+  it("editing a duration row converts back to seconds on save, alongside the switches", async () => {
+    updateProfileMock.mockResolvedValue({ profile: GREENFIELD, warnings: [] });
+    renderEditor({ ...GREENFIELD, limits: {} });
+
+    const maxEnd = screen.getByLabelText(RL.MAX_END_LABEL);
+    await userEvent.clear(maxEnd);
+    await userEvent.type(maxEnd, "14");
+    await userEvent.click(screen.getByRole("switch", { name: RL.USER_CHANGES_LABEL }));
+    await userEvent.click(screen.getByRole("button", { name: GOV.SAVE }));
+
+    expect(updateProfileMock).toHaveBeenCalledWith(
+      GREENFIELD.id,
+      expect.objectContaining({ limits: { max_end_ahead_sec: 14 * 86400, user_changes_limits: true } }),
+    );
   });
 });
 
