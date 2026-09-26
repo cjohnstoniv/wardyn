@@ -473,6 +473,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// approval.Decide itself: internal/api imports internal/approval, so the
 	// dependency only runs this way.
 	s.metrics.approvalDecided(approve)
+	s.approvalClosed(r.Context(), result.RunID) // thaw a run paused waiting on it
 	// The four-eyes break-glass on a decision that WAS made — the success half
 	// of the pair, the failure half being the emit on Decide's error path
 	// above. Recorded HERE and not inside the gate that detected it, so this

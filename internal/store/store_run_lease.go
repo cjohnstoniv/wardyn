@@ -24,7 +24,8 @@ type RunLeaser interface {
 	// ListLeasedRuns returns every RUNNING run that has an end or is kept.
 	ListLeasedRuns(ctx context.Context) ([]types.AgentRun, error)
 	// MarkRunEnded marks run id kept-and-ended at now, but only while it is
-	// still RUNNING, not already kept, and its end is at or before now. The
+	// still RUNNING, not already kept, and its end is at or before now. It
+	// clears a pause: the end stops the agent, paused or not. The
 	// conditional UPDATE is the mutual exclusion between replicas: exactly one
 	// caller sees true and runs the end.
 	MarkRunEnded(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
@@ -57,7 +58,7 @@ func (s PG) ListLeasedRuns(ctx context.Context) ([]types.AgentRun, error) {
 // MarkRunEnded — see RunLeaser.
 func (s PG) MarkRunEnded(ctx context.Context, id uuid.UUID, now time.Time) (bool, error) {
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=$2, lost_reason=$3
+		UPDATE agent_runs SET lost_at=$2, lost_reason=$3, paused_at=NULL, paused_reason=''
 		WHERE id=$1 AND state=$4 AND lost_at IS NULL AND ends_at <= $2`,
 		id, now, string(types.LostEnded), string(types.RunRunning))
 	if err != nil {

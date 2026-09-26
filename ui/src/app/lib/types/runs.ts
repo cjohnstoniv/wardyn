@@ -190,6 +190,14 @@ export interface AgentRun {
   // meanwhile.
   lost_at?: string;
   lost_reason?: "ended" | "reboot" | "outage";
+  // Set while the run's agent is frozen because nobody is there (migration
+  // 0085, #572): "waiting" = parked on an open request, "idle" = unused past
+  // its profile's pause_idle_after_sec. The run stays RUNNING; typing, an
+  // exec, the request closing or POST /runs/{id}/resume thaws it. active_at is
+  // the presence clock (absent = nothing stamped since create).
+  paused_at?: string;
+  paused_reason?: "waiting" | "idle";
+  active_at?: string;
   // internal/types/types.go's AgentRun.ModelProviderID (migration 0076, #527) —
   // the id of the model provider chooseModelProvider (#526) resolved this run
   // to at create time. The KIND is not here (it can change later on the
