@@ -117,12 +117,21 @@ type hybridStore struct {
 	cursor  int64
 	head    int64
 	revoked bool
+	resets  int
 }
 
 func (s *hybridStore) cursorNow() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cursor
+}
+
+// resetsNow counts ResetFederation calls: only bootHybrid makes them, unlike
+// the cursor, which a running forwarder rewrites on its own schedule.
+func (s *hybridStore) resetsNow() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resets
 }
 
 func (s *hybridStore) FederationRevoked(context.Context) (bool, error) {
@@ -140,6 +149,7 @@ func (s *hybridStore) ResetFederation(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cursor, s.revoked = 0, false
+	s.resets++
 	return nil
 }
 
@@ -330,9 +340,12 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 	} else {
 		hj.add(fwd)
 	}
+	// A restart must not reset federation state. Counted, not read off the
+	// cursor: each restart's forwarder is already running and finds no row at
+	// seq 7 in this fake table, so it resends from 0 whenever it gets there.
 	enrols, _ = org.seen()
-	if len(enrols) != 1 || len(rec.events) != 1 || st.cursorNow() != 7 {
-		t.Fatalf("restart re-enrolled: enrols=%d rows=%d cursor=%d", len(enrols), len(rec.events), st.cursorNow())
+	if len(enrols) != 1 || len(rec.events) != 1 || st.resetsNow() != 1 {
+		t.Fatalf("restart re-enrolled: enrols=%d rows=%d resets=%d", len(enrols), len(rec.events), st.resetsNow())
 	}
 
 	// A fresh token re-enrols as a new device and resets the cursor.
@@ -343,8 +356,8 @@ func TestBootHybrid_EnrolsOnceAndReEnrolsOnAFreshToken(t *testing.T) {
 	}
 	_ = json.Unmarshal(secrets[secretOrgDeviceCredential], &cred)
 	enrols, devices = org.seen()
-	if len(enrols) != 2 || cred.DeviceID != devices[1] || st.cursorNow() != 0 || len(rec.events) != 2 {
-		t.Fatalf("re-enrol: enrols=%v cred=%v cursor=%d rows=%d", enrols, cred.DeviceID, st.cursorNow(), len(rec.events))
+	if len(enrols) != 2 || cred.DeviceID != devices[1] || st.resetsNow() != 2 || st.cursorNow() != 0 || len(rec.events) != 2 {
+		t.Fatalf("re-enrol: enrols=%v cred=%v resets=%d cursor=%d rows=%d", enrols, cred.DeviceID, st.resetsNow(), st.cursorNow(), len(rec.events))
 	}
 }
 
