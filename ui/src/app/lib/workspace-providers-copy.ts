@@ -43,6 +43,7 @@
 // as the wording the Go side must emit.
 
 import { absoluteTime } from "./format";
+import { UNSAVED_GUARD } from "../components/wardyn/copy/shell";
 // The two model-access POLICY exports moved to lib/model-access.ts (0.7.6) —
 // re-exported here so every existing import site is untouched. They had to
 // leave: this module carries the whole AGENTS copy table, and the shell's eager
@@ -122,8 +123,11 @@ export const PROVIDERS = {
   LEGACY_OPEN_TITLE: "No git provider rows",
   LEGACY_OPEN_BODY: "Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name.",
   LEGACY_OPEN_OTHER_HOSTS: "A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page.",
-  SAVED_ELSEWHERE_TITLE: "Someone else saved providers since you loaded this page",
-  SAVED_ELSEWHERE_BODY: "Reload to see their version before saving yours.",
+  // #460 (Q460): reworded from #217's provider-specific sentence to the one
+  // banner shape every 412 conflict now shares (saved-elsewhere-banner.tsx).
+  SAVED_ELSEWHERE_TITLE: "Someone else saved this first",
+  SAVED_ELSEWHERE_BODY:
+    "Your copy is out of date, so saving it would overwrite their change. Copy your edits somewhere safe, then reload and redo them.",
   SAVED_TOAST: "Providers saved.",
   // Inline pluralisation — the PERM.ENFORCE_ON_BODY shape, not a second
   // helper (§5 #9). Stays on the page as an amber note until the next save,
@@ -398,10 +402,23 @@ export const AGENTS_DRAFT = {
 // AGENTS out of the doc).
 export const PROVIDERS_DRAFT = {
   // F4-F3 (Appendix A V8, corrected verdict): the keep-draft-mounted 412
-  // banner's ONE control — discards the admin's own unsaved edits and reloads
-  // the server's version. NO "Save over theirs" arm: a security document is
-  // never last-writer-wins from this banner.
+  // banner's SECOND control — discards the admin's own unsaved edits and
+  // reloads the server's version. NO "Save over theirs" arm: a security
+  // document is never last-writer-wins from this banner. #217: now a ghost
+  // button, not the banner's only exit — Copy my changes sits before it.
   DISCARD_AND_RELOAD: "Discard mine and reload",
+  // #460 (Q460-3): the 412 banner's FIRST control — reversed from #217's
+  // "changed fields only" rule. It now copies the WHOLE document as the
+  // editor holds it (saved-elsewhere-banner.tsx), so nothing typed is left
+  // out of what "Copy my changes" saves.
+  CONFLICT_COPY: "Copy my changes",
+  CONFLICT_COPIED_TOAST: "Changes copied",
+  // #217/#460: beside Save whenever the draft differs from what loaded — the
+  // same fact the unsaved-navigation guard (lib/use-unsaved-guard.tsx) is
+  // armed on, and the same text every dirty chip on this screen shows
+  // (reused from wardyn/copy/shell.ts's UNSAVED_GUARD.DIRTY_CHIP, its home —
+  // see that constant's own comment for why).
+  UNSAVED_MARKER: UNSAVED_GUARD.DIRTY_CHIP,
   // F6-F6: PUT /site-config's dangling_secret_refs, surfaced in the
   // Corporate-network save toast — an ADDITIONAL warning beside whatever
   // success toast the saving step already shows, never a replacement for it.

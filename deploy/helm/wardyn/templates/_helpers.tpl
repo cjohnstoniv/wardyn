@@ -104,18 +104,35 @@ control plane its refusal exists to prevent — an empty token is not a token,
 and internal/api/http.go's adminAuth reads it as unconfigured. extraEnv wins
 over env when both name the same variable, matching the order deployment.yaml
 appends them in.
+
+A secret setting's <name>_FILE twin (cmd/wardynd resolveSecretFiles — a path
+wardynd reads the value from) counts as the variable being set, returned as the
+literal "<file>": the value exists, in a file a Vault Agent, CSI or your own
+volume delivers, and every refusal that asks "is WARDYN_ADMIN_TOKEN wired?"
+must hear yes. No non-secret name this is called with has a _FILE twin.
+Naming BOTH forms is a render failure, because wardynd refuses to boot on it
+(resolveSecretFiles) — the pod would apply cleanly and crash-loop.
 */}}
 {{- define "wardyn.envValue" -}}
 {{- $ctx := .ctx -}}
 {{- $name := .name -}}
 {{- $env := $ctx.Values.env | default dict -}}
 {{- $v := "" -}}
+{{- $file := "" -}}
 {{- if hasKey $env $name -}}{{- $v = get $env $name | toString | trim -}}{{- end -}}
+{{- if hasKey $env (printf "%s_FILE" $name) -}}{{- $file = get $env (printf "%s_FILE" $name) | toString | trim -}}{{- end -}}
 {{- range $ctx.Values.extraEnv | default list -}}
 {{- if eq (.name | default "") $name -}}
 {{- if .valueFrom -}}{{- $v = "<valueFrom>" -}}{{- else -}}{{- $v = .value | default "" | toString | trim -}}{{- end -}}
 {{- end -}}
+{{- if eq (.name | default "") (printf "%s_FILE" $name) -}}
+{{- if .valueFrom -}}{{- $file = "<valueFrom>" -}}{{- else -}}{{- $file = .value | default "" | toString | trim -}}{{- end -}}
 {{- end -}}
+{{- end -}}
+{{- if and $v $file -}}
+{{- fail (printf "wardyn: %s and %s_FILE are both set in env/extraEnv — pick one. wardynd refuses to boot with both forms of a secret set, so this would apply cleanly and then crash-loop." $name $name) -}}
+{{- end -}}
+{{- if $file -}}{{- $v = "<file>" -}}{{- end -}}
 {{- $v -}}
 {{- end -}}
 
@@ -164,10 +181,35 @@ rejected object — so say it at render, like every other guard in this chart.
 {{- $http := int .Values.service.port -}}
 {{- $ssh := .Values.ssh | default dict -}}
 {{- $ui := .Values.uiSandbox | default dict -}}
+{{- $internal := int (.Values.service.internalPort | default 8443) -}}
+{{- if or (eq $internal $http) (and $ssh.enabled (eq $internal (int ($ssh.port | default 2222)))) (and $ui.enabled (eq $internal (int ($ui.port | default 8081)))) -}}
+{{- fail (printf "wardyn: service.internalPort %d collides with another wardynd port (service.port, ssh.port or uiSandbox.port). It is the proxy-facing TLS listener and needs its own number." $internal) -}}
+{{- end -}}
 {{- if and $ssh.enabled (eq (int ($ssh.port | default 2222)) $http) -}}
 {{- fail (printf "wardyn: ssh.port and service.port are both %d — the SSH gateway and the console cannot share one port. Give ssh.port its own number." $http) -}}
 {{- end -}}
 {{- if and $ui.enabled (eq (int ($ui.port | default 8081)) $http) -}}
 {{- fail (printf "wardyn: uiSandbox.port and service.port are both %d — wardynd refuses to boot when they are equal, because the sandbox's own pages must land on a DIFFERENT browser origin than the console. Give uiSandbox.port its own number." $http) -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+wardyn.vaultProjectedToken: "true" when the pod needs the dedicated Vault
+service-account token volume (a Vault address with Kubernetes auth). Nil-safe
+for a values map that predates secretStore (--reuse-values).
+*/}}
+{{- define "wardyn.vaultProjectedToken" -}}
+{{- $vault := (.Values.secretStore | default dict).vault | default dict -}}
+{{- if and $vault.addr (eq $vault.auth "kubernetes") -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+wardyn.azureWorkloadIdentity: "true" when wardynd gets its Key Vault token
+through AKS workload identity (a Key Vault URL with auth workload-identity):
+the pod label and service-account annotation the webhook keys on. Nil-safe
+for a values map that predates secretStore.azure (--reuse-values).
+*/}}
+{{- define "wardyn.azureWorkloadIdentity" -}}
+{{- $azure := (.Values.secretStore | default dict).azure | default dict -}}
+{{- if and $azure.vaultUrl (eq ($azure.auth | default "workload-identity") "workload-identity") -}}true{{- end -}}
 {{- end -}}

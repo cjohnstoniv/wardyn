@@ -10,10 +10,12 @@
 # health) keep their own bespoke loop — those are not the same shape.
 #
 # log/warn/die are the ANSI-colored console helpers used by most scripts/*.sh.
-# Callers whose tag/color/stream differs from this default (e.g. a script that
-# tags its lines "[e2e]" instead of "==>") keep a local override defined AFTER
-# sourcing this file — bash lets the later definition win, so behavior for
-# those scripts is unchanged.
+# A caller whose tag differs from the "==>" default (e.g. a script that wants
+# its lines prefixed "[e2e]") sets WARDYN_LOG_TAG before sourcing this file
+# instead of re-declaring the functions — one place to fix a log line, not one
+# per script. A caller whose STREAM or exit behavior differs (die() that must
+# also run a teardown hook first) still keeps its own local override, defined
+# AFTER sourcing this file so bash lets the later definition win.
 
 # wait_healthy URL [TRIES] [SLEEP_SECS] — poll URL/healthz until it answers
 # (curl -fsS), sleeping SLEEP_SECS (default 1) between up to TRIES (default 60)
@@ -46,7 +48,21 @@ wait_down() {
   return 1
 }
 
-log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+# pick_free_port — ask the OS for a free TCP port and print it. Binds "" (all
+# interfaces), the same address wardynd listens on for `:PORT` — a port held
+# only on another address would otherwise pass this probe and then fail to
+# bind. Bind then immediately close, so nothing holds the port afterwards:
+# another process can take it before the caller binds it. run-ui-e2e.sh
+# accepts that rather than run a lockfile protocol: its backend then fails to
+# come up, and it reports "backend up failed ... this is the backend, not the
+# spec". Its one retry reuses the same port, so it does not recover a stolen
+# one. Requires python3, already relied on elsewhere under scripts/.
+pick_free_port() {
+  python3 -c 'import socket; s = socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()'
+}
+
+WARDYN_LOG_TAG="${WARDYN_LOG_TAG:-==>}"
+log()  { printf '\033[1;34m%s\033[0m %s\n' "${WARDYN_LOG_TAG}" "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 

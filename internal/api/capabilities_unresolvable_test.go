@@ -7,16 +7,16 @@
 // capUnresolvableGroupDeny answers "could a group DENY row I cannot see cover
 // this value" for every caller whose group snapshot is unanswerable — which,
 // because a NULL groups_truncated column reads as truncated by design, is every
-// API token minted before 0.7, on every request. It used to answer by reading
-// the WHOLE capability_grants table, once per value checked, so the cost of an
-// authorization check scaled with the size of the grant table (68 ms at 20k
-// rows against 0.35 ms for the indexed sibling) and a token holder could force
-// that read per checked value.
+// API token minted before 0.7, on every request. Reading the whole
+// capability_grants table once per value checked would scale the cost of an
+// authorization check with the size of the grant table (68 ms at 20k rows
+// against 0.35 ms for the indexed sibling), and a token holder could force that
+// read per checked value.
 //
 // Making a fail-closed check faster risks the only thing worse than a slow
 // deny: a deny that stops firing. So the equivalence is pinned directly, over a
-// generated matrix, against a reference implementation of the exact scan the
-// fix replaced — not merely "the new path is quicker".
+// generated matrix, against a reference implementation of the full scan — not
+// merely "the indexed path is quicker".
 package api
 
 import (
@@ -27,9 +27,9 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// capUnresolvableGroupDenyFullScanReference is the PRE-FIX implementation,
-// verbatim: the whole table, filtered in Go. It is the oracle, so it must not
-// be "improved" — if this and the production path ever disagree, the
+// capUnresolvableGroupDenyFullScanReference is the plain full-scan
+// implementation: the whole table, filtered in Go. It is the oracle, so it
+// must not be "improved" — if this and the production path ever disagree, the
 // production path is wrong.
 func capUnresolvableGroupDenyFullScanReference(grants []types.CapabilityGrant, kind, value string) bool {
 	for _, g := range grants {
@@ -70,13 +70,13 @@ func capUnresolvableMatrixRows() []types.CapabilityGrant {
 }
 
 // TestCapUnresolvableGroupDenyMatchesFullScan is the equivalence pin: for every
-// (kind, value) in the matrix, the production path and the pre-fix full scan
+// (kind, value) in the matrix, the production path and the full-scan reference
 // must return the SAME answer over the SAME rows.
 //
 // Counterfactual: narrow the store predicate wrongly — drop the effect clause,
 // or match subject_type='user' — and the two disagree here, in the direction
-// that matters (a deny that no longer fires, or one that fires on a row the old
-// code ignored).
+// that matters (a deny that stops firing, or one that fires on a row the
+// reference ignores).
 func TestCapUnresolvableGroupDenyMatchesFullScan(t *testing.T) {
 	rows := capUnresolvableMatrixRows()
 	values := []string{
@@ -138,7 +138,7 @@ func TestCapUnresolvableGroupDenyStillRefusesThroughCapScan(t *testing.T) {
 		srv := New(baseTestConfig(newHarness(t), st))
 		// nil groups => capabilitySubjects reports stale (a pre-0.6 cookie or a
 		// pre-0.7 API token, the population this path exists for).
-		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "member", nil, false)
+		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "user", "standard", nil, false)
 		deny, allow, err := srv.capScan(ctx, capSecret, "prod-db")
 		if err != nil {
 			t.Fatalf("capScan: %v", err)
@@ -157,7 +157,7 @@ func TestCapUnresolvableGroupDenyStillRefusesThroughCapScan(t *testing.T) {
 	t.Run("stale snapshot, no group deny of that kind: unaffected", func(t *testing.T) {
 		st := &capStore{grants: rows}
 		srv := New(baseTestConfig(newHarness(t), st))
-		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "member", nil, false)
+		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "user", "standard", nil, false)
 		// capModelProvider has no group deny row in the matrix, so the scoping
 		// that keeps "an upgrade with no configuration changes nothing" must
 		// hold: no refusal.
@@ -174,7 +174,7 @@ func TestCapUnresolvableGroupDenyStillRefusesThroughCapScan(t *testing.T) {
 	t.Run("answerable snapshot never asks the question", func(t *testing.T) {
 		st := &capStore{grants: rows}
 		srv := New(baseTestConfig(newHarness(t), st))
-		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "member", []string{"eng"}, false)
+		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "user", "standard", []string{"eng"}, false)
 		if _, _, err := srv.capScan(ctx, capSecret, "prod-db"); err != nil {
 			t.Fatalf("capScan: %v", err)
 		}
@@ -187,7 +187,7 @@ func TestCapUnresolvableGroupDenyStillRefusesThroughCapScan(t *testing.T) {
 	t.Run("a store error refuses rather than allowing", func(t *testing.T) {
 		st := &capStore{grants: rows, err: fmt.Errorf("boom")}
 		srv := New(baseTestConfig(newHarness(t), st))
-		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "member", nil, false)
+		ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "user", "standard", nil, false)
 		if _, _, err := srv.capScan(ctx, capSecret, "prod-db"); err == nil {
 			t.Fatal("capScan returned nil error when the store failed; an unresolvable question must not answer 'allowed'")
 		}
@@ -203,7 +203,7 @@ func TestCapUnresolvableGroupDenyStillRefusesThroughCapScan(t *testing.T) {
 func TestCapUnresolvableGroupDenyReadCostIsPerValueNotPerTable(t *testing.T) {
 	st := &capStore{grants: capUnresolvableMatrixRows()}
 	srv := New(baseTestConfig(newHarness(t), st))
-	ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "member", nil, false)
+	ctx := withHumanIdentity(context.Background(), "sub-alice", "alice@corp.example", "user", "standard", nil, false)
 
 	const n = 200
 	for i := 0; i < n; i++ {

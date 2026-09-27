@@ -118,6 +118,9 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	if err := validateUIApps(spec.UIApps); err != nil {
 		return err
 	}
+	if err := validatePushRules(spec.PushRules); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -171,7 +174,7 @@ const (
 
 // maxAllowedDomainsPerSpec bounds allowed_domains, the last per-spec list that
 // had no count cap at all. Every entry is work: the proxy matches against it per
-// request, and on the MEMBER path narrowMemberInlinePolicy asks the capability
+// request, and on the MEMBER path narrowUserInlinePolicy asks the capability
 // seam about each one, so an unbounded list was an unbounded amount of work
 // bought with one request body. maxJSONBody left room for ~52k entries of
 // "api.anthropic.com", and POST /runs/preflight persists nothing, so it was
@@ -188,7 +191,7 @@ const maxAllowedDomainsPerSpec = 256
 // validateAllowedDomainsCount is the count half of allowed_domains validation,
 // split out because it has to run at TWO points on the member path: here, inside
 // validatePolicySpec (the chokepoint every ingest funnels through), and earlier
-// in resolveRunPolicy, BEFORE boundMemberSpec narrows the spec — the narrowing
+// in resolveRunPolicy, BEFORE boundUserSpec narrows the spec — the narrowing
 // is itself the expensive per-entry work, and validatePolicySpec runs after it.
 // One message, so the 400 an admin sees and the 400 a member sees are the same
 // sentence.
@@ -297,6 +300,83 @@ func validateUIAppPath(p string) error {
 	}
 	if strings.Contains(p, "..") {
 		return fmt.Errorf("invalid path %q (\"..\" is not allowed)", p)
+	}
+	return nil
+}
+
+// maxPushRulesPathBytes bounds each push_rules.deny_paths ENTRY — a
+// hostile-input ceiling, not a sizing of any real policy, same reasoning as
+// maxToolRuleNameLen: this rides a per-run JSON document.
+//
+// Deliberately NO count cap on the list itself, unlike allowed_domains.
+// deny_paths only ever NARROWS what a push may touch — more entries can never
+// widen anything — and nothing does an expensive per-entry lookup on it the
+// way narrowUserInlinePolicy does for allowed_domains (see
+// maxAllowedDomainsPerSpec's own doc): the same reasoning denied_domains
+// already rests on, which likewise carries no count cap. That matters
+// concretely here: boundUserSpec validates the CLAMPED spec, not just what
+// a member typed, and composer.Clamp's push_rules union
+// (clamp.go:clampPushRules) can legally produce a deny_paths longer than
+// either the operator's ceiling or the member's own proposal authored on its
+// own. A count cap here would then refuse a member for a bound their OWN
+// policy never violated — unfixable from their side (found reviewing #176).
+//
+// maxPushRulesInspectPackMiB bounds max_inspect_pack_mib; the range (not a
+// bare non-negative check) mirrors how llm_inspection's other size knobs are
+// bounded, and keeps a hand-authored policy from asking the broker's pack
+// inspector to read an unbounded pack. Clamp only ever LOWERS this
+// scalar (never a union), so it cannot suffer the same post-clamp overshoot.
+// maxPushRulesHoldSeconds is the proxy's own hold ceiling (maxHoldTimeout in
+// internal/egress/proxy): a longer value would be clamped there anyway.
+const (
+	maxPushRulesPathBytes      = 256
+	maxPushRulesInspectPackMiB = 64
+	maxPushRulesHoldSeconds    = 600
+)
+
+// validatePushRules enforces push_rules' structural invariants at write time.
+// It bounds the STRINGS and refuses an entry types.DenyPathSegments cannot
+// read — one that would match nothing or is almost certainly a typo; what
+// they match is the broker's
+// (internal/egress/proxy/push_rules.go), which is also where the list's own
+// evaluation cost is bounded — deliberately not here, for the no-count-cap
+// reason above. nil is legal and validates as a no-op, keeping the field's
+// wire-identical-to-nothing contract for every policy that predates it.
+func validatePushRules(pr *types.PushRulesSpec) error {
+	if pr == nil {
+		return nil
+	}
+	if err := validatePushRulePaths("deny_paths", pr.DenyPaths); err != nil {
+		return err
+	}
+	if err := validatePushRulePaths("require_review_paths", pr.RequireReviewPaths); err != nil {
+		return err
+	}
+	if pr.MaxInspectPackMiB < 0 || pr.MaxInspectPackMiB > maxPushRulesInspectPackMiB {
+		return fmt.Errorf("push_rules.max_inspect_pack_mib must be between 0 and %d, got %d", maxPushRulesInspectPackMiB, pr.MaxInspectPackMiB)
+	}
+	if pr.HoldSeconds < 0 || pr.HoldSeconds > maxPushRulesHoldSeconds {
+		return fmt.Errorf("push_rules.hold_seconds must be between 0 and %d, got %d", maxPushRulesHoldSeconds, pr.HoldSeconds)
+	}
+	return nil
+}
+
+// validatePushRulePaths is one pattern list's checks; require_review_paths
+// shares deny_paths' language and limits, count cap included (none).
+func validatePushRulePaths(field string, list []string) error {
+	for i, p := range list {
+		if p == "" {
+			return fmt.Errorf("push_rules.%s[%d]: empty entry", field, i)
+		}
+		if len(p) > maxPushRulesPathBytes {
+			return fmt.Errorf("push_rules.%s[%d]: exceeds %d bytes", field, i, maxPushRulesPathBytes)
+		}
+		if !controlCharFree(p) {
+			return fmt.Errorf("push_rules.%s[%d]: control character not allowed", field, i)
+		}
+		if _, err := types.DenyPathSegments(p); err != nil {
+			return fmt.Errorf("push_rules.%s[%d]: %w", field, i, err)
+		}
 	}
 	return nil
 }
@@ -448,7 +528,7 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 		if derr != nil {
 			return fmt.Errorf("eligible_grants[%d]: env_secret scope invalid: %w", i, derr)
 		}
-		if sinkReservedSecret(secretName) {
+		if nameSinkReservedSecret(secretName) {
 			return fmt.Errorf("eligible_grants[%d]: env_secret references reserved secret name %q", i, secretName)
 		}
 		if g.RequiresApproval {
@@ -633,7 +713,7 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 	// an operator authoring a reserved name gets a 400 instead of a run whose
 	// scanner silently covers one fewer value than they asked for.
 	for i, name := range li.WorkspaceSecretNames {
-		if sinkReservedSecret(name) {
+		if nameSinkReservedSecret(name) {
 			return fmt.Errorf("llm_inspection.workspace_secret_names[%d]: %q is a reserved platform-internal secret name", i, name)
 		}
 		if name == bedrockAPIKeySecret {

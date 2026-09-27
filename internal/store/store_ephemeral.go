@@ -40,7 +40,7 @@ func hashToken(token string) string {
 // AttachTicket is what one redeemed single-use WS attach ticket carries: the run
 // it is bound to, the principal that minted it (attribution — the session.attach
 // audit names the human, never the ticket), and that principal's role
-// (admin/member — internal/auth/oidc's RoleAdmin/RoleMember) at mint time. The
+// (admin/member — internal/auth/oidc's RoleAdmin/RoleUser) at mint time. The
 // ?ticket= WS lane bypasses humanOrAdminAuth entirely, so this stamped role is
 // the only signal available to re-check owner-or-admin at consume time (see
 // internal/api's ticketOrHumanAuth / handleAttachWS).

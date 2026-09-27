@@ -42,6 +42,7 @@ import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState } from "../wardyn/states";
 import { RECORDING_DISABLED_DESC, RECORDING_DISABLED_TITLE } from "../wardyn/copy";
 import {
+  RECORDINGS,
   RECORDINGS_ALL_LOADED,
   RECORDINGS_FILTER_SCOPE,
   RECORDINGS_LOADING,
@@ -236,12 +237,8 @@ export function RecordingScreen() {
         <div className="rounded-xl border border-dashed border-border">
           <EmptyState
             icon={SquareTerminal}
-            title={recordingDisabled ? RECORDING_DISABLED_TITLE : "Recordings appear once a run's terminal session is captured"}
-            description={
-              recordingDisabled
-                ? RECORDING_DISABLED_DESC
-                : "When a run's runner supports session capture, its terminal is recorded and its replay appears here. Launch a run to get started."
-            }
+            title={recordingDisabled ? RECORDING_DISABLED_TITLE : RECORDINGS.EMPTY_TITLE}
+            description={recordingDisabled ? RECORDING_DISABLED_DESC : RECORDINGS.EMPTY_BODY}
             action={
               recordingDisabled ? undefined : (
                 <Button asChild size="sm">
@@ -278,14 +275,20 @@ export function RecordingScreen() {
         <>
           {showFilters && (
             <div className="mb-5 flex flex-wrap items-center gap-2.5">
-              <div className="relative w-full max-w-xs">
-                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Search tasks, repos, run IDs…"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  className="pl-9"
-                />
+              <div className="w-full max-w-xs">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Search tasks, repos, run IDs…"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    className="pl-9"
+                    disabled={recordingDisabled}
+                  />
+                </div>
+                {recordingDisabled && (
+                  <p className="mt-1 text-xs text-muted-foreground">{RECORDINGS.SEARCH_DISABLED_HINT}</p>
+                )}
               </div>
               {agentOptions.length > 1 && (
                 <Select value={agentFacet} onValueChange={setAgentFacet}>

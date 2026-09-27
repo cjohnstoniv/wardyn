@@ -4,15 +4,17 @@
 package pg
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"filippo.io/age"
 )
 
-// Regression: New must accept a generated *age.X25519Identity. The original
-// implementation asserted an anonymous interface with the WRONG Recipient()
-// return type (the age.Recipient interface instead of the concrete
-// *age.X25519Recipient), which can never match and broke wardynd boot.
+// New must accept a generated *age.X25519Identity. An anonymous interface
+// asserting the wrong Recipient() return type (the age.Recipient interface
+// instead of the concrete *age.X25519Recipient) can never match, and breaks
+// wardynd boot.
 func TestNew_AcceptsX25519Identity(t *testing.T) {
 	id, err := age.GenerateX25519Identity()
 	if err != nil {
@@ -22,17 +24,18 @@ func TestNew_AcceptsX25519Identity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New rejected a valid X25519 identity: %v", err)
 	}
-	if s.recipient == nil {
-		t.Fatal("recipient not derived")
+	if !strings.HasPrefix(s.kek.ID(), "local/cred:") {
+		t.Fatalf("kek_id %q is not a local KEK", s.kek.ID())
 	}
-	// Encrypt/decrypt roundtrip exercises the derived recipient without a DB.
-	ct, err := s.encrypt([]byte("hello"))
+	// Seal/open round trip exercises the derived KEK without a DB.
+	ctx := context.Background()
+	wrapped, ct, err := seal(ctx, s.kek, "", "n", []byte("hello"))
 	if err != nil {
-		t.Fatalf("encrypt: %v", err)
+		t.Fatalf("seal: %v", err)
 	}
-	pt, err := s.decrypt(ct)
+	pt, err := s.open(ctx, envelope{name: "n", version: encVersion, kekID: s.kek.ID(), wrapped: wrapped, ct: ct})
 	if err != nil {
-		t.Fatalf("decrypt: %v", err)
+		t.Fatalf("open: %v", err)
 	}
 	if string(pt) != "hello" {
 		t.Fatalf("roundtrip mismatch: %q", pt)

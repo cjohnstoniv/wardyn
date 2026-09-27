@@ -124,7 +124,7 @@ type h2Fallback struct {
 // nothing the HTTP/1.1 lane could not. p.transport gets a PRIVATE copy of
 // base: its DialTLSContext does TLS itself, but enabling HTTP/2 appends to the
 // transport's own TLSClientConfig.NextProtos on first use, and base is the
-// very config controlTransport (HTTP/1.1 only) shares.
+// egress config every other copy (the fallback, each dial) is cut from.
 func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 	p.transport.ForceAttemptHTTP2 = true
 	p.transport.TLSClientConfig = base.Clone()
@@ -444,6 +444,20 @@ func (p *Proxy) refuseH2Mismatch(w http.ResponseWriter, err error, ruleSource st
 	}
 	p.writeUpstreamProtocolMismatch(w, host, msg, cause, err)
 	return true
+}
+
+// failUpstream answers a failed roundTripUpstream with exactly one deny row:
+// the HTTP/2 mismatch refusal (a 400), or builtin:dial-failed and a 502. A lane
+// emits its allow row only after the round trip succeeds (E3), so a failed dial
+// never over-reports an allow. seen may be nil, for a lane that records nothing.
+func (p *Proxy) failUpstream(w http.ResponseWriter, err error, seen *egress.DecisionLog, host, msg string) {
+	if p.refuseH2Mismatch(w, err, ruleSourceUpstreamProtocolMismatch, seen, host, msg) {
+		return
+	}
+	if seen != nil && p.sink != nil {
+		p.sink.emit(p.denyDialFailed("builtin:dial-failed", seen.Request, host, err, seen.Scan))
+	}
+	p.httpError(w, msg, err, http.StatusBadGateway)
 }
 
 // writeUpstreamProtocolMismatch answers the refusal to the sandbox with cause

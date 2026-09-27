@@ -395,7 +395,7 @@ export function DrivesScreen() {
               disabled={deleteCount > 0 || busy}
               onClick={(e) => {
                 e.preventDefault();
-                if (toDelete) del(toDelete);
+                if (toDelete) void del(toDelete);
               }}
             >
               {busy ? <Loader2 className="size-4 animate-spin" /> : null}

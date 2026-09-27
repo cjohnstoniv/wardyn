@@ -13,11 +13,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-const roleMappingCols = `id, value, role, created_at, created_by`
+const roleMappingCols = `id, value, role, COALESCE(user_type, ''), created_at, created_by`
 
 // UpsertRoleMapping writes one row, keyed on the natural UNIQUE (value):
 // re-adding an already-mapped value FLIPS its role in place rather than
@@ -31,7 +32,11 @@ const roleMappingCols = `id, value, role, created_at, created_by`
 // given, and an admin re-submitting the same value must not be handed an id
 // that names no row.
 //
-// A-9: the conflict path updates role only, deliberately NOT created_by —
+// A user_type naming no user_types row fails the foreign key; that is
+// ErrNotFound, so the caller can tell a type deleted between its check and
+// this write from a store fault.
+//
+// A-9: the conflict path updates role and user_type only, deliberately NOT created_by —
 // creation provenance (who ADDED this mapping) stays with the original
 // creator across a later role flip by a different admin, the same way
 // created_at is untouched on conflict (no SET at all, so Postgres leaves it).
@@ -40,12 +45,16 @@ func (s PG) UpsertRoleMapping(ctx context.Context, m types.RoleMapping) (types.R
 		m.ID = uuid.New()
 	}
 	const q = `
-		INSERT INTO role_mappings (id, value, role, created_by)
-		VALUES ($1,$2,$3,$4)
+		INSERT INTO role_mappings (id, value, role, user_type, created_by)
+		VALUES ($1,$2,$3,NULLIF($4,''),$5)
 		ON CONFLICT (value) DO UPDATE
-			SET role = EXCLUDED.role
+			SET role = EXCLUDED.role, user_type = EXCLUDED.user_type
 		RETURNING ` + roleMappingCols
-	return scanRoleMapping(s.Pool.QueryRow(ctx, q, m.ID, m.Value, m.Role, m.CreatedBy))
+	saved, err := scanRoleMapping(s.Pool.QueryRow(ctx, q, m.ID, m.Value, m.Role, m.UserType, m.CreatedBy))
+	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return types.RoleMapping{}, ErrNotFound
+	}
+	return saved, err
 }
 
 // DeleteRoleMapping removes one row by id. Returns ErrNotFound when no row
@@ -73,7 +82,7 @@ func (s PG) ListRoleMappings(ctx context.Context) ([]types.RoleMapping, error) {
 
 func scanRoleMapping(row pgx.Row) (types.RoleMapping, error) {
 	var m types.RoleMapping
-	err := row.Scan(&m.ID, &m.Value, &m.Role, &m.CreatedAt, &m.CreatedBy)
+	err := row.Scan(&m.ID, &m.Value, &m.Role, &m.UserType, &m.CreatedAt, &m.CreatedBy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.RoleMapping{}, ErrNotFound
 	}

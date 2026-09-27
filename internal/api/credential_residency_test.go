@@ -20,17 +20,16 @@ import (
 // exceptions table that concerns a MODEL credential, plus the never-resident
 // closing sentence ("api_key, the Bedrock bearer token …").
 //
-// It exists because the New Run rail used to state residency as unconditional
-// static copy: "Minted at launch, injected by the proxy. Never written into the
-// sandbox." — false on the very deployment the 0.7.4 field report came from. The
-// rail now repeats what this function graded, so the threat model and the
-// console can no longer disagree; a row added to that table with no case here is
-// a row the rail would describe wrongly.
+// The New Run rail repeats what this function graded, so the threat model and
+// the console cannot disagree — static copy such as "Minted at launch, injected
+// by the proxy. Never written into the sandbox." is false on some deployments. A
+// row added to that table with no case here is a row the rail would describe
+// wrongly.
 //
 // Every case folds its lanes through selectedMechanism rather than naming a
 // mechanism directly: the residency must be graded from the lane that actually
-// RESOLVES, never from the roster's declared enum. Trap (b) of the plan's review
-// round is case "shared bedrock_bearer row, chain falls to the ~/.aws mount".
+// resolves, never from the roster's declared enum — case "shared bedrock_bearer
+// row, chain falls to the ~/.aws mount" is the trap.
 func TestGradeModelCredential(t *testing.T) {
 	var srv Server
 	perUserSSORow := types.AgentProvider{
@@ -55,7 +54,7 @@ func TestGradeModelCredential(t *testing.T) {
 		want     modelCredentialResidency
 		staged   bool
 	}{{
-		// THE ONE ROW-FIXED CASE. Under per_user the only admissible lane is the
+		// The one row-fixed case. Under per_user the only admissible lane is the
 		// principal's own captured SSO session (mechanismSatisfied), and that lane
 		// is resident — so the answer does not depend on whether they have signed
 		// in yet, which is exactly the state the rail has to be honest about.
@@ -174,7 +173,7 @@ func TestGradeModelCredentialNeverDefaultsToProxy(t *testing.T) {
 	}
 }
 
-// ── the two surfaces that publish the grade ─────────────────────────────────
+// the two surfaces that publish the grade
 
 // harnessRow reads ONE agent's row out of a /setup/status body.
 func harnessRow(t *testing.T, w *httptest.ResponseRecorder, agent string) SetupHarnessTool {
@@ -278,7 +277,7 @@ func TestSetupStatusResidency_PerUserSSOReachesTheWireSignedInOrNot(t *testing.T
 			if signedIn {
 				putAWSSSOBlob(t, srv, awsSSOTestFixedNow.Add(time.Hour))
 			}
-			member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+			member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 			row := harnessRow(t, doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, ""), "claude-code")
 			if row.CredentialResidency != string(residencySandbox) {
 				t.Errorf("credential_residency = %q, want %q — a per_user bedrock_sso row is resident "+
@@ -291,7 +290,7 @@ func TestSetupStatusResidency_PerUserSSOReachesTheWireSignedInOrNot(t *testing.T
 	// verdict at all. A refusal has none to publish, and pretending otherwise is
 	// what would make the status row unnecessary.
 	srv, _ := perUserLoginSrv(t)
-	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member, `{"agent":"claude-code","task":"t"}`)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("preflight = %d, want 422; body=%s", w.Code, w.Body.String())
@@ -303,10 +302,9 @@ func TestSetupStatusResidency_PerUserSSOReachesTheWireSignedInOrNot(t *testing.T
 	}
 }
 
-// TestSetupStatusSaysNothingUnderASubscriptionDeployment: the daemon posture
-// that USED to be read here (an inject-off deployment blessing the ~/.claude
-// mount in its default policy) now changes nothing on this surface — there is no
-// lane resolution left on a GET at all.
+// TestSetupStatusSaysNothingUnderASubscriptionDeployment: the daemon posture (an
+// inject-off deployment blessing the ~/.claude mount in its default policy)
+// changes nothing on this surface — there is no lane resolution on a GET at all.
 func TestSetupStatusSaysNothingUnderASubscriptionDeployment(t *testing.T) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{})})

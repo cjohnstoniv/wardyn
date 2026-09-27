@@ -6,6 +6,9 @@ package adofake
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -275,6 +278,39 @@ func (s *Server) handleProjectsGet(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	out := append([]map[string]any(nil), s.projects[org]...)
 	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(out), "value": out})
+}
+
+// handleRepositoriesGet answers GET .../{project}/_apis/git/repositories with
+// every repository RegisterRepo put in that project, spelled the way Azure
+// DevOps spells them: the names literal in the JSON, and escaped in every URL.
+// The URLs are escaped by url.PathEscape, which escapes "(", ")", "'" and "!"
+// as well as the space. How the real service spells punctuation in a
+// remoteUrl is not documented; this is the widest plausible spelling, and
+// wider than Wardyn's own, so a caller that onboards a remoteUrl from here
+// proves its door canonicalises whatever the service hands out.
+func (s *Server) handleRepositoriesGet(w http.ResponseWriter, r *http.Request) {
+	org, project := r.PathValue("org"), r.PathValue("project")
+	prefix := org + "/" + project + "/"
+	var names []string
+	s.mu.Lock()
+	for key := range s.repos {
+		if name, ok := strings.CutPrefix(key, prefix); ok {
+			names = append(names, name)
+		}
+	}
+	s.mu.Unlock()
+	slices.Sort(names)
+	projectURL := "dev.azure.com/" + org + "/" + url.PathEscape(project)
+	out := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		out = append(out, map[string]any{
+			"id": name, "name": name,
+			"project":   map[string]any{"name": project},
+			"remoteUrl": "https://" + org + "@" + projectURL + "/_git/" + url.PathEscape(name),
+			"webUrl":    "https://" + projectURL + "/_git/" + url.PathEscape(name),
+		})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"count": len(out), "value": out})
 }
 

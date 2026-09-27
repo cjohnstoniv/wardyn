@@ -11,14 +11,27 @@
 // roleRank's fold. "security_admin" is the 0.7 third tier and is MAPPED-ONLY
 // (never a default role, never derivable from the operator allowlist), which
 // is why a role mapping is the one surface that can hand it out at all.
-export type AccessRole = "admin" | "security_admin" | "member";
+export type AccessRole = "admin" | "security_admin" | "user";
+
+// A user type (0.8) as GET /access lists it — internal/types.UserType on the
+// wire. The People page reads only id, name and priority.
+export interface AccessUserType {
+  id: string;
+  name: string;
+  description: string;
+  priority: number;
+  built_in: boolean;
+}
 
 // A single row of GET /access's merged table — a chart row (no id/created_*)
-// or a console row. shadow_cause is "" unless shadowed is true.
+// or a console row. shadow_cause is "" unless shadowed is true. user_type is
+// set only on a "user" row: the type that row gives ("standard" is the
+// built-in Standard user).
 export interface AccessMapping {
   id?: string;
   value: string;
   role: string;
+  user_type?: string;
   source: "chart" | "console";
   shadowed: boolean;
   shadow_cause: "" | "chart" | "operator_allowlist";
@@ -65,6 +78,10 @@ export interface AccessResponse {
   // the console ever rendered it.
   provider: string;
   posture: AccessPosture;
+  // Every user type, for naming the type on a row, in the default role and
+  // in a preview. default_role and posture before/after are role-map values:
+  // "admin", "security_admin", "user" (Standard user), or a type id.
+  user_types: AccessUserType[];
 }
 
 // POST /access/mappings body. DELETE takes acknowledge_access_change as a
@@ -73,6 +90,8 @@ export interface AccessResponse {
 export interface RoleMappingWriteInput {
   value: string;
   role: string;
+  // The row's type when role is "user"; omitted means Standard user.
+  user_type?: string;
   acknowledge_access_change?: boolean;
 }
 
@@ -109,6 +128,7 @@ export interface AccessPreviewRequest {
 export interface AccessPreviewMatch {
   value: string;
   role: string;
+  user_type?: string;
   source: string;
 }
 
@@ -118,7 +138,15 @@ export interface AccessPreviewMatch {
 // vanish.
 export interface AccessPreviewResponse {
   role: string;
+  // The type the sign-in would carry; absent when it is refused.
+  user_type?: string;
   ok: boolean;
   matched: AccessPreviewMatch[];
+  // Why a refused sign-in is refused: "no_role", "user_type_ambiguous"
+  // (tied names the custom types that tie) or "user_type_unknown" (unknown
+  // names the type ids that don't exist).
+  denial?: string;
+  tied?: string[];
+  unknown?: string[];
   error?: string;
 }

@@ -183,7 +183,7 @@ async function mockMemberDrive(page: Page, drive: MeUserDrive | null, deniedBy =
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
-    json.role = "member";
+    json.role = "user";
     json.operator = false;
     json.security_operator = false;
     json.user_drive = drive;
@@ -446,7 +446,7 @@ test.describe("drives — the door is a governance limit, not a drives control",
   const DOOR = "no-drives-here";
 
   test("the profile editor's third limit shuts it, and the profiles table chips it", async ({ page }) => {
-    await gotoConsole(page);
+    await gotoConsole(page, "admin");
     await navTo(page, "Governance");
     await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
 
@@ -491,13 +491,14 @@ test.describe("drives — the door is a governance limit, not a drives control",
 //    authorization is Go's (the operatorOnly route group).
 // ---------------------------------------------------------------------------
 
-test.describe("drives — the registry is SUPER's, and it has no nav item for anyone", () => {
+test.describe("drives — the registry is SUPER's, and no super admin's nav lists it", () => {
   test("an admin reaches it from Workspaces and from the Settings card — and never from the sidebar", async ({
     page,
   }) => {
     await gotoConsole(page);
-    // There is no Drives nav entry at all: the sidebar's NAV_ITEMS never grew
-    // one, on purpose (§6) — the two entry points below are the whole door.
+    // No Drives nav entry for a super admin, in either view (§6): the two entry
+    // points below are the whole door. Only a security admin's Admin view
+    // lists it, for its grants and preview (packet M-A, view-switch.spec.ts).
     await expect(page.getByRole("link", { name: new RegExp(`^${DRIVES.TITLE}`) })).toHaveCount(0);
 
     await navTo(page, "Workspaces");
@@ -507,10 +508,10 @@ test.describe("drives — the registry is SUPER's, and it has no nav item for an
     await expect(door).toBeVisible();
     await expect(door).not.toHaveClass(/bg-primary/);
     await door.click();
-    await expect(page).toHaveURL(/\/drives$/);
+    await expect(page).toHaveURL(/\/admin\/drives$/);
 
     // The second home of the same component (setup step + Settings).
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     const card = page.getByTestId("user-drives-card");
     await expect(card).toBeVisible();
     await expect(card.getByText(DRIVES.CARD_LEAD)).toBeVisible();
@@ -518,7 +519,7 @@ test.describe("drives — the registry is SUPER's, and it has no nav item for an
     // than rendering a zero.
     await expect(card.getByText(DRIVES.CARD_EMPTY)).toBeVisible();
     await card.getByText(DRIVES.CARD_OPEN).click();
-    await expect(page).toHaveURL(/\/drives$/);
+    await expect(page).toHaveURL(/\/admin\/drives$/);
   });
 
   test("a security admin is offered neither door, and every write on the screen is parked", async ({ page }) => {
@@ -529,7 +530,7 @@ test.describe("drives — the registry is SUPER's, and it has no nav item for an
     // registry — so they see no entry point at all.
     await navTo(page, "Workspaces");
     await expect(page.getByRole("button", { name: DRIVES.TITLE, exact: true })).toHaveCount(0);
-    await navToRoute(page, "/settings");
+    await navToRoute(page, "/admin/settings");
     await expect(page.getByTestId("user-drives-card")).toHaveCount(0);
 
     // Reaching /drives directly: GET /drives is operatorOnly, so a real
@@ -546,7 +547,7 @@ test.describe("drives — the registry is SUPER's, and it has no nav item for an
         body: JSON.stringify({ error: "forbidden" }),
       });
     });
-    await navToRoute(page, "/drives");
+    await navToRoute(page, "/admin/drives");
     await expect(page.getByRole("heading", { name: DRIVES.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
     await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toHaveCount(0);
@@ -675,7 +676,7 @@ test.describe("drives — what the member is told at New run", () => {
     await page.route("**/api/v1/me", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
-      json.role = "member";
+      json.role = "user";
       json.operator = false;
       json.security_operator = false;
       json.user_drive = null;
@@ -1120,7 +1121,8 @@ test.describe("drives — the admin's authoring walk (needs a runner that can mo
 //   DOCKER_HOST=unix:///var/run/docker.sock WARDYN_E2E_ADDR=:8288 \
 //   WARDYN_E2E_UI_ADDR=:8289 WARDYN_E2E_PG_CONTAINER=wardyn-profiles-pg \
 //   WARDYN_E2E_PG_HOSTPORT=localhost:55434 ./scripts/run-ui-e2e.sh e2e/drives.spec.ts
-test.describe("allocations: a bounded page says so (R4/F092)", () => {
+test.describe("allocations: a bounded page says so", () => {
+  // ticket: R4/F092
   const TRUNCATED = /Showing the first 1000 \(truncated\)/;
 
   const DRIVE = {
@@ -1211,7 +1213,8 @@ test.describe("allocations: a bounded page says so (R4/F092)", () => {
 // internal/api/user_drives_run_test.go, both grep-confirmed), which is where
 // it has to live until this harness can mint a real OIDC session (a bigger
 // e2e-infra change, out of this lane's scope).
-test.describe("drives — the launch-refusal resolver needs a real OIDC subject this harness has none of (D9, R4-F106-followup)", () => {
+test.describe("drives — the launch-refusal resolver needs a real OIDC subject this harness has none of", () => {
+  // ticket: D9 R4-F106 (follow-up)
   test("a real PAUSED allocation for 'admin-token' still answers REFUSED_NO_GRANT — pinning the ceiling above, not a gap", async ({
     page,
   }) => {
@@ -1361,12 +1364,13 @@ test.describe("drives — the org-switch banner (storage.user_drive.disabled)", 
 // created_by and pass the gate vacuously; the point of this test is a caller
 // who is BOTH not an operator AND not the run's creator).
 // ---------------------------------------------------------------------------
-test.describe("run-detail — the SSH/CLI/UI-apps card is owner-or-admin, and nothing else (R4-F129)", () => {
+test.describe("run-detail — the SSH/CLI/UI-apps card is owner-or-admin, and nothing else", () => {
+  // ticket: R4-F129
   async function mockOtherPrincipal(page: Page, principal: string): Promise<void> {
     await page.route("**/api/v1/me", async (route) => {
       const response = await route.fetch();
       const json = await response.json();
-      json.role = "member";
+      json.role = "user";
       json.operator = false;
       json.security_operator = false;
       json.principal = principal;

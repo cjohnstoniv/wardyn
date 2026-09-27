@@ -286,7 +286,7 @@ func TestPG_ResolveGovernanceProfile(t *testing.T) {
 		// ORDER BY picking the right ROW. What the tier is FOR — telling a
 		// user-tier winner from an all-tier one when a group snapshot cannot be
 		// evaluated — is internal/api's TestEffectiveCeilingPrecedence.
-		p, _, err := st.ResolveGovernanceProfile(ctx, users, groups)
+		p, _, err := st.ResolveGovernanceProfile(ctx, users, groups, "")
 		if errors.Is(err, store.ErrNotFound) {
 			return ""
 		}

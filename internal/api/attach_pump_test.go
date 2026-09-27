@@ -22,7 +22,7 @@ import (
 // sees a write, and waitFor times out.
 func TestAttachWS_LargePasteSurvives(t *testing.T) {
 	srv, _, fr, _, run := holderTestServer(t)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
 	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")
@@ -55,7 +55,7 @@ func TestAttachWS_LargePasteSurvives(t *testing.T) {
 // which is exactly when a per-frame touch would have fired.
 func TestAttachWS_KeystrokesDoNotUpdateTheRunRow(t *testing.T) {
 	srv, st, fr, _, run := holderTestServer(t)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(panicFails(t, srv.Handler()))
 	defer ts.Close()
 
 	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")

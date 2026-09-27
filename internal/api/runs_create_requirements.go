@@ -209,7 +209,7 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 		}
 		if len(addedEgress) > 0 {
 			events = append(events, requirementAuditEntry{
-				action: "run.workspace.requirement.egress", target: ws.ID.String(),
+				action: "run.requirement.allow", target: ws.ID.String(),
 				data: map[string]any{"workspace_id": ws.ID.String(), "added_domains": addedEgress},
 			})
 		}
@@ -269,7 +269,7 @@ func (s *Server) applyRequiredSecretGrant(present map[string]bool, spec *types.R
 	// ceiling would otherwise brick every run granted it.
 	unionAllowedDomains(spec, []string{p.host})
 	return requirementAuditEntry{
-		action: "run.workspace.requirement.secret", target: secretName,
+		action: "run.requirement.grant", target: secretName,
 		data: map[string]any{"secret_name": secretName, "host": p.host},
 	}, true
 }

@@ -280,7 +280,7 @@ func TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin(t *testing
 	if awsRow.Status != "warn" {
 		t.Errorf("harness_credential_aws status = %q, want warn", awsRow.Status)
 	}
-	// AND IT MUST SAY THE TRUE THING. `expired_signin` was already a warn row
+	// And it must say the true thing. `expired_signin` was already a warn row
 	// before this lane, so status alone asserts nothing this fix added: without
 	// the PinMismatch arm the row reads "Your captured AWS SSO session expired
 	// at <ts> and cannot be renewed" about a session putPinnedSSOBlob made live
@@ -303,7 +303,7 @@ func TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin(t *testing
 		t.Error("harness_credential_aws must never be Blocking — it is graded through the CALLER's own session, not the install")
 	}
 
-	// THE ADMIN'S OWN STATUS IS UNTOUCHED: their capture agrees with the pin, so
+	// The admin's own status is untouched: their capture agrees with the pin, so
 	// the grading is the one it always was.
 	if _, _, adminMA := srv.setupHarnessCreds(ctx, sc, awsSSOScope{perUser: true, owner: "admin-sub"}); adminMA.State != modelAccessLive {
 		t.Errorf("the admin's own model_access.state = %q, want %q — an agreeing capture must grade exactly as before",
@@ -311,7 +311,7 @@ func TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin(t *testing
 	}
 }
 
-// ── negative controls: every shipped behaviour this fix must leave alone ─────
+// negative controls: every shipped behaviour this fix must leave alone
 
 // TestDispatch_UnpinnedRowNeverRefusesAStoredBlob is THE UPGRADE GUARD, and it
 // matters more than it looks: the pin is optional on purpose and most estates
@@ -463,7 +463,7 @@ func TestDispatch_RefreshedBlobIsTheOneCompared(t *testing.T) {
 	}
 }
 
-// ── the recovery the refusals above depend on (EXISTING behaviour, pinned) ───
+// the recovery the refusals above depend on (existing behaviour, pinned)
 
 // twoLoginRunStore serves TWO aws-sso login runs, each with its own launch
 // stamp — the shape the member's recovery actually has: the contradicting
@@ -583,7 +583,7 @@ func TestBedrockBlobPinMismatch(t *testing.T) {
 		"a stored account the pin does not allow": {sc: pinned, auth: ssoAuth("222222222222", "BedrockRunner"), want: true},
 		"the pinned account's wrong role":         {sc: pinned, auth: ssoAuth("111111111111", "ReadOnly"), want: true},
 		"the pinned pair itself":                  {sc: pinned, auth: ssoAuth("111111111111", "BedrockRunner")},
-		// THE UPGRADE GUARDS. Each of these is a shipped deployment shape, and a
+		// The upgrade guards. Each of these is a shipped deployment shape, and a
 		// predicate that fired on any of them would take Bedrock away from it.
 		"an unpinned per_user row":    {sc: pinnedPerUserRoster("", ""), auth: ssoAuth("222222222222", "DevPower")},
 		"a blob carrying no pair yet": {sc: pinned, auth: ssoAuth("", "")},

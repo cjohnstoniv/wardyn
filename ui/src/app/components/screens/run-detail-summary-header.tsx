@@ -15,13 +15,15 @@ import { Check, Clock, Link as LinkIcon, RotateCcw, ShieldAlert, Skull, Terminal
 import type { AgentRun } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { Button } from "../ui/button";
-import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
+import { AgentBadge, AutonomyChip, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RunStateGlyph } from "../wardyn/run-state-glyph";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { waitingAdoConsent, waitingReauth } from "../../lib/reauth-waiting-copy";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { useShellSetupStatus } from "../wardyn/model-access-context";
+import { RUN_FACTS } from "../wardyn/copy/door";
 import { isTerminalStatusReason, statusDetailChip, statusDetailSentence } from "./run-status-detail";
 
 
@@ -49,6 +51,16 @@ function useElapsed(createdAt: string, updatedAt: string, terminal: boolean): st
   }, [terminal]);
   const end = terminal ? new Date(updatedAt).getTime() : now;
   return formatElapsed(end - new Date(createdAt).getTime());
+}
+
+// The model provider this run chose at create (#543, decision 5) — fixed on the
+// run, so it never changes after launch. Named from the shell's /setup/status;
+// a provider no longer there is marked removed, by its id, the only name the
+// run records. Nothing is claimed removed before that answer is in.
+function RunProviderChip({ id }: { id: string }) {
+  const { status } = useShellSetupStatus();
+  const p = status?.model_providers?.find((v) => v.id === id);
+  return <Chip tone="neutral">{RUN_FACTS.PROVIDER(p?.name || id, !!status && !p)}</Chip>;
 }
 
 export function SummaryHeader({
@@ -312,7 +324,15 @@ export function SummaryHeader({
           wraps, so showing these costs a line, not information — and
           runs.spec.ts's width loop measures 800px alongside 1024/1280/1536. */}
       <div className="flex shrink-0 items-center gap-2">
+        {run.model_provider_id && <RunProviderChip id={run.model_provider_id} />}
         <ConfinementChip value={run.confinement_class} />
+        {/* run.autonomy_level (#97) freezes the level resolveRunAutonomy
+            capped this run at, at create time. Empty for a run under no
+            profile, a profile with no rubric, or one created before this
+            field existed — the same absent-row rule every chip on this bar
+            follows, so an ordinary run's header is byte-for-byte what it
+            was. */}
+        {run.autonomy_level && <AutonomyChip level={run.autonomy_level} />}
         {run.interactive && (
           <Chip tone="info" className="gap-1">
             <TerminalSquare className="size-3" />

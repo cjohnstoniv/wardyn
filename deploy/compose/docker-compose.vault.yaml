@@ -1,0 +1,25 @@
+# Store mode overlay (docs/OPERATIONS.md "Store mode: credentials in Vault"):
+# wardynd keeps every stored credential in your organisation's Vault KV v2
+# engine and holds no key. Token-file auth, the compose and VM shape: point
+# WARDYN_VAULT_TOKEN_DIR at the directory your Vault Agent sink (or CSI driver)
+# writes `token` into; wardynd re-reads it whenever Vault answers 403. There is
+# no token-in-env option.
+#
+#   WARDYN_VAULT_ADDR=https://vault.example:8200 WARDYN_VAULT_TOKEN_DIR=/run/vault-agent \
+#     docker compose -f docker-compose.yaml -f docker-compose.vault.yaml up -d
+#
+# Keep WARDYN_AGE_KEY set until `wardynd -migrate-secrets -to=vaultkv` reports
+# nothing left to move; then unset it. Vault's CA, if private, comes in through
+# the base file's WARDYN_TRUSTED_CA_FILE.
+services:
+  wardynd:
+    environment:
+      WARDYN_SECRET_STORE: vaultkv
+      WARDYN_VAULT_ADDR: "${WARDYN_VAULT_ADDR:?set WARDYN_VAULT_ADDR to your Vault's https:// address}"
+      WARDYN_VAULT_NAMESPACE: "${WARDYN_VAULT_NAMESPACE:-}"
+      WARDYN_VAULT_AUTH: token-file
+      WARDYN_VAULT_TOKEN_FILE: /run/wardyn-vault/token
+      WARDYN_VAULT_KV_MOUNT: "${WARDYN_VAULT_KV_MOUNT:-wardyn}"
+      WARDYN_VAULT_KV_PREFIX: "${WARDYN_VAULT_KV_PREFIX:-wardyn}"
+    volumes:
+      - ${WARDYN_VAULT_TOKEN_DIR:?set WARDYN_VAULT_TOKEN_DIR to the directory your Vault Agent sink writes token into}:/run/wardyn-vault:ro

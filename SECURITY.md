@@ -71,7 +71,7 @@ disclose them — but a *more severe than documented* instance is in scope):
   `security_admin`/super-admin boundary — a principal holding only
   `security_admin` reaching a super-admin-only surface (`/access` role mappings,
   `POST /api/v1/admin/sandboxes/sweep`, attach / attach-ticket / take-over on a
-  run they do not own, an SSH key stamped above `member`), or a `member` reaching
+  run they do not own, an SSH key stamped above `user`), or a `user` reaching
   either admin tier. A bypass of the four-eyes rule on egress approvals
   (`WARDYN_EGRESS_SECOND_HUMAN=1`) is likewise in scope — except by the admin
   token, which is a documented, deliberate exemption

@@ -12,20 +12,27 @@ document is that process, written down.
 - You are the maintainer (see [MAINTAINERS.md](MAINTAINERS.md)); releases push tags to
   `origin`, so only someone with push rights cuts them.
 - The full CI gate is green on the commit you intend to tag. The gate is the
-  `.github/workflows/ci.yml` job list: `build`, `diagrams`, `ui`, `ui-e2e`,
+  `.github/workflows/ci.yml` job list: `changes`, `go`
+  (a matrix job: `lint`, `unit`, `docker`, `k8s`), `build`, `diagrams`, `ui`, `ui-e2e`,
   `helm`, `helm-install-test`, `compose`, `conformance`, `conformance-k8s`,
-  `envbuild-integration`, `test-pg`, `screenshots-fresh` (PR-only), `gates`
+  `envbuild-integration`, `test-pg`, `gates`
   (a matrix job: `govulncheck`, `staticcheck`, `licenses`,
-  `license-headers`, `gitleaks`), `dco`, `desktop-envelope`, `buildx-smoke`,
+  `license-headers`, `gitleaks`), `dco`,
   `trivy`, and **`notices`** — the copyleft / unreviewed-dependency gate, which
   was missing from this list entirely. `sbom-stub` used to be named here and is
   **gone**: it was deleted along with `make sbom` (CHANGELOG, *Removed*), so a
   maintainer following this list literally was waiting on a phantom job while
   skipping the one that catches a GPL regression. Two more publish
   workflows are not part of this job list at all (see "Container images"
-  below): `publish-image` (`.github/workflows/publish-image.yml`, push to
-  `main` only) and `release` (`.github/workflows/release.yml`, triggered by
-  step 5's tag push itself, so it cannot be a prerequisite of tagging).
+  below): `publish-image` (`.github/workflows/publish-image.yml`, after CI
+  passes on a push to `main`) and `release` (`.github/workflows/release.yml`,
+  triggered by step 5's tag push itself, so it cannot be a prerequisite of
+  tagging).
+- The multi-arch build is green on that commit too. It is `nightly.yml`'s
+  `buildx-smoke` (checks named `multi-arch build (…)`), not a `ci.yml` job, so
+  a pull request never runs it: read the latest nightly, or run it on the
+  branch you tag with `gh workflow run nightly.yml --ref release/X.Y`. It is
+  the only build of the arm64 half before `release.yml` publishes it.
 
 Run the local gate first:
 
@@ -39,20 +46,24 @@ The live-service jobs are outside `make release-check`: `conformance`
 (`make test-conformance-k8s`, needs a kind/Calico cluster and the test images
 from that CI job), `envbuild-integration` (`make test-envbuild-integration`),
 `helm-install-test` (`make helm-install-test`, also needs a local `kind`
-cluster), the Playwright `ui-e2e` job, `desktop-envelope` (compose build +
-up), `buildx-smoke`, and `trivy` (both docker builds). Their checks can run
-locally with the required services; follow `.github/workflows/ci.yml` for
-image builds, cluster setup, and environment variables. Run the Playwright
-lane with `scripts/run-ui-e2e.sh`. Without `WARDYN_TEST_PG` the Postgres
-suite prints a loud SKIPPED line.
+cluster; the same job then boots the desktop compose envelope), the
+Playwright `ui-e2e` job, `trivy` (docker builds) and nightly's `buildx-smoke`.
+Their checks can run locally with the required services; follow
+`.github/workflows/ci.yml` for image builds, cluster setup, and environment
+variables. Run the Playwright lane with `scripts/run-ui-e2e.sh`. Without
+`WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
 
-Screenshot freshness is CI-only for a different reason: `ci.yml`'s
-`screenshots-fresh` job compares the PR diff, so it can tell "you changed the
-console (anything under `ui/src/app` or `ui/src/styles`) without re-shooting
-`docs/img`" — a local commit-timestamp test cannot, and cannot be cleared at all
-once `make screenshots` re-renders the PNGs byte-identically. Re-shoot with
-`make screenshots` when you touch the console, or apply the `no-screenshots`
-label (and push again) when the change is provably invisible in the two shots.
+Before tagging, run `scripts/stress-proxy-cgroup.sh` (needs docker). It sends
+the egress proxy's worst inspection load through it under the sidecar's 256
+MiB memory cap and fails on a refused request or an OOM kill.
+
+Screenshot freshness is advisory and CI-only. On a pull request, `ci.yml`'s
+`diagrams` job compares the PR diff and adds a warning annotation when the
+console (anything under `ui/src/app` or `ui/src/styles`) changed and `docs/img`
+did not. It never fails a check, because many console changes rightly leave
+both shots alone; a local commit-timestamp test could not tell the difference,
+and could not be cleared once `make screenshots` re-renders the PNGs
+byte-identically. Re-shoot with `make screenshots` when a shot shows the change.
 
 `release-check` pushes nothing and tags nothing. A green local run means "no local
 reason not to tag", not "CI is green" — check the actual CI run on the commit
@@ -152,7 +163,7 @@ another maintainer. Use the chosen version throughout this checklist.
    job (docs/CI.md "Pin the wardyn checkout"). **`docs/DESKTOP.md`'s real-hardware
    smoke recipe** also pins both image tags by hand (`WARDYN_WARDYND_IMAGE`,
    `WARDYN_PROXY_IMAGE` — the desktop tier's MDM config has no `$WARDYN_VERSION`
-   to interpolate; X1a-F10 found this stale for a whole release cycle).
+   to interpolate; a past review found this stale for a whole release cycle).
    `scripts/test-claims-match-code.sh` fails if either pin drifts from
    `internal/version/version.go`.
    `scripts/test-install-sh.sh` asserts the two agree with each other, but it
@@ -165,17 +176,29 @@ another maintainer. Use the chosen version throughout this checklist.
    commit** before tagging.
 
    **Also add a `ROADMAP.md` Shipped row for the release you are cutting**
-   (X1c-F2 found the Shipped table stuck on "Built, awaiting release" for
-   three released versions in a row) — a new row plus flipping that release's
-   own `### What vX.Y shipped` intro from "Built, awaiting release" to
-   "Shipped as `vX.Y.Z`", pointing at the CHANGELOG's now-dated entry instead
-   of `[Unreleased]`.
+   (a past review found the Shipped table stuck on "Built, awaiting release" for
+   three released versions in a row) — a new row in the `## Shipped` table,
+   its Status cell reading "**Shipped (pre-alpha)** — `vX.Y.Z`, <date> (see
+   [CHANGELOG.md](CHANGELOG.md))", pointing at the CHANGELOG's now-dated entry
+   instead of `[Unreleased]`. ROADMAP.md carries no per-version narrative to
+   flip any more — CHANGELOG.md is the only per-release detail.
 
    **Also regenerate `docs/TEST-GAPS.md`: `make test-gaps`** (needs the union
    coverage profile `make ci`/`cover-check` already produced this run) —
-   X1c-F13/D-7 found the generator gained a Kubernetes-gated bucket with
+   a past review found the generator gained a Kubernetes-gated bucket with
    nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
    `make test-gaps` is a standalone target, not in `make ci`.
+
+   **Also snapshot the proxy config key set:** generate the previous-release key set AT THE TAG
+   (check out the tag, run the golden with `WARDYN_UPDATE_GOLDEN=1 go test ./internal/egress/proxy/
+   -run TestConfigKeySet`) rather than copying `current.txt` — a patch release is cut from
+   `release/X.Y`, whose tree can differ from whatever `current.txt` reads on the branch you are
+   releasing from. Save the generated file as
+   `internal/egress/proxy/testdata/config-keys/vX.Y.Z.txt` and set `previousProxyTag` in
+   `internal/api/proxy_config_skew_test.go` to `vX.Y.Z`, removing the older file. Operators pin the
+   proxy image apart from wardynd, and that test loads every config dispatch writes against the last
+   release's key set. When a fail-closed case's key (e.g. `policy.push_rules`) reaches the previous
+   release, update or drop that case in `internal/api/proxy_config_skew_test.go`.
 
    **`docs/VERIFY.md` is deliberately NOT on that list.** Every command in it is
    parameterised on `$WARDYN_VERSION`, which its own step 0 resolves, so it needs
@@ -348,15 +371,19 @@ the five supply-chain gates are `gates (...)` rather than bare names.
 A job conditional on `push`, a schedule, or a path filter must **not** be a required
 context: GitHub does not treat a never-reported required context as passing, so
 the PR sits at "Expected — waiting for status to be reported" and cannot be
-merged. `screenshots-fresh` (PR-only) is the live example. This paragraph used
-to cite `sbom-stub`, which no longer exists.
+merged. Every `nightly.yml` job is such a job, `buildx-smoke` (the multi-arch
+build) included. `ci.yml`'s change classifier (#932) never skips a required job:
+one whose work a change cannot affect still runs, skips its steps and reports
+success (docs/CI.md, "Incremental CI"). A job's check name is its `name:` when it sets one, otherwise
+its job id, so renaming either is the same protection change as deleting the
+job.
 
 ## Container images
 
 Two workflows publish images, on two different triggers — neither overlaps
 the other:
 
-- **Continuous (every push to `main`).**
+- **Continuous (every push to `main` that passes CI).**
   `.github/workflows/publish-image.yml` builds and pushes `wardynd` only, to
   `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`). **Signed
   (keyless, by digest) but not SBOM- or provenance-attested**, and under the

@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -152,7 +153,7 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sc t
 	// caller also holds is not what dispatch selects, so it is not reported.
 	ssoLive, ssoDead := false, false
 	ssoAccount, ssoRole := "", ""
-	if blob, found, err := s.readAWSSSOBlob(ctx, sso); sso.readsSSO() && err == nil && found {
+	if blob, found, err := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sso); sso.readsSSO() && err == nil && found {
 		now := s.cfg.Now()
 		ssoLive = (blob.renewable(now) && !s.awsSSOTokenSpentFor(blob)) || !blob.expired(now)
 		ssoDead = !ssoLive
@@ -191,7 +192,7 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sc t
 		// configured" over a bearer their runs really authenticate with. Under a
 		// row that declares the SSO lane bedrockBearerFor reads nothing, for the
 		// same reason the SSO read above is skipped under a bearer row.
-		b.BearerPresent = len(s.bedrockBearerFor(ctx, sso)) > 0
+		b.BearerPresent = len(s.bedrockBearerFor(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sso)) > 0
 	}
 	b.PerUser = sso.perUser
 	b.Mechanism = awsSSOScopeIsMechanism(sso)

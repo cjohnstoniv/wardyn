@@ -15,7 +15,7 @@ package db
 // reports as a broken chain and REFUSES THE BOOT over. A boot-time integrity
 // check must not have its snapshot semantics decided by a deployment setting.
 //
-// HOW THE PROBE SEES INSIDE A TRANSACTION THAT IS ALWAYS ROLLED BACK: an AFTER
+// How the probe sees inside a transaction that is always rolled back: an AFTER
 // INSERT trigger on the probe schema's audit_events reads
 // current_setting('transaction_isolation') and, when it is not read committed,
 // bumps a SEQUENCE. nextval is NOT transactional, so the witness survives the
@@ -139,7 +139,7 @@ func TestPG_BootCanaryRunsAtReadCommittedWhateverTheServerDefaultIs(t *testing.T
 		t.Fatalf("the witness did not fire for a transaction that inherits repeatable read; the probe cannot see what it claims to")
 	}
 
-	// THE REAL PATH: Migrate runs auditChainCanary, which appends one row and
+	// The real path: Migrate runs auditChainCanary, which appends one row and
 	// rolls it back. The witness must NOT move.
 	mark := witness()
 	if err := Migrate(ctx, pool); err != nil {

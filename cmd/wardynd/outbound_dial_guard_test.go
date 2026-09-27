@@ -6,9 +6,8 @@ package main
 // The operator-reported MITM/upstream-proxy defect (0.7.8) was the THIRD time a
 // new forward-egress code path failed to inherit SiteConfig.UpstreamProxyURL:
 // the git broker and the brokered LLM route each once called their own
-// resolve+dial instead of routing through egressTarget/dialThroughUpstream
-// (W23-S1-4 / W19-W19d-3), and the MITM lane went unpinned for a third
-// instance of the same shape. Each was found by READING the code, never by a
+// resolve+dial instead of routing through egressTarget/dialThroughUpstream,
+// and the MITM lane went unpinned for a third instance of the same shape. Each was found by reading the code, never by a
 // test — there was no checklist item asking "does this path honour
 // upstream_proxy_url?" of a NEW net.Dial/tls.Dial/http.Transport/http.Client.
 //
@@ -168,22 +167,11 @@ var sanctionedDialHomes = []dialAllowance{
 			"caller (evaluate, serveMITMRequest, the git/PAT brokers) already routes through.",
 	},
 	{
-		relFile: "internal/egress/proxy/approvals.go",
+		relFile: "internal/egress/proxy/server.go",
 		kinds:   kindSet("http.Client"),
-		why: "fallback control-plane client (approval polling), constructed ONLY when the " +
-			"caller passes a nil *http.Client. Production (server.go's NewServer) always supplies " +
-			"the shared control-plane client with Proxy stripped, so this literal never carries " +
-			"live traffic — it exists for tests and any future caller that forgets the argument.",
-	},
-	{
-		relFile: "internal/egress/proxy/inject.go",
-		kinds:   kindSet("http.Client"),
-		why:     "same nil-fallback control-plane client shape as approvals.go, for credential/injection resolve and the approvals reader.",
-	},
-	{
-		relFile: "internal/egress/proxy/decisions.go",
-		kinds:   kindSet("http.Client"),
-		why:     "same nil-fallback control-plane client shape as approvals.go, for the decision-log POST to the control plane.",
+		why: "NewServer builds the control-plane client when its caller passes nil, so no callee " +
+			"can fall back to a client on http.DefaultTransport; the client then rides the pinned " +
+			"transport NewServer owns (internal CA only, Proxy stripped) like any caller-supplied one.",
 	},
 	{
 		relFile: "cmd/wardyn-proxy/main.go",

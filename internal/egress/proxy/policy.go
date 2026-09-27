@@ -63,7 +63,7 @@ type Policy struct {
 	// the operator named exactly, mapped to the set of ports they qualified it
 	// with. It answers the HOST question AllowedExactHost asks (credential
 	// injection) and nothing else — evalHost never consults it, so a port-qualified
-	// entry still grants egress on that port only (F106).
+	// entry still grants egress on that port only.
 	//
 	// It keeps the PORTS rather than stripping them because the allow side and the
 	// deny side must stay symmetric: CompilePolicy routes a port-qualified deny to
@@ -94,6 +94,13 @@ type Policy struct {
 	// brokered pushes skip branch-namespace confinement (handleGitBroker). The
 	// per-run counterpart of the deployment-wide BranchNSEnforced() switch.
 	gitPushAnyBranch bool
+	// pushRules is RunPolicySpec.PushRules compiled for per-request matching,
+	// or nil when the run carries no content rule at all
+	// (types.PushRulesSpec.IsSet, so a literal push_rules:{} reads as absent).
+	// Compiled here rather than per request because a push may be matched
+	// against every entry of a deny list the control-plane body cap alone
+	// bounds (push_rules.go).
+	pushRules *pushRuleSet
 }
 
 // CompilePolicy builds a Policy from a RunPolicySpec. Domains are normalized
@@ -109,6 +116,7 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 		firstUse:            spec.FirstUseApproval.Normalize(),
 		allowAll:            spec.AllowAllEgress,
 		gitPushAnyBranch:    spec.GitPushAnyBranch,
+		pushRules:           compilePushRules(spec.PushRules),
 	}
 	// Compiled into a map rather than scanned: validatePolicySpec already refuses
 	// duplicates, so the map cannot lose a rule, and an exact-match lookup is the
@@ -162,6 +170,20 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 // out of branch-namespace confinement. Nil-safe like ToolEffectFor: a proxy
 // built without a compiled policy keeps confinement ON.
 func (p *Policy) GitPushAnyBranch() bool { return p != nil && p.gitPushAnyBranch }
+
+// PushRulesSet reports whether this run's policy carries git push CONTENT
+// rules. Nil-safe like GitPushAnyBranch: a proxy built without a compiled
+// policy has none, which keeps today's advertisement untouched.
+func (p *Policy) PushRulesSet() bool { return p.contentRules() != nil }
+
+// contentRules returns the compiled push content rules, or nil when the run
+// has none. Nil-safe on the same ground PushRulesSet is.
+func (p *Policy) contentRules() *pushRuleSet {
+	if p == nil {
+		return nil
+	}
+	return p.pushRules
+}
 
 // FirstUseMode reports how unknown domains are handled (always_deny /
 // deny_with_review / wait_for_review), normalized (never empty).
@@ -465,8 +487,8 @@ func (p *Policy) AllowsLiteralIP(host string, port int) bool {
 // allowlist entry covering host:port — "vendor.example:8443", or the wildcard
 // form "*.example.com:8443".
 //
-// It is the closest thing the compiled policy has to declared TRANSPORT INTENT
-// (F110): a BARE entry matches any port, so it says nothing about which port
+// It is the closest thing the compiled policy has to declared TRANSPORT INTENT:
+// a BARE entry matches any port, so it says nothing about which port
 // the operator meant; a port-qualified one is the operator naming the port in
 // writing. Credential injection over CLEARTEXT reads it that way — see
 // Proxy.injectableTransport, which asks this only AFTER its unconditional
@@ -674,8 +696,8 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 // X-Wardyn-Host already carries that.
 //
 // It exists so a resolver outage is never labelled builtin:private-ip with
-// literalIPDenialDetail's "declare it under internal_hosts" advice attached
-// (F055): that advice cannot fix a resolver outage, and it points at loosening
+// literalIPDenialDetail's "declare it under internal_hosts" advice attached.
+// That advice cannot fix a resolver outage, and it points at loosening
 // an SSRF control for a fault that is neither.
 const resolveFailedDetail = "this host did not resolve (DNS failure, no such name, or no address records), so no address " +
 	"could be vetted; this is a name-resolution fault, not the private-address guard — check the sandbox's resolver, " +

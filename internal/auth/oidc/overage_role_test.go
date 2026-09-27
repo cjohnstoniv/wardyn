@@ -55,7 +55,7 @@ func TestOverageWidensRole(t *testing.T) {
 		// just as completely — both claims feed the same role map.
 		{"roles overage + default admin fallthrough", overageNames("roles"), writoidc.RoleAdmin, defaultMatch(writoidc.RoleAdmin), true},
 
-		// NOT AN ESCALATION, and each of these must keep signing in.
+		// Not an escalation, and each of these must keep signing in.
 		//
 		// A real match is authoritative: hiding a claim can only REMOVE matches
 		// from a highest-wins fold, so an overage can only narrow a matched
@@ -64,7 +64,7 @@ func TestOverageWidensRole(t *testing.T) {
 		// The ordinary posture: member is the narrowest tier there is, so no
 		// hidden claim could have produced less. A human in 200+ groups must
 		// still be able to sign in.
-		{"overage + default member fallthrough", overageNames("groups"), writoidc.RoleMember, defaultMatch(writoidc.RoleMember), false},
+		{"overage + default member fallthrough", overageNames("groups"), writoidc.RoleUser, defaultMatch(writoidc.RoleUser), false},
 		// No overage: the token answered the question, whatever the answer was.
 		{"no claim_names at all", nil, writoidc.RoleAdmin, defaultMatch(writoidc.RoleAdmin), false},
 		// A distributed claim this package derives nothing from is not an
@@ -85,28 +85,28 @@ func TestOverageWidensRole(t *testing.T) {
 	}
 }
 
-// TestOverageLoginDeniedNotPromoted is the end-to-end pin, and it is the one
-// that reproduces the finding: ONE human, ONE role map, ONE default, and the
-// only difference between the two legs is whether the IdP sent the claim.
+// TestOverageLoginDeniedNotPromoted is the end-to-end pin: one human, one role
+// map, one default, and the only difference between the two legs is whether
+// the IdP sent the claim.
 //
-// Leg 1 (claim present): "walled-contractors" maps to member, so the human is a
-// member. Leg 2 (the identical human, in overage): the claim is absent, the
-// map matches nothing, and WARDYN_OIDC_DEFAULT_ROLE=admin used to hand them a
+// Leg 1 (claim present): "walled-contractors" maps to member, so the human is
+// a member. Leg 2 (the identical human, in overage): the claim is absent, the
+// map matches nothing, and WARDYN_OIDC_DEFAULT_ROLE=admin would hand them a
 // SUPER ADMIN session — full reach into other people's runs, secrets, harness
-// credentials and an interactive PTY in any sandbox. It must now be refused
-// with a code that says retrying will not help.
+// credentials and an interactive PTY in any sandbox. It must be refused with a
+// code that says retrying will not help.
 //
 // Counterfactual: remove the overageWidensRole branch from CallbackHandler and
 // leg 2 mints a cookie with Role=admin instead of redirecting.
 func TestOverageLoginDeniedNotPromoted(t *testing.T) {
-	roleMap := map[string]string{"walled-contractors": writoidc.RoleMember}
+	roleMap := map[string]string{"walled-contractors": writoidc.RoleUser}
 
 	t.Run("claim present: walled to member", func(t *testing.T) {
 		env := newIdPEnv(t)
 		auth := env.newRoleAuth(t, roleMap, writoidc.RoleAdmin, nil)
 		_, sess := doRoleCallback(t, env, auth, "contractor@corp.example", nil, []string{"walled-contractors"})
-		if sess.Role != writoidc.RoleMember {
-			t.Fatalf("role = %q, want %q — the control leg must be walled, or the overage leg proves nothing", sess.Role, writoidc.RoleMember)
+		if sess.Role != writoidc.RoleUser {
+			t.Fatalf("role = %q, want %q — the control leg must be walled, or the overage leg proves nothing", sess.Role, writoidc.RoleUser)
 		}
 	})
 
@@ -139,12 +139,12 @@ func TestOverageLoginDeniedNotPromoted(t *testing.T) {
 	// token, with the default set to the narrowest tier, still signs in.
 	t.Run("overage + default member still signs in", func(t *testing.T) {
 		env := newIdPEnv(t)
-		auth := env.newRoleAuth(t, roleMap, writoidc.RoleMember, nil)
+		auth := env.newRoleAuth(t, roleMap, writoidc.RoleUser, nil)
 		f2BuildOverageIDToken(t, env, "sub-contractor", "contractor@corp.example")
 		w, sess := doCallback(t, auth)
-		if sess.Role != writoidc.RoleMember {
+		if sess.Role != writoidc.RoleUser {
 			t.Fatalf("role = %q (status %d, %q), want %q — a human in 200+ groups must still be able to sign in when the default cannot widen",
-				sess.Role, w.Code, w.Result().Header.Get("Location"), writoidc.RoleMember)
+				sess.Role, w.Code, w.Result().Header.Get("Location"), writoidc.RoleUser)
 		}
 	})
 }

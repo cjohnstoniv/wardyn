@@ -38,7 +38,7 @@ func TestBrokeredForgePATIsWithheldFromBothHalvesOfDispatch(t *testing.T) {
 	fr := &fakeRunner{}
 	srv, _, _, run := dispatchTeardownFixture(t, fr, types.RunPending)
 	run.Task = "" // composition only: no agent exec, no completion watcher
-	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}), dispatchParams{
+	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest",
 		// A github_token grant for a repo on the brokered forge is what makes the
 		// run brokered for it (the same map confineGitBrokerEgress keys on).

@@ -116,7 +116,8 @@ describe("setup.getSetupStatus()", () => {
 //
 // Pinned at the seam itself rather than only through one module's caller: it is
 // wfetch's contract, not setup's.
-describe("wfetch — a 401 is BOTH a throw and a sign-out (R4/F116)", () => {
+describe("wfetch — a 401 is BOTH a throw and a sign-out", () => {
+  // ticket: R4/F116
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {

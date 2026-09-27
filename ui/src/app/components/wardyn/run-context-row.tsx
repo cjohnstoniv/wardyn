@@ -10,10 +10,12 @@ import type { AgentRun } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
 import { rowHeadline } from "../screens/runs/board-groups";
 import { AgentBadge, ConfinementChip } from "./primitives";
+import { runPath, useConsoleMode } from "./console-view";
 
 // The run an approval gates, inlined on the pending card (finding A3): the
 // approver must see WHAT they're authorizing against — agent, task, repo, and
-// barrier — with a click-through to the run's lifecycle hub at /runs/:id. The run
+// barrier — with a click-through to the run's lifecycle hub in the same view
+// (runPath: /admin/runs/:id from /admin/approvals, else /runs/:id). The run
 // is fetched per-row via getRun(run_id); the queue is a handful of items so a
 // per-row fetch is fine (the row stays mounted across the parent's poll because
 // it's keyed by approval id, so [runId] never re-fires). A missing/gone run
@@ -33,6 +35,7 @@ export function RunContextRow({
 }) {
   // undefined = loading, null = fetch failed / run gone, AgentRun = loaded.
   const [run, setRun] = React.useState<AgentRun | null | undefined>(undefined);
+  const view = useConsoleMode();
   // A ref, not a dependency: a fresh closure on every parent render must not
   // re-fire the fetch (the reason attach-terminal.tsx keeps onClose in one).
   const onRunRef = React.useRef(onRun);
@@ -58,7 +61,7 @@ export function RunContextRow({
 
   return (
     <Link
-      to={`/runs/${encodeURIComponent(runId)}`}
+      to={runPath(view, runId)}
       className="group mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-border bg-background px-3 py-2 transition-colors hover:border-border-strong"
     >
       {run === undefined ? (

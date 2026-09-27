@@ -35,8 +35,11 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
 import { MODEL_ACCESS_RUN_DOOR } from "../../wardyn/model-access-copy";
-import { useClaimModelAccessDoor, useModelAccessDoor } from "../../wardyn/model-access-context";
-import { usePrincipal } from "../../wardyn/operator-context";
+import { useClaimModelAccessDoor, useModelAccessDoor, useShellSetupStatus } from "../../wardyn/model-access-context";
+import { useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
+import { OpenInUserView, useConsoleMode } from "../../wardyn/console-view";
+import { CONNECTIONS } from "../../wardyn/copy/door";
+import { resolveDoor, type DoorTarget } from "../../../lib/model-access";
 import { formatElapsed } from "../run-detail-summary-header";
 
 // Copy change (M7): the two labels, the action, and the four reason bodies.
@@ -124,16 +127,74 @@ const KILL_INCOMPLETE: EndingCopy = {
   ],
 };
 
+// The button each provider door gets on a failed run (#543, canon Table 2).
+function doorButton(t: DoorTarget): { label: string; aria: string; note: string } {
+  if (t.kind === "key") {
+    return t.token
+      ? { label: CONNECTIONS.ADD_TOKEN, aria: MODEL_ACCESS_RUN_DOOR.ADD_TOKEN_ARIA, note: MODEL_ACCESS_RUN_DOOR.NOTE_KEY }
+      : { label: CONNECTIONS.ADD_KEY, aria: MODEL_ACCESS_RUN_DOOR.ADD_KEY_ARIA, note: MODEL_ACCESS_RUN_DOOR.NOTE_KEY };
+  }
+  return t.login === "anthropic"
+    ? { label: CONNECTIONS.SIGN_IN_CLAUDE, aria: MODEL_ACCESS_RUN_DOOR.SIGN_IN_CLAUDE_ARIA, note: MODEL_ACCESS_RUN_DOOR.NOTE }
+    : { label: AGENTS.SIGN_IN_AWS, aria: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA, note: MODEL_ACCESS_RUN_DOOR.NOTE };
+}
+
+// A provider run's credential refusal (design §5.7): the door of the run's OWN
+// provider — the one its refusal names, never the one selected anywhere on
+// screen (#146's ruling) — for the run's owner in the User view. Anyone else,
+// and every run in the Admin view, reads whose credential it was and gets no
+// door: a sign-in lands in the signer's own namespace and can never serve
+// another person's run. The admin's own run is one click from its door.
+function ProviderDoor({ run, provider }: { run: AgentRun; provider: string }) {
+  const door = useModelAccessDoor();
+  const { status } = useShellSetupStatus();
+  const view = useConsoleMode();
+  const resolved = useOperatorResolved();
+  const owner = !!door.principal && run.created_by === door.principal;
+  const yours = owner && view === "user";
+  // null when this person has no door for it any more (removed, or no agent of
+  // theirs uses it): the server's sentence stands alone.
+  const target = yours ? resolveDoor(status, { provider }, "user") : null;
+  useClaimModelAccessDoor(!!target);
+  if (target) {
+    const b = doorButton(target);
+    return (
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button size="sm" aria-label={b.aria} onClick={(e) => door.openDoor({ for: { provider }, returnTo: e.currentTarget })}>
+          {b.label}
+        </Button>
+        <span className="text-xs leading-relaxed text-muted-foreground">{b.note}</span>
+      </div>
+    );
+  }
+  // Nothing while /me is in flight: its "" principal would tell the owner the
+  // run was someone else's.
+  if (yours || !resolved || !run.created_by) return null;
+  return (
+    <div className="mt-2 space-y-1">
+      <p className="text-xs leading-relaxed text-muted-foreground">{MODEL_ACCESS_RUN_DOOR.NOT_OWNER(run.created_by)}</p>
+      {owner && <OpenInUserView />}
+    </div>
+  );
+}
+
 export function RunFailureBlock({
   run,
   audit,
   onGoAudit,
+  adminView = false,
 }: {
   run: AgentRun;
   /** The trail the run page already fetched. */
   audit: AuditEvent[];
   /** Switch to the Audit tab. */
   onGoAudit: () => void;
+  /** M-7 (admin-member-modes-design.md §4.6): the admin monitor carries no
+   *  credential door, even on the admin's own run — this block's failure
+   *  sentence stays, but its sign-in button never renders there; on the
+   *  admin's own per-user lane the switch link back to it does instead
+   *  (QM-7). Defaults false: the user cockpit. */
+  adminView?: boolean;
 }) {
   const ending = runEndingFromAudit(run.state, audit);
   const door = useModelAccessDoor();
@@ -155,13 +216,15 @@ export function RunFailureBlock({
   //    repairs nothing for that run (round-2 general S5). An empty principal is
   //    /me unresolved or a deployment with no OIDC — never matched against an
   //    equally empty created_by.
-  const showDoor =
-    credential &&
-    ending.mechanism === "bedrock_sso" &&
-    door.bedrockSSO &&
-    door.actionable &&
-    !!principal &&
-    run.created_by === principal;
+  //  - a provider run's refusal names its provider (#532): ProviderDoor below
+  //    answers it instead, keyed by that provider alone (#543).
+  const ownSignIn =
+    credential && !ending.provider && ending.mechanism === "bedrock_sso" && !!principal && run.created_by === principal;
+  const showDoor = !adminView && ownSignIn && door.bedrockSSO && door.actionable;
+  // The admin view's stand-in on the admin's own run: the switch link, on the
+  // per-user lane only (the shared lane's sign-in is the admin's own control,
+  // and never a User-view door).
+  const showSwitch = adminView && ownSignIn && door.perUser;
   // One primary recovery action per state per screen: while this block carries
   // the button the shell strip keeps its sentence and drops its own.
   useClaimModelAccessDoor(showDoor);
@@ -244,10 +307,17 @@ export function RunFailureBlock({
           {/* The page's one primary action, so the one `default` Button on this
               surface (CONSOLE-RULES §6) — the sentence above it is the server's
               and names no control. */}
-          <Button size="sm" aria-label={MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA} onClick={(e) => door.openDoor(e.currentTarget)}>
+          <Button size="sm" aria-label={MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA} onClick={(e) => door.openDoor({ returnTo: e.currentTarget })}>
             {AGENTS.SIGN_IN_AWS}
           </Button>
           <span className="text-xs leading-relaxed text-muted-foreground">{MODEL_ACCESS_RUN_DOOR.NOTE}</span>
+        </div>
+      )}
+      {credential && ending.provider && <ProviderDoor run={run} provider={ending.provider} />}
+
+      {showSwitch && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <OpenInUserView runId={run.id} />
         </div>
       )}
 

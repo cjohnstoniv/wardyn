@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -153,6 +154,30 @@ func unionDeniedDomains(spec *types.RunPolicySpec, add []string) []string {
 	return unionDomains(&spec.DeniedDomains, add)
 }
 
+// subsetOf reports whether every element of need is present in have. The
+// empty set is a subset of everything by this reading; a caller for whom an
+// empty need must fail closed (the Azure DevOps capability lane) guards that
+// case itself before calling in.
+func subsetOf[T comparable](need, have []T) bool {
+	for _, n := range need {
+		if !slices.Contains(have, n) {
+			return false
+		}
+	}
+	return true
+}
+
+// intersect returns the elements of a that are also in b, in a's order.
+func intersect[T comparable](a, b []T) []T {
+	var out []T
+	for _, v := range a {
+		if slices.Contains(b, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // refreshRun re-reads a run after a state-changing step (build failure,
 // dispatch) so the caller returns the store's freshest row; on read error the
 // pre-step snapshot is returned unchanged.
@@ -261,9 +286,7 @@ func (s *Server) ownsWorkspaceOrSecurityAdmin(r *http.Request, ws types.Workspac
 // known to exist and to be foreign — a truly-missing workspace stays silent, so
 // the audit trail is not a scan log of every 404.
 func (s *Server) denyForeignWorkspace(w http.ResponseWriter, r *http.Request, ws types.Workspace) {
-	writeError(w, http.StatusNotFound, "workspace not found")
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"authz.denied", ws.ID.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+	s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, ws.ID.String(), "workspace not found"))
 }
 
 // getWorkspaceAuthorized loads a workspace and authorizes the caller to MUTATE
@@ -289,9 +312,7 @@ func (s *Server) getWorkspaceAuthorized(w http.ResponseWriter, r *http.Request, 
 		return ws, true
 	}
 	if ws.OwnedBy == "" {
-		writeError(w, http.StatusForbidden, "requires admin role")
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
+		s.refuse(w, r, authz.Deny(authz.ReasonAdminSurface, r.URL.Path, ""))
 		return types.Workspace{}, false
 	}
 	s.denyForeignWorkspace(w, r, ws)
@@ -461,13 +482,11 @@ func (s *Server) getRunAuthorizedBy(w http.ResponseWriter, r *http.Request, id u
 	if allow(r, run) {
 		return run, true
 	}
-	writeError(w, http.StatusNotFound, "run not found")
 	// Audited AFTER confirming the run genuinely exists — a truly-missing
 	// run (the getRunOr404 branch above) stays silent, so only a POSITIVELY
-	// identified foreign run reaches this audit (reason not_owner). The response
-	// written above is unaffected (byte-identical either way).
-	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorTypeFromRequest(r), principalFromRequest(r),
-		"authz.denied", run.ID.String(), "denied", mustJSON(map[string]any{"reason": "not_owner"})))
+	// identified foreign run reaches this audit (reason not_owner). The body
+	// is byte-identical to getRunOr404's either way.
+	s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, run.ID.String(), "run not found").OnRun(run.ID))
 	return types.AgentRun{}, false
 }
 

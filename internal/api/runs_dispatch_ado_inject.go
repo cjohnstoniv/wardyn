@@ -43,6 +43,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -235,7 +236,8 @@ func adoEntraRunForRepo(sc types.SiteConfig, repo, owner string) (adoEntraRun, b
 // an organisation — so the legacy arm requires the host to be exactly one label
 // in front of visualstudio.com rather than trimming a suffix.
 func adoOrganisationOf(cloneURL string) (string, bool) {
-	t, ok := parseCloneTarget(cloneURL)
+	// nil: an organisation is only ever read off an Azure DevOps SERVICE host.
+	t, ok := parseCloneTarget(cloneURL, nil)
 	if !ok {
 		return "", false
 	}
@@ -328,7 +330,102 @@ type adoEntraLane struct {
 	// exact hosts. The injection alone would attach the person's credential with
 	// nothing narrowing it — the token bounds nothing — so the two always travel
 	// together; nil exactly when no injection was authored.
-	gate []proxy.ADOGrantConfig
+	gate *proxy.ADOGrantConfig
+}
+
+// adoEntraGrade is what the autonomy gate RESOLVED about this run's per-person
+// Azure DevOps lane at CREATE, frozen for dispatch to author from.
+//
+// It exists because the two moments read site config twice. The gate grades
+// from scmLaneSiteConfig (runs_autonomy.go) and freezes the run's autonomy
+// level; dispatch re-reads (siteConfigForDispatch) and authors from that
+// SECOND read. With nothing tying them, an admin flipping this row between the
+// two — `shared` to `per_user`, or adding the entra lane — handed a run graded
+// `secrets=none` the person's Entra bearer. That window is not a race to shrug
+// at: it is the image resolve and the devcontainer/BYOI build inside
+// finishCreateRunLaunch, up to thirty minutes.
+//
+// THE RESOLUTION TRAVELS, NOT THE INPUTS. Freezing the site-config snapshot
+// instead would leave the repositories and the subject re-derived at dispatch
+// and merely PROVEN equal by a test; freezing the answer makes all three one
+// value, and any disagreement becomes a refusal rather than a silent
+// substitution — the rule adoEntraScopeSnapshot already applies to the
+// credential itself, one moment earlier.
+//
+// It rides on dispatchCeiling rather than on dispatchParams, and that is the
+// same decision dispatchCeiling's own doc comment records: an optional field
+// defaulting to "nobody decided" is the defect class that struct exists to
+// close, and ceilingForDispatch is the one translation every dispatch lane
+// already goes through.
+type adoEntraGrade struct {
+	// graded records that a rubric graded this run, so dispatch is held to the
+	// rest of this value. Set by the two constructors below and by nothing else.
+	//
+	// FALSE IS NOT FAIL-OPEN. It means no rubric bound this run — no assigned
+	// profile, no rubric on it, or a dispatch lane that runs no autonomy gate at
+	// all — and dispatch then resolves the lane exactly as it did before this
+	// type existed. A run with no cap cannot be launched above one; the escape
+	// this type closes requires a rubric to have capped the run in the first
+	// place.
+	graded bool
+	// rowID and org are the provider row and organisation the gate resolved.
+	// Both empty with graded=true is the explicit "graded, and the gate saw NO
+	// lane" — the case the security review reproduced.
+	rowID string
+	org   string
+}
+
+// adoEntraUngraded is the answer for a dispatch lane that runs no autonomy
+// gate: the scan lane, the site-config probe, the harness login and the
+// record/verify session. Named rather than a bare literal so the claim is
+// greppable at the call site and a new lane has to make it on purpose.
+func adoEntraUngraded() adoEntraGrade { return adoEntraGrade{} }
+
+// adoEntraGradedAs freezes what resolveADOEntraRun answered at the gate, for
+// the one door that grades. `on=false` freezes "graded with no lane", which is
+// an answer and not an absence — that distinction is the whole fix.
+func adoEntraGradedAs(ado adoEntraRun, on bool) adoEntraGrade {
+	if !on {
+		return adoEntraGrade{graded: true}
+	}
+	return adoEntraGrade{graded: true, rowID: ado.rowID, org: ado.org}
+}
+
+// adoEntraGradeHolds refuses a dispatch that would author a lane the autonomy
+// gate never graded, or one for a DIFFERENT row or organisation than it graded.
+// Returns true when dispatch may proceed; false once the run is already FAILED.
+//
+// Only the ESCAPE direction refuses. The mirror case — the gate graded a lane
+// and dispatch now resolves none, because an admin went `per_user` to `shared`
+// — leaves the run capped as if it held the credential while holding nothing,
+// which is stricter than its posture and harms no one. Refusing it would turn a
+// benign admin edit into a failed run, so it declines quietly, exactly as a run
+// that never had a row does.
+//
+// The ORGANISATION is checked as well as the row, because it is the pin: an
+// Entra access token carries no organisation claim (this file's header,
+// measured), so the graded envelope named contoso's hosts and a dispatch
+// authoring fabrikam's would credential an organisation the grade never saw.
+func (s *Server) adoEntraGradeHolds(ctx context.Context, run types.AgentRun, g adoEntraGrade,
+	ado adoEntraRun, on bool,
+) bool {
+	if !g.graded || !on {
+		return true
+	}
+	if g.rowID == "" {
+		return s.refuseADOEntraDispatch(ctx, run, "autonomy_grade_drift",
+			"this run was not launched: its autonomy level was graded WITHOUT an Azure DevOps credential, and the "+
+				"provider configuration changed between then and now so that dispatch would attach one. Re-launch the "+
+				"run so it is graded against the configuration it will actually get.")
+	}
+	if g.rowID != ado.rowID || g.org != ado.org {
+		return s.refuseADOEntraDispatch(ctx, run, "autonomy_grade_drift",
+			fmt.Sprintf("this run was not launched: its autonomy level was graded for Azure DevOps organisation %q on "+
+				"provider row %q, and dispatch resolved organisation %q on row %q. An Entra access token carries no "+
+				"organisation claim, so the pin is the only thing scoping this credential and it may not be "+
+				"re-decided after the run was graded. Re-launch the run.", g.org, g.rowID, ado.org, ado.rowID))
+	}
+	return true
 }
 
 // authorADOEntraLane is dispatchRun's one call into this file: it authors the
@@ -337,9 +434,14 @@ type adoEntraLane struct {
 // run has already been marked FAILED and dispatch must stop —
 // authorBedrockSSOInjection's contract, deliberately identical.
 func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado adoEntraRun, on bool,
-	plan dispatchLLMPlan, policy *types.RunPolicySpec, sandboxEnv map[string]string,
+	grade adoEntraGrade, plan dispatchLLMPlan, policy *types.RunPolicySpec, sandboxEnv map[string]string,
 	injections []runner.InjectionGrant,
 ) (adoEntraLane, bool) {
+	// Ahead of the `on` short-circuit: the case that matters is the one where
+	// dispatch WOULD author a lane the grade did not include.
+	if !s.adoEntraGradeHolds(ctx, run, grade, ado, on) {
+		return adoEntraLane{injections: injections}, false
+	}
 	if !on {
 		return adoEntraLane{injections: injections}, true
 	}
@@ -347,9 +449,9 @@ func (s *Server) authorADOEntraLane(ctx context.Context, run types.AgentRun, ado
 	if !ok {
 		return adoEntraLane{injections: injections}, false
 	}
-	return adoEntraLane{injections: inj, mitmHosts: mitm, gate: []proxy.ADOGrantConfig{{
+	return adoEntraLane{injections: inj, mitmHosts: mitm, gate: &proxy.ADOGrantConfig{
 		Organization: ado.org, Capabilities: slices.Clone(ado.caps), Hosts: adoEntraHosts(ado.org),
-	}}}, true
+	}}, true
 }
 
 // authorADOEntraInjection authors the whole lane for one run.
@@ -385,7 +487,9 @@ func (s *Server) authorADOEntraInjection(ctx context.Context, run types.AgentRun
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_not_grantable",
 			"this run's Azure DevOps provider row grants a capability Wardyn will not mint a credential for: "+err.Error())
 	}
-	if !adoCapabilitiesWithin(ado.caps, ado.ceiling) {
+	// Empty is NOT within anything: a run granted nothing has no business
+	// holding a credential.
+	if len(ado.caps) == 0 || !subsetOf(ado.caps, ado.ceiling) {
 		return injections, nil, s.refuseADOEntraDispatch(ctx, run, "capability_ceiling",
 			"this run's Azure DevOps default profile names a capability outside the provider row's own ceiling")
 	}
@@ -455,25 +559,31 @@ func (s *Server) createADOEntraGrants(ctx context.Context, run types.AgentRun,
 			"snapshot":    snapshot,
 		})
 		if merr != nil {
-			return nil, s.refuseADOEntraDispatch(ctx, run, "grant_scope",
-				"could not author the Azure DevOps credential injection: "+merr.Error())
+			return nil, s.refuseADOEntraGrant(ctx, run, "grant_scope", "could not author the Azure DevOps credential injection", merr)
 		}
 		grantID := uuid.New()
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID: grantID, RunID: run.ID, CreatedAt: time.Now(),
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope, TTLSeconds: adoEntraGrantTTLSeconds},
 		}); gerr != nil {
-			return nil, s.refuseADOEntraDispatch(ctx, run, "grant_write",
-				"could not author the Azure DevOps credential injection: "+gerr.Error())
+			return nil, s.refuseADOEntraGrant(ctx, run, "grant_write", "could not record the Azure DevOps credential grant", gerr)
 		}
 		rule, derr := injectionRuleFromScope(scope)
 		if derr != nil {
-			return nil, s.refuseADOEntraDispatch(ctx, run, "grant_scope",
-				"could not author the Azure DevOps credential injection: "+derr.Error())
+			return nil, s.refuseADOEntraGrant(ctx, run, "grant_scope", "could not author the Azure DevOps credential injection", derr)
 		}
 		out = append(out, runner.InjectionGrant{GrantID: grantID, Rule: rule})
 	}
 	return out, true
+}
+
+// refuseADOEntraGrant refuses a run whose grant could not be authored. The
+// hint becomes the member-visible failure hint and the audit detail, so it is
+// a fixed sentence; err (store/driver text) goes to the log only.
+func (s *Server) refuseADOEntraGrant(ctx context.Context, run types.AgentRun, reason, hint string, err error) bool {
+	slog.ErrorContext(ctx, "wardynd: "+hint,
+		slog.String("run_id", run.ID.String()), slog.String("reason", reason), slog.Any("err", err))
+	return s.refuseADOEntraDispatch(ctx, run, reason, hint)
 }
 
 // refuseADOEntraDispatch marks the run FAILED and records why. It always
@@ -489,20 +599,4 @@ func (s *Server) refuseADOEntraDispatch(ctx context.Context, run types.AgentRun,
 			"error": "azure devops entra inject: " + reason, "reason": reason, "detail": detail,
 		})))
 	return false
-}
-
-// adoCapabilitiesWithin reports whether every capability in caps is inside
-// ceiling. An empty caps is NOT within anything: a run granted nothing has no
-// business holding a credential, and "the empty set is inside every set" is
-// exactly the reading adoscope refuses for scopes.
-func adoCapabilitiesWithin(caps, ceiling []adoscope.Capability) bool {
-	if len(caps) == 0 {
-		return false
-	}
-	for _, c := range caps {
-		if !slices.Contains(ceiling, c) {
-			return false
-		}
-	}
-	return true
 }

@@ -1,0 +1,1 @@
+{"id":"11111111-2222-3333-4444-555555555555","run_id":"66666666-7777-8888-9999-000000000000","kind":"tool_call","requested_scope":{"tool":"Bash","cmd":"make test"},"state":"PENDING","requested_at":"2026-09-23T12:00:00Z"}

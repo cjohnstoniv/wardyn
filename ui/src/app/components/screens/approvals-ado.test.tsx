@@ -14,10 +14,13 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { ADO } from "../../lib/ado-entra-copy";
+import { APPROVALS } from "../../lib/approvals-copy";
+import { toast } from "sonner";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
@@ -146,5 +149,56 @@ describe("ApprovalsScreen — the Azure DevOps capability card", () => {
     renderScreen(false, false, "dana@acme.example");
     await screen.findByTestId("ado-capability-card");
     expect(screen.getByText(ADO.TOOL_CALL_NOTE)).toBeInTheDocument();
+  });
+
+  // #458 — the toast on a successful decide comes from the shared canon
+  // module, not a hand-typed literal.
+  it("#458: approving toasts the canon APPROVALS.TOAST_APPROVED", async () => {
+    mockRow = escalationRow;
+    approveMock.mockResolvedValue(undefined);
+    renderScreen(false, false, "dana@acme.example");
+    const card = await screen.findByTestId("ado-capability-card");
+    await waitFor(() => expect(card).toHaveTextContent("Push"));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(APPROVALS.TOAST_APPROVED));
+  });
+
+  // #458 — busy is now "approve" | "deny" | null: while Approve is deciding,
+  // BOTH buttons disable and only Approve shows the spinner.
+  it("#458: while Approve decides, both buttons disable and only Approve spins", async () => {
+    mockRow = escalationRow;
+    let resolveApprove!: () => void;
+    approveMock.mockReturnValue(new Promise<void>((resolve) => { resolveApprove = resolve; }));
+    renderScreen(false, false, "dana@acme.example");
+    const card = await screen.findByTestId("ado-capability-card");
+    await waitFor(() => expect(card).toHaveTextContent("Push"));
+    const user = userEvent.setup();
+    const approveBtn = screen.getByRole("button", { name: /approve/i });
+    const denyBtn = screen.getByRole("button", { name: /deny/i });
+    await user.click(approveBtn);
+
+    await waitFor(() => expect(approveBtn).toBeDisabled());
+    expect(denyBtn).toBeDisabled();
+    expect(approveBtn.querySelector(".animate-spin")).toBeInTheDocument();
+    expect(denyBtn.querySelector(".animate-spin")).not.toBeInTheDocument();
+
+    resolveApprove();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(APPROVALS.TOAST_APPROVED));
+  });
+
+  // #458 — a failed decide toasts the canon failure string, not a
+  // hand-typed one.
+  it("#458: a failed approve toasts APPROVALS.TOAST_APPROVE_FAILED", async () => {
+    mockRow = escalationRow;
+    approveMock.mockRejectedValue(new Error("boom"));
+    renderScreen(false, false, "dana@acme.example");
+    const card = await screen.findByTestId("ado-capability-card");
+    await waitFor(() => expect(card).toHaveTextContent("Push"));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(APPROVALS.TOAST_APPROVE_FAILED, expect.anything()),
+    );
   });
 });

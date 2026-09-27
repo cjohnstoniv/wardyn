@@ -38,7 +38,6 @@ test.describe("New run rail — the Azure DevOps launch door", () => {
           error: "git_credential: you are not connected to Azure DevOps — connect and start the run again",
           reason: "git_credential",
           org,
-          row_id: "ado-row-1",
         }),
       });
     });

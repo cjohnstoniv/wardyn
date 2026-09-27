@@ -130,6 +130,7 @@ import { OperatorProvider } from "./wardyn/operator-context";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { runs } from "../lib/api/runs";
 import { HttpError } from "../lib/api/core";
+import { aheadByHours } from "../lib/test-clock";
 
 // The attach-mode control frame the daemon sends as a TEXT frame on EVERY
 // connect (internal/api/attach_holder.go), read_only=false included.
@@ -140,7 +141,7 @@ function attachModeFrame(readOnly: boolean, principal: string) {
     holder: {
       held: true,
       principal,
-      since: "2026-08-16T12:00:00Z",
+      since: aheadByHours(-1),
       cols: 132,
       rows: 50,
       source: "web",
@@ -571,10 +572,11 @@ describe("AttachTerminal — attach mode, displacement, take-over", () => {
   });
 });
 
-// Take-over evicts, it does not promote: after the POST returns, this client's
-// socket is still the read-only one, so it has to reconnect to claim the writer
-// slot (handleAttachTakeover's own note). Real timers — the confirm dialog is
-// Radix, driven the same way live-approvals.test.tsx drives its deny confirm.
+// `promoted:false` (no queued observer socket of our own on this run): after
+// the POST returns, this client's socket is still the read-only one, so it
+// has to reconnect to claim the writer slot. Real timers — the confirm
+// dialog is Radix, driven the same way live-approvals.test.tsx drives its
+// deny confirm.
 describe("AttachTerminal — take-over reconnects to claim the writer slot", () => {
   beforeEach(stubTerminalEnv);
   afterEach(() => vi.unstubAllGlobals());
@@ -582,7 +584,7 @@ describe("AttachTerminal — take-over reconnects to claim the writer slot", () 
   it("confirm → takeoverAttach → a NEW socket is opened", async () => {
     const takeover = vi.mocked(runs.takeoverAttach);
     takeover.mockReset();
-    takeover.mockResolvedValue(undefined);
+    takeover.mockResolvedValue({ promoted: false });
 
     render(<AttachTerminal runId="run_1" />);
     const ws = FakeWebSocket.instances[0];
@@ -647,6 +649,58 @@ describe("AttachTerminal — take-over reconnects to claim the writer slot", () 
     // ...and does NOT show the 409 text as an error the operator cannot act on.
     expect(screen.queryByText(/nothing to take over/)).toBeNull();
   });
+
+  // #507: `promoted:true` means the server already flipped THIS socket to
+  // writer in place. Reconnecting on that answer would close the very socket
+  // that was just promoted, releasing the writer slot to whichever bystander
+  // is next in the FIFO queue — the taker ends up read-only despite winning
+  // the take-over. The fix is to leave the socket alone and let the server's
+  // own attach-mode frame (read_only:false) flip it.
+  it("promoted:true does NOT reconnect — the same socket is promoted in place", async () => {
+    const takeover = vi.mocked(runs.takeoverAttach);
+    takeover.mockReset();
+    takeover.mockResolvedValue({ promoted: true });
+
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(true, "alice@example.com")));
+
+    fireEvent.click(screen.getByRole("button", { name: RUN_COCKPIT.takeOver }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: RUN_COCKPIT.takeOver }));
+
+    await waitFor(() => expect(takeover).toHaveBeenCalledWith("run_1"));
+    // No second socket: the original one is what gets promoted.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // The server's promotion notice arrives on the SAME socket.
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  // `promoted:true` names the principal, not the socket: the server flips that
+  // principal's FIRST observer, which may be another tab. A displaced panel's
+  // socket is already closed, so the promoted one cannot be ours — returning
+  // on that answer left the panel with no socket and no way out.
+  it("promoted:true on a DISPLACED panel still reconnects — its socket is gone", async () => {
+    const takeover = vi.mocked(runs.takeoverAttach);
+    takeover.mockReset();
+    takeover.mockResolvedValue({ promoted: true });
+
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+    act(() => ws.drop(1008, "taken over by bob@example.com"));
+
+    fireEvent.click(screen.getByRole("button", { name: RUN_COCKPIT.takeOver }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: RUN_COCKPIT.takeOver }));
+
+    await waitFor(() => expect(takeover).toHaveBeenCalledWith("run_1"));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+  });
 });
 
 // R4-F143: every state in this component came off the socket's open/close/error
@@ -693,7 +747,7 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
     expect(screen.getByText("run_1")).toBeInTheDocument();
     expect(screen.queryByText("[closed] run_1")).toBeNull();
     expect(screen.getByText(TERMINAL.CLOSED_TITLE)).toBeInTheDocument();
-    expect(screen.getByText(TERMINAL.CLOSED_BODY)).toBeInTheDocument();
+    expect(screen.getByText(TERMINAL.CLOSED_BODY(4))).toBeInTheDocument();
     expect(screen.getByRole("button", { name: TERMINAL.RECONNECT })).toBeInTheDocument();
     // Never written into xterm's own buffer — the writeln mock proves it.
     expect(writeln).not.toHaveBeenCalledWith(expect.stringContaining("[connection closed after"));
@@ -740,10 +794,14 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
 // allows a non-standard exit only if it is advised on entry, so the chord and
 // its announcement are one feature: either alone still fails the criterion.
 //
-// The chord is Ctrl+] and not the filed proposal's Ctrl+Shift+Esc — Windows
-// intercepts that at OS level (Task Manager) before the browser sees it, so
-// on the platform most likely to need it the exit would silently not exist.
-describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", () => {
+// The advertised chord is Ctrl+Shift+Backspace (#133) — the earlier Ctrl+]
+// never fired on DE/FR/ES layouts, where AltGr (needed to type `]`) arrives
+// at the browser as ctrlKey && altKey. Ctrl+] still works, silently,
+// as a US-only fallback, but must not fire when altKey is held — that is
+// AltGr typing a bracket, not the chord. The per-layout matrix lives in
+// attach-terminal-keys.test.ts; these tests pin the wiring into the widget.
+describe("AttachTerminal — the keyboard trap has an advertised exit", () => {
+  // ticket: F144
   beforeEach(() => {
     keyHandler = null;
     FakeWebSocket.instances = [];
@@ -754,9 +812,9 @@ describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", (
   const chord = () =>
     ({
       type: "keydown",
-      key: "]",
+      key: "Backspace",
       ctrlKey: true,
-      shiftKey: false,
+      shiftKey: true,
       altKey: false,
       metaKey: false,
     }) as unknown as KeyboardEvent;
@@ -771,7 +829,7 @@ describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", (
     ).not.toBeNull();
   });
 
-  it("Ctrl+] moves focus OUT of the terminal and is not forwarded to the PTY", () => {
+  it("Ctrl+Shift+Backspace moves focus OUT of the terminal and is not forwarded to the PTY", () => {
     render(<AttachTerminal runId="run_1" />);
     act(() => FakeWebSocket.instances[0].open());
     expect(keyHandler).not.toBeNull();
@@ -787,18 +845,25 @@ describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", (
     expect((document.activeElement as HTMLElement).tabIndex).toBe(-1);
   });
 
+  it("Ctrl+] (US, no AltGr) still escapes silently", () => {
+    render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].open());
+    const bracket = { ...chord(), key: "]", shiftKey: false } as unknown as KeyboardEvent;
+    expect(keyHandler!(bracket)).toBe(false);
+  });
+
+  it("Ctrl+] with altKey held (DE AltGr+9 typing a bracket) reaches the PTY, not the escape", () => {
+    render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].open());
+    const altGr = { ...chord(), key: "]", shiftKey: false, altKey: true } as unknown as KeyboardEvent;
+    expect(keyHandler!(altGr)).toBe(true);
+  });
+
   it("leaves an ordinary ] alone — the terminal still gets its bracket", () => {
     render(<AttachTerminal runId="run_1" />);
     act(() => FakeWebSocket.instances[0].open());
-    const plain = { ...chord(), ctrlKey: false } as unknown as KeyboardEvent;
+    const plain = { ...chord(), key: "]", shiftKey: false, ctrlKey: false } as unknown as KeyboardEvent;
     expect(keyHandler!(plain)).toBe(true);
-  });
-
-  it("leaves Ctrl+Shift+] alone — one chord, no near-miss that also escapes", () => {
-    render(<AttachTerminal runId="run_1" />);
-    act(() => FakeWebSocket.instances[0].open());
-    const near = { ...chord(), shiftKey: true } as unknown as KeyboardEvent;
-    expect(keyHandler!(near)).toBe(true);
   });
 });
 
@@ -807,7 +872,8 @@ describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", (
 // click on the container's padding, or the dead space below the last row,
 // lands nowhere — which reads as needing a very specific click location, or
 // a second click that happens to land on the screen.
-describe("AttachTerminal — D3 focus", () => {
+describe("AttachTerminal — focus", () => {
+  // ticket: D3
   beforeEach(() => {
     focusCalls.n = 0;
     stubTerminalEnv();

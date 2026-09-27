@@ -345,20 +345,21 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 
 // repoCloneLeaf is the directory agent-run clones a run's repo into under the
 // workspace mount target: the last path element of "org/name" (or of a URL),
-// minus a ".git" suffix. Empty for a run with no repo.
+// minus a ".git" suffix, named by repoDirName exactly as buildRepoRecords names
+// the clone. Empty for a run with no repo.
 func repoCloneLeaf(repo string) string {
 	repo = strings.TrimSuffix(strings.TrimRight(strings.TrimSpace(repo), "/"), ".git")
 	if i := strings.LastIndex(repo, "/"); i >= 0 {
 		repo = repo[i+1:]
 	}
-	return repo
+	return repoDirName(repo)
 }
 
-// auditRunFilesFailure records the FAILURE-only run.files audit row (see
+// auditRunFilesFailure records the FAILURE-only run.files.fail audit row (see
 // handleRunFiles' doc for why success is silent).
 func (s *Server) auditRunFilesFailure(r *http.Request, runID uuid.UUID, err error) {
 	s.recordAudit(r.Context(), s.auditEvent(&runID, actorTypeFromRequest(r), principalFromRequest(r),
-		"run.files", runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
+		"run.files.fail", runID.String(), "failure", mustJSON(map[string]any{"error": err.Error()})))
 }
 
 // parseRunFiles reads runFilesScript's stdout — the numstat section, the

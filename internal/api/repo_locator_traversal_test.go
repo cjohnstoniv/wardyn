@@ -52,13 +52,13 @@ func TestRepoLocatorPathSafeAdmitsOrdinaryAddresses(t *testing.T) {
 		"https://github.com", // no path at all: nothing to traverse
 		"",
 	} {
-		if !repoLocatorPathSafe(ok) {
-			t.Errorf("repoLocatorPathSafe(%q) = false, want true — an ordinary repository address", ok)
+		if !repoLocatorPathSafe(ok, nil) {
+			t.Errorf("repoLocatorPathSafe(%q, nil) = false, want true — an ordinary repository address", ok)
 		}
 	}
 	for _, tc := range traversalLocators {
-		if repoLocatorPathSafe(tc.locator) {
-			t.Errorf("%s: repoLocatorPathSafe(%q) = true, want false", tc.name, tc.locator)
+		if repoLocatorPathSafe(tc.locator, nil) {
+			t.Errorf("%s: repoLocatorPathSafe(%q, nil) = true, want false", tc.name, tc.locator)
 		}
 	}
 }
@@ -71,12 +71,12 @@ func TestRepoLocatorPathSafeAdmitsOrdinaryAddresses(t *testing.T) {
 func TestTraversalLocatorsRefusedAtBothWriteDoors(t *testing.T) {
 	for _, tc := range traversalLocators {
 		t.Run(tc.name, func(t *testing.T) {
-			lib := validateSourceWrite(types.Source{Kind: types.SourceRepo, Name: "n", Locator: tc.locator})
+			lib := validateSourceWrite(types.Source{Kind: types.SourceRepo, Name: "n", Locator: tc.locator}, nil)
 			if want := fmt.Sprintf(repo400LocatorShape, "locator"); lib != want {
 				t.Errorf("validateSourceWrite = %q, want the DRAFT shape sentence %q", lib, want)
 			}
 			ws := validateWorkspaceSource(types.WorkspaceSource{
-				Type: types.WorkspaceSourceTypeRepo, Source: tc.locator})
+				Type: types.WorkspaceSourceTypeRepo, Source: tc.locator}, nil)
 			if want := fmt.Sprintf(repo400LocatorShape, "source"); ws != want {
 				t.Errorf("validateWorkspaceSource = %q, want the DRAFT shape sentence %q", ws, want)
 			}
@@ -84,12 +84,12 @@ func TestTraversalLocatorsRefusedAtBothWriteDoors(t *testing.T) {
 	}
 	// …and an ordinary address still passes both, so the guard is not simply
 	// refusing every repo source.
-	if msg := validateSourceWrite(types.Source{Kind: types.SourceRepo, Name: "n", Locator: "acme/app"}); msg != "" {
-		t.Errorf("validateSourceWrite(acme/app) = %q, want accepted", msg)
+	if msg := validateSourceWrite(types.Source{Kind: types.SourceRepo, Name: "n", Locator: "acme/app"}, nil); msg != "" {
+		t.Errorf("validateSourceWrite(acme/app, nil) = %q, want accepted", msg)
 	}
 	if msg := validateWorkspaceSource(types.WorkspaceSource{
-		Type: types.WorkspaceSourceTypeRepo, Source: "acme/app"}); msg != "" {
-		t.Errorf("validateWorkspaceSource(acme/app) = %q, want accepted", msg)
+		Type: types.WorkspaceSourceTypeRepo, Source: "acme/app"}, nil); msg != "" {
+		t.Errorf("validateWorkspaceSource(acme/app, nil) = %q, want accepted", msg)
 	}
 }
 

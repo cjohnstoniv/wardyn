@@ -14,11 +14,12 @@ import { MemoryRouter } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
 import { ruleSourceLabel } from "../../lib/types";
 import { AuditDecision, RuleSourceChip, toolRuleDecision } from "./audit-decision";
+import { aheadByHours } from "../../lib/test-clock";
 
 function event(over: Partial<AuditEvent> = {}): AuditEvent {
   return {
     id: "evt_1",
-    time: "2026-08-28T14:02:11Z",
+    time: aheadByHours(-1),
     actor_type: "agent",
     actor: "run_abc",
     action: "egress.allow",
@@ -131,7 +132,7 @@ describe("ruleSourceLabel", () => {
       label: "Declared internal host",
       tone: "info",
     });
-    expect(ruleSourceLabel("egress.decisions.dropped:3")).toEqual({
+    expect(ruleSourceLabel("egress:dropped-decisions-3")).toEqual({
       label: "Decisions dropped",
       tone: "neutral",
     });

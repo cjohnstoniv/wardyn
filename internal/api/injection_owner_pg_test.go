@@ -101,7 +101,7 @@ func newRunOwnerPGHarness(t *testing.T) (*harness, *secretspg.Store) {
 		AllowedDomains:      []string{"api.anthropic.com"},
 		MinConfinementClass: types.CC2,
 		// A bare api_key ceiling entry: composer.Clamp keeps a proposed grant
-		// only by KIND before filterMemberGrants' own-key arm ever runs — see
+		// only by KIND before filterUserGrants' own-key arm ever runs — see
 		// TestIntegrations_MemberKeySynthesisesRow_NoWarning.
 		EligibleGrants: []types.GrantSpec{{Kind: types.GrantAPIKey}},
 	}
@@ -123,7 +123,7 @@ func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator_NoWarning(t *testing.T
 	h, sec := newRunOwnerPGHarness(t)
 	ctx := context.Background()
 
-	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleUser)
 
 	// The member writes her OWN row through the real PUT /secrets handler
 	// (secretOwnerFromRequest stamps it under her own namespace, persisted to
@@ -135,7 +135,7 @@ func TestInvariant1_PGBacked_MemberOwnRowWinsOverOperator_NoWarning(t *testing.T
 	}
 
 	// She creates a run with a hand-authored inline api_key grant naming her
-	// own secret — the filterMemberGrants own-key lane (6c) — through the
+	// own secret — the filterUserGrants own-key lane (6c) — through the
 	// real POST /runs handler (real create, real grant persistence).
 	body := `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2",` +
 		`"allowed_domains":["api.anthropic.com"],` +

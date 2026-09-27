@@ -12,6 +12,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/subscription"
@@ -108,7 +109,7 @@ type SetupStatus struct {
 	// decides llmProvenance's detail (resident CLI login, a secret-name
 	// heuristic, Bedrock, a managed harness token) OR'd with an AI-provider
 	// Integration being configured. It exists
-	// because a MEMBER'S redacted response (redactSetupStatusForMember) drops
+	// because a MEMBER'S redacted response (redactSetupStatusForUser) drops
 	// the checks/providers/secret-name detail that would otherwise let the
 	// console derive this itself — LLMReady is computed BEFORE redaction and
 	// deliberately left untouched BY it, so the console's readiness chip / new-run
@@ -133,9 +134,24 @@ type SetupStatus struct {
 	// second boot-time field — see handleSetupStatus. Go + test only: no
 	// console reader exists yet (the ui/src/app/lib/types.ts mirror is
 	// hand-maintained, added when the Network step renders it) and
-	// redactSetupStatusForMember does not zero it — a bare count carries no
+	// redactSetupStatusForUser does not zero it — a bare count carries no
 	// PEM content, host name, or other detail members are barred from.
 	TrustedCACerts int `json:"trusted_ca_certs,omitempty"`
+	// ModelProviders is the model providers THIS PRINCIPAL may use, in the
+	// member-safe shape (SetupModelProvider) — the same for every tier, so the
+	// member redaction has nothing to strip. Absent with no provider block,
+	// which is today.
+	ModelProviders []SetupModelProvider `json:"model_providers,omitempty"`
+	// ProviderAccess is THIS PRINCIPAL's connection state for every provider in
+	// ModelProviders (MP-12) — one row per provider, generalising the single
+	// AWS-SSO-only answer ModelAccess gives. Getting started and the setup
+	// checklist read this instead of grading one hardcoded lane, so a person
+	// granted several providers sees all of them. Kept for members: a state
+	// name, an already-composed action sentence, and a deadline instant — no
+	// secret names, no start URL. The pin-mismatch action is the one place the
+	// pinned account and role appear (SetupProviderAccess's doc). Absent with
+	// no provider block.
+	ProviderAccess []SetupProviderAccess `json:"provider_access,omitempty"`
 }
 
 // SetupHarness is a Wardyn-managed subscription credential's readiness. Derived
@@ -212,7 +228,7 @@ type SetupRunner struct {
 	// The Workspace Providers screen renders it beside default_disk_mib so an
 	// admin setting a number can see whether anything will hold it.
 	//
-	// Operator-only: redactSetupStatusForMember rebuilds this struct with
+	// Operator-only: redactSetupStatusForUser rebuilds this struct with
 	// ConfinementClasses alone, so the word never reaches a member. It is
 	// deliberately absent from the ANONYMOUS /healthz, which composes its own body
 	// field by field.
@@ -406,7 +422,8 @@ func claudeSubscriptionStagingCheck(hasClaudeSub, blessed bool, loginVia string)
 // The handler gathers state; every checklist row is a small pure function below
 // (one per item, in the order the wizard renders them).
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	// One capability snapshot for every per-person list below (capVisible).
+	ctx := withCapBatch(r.Context())
 
 	// auth: same derivation handleMe uses, plus the "disabled" edge (no auth
 	// configured at all — practically unreachable here since adminAuth would have
@@ -485,7 +502,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// AI-provider Integration being configured, computed ONCE here and reused
 	// below for resp.Integrations so effectiveIntegrations() is not walked
 	// twice. Computed BEFORE redaction and left untouched by it (see
-	// redactSetupStatusForMember) — a member's console needs the ANSWER even
+	// redactSetupStatusForUser) — a member's console needs the ANSWER even
 	// though it can no longer see the detail that produced it.
 	//
 	// PLATFORM-API-7: use the *Using form, reusing the present/providers/bedrock
@@ -493,16 +510,16 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// listing, a CLI sweep + subscription peek, and an AWS-SSO-blob age decrypt.
 	integrations := s.integrationsWithCapabilitiesUsing(ctx, present, providers, bedrock)
 	llmReady := computeLLMReady(llmDetail, integrations)
+	modelProviders, providerAccess, providerChecks := s.setupModelProviderState(ctx, siteCfg, runIdentitySubject(ctx, principalFromRequest(r)))
 
 	// checks: the rows the wizard renders. "info" is used for permanent /
 	// non-fixable or purely-optional conditions so the user is never shown a red
-	// they cannot clear.
-	checks := []SetupCheck{
-		runnerCheck(rnr),
-		agentImageCheck(s.cfg.AgentImages),
-		envBuilderCheck(s.cfg.ImageBuilder != nil),
-		llmProviderCheck(llmDetail, bedrock),
-	}
+	// they cannot clear. Each granted provider's own row follows LLM access.
+	checks := append([]SetupCheck{
+		runnerCheck(rnr), agentImageCheck(s.cfg.AgentImages),
+		claudeSignInImageCheck(ctx, s.cfg.AgentImages, s.cfg.Runner),
+		envBuilderCheck(s.cfg.ImageBuilder != nil), llmProviderCheck(llmDetail, bedrock, providerAccess),
+	}, providerChecks...)
 	// confinement_floor: the operator's configured floor vs what this runner
 	// can actually enforce — see confinementFloorCheck.
 	if chk, ok := confinementFloorCheck(rnr, s.cfg.DefaultPolicy.MinConfinementClass); ok {
@@ -535,13 +552,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	checks = append(checks, ageKeyCheck(s.cfg.AgeKeyDurable),
-		hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
+	checks = append(checks, secretStoreChecks(s.cfg.SecretStoreExternal, s.cfg.SecretKeyService, s.cfg.AgeKeyDurable, s.cfg.OIDC != nil, s.cfg.PlatformKeySeparate)...)
+	checks = append(checks, hostProxyCheck(hostProxy, plat.Containerized && !setup.HostProxySeeded()))
 
 	// sso_rbac / tls_cookie_posture: both OIDC-gated (mirror how every other
 	// conditional check gates on its own applicability).
 	oidcConfigured := s.cfg.OIDC != nil
-	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured)); ok {
+	if chk, ok := ssoRBACCheck(oidcConfigured, s.cfg.OIDCRoleMapConfigured, s.consoleRoleMappingsPresent(ctx, oidcConfigured), oidcConfigured && s.cfg.OIDC.HasOperatorEmails(), s.oidcDefaultRoleIsAdmin(oidcConfigured)); ok {
 		checks = append(checks, chk)
 	}
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
@@ -628,11 +645,13 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Harness:            harnessCreds,
 		// Integrations reuses the single integrationsWithCapabilitiesUsing call
 		// hoisted above (PLATFORM-API-7 optimization + HIGH-4 llm_ready reuse).
-		Integrations: integrations,
-		Harnesses:    setupHarnessTools(siteCfg, s.cfg.AgentImages),
-		LLMReady:     llmReady,
-		ModelAccess:  modelAccess,
-		SCMAccess:    s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
+		// Every list holds only what this caller may use (capVisible; model providers
+		// on the roster line, funlen ratchet); llmReady stays the deployment fact.
+		Integrations: capVisible(ctx, s, capIntegration, integrations, setupIntegrationID),
+		Harnesses:    capVisible(ctx, s, capAgent, setupHarnessTools(siteCfg, s.cfg.AgentImages), setupHarnessToolID), ModelProviders: modelProviders, ProviderAccess: providerAccess,
+		LLMReady:    llmReady,
+		ModelAccess: modelAccess,
+		SCMAccess:   s.scmAccessValue(ctx, siteCfg, oidcHumanFromContext(ctx)), // #386: absent -> zero value
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
@@ -644,7 +663,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// setup mutation, which stays super-only. A security admin sees the same
 	// summary a member does because there is nothing here they could act on.
 	if !s.isOperator(ctx) {
-		resp = redactSetupStatusForMember(resp, ssoScope.perUser, ssoScope.perUser && ssoScope.bearer)
+		resp = redactSetupStatusForUser(resp, ssoScope.perUser, ssoScope.perUser && ssoScope.bearer)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -663,7 +682,19 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 	return err == nil && len(rows) > 0
 }
 
-// redactSetupStatusForMember drops the operator/admin-facing DIAGNOSTIC detail
+// oidcDefaultRoleIsAdmin reports whether WARDYN_OIDC_DEFAULT_ROLE resolves to
+// admin — ssoRBACCheck's defaultRoleAdmin input (#491). Split out of
+// handleSetupStatus (which is otherwise inline) to keep it under the gocyclo
+// gate; s.cfg.OIDC already carries the boot-validated DefaultRole, so no new
+// Config field is needed. Deciding "is this the admin role" is
+// oidc.Authenticator's own call (DefaultRoleIsAdmin), not a bare == RoleAdmin
+// comparison here — internal/api/refusal_test.go's roleComparisons guard
+// stays shrink-only.
+func (s *Server) oidcDefaultRoleIsAdmin(oidcConfigured bool) bool {
+	return oidcConfigured && s.cfg.OIDC.DefaultRoleIsAdmin()
+}
+
+// redactSetupStatusForUser drops the operator/admin-facing DIAGNOSTIC detail
 // a member has no route to act on — the environment/credential checklist rows,
 // resident-CLI login detection, and secret NAMES — the explicit drop list
 // (checks/providers/secret names/runner detail), plus the integration rows' OWN
@@ -693,7 +724,7 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // ownBearerRow (#337) is narrower: per_user AND bedrock_bearer specifically,
 // false under a per_user bedrock_sso row (which has no bearer lane of its
 // own to read). It decides one field too — see Bedrock.
-func redactSetupStatusForMember(st SetupStatus, ownAWSRow, ownBearerRow bool) SetupStatus {
+func redactSetupStatusForUser(st SetupStatus, ownAWSRow, ownBearerRow bool) SetupStatus {
 	st.Checks = []SetupCheck{}
 	// Say the strip happened, so a reader never takes [] for "nothing is wired".
 	st.ChecksRedacted = true
@@ -748,7 +779,7 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow, ownBearerRow bool) Se
 	// contradiction: one credential-ref list withheld, an equivalent one beside
 	// it passed through, together with the internal egress hosts and the
 	// operator's connection config.
-	st.Integrations = memberSafeIntegrations(st.Integrations)
+	st.Integrations = userSafeIntegrations(st.Integrations)
 	// ModelAccess is KEPT, deliberately, and it is the reason a member's chip can
 	// stop reading llm_ready (a DEPLOYMENT fact that read green over their own
 	// lapsed session). It carries a state name, a wire mechanism value and one
@@ -758,8 +789,8 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow, ownBearerRow bool) Se
 	// PROJECTED, not passed through: under `shared` the graded blob is the
 	// OPERATOR's, and the `expiring` arm's action line carried their lapse
 	// timestamp verbatim — a credential deadline put back into a body this
-	// function had just stripped it from. See memberModelAccess (modelaccess.go).
-	st.ModelAccess = memberModelAccess(st.ModelAccess)
+	// function had just stripped it from. See userModelAccess (modelaccess.go).
+	st.ModelAccess = userModelAccess(st.ModelAccess)
 	if len(st.Harness) > 0 {
 		reduced := make([]SetupHarness, len(st.Harness))
 		for i, h := range st.Harness {
@@ -835,7 +866,7 @@ func claudeLoginSignal(providers []SetupProvider) (bool, string) {
 func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, scope awsSSOScope) ([]SetupHarness, string, SetupModelAccess) {
 	var out []SetupHarness
 	managedDetail := ""
-	if blob, ok, err := s.readManagedBlob(ctx, "anthropic"); err == nil && ok {
+	if blob, ok, err := s.readManagedBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), "anthropic"); err == nil && ok {
 		out = append(out, SetupHarness{
 			Provider: "anthropic", Captured: true,
 			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
@@ -847,7 +878,7 @@ func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, sco
 	// Scoped: under a per_user row this is the CALLER's own captured session, not
 	// the operator's — the whole point of per_user, and the reason the probe
 	// below can speak for this person rather than for the deployment.
-	blob, found, err := s.readAWSSSOBlob(ctx, scope)
+	blob, found, err := s.readAWSSSOBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), scope)
 	if err != nil {
 		// A wedged store is not a credential fact. readHarnessBlob propagates
 		// every non-ErrNotFound error precisely so a rotated age key or a PG blip

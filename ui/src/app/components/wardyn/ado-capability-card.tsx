@@ -39,7 +39,7 @@
 //
 // WHO MAY DECIDE (round-2 fix): canDecideAdoCapability(securityOperator,
 // isRunOwner) — the run's OWNER or a security operator, mirroring
-// authorizeMemberDecision/ownsRunOrAdmin exactly. securityOperator already
+// authorizeUserDecision/ownsRunOrAdmin exactly. securityOperator already
 // INCLUDES a plain admin: isSecurityOperator (internal/api/http.go) is true
 // for oidc.RoleAdmin as well as oidc.RoleSecurityAdmin ("a super admin is a
 // security admin too — the tiers overlap on this surface"). There is no
@@ -50,11 +50,17 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 import { Check, CheckCircle2, ChevronDown, Loader2, X } from "lucide-react";
 import type { AgentRun, ApprovalRequest, DecisionOptions } from "../../lib/types";
-import { canDecideAdoCapability, isAdoConsentRequest, type AdoCapabilityScope, type AdoConsentScope } from "../../lib/types/approvals";
+import {
+  ADO_HOLD_WINDOW_MS,
+  canDecideAdoCapability,
+  isAdoConsentRequest,
+  type AdoCapabilityScope,
+  type AdoConsentScope,
+} from "../../lib/types/approvals";
 import { isTerminalRunState } from "../../lib/types";
 import { ADO } from "../../lib/ado-entra-copy";
 import { Button } from "../ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { Chip } from "./primitives";
 import { Mono } from "./code-block";
 import { cn } from "../ui/utils";
@@ -123,11 +129,12 @@ const SCOPE_LABEL: Record<"once" | "run", string> = { once: "Once", run: "This r
 // names. No expiry timestamp reaches the client (unlike egress's
 // HOLD_TIMEOUT_MS), so this is derived from requested_at, exactly the way
 // isHeld (lib/types/approvals.ts) derives egress's own HOLD_TIMEOUT_MS check.
-const HOLD_WINDOW_MS = 240_000;
-
+// ADO_HOLD_WINDOW_MS is the SAME 240_000 isHeld itself now reads for this
+// exact row shape (#725/F1) — imported rather than redeclared so the two
+// never drift apart again.
 function stillHeld(requestedAt: string): boolean {
   const at = Date.parse(requestedAt);
-  return Number.isNaN(at) ? true : Date.now() - at < HOLD_WINDOW_MS; // unparseable — fail toward showing the hold
+  return Number.isNaN(at) ? true : Date.now() - at < ADO_HOLD_WINDOW_MS; // unparseable — fail toward showing the hold
 }
 
 // boldFirstWord — round-2 fix N2: REQ_APPROVING_ONCE/RUN and REQ_DENYING
@@ -199,12 +206,33 @@ export function AdoCapabilityCard({
   // being visible there does NOT by itself prove ownership — those callers
   // keep the real loading/error/ownership gates.
   ownershipScopedList?: boolean;
-  busy: boolean;
+  // "approve" | "deny" while THAT decision is in flight, else null (#458):
+  // the old single boolean correctly disabled BOTH buttons but ALSO spun
+  // BOTH of them, so a reader couldn't tell which action their click had
+  // actually started. Both are still disabled whenever busy !== null; now
+  // only the pressed one shows the spinner.
+  busy: "approve" | "deny" | null;
   onApprove: (opts: [DecisionOptions]) => void;
   onDeny: (opts: [DecisionOptions]) => void;
 }) {
   const [scope, setScope] = React.useState<"once" | "run">("run");
   const [menuOpen, setMenuOpen] = React.useState(false);
+  // The hold window's own timer (#458): stillHeld(requested_at) was read only
+  // at render, so REQ_HELD survived past its own 4-minute window until some
+  // UNRELATED re-render happened to catch it up. `held` is seeded from the
+  // same check and then flipped false by a timer sized to the remaining
+  // window, so the card corrects itself with no other trigger needed.
+  const [held, setHeld] = React.useState(() => stillHeld(item.requested_at));
+  React.useEffect(() => {
+    if (isAdoConsentRequest(item)) return; // this card's own timer, not the consent card's
+    setHeld(stillHeld(item.requested_at));
+    const at = Date.parse(item.requested_at);
+    if (Number.isNaN(at)) return;
+    const msLeft = ADO_HOLD_WINDOW_MS - (Date.now() - at);
+    if (msLeft <= 0) return; // already past the window — no timer to set
+    const timer = setTimeout(() => setHeld(false), msLeft);
+    return () => clearTimeout(timer);
+  }, [item]);
 
   // The consent card FIRST, before any run-loading/error/ended gate below:
   // its decidability is "is the viewer the row's own owner" (a plain string
@@ -253,7 +281,6 @@ export function AdoCapabilityCard({
   const decidable = trusted || canDecideAdoCapability(securityOperator, isOwner);
   const where = scopeData.repo ? `${scopeData.org}/${scopeData.repo}` : scopeData.org;
   const source = ADO.REQ_SOURCE(relativeAbsolute(item.requested_at));
-  const held = stillHeld(item.requested_at);
 
   return (
     <div className="rounded-xl border border-warning/30 bg-warning/5 p-4" data-testid="ado-capability-card">
@@ -301,10 +328,10 @@ export function AdoCapabilityCard({
               size="sm"
               variant={destructive ? "outline" : "info"}
               className="rounded-r-none"
-              disabled={busy}
+              disabled={busy !== null}
               onClick={() => onApprove(adoDecisionArgs(scope))}
             >
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} Approve
+              {busy === "approve" ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />} Approve
             </Button>
             <AdoScopeMenu scope={scope} thing={thing} onPick={(s) => setScope(s)} open={menuOpen} onOpenChange={setMenuOpen} />
             {/* The scope readout sits directly after Approve's own group,
@@ -317,10 +344,10 @@ export function AdoCapabilityCard({
               size="sm"
               variant={destructive ? "destructive" : "outline"}
               className="ml-1"
-              disabled={busy}
+              disabled={busy !== null}
               onClick={() => onDeny(adoDecisionArgs(scope))}
             >
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />} Deny
+              {busy === "deny" ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />} Deny
             </Button>
           </div>
           <p className="mt-2.5 text-meta text-muted-foreground">
@@ -333,15 +360,22 @@ export function AdoCapabilityCard({
         </div>
       ) : (
         <p className="mt-3 border-t border-border/60 pt-3 text-sm text-muted-foreground">
-          {ADO.REQ_NOT_YOURS_BODY(runOwner ?? "the run's owner")}
+          {/* `||`, not `??`: an empty owner names nobody exactly as much as a
+              missing one does — both get the fallback (#458). */}
+          {ADO.REQ_NOT_YOURS_BODY(runOwner || ADO.REQ_OWNER_FALLBACK)}
         </p>
       )}
     </div>
   );
 }
 
+// outline-none + the three focus-visible: classes are CONSOLE-RULES.md §34's
+// standard ring (button.tsx#buttonVariants carries the same three) — these
+// buttons went keyboard-reachable under a Popover (review finding F3) and,
+// without this, showed the browser's default outline instead (review
+// finding 5).
 const SCOPE_ITEM_CLS =
-  "flex w-full flex-col items-start gap-0 rounded-sm px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
+  "flex w-full flex-col items-start gap-0 rounded-sm px-2 py-1.5 text-left text-sm text-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
 
 // AdoScopeMenu — the caret half of the mock's "shipped Approve-and-scope
 // control" (Q2). Unlike live-approvals.tsx's ScopeMenu (egress's four live
@@ -349,6 +383,13 @@ const SCOPE_ITEM_CLS =
 // between exactly the two scopes adoDecisionRule accepts — Approve/Deny
 // commit whichever is currently staged, matching the mock's "the pair on the
 // right is what they read with Once selected instead of This run".
+//
+// Held in a Popover, not a DropdownMenu (review finding F3): a DropdownMenu's
+// roving-tabindex focus manager only covers registered DropdownMenuItems and
+// swallows Tab, so the plain <button>s below (needed for the always/until
+// rows' real `disabled`, same reason as live-approvals.tsx's ScopeMenu) were
+// unreachable by keyboard. Popover's content does not manage focus that way,
+// so Tab walks the buttons in plain DOM order and Enter/Space pick one.
 function AdoScopeMenu({
   scope,
   thing,
@@ -366,13 +407,16 @@ function AdoScopeMenu({
   onOpenChange: (o: boolean) => void;
 }) {
   return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
         <Button size="sm" variant="outline" className="h-8 w-6 rounded-l-none p-0" aria-label="More options">
           <ChevronDown className="size-3.5" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-64 space-y-0.5 p-1">
+      </PopoverTrigger>
+      {/* review finding 6: PopoverContent renders role="dialog" with no
+          accessible name by default — label it to match the trigger it
+          opens from. */}
+      <PopoverContent align="start" className="w-64 space-y-0.5 p-1" aria-label="More options">
         {(["once", "run"] as const).map((s) => (
           <button
             key={s}
@@ -400,8 +444,8 @@ function AdoScopeMenu({
           <span className="font-medium text-muted-foreground">{ADO.SCOPE_ALWAYS_LABEL}</span>
           <span className="text-meta text-muted-foreground">{ADO.REQ_SCOPE_ALWAYS_REFUSED}</span>
         </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -421,14 +465,16 @@ function AdoScopeMenu({
 // (or "you allowed it") the wire scope cannot back on every path — see its
 // own doc note in ado-entra-copy.ts.
 //
-// "Allow and continue" (REQ_CONSENT_CTA) links to /settings, not a route of
-// its own or a deep anchor into it: F9 (S10 round 3) points it at the same
-// Azure DevOps connection surface #415 built (screens/settings/ado-
-// connection.tsx's AdoConnectionCard, mounted unconditionally on the one
-// settings-screen.tsx page — no tabs, no query param), and #415's own
-// new-run-rail.tsx launch door already links there the identical way (a
-// bare `<Link to="/settings">`), so this reuses that precedent rather than
-// inventing a second convention for reaching the same card.
+// REQ_CONSENT_CTA links to /account#azure-devops, not a route of its own:
+// F9 (S10 round 3) pointed it at the same Azure DevOps connection surface
+// #415 built (screens/settings/ado-connection.tsx's AdoConnectionCard,
+// mounted unconditionally on the one settings-screen.tsx page — no tabs, no
+// query param). #458 added the `#azure-devops` anchor and matched the
+// label to that card's own CTA ("Connect Azure DevOps", CONNECT_ADO) — a
+// bare `<Link to="/settings">` landed at the top of a five-card page with
+// no way to find the one card this door is actually about, and the two CTAs
+// named the same act two different ways. M-1b: it's your own connection
+// (#386), so the anchor moved to /account when /settings was deleted.
 function AdoConsentCard({
   item,
   viewerPrincipal,
@@ -469,7 +515,7 @@ function AdoConsentCard({
       {isOwner && (
         <div className="mt-3">
           <Button asChild size="sm" variant="info">
-            <Link to="/settings">{copy.cta}</Link>
+            <Link to="/account#azure-devops">{copy.cta}</Link>
           </Button>
         </div>
       )}

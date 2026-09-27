@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,6 +60,48 @@ func TestPG_Devices_EnrolmentToken_ConsumeOnce(t *testing.T) {
 	// Consume-once: the conditional UPDATE already claimed the row.
 	if _, ok, err := st.ConsumeEnrolmentToken(ctx, tok, now); ok || err != nil {
 		t.Fatalf("second consume: ok=%v err=%v, want false/nil (single-use)", ok, err)
+	}
+}
+
+// TestPG_Devices_EnrolmentToken_ConcurrentConsume races redemptions of ONE
+// token on separate connections. The conditional UPDATE's `consumed_at IS
+// NULL` is all that stands between a leaked enrolment token and two enrolled
+// devices, so exactly one racer may win — the sequential test above cannot
+// tell a single-statement consume from a read-then-write one.
+func TestPG_Devices_EnrolmentToken_ConcurrentConsume(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	now := time.Now().UTC()
+	tok := uuid.NewString()
+	if _, err := st.MintEnrolmentToken(ctx, tok, types.DeviceEnrolmentToken{
+		ID: uuid.New(), DeviceName: "raced", ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+
+	const racers = 16
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, ok, err := st.ConsumeEnrolmentToken(ctx, tok, now)
+			if err != nil {
+				t.Errorf("consume: %v", err)
+			}
+			if ok {
+				wins.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("%d concurrent redemptions of one token succeeded, want exactly 1", got)
 	}
 }
 
@@ -121,6 +165,10 @@ func TestPG_Devices_CreateGetRevoke(t *testing.T) {
 		t.Errorf("second revoke err = %v, want ErrNotFound", err)
 	}
 }
+
+// testPeer is the address the organisation "saw" a test push arrive from —
+// what IngestDeviceAudit records in source_ip in place of the device's claim.
+const testPeer = "203.0.113.7:45000"
 
 // auditRowHash computes what audit_row_hash would produce for one row,
 // exactly as the device's own local trigger would have — the fixture builder
@@ -187,7 +235,7 @@ func TestPG_Devices_IngestDeviceAudit_LinkedBatchVerifies(t *testing.T) {
 	r2 := chainedRow(t, pool, r1.RowHash, 2, "egress.deny")
 	r3 := chainedRow(t, pool, r2.RowHash, 3, "credential.mint")
 
-	result, err := st.IngestDeviceAudit(ctx, d.ID, []types.FederatedAuditEvent{r1, r2, r3})
+	result, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2, r3})
 	if err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
@@ -239,7 +287,7 @@ func TestPG_Devices_IngestDeviceAudit_LinkedBatchVerifies(t *testing.T) {
 
 	// Idempotent retry: re-submitting the SAME already-ingested batch accepts
 	// nothing new and does not error.
-	retry, err := st.IngestDeviceAudit(ctx, d.ID, []types.FederatedAuditEvent{r1, r2, r3})
+	retry, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2, r3})
 	if err != nil {
 		t.Fatalf("idempotent retry: %v", err)
 	}
@@ -265,7 +313,7 @@ func TestPG_Devices_IngestDeviceAudit_EditedDataRefused(t *testing.T) {
 	// exactly what an edited-in-flight or edited-at-rest row looks like.
 	r2.Data = json.RawMessage(`{"seq":99}`)
 
-	_, err = st.IngestDeviceAudit(ctx, d.ID, []types.FederatedAuditEvent{r1, r2})
+	_, err = st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2})
 	if !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("ingest edited batch err = %v, want ErrConflict", err)
 	}
@@ -307,7 +355,7 @@ func TestPG_Devices_IngestDeviceAudit_GenesisAfterReset(t *testing.T) {
 	// First chain: establishes a recorded cursor.
 	r1 := chainedRow(t, pool, "", 1, "run.create")
 	r2 := chainedRow(t, pool, r1.RowHash, 2, "egress.deny")
-	if _, err := st.IngestDeviceAudit(ctx, d.ID, []types.FederatedAuditEvent{r1, r2}); err != nil {
+	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{r1, r2}); err != nil {
 		t.Fatalf("ingest first chain: %v", err)
 	}
 
@@ -316,7 +364,7 @@ func TestPG_Devices_IngestDeviceAudit_GenesisAfterReset(t *testing.T) {
 	// relation to r1/r2's hashes.
 	g1 := chainedRow(t, pool, "", 5, "run.create")
 
-	result, err := st.IngestDeviceAudit(ctx, d.ID, []types.FederatedAuditEvent{g1})
+	result, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{g1})
 	if err != nil {
 		t.Fatalf("ingest genesis-after-reset: %v", err)
 	}

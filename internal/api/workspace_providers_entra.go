@@ -39,6 +39,7 @@ const (
 	providers400EntraMode = "git[%d].entra.token_mode: %q is not a token mode — want one of: %s"
 	providers400Source    = "git[%d].credential_source: %q is not a credential source — want one of: %s"
 	providers400PerUser   = "git[%d].credential_source: per_user needs the %q lane — no other git lane authorizes a person as themselves"
+	providers400EntraTwo  = "git[%d].lanes: git[%d] already carries the %q lane — a person signs in to one Azure DevOps organisation per deployment, so disable one of the two rows"
 )
 
 // entraGUID is the tenant/client id shape.
@@ -92,6 +93,26 @@ func validateProviderEntra(i int, row types.GitProvider) error {
 		return fmt.Errorf(providers400EntraNone, i)
 	}
 	return validateEntraBlock(i, *row.Entra)
+}
+
+// validateOneEntraRow refuses a second ENABLED row on the entra lane. The
+// sign-in is served for one row only (cmd/wardynd's adoEntraRow takes the
+// first), so a second row would store as valid, never be offered a sign-in,
+// and have every run on it refused later for a cause that is not the real
+// one. A disabled row is not served and so is not counted. It runs after the
+// per-row rules, so every row counted here is a valid per_user Entra row.
+func validateOneEntraRow(rows []types.GitProvider) error {
+	first := -1
+	for i, row := range rows {
+		if row.Disabled || !slices.Contains(row.Lanes, types.GitLaneEntra) {
+			continue
+		}
+		if first >= 0 {
+			return fmt.Errorf(providers400EntraTwo, i, first, string(types.GitLaneEntra))
+		}
+		first = i
+	}
+	return nil
 }
 
 // entraLaneHosts refuses the lane on a host that cannot carry it. Azure DevOps
@@ -164,7 +185,7 @@ func grantableCapabilities(i int, field string, caps []adoscope.Capability) erro
 	for j, c := range caps {
 		if !c.Grantable() {
 			return fmt.Errorf(providers400EntraCap, i, field, j, string(c),
-				strings.Join(adoscope.GrantableCapabilityList(), ", "))
+				adoscope.GrantableCapabilityList())
 		}
 	}
 	return nil

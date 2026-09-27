@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── B3-F2: the decision's durable write-backs outlive the request ───────────
+// B3-F2: the decision's durable write-backs outlive the request
 
 // cancelOnDecide wraps the fixture's approval service so the client
 // "disconnects" the instant Decide() commits — the real shape of the defect:
@@ -92,7 +92,7 @@ func TestDecideWriteBacksSurviveAClientDisconnect(t *testing.T) {
 		strings.NewReader(decideBody(t, types.ScopeAlways, nil))).WithContext(ctx)
 	req.AddCookie(admin)
 	w := httptest.NewRecorder()
-	f.srv.Handler().ServeHTTP(w, req)
+	panicFails(t, f.srv.Handler()).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("approve always: status = %d, want 200; body=%s", w.Code, w.Body.String())

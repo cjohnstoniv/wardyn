@@ -50,8 +50,10 @@
 # ui/e2e/live/sso-reauth-hold.spec.ts (0.7.6) — driven through
 # scripts/run-ui-e2e.sh in its LIVE mode: same runner, same per-spec reporting
 # and the same zero-executed check, pointed at this cluster instead of the
-# hermetic backend it otherwise boots. The THREE files run in ONE invocation and
-# in THAT order: the recovery file inherits a member who is already `live` and a
+# hermetic backend it otherwise boots. The THREE files run, one run-ui-e2e.sh
+# call per file (#804 — so a failed spec's own ui/test-results survives to be
+# copied out before the next spec's Playwright process wipes it), in THAT
+# order: the recovery file inherits a member who is already `live` and a
 # roster pin that already contradicts nothing, and the hold file goes last
 # because its case K spends ten minutes of wall clock and every case in it makes
 # its own capture.
@@ -739,25 +741,51 @@ if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   export WARDYN_LIVE_SANDBOX_UP_MS="${WARDYN_LIVE_SANDBOX_UP_MS:-720000}"
   export WARDYN_LIVE_LOGIN_DONE_MS="${WARDYN_LIVE_LOGIN_DONE_MS:-720000}"
 fi
-# THREE specs, ONE invocation: run-ui-e2e.sh runs them sequentially against this
-# one cluster, and sso-member-recovery.spec.ts inherits the state
-# sso-member.spec.ts leaves (a `live` member under the contradicting pin, and
-# the Dex principals). Order is the argument order — never sort these.
+# THREE specs, run in this order against this one cluster: sso-member-recovery
+# inherits the state sso-member leaves (a `live` member under the contradicting
+# pin, and the Dex principals). Order is the argument order — never sort these.
 # sso-reauth-hold.spec.ts is LAST: its case K spends about ten minutes of wall
 # clock waiting for the injector's own re-resolve window, and every case in it
 # makes its own capture, so nothing after it should depend on which session the
 # member is holding.
 #
-# WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 drops it from the invocation entirely — for
-# a nightly job, where that ten minutes is wall clock nobody is watching and
-# every other spec already runs unattended. An interactive or release walk
-# leaves this unset and keeps all three.
+# WARDYN_KIND_SSO_SKIP_REAUTH_HOLD=1 drops it entirely — for a nightly job,
+# where that ten minutes is wall clock nobody is watching and every other spec
+# already runs unattended. An interactive or release walk leaves this unset and
+# keeps all three.
 specs=(sso-member sso-member-recovery sso-reauth-hold)
 if [[ "${WARDYN_KIND_SSO_SKIP_REAUTH_HOLD:-}" == "1" ]]; then
   specs=(sso-member sso-member-recovery)
 fi
-./scripts/run-ui-e2e.sh "${specs[@]}" 2>&1 | tee "${EVIDENCE_DIR}/walk.log"
-walk_rc="${PIPESTATUS[0]}"
+# ONE run-ui-e2e.sh CALL PER SPEC (#804), not the three-argument call this used
+# to be. run-ui-e2e.sh's own per-spec loop shells out to a SEPARATE `playwright
+# test` process per spec file, and Playwright clears its outputDir
+# (ui/test-results — screenshots, traces, videos) at the START of every one of
+# those processes. A single `run-ui-e2e.sh sso-member sso-member-recovery
+# sso-reauth-hold` call therefore wipes sso-member's own failure artefacts the
+# moment sso-member-recovery's process starts — long before this script's own
+# chart-render restore step, which is where a walk-3 sso-pin-dispatch failure
+# (sso-member.spec.ts, the FIRST spec) lost its screenshot. Calling
+# run-ui-e2e.sh once per spec, and copying ui/test-results out immediately
+# after any call that failed, is what lets that spec's own artefacts survive
+# long enough to reach ${EVIDENCE_DIR} at all. Behavior otherwise unchanged:
+# every spec still runs regardless of an earlier one's outcome (matching
+# run-ui-e2e.sh's own no-early-exit loop), and walk_rc is still 1 if any of
+# them failed.
+walk_rc=0
+: >"${EVIDENCE_DIR}/walk.log"
+for spec in "${specs[@]}"; do
+  ./scripts/run-ui-e2e.sh "${spec}" 2>&1 | tee -a "${EVIDENCE_DIR}/walk.log"
+  spec_rc="${PIPESTATUS[0]}"
+  if [[ "${spec_rc}" -ne 0 ]]; then
+    walk_rc=1
+    if [[ -d "${ROOT}/ui/test-results" ]]; then
+      rm -rf "${EVIDENCE_DIR}/test-results/${spec}"
+      mkdir -p "${EVIDENCE_DIR}/test-results"
+      cp -r "${ROOT}/ui/test-results" "${EVIDENCE_DIR}/test-results/${spec}"
+    fi
+  fi
+done
 
 # /_seen is the one observation that is not Wardyn asserting about itself: it is
 # what the AWS SDK actually asked the portal to mint. Read through the harness's
@@ -778,7 +806,13 @@ walk_rc="${PIPESTATUS[0]}"
 # file here is the expected shape of "the last case restarted the fake", never a
 # finding on its own.
 step "reading the fake's /_seen"
-if ! curl -sf "${SEEN_URL}" | tee "${EVIDENCE_DIR}/seen.json" | grep -q .; then
+# CAPTURE, THEN MATCH — same law as the "TEST HATCH ACTIVE" read above: never
+# `curl | grep -q` under `pipefail`. Write the evidence file from the capture
+# rather than through `tee`, so a grep -q that matches on the first byte can
+# no longer SIGPIPE curl mid-write.
+_seen_body="$(curl -sf "${SEEN_URL}")"
+printf '%s' "${_seen_body}" >"${EVIDENCE_DIR}/seen.json"
+if ! grep -q . <<<"${_seen_body}"; then
   kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}" \
     "${SEEN_RETRY_PORT:-8398}:${FAKE_PORT}" >/dev/null 2>&1 &
   seen_retry_pf=$!

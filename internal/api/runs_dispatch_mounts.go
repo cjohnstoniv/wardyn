@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -42,7 +43,7 @@ import (
 // A single-user / self-hosted choice, not for a shared multi-tenant service.
 // Extracted verbatim from dispatchRun.
 //
-// member is the run's member-mount posture (memberMountPosture, workspace_refs.go).
+// member is the run's member-mount posture (userMountPosture, workspace_refs.go).
 // Its Sources decide which binds carry runner.Mount.MemberAuthored — the flag the
 // driver's bind-time within-roots check keys on. Everything NOT in that set is
 // operator/Wardyn-authored (the blessed credential mounts copied from the
@@ -60,7 +61,7 @@ func driveTargetReserved(target string) bool {
 	return target == runner.DriveTarget || strings.HasPrefix(target, runner.DriveTarget+"/")
 }
 
-func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberMountPosture) []runner.Mount {
+func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member userMountPosture) []runner.Mount {
 	var mounts []runner.Mount
 	for _, wm := range policy.WorkspaceMounts {
 		// The resident ~/.claude subscription mount is a MODEL-RUN-ONLY
@@ -164,7 +165,13 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 		// secret here would let a member redirect every run's egress to a
 		// server of their own choosing with no SSRF guard on that hop at all,
 		// not merely widen what a vetted destination allows.
-		getSecret = s.cfg.Secrets.For("").Get
+		// A closure, not the method value: the read carries its purpose
+		// (the Audited store refuses a read without one), and the read guard
+		// can see it.
+		sec := s.cfg.Secrets.For("")
+		getSecret = func(ctx context.Context, name string) ([]byte, error) {
+			return sec.Get(secretstore.WithPurpose(ctx, secretstore.PurposeDispatch), name)
+		}
 	}
 	detail := map[string]any{
 		"secret_ref": siteCfg.UpstreamProxySecretRef, "url_configured": siteCfg.UpstreamProxyURL != "",
@@ -315,6 +322,26 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 	return env
 }
 
+// interactiveBootSeed returns the text an interactive run fires at sandbox
+// boot as WARDYN_INTERACTIVE_SEED, or "" when it fires nothing. ONE definition,
+// because two sides have to agree on it: applyDispatchModeEnv delivers the
+// seed, and resolveRunAutonomy grades it before the run exists — a gate with
+// its own copy of this predicate would refuse one set of runs while dispatch
+// seeded another.
+//
+// The reservedRunTasks exclusion is load-bearing, not defensive:
+// server-launched record/verify/login runs (runs_create_validate.go) are
+// INTERACTIVE runs that carry a non-empty, server-set Task ("workspace
+// record", etc.) — without it they would boot-seed `claude "workspace record"`
+// into what is supposed to be a plain record-mode sandbox, and the login box
+// would boot-seed over its own login flow.
+func interactiveBootSeed(interactive bool, task string) string {
+	if !interactive || reservedRunTasks[task] || strings.TrimSpace(task) == "" {
+		return ""
+	}
+	return task
+}
+
 // applyDispatchModeEnv sets dispatchRun's run-mode discriminator env vars
 // (scan-only / exec task mode / interactive-start / boot-seed / tool-approval
 // posture) plus the non-secret grant-id maps (WARDYN_GITHUB_GRANT_ID /
@@ -364,19 +391,12 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// session the human's attach later joins (interactiveStart above decides
 	// whether it reads as an initial prompt or a startup command; that
 	// interpretation lives entirely image-side, in agent-run's --boot-seed
-	// branch — nothing here needs to know which). The reservedRunTasks
-	// exclusion is load-bearing, not defensive: server-launched record/verify/
-	// login runs (runs_create_validate.go, same package) are INTERACTIVE runs
-	// that carry a non-empty, server-set Task ("workspace record", etc.) —
-	// without this guard they would boot-seed `claude "workspace record"` into
-	// what is supposed to be a plain record-mode sandbox, and the login box
-	// would boot-seed over its own login flow.
-	if p.Interactive && !reservedRunTasks[run.Task] {
-		if seed := strings.TrimSpace(run.Task); seed != "" {
-			sandboxEnv["WARDYN_INTERACTIVE_SEED"] = run.Task
-			if p.SeedAutoTools {
-				sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
-			}
+	// branch — nothing here needs to know which). See interactiveBootSeed for
+	// which tasks never seed.
+	if seed := interactiveBootSeed(p.Interactive, run.Task); seed != "" {
+		sandboxEnv["WARDYN_INTERACTIVE_SEED"] = seed
+		if p.SeedAutoTools {
+			sandboxEnv["WARDYN_SEED_AUTO_TOOLS"] = "1"
 		}
 	}
 	// Tool-approval posture: "hold" routes an AUTONOMOUS run's own
@@ -387,8 +407,31 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// InteractiveStart above is gated on `interactive`: an interactive run's
 	// supervised-seed posture is SeedAutoTools's job, so this can't ride one no
 	// matter what the request said.
-	if !p.Interactive && p.ToolApprovals == "hold" {
+	if p.holdLane() {
 		sandboxEnv["WARDYN_TOOL_APPROVALS"] = "hold"
+		// The same ceiling the approval-expiry sweeper actually expires a
+		// PENDING approval at (Config.ApprovalExpiryAfter — see the field's
+		// doc). agent-run's hold branch reads it to size MCP_TOOL_TIMEOUT and
+		// wardyn-toolgate defaults -deadline from it (RL-1): without this, a
+		// tool call's wait is bounded by their own hardcoded literals instead
+		// of the operator's real, possibly-raised, ceiling.
+		sandboxEnv["WARDYN_APPROVAL_EXPIRY_AFTER"] = p.ApprovalExpiryAfter.String()
+	}
+	// The RESOLVED autonomy level, read off the run row the launch gate froze
+	// it on (resolveRunAutonomy, runs_autonomy.go) rather than off a dispatch
+	// parameter, so the sandbox and the audit trail cannot be told two levels
+	// for one run.
+	//
+	// An ANNOUNCEMENT, never the mechanism — the same posture WARDYN_USER_DRIVE
+	// takes. What constrains the agent is the launch branch above plus the
+	// managed-settings file generated from this same level
+	// (runs_dispatch_agentpolicy.go), so an agent that ignores this key still
+	// has both and one that fabricates it still has neither. It exists so the
+	// image's launcher can SAY which level it came up under, which is what
+	// makes a MISSING agent-side layer visible from inside the sandbox instead
+	// of only in the control plane. Absent for every run no rubric bound.
+	if run.AutonomyLevel != "" {
+		sandboxEnv["WARDYN_AUTONOMY_LEVEL"] = string(run.AutonomyLevel)
 	}
 	if p.FirstGitHubGrantID != nil {
 		sandboxEnv["WARDYN_GITHUB_GRANT_ID"] = p.FirstGitHubGrantID.String()

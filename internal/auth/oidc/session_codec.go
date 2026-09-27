@@ -37,6 +37,10 @@ import (
 // tolerant-decode-false, or a permanent second guess — it is the only one that
 // is neither a silent widening nor a permanent one.
 //
+// Version 2 (0.8) renamed the non-admin tier "member" to "user" and added
+// Session.UserType: one more re-login, and no cookie carrying the old tier
+// word, or no type, is ever half-trusted.
+//
 // The compare is EXACT rather than `<`: under `<`, an OLD binary in a rolling
 // upgrade accepts a NEW cookie and reads its unknown fields as zero, which is
 // the same fail-open this constant exists to prevent. A mixed-version rollout
@@ -46,7 +50,7 @@ import (
 // that builds a session cookie without going through encodeSession — this
 // module's own integration tests, an embedder's harness — has to stamp the
 // current version or produce a cookie the very next request rejects.
-const SessionCodecVersion = 1
+const SessionCodecVersion = 2
 
 // ─── session encoding ────────────────────────────────────────────────────────
 
@@ -115,7 +119,7 @@ func (a *Authenticator) decodeSession(r *http.Request) (Session, error) {
 		// login buys.
 		return Session{}, ErrInvalidSession
 	}
-	if sess.Role == "" {
+	if sess.Role == "" || sess.UserType == "" {
 		// Pre-0.5 cookie (the role field didn't exist yet) or a corrupt/empty
 		// payload: never treat an undefined role as authenticated. Middleware
 		// falls through on this exactly like any other invalid session,

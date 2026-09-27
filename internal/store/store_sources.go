@@ -127,7 +127,7 @@ func (s PG) UpdateSourceConfig(ctx context.Context, id uuid.UUID, name string, r
 // reference source id — the loud half of delete-in-use. One GIN probe
 // (workspaces_attachments_gin). A dangling attachment would silently narrow a
 // workspace to its remaining sources (no error, no mount-gate check for a
-// source that used to be there), so DELETE refuses with these names rather
+// source that no longer exists), so DELETE refuses with these names rather
 // than orphaning silently.
 func (s PG) WorkspacesAttaching(ctx context.Context, id uuid.UUID) ([]string, error) {
 	return collect(ctx, s.Pool, "list", "workspaces attaching", `

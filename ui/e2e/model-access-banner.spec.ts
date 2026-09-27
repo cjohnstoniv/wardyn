@@ -133,6 +133,20 @@ test.describe("the model-access strip", () => {
     await expect(page.getByRole("button", { name: RUN_COCKPIT.exitFocus })).toBeVisible();
   });
 
+  // §4.2 (M-3): a per-user deployment's strip is each person's own
+  // credential, which belongs to the User view. Seen there first, so its
+  // absence after the switch is the view rule at work, not a strip that had
+  // not loaded yet.
+  test("the Admin view carries no per-user strip; the User view does", async ({ page }) => {
+    await mockModelAccess(page, { state: "not_configured", action: AGENTS.SIGN_IN_AWS });
+    await gotoConsole(page);
+    await navToRoute(page, "/runs");
+    await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible();
+
+    await navToRoute(page, "/admin/runs");
+    await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
+  });
+
   test("a live credential says nothing at all", async ({ page }) => {
     await mockModelAccess(page, { state: "live" });
     await gotoConsole(page);

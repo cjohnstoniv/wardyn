@@ -17,7 +17,7 @@ import "io"
 // process blocks on write, the demux goroutine blocks with it, and Wait — which
 // both endpoints called next — can never return. The docker driver's Wait
 // selects on the 5 s handler ctx, so what the operator actually saw was a
-// five-second stall, a 500, and a run.files FAILURE row per poll tick, for a
+// five-second stall, a 500, and a run.files.fail FAILURE row per poll tick, for a
 // workspace whose only crime was a chatty `git status`.
 //
 // Draining to EOF instead would contradict the cap's own rationale (the cap

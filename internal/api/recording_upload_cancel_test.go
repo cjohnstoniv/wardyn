@@ -63,7 +63,7 @@ func TestUploadRecording_StorageFailureDoesNotWaitForBody(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		h.srv.Handler().ServeHTTP(w, req)
+		panicFails(t, h.srv.Handler()).ServeHTTP(w, req)
 	}()
 	select {
 	case <-done:

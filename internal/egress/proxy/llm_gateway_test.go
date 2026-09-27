@@ -124,14 +124,13 @@ func TestLLMGateway_SameHostOnConnectPath_StillBuiltinPrivateIP(t *testing.T) {
 	}
 }
 
-// TestLLMGateway_GatewayHostnameOnConnectPath_StillBuiltinPrivateIP is the
-// review's repro for the fixed defect: egressTarget used to check
-// gatewayVendor BEFORE p.vetHost, so a gateway HOSTNAME in allowed_domains
-// resolving to an RFC1918 address (no InternalHosts declared) was ALLOWED on
-// the ordinary sandbox CONNECT/MITM paths, not only the brokered LLM route —
-// on every port an agent might try, since the branch never looked at the
-// port. Both call sites the review named (evaluate and serveMITMRequest)
-// must independently deny.
+// TestLLMGateway_GatewayHostnameOnConnectPath_StillBuiltinPrivateIP:
+// egressTarget must run p.vetHost before checking gatewayVendor, or a gateway
+// hostname in allowed_domains resolving to an RFC1918 address (no
+// InternalHosts declared) is allowed on the ordinary sandbox CONNECT/MITM
+// paths, not only the brokered LLM route — on every port an agent might try,
+// since that branch never looks at the port. Both call sites (evaluate and
+// serveMITMRequest) must independently deny.
 func TestLLMGateway_GatewayHostnameOnConnectPath_StillBuiltinPrivateIP(t *testing.T) {
 	const host = "llm-gateway.corp.internal"
 	res := fakeResolver{m: map[string][]net.IP{host: ips("10.40.1.5")}}
@@ -384,11 +383,10 @@ func TestLLMGateway_TrailingDotBaseURL_KeyTrimmed(t *testing.T) {
 }
 
 // TestLLMGateway_DecisionRecordsRealPort: a gateway configured on a non-443
-// port must be recorded in the decision log on THAT port. The emitter used to
-// hard-code 443 for every LLM/MITM row (only the generic forward path carried a
-// real port), so a gateway on :8443 produced an audit row naming a port nothing
-// was dialled on. docs/AUDIT-ACTIONS.md lists `port` as an egress.* detail
-// field; a wrong one is a dishonest row, not a cosmetic detail.
+// port must be recorded in the decision log on that port. Hard-coding 443 for
+// every LLM/MITM row would make a gateway on :8443 produce an audit row naming
+// a port nothing was dialled on. docs/AUDIT-ACTIONS.md lists `port` as an
+// egress.* detail field; a wrong one is a dishonest row, not a cosmetic detail.
 func TestLLMGateway_DecisionRecordsRealPort(t *testing.T) {
 	const host = "llm-gateway.corp.internal"
 	gw := captureUpstream(t, true, `{"ok":true}`)
