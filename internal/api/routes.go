@@ -107,7 +107,8 @@ func (s *Server) routes() chi.Router {
 			//   mountSiteConfigProbeRoutes          securityOps
 			//       (site_config_probe.go)
 			//   mountSecretRoutes (routes.go) split: the /secrets
-			//       self-service routes on r, the credential erase securityOps
+			//       self-service routes on r, the credential erase and the
+			//       credential inventory securityOps
 			operatorOnly := r.With(s.requireOperator)
 			// securityOps is the second admin tier: admin OR security_admin, via
 			// requireSecurityOperator / isSecurityOperator (http.go). What the tier
@@ -754,7 +755,9 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 // names (still operator-only). Admin cross-principal reads/deletes go through
 // ?owner=; a PUT refuses it (K7-A). The LIST stays viewer-readable — names
 // only, never values. Erasing a person's credentials is on the security tier:
-// it only removes reach, and returns no credential material.
+// it only removes reach, and returns no credential material; so is the
+// inventory of who holds one for which model provider, its offboarding
+// companion (design K5-A), which returns metadata only.
 func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
 	if s.cfg.Secrets == nil {
 		return
@@ -763,6 +766,7 @@ func (s *Server) mountSecretRoutes(r, securityOps chi.Router) {
 	r.Delete("/secrets/{name}", s.handleDeleteSecret)
 	r.Get("/secrets", s.handleListSecrets)
 	securityOps.Delete("/people/{principal}/credentials", s.handleErasePersonCredentials)
+	securityOps.Get("/model-providers/credentials", s.handleCredentialInventory)
 }
 
 // mountPermissionRoutes registers the capability-grant family: which of the

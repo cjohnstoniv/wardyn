@@ -366,6 +366,11 @@ export interface SetupProviderAccess {
   // RFC3339 UTC, only on a state `action` names an instant for. Same reading
   // rule as SetupModelAccess.deadline.
   deadline?: string;
+  // RFC3339: when the caller's OWN credential for this provider was stored and
+  // when a run last used it (to the minute). Absent when none is stored or it
+  // was never used.
+  added_at?: string;
+  last_used_at?: string;
 }
 
 export interface SetupStatus {

@@ -252,6 +252,7 @@ func (s *Server) resolveProviderSubscriptionInjection(w http.ResponseWriter, r *
 			"purpose": "proxy-injection-subscription", "grant_id": grantID, "jti": minted.JTI,
 			"source": "provider", "provider": p.ID, "owner": claims.Sub,
 		})))
+	s.stampCredentialUse(ctx, claims.Sub, name)
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host: minted.Injection.Host, Header: "Authorization", Value: formatted, JTI: minted.JTI,
 		ExpiresAt: s.subscriptionLease(minted, tok),

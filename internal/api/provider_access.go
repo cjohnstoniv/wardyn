@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -43,11 +44,15 @@ const (
 // account and role appear is the pin-mismatch action, which names both pairs
 // to the caller — members included — because they must pick the pinned pair
 // when they sign in again (the same sentence model_access already sends).
+// AddedAt and LastUsedAt are the caller's own stored credential's metadata
+// (CS-6), absent when none is stored.
 type SetupProviderAccess struct {
-	Provider string `json:"provider"`
-	State    string `json:"state"`
-	Action   string `json:"action,omitempty"`
-	Deadline string `json:"deadline,omitempty"`
+	Provider   string     `json:"provider"`
+	State      string     `json:"state"`
+	Action     string     `json:"action,omitempty"`
+	Deadline   string     `json:"deadline,omitempty"`
+	AddedAt    *time.Time `json:"added_at,omitempty"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
 // setupModelProviderState is handleSetupStatus's one call site for
@@ -178,6 +183,7 @@ func (s *Server) setupProviderAccess(ctx context.Context, sc types.SiteConfig, p
 		}
 		out = append(out, s.providerAccessFor(ctx, p, owner))
 	}
+	s.attachOwnCredentialMeta(ctx, sc, out, owner)
 	return out
 }
 
