@@ -363,6 +363,12 @@ test.describe("admin-written help under a sign-in refusal (#484)", () => {
     await page.goto("/?auth_error=no_role");
 
     const alert = page.getByRole("alert");
+    await expect(alert.locator("..")).toMatchAriaSnapshot(`
+      - alert: ${JSON.stringify(SIGNIN.NO_ROLE)}
+      - paragraph: ${JSON.stringify(HELP_TEXT)}
+      - link "${SIGNIN_HELP_LINK_LABEL}":
+        - /url: ${HELP_URL}
+    `);
     await expect(alert).toHaveText(SIGNIN.NO_ROLE);
     const help = page.getByTestId("sign-in-help");
     // Literal text: the markup in it is characters, never an element.
