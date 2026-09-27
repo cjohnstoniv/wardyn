@@ -37,7 +37,10 @@ owner check (below) will ever match against a run you created.
 registers the key against the shared, non-human `admin-token` principal, not
 any human's own identity. With OIDC configured, `POST` from a bare admin
 token now 422s for exactly this reason instead of silently writing a key
-that can never authorize anyone's run — use the console (above) instead:
+that can never authorize anyone's run — use the console (above) instead. A
+key already stored under a reserved principal (`admin-token`, the local
+operator seat, a `device:` name) is refused at the gateway while OIDC is
+configured; without OIDC it keeps working:
 
 ```sh
 curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \

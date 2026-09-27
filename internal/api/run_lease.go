@@ -22,8 +22,10 @@ import (
 // it stops and is KEPT: approvals cancelled, broker credentials revoked, the
 // agent and the proxy stopped, so it has no network while its files
 // stay for Config.EndedRunGrace. The grace running out tears it down. The run
-// token is deliberately not revoked: nothing holds it once the proxy is gone,
-// it lapses within its TTL, and a later revive mints from it.
+// identity is deliberately not revoked, because a run-wide revoke would also
+// refuse the fresh token a later revive mints. The old token is refused
+// instead: the /internal liveness gate and renew both refuse a kept run
+// (refuseTerminalRun, #1176), and a revive retires it by its jti.
 
 // endingSoonThresholds are the warning points before a run's end, smallest
 // first so the first one a run is inside is the closest.
@@ -269,7 +271,7 @@ func (s *Server) stopKeptRun(ctx context.Context, leaser store.RunLeaser, run ty
 }
 
 // revokeRunBroker is revokeRunCascade's broker half alone, for the end: a kept
-// run keeps its run identity so a revive can mint from it.
+// run keeps its run identity so a revive can mint a fresh token under it.
 func (s *Server) revokeRunBroker(ctx context.Context, runID uuid.UUID) {
 	if s.cfg.Broker == nil {
 		return

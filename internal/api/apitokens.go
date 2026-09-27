@@ -91,8 +91,9 @@ func apiTokenIDFromContext(ctx context.Context) uuid.UUID {
 // into an admin-token compare the caller never asked for. It fails closed with a
 // 500 that says the lookup failed, not that the credential did.
 //
-// This branch deliberately does NOT emit an auth.fail audit event; that
-// vocabulary belongs to a separate lane.
+// This branch emits auth.fail for one refusal only, a token whose principal is
+// reserved (isReservedPrincipal): the holder presented a real credential, and
+// falling through would record it as a wrong admin token.
 func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := bearerToken(r)
@@ -123,6 +124,12 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 				"error", err, "path", r.URL.Path)
 			s.metrics.authStoreErrorInc()
 			writeError(w, http.StatusServiceUnavailable, "api token lookup failed")
+			return
+		}
+		// A row minted for a reserved principal (before the sign-in callback
+		// refused one) would replay it as that identity (#1162). Audited and
+		// answered here: the fallback would only record invalid_admin_token.
+		if s.refuseReservedPrincipal(w, r, t.Principal, apiTokenReservedRefusal) {
 			return
 		}
 		// The same cutoff the session lane obeys, applied to the token's
@@ -218,6 +225,11 @@ type createAPITokenRequest struct {
 // distinguishes "you were never signed in" from "your session was just
 // revoked".
 const apiTokenNoHumanRefusal = "an API token belongs to a signed-in human — sign in to the console and create one from Account, or keep using the admin token directly"
+
+// apiTokenReservedRefusal is the 401 body for a token whose principal is
+// reserved. The holder has the secret, so naming the token is no oracle; the
+// cause stays in the auth.fail row.
+const apiTokenReservedRefusal = "this API token can no longer be used — ask your Wardyn admin"
 
 // apiTokenFeatureRefusal is the 403 body when the api_token feature is not
 // available to the caller.

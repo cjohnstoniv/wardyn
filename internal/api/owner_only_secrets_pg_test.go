@@ -273,44 +273,25 @@ func TestOwnerOnlyGrant_OperatorOwnedRunReadsTheOperatorRow(t *testing.T) {
 	}
 }
 
-// TestOwnerOnlyGrant_IdPSubSpelledLikeTheAdminTokenIsAPerson: operator
-// ownership is what authenticated the creating request, recorded on the run and
-// signed into its token, never the subject string. A signed-in person whose IdP
-// sub is literally "admin-token", member or admin, is refused an owner_only
-// grant that only an operator row could serve, and no mint happens; their run's
-// row records operator_owned=false. The real admin token still reads the
-// operator row (TestOwnerOnlyGrant_OperatorOwnedRunReadsTheOperatorRow).
-func TestOwnerOnlyGrant_IdPSubSpelledLikeTheAdminTokenIsAPerson(t *testing.T) {
+// TestOwnerOnlyGrant_IdPSubSpelledLikeTheAdminTokenIsRefused: a signed-in
+// person whose IdP sub is literally "admin-token", member or admin, was once
+// a person the owner_only gate had to tell from the operator (#1106); since
+// #1162 that session authenticates nothing, so it launches no run and no mint
+// happens. The real admin token still reads the operator row
+// (TestOwnerOnlyGrant_OperatorOwnedRunReadsTheOperatorRow), and a run such a
+// session created earlier is pinned at the sink
+// (TestOwnerOnlyInjectionSink_NeverServesTheOperatorRow).
+func TestOwnerOnlyGrant_IdPSubSpelledLikeTheAdminTokenIsRefused(t *testing.T) {
 	e := newOwnerOnlyPG(t)
 	if err := e.sec.Put(context.Background(), "x", []byte("operator-pat")); err != nil {
 		t.Fatal(err)
 	}
 	strict := e.storePolicy(t, "strict", "x", true)
-	fallback := e.storePolicy(t, "fallback", "x", false)
 	for _, role := range []string{oidc.RoleUser, oidc.RoleAdmin} {
 		impostor := ssoSession(t, adminTokenPrincipal, "impostor-"+role+"@corp.example", role)
-		if role == oidc.RoleAdmin {
-			// #639: an SSO admin session in the Admin view now gets 409
-			// admin_view on a launch door before any owner_only check; the
-			// admin/user split this test pins is about the OIDC identity, not
-			// the view gate, so the admin impostor launches from the user view.
-			uv := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/me/view", impostor, `{"view":"user"}`)
-			if uv.Code != http.StatusOK {
-				t.Fatalf("admin impostor switches to the user view: %d, want 200: %s", uv.Code, uv.Body.String())
-			}
-			impostor = sessionCookieFrom(t, uv.Result().Cookies())
-		}
 		w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/runs", impostor, `{"agent":"claude-code","task":"t","policy_id":"`+strict+`"}`)
-		if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), `secret \"x\" is owner_only`) {
-			t.Fatalf("%s with sub %q: create = %d %s, want 422 — a person, not the operator", role, adminTokenPrincipal, w.Code, w.Body.String())
-		}
-		created := mustCreate(t, doSSO(t, e.h.srv, http.MethodPost, "/api/v1/runs", impostor, `{"agent":"claude-code","task":"t","policy_id":"`+fallback+`"}`))
-		var run createRunResponse
-		if err := json.Unmarshal(created.Body.Bytes(), &run); err != nil {
-			t.Fatal(err)
-		}
-		if rec, err := e.h.srv.cfg.Store.GetRun(context.Background(), run.ID); err != nil || rec.OperatorOwned {
-			t.Fatalf("%s with sub %q: run row operator_owned=%v (%v), want false", role, adminTokenPrincipal, rec.OperatorOwned, err)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s with sub %q: create = %d %s, want 401 — a reserved principal is no identity", role, adminTokenPrincipal, w.Code, w.Body.String())
 		}
 	}
 	if rows := e.mintRows(t); len(rows) != 0 {
@@ -331,20 +312,26 @@ func TestOwnerOnlyInjectionSink_NeverServesTheOperatorRow(t *testing.T) {
 	// The sink serves only a live run, so each subject gets one, under a
 	// default policy with no grants of its own.
 	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
-	// "impostor" is a signed-in person whose IdP sub is "admin-token".
+	// "impostor" is a person whose IdP sub is "admin-token", and whose run
+	// predates #1162 (which now refuses that session at the door): launched
+	// as a person, then its created_by rewritten to the sub it carried.
 	runs, subs := map[string]uuid.UUID{}, map[string]string{"alice": "alice", "admin": adminTokenPrincipal, "impostor": adminTokenPrincipal}
-	for who, sub := range subs {
+	for who := range subs {
 		var w *httptest.ResponseRecorder
 		if who == "admin" {
 			w = do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, `{"agent":"claude-code","task":"t"}`)
 		} else {
-			w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, sub, who+"@corp.example", oidc.RoleUser), `{"agent":"claude-code","task":"t"}`)
+			w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, who, who+"@corp.example", oidc.RoleUser), `{"agent":"claude-code","task":"t"}`)
 		}
 		var run createRunResponse
 		if err := json.Unmarshal(mustCreate(t, w).Body.Bytes(), &run); err != nil {
 			t.Fatal(err)
 		}
 		runs[who] = run.ID
+	}
+	if _, err := h.srv.cfg.Store.(store.PG).Pool.Exec(context.Background(),
+		`UPDATE agent_runs SET created_by = $1 WHERE id = $2`, adminTokenPrincipal, runs["impostor"]); err != nil {
+		t.Fatal(err)
 	}
 	resolve := func(who string, ownerOnly bool) *httptest.ResponseRecorder {
 		t.Helper()

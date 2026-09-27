@@ -11,3 +11,8 @@
 // reads this constant, so it stays the one string for both the nav label and
 // the screen heading, per governance-prompt.md §7.2.
 export const GOVERNANCE_NAV_TITLE = "Governance";
+
+// Same reasoning, one entry later (UT-7a): the User types screen's own
+// heading (user-types-copy.ts's USER_TYPES.TITLE) reads this constant too, so
+// the nav label and the screen heading can't drift apart.
+export const USER_TYPES_NAV_TITLE = "User types";

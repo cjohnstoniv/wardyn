@@ -847,6 +847,11 @@ const (
 	// attempt cannot help; the user needs a fresh `/auth/login`, or an
 	// operator needs to look at the client credentials.
 	authErrorOIDCConfig = "oidc_config"
+	// authErrorSignInRefused: a refusal the person cannot act on and should
+	// not be told the cause of (DenialReservedPrincipal). The sign-in screen
+	// has no arm for it and shows its generic sentence; the cause is in the
+	// log and the auth.fail row.
+	authErrorSignInRefused = "sign_in_refused"
 )
 
 // redirectAuthError sends the browser back to "/" with ?auth_error=<code> —
