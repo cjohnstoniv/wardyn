@@ -88,7 +88,7 @@ _v03_no_canary() {
 
 # The cue floor, as the 01) arm does it: a take that dies mid-episode still
 # leaves a narration.json, just a short one. Each floor is ~85% of the episode's
-# full cue count = local/episode-03-stanza-check.py's spec-string count, plus
+# full cue count = the stanza-check script's spec-string count, plus
 # chapter() cards and the lines spoken from shared helpers (startAndBoot's
 # "Start it."). 03a 109+5=114 -> 95, 03b 36+5=41 -> 34, 03c 51+5=56 -> 47,
 # 03d 38+3=41 -> 34. 03a and 03c are confirmed against real rehearsals (114 and

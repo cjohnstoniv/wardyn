@@ -213,16 +213,25 @@ function useSessionDismissal(principal: string): [boolean, () => void] {
 /** One provider's line on the strip (§5.5, B1–B5), with the button that opens
  *  its door. `harnesses` is the display names of the agents whose default it
  *  is. Pure, and exported for the tests: the kind/state table is the feature.
- *  null for a state packet D draws no line for. */
+ *  null for a state packet D draws no line for. `action` is the server's own
+ *  line, verbatim, only where it says what the sentence cannot (#993): the
+ *  pin-contradicted pair or another access portal, never the button's label. */
 export function providerStripLine(
   a: ProviderAttention,
   harnesses: string,
-): { sentence: string; button: string; title: string; tone: "warning" | "info"; dismissible: boolean } | null {
+): { sentence: string; action?: string; button: string; title: string; tone: "warning" | "info"; dismissible: boolean } | null {
   const name = a.provider.name || a.provider.id;
   switch (a.provider.kind) {
     case "bedrock_sso":
       if (a.state === "expired_signin")
-        return { sentence: CONNECTIONS.C6_LINE(name), button: AGENTS.SIGN_IN_AWS, title: "", tone: "warning", dismissible: false };
+        return {
+          sentence: CONNECTIONS.C6_LINE(name),
+          action: a.action && a.action !== AGENTS.SIGN_IN_AWS ? a.action : "",
+          button: AGENTS.SIGN_IN_AWS,
+          title: "",
+          tone: "warning",
+          dismissible: false,
+        };
       if (a.state === "expiring") {
         // {when} keeps its existing format (packet D): relative in the
         // sentence, the absolute instant as its title.
@@ -393,6 +402,8 @@ export function ModelAccessBanner({ view = "user" }: { view?: ConsoleView } = {}
         <div className={STRIP_CLASS + TONE_CLASS[one.line.tone]}>
           {one.line.tone === "info" ? <Clock className="size-4 shrink-0" /> : <AlertTriangle className="size-4 shrink-0" />}
           <span title={one.line.title || undefined}>{one.line.sentence}</span>
+          {/* The server's own words, verbatim — never reworded client-side. */}
+          {one.line.action && <span>{one.line.action}</span>}
           {!door.claimed && (
             <button
               type="button"

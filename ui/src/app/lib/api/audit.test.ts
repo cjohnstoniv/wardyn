@@ -84,7 +84,7 @@ describe("egressFromAudit", () => {
     expect(out.map((d) => d.id)).toEqual(["wire"]);
   });
 
-  // Negative control (ui/src/app/lib/types/audit.ts's ruleSourceLabel, the
+  // Negative control (wardyn/audit-decision.tsx's ruleSourceLabel, the
   // console's rule_source chip): a mixed feed of tool-rule AND real
   // rule_source-carrying egress rows must project identically — egressFromAudit
   // keys on toolRuleDecision alone, never on ruleSourceLabel, so a non-tool
@@ -227,7 +227,7 @@ describe("runEndingFromAudit — the model-credential refusal is its own ending"
   const failed = (data: Record<string, unknown>): AuditEvent =>
     ev({ id: "c", actor_type: "system", actor: "wardynd", action: "run.create", outcome: "failure", data });
   const REFUSAL =
-    "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
+    "This run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
 
   it("grades `credential`, and carries the DECLARED lane", () => {
     const ending = runEndingFromAudit("FAILED", [

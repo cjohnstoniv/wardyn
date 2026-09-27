@@ -14,8 +14,8 @@
  * HOLD, and WHO DECIDED — each with its receipt on screen, and then it tears
  * down its own nouns on camera.
  *
- * THE SCRIPT IS THE OWNER'S, VERBATIM — local/review-0.7/dialog/00-script.md.
- * Every caption below is one line of its §3 transcript, in order, unedited;
+ * THE SCRIPT IS THE OWNER'S, VERBATIM. Every caption below is one line of its
+ * §3 transcript, in order, unedited;
  * the C-numbers in the comments are that transcript's. The choreography
  * (rings, typing, races, asserts) is this file's job; the words are not.
  * Wording changes go through the script, never through this file.

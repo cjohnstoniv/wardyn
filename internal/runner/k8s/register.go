@@ -8,8 +8,33 @@ package k8s
 import (
 	"os"
 
+	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 )
+
+// buildConfig maps registration Deps to the k8s driver's Config. Extracted to
+// a pure function so its Record wiring is testable without a live cluster
+// (register_test.go's TestBuildConfig_RecordFollowsDeps pins it): Deps.Record
+// — itself derived from the boot recording-store selection, see
+// substrate.RecordEnabled and cmd/wardynd's buildRunnerFromFlags — must reach
+// Config.Record verbatim. #1113 was exactly this wiring hardcoding
+// `Record: true` here regardless of WARDYN_RECORDING_STORE, so an install
+// with recording off still wrapped every exec in wardyn-rec and still logged
+// a brokered:recording deny for a feature that was switched off.
+func buildConfig(d substrate.Deps) Config {
+	return Config{
+		Namespace:           resolveNamespace(os.Getenv("WARDYN_K8S_NAMESPACE")),
+		ProxyImage:          d.ProxyImage,
+		ImagePullSecret:     os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
+		Record:              d.Record,
+		ConfinementRuntimes: d.ConfinementRuntimes,
+		// cliutil.EnvBool, not a literal "1" compare (#202): the shared
+		// 1/true/yes/on token set, and a garbage value exits 2 at boot
+		// instead of silently staying off.
+		AllowUnenforcedNetPol: cliutil.EnvBool("WARDYN_K8S_ALLOW_UNENFORCED_NETPOL", false),
+		AckAmbientDefaultDeny: cliutil.EnvBool("WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY", false),
+	}
+}
 
 // Self-register the Kubernetes substrate so a blank import (cmd/wardynd under
 // `-tags k8s`) makes "k8s" selectable via -runner/WARDYN_RUNNER. Compiled ONLY
@@ -18,14 +43,7 @@ import (
 // code — mirrors docker/register.go exactly.
 func init() {
 	substrate.Register("k8s", func(d substrate.Deps) (substrate.Substrate, error) {
-		s, err := New(Config{
-			Namespace:             resolveNamespace(os.Getenv("WARDYN_K8S_NAMESPACE")),
-			ProxyImage:            d.ProxyImage,
-			ImagePullSecret:       os.Getenv("WARDYN_K8S_IMAGE_PULL_SECRET"),
-			ConfinementRuntimes:   d.ConfinementRuntimes,
-			AllowUnenforcedNetPol: os.Getenv("WARDYN_K8S_ALLOW_UNENFORCED_NETPOL") == "1",
-			AckAmbientDefaultDeny: os.Getenv("WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY") == "1",
-		})
+		s, err := New(buildConfig(d))
 		if err != nil {
 			return nil, err
 		}

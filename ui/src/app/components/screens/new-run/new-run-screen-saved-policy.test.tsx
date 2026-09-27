@@ -51,6 +51,7 @@ vi.mock("../../../lib/capabilities", async () => {
 import { NewRunScreen } from "./new-run-screen";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RUN } from "../../wardyn/copy";
+import { PUSH } from "../../wardyn/copy/push";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -242,5 +243,38 @@ describe("NewRunScreen — the saved-policy lane", () => {
     await user.click(screen.getByRole("combobox", { name: "Agent" }));
     await user.click(await screen.findByRole("option", { name: "Claude Code" }));
     expect(screen.getByRole("radio", { name: /^Hold in Wardyn/ })).toHaveAttribute("aria-checked", "true");
+  });
+
+  // M30 (review finding, PR #555) — new-run-screen.tsx derives `unattended =
+  // !isInteractive` and hands it, alongside the saved policy's own
+  // push_rules, down to RunRail as props. new-run-rail.test.tsx exercises the
+  // rail with `unattended` passed directly, which pins the rail's OWN gating
+  // but not the screen's wiring into it: a mutation that dropped the screen's
+  // `unattended={unattended}` prop (or hard-coded it false) left every
+  // existing suite green. Only mounting the real NewRunScreen, picking a
+  // policy whose push_rules.require_review_paths is set, and switching Run
+  // mode to Autonomous proves the screen actually tells the rail this run is
+  // unattended.
+  const PUSH_REVIEW_POLICY = {
+    id: "pol_push_review",
+    name: "Push review policy",
+    spec: {
+      allowed_domains: ["api.anthropic.com"],
+      first_use_approval: "deny_with_review" as const,
+      min_confinement_class: "CC1" as const,
+      push_rules: { require_review_paths: [".github/**"] },
+    },
+  };
+
+  it("a batch (unattended) run under a require_review_paths policy shows PUSH.RAIL_UNATTENDED (M30)", async () => {
+    listPoliciesMock.mockResolvedValue([PUSH_REVIEW_POLICY]);
+    renderScreen();
+    await pickSavedPolicy(PUSH_REVIEW_POLICY.name);
+    // Interactive (the wizard's default) never shows the unattended note —
+    // the section renders (require_review_paths is set) but the note doesn't.
+    expect(await screen.findByText(PUSH.RAIL_TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(PUSH.RAIL_UNATTENDED)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: /^Autonomous/ }));
+    expect(await screen.findByText(PUSH.RAIL_UNATTENDED)).toBeInTheDocument();
   });
 });

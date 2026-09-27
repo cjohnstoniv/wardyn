@@ -27,12 +27,12 @@ type mintSubjectRecorder struct {
 	sponsors []string
 }
 
-func (m *mintSubjectRecorder) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string) (identity.RunIdentity, error) {
+func (m *mintSubjectRecorder) MintRunIdentity(ctx context.Context, runID uuid.UUID, humanSub, sponsor, audience string, operatorOwned bool) (identity.RunIdentity, error) {
 	m.mu.Lock()
 	m.subjects = append(m.subjects, humanSub)
 	m.sponsors = append(m.sponsors, sponsor)
 	m.mu.Unlock()
-	return m.Provider.MintRunIdentity(ctx, runID, humanSub, sponsor, audience)
+	return m.Provider.MintRunIdentity(ctx, runID, humanSub, sponsor, audience, operatorOwned)
 }
 
 func (m *mintSubjectRecorder) seen() (subjects, sponsors []string) {
@@ -41,8 +41,7 @@ func (m *mintSubjectRecorder) seen() (subjects, sponsors []string) {
 	return append([]string(nil), m.subjects...), append([]string(nil), m.sponsors...)
 }
 
-// TestLocalPrincipalHeaderCannotSteerTheSecretNamespace is the pin for F099
-// (Requirement 10).
+// TestLocalPrincipalHeaderCannotSteerTheSecretNamespace pins Requirement 10.
 //
 // In LocalMode, actorFromRequest honors the DEV-ONLY X-Wardyn-Principal header,
 // and handleCreateRun used that value as BOTH the run's attribution AND the run

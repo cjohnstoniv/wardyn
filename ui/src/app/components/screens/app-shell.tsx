@@ -51,8 +51,10 @@ import {
   RoleProvider,
   type Role,
 } from "../wardyn/operator-context";
-import { health as api, type MeUserDrive } from "../../lib/api/health";
+import { health as api, type Me, type MeUserDrive } from "../../lib/api/health";
+import { useReauth } from "../../lib/reauth";
 import { TopBar } from "./top-bar";
+import { appURL } from "../../lib/base-path";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
 import { useShellView, useViewResync, ViewSwitch } from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
@@ -153,8 +155,40 @@ export interface ShellMeta {
   sso: boolean;
 }
 
-/** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
-function useMeta(): [ShellMeta, () => void] {
+/** Everything the shell holds that /me decides — `me` null is a failed /me.
+ *  One mapping for the mount read and adopt(): a partial copy on adopt kept the
+ *  placeholder principal after a resume, so every later lapse in the tab
+ *  skipped the different-person check (#483, Q457-12). */
+function identityFromMe(me: Me | null) {
+  return {
+    principal: me?.principal || "unknown",
+    email: me?.email ?? "",
+    // ?? "": a pre-0.7.1 daemon never sends name — absent must read as
+    // "none", which falls back to the email, then the principal.
+    name: me?.name ?? "",
+    method: me?.method || "",
+    identityResolved: me !== null,
+    operator: me?.operator ?? true,
+    // ?? true, not `?? me?.operator`: an older daemon that never sends
+    // this field must fail OPEN like every other identity signal here.
+    securityOperator: me?.security_operator ?? true,
+    role: me?.role ?? "admin",
+    // F3-F11: a bad string parses to an Invalid Date, not null — guard
+    // NaN here so useSessionExpiry never has to.
+    sessionExpiresAt: validExpiry(me?.session_expires_at),
+    memberLocalDirRoot: me?.member_local_dir_root ?? null,
+    userDrive: me?.user_drive ?? null,
+    userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
+    userDriveUnavailable: me?.user_drive_unavailable ?? "",
+    memberMode: me?.user_view ?? false,
+    memberModeNoCredential: me?.user_view_no_credential ?? false,
+    memberPreviewAvailable: me?.user_preview_available ?? false,
+  } satisfies Partial<ShellMeta>;
+}
+
+/** The shell's identity, the retry that re-fires /me (B1's banner action), and
+ *  adopt() for a /me the reauth dialog already read (#483). */
+function useMeta(): [ShellMeta, () => void, (me: Me) => void] {
   // Bumped by retry(), which is the effect's only other dependency: /me is
   // fetched once per load today, so after a failure identityResolved would stay
   // false forever and the banner below would have nothing to offer.
@@ -192,29 +226,8 @@ function useMeta(): [ShellMeta, () => void] {
         setMeta({
           trustDomain: h.trust_domain || "unknown",
           identityProvider: h.identity_provider || "unknown",
-          principal: me?.principal || "unknown",
-          email: me?.email ?? "",
-          // ?? "": a pre-0.7.1 daemon never sends name — absent must read as
-          // "none", which falls back to the email, then the principal.
-          name: me?.name ?? "",
-          method: me?.method || "",
+          ...identityFromMe(me),
           resolved: true,
-          identityResolved: me !== null,
-          operator: me?.operator ?? true,
-          // ?? true, not `?? me?.operator`: an older daemon that never sends
-          // this field must fail OPEN like every other identity signal here.
-          securityOperator: me?.security_operator ?? true,
-          role: me?.role ?? "admin",
-          // F3-F11: a bad string parses to an Invalid Date, not null — guard
-          // NaN here so useSessionExpiry never has to.
-          sessionExpiresAt: validExpiry(me?.session_expires_at),
-          memberLocalDirRoot: me?.member_local_dir_root ?? null,
-          userDrive: me?.user_drive ?? null,
-          userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
-          userDriveUnavailable: me?.user_drive_unavailable ?? "",
-          memberMode: me?.user_view ?? false,
-          memberModeNoCredential: me?.user_view_no_credential ?? false,
-          memberPreviewAvailable: me?.user_preview_available ?? false,
           runner: h.runner ?? "",
           networkPolicy: h.network_policy ?? "",
           // "" (unset) reads the same as absent: both mean "no mirror".
@@ -232,7 +245,11 @@ function useMeta(): [ShellMeta, () => void] {
       alive = false;
     };
   }, [attempt]);
-  return [meta, React.useCallback(() => setAttempt((n) => n + 1), [])];
+  // The same person signed back in over the page: take the whole identity
+  // from the /me the dialog read, rather than re-asking — a failed re-ask
+  // would settle as an unknown identity and blank the page it just kept.
+  const adopt = React.useCallback((me: Me) => setMeta((m) => ({ ...m, ...identityFromMe(me), resolved: true })), []);
+  return [meta, React.useCallback(() => setAttempt((n) => n + 1), []), adopt];
 }
 
 // SESSION_WARN_MS — how far ahead of the session's real expiry to start
@@ -393,6 +410,12 @@ const EveryoneAdminBanner = React.lazy(() =>
   import("../wardyn/everyone-admin-banner").then((m) => ({ default: m.EveryoneAdminBanner })),
 );
 
+// #483 — the "Sign in to continue" dialog and the signed-out bar. Lazy for the
+// same entry-budget reason; the shell warms the chunk on mount, because by the
+// time a session ends the daemon may not be answering.
+const loadReauthLayer = () => import("../wardyn/reauth-layer");
+const ReauthLayer = React.lazy(() => loadReauthLayer().then((m) => ({ default: m.ReauthLayer })));
+
 const navLinkClass = (isActive: boolean) =>
   cn(
     "relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",
@@ -546,7 +569,12 @@ export function AppShell({
   unreachable?: boolean;
   lastOkAt?: Date | null;
 }) {
-  const [meta, retryIdentity] = useMeta();
+  const [meta, retryIdentity, adoptIdentity] = useMeta();
+  const reauth = useReauth();
+  React.useEffect(() => {
+    // A warm-up only: if it fails, React.lazy asks again when the layer mounts.
+    loadReauthLayer().catch(() => {});
+  }, []);
   // B1 — SETTLED and still unknown: /me answered nothing, so every tier the
   // shell holds is the fail-open seed. Distinct from "not settled yet", which is
   // an ordinary first paint and says nothing to anybody.
@@ -604,6 +632,13 @@ export function AppShell({
             >
               Skip to main content
             </a>
+            {/* #483: first, above everything — while it shows, nothing below
+                it can save. */}
+            {reauth.phase !== "none" && (
+              <React.Suspense fallback={null}>
+                <ReauthLayer onResumed={adoptIdentity} />
+              </React.Suspense>
+            )}
             {/* Hidden — not merely covered — in focus mode: the cockpit's overlay is
           painted over the shell anyway, but leaving the header mounted would
           keep a dozen focusable controls ahead of the terminal in tab order
@@ -674,7 +709,7 @@ export function AppShell({
                 <AlertTriangle className="size-4 shrink-0" />
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][0]}</span>
                 <a
-                  href="/auth/login"
+                  href={appURL("/auth/login")}
                   className="font-medium underline underline-offset-2"
                 >
                   Sign in again

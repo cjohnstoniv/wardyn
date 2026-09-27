@@ -7,6 +7,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./app/App";
+import { basePath } from "./app/lib/base-path";
 import "./styles/index.css";
 
 const container = document.getElementById("root");
@@ -16,7 +17,7 @@ if (!container) {
 
 createRoot(container).render(
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename={basePath() || undefined}>
       <App />
     </BrowserRouter>
   </React.StrictMode>,

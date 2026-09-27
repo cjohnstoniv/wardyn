@@ -24,7 +24,7 @@ func TestPG_BootWithAPlatformKeyNeedsRewrapOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	orig, err := loadOrCreateSigningKey(ctx, before)
+	orig, err := loadOrCreateSigningKey(ctx, unlocked(before))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,14 +33,14 @@ func TestPG_BootWithAPlatformKeyNeedsRewrapOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadOrCreateSigningKey(ctx, split); err == nil || !strings.Contains(err.Error(), "wardynd -rewrap") {
+	if _, err := loadOrCreateSigningKey(ctx, unlocked(split)); err == nil || !strings.Contains(err.Error(), "wardynd -rewrap") {
 		t.Fatalf("boot with the platform key over a pre-split signing key = %v, want a refusal naming -rewrap", err)
 	}
 
 	if n, err := secretstorepg.Rewrap(ctx, pool, id, platform); err != nil || n != 1 {
 		t.Fatalf("Rewrap = (%d, %v)", n, err)
 	}
-	got, err := loadOrCreateSigningKey(ctx, split)
+	got, err := loadOrCreateSigningKey(ctx, unlocked(split))
 	if err != nil || !got.Equal(orig) {
 		t.Fatalf("boot after -rewrap = %v; want the same signing key", err)
 	}

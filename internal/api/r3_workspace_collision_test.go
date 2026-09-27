@@ -25,7 +25,7 @@ func collisionRequest() *http.Request {
 	return httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
 }
 
-// memberRequest is a plain member SSO session, the caller F336 is about.
+// memberRequest is a plain member SSO session.
 func collisionMemberRequest(sub string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
 	return r.WithContext(withOIDCRole(withOIDCHuman(r.Context(), sub), string(oidc.RoleUser)))
@@ -43,8 +43,6 @@ func (s *fallbackCollisionStore) ListRuns(context.Context) ([]types.AgentRun, er
 	return s.runs, nil
 }
 
-// TestWorkspaceCollisionNamesOnlyRunsTheCallerMaySee is F336.
-//
 // The advisory 201 warning enumerated every active run id at the workspace
 // path, unfiltered by ownership — so a member creating a run in a shared
 // directory learned another principal's run ids, and by repeating the create

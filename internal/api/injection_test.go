@@ -477,7 +477,7 @@ func TestSecretsAPI_ReservesOAuthSentinels(t *testing.T) {
 // itself hardcodes "alice@example.com" for every other test in this file).
 func mintRunTokenAs(t *testing.T, h *harness, runID uuid.UUID, sub string) string {
 	t.Helper()
-	id, err := h.idp.MintRunIdentity(context.Background(), runID, sub, "", internalAudience)
+	id, err := h.idp.MintRunIdentity(context.Background(), runID, sub, "", internalAudience, false)
 	if err != nil {
 		t.Fatalf("mint run identity: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestInjectionResolve_OperatorRunUnchanged(t *testing.T) {
 	}
 }
 
-// ---- F133 pins: the H2 OAuth host pin (both halves) and the sentinel success path ----
+// ---- The H2 OAuth host pin (both halves) and the sentinel success path ----
 //
 // handleInternalInjection's OAuth HOST PIN (H2) and its write-time sibling in
 // validateInlineSecretRefs were both unheld: short-circuiting either comparison
@@ -667,11 +667,11 @@ func TestValidateInlineSecretRefs_SentinelHostPin(t *testing.T) {
 	for _, sentinel := range []string{types.SubscriptionOAuthSecret, types.ManagedOAuthSecret} {
 		// The control: the pinned host still validates, so a failure below is the
 		// host pin and not the sentinel path breaking wholesale.
-		if code, err := h.srv.validateInlineSecretRefs(ctx, "", sentinelAt(sentinel, "api.anthropic.com")); err != nil || code != 0 {
+		if code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinelAt(sentinel, "api.anthropic.com")); err != nil || code != 0 {
 			t.Fatalf("%s at api.anthropic.com: code=%d err=%v, want (0,nil)", sentinel, code, err)
 		}
 		for _, host := range []string{"evil.attacker.example", "api.anthropic.com.evil.example"} {
-			code, err := h.srv.validateInlineSecretRefs(ctx, "", sentinelAt(sentinel, host))
+			code, err := h.srv.validateInlineSecretRefs(ctx, "", "", sentinelAt(sentinel, host))
 			if err == nil || code != http.StatusUnprocessableEntity {
 				t.Fatalf("%s at %q: code=%d err=%v, want (422,err) — a sentinel grant may only target %s",
 					sentinel, host, code, err, subscriptionInjectionHost)

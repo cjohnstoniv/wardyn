@@ -7,7 +7,9 @@
      provider still REMOVES this class for a stored "light" preference
      (classList.toggle("dark", theme === "dark")), so that case is
      unaffected — this only fixes the default-theme flash. -->
-<html lang="en" class="dark">
+<!-- data-wardyn-base: the daemon writes WARDYN_BASE_PATH here (internal/api's
+     serveIndex); src/app/lib/base-path.ts reads it. Empty = the host root. -->
+<html lang="en" class="dark" data-wardyn-base="">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

@@ -843,13 +843,16 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 	oidcInternalIss, oidcClientID, oidcClientSecret := "", "test-client", ""
 	oidcRedirectURL := "http://localhost/auth/callback"
 	oidcEmailDomains, oidcRoleMap, oidcDefaultRole := "", "", ""
+	oidcExtraScopes := ""
 	oidcOperatorEmails := "ops@example.com"
 	allowOIDCNoOperatorList, localMode, memberMode := false, false, false
 	dirProvider, dirTenant, dirClientID, dirSecret := "", "", "", ""
 	envbuild, scanAIAdvisor := false, false
 	sshListen, uiListen := "", ""
 	controlURL := "http://127.0.0.1:8080" // loopback: no internal CA to mint
+	basePath := ""
 	return &bootFlags{
+		basePath:                &basePath,
 		recordingSel:            &recordingSel,
 		recordingDir:            &recordingDir,
 		oidcIssuer:              &issuerURL,
@@ -858,6 +861,7 @@ func ssoOnlyBootFlags(issuerURL, adminToken string, ssoOnly bool) *bootFlags {
 		oidcClientSecret:        &oidcClientSecret,
 		oidcRedirectURL:         &oidcRedirectURL,
 		oidcEmailDomains:        &oidcEmailDomains,
+		oidcExtraScopes:         &oidcExtraScopes,
 		oidcOperatorEmails:      &oidcOperatorEmails,
 		allowOIDCNoOperatorList: &allowOIDCNoOperatorList,
 		oidcRoleMap:             &oidcRoleMap,
@@ -911,7 +915,7 @@ func TestSSOOnlyPosture_WiredThroughTheRealBootPath(t *testing.T) {
 
 	t.Run("sso-only with an admin token set: refused", func(t *testing.T) {
 		f := ssoOnlyBootFlags(httpSrv.URL, "some-admin-token", true)
-		_, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false)
+		_, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), unlocked(newStore()), false, false)
 		if err == nil {
 			t.Fatal("buildOptionalFeatures: want a refusal booting WARDYN_SSO_ONLY alongside WARDYN_ADMIN_TOKEN, got nil error")
 		}
@@ -924,7 +928,7 @@ func TestSSOOnlyPosture_WiredThroughTheRealBootPath(t *testing.T) {
 
 	t.Run("sso-only with nothing else set: boots clean, real OIDC configured", func(t *testing.T) {
 		f := ssoOnlyBootFlags(httpSrv.URL, "", true)
-		of, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false)
+		of, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), unlocked(newStore()), false, false)
 		if err != nil {
 			t.Fatalf("buildOptionalFeatures: unexpected error: %v", err)
 		}
@@ -935,7 +939,7 @@ func TestSSOOnlyPosture_WiredThroughTheRealBootPath(t *testing.T) {
 
 	t.Run("an admin token alone (sso-only unset): unaffected", func(t *testing.T) {
 		f := ssoOnlyBootFlags(httpSrv.URL, "some-admin-token", false)
-		if _, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), false, false); err != nil {
+		if _, err := buildOptionalFeatures(context.Background(), context.Background(), f, nil, newStore(), unlocked(newStore()), false, false); err != nil {
 			t.Fatalf("buildOptionalFeatures: unexpected error with sso-only unset: %v", err)
 		}
 	})

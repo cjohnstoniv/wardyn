@@ -8,6 +8,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+
+	"github.com/cjohnstoniv/wardyn/internal/hostcapacity"
 )
 
 // writeServerError is writeError's 5xx twin: it LOGS the underlying error and
@@ -42,6 +44,9 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		writeError(w, http.StatusServiceUnavailable, orgRevokedMsg)
 		return
 	}
+	if writeHostCapacityRefusal(w, r, err) {
+		return
+	}
 	if errors.Is(err, errUserTypeUnknown) {
 		writeError(w, http.StatusForbidden, userTypeUnknownMsg)
 		return
@@ -52,6 +57,22 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		slog.Any("err", err),
 	)
 	writeError(w, http.StatusInternalServerError, msg)
+}
+
+// writeHostCapacityRefusal answers a hostcapacity refusal 503 with a
+// Retry-After and logs its reason, reporting whether err was one. Like
+// errOrgRevoked above it is not a fault, and every launcher's store-failure path
+// already reaches writeServerError, so none needs a branch of its own.
+func writeHostCapacityRefusal(w http.ResponseWriter, r *http.Request, err error) bool {
+	var refused hostcapacity.ErrRefused
+	if !errors.As(err, &refused) {
+		return false
+	}
+	slog.WarnContext(r.Context(), "api: run launch refused: host capacity",
+		slog.String("path", r.URL.Path), slog.String("reason", refused.Reason))
+	w.Header().Set("Retry-After", "30")
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "host_capacity_refused", "reason": refused.Reason})
+	return true
 }
 
 // loggedMsg is writeServerError for the few 5xx sites that keep their own

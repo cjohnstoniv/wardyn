@@ -10,7 +10,8 @@ import {
   ADMIN_TOKEN,
   gotoConsole,
   mockMemberRole,
-  mockSecurityAdminRole,
+  asRealSecurityAdmin,
+  consoleAPI,
   navTo,
   navToRoute,
   sidebarLink,
@@ -44,13 +45,9 @@ import type { Page } from "@playwright/test";
 //
 //   1. A RUN BOUND BY A PROFILE. effectiveCeiling (internal/api/governance.go)
 //      short-circuits at step 1: "OPERATOR ⇒ DefaultPolicy, with NO store
-//      read". isOperator (internal/api/http.go:472) returns true for ANY
-//      caller with no OIDC human session — which is exactly this harness's
-//      bearer token. So no run created through this backend can ever resolve a
-//      governance profile, and GET /policies/default never emits
-//      governance_profile_name for it (verified live against :8288 with an
-//      `all`-tier assignment in place: the key stays absent). There is no IdP
-//      in this harness, so the §E "yolo" LIVE RUN is not achievable here; the
+//      read". The operator token used by this authoring walk takes that arm,
+//      so its GET /policies/default omits governance_profile_name. The none
+//      runner cannot dispatch a profile-bound sandbox; the
 //      walls are asserted at the API level instead (the resolver, the stored
 //      ceiling, the two write refusals), and the run-level enforcement is
 //      proven in Go — TestGovernanceProfileNonEscape's 16-row escape table on
@@ -64,11 +61,8 @@ import type { Page } from "@playwright/test";
 //      is proven against the real, unmodified response shape. The absent-row
 //      half needs no splice and is asserted unmocked.
 //
-//   3. THE THREE ROLES. mockMemberRole / mockSecurityAdminRole splice /me
-//      only, so these prove RENDER behaviour — server-side authorization is
-//      pinned in Go (the chi.Walk classSecurity route matrix, authz_test.go).
-//      That split is fixtures.ts's own documented ceiling, not a shortcut
-//      taken here.
+//   3. The member display cases splice role and policy for rendering. The
+//      security-admin block uses a real restricted token and server refusals.
 //
 // Serial: one backend, one profiles table. The walk builds state the later
 // blocks read, and a mutating test must never run beside an assertion about
@@ -439,12 +433,12 @@ test.describe("governance — a ceiling that would MINT credential eligibility i
 });
 
 // ---------------------------------------------------------------------------
-// 4. The three roles. /me is spliced; server-side authorization is Go's.
+// 4. Security-admin authorization, with member policy rendering below.
 // ---------------------------------------------------------------------------
 
-test.describe("governance — the security admin's console (mocked /me role)", () => {
+test.describe("governance — the security admin's console (real per-person token)", () => {
   test.beforeEach(async ({ page }) => {
-    await mockSecurityAdminRole(page);
+    await asRealSecurityAdmin(page);
   });
 
   test("Governance, Permissions and Audit are offered — and Governance is ACTIONABLE", async ({ page }) => {
@@ -523,7 +517,26 @@ test.describe("governance — the security admin's console (mocked /me role)", (
     // Purely operator-gated (secrets.tsx:81,115) — the one chokepoint every
     // secret-write caller routes through.
     await expect(page.getByRole("button", { name: "Add secret" })).toBeDisabled();
-    await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
+    await expect(page.getByText(OPERATOR_ONLY_REASON, { exact: true })).toBeVisible();
+  });
+
+  test("real security admin receives a server refusal on secret writes", async ({ page }) => {
+    // Ordinary secrets are self-service; resident AWS credentials are operator-only.
+    const path = "/api/v1/secrets/aws-access-key-id";
+    const headers = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const accepted = await page.request.put(path, { headers, data: { value: "e2e-synthetic-resident-credential" } });
+    try {
+      expect(accepted.status()).toBe(204);
+      const before = sql("SELECT encode(ciphertext, 'hex') FROM secrets WHERE owned_by = '' AND name = 'aws-access-key-id'");
+      expect(before).not.toBe("");
+      const refused = await consoleAPI(page, "PUT", path, { value: "e2e-replacement-must-not-be-stored" });
+      expect(refused.status, refused.text).toBe(403);
+      expect(JSON.parse(refused.text)).toEqual({ error: "secret name is reserved for platform internals" });
+      expect(sql("SELECT encode(ciphertext, 'hex') FROM secrets WHERE owned_by = '' AND name = 'aws-access-key-id'")).toBe(before);
+      expect(sql("SELECT count(*) FROM secrets WHERE name = 'aws-access-key-id'")).toBe("1");
+    } finally {
+      expect((await page.request.delete(path, { headers })).status()).toBe(204);
+    }
   });
 
   test("nor reaching INTO a run they do not own: attach is not offered", async ({ page }) => {

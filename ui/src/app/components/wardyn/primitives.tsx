@@ -379,6 +379,9 @@ const kindTone: Record<ApprovalKind, Tone> = {
   // Warning, like the other rows that are WAITING on a person — a re-auth
   // request is a held run, not an informational note.
   credential_reauth: "warning",
+  // Same reasoning: a held push parks the sandbox exactly like a re-auth
+  // request does (isHeld treats both the same way — lib/types/approvals.ts).
+  push_content: "warning",
 };
 export function ApprovalKindChip({ kind }: { kind: ApprovalKind }) {
   const tone = metaFor(kindTone, kind as string, "neutral" as Tone);

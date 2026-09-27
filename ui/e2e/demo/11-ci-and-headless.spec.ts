@@ -271,8 +271,7 @@ test("beat 6 — same trail, no human", async () => {
   // pipeline GETS but never what happens when it reaches off-list — the beat
   // the terminal half films (scripts/demo-beats/11-ci-and-headless.sh, "No
   // reviewer. / No approval screen. / The build goes red."), restated here
-  // where the episode sums itself up. Drafted; see
-  // local/light-episodes-dialog-flags.md.
+  // where the episode sums itself up. Drafted during the dialog review.
   await caption(
     page,
     "And anything off the list has nobody to ask — the door stays shut, and the build goes red.",

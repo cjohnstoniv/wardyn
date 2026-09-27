@@ -256,7 +256,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       // with its own head/sentence, and the footer's action is the fix.
       expect(screen.queryByRole("button", { name: /^next: review$/i })).not.toBeInTheDocument();
       expect(screen.getByText("Redirects aren't proven yet")).toBeInTheDocument();
-      expect(screen.getByText(/every configured redirect has to prove reached/i)).toBeInTheDocument();
+      // #497: the same reason also renders a second time, as the rail's own
+      // visible refusal text on every step this gate still blocks (Workspaces,
+      // Review) — hence getAllByText, not getByText.
+      expect(screen.getAllByText(/every configured redirect has to prove reached/i).length).toBeGreaterThan(0);
 
       // Clicking it dispatches into the step: switches to the egress tab and
       // fires every row's real probe — the full footer→step wiring, proven.
@@ -326,7 +329,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(within(nav).getByRole("button", { name: /^secrets/i }));
       expect(screen.getByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
 
-      await user.click(within(nav).getByRole("button", { name: /network/i }));
+      // #497: anchored — Secrets' now-visible refusal reason text ("...
+      // assumes the network works...") is part of its own accessible name
+      // too, and would otherwise ambiguously match this unanchored regex.
+      await user.click(within(nav).getByRole("button", { name: /^network/i }));
       await screen.findByRole("heading", { name: /^network$/i });
 
       // Proven: the identical rail click now works.
