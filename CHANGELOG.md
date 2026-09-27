@@ -616,7 +616,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `PUT /api/v1/presets/{name}`, and a launcher starts it with `POST /runs {"preset": "<name>",
   "title": …, "task": …}` instead of a full spec. The server expands the preset and runs the
   unchanged create path, so the caller's own ceiling, grants, secrets and drive apply as they
-  would to the explicit request; any other field beside `preset` is refused. Presets are
+  would to the explicit request; only `title`, `task` and an optional `preset_version` pin may accompany `preset`; any other field is refused. Presets are
   versioned, every write is audited (`preset.create`/`update`/`delete`), the run records
   `preset` and `preset_version`, and `wardyn preset get/apply` round-trips them. Migration
   `0086_launch_presets`.

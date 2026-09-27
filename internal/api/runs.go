@@ -627,6 +627,12 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		"confinement_class": enforced, "confinement_source": confinementSource, "jti": jti,
 		"inline_policy": req.InlinePolicy != nil,
 	}
+	if req.Preset != "" {
+		// The preset stamp is also on the run row, but the chained audit row
+		// outlives it: this ties the run to the preset version it came from.
+		data["preset"] = req.Preset
+		data["preset_version"] = req.PresetVersion
+	}
 	if req.TaskMode == "exec" {
 		// The run row doesn't store task_mode (request-scoped), so the audit
 		// event is the provenance record that this run ran a plain command.

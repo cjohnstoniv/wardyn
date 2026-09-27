@@ -316,6 +316,18 @@ func TestPG_PresetVersionRecordedAndAudited(t *testing.T) {
 	if run.Preset != "widgets" || run.PresetVersion != 2 || run.Repo != "acme/gadgets" {
 		t.Errorf("run = (%q v%d repo %q), want widgets v2 on acme/gadgets", run.Preset, run.PresetVersion, run.Repo)
 	}
+	var runRow struct {
+		Preset        string `json:"preset"`
+		PresetVersion int    `json:"preset_version"`
+	}
+	for _, e := range f.actions("run.create") {
+		if e.Target == run.ID.String() {
+			_ = json.Unmarshal(e.Data, &runRow)
+		}
+	}
+	if runRow.Preset != "widgets" || runRow.PresetVersion != 2 {
+		t.Errorf("run.create audit = %+v, want preset widgets v2 (the chained row outlives the run row)", runRow)
+	}
 	f.dispatched(t, run.ID)
 	stored, err := f.pg.GetRun(context.Background(), run.ID)
 	if err != nil || stored.PresetVersion != 2 {
