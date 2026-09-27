@@ -503,6 +503,9 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 	var pulls pullWatch
 	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
+		if isClientThrottled(gerr) {
+			return false, nil
+		}
 		if gerr != nil {
 			return false, gerr
 		}
@@ -549,6 +552,17 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 		}
 	}
 	return err
+}
+
+// isClientThrottled reports client-go's own rate-limiter refusal. x/time/rate
+// refuses a Wait whose token would arrive after the context's deadline, and
+// that error does not wrap context.DeadlineExceeded — so returned as-is from
+// the poll, a timeout under load read as "client rate limiter" and dropped
+// podStuckReason. Treated as "not yet", the poll ends on its own deadline and
+// the enrichment runs. A string match on client-go's wrapper text: if upstream
+// renames it, this degrades to passing the error through, as before.
+func isClientThrottled(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "client rate limiter Wait returned an error")
 }
 
 // podStuckReason renders why a pod that never started is where it is, from the
