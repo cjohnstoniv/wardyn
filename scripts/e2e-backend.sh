@@ -25,6 +25,10 @@
 #   WARDYN_E2E_TOKEN         admin bearer token (default: wardyn-e2e-token)
 #   WARDYN_E2E_ADDR          listen address   (default: :8088)
 #   WARDYN_E2E_UI_ADDR       UI-sandbox gateway listen address (default: :8089) — must differ from WARDYN_E2E_ADDR
+#   WARDYN_E2E_INTERNAL_ADDR proxy-facing internal TLS listen address (default: :8443) — wardynd binds
+#                            this whenever -control-plane-url is https (the default), regardless of
+#                            ADDR/UI_ADDR; a caller running more than one instance on one host (the
+#                            per-screen fanout, run-ui-e2e.sh's lanes) must give each its own
 #   WARDYN_E2E_PG_CONTAINER  psql container   (default: wardyn-test-pg) — used for SQL state seeding
 #   WARDYN_E2E_PG_DBNAME     e2e database name (default: wardyn_e2e)
 #   WARDYN_E2E_AGE_KEY       pinned age identity (default: unset, mint a fresh one per `up`)
@@ -58,6 +62,14 @@ AGE_KEY="${WARDYN_E2E_AGE_KEY:-}"
 # differ from ADDR or wardynd refuses to boot. The per-screen fanout gives
 # each instance its own ports, so override this alongside WARDYN_E2E_ADDR.
 UI_ADDR="${WARDYN_E2E_UI_ADDR:-:8089}"
+# wardynd's proxy-facing internal TLS listener (-internal-listen /
+# WARDYN_INTERNAL_LISTEN, cmd/wardynd/boot_flags.go): it runs whenever
+# -control-plane-url is https, which is the daemon's own default, so it binds
+# unconditionally regardless of ADDR/UI_ADDR. Give it the same per-instance
+# override ADDR/UI_ADDR already get, or two isolated instances on one host
+# (the per-screen fanout, run-ui-e2e.sh's lanes) both fight over the fixed
+# :8443 default and the second one's `up` dies on the bind.
+INTERNAL_ADDR="${WARDYN_E2E_INTERNAL_ADDR:-:8443}"
 PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 PG_DBNAME="${WARDYN_E2E_PG_DBNAME:-wardyn_e2e}"
 # Derive the URL port by splitting on the LAST colon, so every documented ADDR
@@ -214,6 +226,7 @@ cmd_up() {
       -listen "${ADDR}" \
       -ui-sandbox-listen "${UI_ADDR}" \
       -ui-sandbox-advertise "http://localhost:${UI_ADDR##*:}" \
+      -internal-listen "${INTERNAL_ADDR}" \
       -ui-dir "${REPO_ROOT}/ui/dist" \
       -default-policy "${REPO_ROOT}/examples/policies/demo.json" \
       >"${LOG_FILE}" 2>&1 &
@@ -227,43 +240,34 @@ cmd_up() {
 }
 
 cmd_down_quiet() {
-  if [[ -f "${PID_FILE}" ]]; then
-    local pid; pid="$(cat "${PID_FILE}")"
-    kill "${pid}" >/dev/null 2>&1 || true
-    rm -f "${PID_FILE}"
-  fi
-  # Free ONLY this instance's listen port (do NOT broad-kill every .e2e-bin/wardynd
-  # — that would tear down sibling instances during the per-screen e2e fanout).
-  local port="${ADDR#*:}"
-  # Both listeners: the UI-sandbox gateway's port has the same lifecycle as the
-  # console's, so leaving it held would make the NEXT `up` fail to bind exactly
-  # the way the console port used to (see the wait loop below).
-  local ui_port="${UI_ADDR##*:}"
-  if command -v fuser >/dev/null 2>&1; then
-    fuser -k "${port}/tcp" >/dev/null 2>&1 || true
-    fuser -k "${ui_port}/tcp" >/dev/null 2>&1 || true
-  fi
+  [[ -f "${PID_FILE}" ]] || return 0
+  local pid; pid="$(cat "${PID_FILE}")"
+  rm -f "${PID_FILE}"
+  kill -0 "${pid}" 2>/dev/null || return 0
 
-  # WAIT for the port to actually be free, rather than guessing.
-  #
-  # This was `sleep 0.3`, and run-ui-e2e.sh brings a fresh backend up per spec
-  # file on the SAME port, so the next `up` raced a socket the kill had not
-  # finished releasing. It flaked two ways, both seen: the new wardynd fails to
-  # bind (run-ui-e2e reports "backend up failed for <spec>" and scores the whole
-  # file as failed), or it binds while the dying process still answers, and the
-  # spec loads against a backend that stops mid-run.
+  # Stop ONLY the process this script itself started and tracked in
+  # PID_FILE — never a port-based kill (no `fuser -k`). A port-based kill can
+  # hit an unrelated process that happens to be listening on the same number,
+  # which on a shared box is someone else's session, not this run's backend.
+  # wardynd is a single process with no children, so once IT exits, the
+  # kernel releases every socket it held (ADDR, UI_ADDR, INTERNAL_ADDR)
+  # together — there is nothing left to free port-by-port.
+  kill -TERM "${pid}" 2>/dev/null || true
+
+  # WAIT for the process itself to exit, rather than guessing or polling the
+  # port. This was `sleep 0.3`, and run-ui-e2e.sh brings a fresh backend up
+  # per spec file on the SAME port, so the next `up` raced a socket the TERM
+  # had not finished releasing. Escalate to KILL after 5s so a wedged process
+  # cannot wedge the next `up` forever.
   local waited=0
-  while [[ ${waited} -lt 50 ]]; do
-    if command -v fuser >/dev/null 2>&1; then
-      fuser "${port}/tcp" >/dev/null 2>&1 || return 0
-    else
-      sleep 0.3
-      return 0
+  while kill -0 "${pid}" 2>/dev/null; do
+    if [[ ${waited} -ge 50 ]]; then
+      kill -KILL "${pid}" 2>/dev/null || true
+      break
     fi
     sleep 0.1
     waited=$((waited + 1))
   done
-  log "port ${port} still busy after 5s — continuing; the next bind may fail"
 }
 
 cmd_down() {
