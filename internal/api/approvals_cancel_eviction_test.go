@@ -54,7 +54,7 @@ func (r *evictedRunner) Wait(context.Context, string) (int, error) { return evic
 // `WHERE state='PENDING'` CAS (anything else is ErrAlreadyDecided, exactly as
 // store.PG.DecideApproval answers), and a recorder.
 //
-// It exists because this test has to see the approval.cancelled AUDIT row, and
+// It exists because this test has to see the approval.cancel AUDIT row, and
 // that row is written inside approval.CancelForRun over the STORE's recorder.
 // The package's own fakeApprovals mirrors the FSM faithfully but is the service,
 // not the store, so it emits nothing — which is why every existing terminal
@@ -176,7 +176,7 @@ var _ ApprovalService = evictionApprovals{}
 //  2. the credential_reauth row is CANCELLED with reason=run_failed, so the
 //     console stops asking a person to sign in for a sandbox that is gone and
 //     the 24h sweeper never gets to record it as "nobody answered";
-//  3. an approval.cancelled audit row landed — the REAL one, from the shipping
+//  3. an approval.cancel audit row landed — the REAL one, from the shipping
 //     FSM — so the queue's emptying is explained;
 //  4. wardyn_credential_reauth_total{outcome="cancelled"} moved by exactly one.
 //
@@ -262,21 +262,21 @@ func TestEvictedSandbox_CancelsAHeldCredentialReauthAndShutsTheInternalDoor(t *t
 			ap.DecidedBy, ap.Reason)
 	}
 
-	// 3 — the REAL approval.cancelled row, once, carrying this run and count 1.
+	// 3 — the REAL approval.cancel row, once, carrying this run and count 1.
 	rows := cancelledRows(audit, runID)
 	if len(rows) != 1 {
-		t.Fatalf("approval.cancelled rows = %d, want exactly 1 — one run transition is one fact in the "+
+		t.Fatalf("approval.cancel rows = %d, want exactly 1 — one run transition is one fact in the "+
 			"trail, and an unexplained emptying of the queue is what this row exists to prevent", len(rows))
 	}
 	var data map[string]any
 	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
-		t.Fatalf("approval.cancelled data is not JSON: %v", err)
+		t.Fatalf("approval.cancel data is not JSON: %v", err)
 	}
 	if data["reason"] != "run_failed" {
-		t.Errorf("approval.cancelled reason = %v, want run_failed", data["reason"])
+		t.Errorf("approval.cancel reason = %v, want run_failed", data["reason"])
 	}
 	if n, ok := data["count"].(float64); !ok || int(n) != 1 {
-		t.Errorf("approval.cancelled count = %v, want 1", data["count"])
+		t.Errorf("approval.cancel count = %v, want 1", data["count"])
 	}
 
 	// 4 — the metric moved by exactly one.

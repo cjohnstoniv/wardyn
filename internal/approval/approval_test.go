@@ -476,7 +476,7 @@ func cancelForRunTotal(ctx context.Context, st approval.Store, runID uuid.UUID, 
 // TestCancelForRun_MovesOnlyThisRunsPending is the whole contract in one drive:
 // only PENDING rows move, only this run's, they land on CANCELLED with
 // decided_by=system and the transition as the reason, and the batch emits ONE
-// approval.cancelled audit row carrying the count.
+// approval.cancel audit row carrying the count.
 func TestCancelForRun_MovesOnlyThisRunsPending(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}
@@ -527,12 +527,12 @@ func TestCancelForRun_MovesOnlyThisRunsPending(t *testing.T) {
 
 	var evs []types.AuditEvent
 	for _, ev := range st.audit {
-		if ev.Action == "approval.cancelled" {
+		if ev.Action == "approval.cancel" {
 			evs = append(evs, ev)
 		}
 	}
 	if len(evs) != 1 {
-		t.Fatalf("approval.cancelled rows = %d, want exactly 1 for the batch", len(evs))
+		t.Fatalf("approval.cancel rows = %d, want exactly 1 for the batch", len(evs))
 	}
 	if evs[0].ActorType != types.ActorSystem {
 		t.Errorf("actor_type = %q, want system", evs[0].ActorType)
@@ -602,12 +602,12 @@ func TestCancelForRun_PartialFailureStillRecordsWhatMoved(t *testing.T) {
 	}
 	var evs []types.AuditEvent
 	for _, ev := range st.audit {
-		if ev.Action == "approval.cancelled" {
+		if ev.Action == "approval.cancel" {
 			evs = append(evs, ev)
 		}
 	}
 	if len(evs) != 1 {
-		t.Fatalf("approval.cancelled rows = %d, want 1 — one approval is durably CANCELLED, so the trail must "+
+		t.Fatalf("approval.cancel rows = %d, want 1 — one approval is durably CANCELLED, so the trail must "+
 			"say who emptied it", len(evs))
 	}
 	if evs[0].Outcome != "failure" {
@@ -643,7 +643,7 @@ func TestCancelForRun_AFailureBeforeAnythingMovedRecordsNothing(t *testing.T) {
 		t.Fatalf("CancelForRun = (%d, %v), want (0, an error)", n, err)
 	}
 	for _, ev := range st.audit {
-		if ev.Action == "approval.cancelled" {
+		if ev.Action == "approval.cancel" {
 			t.Errorf("a cascade that moved nothing emitted %+v", ev)
 		}
 	}
@@ -872,12 +872,12 @@ func TestCancelForRun_AlreadyDecidedRaceIsNotAFailure(t *testing.T) {
 	}
 	var evs []types.AuditEvent
 	for _, ev := range st.audit {
-		if ev.Action == "approval.cancelled" {
+		if ev.Action == "approval.cancel" {
 			evs = append(evs, ev)
 		}
 	}
 	if len(evs) != 1 || evs[0].Outcome != "success" {
-		t.Fatalf("approval.cancelled rows = %+v, want one success row", evs)
+		t.Fatalf("approval.cancel rows = %+v, want one success row", evs)
 	}
 	var data struct {
 		Count int `json:"count"`
@@ -893,7 +893,7 @@ func TestCancelForRun_AlreadyDecidedRaceIsNotAFailure(t *testing.T) {
 // tool_call apart from an Azure DevOps escalation (the tool_call row with a
 // grant_id), and an AWS SSO credential_reauth apart from an Azure DevOps
 // sign-in or consent request. The keys are the ones docs/AUDIT-ACTIONS.md
-// documents on the approval.cancelled row.
+// documents on the approval.cancel row.
 func TestCancelForRun_CountsMovedRowsByKind(t *testing.T) {
 	ctx := context.Background()
 	st := &fakeStore{}
@@ -940,12 +940,12 @@ func TestCancelForRun_CountsMovedRowsByKind(t *testing.T) {
 	}
 	var evs []types.AuditEvent
 	for _, ev := range st.audit {
-		if ev.Action == "approval.cancelled" {
+		if ev.Action == "approval.cancel" {
 			evs = append(evs, ev)
 		}
 	}
 	if len(evs) != 1 {
-		t.Fatalf("approval.cancelled rows = %d, want exactly 1", len(evs))
+		t.Fatalf("approval.cancel rows = %d, want exactly 1", len(evs))
 	}
 	var data struct {
 		Count  int            `json:"count"`

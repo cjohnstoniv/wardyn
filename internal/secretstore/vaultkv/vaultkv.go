@@ -1,10 +1,12 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package vaultkv is the Vault KV v2 external store (credential-storage design
-// §2.3a.1): in store mode each credential's value lives in the organisation's
-// Vault (OpenBao is a supported, API-compatible endpoint), and the Postgres
-// row is a pointer to it. Wardyn does no at-rest cryptography for such a row.
+// Package vaultkv is Wardyn's Vault client and what it serves: the KV v2
+// external store (credential-storage design §2.3a.1), and the Transit KEK
+// (transit.go, §2.3). In store mode each credential's value lives in the
+// organisation's Vault (OpenBao is a supported, API-compatible endpoint), and
+// the Postgres row is a pointer to it. Wardyn does no at-rest cryptography
+// for such a row.
 //
 // Path scheme, under the mount and a per-install prefix:
 //

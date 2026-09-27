@@ -681,12 +681,19 @@ func TestAttachWS_SecondClientReadOnlyThenTakeover(t *testing.T) {
 		TakenOver      bool   `json:"taken_over"`
 		PreviousHolder string `json:"previous_holder"`
 		PreviousSource string `json:"previous_source"`
+		Promoted       bool   `json:"promoted"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode takeover body %q: %v", w.Body.String(), err)
 	}
 	if !body.TakenOver || body.PreviousHolder != holderOwner || body.PreviousSource != attachSourceWeb {
 		t.Fatalf("takeover body = %+v, want the displaced web holder %s", body, holderOwner)
+	}
+	// admin has no queued observer socket on this run, so the slot is freed —
+	// the UI's doTakeover must take its evict-then-reconnect path on this
+	// answer (see the promoted:true assertion in attach_promotion_test.go).
+	if body.Promoted {
+		t.Errorf("takeover body promoted = true, want false (the taker had no observer socket to promote)")
 	}
 
 	// The displaced socket is closed with a reason the client can READ — this is

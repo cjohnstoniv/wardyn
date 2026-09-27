@@ -674,8 +674,8 @@ func grantDominatedBy(g, cg types.GrantSpec) bool {
 // A proposal whose pairing NO ceiling entry names falls back to the meet of every
 // same-kind entry (ceilingGrantsBounding, whose paired branch this caller has
 // already pre-empted). It is still KEPT, bounded to the strictest same-kind
-// bound: the pairing gate is filterMemberGrants' job (stage 2 of
-// boundMemberSpec), not the clamp's, and the write-time comparator refuses such a
+// bound: the pairing gate is filterUserGrants' job (stage 2 of
+// boundUserSpec), not the clamp's, and the write-time comparator refuses such a
 // grant outright — the one deliberate asymmetry between the two, pinned in
 // grantbound_test.go and internal/api/grant_clamp_agreement_test.go.
 func clampGrants(grants []types.GrantSpec, ceiling types.RunPolicySpec, warns *[]string) []types.GrantSpec {

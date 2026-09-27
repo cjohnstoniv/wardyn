@@ -583,7 +583,7 @@ test.describe("the egress widget's held chip and the Approvals tab badge count L
 
       // The Egress widget's chip: exactly "1 held" — a stale audit-count
       // implementation would read "2" here (one row per decision recorded),
-      // or would count the APPROVED row's own historical egress.pending audit
+      // or would count the APPROVED row's own historical egress.hold audit
       // entry as still "held" forever. "N held" is this widget's own phrase
       // (RUN_COCKPIT.held) and appears nowhere else on the Overview tab.
       await expect(page.getByText(RUN_COCKPIT.held(1), { exact: true })).toBeVisible();
@@ -715,7 +715,7 @@ test.describe("T-68 — a seeded PENDING credential_reauth row on /approvals", (
 
 // ---------------------------------------------------------------------------
 // F-12 pinning — LiveApprovals' row-level gate follows canDecideApproval
-// (server truth: authorizeMemberDecision, internal/api/approvals.go), not a
+// (server truth: authorizeUserDecision, internal/api/approvals.go), not a
 // blanket !operator disable. A member may decide an egress_domain approval on
 // a run they own; credential and tool_call stay admin-only regardless.
 //

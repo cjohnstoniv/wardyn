@@ -36,7 +36,7 @@ type r3IntegStore struct{ r3PlainStore }
 // r3IntegGitHost is the internal host a bare ScmHosts entry derives a
 // git_host row for (gitHostRows, integrations.go): id="git_host:"+host,
 // name=host — the row's IDENTITY is the internal hostname, not a field
-// memberSafeIntegration's Secrets/Egress/Config/Docs nulling ever touches.
+// userSafeIntegration's Secrets/Egress/Config/Docs nulling ever touches.
 const r3IntegGitHost = "git.corp.internal"
 
 func (r3IntegStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
@@ -68,7 +68,7 @@ func (r3IntegStore) ListRunsPage(context.Context, store.Page) ([]types.AgentRun,
 // connection config from two other routes at 200 while the document embedding
 // the identical rows answered them 403 — which made the narrowing cosmetic.
 //
-// /setup/status is the sharper form of it: redactSetupStatusForMember drops
+// /setup/status is the sharper form of it: redactSetupStatusForUser drops
 // SetupSecrets.Present as "secret NAMES" and shipped
 // integrations[].secrets[].secret_name in the SAME body.
 func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
@@ -108,7 +108,7 @@ func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
 			// entirely from a member's body.
 			if strings.Contains(body, r3IntegGitHost) {
 				t.Errorf("GET %s leaked derived git_host row %q to a member (id=\"git_host:%s\", name=%q) — "+
-					"the row's own identity IS the internal host, which memberSafeIntegration's "+
+					"the row's own identity IS the internal host, which userSafeIntegration's "+
 					"Secrets/Egress/Config/Docs nulling never touches; it must be dropped entirely.\nbody=%s",
 					path, r3IntegGitHost, r3IntegGitHost, r3IntegGitHost, body)
 			}
@@ -220,9 +220,9 @@ func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
 			ID: "x", Egress: []string{r3IntegEgress},
 			Secrets: []types.IntegrationSecret{{SecretName: r3IntegSecretRef}},
 		}}}}
-		_ = memberSafeIntegrations(in)
+		_ = userSafeIntegrations(in)
 		if len(in[0].Secrets) != 1 || in[0].Secrets[0].SecretName != r3IntegSecretRef || len(in[0].Egress) != 1 {
-			t.Errorf("memberSafeIntegrations mutated its input: %+v", in[0])
+			t.Errorf("userSafeIntegrations mutated its input: %+v", in[0])
 		}
 	})
 }

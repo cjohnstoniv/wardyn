@@ -435,7 +435,7 @@ func closedEnumChecks() []closedEnumCheck {
 		// internal/api, validated at the write boundary) — see the migration.
 		{"capability_grants", "subject_type", stringSet(
 			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
-			string(types.CapabilitySubjectAll),
+			string(types.CapabilitySubjectAll), string(types.CapabilitySubjectUserType),
 		)},
 		{"capability_grants", "effect", stringSet(
 			string(types.CapabilityAllow), string(types.CapabilityDeny),
@@ -487,7 +487,7 @@ func closedEnumChecks() []closedEnumCheck {
 		// boundary" doctrine 0042's capability column follows.
 		{"governance_assignments", "subject_type", stringSet(
 			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
-			string(types.CapabilitySubjectAll),
+			string(types.CapabilitySubjectAll), string(types.CapabilitySubjectUserType),
 		)},
 		// 0054's three user_drives enums, each pinned to the Go set the write
 		// boundary validates against (types.DriveBackend.Valid,
@@ -516,7 +516,7 @@ func closedEnumChecks() []closedEnumCheck {
 		// type cannot land on two tables' CHECKs and not the third's.
 		{"user_drive_grants", "subject_type", stringSet(
 			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
-			string(types.CapabilitySubjectAll),
+			string(types.CapabilitySubjectAll), string(types.CapabilitySubjectUserType),
 		)},
 	}
 }

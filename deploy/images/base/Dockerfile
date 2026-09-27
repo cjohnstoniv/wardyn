@@ -296,8 +296,8 @@ RUN git config --system credential.helper \
 # not a descendant of agent-run, so agent-run-lib.sh's exports cannot reach it.
 # Only ENV a derived image inherits does.
 #
-# What each one removes, measured host-by-host through a real proxy
-# (local/v075/evidence/agent-boot-egress/), because the obvious attribution was
+# What each one removes, measured host-by-host through a real proxy,
+# because the obvious attribution was
 # wrong once already:
 #   - CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL — the reported pair.
 #     On first REPL start the CLI auto-installs the official PLUGIN MARKETPLACE

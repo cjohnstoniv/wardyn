@@ -6,7 +6,7 @@
 // RecordingTab's session-picker copy (run-detail.tsx), split out under that
 // file's line cap.
 //
-// session.recording is emitted at DETACH (internal/api/attach.go's finish),
+// session.recording.write is emitted at DETACH (internal/api/attach.go's finish),
 // not at attach — the picker must not name the attach end of the session.
 import { clockTime } from "../../../lib/format";
 import type { AuditEvent } from "../../../lib/types";

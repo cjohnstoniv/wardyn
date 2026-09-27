@@ -809,15 +809,56 @@ func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 	const undelivered = "managed settings for autonomy level"
 	member := func(t *testing.T) *http.Cookie { return govSession(t, "sub-autonomy", []string{"eng"}, false) }
 
+	const holdUndelivered = "claude-code's managed settings for tool approvals on hold are not delivered"
 	for _, tc := range []struct {
-		name           string
-		level          types.AutonomyLevel
+		name  string
+		level types.AutonomyLevel
+		// rubric, when set, replaces autonomyRubric(level): one that binds
+		// nothing at the fixture's sealed/none/CC2 posture.
+		rubric         *types.AutonomyRubric
 		body           string
 		noManagedFiles bool
 		krunCC2        bool
 		want           []string
 		absent         []string
 	}{
+		{
+			// #358: a hold run gets its managed settings at no level too, so
+			// the person launching it is told when they will not land.
+			name:           "a hold run no rubric bound is told its managed settings are undelivered",
+			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			noManagedFiles: true,
+			want:           []string{holdUndelivered, `runner "fake" does not deliver managed files`},
+			absent:         []string{derived, noLane},
+		},
+		{
+			name: "a hold run whose rubric binds nothing is told its managed settings are undelivered",
+			rubric: &types.AutonomyRubric{
+				EgressOpen: types.AutonomyL0, SecretsPowerful: types.AutonomyL0, ConfinementCC1: types.AutonomyL0,
+			},
+			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			noManagedFiles: true,
+			want:           []string{holdUndelivered},
+			absent:         []string{derived, noLane},
+		},
+		{
+			// L3 brings no document of its own: the hold lane chose it, and
+			// the sentence names the hold rather than a level with no file.
+			name:           "a hold run at L3 is told its hold-lane settings are undelivered",
+			level:          types.AutonomyL3,
+			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"hold"}`,
+			noManagedFiles: true,
+			want:           []string{holdUndelivered},
+			absent:         []string{undelivered, derived, noLane},
+		},
+		{
+			// Off the hold lane an unbound run generates no file, so there is
+			// nothing undelivered to report.
+			name:           "an auto run no rubric bound is not told about managed settings",
+			body:           `{"agent":"claude-code","task":"t","confinement_class":"CC2","tool_approvals":"auto"}`,
+			noManagedFiles: true,
+			absent:         []string{"are not delivered"},
+		},
 		{
 			// The exec-less krun ruling: the file is placed, but the row records
 			// delivered:false and the person launching the run is told the same.
@@ -890,6 +931,9 @@ func TestAutonomyWarningsOnTheCreatedRun(t *testing.T) {
 			p := govProfile("autonomy-warnings")
 			if tc.level != "" {
 				p.Limits = types.GovernanceLimits{AutonomyRubric: autonomyRubric(tc.level)}
+			}
+			if tc.rubric != nil {
+				p.Limits = types.GovernanceLimits{AutonomyRubric: tc.rubric}
 			}
 			srv, _, _ := govEscapeFixture(t, autonomyCapStore(p))
 			if tc.noManagedFiles {

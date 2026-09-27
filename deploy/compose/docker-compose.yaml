@@ -161,6 +161,10 @@ services:
     # sidecar is launched by the docker runner (not a compose service), so its
     # restart posture is set container-side, not here.
     restart: unless-stopped
+    # docker stop's default 10s would SIGKILL wardynd's orderly stop, which
+    # needs up to ~65s (HTTP drain, detached launches and teardowns, audit
+    # flush); see terminationGracePeriodSeconds in the Helm values.
+    stop_grace_period: 70s
     # The docker runner needs to reach the host daemon to create sandboxes.
     # Run as root inside the container so it can open the bind-mounted socket
     # (demo only; see the DAEMON-TRUST note above).
@@ -275,8 +279,8 @@ services:
       # ends up writable. It only bounds what THIS wardynd container can itself
       # see (EvalSymlinks + the credential dotfile deny-list, both reads) —
       # WARDYN_USER_WRITABLE_ROOTS alone (checked in
-      # internal/runner/member_mount.go's ValidateMemberMount /
-      # ValidateMemberMountSource) decides writability, purely by root/deny-list
+      # internal/runner/member_mount.go's ValidateUserMount /
+      # ValidateUserMountSource) decides writability, purely by root/deny-list
       # match; neither function opens or stat-for-write-checks the source. The
       # actual sandbox bind is created by the HOST dockerd straight from the
       # source path string (DooD siblings) and never passes through this
@@ -307,7 +311,6 @@ services:
       # validateHybridPosture (cmd/wardynd/boot_posture.go).
       WARDYN_ORG_URL: "${WARDYN_ORG_URL:-}"
       WARDYN_ORG_ENROLMENT_TOKEN: "${WARDYN_ORG_ENROLMENT_TOKEN:-}"
-      WARDYN_ORG_DEVICE_NAME: "${WARDYN_ORG_DEVICE_NAME:-}"
       # Four-eyes on egress approvals: the human who DECIDES an egress_domain
       # approval must not be the human who created the run. Unforwarded, the m'
       # envelope's WARDYN_EGRESS_SECOND_HUMAN=true read as ON in the file MDM
@@ -770,7 +773,7 @@ services:
       WARDYN_GROUNDTRUTH_TOKEN: "${WARDYN_GROUNDTRUTH_TOKEN:-}"
       WARDYN_GROUNDTRUTH_HEARTBEAT: "30s"
       # Comma-separated run ids the host sensor is blind to (CC3/Kata); a
-      # kernel.sensor.blind event is emitted once per id at boot.
+      # kernel.sensor.bypass event is emitted once per id at boot.
       WARDYN_GROUNDTRUTH_BLIND_RUNS: "${WARDYN_GROUNDTRUTH_BLIND_RUNS:-}"
     volumes:
       # Read the Tetragon JSON export.

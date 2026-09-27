@@ -32,9 +32,11 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -132,6 +134,23 @@ func (s *memSecrets) List(_ context.Context) ([]string, error) {
 		out = append(out, k)
 	}
 	return out, nil
+}
+
+func (s *memSecrets) DeleteEverywhere(_ context.Context, names []string) (int, error) {
+	n := 0
+	for _, rows := range append([]map[string][]byte{s.m}, slices.Collect(maps.Values(s.owned))...) {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				delete(rows, name)
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+func (s *memSecrets) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, nil
 }
 
 // For returns an owner-scoped view sharing the same backing maps as s — see
@@ -316,8 +335,6 @@ func (f *fakeRunner) KillSandbox(context.Context, string) error {
 	return nil
 }
 
-// stopCount returns the StopSandbox call count under the lock (race-clean read
-// for the test, which races the detached completion watcher).
 // specFor is the SandboxSpec dispatched for runID, if CreateSandbox saw one.
 func (f *fakeRunner) specFor(runID uuid.UUID) (runner.SandboxSpec, bool) {
 	f.mu.Lock()
@@ -330,6 +347,8 @@ func (f *fakeRunner) specFor(runID uuid.UUID) (runner.SandboxSpec, bool) {
 	return runner.SandboxSpec{}, false
 }
 
+// stopCount returns the StopSandbox call count under the lock (race-clean read
+// for the test, which races the detached completion watcher).
 func (f *fakeRunner) stopCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

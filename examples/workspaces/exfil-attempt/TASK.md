@@ -11,7 +11,7 @@
 
 - UI > Approvals tab: an entry with kind=egress_domain for webhook.example.com
   appears shortly after the run starts.
-- UI > Audit tab: egress.pending (or egress.deny) event with
+- UI > Audit tab: egress.hold (or egress.deny) event with
   rule_source=policy and target host=webhook.example.com.
 - The agent receives an HTTP error (403 or connection refused) from the proxy;
   the file content is never transmitted.

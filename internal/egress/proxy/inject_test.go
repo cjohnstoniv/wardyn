@@ -401,7 +401,7 @@ func TestRequireTLSRefusalPreemptsInspection(t *testing.T) {
 		t.Errorf("scan summary = %+v, want none: the body of a refused request is never read", d.Scan)
 	}
 	if n := strings.Count(strings.TrimSpace(buf.String()), "\n"); n != 0 {
-		t.Errorf("decision log = %q, want exactly one row (no scan:blocked, no llm.scan.blind)", buf.String())
+		t.Errorf("decision log = %q, want exactly one row (no scan:blocked, no llm.scan.bypass)", buf.String())
 	}
 }
 

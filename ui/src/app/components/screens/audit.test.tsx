@@ -8,6 +8,7 @@ import { act, render, screen, waitFor, fireEvent } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, AuditEvent } from "../../lib/types";
+import { aheadByHours } from "../../lib/test-clock";
 
 // MEDIUM fixes pinned here:
 //  - run_id filter must query the SERVER with run_id (api.listAudit(runId)),
@@ -40,7 +41,7 @@ import { AuditScreen } from "./audit";
 
 function ev(partial: Partial<AuditEvent> & { id: string }): AuditEvent {
   return {
-    time: "2026-06-28T00:00:00.000Z",
+    time: aheadByHours(-1),
     actor_type: "agent",
     actor: "spiffe://wardyn/agent",
     action: "tool.call",
@@ -170,8 +171,8 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     // Server returns seq order e1 then e2, but e2 has an EARLIER timestamp.
     // A buggy client re-sort by time would flip them; we must keep e1 first.
     listAuditMock.mockResolvedValue([
-      ev({ id: "e1", action: "first.action", time: "2026-06-28T00:00:02.000Z" }),
-      ev({ id: "e2", action: "second.action", time: "2026-06-28T00:00:01.000Z" }),
+      ev({ id: "e1", action: "first.action", time: aheadByHours(-1) }),
+      ev({ id: "e2", action: "second.action", time: aheadByHours(-2) }),
     ]);
     renderScreen();
 
@@ -289,15 +290,15 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
   // zero prose), just discovered after the tier-1/tier-2/integration sweep.
   it("renders prose, not raw dotted actions, for the ssh/workspace-requirement/llm families", async () => {
     listAuditMock.mockResolvedValue([
-      ev({ id: "e1", action: "ssh.auth", target: "SHA256:abc", outcome: "success" }),
+      ev({ id: "e1", action: "ssh.authenticate", target: "SHA256:abc", outcome: "success" }),
       ev({ id: "e2", action: "ssh.exec", target: "run-1" }),
-      ev({ id: "e3", action: "ssh.sftp", target: "run-1" }),
+      ev({ id: "e3", action: "ssh.sftp.transfer", target: "run-1" }),
       ev({ id: "e4", action: "ssh.forward", target: "127.0.0.1:8080" }),
-      ev({ id: "e5", action: "run.workspace.requirement.egress", target: "ws-1" }),
-      ev({ id: "e6", action: "run.workspace.requirement.secret", target: "OPENAI_API_KEY" }),
-      ev({ id: "e7", action: "run.workspace.requirement.integration", target: "corp-anthropic" }),
-      ev({ id: "e8", action: "run.llm.bedrock", target: "run-1" }),
-      ev({ id: "e9", action: "run.llm.subscription_inject", target: "run-1" }),
+      ev({ id: "e5", action: "run.requirement.allow", target: "ws-1" }),
+      ev({ id: "e6", action: "run.requirement.grant", target: "OPENAI_API_KEY" }),
+      ev({ id: "e7", action: "run.requirement.inject", target: "corp-anthropic" }),
+      ev({ id: "e8", action: "run.bedrock.configure", target: "run-1" }),
+      ev({ id: "e9", action: "run.subscription.inject", target: "run-1" }),
     ]);
     renderScreen();
 
@@ -314,18 +315,18 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/Configured Bedrock model access for the run/)).toBeInTheDocument();
     expect(screen.getByText(/Injected the subscription credential at the proxy/)).toBeInTheDocument();
-    expect(screen.queryByText("ssh.auth")).not.toBeInTheDocument();
-    expect(screen.queryByText("run.workspace.requirement.egress")).not.toBeInTheDocument();
-    expect(screen.queryByText("run.llm.subscription_inject")).not.toBeInTheDocument();
+    expect(screen.queryByText("ssh.authenticate")).not.toBeInTheDocument();
+    expect(screen.queryByText("run.requirement.allow")).not.toBeInTheDocument();
+    expect(screen.queryByText("run.subscription.inject")).not.toBeInTheDocument();
   });
 
-  // run.llm.subscription_inject is a credential event (the subscription
+  // run.subscription.inject is a credential event (the subscription
   // credential being injected proxy-side) wearing a run.* prefix — without an
   // explicit override it falls into the run.*/session.*/policy.* lifecycle
   // catch-all, same trap integration.* was in before DEADCODE-4.
-  it("classifies run.llm.subscription_inject under the Credentials facet, not Lifecycle", async () => {
+  it("classifies run.subscription.inject under the Credentials facet, not Lifecycle", async () => {
     listAuditMock.mockResolvedValue([
-      ev({ id: "e1", action: "run.llm.subscription_inject", target: "run-1" }),
+      ev({ id: "e1", action: "run.subscription.inject", target: "run-1" }),
       ev({ id: "e2", action: "run.create" }),
     ]);
     const user = userEvent.setup({ pointerEventsCheck: 0 });

@@ -15,6 +15,7 @@ import { RUN } from "../../wardyn/copy";
 import { CLONE_LOAD_FAILED } from "../new-run/wizard-types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { waitingAdoConsent, waitingReauth } from "../../../lib/reauth-waiting-copy";
+import { aheadByHours } from "../../../lib/test-clock";
 
 // review C-01/C-06/C-07 — cloneRun's own behaviour, not just the menu item's
 // gating. listAudit is stubbed; createRequestFromAudit stays REAL so the
@@ -303,7 +304,7 @@ describe("RunCard — cloneRun behaviour (review C-01/C-06/C-07)", () => {
 
   const createEvent = (data: Record<string, unknown>): AuditEvent => ({
     id: "ev-create",
-    time: "2026-09-14T10:00:00Z",
+    time: aheadByHours(-1),
     actor_type: "human",
     actor: "alice",
     action: "run.create",
@@ -323,7 +324,7 @@ describe("RunCard — cloneRun behaviour (review C-01/C-06/C-07)", () => {
     await clickClone();
 
     await waitFor(() => expect(navigateMock).toHaveBeenCalled());
-    expect(listAuditMock).toHaveBeenCalledWith("run_3b7f10c4aa99", "run.create");
+    expect(listAuditMock).toHaveBeenCalledWith("run_3b7f10c4aa99", { action: "run.create" });
     const [path, opts] = navigateMock.mock.calls[0];
     expect(path).toBe("/runs/new");
     expect(opts.state.prefill.state.toolApprovals).toBe("hold");

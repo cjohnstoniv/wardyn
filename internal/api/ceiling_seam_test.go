@@ -26,7 +26,7 @@ type flakyCeilingStore struct {
 	calls atomic.Int64
 }
 
-func (s *flakyCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
+func (s *flakyCeilingStore) ResolveGovernanceProfile(context.Context, []string, []string, string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {
 	if s.calls.Add(1) == 1 {
 		return &types.GovernanceProfile{ID: uuid.New(), Name: "walled", Ceiling: types.RunPolicySpec{
 			MinConfinementClass: types.CC2, AllowedDomains: []string{"api.anthropic.com"},
@@ -42,11 +42,15 @@ func (s *flakyCeilingStore) ListCapabilityGrants(context.Context) ([]types.Capab
 func (s *flakyCeilingStore) ListGroupDenyGrants(context.Context, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
-func (s *flakyCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string) ([]types.CapabilityGrant, error) {
+func (s *flakyCeilingStore) ListCapabilityGrantsFor(context.Context, []string, []string, string) ([]types.CapabilityGrant, error) {
 	return nil, nil
 }
 func (s *flakyCeilingStore) GetCapabilityEnforcement(context.Context) (map[string]bool, error) {
 	return nil, nil
+}
+
+func (s *flakyCeilingStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
+	return map[string]map[string]bool{}, nil
 }
 func (s *flakyCeilingStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 	return nil, nil
@@ -59,8 +63,8 @@ func (s *flakyCeilingStore) GetSiteConfig(context.Context) (types.SiteConfig, er
 // ceiling reads per create cannot disagree" — given an implementing mechanism.
 //
 // It had none. A member create took THREE independent, uncached, untransacted
-// reads of governance_assignments (denyMemberGovernance -> resolveRunPolicy ->
-// filterMemberGrants) and dispatch a fourth, while resolveRunPolicy's own
+// reads of governance_assignments (denyUserGovernance -> resolveRunPolicy ->
+// filterUserGrants) and dispatch a fourth, while resolveRunPolicy's own
 // comment asserted "a create must never resolve two different ceilings for one
 // request" and governance.go's called the repetition "PF-13's accepted double
 // resolution", justified purely on latency. Two in-tree comments, opposite

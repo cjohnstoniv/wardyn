@@ -210,7 +210,7 @@ func (a *Authenticator) CallbackHandler(w http.ResponseWriter, r *http.Request) 
 
 // CallbackHandlerWithDenials is CallbackHandler that also reports each sign-in
 // refused over a user type (DenialUserTypeAmbiguous, DenialUserTypeUnknown) to
-// onDenied, so internal/api can audit it as auth.failed. This package stays
+// onDenied, so internal/api can audit it as auth.fail. This package stays
 // store- and audit-agnostic, as it is for OnLogin.
 func (a *Authenticator) CallbackHandlerWithDenials(onDenied func(r *http.Request, reason string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { a.callback(w, r, onDenied) }
@@ -398,7 +398,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, onUserT
 	// Config.OnLogin doc). groups/groupsTruncated are the SAME values the
 	// session below carries, never re-derived.
 	if a.cfg.OnLogin != nil {
-		a.cfg.OnLogin(r.Context(), idToken.Subject, role, groups, groupsTruncated)
+		a.cfg.OnLogin(r.Context(), idToken.Subject, role, d.UserType, groups, groupsTruncated)
 	}
 	// The login-grant sink, for the same reason and in the same place as
 	// OnLogin: the login is APPROVED here and not before, so a refused login
