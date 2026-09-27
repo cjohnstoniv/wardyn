@@ -949,6 +949,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Console branding (#1125).** A super admin sets the organisation's name, how the product name
+  reads (`<Company> Wardyn` or `Wardyn for <Company>`), a primary colour and its text colour, an
+  optional dark-mode pair (derived when unset), a logo (SVG or PNG, at most 512 KB) and an optional
+  https Support link from a new Branding card in Admin view Settings. The sign-in page, the top bar,
+  the browser tab title and the tab icon follow it; the danger, warning, success and info colours
+  and the Admin view cue are never brandable. wardynd stores the record (migration
+  `0091_branding`), validates every save server-side with a named reason (`invalid_colour`,
+  `low_contrast` with the ratio, `link_not_https`, `logo_too_large`, `invalid_logo`, …), rebuilds
+  an uploaded SVG from an allowlist and refuses one that can run script or fetch, serves the logo
+  from `'self'` with its validated type and `nosniff`, and audits `branding.write` /
+  `branding.delete`. The Content-Security-Policy is unchanged, and an unbranded console renders
+  exactly as before. New routes: `GET /api/v1/branding` and `/branding/logo` (anonymous, the
+  public subset), `GET /branding/settings` (signed in), `PUT`/`DELETE /branding/settings` (admin).
+
 - **Admin-minted API tokens and people set up before their first sign-in (#1157).** An admin or
   `security_admin` can create a person keyed by their identity provider's `sub` (`POST /people`),
   mint them a `wdn_` token (`POST /people/{principal}/tokens`) and list their tokens
