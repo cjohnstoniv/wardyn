@@ -98,7 +98,7 @@ func TestLoadOrCreateSecret_MintsOnlyOnErrNotFound(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			store := &fakeSecretStore{getErr: c.err}
-			_, err := loadOrCreateSecret(context.Background(), store, "wardyn-signing-key",
+			_, err := loadOrCreateSecret(context.Background(), unlocked(store), "wardyn-signing-key",
 				func(b []byte) bool { return len(b) > 0 },
 				func() ([]byte, error) { return []byte("new"), nil },
 			)
