@@ -478,6 +478,7 @@ func run() error {
 		OIDCRoleMapConfigured: strings.TrimSpace(*f.oidcRoleMap) != "",
 		OIDCRedirectURL:       *f.oidcRedirectURL,
 		OIDCSecureCookies:     posture.secureCookies,
+		BasePath:              *f.basePath,
 		// SSH gateway (C2/C3): SSHHostKey is nil unless -ssh-listen is set
 		// (buildOptionalFeatures), which is also the sole gate ServeSSHGateway
 		// itself checks below — belt and suspenders, "empty = off" holds either

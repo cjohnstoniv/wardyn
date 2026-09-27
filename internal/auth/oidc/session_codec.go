@@ -73,7 +73,7 @@ func (a *Authenticator) encodeSession(sess Session) (*http.Cookie, error) {
 	cookie := &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    encoded,
-		Path:     "/",
+		Path:     a.cookiePath(),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   a.cfg.SecureCookies, // true only under TLS (direct or terminated); false over plain HTTP

@@ -83,6 +83,21 @@ export WARDYN_E2E_PG_DBNAME="${DB}"
 export WARDYN_E2E_PG_CONTAINER="${WARDYN_E2E_PG_CONTAINER:-wardyn-test-pg}"
 export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
 
+# Base-path mode (WARDYN_E2E_BASE_PATH, e.g. /wardyn): e2e-backend.sh serves the
+# backend under that WARDYN_BASE_PATH behind test/basepathproxy, and Playwright
+# browses the proxy under the prefix. The trailing slash is load-bearing: a
+# spec's relative page.goto("runs") then resolves under the prefix. Specs
+# written for the root use absolute paths and are not meant for this mode.
+# Unset, nothing below changes.
+if [[ -n "${WARDYN_E2E_BASE_PATH:-}" ]]; then
+  if [[ -z "${WARDYN_E2E_PROXY_ADDR:-}" ]]; then
+    WARDYN_E2E_PROXY_ADDR=":$(pick_free_port)"
+  fi
+  export WARDYN_E2E_PROXY_ADDR
+  export WARDYN_E2E_BASE_URL="http://localhost:${WARDYN_E2E_PROXY_ADDR##*:}${WARDYN_E2E_BASE_PATH}/"
+  log "base-path mode: backend under ${WARDYN_E2E_BASE_PATH}, browsed through ${WARDYN_E2E_BASE_URL}"
+fi
+
 # log() uses WARDYN_LOG_TAG="[e2e-ui]" set before sourcing common.sh above.
 
 # LIVE mode (WARDYN_E2E_LIVE_BASE_URL): run a spec from ui/e2e/live/ against an

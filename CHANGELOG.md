@@ -612,6 +612,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Serve the console and API under a sub-path behind a reverse proxy: `WARDYN_BASE_PATH`
+  (#1154).** Set it (e.g. `/wardyn`; Helm `basePath`) and `wardynd` mounts the console, API,
+  sign-in and health routes under the prefix and answers 404 outside it; the proxy forwards the
+  path unchanged. One console bundle serves at any prefix: it is built with relative asset URLs,
+  reads the base from the served `index.html` (an attribute, so the CSP is unchanged) and builds
+  every API, sign-in, terminal and recording URL from one helper. Cookies are scoped to the base,
+  boot refuses a malformed value or a `WARDYN_OIDC_REDIRECT_URL` outside it, and `/healthz`'s
+  `ui_sandbox.enter_url_template` carries it in shared-origin mode. Unset, nothing changes.
 - **`wardyn ssh-key delete <fingerprint>` (#206).** The CLI could list and register keys but not
   remove one; it now wraps `DELETE /api/v1/me/ssh-keys/{fingerprint}` (alias `rm`), matching
   `secret delete`'s pattern.

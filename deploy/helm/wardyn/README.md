@@ -1101,6 +1101,12 @@ See `values.yaml` for all options. Key settings:
   own default image serves `/readyz` from 0.6.0 on, so leave this alone unless
   you **pin an `image.tag` at or below `0.5.0`**, which serves none: see
   [Installation](#installation) for what that failure looks like.
+- `basePath`: serve the console, API, sign-in and health endpoints under a
+  sub-path behind a reverse proxy (`WARDYN_BASE_PATH`, e.g. `/wardyn`). The
+  three probes move under it (`readinessProbe.path` stays relative to it), and
+  so must `WARDYN_OIDC_REDIRECT_URL`. Empty (default) => the host root. See
+  [docs/OPERATIONS.md "Serving the console under a
+  sub-path"](../../../docs/OPERATIONS.md#serving-the-console-under-a-sub-path).
 - `env`: extra `WARDYN_*` env (OIDC issuer, TLS, default policy). Renders as a
   literal in the pod spec — **not for secrets**. `WARDYN_DEFAULT_POLICY` is
   optional — the image already bakes a working default; see

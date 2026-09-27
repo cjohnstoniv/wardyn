@@ -38,6 +38,7 @@
 package oidc
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -86,6 +87,9 @@ type Config struct {
 	// RedirectURL is the callback URL registered with the IdP.
 	// Must be <wardynd-base>/auth/callback.
 	RedirectURL string
+	// BasePath is WARDYN_BASE_PATH ("" = the host root): the prefix of every
+	// redirect back to the console and the Path of every cookie.
+	BasePath string
 	// AllowedEmailDomains, when non-empty, restricts login to email addresses
 	// whose domain — the part after the last '@' — exactly equals one of the
 	// listed values, case-insensitively. Matching is exact, not suffix-based:
@@ -635,11 +639,16 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
-// LogoutHandler clears the Wardyn session cookie and redirects to "/".
+// LogoutHandler clears the Wardyn session cookie and redirects to the console root.
 func (a *Authenticator) LogoutHandler(w http.ResponseWriter, r *http.Request) {
-	clearCookie(w, sessionCookieName)
-	http.Redirect(w, r, "/", http.StatusFound)
+	a.clearCookie(w, sessionCookieName)
+	http.Redirect(w, r, a.cfg.BasePath+"/", http.StatusFound)
 }
+
+// cookiePath scopes every cookie Wardyn issues to the console's base path
+// (WARDYN_BASE_PATH), so a neighbouring application on the same host never
+// receives the session.
+func (a *Authenticator) cookiePath() string { return cmp.Or(a.cfg.BasePath, "/") }
 
 // Middleware returns an http.Handler wrapper that:
 //   - If a valid (non-expired, correctly signed) session cookie is present,
@@ -677,7 +686,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 						return
 					}
 					if revoked {
-						clearCookie(w, sessionCookieName)
+						a.clearCookie(w, sessionCookieName)
 						// Post-revocation use is THE event "revoke a human now"
 						// exists to make visible: surface it by name.
 						next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "revoked_session")))
@@ -691,7 +700,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			}
 			// Expired session: clear the stale cookie so the browser doesn't
 			// keep sending it, then fall through.
-			clearCookie(w, sessionCookieName)
+			a.clearCookie(w, sessionCookieName)
 			next.ServeHTTP(w, r.WithContext(withSessionRejected(r.Context(), "expired_session")))
 			return
 		}
@@ -773,7 +782,7 @@ func (a *Authenticator) loginCookie(name, value string) *http.Cookie {
 	return &http.Cookie{
 		Name:     name,
 		Value:    value,
-		Path:     "/",
+		Path:     a.cookiePath(),
 		MaxAge:   600, // 10 minutes
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -782,11 +791,11 @@ func (a *Authenticator) loginCookie(name, value string) *http.Cookie {
 }
 
 // clearCookie instructs the browser to delete a named cookie.
-func clearCookie(w http.ResponseWriter, name string) {
+func (a *Authenticator) clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    "",
-		Path:     "/",
+		Path:     a.cookiePath(),
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -841,8 +850,8 @@ const (
 // redirectAuthError sends the browser back to "/" with ?auth_error=<code> —
 // a real page it can act on (retry, sign out, ask an operator), rather than
 // a bare http.Error text response with no way back to the console.
-func redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
-	http.Redirect(w, r, "/?auth_error="+url.QueryEscape(code), http.StatusFound)
+func (a *Authenticator) redirectAuthError(w http.ResponseWriter, r *http.Request, code string) {
+	http.Redirect(w, r, a.cfg.BasePath+"/?auth_error="+url.QueryEscape(code), http.StatusFound)
 }
 
 // ─── D12: bounded retry for a transient IdP error on the token endpoint ──────

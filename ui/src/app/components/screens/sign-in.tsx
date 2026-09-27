@@ -31,6 +31,7 @@ import { SIGNIN } from "../../lib/sign-in-copy";
 import { SIGNIN_HELP_REFUSALS } from "../../lib/people-access-copy";
 import { SignInHelp } from "../wardyn/sign-in-help";
 import { usePoll } from "../../lib/use-poll";
+import { appURL } from "../../lib/base-path";
 
 // How often the gate re-asks /healthz for `sso` (R4/F027). Slower than the
 // shell's 5s health poll: nothing here is live data, this only has to notice a
@@ -380,7 +381,7 @@ export function SignIn({
               value a reader here cannot reach. */}
           {showSso && (
             <Button asChild variant="outline" className="w-full">
-              <a href="/auth/login">
+              <a href={appURL("/auth/login")}>
                 <Building2 className="size-4" />
                 Sign in with SSO
               </a>

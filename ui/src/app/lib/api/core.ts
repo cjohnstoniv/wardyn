@@ -10,8 +10,8 @@
 // former monolithic lib/api.ts so unused domains tree-shake per route chunk.
 import { lsGet, lsSet, ssGet, ssSet } from "../storage";
 import { CC_ORDER, type ConfinementClass } from "../types";
+import { apiURL, routerPath } from "../base-path";
 
-const BASE = "/api/v1";
 const TOKEN_KEY = "wardyn_admin_token";
 
 // Auth token + 401 handling
@@ -213,7 +213,7 @@ export async function wfetch(
 
   let res: Response;
   try {
-    res = await fetch(`${BASE}${path}`, {
+    res = await fetch(apiURL(path), {
       ...init,
       headers,
       credentials: "include",
@@ -253,7 +253,7 @@ export async function wfetch(
     // The 401 body is thrown over, never handed to a caller — drain it here or
     // the rejected request stays open on its connection (see drainBody).
     await drainBody(res);
-    _unauthorized?.(SESSION_ENDED_REASON, safeReturnPath(window.location.pathname));
+    _unauthorized?.(SESSION_ENDED_REASON, safeReturnPath(routerPath()));
     throw new HttpError(401, "Unauthorized");
   }
   if (res.status === 403) _forbidden?.();

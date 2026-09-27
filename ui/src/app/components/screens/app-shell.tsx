@@ -53,6 +53,7 @@ import {
 } from "../wardyn/operator-context";
 import { health as api, type MeUserDrive } from "../../lib/api/health";
 import { TopBar } from "./top-bar";
+import { appURL } from "../../lib/base-path";
 import { ViewAccessProvider, type ConsoleView } from "../wardyn/console-view";
 import { useShellView, useViewResync, ViewSwitch } from "../wardyn/view-switch";
 import { CONSOLE_VIEW, NAV } from "../wardyn/copy/console-view";
@@ -674,7 +675,7 @@ export function AppShell({
                 <AlertTriangle className="size-4 shrink-0" />
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][0]}</span>
                 <a
-                  href="/auth/login"
+                  href={appURL("/auth/login")}
                   className="font-medium underline underline-offset-2"
                 >
                   Sign in again

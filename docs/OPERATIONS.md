@@ -3454,6 +3454,47 @@ it.
   upgrade, which finish on the plaintext path they started with. The proxy authenticates to `wardynd` with its run token
   (bearer, not mTLS — `threatmodel/THREAT-MODEL.md` B6).
 
+### Serving the console under a sub-path
+
+To put Wardyn behind a reverse proxy at a sub-path next to another application
+(`https://host.example.com/wardyn/`), set `WARDYN_BASE_PATH=/wardyn` (Helm:
+`basePath: /wardyn`). Unset, everything stays at the host root exactly as before.
+
+- **The proxy forwards the path unchanged.** `wardynd` mounts the console, the
+  API, `/auth/login`, `/auth/callback`, `/healthz`, `/readyz` and `/metrics`
+  under the prefix and answers 404 for everything outside it, so a rule that
+  strips the prefix breaks every request. nginx: `location /wardyn/ { proxy_pass
+  http://wardynd:8080; }` — no trailing slash or URI on `proxy_pass`. WebSocket
+  upgrades (the terminal) need the usual `Upgrade`/`Connection` headers.
+- **One bundle, any prefix.** The console is built with relative asset URLs;
+  `wardynd` writes the base into the `index.html` it serves (an attribute, not an
+  inline script — the CSP is unchanged) and the console builds every API, sign-in,
+  terminal and recording URL from it. A refresh on a deep link works.
+- **Cookies** — the session, the sign-in cookies and the Azure DevOps sign-in's —
+  are scoped to `Path=/wardyn`, so the neighbouring application never receives
+  them.
+- **SSO.** Register and set `WARDYN_OIDC_REDIRECT_URL` under the base
+  (`https://host.example.com/wardyn/auth/callback`); boot refuses one outside it,
+  naming both variables. The Azure DevOps callback is derived from it and carries
+  the base itself.
+- **Health checks** move with the prefix: `/wardyn/healthz`, `/wardyn/readyz`.
+  The chart's probes follow `basePath` (or an `env.WARDYN_BASE_PATH`); a compose
+  or external health check has to be edited by hand.
+- **What stays at the root.** The proxy-facing TLS listener
+  (`WARDYN_INTERNAL_LISTEN`, the default `https` `WARDYN_CONTROL_PLANE_URL`) is not
+  behind your reverse proxy, so runs keep dialling it at the root. A plain
+  `http://` loopback control-plane URL reaches the console listener instead, so
+  it has to end in the base (`http://127.0.0.1:8080/wardyn`); boot refuses one
+  that does not. The CLI's `WARDYN_URL` and `wardyn-tetragon-ingest`'s
+  control-plane URL point at the console listener too: include the base in them.
+- **UI sandboxes.** The shared-origin gateway (no
+  `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) serves its enter and relay routes under
+  the same prefix on its own listener, and `/healthz`'s
+  `ui_sandbox.enter_url_template` includes it — proxy that origin with the prefix
+  too. Per-run origins (host mode) are separate hosts and are unchanged.
+- **Not detected.** A proxy that strips the prefix is not refused at boot —
+  nothing in a request says it was stripped; it shows up as 404s on every page.
+
 ### Corporate TLS-inspection root
 
 A TLS-inspecting upstream proxy — one that terminates and re-signs TLS with its

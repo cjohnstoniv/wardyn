@@ -45,6 +45,7 @@ import "@fontsource/jetbrains-mono/latin-ext-400.css";
 import { decideKey } from "./attach-terminal-keys";
 import { getToken, HttpError } from "../lib/api/core";
 import { runs } from "../lib/api/runs";
+import { wsURL } from "../lib/base-path";
 import type { AttachHolder, AttachModeMsg } from "../lib/types/runs";
 import { getErrorMessage } from "../lib/format";
 import { Eye, Loader2, TriangleAlert, Maximize2, Minimize2, RotateCw } from "lucide-react";
@@ -69,9 +70,7 @@ function isAdminTokenOnlyMode(): boolean {
 
 // Helpers
 function buildWsUrl(runId: string, ticket?: string): string {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host = window.location.host; // same-origin → cookie is sent
-  const base = `${proto}//${host}/api/v1/runs/${encodeURIComponent(runId)}/attach`;
+  const base = wsURL(`/runs/${encodeURIComponent(runId)}/attach`);
   return ticket ? `${base}?ticket=${encodeURIComponent(ticket)}` : base;
 }
 

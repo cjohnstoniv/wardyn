@@ -646,6 +646,10 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	[ "$$(echo "$$out" | grep -c 'WARDYN_DEFAULT_POLICY')" = "0" ] || { echo "default render (no defaultPolicy set) still set WARDYN_DEFAULT_POLICY"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'kind: Ingress')" = "0" ] || { echo "default render (ingress.enabled=false) still created an Ingress"; exit 1; }; \
 	[ "$$(echo "$$out" | grep -c 'trusted-ca\|WARDYN_TRUSTED_CA_FILE')" = "0" ] || { echo "default render (no trustedCA set) rendered part of the corporate-CA surface — the switch is off by default and must render NONE of its five objects"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set basePath=/wardyn); \
+	echo "$$out" | grep -A1 "name: WARDYN_BASE_PATH" | grep -q 'value: "/wardyn"' || { echo "basePath did not reach wardynd as WARDYN_BASE_PATH"; exit 1; }; \
+	[ "$$(echo "$$out" | grep -c 'path: /wardyn/healthz')" = "2" ] || { echo "basePath: liveness + startup probes are not under it — wardynd 404s /healthz outside the base path"; exit 1; }; \
+	echo "$$out" | grep -q 'path: "/wardyn/readyz"' || { echo "basePath: readinessProbe is not under it"; exit 1; }
 	@out=$$(helm template wardyn ./deploy/helm/wardyn -f deploy/helm/wardyn/ci/all-on-values.yaml); \
 	echo "$$out" | grep -q "kind: PersistentVolumeClaim" || { echo "persistence.enabled rendered no PVC"; exit 1; }; \
 	echo "$$out" | grep -q "terminationGracePeriodSeconds: 90" || { echo "terminationGracePeriodSeconds is not carried into the pod spec"; exit 1; }; \
@@ -936,6 +940,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@#   replicas/allowMultiReplica    — exercised by their own refusal renders below
 	@#     (`--set replicas=5` is refused; `--set allowMultiReplica=true` renders).
 	@#   readinessProbe                — exercised by its own render (`readinessProbe.path=/healthz`).
+	@#   basePath                      — exercised by its own render (`--set basePath=/wardyn`).
 	@#   service                       — exercised by the two port-collision refusals
 	@#     (uiSandbox.port == service.port, ssh.port == service.port).
 	@#   pod/containerSecurityContext  — the DEFAULT render is what pins runAsNonRoot
@@ -943,7 +948,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@#   secretFiles                   — exercised by its own render (#596 block above);
 	@#     in all-on it would turn the env-mode DSN/age-key assertions into _FILE ones.
 	@missing=""; for k in $$(grep -oE '^[a-zA-Z][a-zA-Z0-9]*:' deploy/helm/wardyn/values.yaml | tr -d ':'); do \
-		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe service podSecurityContext containerSecurityContext secretFiles " in *" $$k "*) continue ;; esac; \
+		case " nameOverride fullnameOverride replicas allowMultiReplica readinessProbe basePath service podSecurityContext containerSecurityContext secretFiles " in *" $$k "*) continue ;; esac; \
 		grep -qE "^$$k:" deploy/helm/wardyn/ci/all-on-values.yaml || missing="$$missing $$k"; \
 	done; \
 	[ -z "$$missing" ] || { echo "values.yaml keys neither helm-lint render exercises:$$missing — add them to deploy/helm/wardyn/ci/all-on-values.yaml, or exempt them in the comment above with the reason"; exit 1; }

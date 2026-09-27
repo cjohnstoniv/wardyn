@@ -32,7 +32,7 @@ func entraSite(clientID string) fakeSiteConfig {
 }
 
 var testLogin = newADOEntraLogin("https://login.microsoftonline.com/"+testTenant+"/v2.0",
-	testLoginClient, "console-secret", "https://wardyn.corp.example/auth/callback", false)
+	testLoginClient, "console-secret", "https://wardyn.corp.example/auth/callback", "", false)
 
 // An unconfigured deployment is unchanged: no entra row answers found=false,
 // which is the same refusal the sign-in doors give with no source at all.
@@ -69,12 +69,12 @@ func TestADOEntraSource_FailsClosed(t *testing.T) {
 	if cfg.ClientSecret != "" {
 		t.Errorf("a foreign application was handed the console's client secret")
 	}
-	noOIDC := newADOEntraLogin("", "", "", "", false)
+	noOIDC := newADOEntraLogin("", "", "", "", "", false)
 	cfg, _, _ = adoEntraSource(entraSite(testLoginClient), noOIDC)(context.Background())
 	if cfg.LoginClientID != "" || cfg.LoginTenantID != "" || cfg.ClientSecret != "" {
 		t.Errorf("no OIDC: cfg = %+v, want an empty login half", cfg)
 	}
-	dex := newADOEntraLogin("https://sso.corp.example/dex", testLoginClient, "s", "", false)
+	dex := newADOEntraLogin("https://sso.corp.example/dex", testLoginClient, "s", "", "", false)
 	if cfg, _, _ = adoEntraSource(entraSite(testLoginClient), dex)(context.Background()); cfg.LoginTenantID != "" {
 		t.Errorf("a non-Entra issuer produced a login tenant %q", cfg.LoginTenantID)
 	}

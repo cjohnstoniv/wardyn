@@ -62,6 +62,14 @@ allowMultiReplica: false
 readinessProbe:
   path: /readyz
 
+# Sub-path the console, API, sign-in and health endpoints are served under
+# behind a reverse proxy (WARDYN_BASE_PATH), e.g. "/wardyn": a leading slash,
+# no trailing slash. The probes above follow it (readinessProbe.path stays
+# relative to it). Empty (default) serves at the host root. An ingress in
+# front forwards the path unchanged; see docs/OPERATIONS.md "Serving the
+# console under a sub-path".
+basePath: ""
+
 service:
   type: ClusterIP
   # port is the ONE exception to ".Values.env renders inline, verbatim" (this

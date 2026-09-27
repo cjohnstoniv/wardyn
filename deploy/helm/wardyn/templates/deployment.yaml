@@ -42,6 +42,10 @@ out; guarded, the 0.5 defaults simply carry forward.
 {{- $ui := .Values.uiSandbox | default dict -}}
 {{- $ageRef := .Values.secrets.ageKeySecretRef | default dict -}}
 {{- $internalPort := int (.Values.service.internalPort | default 8443) -}}
+{{- /* basePath (WARDYN_BASE_PATH): wardynd serves /healthz and /readyz under it,
+so the probes follow — from basePath, or from an env.WARDYN_BASE_PATH set
+directly. */ -}}
+{{- $basePath := .Values.basePath | default (get .Values.env "WARDYN_BASE_PATH") | default "" -}}
 {{- /*
 secretFiles mode: the three Secrets the chart already wires (DSN, admin token,
 age key) are projected into ONE read-only volume and wardynd gets
@@ -225,6 +229,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "wardyn.authSecretName" . }}
                   key: {{ .Values.auth.adminToken.key }}
+            {{- end }}
+            {{- if and .Values.basePath (not (hasKey .Values.env "WARDYN_BASE_PATH")) }}
+            - name: WARDYN_BASE_PATH
+              value: {{ .Values.basePath | quote }}
             {{- end }}
             {{- if and .Values.auth.ssoOnly (not (hasKey .Values.env "WARDYN_SSO_ONLY")) }}
             # Declare SSO the only way into the console (validateSSOOnlyPosture,
@@ -482,7 +490,7 @@ spec:
             {{- end }}
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: {{ printf "%s/healthz" $basePath }}
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -501,7 +509,7 @@ spec:
             # pod never becomes Ready and a rollout to it stalls forever
             # (readinessProbe.path=/healthz pins it back — see values.yaml).
             httpGet:
-              path: {{ (.Values.readinessProbe | default dict).path | default "/readyz" | quote }}
+              path: {{ printf "%s%s" $basePath ((.Values.readinessProbe | default dict).path | default "/readyz") | quote }}
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10
@@ -517,7 +525,7 @@ spec:
             # "generous startup budget" this comment promised was never the
             # thing actually bounding a slow migration).
             httpGet:
-              path: /healthz
+              path: {{ printf "%s/healthz" $basePath }}
               port: http
             periodSeconds: 5
             failureThreshold: 90

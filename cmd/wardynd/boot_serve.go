@@ -223,7 +223,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	}
 
 	errCh := make(chan error, 2)
-	internalSrv := startInternalListener(hop, f, srv.Handler(), errCh)
+	internalSrv := startInternalListener(hop, f, srv.InternalHandler(), errCh)
 	go func() {
 		switch {
 		case posture.tlsEnabled:
