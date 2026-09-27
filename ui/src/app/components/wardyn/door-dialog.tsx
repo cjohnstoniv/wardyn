@@ -326,11 +326,19 @@ export function DoorDialog({
 
   // Lifted out of KeyDoor (review finding F4): the confirm needs its OWN
   // DialogTitle, which only THIS component can set (KeyDoor sits below it).
+  //
+  // Keyed on TARGET, not `t` (review R2-1): `t` falls back to `shown.current`
+  // once the dialog closes, so it never actually becomes null and never
+  // changes on a same-provider reopen — the effect below then never re-ran,
+  // and a closed confirm (Escape, or a completed Remove) stuck the NEXT open
+  // of the same provider on "Remove your token for …?". `target` genuinely
+  // goes null while closed, so this resets both then and on any subsequent
+  // open (same provider or a different one).
   const [confirmingRemove, setConfirmingRemove] = React.useState(false);
-  const keyDoorId = t?.kind === "key" ? t.provider.id : null;
+  const targetKeyDoorId = target?.kind === "key" ? target.provider.id : null;
   React.useEffect(() => {
     setConfirmingRemove(false);
-  }, [keyDoorId]);
+  }, [targetKeyDoorId]);
 
   // A second entrance while the door is open: no second door, the open one
   // takes focus (context openDoor).

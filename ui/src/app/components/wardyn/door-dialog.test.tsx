@@ -198,6 +198,38 @@ describe("the key and token door (case c)", () => {
     expect(screen.getByRole("dialog")).toHaveTextContent(KEY_DOOR.NOTE);
   });
 
+  // R2-1 (round 2 regression, F4's fix): confirmingRemove lives in DoorDialog,
+  // which stays mounted in the shell — closing the dialog must still clear
+  // it, or the NEXT open of the same provider lands straight on the confirm.
+  it("Escape during the remove confirm, then reopen: the door opens on Replace, not on the confirm", async () => {
+    renderDoor(providerStatus([{ provider: gateway, state: "live" }]), { for: { provider: gateway.id } });
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    await userEvent.click(await screen.findByRole("button", { name: KEY_DOOR.REMOVE }));
+    await screen.findByRole("dialog", { name: "Remove your token for Corp gateway?" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    expect(await screen.findByRole("dialog", { name: "Replace your token for Corp gateway" })).toBeInTheDocument();
+  });
+
+  it("after a confirmed remove, reopening the door does not open on the confirm", async () => {
+    renderDoor(providerStatus([{ provider: gateway, state: "live" }]), { for: { provider: gateway.id } });
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    await userEvent.click(await screen.findByRole("button", { name: KEY_DOOR.REMOVE }));
+    await userEvent.click(screen.getByRole("button", { name: REMOVE_CONFIRM.CONFIRM }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: "entrance" }));
+    const d = await screen.findByRole("dialog");
+    expect(d).not.toHaveAccessibleName("Remove your token for Corp gateway?");
+    // Unambiguous over "no button named Remove" — this fixture's `stored`
+    // stays true after a mocked remove (a static status prop, no real
+    // refetch), so the form's own ghost Remove button (KEY_DOOR.REMOVE) and
+    // the confirm's destructive one (REMOVE_CONFIRM.CONFIRM) share the exact
+    // same accessible name ("Remove"). The dialog's OWN title is what tells
+    // the two apart, and it must read back as the ordinary Replace form.
+    expect(d).toHaveAccessibleName("Replace your token for Corp gateway");
+  });
+
   it("the notice's store-mode line names the product (design F-4)", async () => {
     renderDoor(providerStatus([{ provider: anthropicKey }], { credential_storage: "key_vault" }), {
       for: { provider: anthropicKey.id },
