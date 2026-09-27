@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A run refused for its model provider is audited at create and Review (#987).** The 422s for a
+  provider that does not exist, is off, does not serve the agent, is not chosen among several, has
+  no usable credential of the caller's, or would sit beside a policy grant setting a model
+  credential were written with no audit row; only the not-granted 403 and dispatch's own refusals
+  were. Each now writes one `authz.denied` row with the new reason `model_provider_unavailable`
+  (target `runs.model_provider`, with `provider`, `kind` and, for a credential the caller can
+  repair, `remedy` `model_credential`). The 422 body is unchanged, and the not-granted refusal stays
+  its one `capability_model_provider` row.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
