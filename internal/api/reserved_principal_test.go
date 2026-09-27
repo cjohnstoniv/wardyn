@@ -137,7 +137,7 @@ func TestSignInCallbackRouteRefusesReservedSubject(t *testing.T) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, rbacStore{})
 	cfg.OIDC = auth
-	handler := New(cfg).Handler()
+	handler := panicFails(t, New(cfg).Handler())
 
 	lw := httptest.NewRecorder()
 	handler.ServeHTTP(lw, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
