@@ -282,6 +282,21 @@ their own inline policy.
   is yours alone — your admin's own API calls, made with the shared admin
   token, cannot sign in on your behalf or read your model access for you.
 
+## What is kept about your stored credentials
+
+`GET /secrets` shows names only, `mine` included — never a value, not even
+your own; nothing you or your admin ever store is read back through the API.
+Rotating a value (setting it again under the same name) or removing it
+(`DELETE /secrets/<name>`) takes effect for the next run that resolves it — a
+run already going keeps what it already cached for the rest of its life. Your
+admin can erase every credential in your namespace in one step; once that
+runs you keep nothing recoverable through Wardyn, though a database backup
+your organisation took beforehand is a separate question its own retention
+answers, not something erasing your namespace reaches into. Wardyn never
+revokes anything upstream on your behalf: your own AWS, Anthropic or Azure
+DevOps sign-in stays valid at the provider until you — or your admin, there,
+not here — revoke it directly.
+
 ## What to ask your admin for
 
 - **Model access, when you'd rather not store your own key.** An operator

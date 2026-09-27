@@ -1188,6 +1188,22 @@ migration `0050`)** are the second and third owned nouns after runs.
   **Wardyn cannot revoke anything upstream**: revoke the person's AWS, Anthropic
   and Azure DevOps sessions, and any gateway token, where they were issued, and
   disable them in the identity provider.
+  **The erasure horizon, on the default (local Postgres) store, is your backup
+  retention — not the API call.** `DELETE /people/{principal}/credentials`
+  removes the live row; it does not, and cannot, reach a `pg_dump` you already
+  took, a replica, or Postgres WAL. Until every backup made before the erase
+  ages out of your retention window, the value is recoverable from it by
+  whoever can read a backup, exactly as it was live (envelope v1 does not
+  change this: the same key-encryption key that opened the row in Postgres
+  opens the same bytes in a restored dump). With `WARDYN_KEK=transit`, the
+  backup is only as erased as the KEK: rotating the Transit key past the old
+  wrap (`wardynd -rewrap`, then raising `min_decryption_version` — "Key
+  service: Vault Transit") is what actually forecloses an old backup, the same
+  way `-rotate-age-key` does for the local key. In store mode (Vault, Azure Key
+  Vault) the value itself never reaches your Postgres backup at all — the
+  store's own deletion/retention is what governs it, as in "Removing a
+  credential, and the erasure horizon" above for Key Vault, or your Vault KV
+  engine's own versioning and delete-version policy.
 - **Dead sign-ins are not kept.** A captured AWS or Azure DevOps sign-in whose
   refresh token the provider refuses for good (`invalid_grant`) is deleted at
   that renewal, and a stored AWS sign-in is deleted by a daily sweep once it can
