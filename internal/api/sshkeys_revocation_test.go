@@ -78,7 +78,7 @@ func sshRevocationCookie(t *testing.T, principal string, at time.Time) *http.Coo
 }
 
 func TestSSHRegistrationCannotOutliveSessionRevocation(t *testing.T) {
-	for _, phase := range []string{"body", "insert"} {
+	for _, phase := range []string{"body", "insert", "check"} {
 		for _, target := range []string{"sub-alice", "alice@example.com", "all"} {
 			t.Run(phase+"/"+target, func(t *testing.T) {
 				testSSHRegistrationRevocation(t, phase, target)
@@ -116,6 +116,12 @@ func testSSHRegistrationRevocation(t *testing.T, phase, target string) {
 	checkSSHNewChannels(t, client, true)
 
 	payload, _ := json.Marshal(addSSHKeyRequest{PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+	// The session cookie's own IssuedAt: oidc.Authenticator.Middleware checks
+	// the CALLER's session against the same SessionRevocations before the
+	// handler ever runs, so a "check" phase has to tell that call apart from
+	// the app-level one it actually targets (sshkeys.go's authorizedAt) — both
+	// share the same sub/email, only the issuedAt differs.
+	sessionIssuedAt := base.Add(-time.Second)
 	body := newHeldBody(string(payload))
 	release := sync.OnceFunc(func() { close(body.release) })
 	t.Cleanup(release)
@@ -128,8 +134,29 @@ func testSSHRegistrationRevocation(t *testing.T, phase, target string) {
 		st.beforeAdd = sync.OnceFunc(func() { close(addEntered); <-addRelease })
 		entered = addEntered
 	}
+	if phase == "check" {
+		// Holds INSIDE IsSessionRevoked, after it has already computed its
+		// answer from the stamp taken at handler entry but before that answer
+		// is returned — the exact gap a re-stamp between the check and the
+		// insert would straddle. A revoke landing here must still be honored:
+		// the row this request goes on to write must not out-date the cutoff
+		// just because the clock moved on while the check's own decision was
+		// still in flight.
+		release()
+		checkEntered, checkRelease := make(chan struct{}), make(chan struct{})
+		release = sync.OnceFunc(func() { close(checkRelease) })
+		t.Cleanup(release)
+		var once sync.Once
+		rev.afterCheck = func(_, _ string, issuedAt time.Time) {
+			if issuedAt.Equal(sessionIssuedAt) {
+				return // the OIDC session cookie's own check, not this phase's target
+			}
+			once.Do(func() { close(checkEntered); <-checkRelease })
+		}
+		entered = checkEntered
+	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/me/ssh-keys", body)
-	req.AddCookie(sshRevocationCookie(t, principal, base.Add(-time.Second)))
+	req.AddCookie(sshRevocationCookie(t, principal, sessionIssuedAt))
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		w := httptest.NewRecorder()
@@ -162,6 +189,9 @@ func testSSHRegistrationRevocation(t *testing.T, phase, target string) {
 	}
 	if phase == "insert" && registered.Code != http.StatusCreated {
 		t.Fatalf("insert after the last check=%d want 201; body=%s", registered.Code, registered.Body.String())
+	}
+	if phase == "check" && registered.Code != http.StatusCreated {
+		t.Fatalf("registration after the held cutoff check=%d want 201; body=%s", registered.Code, registered.Body.String())
 	}
 	checkSSHNewChannels(t, client, false)
 	if late, err := sshDial(t, h, run.ID.String(), priv); err == nil {

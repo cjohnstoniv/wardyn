@@ -14,7 +14,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
   can remove a person's keys through `DELETE /people/{principal}/ssh-keys`. Deleted or changed
   keys cannot open new SSH channels on an existing connection; already-open channels continue
   until they close or their run is torn down. Registrations in flight cannot escape the session
-  cutoff. Partial revocations audit the completed counts.
+  cutoff. Partial revocations audit the completed counts. `POST /sessions/revoke` naming an
+  email that resolves to no known subject (an SSO-only person with no token and no owned
+  workspace) now answers `500` with the actionable refusal after the session cutoff still
+  commits, instead of a silent `204` — intentional: the cutoff cannot be undone by a failed
+  directory lookup, and the caller needs to be told to name the subject exactly rather than
+  believe the sweep found nothing to do.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a

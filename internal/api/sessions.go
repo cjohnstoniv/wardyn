@@ -143,6 +143,14 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"session.revoke", target, outcome, mustJSON(data)))
 	if err != nil {
+		// A resolver refusal is a composed product sentence, not driver text —
+		// the caller gets it verbatim rather than the generic "revoke credentials"
+		// (the cutoff already committed, so the responder needs the remedy, not
+		// just the log line).
+		if refusal != "" {
+			writeError(w, http.StatusInternalServerError, refusal)
+			return
+		}
 		writeServerError(w, r, "revoke credentials", err)
 		return
 	}

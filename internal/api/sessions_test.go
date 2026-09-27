@@ -8,6 +8,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -432,6 +433,10 @@ func TestRevokeSessions_UnmatchedTargetSweepsNobodyElse(t *testing.T) {
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"nobody@corp.example"}`)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 for unresolved SSH principal after the cutoff; body=%s", w.Code, w.Body.String())
+	}
+	const wantRefusal = "no known principal matches that email address; name the subject exactly"
+	if !strings.Contains(w.Body.String(), wantRefusal) {
+		t.Errorf("body = %s, want the actionable refusal sentence %q, not the generic message", w.Body.String(), wantRefusal)
 	}
 	if len(st.revoked) != 0 {
 		t.Fatalf("revoked = %v, want none — an unmatched target must not sweep the deployment", st.revoked)
