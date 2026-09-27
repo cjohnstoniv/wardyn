@@ -45,6 +45,27 @@ export function setSignedOutHold(on: boolean): void {
  *  never a global release: a Save clicked during the logout stays held. */
 export type WfetchInit = RequestInit & { save?: string; endsSession?: true };
 
+// H2: same-origin PATHNAME only. `internal/api/ui.go`'s catch-all route
+// serves index.html with no path cleaning, so `GET //evil.com` 200s and
+// `window.location.pathname` reads back exactly `//evil.com` — a
+// protocol-relative host a navigation would dial cross-origin. `/\evil.com`
+// is the same trick some browsers normalize a backslash into a slash for.
+// Neither a bare `/` (the landing decision, not "where you were") nor
+// `/setup` (its own gate) is a real place to reload to, in either view.
+// Applied where App.tsx turns a reload target into a navigation (#483).
+export function safeReturnPath(path: string | null | undefined): string {
+  return path &&
+    path.startsWith("/") &&
+    !path.startsWith("//") &&
+    !path.startsWith("/\\") &&
+    path !== "/" &&
+    path !== "/setup" &&
+    path !== "/admin" &&
+    path !== "/admin/setup"
+    ? path
+    : "/runs";
+}
+
 // The full sign-in screen's notice for a session that ended (an amber
 // warning, not the error box). wfetch cannot tell an expired SSO session from
 // a revoked admin token — both arrive as a bare 401 — so this names neither.

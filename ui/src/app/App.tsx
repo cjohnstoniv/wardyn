@@ -14,7 +14,7 @@ import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { getToken, onUnauthorized, probeAuth, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
+import { getToken, onUnauthorized, probeAuth, safeReturnPath, SESSION_ENDED_REASON, setSignedOutHold, setToken } from "./lib/api/core";
 import { health } from "./lib/api/health";
 import { setup as setupApi } from "./lib/api/setup";
 // From setup-gate, NOT setup-screen: the screen re-exports this, but importing it
@@ -438,7 +438,7 @@ export default function App() {
   // console was signed out and reset.
   React.useEffect(() => setSignedOutHold(lapsed), [lapsed]);
   React.useEffect(() => {
-    if (reloadTo !== null) window.location.assign(reloadTo);
+    if (reloadTo !== null) window.location.assign(safeReturnPath(reloadTo));
   }, [reloadTo]);
 
   React.useEffect(() => {

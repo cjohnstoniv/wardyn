@@ -88,12 +88,20 @@ const daemon = { dead: false, down: false, sso: false, meFails: false, me: ME as
 const calls: string[] = [];
 // Set to hold POST /auth/logout open, so the sign-out round trip can be caught mid-flight.
 let heldLogout: Promise<Response> | null = null;
+// Set to hold the shell's mount GET /me open (only the first one), so the
+// identity is still unresolved when the session lapses.
+let heldMe: Promise<Response> | null = null;
 const fetchMock = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
   const u = String(url);
   calls.push(`${init?.method ?? "GET"} ${u}`);
   if (u.includes("/healthz")) return Promise.resolve(json(200, { status: "ok", sso: daemon.sso, token_login: true }));
   if (u.includes("/readyz")) return Promise.resolve(json(200, { status: "ok" }));
   if (heldLogout && u.includes("/auth/logout")) return heldLogout;
+  if (heldMe && u.endsWith("/api/v1/me")) {
+    const held = heldMe;
+    heldMe = null;
+    return held;
+  }
   if (daemon.down) return Promise.reject(new TypeError("Failed to fetch"));
   if (daemon.dead) return Promise.resolve(json(401, { error: "unauthorized" }));
   if (u.includes("/setup/status")) return Promise.resolve(json(200, SETUP_STATUS_READY));
@@ -113,6 +121,7 @@ beforeEach(() => {
   Object.assign(daemon, { dead: false, down: false, sso: false, meFails: false, me: ME });
   mockState.claim = true;
   heldLogout = null;
+  heldMe = null;
   calls.length = 0;
   sessionStorage.setItem("wardyn_admin_token", "good-token");
   vi.stubGlobal("fetch", fetchMock);
@@ -231,6 +240,19 @@ describe("App — a session that ends mid-page (#483)", () => {
     await screen.findByText("at /runs");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("the same person signing back in: the shell takes the whole /me the dialog read", async () => {
+    await lapseMidPage();
+    // Hidden from the accessibility tree while the dialog is up.
+    const header = screen.getByRole("banner", { hidden: true });
+    expect(within(header).getByText("cj")).toBeInTheDocument();
+    daemon.me = { ...ME, name: "Casey Jones" };
+    await signInWithToken();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(assign).not.toHaveBeenCalled();
+    expect(await within(header).findByText("Casey Jones")).toBeInTheDocument();
+    expect(screen.getByLabelText("Note")).toHaveValue("hello");
   });
 
   it("Not now: a read-only bar with Copy and Sign in; a later read's 401 keeps the bar, not the dialog", async () => {
@@ -369,6 +391,27 @@ describe("App — a lapse on an unknown identity", () => {
       await expect(wfetch("/stub-save", { method: "PUT", body: "{}" })).rejects.toMatchObject({ status: 401 });
     });
     expect(count("PUT /api/v1/stub-save")).toBe(0);
+  });
+
+  // H2: the reload is a real navigation, and before the mount /me settles no
+  // route has normalised the pathname yet — a protocol-relative `//host`
+  // must never become the reload target.
+  it("a reload never leaves the origin, even from a //host pathname", async () => {
+    heldMe = new Promise<Response>(() => {});
+    render(
+      <MemoryRouter initialEntries={["//evil.com"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("banner");
+    daemon.dead = true;
+    await act(async () => {
+      await wfetch("/lapse").catch(() => {});
+    });
+    await screen.findByRole("dialog");
+    await signInWithToken();
+    await waitFor(() => expect(assign).toHaveBeenCalled());
+    expect(assign.mock.calls).toEqual([["/runs"]]);
   });
 });
 
