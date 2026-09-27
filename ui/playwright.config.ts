@@ -45,7 +45,13 @@ export default defineConfig({
     baseURL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
-    video: "retain-on-failure",
+    // #469: "retain-on-failure" records EVERY test and discards the passing
+    // ones' videos. Not recording (CI, which now runs concurrent lanes) cut
+    // the Playwright step's wall time noticeably on a 4-core box. CI retries,
+    // so it records the retry instead, next to its trace; the failed attempt
+    // keeps its screenshot and error context. A dev box does not retry, so it
+    // keeps recording.
+    video: process.env.CI ? "on-first-retry" : "retain-on-failure",
   },
   projects: [
     { name: "chromium", testIgnore: ["screenshots/**", "demo/**", "live/**"], use: { ...devices["Desktop Chrome"] } },
