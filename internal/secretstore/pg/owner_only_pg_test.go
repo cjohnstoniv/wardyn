@@ -51,4 +51,9 @@ func TestPG_OwnRowOnlyNeverFallsBackToTheOperatorRow(t *testing.T) {
 	if v, _, err := read("", true); !errors.Is(err, secretstore.ErrNotFound) {
 		t.Errorf("owner \"\" with owner_only = (%q, %v), want not-found: the operator namespace is never an owner_only read", v, err)
 	}
+	// A run the operator itself owns (OperatorOwned): its own row is the operator's.
+	gctx, row := secretstore.GrantRead(secretstore.OperatorOwned(ctx), true)
+	if v, err := s.For(bob).Get(gctx, name); err != nil || string(v) != "operator-v" || row.Scope() != "operator" {
+		t.Errorf("operator-owned owner_only read = (%q, %q, %v), want the operator row as its own", v, row.Scope(), err)
+	}
 }

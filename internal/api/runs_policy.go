@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -503,6 +504,25 @@ func runIdentitySubject(ctx context.Context, actor string) string {
 		return op
 	}
 	return actor
+}
+
+// operatorOwnsRun reports whether a run identity subject is the operator
+// itself rather than a person: the admin token, or local mode's operator.
+// ponytail: keyed on the subject string, as credentialPerson is; an IdP sub
+// equal to "admin-token" would read as the operator.
+func (s *Server) operatorOwnsRun(subject string) bool {
+	return subject == adminTokenPrincipal || (s.cfg.LocalMode && subject == s.cfg.LocalOperator)
+}
+
+// ownerOnlyCtx prepares ctx for a grant read on behalf of run subject. An
+// operator-owned run can store no row but the operator's (every operator
+// write lands in ""), so an owner_only grant's own row for it is that one
+// (secretstore.OperatorOwned); a person's never is.
+func (s *Server) ownerOnlyCtx(ctx context.Context, subject string) context.Context {
+	if s.operatorOwnsRun(subject) {
+		return secretstore.OperatorOwned(ctx)
+	}
+	return ctx
 }
 
 // actorTypeFromRequest is the actor-type half of actorFromRequest, for audit

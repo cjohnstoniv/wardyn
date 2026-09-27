@@ -692,7 +692,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	minted, err := s.cfg.Broker.MintForGrant(r.Context(), claims, body.GrantID)
+	minted, err := s.cfg.Broker.MintForGrant(s.ownerOnlyCtx(r.Context(), claims.Sub), claims, body.GrantID)
 	if err != nil {
 		s.writeMintError(w, r, err)
 		return

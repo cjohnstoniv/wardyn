@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -13,10 +14,12 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	secretspg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -216,4 +219,131 @@ func mustCreate(t *testing.T, w *httptest.ResponseRecorder) *httptest.ResponseRe
 		t.Fatalf("create run: %d, want 201: %s", w.Code, w.Body.String())
 	}
 	return w
+}
+
+// TestOwnerOnlyGrant_OperatorOwnedRunReadsTheOperatorRow is the lead's rule
+// for a run with no person behind it (the admin token, local mode): it can
+// store no row but the operator's, so its owner_only grant's own row is that
+// one. An OIDC admin is a person: without a row of their own the launch is
+// refused, and the sentence names the remedy (the user view).
+func TestOwnerOnlyGrant_OperatorOwnedRunReadsTheOperatorRow(t *testing.T) {
+	e := newOwnerOnlyPG(t)
+	if err := e.sec.Put(context.Background(), "x", []byte("operator-pat")); err != nil {
+		t.Fatal(err)
+	}
+	strict := e.storePolicy(t, "strict", "x", true)
+	body := `{"agent":"claude-code","task":"t","policy_id":"` + strict + `"}`
+
+	created := mustCreate(t, do(t, e.h.srv, http.MethodPost, "/api/v1/runs", adminToken, body))
+	if got := mintedToken(t, e.mint(t, adminTokenPrincipal, created)); got != "operator-pat" {
+		t.Fatalf("admin-token run minted %q, want the operator row (its own)", got)
+	}
+	if rows := e.mintRows(t); len(rows) != 1 || rows[0]["secret_scope"] != "operator" {
+		t.Errorf("mint rows = %v, want one with secret_scope=operator", rows)
+	}
+
+	w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/runs", e.admin, body)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "from the user view") {
+		t.Fatalf("OIDC admin without an own row: create = %d %s, want 422 naming the user view", w.Code, w.Body.String())
+	}
+}
+
+// TestOwnerOnlyInjectionSink_NeverServesTheOperatorRow pins #1106 at the
+// api_key sink, which reads the value itself: a person's owner_only grant with
+// only an operator row is refused, unflagged it keeps the fallback, an
+// operator-owned run reads the operator row as its own, and a person's own row
+// is served.
+func TestOwnerOnlyInjectionSink_NeverServesTheOperatorRow(t *testing.T) {
+	h, sec := newRunOwnerPGHarness(t)
+	if err := sec.Put(context.Background(), "vendor-key", []byte("operator-key")); err != nil {
+		t.Fatal(err)
+	}
+	// The sink serves only a live run, so each subject gets one, under a
+	// default policy with no grants of its own.
+	h.srv.cfg.DefaultPolicy = types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2}
+	runs := map[string]uuid.UUID{}
+	for _, sub := range []string{"alice", adminTokenPrincipal} {
+		var w *httptest.ResponseRecorder
+		if sub == adminTokenPrincipal {
+			w = do(t, h.srv, http.MethodPost, "/api/v1/runs", adminToken, `{"agent":"claude-code","task":"t"}`)
+		} else {
+			w = doSSO(t, h.srv, http.MethodPost, "/api/v1/runs", ssoSession(t, sub, sub+"@corp.example", oidc.RoleUser), `{"agent":"claude-code","task":"t"}`)
+		}
+		var run createRunResponse
+		if err := json.Unmarshal(mustCreate(t, w).Body.Bytes(), &run); err != nil {
+			t.Fatal(err)
+		}
+		runs[sub] = run.ID
+	}
+	resolve := func(sub string, ownerOnly bool) *httptest.ResponseRecorder {
+		t.Helper()
+		h.broker.minted = broker.Minted{
+			Kind: types.GrantAPIKey, JTI: "jti-" + sub,
+			Injection: &egress.InjectionRule{Host: "api.vendor.example", Header: "x-api-key", SecretName: "vendor-key", Format: "%s"},
+			OwnerOnly: ownerOnly,
+		}
+		return do(t, h.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), mintRunTokenAs(t, h, runs[sub], sub), "")
+	}
+	served := func(w *httptest.ResponseRecorder) string {
+		t.Helper()
+		var resp injectionResponse
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &resp) != nil {
+			return fmt.Sprintf("(%d %s)", w.Code, w.Body.String())
+		}
+		return resp.Value
+	}
+
+	if w := resolve("alice", true); w.Code != http.StatusFailedDependency || strings.Contains(w.Body.String(), "operator-key") {
+		t.Fatalf("owner_only, no own row: %d %s, want 424 not-found and never the operator key", w.Code, w.Body.String())
+	}
+	if got := served(resolve("alice", false)); got != "operator-key" {
+		t.Fatalf("unflagged: served %q, want today's operator fallback", got)
+	}
+	if got := served(resolve(adminTokenPrincipal, true)); got != "operator-key" {
+		t.Fatalf("operator-owned run: served %q, want the operator row (its own)", got)
+	}
+	if err := sec.For("alice").Put(context.Background(), "vendor-key", []byte("alice-key")); err != nil {
+		t.Fatal(err)
+	}
+	if got := served(resolve("alice", true)); got != "alice-key" {
+		t.Fatalf("owner_only, own row: served %q, want alice's", got)
+	}
+}
+
+// TestOwnerOnlyEnvSecret_NeverServesTheOperatorRow pins #1106 on env_secret
+// dispatch, and the secret_scope datum on run.env_secret.resolve.
+func TestOwnerOnlyEnvSecret_NeverServesTheOperatorRow(t *testing.T) {
+	h, sec := newRunOwnerPGHarness(t)
+	ctx := context.Background()
+	if err := sec.Put(ctx, "vendor-token", []byte("operator-token")); err != nil {
+		t.Fatal(err)
+	}
+	resolve := func(sub string, ownerOnly bool) (string, map[string]any) {
+		t.Helper()
+		policy := types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{
+			Kind: types.GrantEnvSecret, OwnerOnly: ownerOnly,
+			Scope: json.RawMessage(`{"name":"VENDOR_TOKEN","secret_name":"vendor-token"}`),
+		}}}
+		env := map[string]string{}
+		h.srv.resolveEnvSecretGrants(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: sub}, policy, env)
+		h.audit.mu.Lock()
+		defer h.audit.mu.Unlock()
+		return env["VENDOR_TOKEN"], auditData(t, lastAuditEvent(t, h.audit.events, "run.env_secret.resolve"))
+	}
+
+	if v, d := resolve("alice", true); v != "" || !strings.Contains(fmt.Sprint(d["reason"]), "owner_only") {
+		t.Fatalf("owner_only, no own row: env=%q data=%v, want it skipped with the owner_only reason", v, d)
+	}
+	if v, d := resolve("alice", false); v != "operator-token" || d["secret_scope"] != "operator" {
+		t.Fatalf("unflagged: env=%q data=%v, want the operator fallback with secret_scope=operator", v, d)
+	}
+	if v, d := resolve(adminTokenPrincipal, true); v != "operator-token" || d["secret_scope"] != "operator" {
+		t.Fatalf("operator-owned run: env=%q data=%v, want the operator row (its own)", v, d)
+	}
+	if err := sec.For("alice").Put(ctx, "vendor-token", []byte("alice-token")); err != nil {
+		t.Fatal(err)
+	}
+	if v, d := resolve("alice", true); v != "alice-token" || d["secret_scope"] != "own" {
+		t.Fatalf("owner_only, own row: env=%q data=%v, want alice's with secret_scope=own", v, d)
+	}
 }

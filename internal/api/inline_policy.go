@@ -859,6 +859,13 @@ func storedSecretPairingInCeiling(g types.GrantSpec, ceiling []types.GrantSpec) 
 // references it. The kind is the whole point: without it, a refusal on this
 // path cannot say which grant is the problem — git_pat and ssh_key grants
 // would be named "api_key" too. Reachable from four doors.
+// ownerOnlyMissingRefusal names the remedy: the row is stored by that person,
+// signed in as themselves; an admin's own writes land in the operator
+// namespace, so an admin stores theirs from the user view.
+const ownerOnlyMissingRefusal = "%s grant for secret %q is owner_only, and the run's owner has no secret of that name of their own " +
+	"(an operator secret of that name is never used for it). Store it via the secrets API signed in as that person; " +
+	"an admin stores their own from the user view"
+
 type neededSecret struct {
 	name      string
 	kind      types.GrantKind
@@ -966,12 +973,12 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner, subject st
 		known[n] = true
 	}
 	for _, n := range needed {
-		if n.ownerOnly {
-			// Never the operator namespace (#1106): only the row the mint reads.
+		// A person's owner_only grant never reads the operator namespace (#1106):
+		// only the row the mint reads. An operator-owned run's own row is the
+		// operator's, which the check below finds.
+		if n.ownerOnly && !s.operatorOwnsRun(subject) {
 			if !s.ownsSecretMemoized(ctx, subject, n.name) {
-				return http.StatusUnprocessableEntity, fmt.Errorf(
-					"%s grant for secret %q is owner_only, and you have no secret of that name of your own "+
-						"(store yours via the secrets API; an operator secret of that name is never used for it)", n.kind, n.name)
+				return http.StatusUnprocessableEntity, fmt.Errorf(ownerOnlyMissingRefusal, n.kind, n.name)
 			}
 			continue
 		}

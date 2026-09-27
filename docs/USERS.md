@@ -269,8 +269,9 @@ fallback hands the admin's identity to everyone who has not stored their own,
 so the grant should say `"owner_only": true` (see
 [POLICIES.md](POLICIES.md), the eligible-grant fields). Such a grant reads your
 row and nothing else: with no row of your own the launch is refused and says
-which secret to store; store it under the same name via `PUT /secrets/<name>`
-and launch again. A stored policy an admin writes may name a secret nobody has
+which secret to store; store it under the same name via `PUT /secrets/<name>`,
+signed in as yourself, and launch again (an admin's own writes land in the
+operator namespace, so an admin stores theirs from the user view). A stored policy an admin writes may name a secret nobody has
 stored yet — each person's run checks their own. Ask your admin to mark
 per-person grants `owner_only`; the run's `credential.mint` audit row
 (`secret_scope`: `own` or `operator`) shows which row a mint used.

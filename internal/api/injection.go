@@ -267,7 +267,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// strings and the lookup falls back to the operator row: today's single
 	// namespace, unchanged, for every pre-0.7 deployment. An owner_only grant
 	// never falls back (secretstore.GrantRead).
-	gctx, _ := secretstore.GrantRead(r.Context(), minted.OwnerOnly)
+	gctx, _ := secretstore.GrantRead(s.ownerOnlyCtx(r.Context(), claims.Sub), minted.OwnerOnly)
 	rctx, row := secretstore.SiteAudited(gctx)
 	secret, err := s.cfg.Secrets.For(claims.Sub).Get(rctx, minted.Injection.SecretName)
 	if err != nil {

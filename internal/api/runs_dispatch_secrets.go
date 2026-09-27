@@ -194,8 +194,9 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 			// runIdentitySubject(run.CreatedBy): same owner-then-operator-fallback
 			// rule as resolveLLMInspectionSecrets above, through the same
 			// chokepoint — none for an owner_only grant.
-			gctx, row := secretstore.GrantRead(ctx, g.OwnerOnly)
-			val, gerr := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(secretstore.WithPurpose(gctx, secretstore.PurposeDispatch), secretName)
+			subject := runIdentitySubject(ctx, run.CreatedBy)
+			gctx, row := secretstore.GrantRead(s.ownerOnlyCtx(ctx, subject), g.OwnerOnly)
+			val, gerr := s.cfg.Secrets.For(subject).Get(secretstore.WithPurpose(gctx, secretstore.PurposeDispatch), secretName)
 			scope = row.Scope()
 			switch {
 			case g.OwnerOnly && errors.Is(gerr, secretstore.ErrNotFound):

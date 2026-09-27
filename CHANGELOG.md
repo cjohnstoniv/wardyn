@@ -1190,9 +1190,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `api_key`, `git_pat`, `ssh_key` or `env_secret` grant marked `"owner_only": true` resolves its
   secret from the run owner's own row only; a member with none is refused at launch with a named
   reason instead of being served the operator row of that name, and a row removed after launch is
-  refused at mint. A grant without the flag keeps the fallback. An operator's `owner_only` on a
-  pairing binds a member's proposal for it. `credential.mint` (`git_pat`, `ssh_key`) and
-  `run.env_secret.resolve` now record `secret_scope` (`own` or `operator`).
+  refused at mint. A grant without the flag keeps the fallback. A run with no person behind it
+  (the admin token, local mode) reads the operator row as its own. An `owner_only` on a pairing
+  in the deployment ceiling or a governance profile binds a member's proposal for it, and a
+  profile may not drop it. `credential.mint` (`git_pat`, `ssh_key`) and `run.env_secret.resolve`
+  now record `secret_scope` (`own` or `operator`). **Upgrading:** upgrade the proxy image
+  together with wardynd before marking any grant `owner_only` — an older proxy refuses a policy
+  carrying the key, so such a run fails at proxy start.
 - **Storing a named policy no longer checks its secret grants against the operator namespace
   (#1123).** `POST`/`PUT /api/v1/policies` refused a grant naming a secret the admin had not
   stored as an operator row, forcing the very fallback row a per-person credential must not
