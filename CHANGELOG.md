@@ -20,6 +20,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a group- or world-writable file, or one wardynd's own non-root uid owns that others can read, is
   refused; root-owned Secret-volume and CSI files, and the 0644 file Vault Agent writes as its own
   uid, are still read.
+- **The Azure federated token file and the platform key file now get the same `_FILE` mode rule
+  (#1116).** `WARDYN_AZURE_FEDERATED_TOKEN_FILE` and `WARDYN_PLATFORM_KEY_FILE` were the two
+  remaining secret-file reads that bypassed it after #980's follow-ups; a group- or world-writable
+  file at either setting now refuses to boot with the same message as every other `_FILE` setting.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
