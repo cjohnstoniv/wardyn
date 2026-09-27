@@ -288,6 +288,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a request can be raised between the reaper's scan and the stop. A re-auth hold's own timeout
   decision (`credential:reauth-timeout`) no longer resets the run's idle clock, since it is the
   proxy reporting that nobody answered, not real agent activity (#570).
+- **The remaining disabled Setup controls explained themselves only through a hover
+  title (#497).** The "Done with this one" and "Next" footer buttons, and the phase
+  rail's step buttons (both the full and icon-only compact rail), disabled a refused
+  move but said why only in a tooltip a keyboard or touch user never sees. The reason
+  now renders as visible text next to the control (the icon-only compact rail, with no
+  room for a caption, carries it in the button's accessible name and keeps the tooltip).
+  A New Run preflight error with no message no longer reads "Preflight failed Preflight
+  failed." to a screen reader; it now says "No reason was given."
 - **A completed AWS sign-in now ends its own sign-in sandbox on the server (#151).** Once the
   captured session is stored, Wardyn kills the sign-in run itself after a short grace (so the
   in-sandbox helper still gets its answer and prints its done line), including when the console
