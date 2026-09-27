@@ -221,6 +221,18 @@ member's own Wardyn API token and Wardyn's own captured AWS SSO session.
    `WARDYN_LIVE_BEDROCK_WARDYN_DENIED_INTEGRATION_ID` to its id. Unset, that
    half alone skips, named.
 
+`converse_through_wardyn` proves the run's credential mint is a PER-USER
+capture owned by this member — never the operator's SHARED session, which
+produces the same `run.bedrock.configure` mode and would otherwise pass —
+by reading the mint's own scope snapshot (`credential_source`,
+`owner_subject`). `owner_subject` is compared for exact equality against
+this member's own `GET /me` principal; both are `run.CreatedBy`/the token
+`sub` read the same way outside local mode (see
+`BedrockWardynRunProvesPerUserSSO`'s own doc comment for the exact call
+chain), but this has not been independently confirmed against a live row —
+if a real deployment spells the two differently, this subtest will fail
+naming the mismatch rather than silently passing on the wrong identity.
+
 ### Autonomy L0 (LL5)
 
 The member needs a governance profile assignment whose `AutonomyRubric`

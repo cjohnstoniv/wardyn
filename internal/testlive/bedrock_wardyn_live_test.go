@@ -23,15 +23,18 @@ import (
 // bedrockWardynReply is the exact reply text every LL3w run asks its model
 // for — kept short and fixed so the transcript check has one literal to
 // search for, and so worst-case spend per call stays negligible: one short
-// prompt, one short reply, on a model the ONLY-genuine-lane subtest verifies
-// post-hoc is Claude Haiku 4.5 or Amazon Nova Micro (bedrock.go's
-// ModelAllowed). There is no independent max_tokens fence on this path —
-// unlike LL3's own direct SigV4 calls, a claude-code harness run sends its
-// own system prompt and default generation settings, which this suite cannot
-// override from the CreateRun API. Worst case, absent the model check
-// catching a misconfigured Integration first, is one claude-code turn's
-// ordinary token usage on Haiku/Nova pricing — a few cents, not the
-// unbounded cost a larger model would risk.
+// prompt, one short reply, on whatever model the Integration resolves to.
+// There is no independent max_tokens fence on this path — unlike LL3's own
+// direct SigV4 calls, a claude-code harness run sends its own system prompt
+// and default generation settings, which this suite cannot override from the
+// CreateRun API, and there is no wrapped GET /integrations route to check the
+// model BEFORE the call either. The converse_through_wardyn subtest's model
+// check (bedrock.go's ModelAllowed) runs AFTER the call completes, reading
+// the run's own run.bedrock.configure row — it catches a misconfigured
+// Integration, it does not prevent the one call's worth of spend from it.
+// Expect a few cents on Haiku/Nova pricing; a misconfigured Integration on a
+// larger model costs one such turn at that model's price before this check
+// ever runs.
 const bedrockWardynReply = "pong"
 
 // TestLive_BedrockWardyn (LL3w, #691): Bedrock reached THROUGH a governed
@@ -48,13 +51,15 @@ const bedrockWardynReply = "pong"
 // have signed in to AWS through the console once already (docs/LIVE-TESTS.md
 // setup) so that capture exists.
 //
-// converse_through_wardyn proves the run actually used Bedrock, on the
-// per-user SSO lane specifically, on an allow-listed model, with a real
-// credential mint (BedrockWardynRunProvesPerUserSSO); that the run is
+// converse_through_wardyn proves the run actually used Bedrock, on THIS
+// MEMBER's own per-user AWS SSO capture specifically — never the operator's
+// shared one, which produces the exact same run.bedrock.configure mode
+// (BedrockWardynRunProvesPerUserSSO grades the credential.mint's own scope
+// snapshot to tell them apart) — on an allow-listed model; that the run is
 // attributed to the member, never anyone else (RunCreatedByIsMember); and
 // that the model's own reply reached the transcript (TranscriptContainsReply)
-// — never just "some credential.* row exists", which any run of any kind
-// would trivially carry.
+// — never just "some credential.* row exists", which any run of any kind,
+// shared session included, would trivially carry.
 //
 // forced_access_denied proves the fault path (internal/egress/proxy/
 // bedrock_fault.go's bedrockUpstreamFault) on the ONE lane it is actually
@@ -105,7 +110,7 @@ func TestLive_BedrockWardyn(t *testing.T) {
 		if err != nil {
 			t.Fatalf("audit events for %s: %v", run.ID, err)
 		}
-		if err := BedrockWardynRunProvesPerUserSSO(events); err != nil {
+		if err := BedrockWardynRunProvesPerUserSSO(events, memberPrincipal); err != nil {
 			t.Fatalf("run %s: %v", run.ID, err)
 		}
 		if err := RunCreatedByIsMember(run.CreatedBy, memberPrincipal); err != nil {

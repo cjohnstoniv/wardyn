@@ -23,21 +23,54 @@ func bedrockConfigureEvent(t *testing.T, mode, model string) types.AuditEvent {
 	return types.AuditEvent{ID: uuid.New(), Action: "run.bedrock.configure", Data: data}
 }
 
-func mintEvent(outcome string) types.AuditEvent {
-	return types.AuditEvent{ID: uuid.New(), ActorType: types.ActorAgent, Action: "credential.mint", Outcome: outcome}
+// ssoMintEvent builds a successful (or not) credential.mint row for the
+// per-user AWS SSO grant, mirroring authorBedrockSSOInjection's own scope
+// shape: {"scope":{"secret_name":"aws-sso-access-token","snapshot":
+// {"owner_subject":...,"credential_source":"per_user"|"shared"}}}.
+func ssoMintEvent(t *testing.T, outcome, credentialSource, ownerSubject string) types.AuditEvent {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{
+		"scope": map[string]any{
+			"secret_name": string(types.AWSSSOAccessTokenSecret),
+			"snapshot": map[string]any{
+				"owner_subject":     ownerSubject,
+				"credential_source": credentialSource,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return types.AuditEvent{ID: uuid.New(), ActorType: types.ActorAgent, Action: "credential.mint", Outcome: outcome, Data: data}
 }
+
+// otherGrantMintEvent builds a successful credential.mint row for a
+// DIFFERENT grant entirely (e.g. a github_token) — no AWS-SSO-shaped scope at
+// all — the case R2's review named: "the minted flag today accepts a success
+// mint of ANY grant".
+func otherGrantMintEvent(t *testing.T) types.AuditEvent {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{"scope": map[string]any{"secret_name": "github-token"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return types.AuditEvent{ID: uuid.New(), ActorType: types.ActorAgent, Action: "credential.mint", Outcome: "success", Data: data}
+}
+
+const bedrockWardynTestMember = "member-sub"
 
 // TestBedrockWardynRunProvesPerUserSSO pins the LL3w audit check
 // hermetically: the per-user SSO lane, an allow-listed model and a
-// successful mint together pass; any one of them missing must fail —
-// including a case that DOES carry a credential.* row (proving the check no
-// longer reduces to "some row exists").
+// successful PER-USER mint owned by the member together pass; any one of
+// them missing must fail — including the case round 2's review named: a
+// mint whose scope snapshot says "shared" (the operator's captured session),
+// which must NOT be accepted as proof of this member's own capture.
 func TestBedrockWardynRunProvesPerUserSSO(t *testing.T) {
 	good := []types.AuditEvent{
 		bedrockConfigureEvent(t, "sso-inject-proxy", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-		mintEvent("success"),
+		ssoMintEvent(t, "success", "per_user", bedrockWardynTestMember),
 	}
-	if err := BedrockWardynRunProvesPerUserSSO(good); err != nil {
+	if err := BedrockWardynRunProvesPerUserSSO(good, bedrockWardynTestMember); err != nil {
 		t.Fatalf("a genuine per-user SSO run was rejected: %v", err)
 	}
 
@@ -45,22 +78,34 @@ func TestBedrockWardynRunProvesPerUserSSO(t *testing.T) {
 		name   string
 		events []types.AuditEvent
 	}{
-		{"no bedrock.configure row at all", []types.AuditEvent{mintEvent("success")}},
+		{"no bedrock.configure row at all", []types.AuditEvent{ssoMintEvent(t, "success", "per_user", bedrockWardynTestMember)}},
 		{"wrong lane (bearer, not sso-inject-proxy)", []types.AuditEvent{
 			bedrockConfigureEvent(t, "bearer", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-			mintEvent("success"),
+			ssoMintEvent(t, "success", "per_user", bedrockWardynTestMember),
 		}},
 		{"model off the allow-list", []types.AuditEvent{
 			bedrockConfigureEvent(t, "sso-inject-proxy", "anthropic.claude-opus-4-1-20250805-v1:0"),
-			mintEvent("success"),
+			ssoMintEvent(t, "success", "per_user", bedrockWardynTestMember),
 		}},
-		{"a credential row exists but no mint ever succeeded", []types.AuditEvent{
+		{"SHARED scope (the operator's own captured session, not this member's)", []types.AuditEvent{
 			bedrockConfigureEvent(t, "sso-inject-proxy", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-			mintEvent("denied"),
+			ssoMintEvent(t, "success", "shared", bedrockWardynTestMember),
+		}},
+		{"per_user but owned by someone else", []types.AuditEvent{
+			bedrockConfigureEvent(t, "sso-inject-proxy", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+			ssoMintEvent(t, "success", "per_user", "someone-else-sub"),
+		}},
+		{"a credential row exists but it's a different grant entirely (github_token)", []types.AuditEvent{
+			bedrockConfigureEvent(t, "sso-inject-proxy", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+			otherGrantMintEvent(t),
+		}},
+		{"the per-user SSO mint exists but never succeeded", []types.AuditEvent{
+			bedrockConfigureEvent(t, "sso-inject-proxy", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+			ssoMintEvent(t, "denied", "per_user", bedrockWardynTestMember),
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := BedrockWardynRunProvesPerUserSSO(tc.events); err == nil {
+			if err := BedrockWardynRunProvesPerUserSSO(tc.events, bedrockWardynTestMember); err == nil {
 				t.Fatalf("events %+v were accepted", tc.events)
 			}
 		})
