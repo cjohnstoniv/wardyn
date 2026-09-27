@@ -200,6 +200,7 @@ func rootCmd() *cobra.Command {
 		siteConfigCmd(client),
 		driveCmd(client),
 		presetCmd(client),
+		governanceCmd(client),
 		sessionsCmd(client),
 		deviceCmd(client),
 		supportBundleCmd(client),

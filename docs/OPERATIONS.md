@@ -3335,6 +3335,20 @@ Governance profiles also carry the limits that are not choices at all —
 `max_concurrent_runs`, and the two launch modes a profile can refuse outright —
 and, like every profile field, they bind only the people a profile is assigned to.
 
+Profiles and their assignments live in Postgres, so `make reset` / `make
+reset-all` take them with the volume; `wardyn governance get > governance.json`
+(`GET /api/v1/governance`) before a reset and `wardyn governance apply
+governance.json` after is the round-trip (0.8, #1108) — the same get-then-apply
+shape `wardyn site-config get|apply` and `wardyn drive get|apply` already take.
+`apply` upserts every named profile **by name** (its unique handle) and every
+assignment by its own natural key (subject_type, subject); a profile the file
+does not mention is left alone, and one present server-side but absent from the
+file is only removed with `--prune` (which also removes an omitted assignment,
+assignments before profiles so a still-referenced profile never trips the
+delete-while-assigned refusal above). `wardyn governance get > f && wardyn
+governance apply f` is a no-op: unchanged rows are skipped rather than
+re-written, so a repeat apply issues no writes and adds no audit rows.
+
 ## Network: upstream proxy and egress redirects
 
 One more piece of operator-wide config lives in Postgres alongside everything in
