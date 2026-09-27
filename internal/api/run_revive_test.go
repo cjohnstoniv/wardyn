@@ -30,11 +30,20 @@ type reviveStore struct {
 	release  string
 }
 
-func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, from types.LostReason) (bool, error) {
+func (s *reviveStore) MarkRunRevived(_ context.Context, _ uuid.UUID, from types.LostReason, ended *store.EndedKept) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state != types.RunRunning || (s.run.LostAt != nil) != (from != "") || s.run.LostReason != from ||
-		(from != "" && from != types.LostOutage && from != types.LostReboot) {
+	if s.state != types.RunRunning || (s.run.LostAt != nil) != (from != "") || s.run.LostReason != from {
+		return false, nil
+	}
+	switch from {
+	case "", types.LostOutage, types.LostReboot:
+	case types.LostEnded:
+		if ended == nil || !s.run.LostAt.Equal(ended.LostAt) || !s.run.LostAt.After(ended.KeptAfter) ||
+			(s.run.EndsAt != nil && !s.run.EndsAt.After(ended.Now)) {
+			return false, nil
+		}
+	default:
 		return false, nil
 	}
 	s.run.LostAt, s.run.LostReason = nil, ""
@@ -80,6 +89,7 @@ type reviveRunner struct {
 	// statusErr makes Status fail, as a wedged daemon would (Minor, Fable
 	// review): the probe could not observe the agent at all.
 	statusErr error
+	onEnsure  func()
 }
 
 func (r *reviveRunner) ProxyConfig(context.Context, string) ([]byte, error) {
@@ -88,7 +98,14 @@ func (r *reviveRunner) ProxyConfig(context.Context, string) ([]byte, error) {
 	return r.cfg, nil
 }
 
-func (r *reviveRunner) EnsureProxyImage(context.Context) error { return nil }
+// EnsureProxyImage runs onEnsure, when set: what lands while a revive
+// prepares its image, between its admission and its claim.
+func (r *reviveRunner) EnsureProxyImage(context.Context) error {
+	if r.onEnsure != nil {
+		r.onEnsure()
+	}
+	return nil
+}
 
 func (r *reviveRunner) Status(context.Context, string) (runner.Status, error) {
 	r.mu.Lock()
@@ -278,7 +295,10 @@ func TestReviveRun_Refusals(t *testing.T) {
 			f.rr.cfg, _ = json.Marshal(cfg)
 		}, http.StatusConflict},
 		"a reboot stopped its agent and the runner cannot start it": {func(f *reviveFixture) { f.st.run.LostReason = types.LostReboot }, http.StatusConflict},
-		"it ended": {func(f *reviveFixture) { f.st.run.LostReason = types.LostEnded }, http.StatusConflict},
+		"it ended and was not extended": {func(f *reviveFixture) {
+			end := f.now.Add(-time.Minute)
+			f.st.run.LostReason, f.st.run.EndsAt = types.LostEnded, &end
+		}, http.StatusConflict},
 		"it passed its end": {func(f *reviveFixture) {
 			end := f.now.Add(-time.Minute)
 			f.st.run.EndsAt = &end

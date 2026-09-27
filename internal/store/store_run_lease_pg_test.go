@@ -159,7 +159,7 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 		{"the values read", live.ID, &end, 600, true},
 		{"the same values again", live.ID, &end, 600, false},
 	} {
-		got, err := pg.SetRunEndAndWait(ctx, tc.id, tc.fromEnd, tc.fromWait, &later, 1200)
+		got, err := pg.SetRunEndAndWait(ctx, tc.id, tc.fromEnd, tc.fromWait, &later, 1200, nil)
 		if err != nil || got != tc.want {
 			t.Errorf("%s: SetRunEndAndWait = %v, %v; want %v", tc.name, got, err, tc.want)
 		}
@@ -171,13 +171,81 @@ func TestPG_SetRunEndAndWait(t *testing.T) {
 	if moved.EndsAt == nil || !moved.EndsAt.Equal(later) || moved.WaitBudgetSec != 1200 {
 		t.Errorf("run = ends %v wait %d; want %v and 1200", moved.EndsAt, moved.WaitBudgetSec, later)
 	}
-	if got, err := pg.SetRunEndAndWait(ctx, live.ID, &later, 1200, nil, 1200); err != nil || !got {
+	if got, err := pg.SetRunEndAndWait(ctx, live.ID, &later, 1200, nil, 1200, nil); err != nil || !got {
 		t.Fatalf("to No end: %v, %v; want true", got, err)
 	}
 	if moved, _ := pg.GetRun(ctx, live.ID); moved.EndsAt != nil {
 		t.Errorf("ends_at = %v, want NULL (no end)", moved.EndsAt)
 	}
-	if got, err := pg.SetRunEndAndWait(ctx, live.ID, nil, 1200, &end, 1200); err != nil || !got {
+	if got, err := pg.SetRunEndAndWait(ctx, live.ID, nil, 1200, &end, 1200, nil); err != nil || !got {
 		t.Errorf("from No end: %v, %v; want true — a NULL end compares as the value read", got, err)
+	}
+}
+
+// endedRun persists a RUNNING run whose end passed an hour ago and which the
+// lease ended a minute ago; it returns the run and when it ended.
+func endedRun(t *testing.T, ctx context.Context, pg store.PG, now time.Time) (types.AgentRun, time.Time) {
+	t.Helper()
+	end := now.Add(-time.Hour)
+	r := newRun(types.RunRunning)
+	r.EndsAt = &end
+	persistRun(t, ctx, pg.Pool, r)
+	endedAt := now.Add(-time.Minute)
+	if ok, err := pg.MarkRunEnded(ctx, r.ID, endedAt); err != nil || !ok {
+		t.Fatalf("MarkRunEnded = %v, %v", ok, err)
+	}
+	return r, endedAt
+}
+
+const testEndedGrace = 7 * 24 * time.Hour
+
+// keptAt is the ended condition for the mark lostAt, decided at at.
+func keptAt(lostAt, at time.Time) *store.EndedKept {
+	return &store.EndedKept{LostAt: lostAt, KeptAfter: at.Add(-testEndedGrace), Now: at}
+}
+
+// TestPG_EndedRunExtensionHonorsTheKeptMark pins #1061's extension write: a
+// run its own end stopped moves its end only under the ended condition, only
+// for the exact mark the caller read, and only while its files grace is live
+// as of the write; the mark itself stays, so the grace is not renewed. The
+// ended condition never lets a run that is not ended move.
+func TestPG_EndedRunExtensionHonorsTheKeptMark(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	r, endedAt := endedRun(t, ctx, pg, now)
+	later := now.Add(24 * time.Hour)
+
+	for _, tc := range []struct {
+		name  string
+		ended *store.EndedKept
+		want  bool
+	}{
+		{"without the ended condition", nil, false},
+		{"another mark", keptAt(endedAt.Add(time.Second), now), false},
+		{"the grace has run out", keptAt(endedAt, endedAt.Add(testEndedGrace)), false},
+		{"the mark read, inside the grace", keptAt(endedAt, now), true},
+	} {
+		got, err := pg.SetRunEndAndWait(ctx, r.ID, r.EndsAt, r.WaitBudgetSec, &later, r.WaitBudgetSec, tc.ended)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: SetRunEndAndWait = %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+	got, err := pg.GetRun(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.EndsAt == nil || !got.EndsAt.Equal(later) || got.LostAt == nil || !got.LostAt.Equal(endedAt) ||
+		got.LostReason != types.LostEnded || got.State != types.RunRunning {
+		t.Errorf("run = ends %v lost %v %q state %s; want the new end and the SAME ended mark %v, still RUNNING",
+			got.EndsAt, got.LostAt, got.LostReason, got.State, endedAt)
+	}
+
+	live := newRun(types.RunRunning)
+	live.EndsAt = &later
+	persistRun(t, ctx, pool, live)
+	if ok, err := pg.SetRunEndAndWait(ctx, live.ID, &later, live.WaitBudgetSec, &now, live.WaitBudgetSec, keptAt(endedAt, now)); err != nil || ok {
+		t.Errorf("a live run under the ended condition = %v, %v; want false", ok, err)
 	}
 }

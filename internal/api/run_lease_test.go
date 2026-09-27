@@ -40,6 +40,8 @@ type leaseStore struct {
 	casErr     error // returned once by UpdateRunStateIf or StopKeptRunIf
 	grantsErr  error // ListCapabilityGrants fails closed with this, never an implicit allow
 	restricted map[string]map[string]bool
+	// beforeSetEnd, when set, runs at the top of SetRunEndAndWait.
+	beforeSetEnd func()
 }
 
 func (s *leaseStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
@@ -123,12 +125,22 @@ func (s *leaseStore) MarkRunEndingSoon(_ context.Context, _ uuid.UUID, endsAt ti
 	return true, nil
 }
 
-func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int) (bool, error) {
+// SetRunEndAndWait mirrors the PG predicate, EndedKept included. beforeSetEnd
+// runs first, outside the lock: what lands between the handler's decision and
+// this write.
+func (s *leaseStore) SetRunEndAndWait(_ context.Context, _ uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int, ended *store.EndedKept) (bool, error) {
+	if s.beforeSetEnd != nil {
+		s.beforeSetEnd()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur := s.run.EndsAt
 	sameEnd := (fromEnd == nil && cur == nil) || (fromEnd != nil && cur != nil && fromEnd.Equal(*cur))
-	if !sameEnd || fromWait != s.run.WaitBudgetSec || s.run.LostReason == types.LostEnded || s.state.IsTerminal() {
+	keptOK := s.run.LostReason != types.LostEnded
+	if ended != nil {
+		keptOK = !keptOK && s.run.LostAt.Equal(ended.LostAt) && s.run.LostAt.After(ended.KeptAfter)
+	}
+	if !sameEnd || fromWait != s.run.WaitBudgetSec || !keptOK || s.state.IsTerminal() {
 		return false, nil
 	}
 	s.run.EndsAt, s.run.WaitBudgetSec = toEnd, toWait
