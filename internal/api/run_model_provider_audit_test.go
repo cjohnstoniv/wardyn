@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
@@ -61,7 +62,11 @@ func TestRunModelProviderDoors_AuditEachRefusal(t *testing.T) {
 		wantReason string // the one authz.denied row's reason; "" is none
 		wantDetail map[string]any
 	}{
-		{name: "not connected: no key of the caller's", site: twoKeys, cs: &capStore{},
+		// A named human caller, not the admin token: credentialPerson refuses
+		// the admin token's "no key" as mpcNoPerson (no sign-in door, since
+		// there is no person to sign in), which would drop the remedy this
+		// case pins. A member session is a real subject with no stored key.
+		{name: "not connected: no key of the caller's", site: twoKeys, cs: &capStore{}, member: true,
 			body: `{"agent":"claude-code","task":"t","model_provider":"corp"}`, wantCode: http.StatusUnprocessableEntity,
 			wantReason: string(authz.ReasonModelProviderUnavailable),
 			wantDetail: map[string]any{"provider": "corp", "kind": string(types.ModelProviderAnthropicAPIKey), "remedy": llmRefusalAuditReason}},
@@ -91,11 +96,19 @@ func TestRunModelProviderDoors_AuditEachRefusal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, path := range []string{"/api/v1/runs/preflight", "/api/v1/runs"} {
 				srv := providerRunFixture(t, tc.site, tc.cs, nil)
-				session := admitAdminSession(t)
+				// The admin API token is an authorised caller for every case
+				// that just needs one to pass the door (#639: an SSO session
+				// of admin tier in the Admin view now gets 409 admin_view on
+				// a launch door, so an SSO admin session can no longer stand
+				// in for "any authorised caller" here). The one case testing
+				// the capability-denied 403 needs a real member subject, not
+				// the operator-exempt token.
+				var w *httptest.ResponseRecorder
 				if tc.member {
-					session = govSession(t, govMemberSub, []string{"eng"}, false)
+					w = doSSO(t, srv, http.MethodPost, path, govSession(t, govMemberSub, []string{"eng"}, false), tc.body)
+				} else {
+					w = do(t, srv, http.MethodPost, path, adminToken, tc.body)
 				}
-				w := doSSO(t, srv, http.MethodPost, path, session, tc.body)
 				if w.Code != tc.wantCode {
 					t.Fatalf("%s = %d %s, want %d", path, w.Code, w.Body.String(), tc.wantCode)
 				}
