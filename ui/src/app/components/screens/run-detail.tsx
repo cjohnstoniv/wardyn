@@ -62,6 +62,7 @@ import { APPROVALS } from "../../lib/approvals-copy";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import { useConsoleMode, type ConsoleView } from "../wardyn/console-view";
 import {
+  RUN_COCKPIT,
   VIEWER_APPROVAL_BLOCKS_NOTE,
 } from "../wardyn/copy";
 import { ProfileReview } from "./profile-review";
@@ -287,6 +288,20 @@ export function RunDetailScreen() {
     }
   };
 
+  // Rename (#1197 L2): PATCH /runs/{id}/title, then re-fetch so the new
+  // title renders in place — no reload, same `load(false)` pattern kill and
+  // the decision handlers below already use.
+  const rename = async (title: string) => {
+    try {
+      await runsApi.setTitle(id, title);
+      toast.success(RUN_COCKPIT.renamed);
+    } catch (err) {
+      toast.error(`Couldn't rename this run`, { description: getErrorMessage(err) });
+    } finally {
+      void load(false);
+    }
+  };
+
   // 0.7.3 F7 / review U-01 — the header's clone door, same cloneFromAudit
   // refusal as the Runs-list kebab (run-card.tsx): no run.create row, no
   // navigation.
@@ -414,6 +429,7 @@ export function RunDetailScreen() {
             linkCopied={copied}
             onKill={kill}
             onClone={view === "user" ? onClone : undefined}
+            onRename={view === "user" ? rename : undefined}
           />
 
           <LaunchWarningsNote />

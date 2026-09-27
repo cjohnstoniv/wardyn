@@ -712,12 +712,16 @@ func (s *Server) mountRenamedRunRoutes(r chi.Router) {
 	r.Post("/runs/{id}/attach/ticket", s.handleAttachTicket)
 }
 
-// mountRunLeaseRoutes registers a run's end/wait change, its kill and its
-// revive on r — carved out of routes() purely for funlen.
+// mountRunLeaseRoutes registers a run's end/wait change, its title, its kill
+// and its revive on r — carved out of routes() purely for funlen.
 func (s *Server) mountRunLeaseRoutes(r chi.Router) {
 	// The run's end and wait (#569): owner or SUPER admin, clamped to the
 	// run's captured limits — handleSetRunEndAndWait.
 	r.Patch("/runs/{id}", s.handleSetRunEndAndWait)
+	// The run's title (#1197 L2): OWNER ONLY (ownsRun, no admin bypass), any
+	// run state, unlike the lease PATCH above — see run_title.go's own doc
+	// comment for why this stays a separate route.
+	r.Patch("/runs/{id}/title", s.handleSetRunTitle)
 	r.Post("/runs/{id}/kill", s.handleKillRun)
 	r.Post("/runs/{id}/revive", s.handleReviveRun) // owner or super admin (run_revive.go)
 }

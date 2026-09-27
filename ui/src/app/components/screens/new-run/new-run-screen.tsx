@@ -56,7 +56,7 @@ import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
 import { barrierReasons, clearedSpecOnCustomSwitch, defaultSpecText, savedPolicyGone } from "./policy-lane";
 import { mergeRunSelections } from "./wizard-spec";
-import { agentLabel, initialWizardState, type RunPrefill, type WizardState } from "./wizard-types";
+import { agentLabel, initialWizardState, titleFromTask, type RunPrefill, type WizardState } from "./wizard-types";
 import { useLaunch } from "./use-launch";
 import { WhatToRunStep } from "./step-bodies";
 
@@ -138,10 +138,13 @@ export function NewRunScreen() {
   // title character-perfect for a run to ever join its family — the feature
   // would look broken while working precisely as designed.
   const [knownTitles, setKnownTitles] = React.useState<string[]>([]);
-  // The ONE validation-error state on this form. Painted only once the operator
-  // has been in the field and left it empty — a red ring on an untouched form is
-  // an accusation about something nobody has done yet.
-  const [titleTouched, setTitleTouched] = React.useState(false);
+  // #1197 L2: Title is optional now, and tracks the task's first line
+  // (titleFromTask, wizard-types.ts) until the operator edits it themselves —
+  // a clone's carried-over title counts as an edit too, so a non-empty
+  // prefill is never silently overwritten by whatever the task says.
+  // Clearing the field by hand also counts: re-arming would fight the
+  // operator's own delete.
+  const [titleUserEdited, setTitleUserEdited] = React.useState(!!prefill?.state.title);
   // The governance profile bounding THIS caller, named by GET
   // /policies/default. undefined for a caller with no assignment (the key is
   // omitted on the wire) and for a read that failed — in both cases the rail's
@@ -170,6 +173,14 @@ export function NewRunScreen() {
         /* the datalist simply offers nothing — never blocks a launch */
       });
   }, []);
+
+  // #1197 L2: the title default tracks the task's first line until the
+  // operator writes their own. Keyed on state.task alone — patch() below is a
+  // stable useCallback, so this never fires on an unrelated field's change.
+  React.useEffect(() => {
+    if (titleUserEdited) return;
+    setState((s) => ({ ...s, title: titleFromTask(s.task) }));
+  }, [state.task, titleUserEdited]);
 
   // ONE /setup/status read for everything this screen needs: model-access
   // readiness, the harness catalog, and which barriers this host can
@@ -274,21 +285,22 @@ export function NewRunScreen() {
   // this screen's question, and a second general-purpose answer living
   // elsewhere is what drifts out of sync with the form it describes.
   const needsTask = !isAgent || state.mode === "batch";
-  const problem = !state.title.trim()
-    ? "Give this run a title."
-    : needsTask && !state.task.trim()
-      ? isAgent
-        ? "An autonomous run needs a task to perform."
-        : "Enter a command to run."
-      : // A Custom policy that doesn't parse has nothing to send. The saved
-        // lane launches by reference, so its body is never on the wire.
-        !useSaved && !parsed.ok
-        ? "The policy spec isn't valid JSON."
-        : savedPolicyGone(useSaved, state.selectedPolicyId, selectedPolicy, policiesLoaded) // F2-F5
-          ? RUN.POLICY_GONE
-          : useSaved && !state.selectedPolicyId
-            ? "Pick a saved policy, or write a custom one."
-            : null;
+  // #1197 L2: Title dropped out of this chain — the server never required
+  // one (runs_create_validate.go's own doc comment), only the console did,
+  // and the console default now derives one from the task instead of asking.
+  const problem = needsTask && !state.task.trim()
+    ? isAgent
+      ? "An autonomous run needs a task to perform."
+      : "Enter a command to run."
+    : // A Custom policy that doesn't parse has nothing to send. The saved
+      // lane launches by reference, so its body is never on the wire.
+      !useSaved && !parsed.ok
+      ? "The policy spec isn't valid JSON."
+      : savedPolicyGone(useSaved, state.selectedPolicyId, selectedPolicy, policiesLoaded) // F2-F5
+        ? RUN.POLICY_GONE
+        : useSaved && !state.selectedPolicyId
+          ? "Pick a saved policy, or write a custom one."
+          : null;
 
   // Every successful parse re-reads the floor the document authors; a FAILED
   // parse changes nothing (parsedFloor stays whatever last parsed).
@@ -461,23 +473,16 @@ export function NewRunScreen() {
         {/* Left: the form */}
         <div className="min-w-0 space-y-4">
           {/* Identity first: the one thing that makes this run findable a week
-              from now, and the only field on the page that is always required. */}
+              from now. Title is optional (#1197 L2) — it defaults from the
+              task's own first line and stays editable. */}
           <SectionCard title="This run">
             <div className="space-y-4">
-              <Field
-                label="Title"
-                htmlFor="nr-title"
-                required
-                hint="Runs that share a title are grouped together on the Runs board."
-              >
+              <Field label="Title" htmlFor="nr-title">
                 <Input
                   id="nr-title"
-                  required
                   // Rulebook §8: default focus lands on the primary field, not
                   // on the back-out button or the first select.
                   autoFocus
-                  aria-invalid={titleTouched && !state.title.trim() ? true : undefined}
-                  onBlur={() => setTitleTouched(true)}
                   // NO Enter-to-launch here. Rulebook §8 allows it from a
                   // single-line input, but this is the input carrying the
                   // datalist below: choosing a suggestion with Enter dispatches
@@ -491,7 +496,12 @@ export function NewRunScreen() {
                   list="nr-known-titles"
                   placeholder="Refactor the payments module"
                   value={state.title}
-                  onChange={(e) => patch({ title: e.target.value })}
+                  // #1197 L2: any edit — including clearing it — turns off the
+                  // task-derived default for the rest of this session.
+                  onChange={(e) => {
+                    setTitleUserEdited(true);
+                    patch({ title: e.target.value });
+                  }}
                 />
                 <datalist id="nr-known-titles">
                   {knownTitles.map((t) => (

@@ -151,6 +151,13 @@ const (
 	// tierSecurity: the bypass extends to the security tier, deliberately —
 	// inspect-or-stop is that tier's warrant (helpers.go's ownsRunOrAdmin).
 	tierSecurity ownerTier = "security"
+	// tierOwnerOnly: NO admin bypass at all, not even the super admin —
+	// stricter than tierSuper. A SUPER admin AND a security_admin both get
+	// the byte-identical 404 a non-owner gets on a FOREIGN entity (helpers.go's
+	// ownsRun). Exists for a route with no security or incident-response
+	// warrant behind it at all (PATCH /runs/{id}/title, #1197 L2 — a display
+	// field, not a lease, a live PTY or a workspace write).
+	tierOwnerOnly ownerTier = "owner-only"
 )
 
 type classifiedRoute struct {
@@ -600,7 +607,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
-	"PATCH /api/v1/runs/{id}":                 {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	// The title (#1197 L2): OWNER ONLY, no admin bypass at all (packet H-5 =
+	// A) — a rename is a display-field write with no security or
+	// incident-response warrant behind it. See run_title.go's doc comment.
+	"PATCH /api/v1/runs/{id}/title":           {class: classOwner, entity: entityRun, ownerTier: tierOwnerOnly},
 	"GET /api/v1/runs/{id}/recording/{runID}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/attach-ticket":    {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	// /attach/ticket, /attach/holder and /profile/synthesize (below) are the
@@ -1044,9 +1055,10 @@ func TestAuthzMatrix(t *testing.T) {
 				// it cannot be classified, because the answer is not derivable
 				// from the class. Fatal here rather than defaulted, so
 				// the omission is a failure and not a silent tierSuper.
-				if rc.ownerTier != tierSuper && rc.ownerTier != tierSecurity {
-					t.Fatalf("classOwner route %q has no ownerTier set (want tierSuper or tierSecurity) — "+
-						"the tiers do not nest, so 'may an admin bypass ownership here' has two answers", key)
+				if rc.ownerTier != tierSuper && rc.ownerTier != tierSecurity && rc.ownerTier != tierOwnerOnly {
+					t.Fatalf("classOwner route %q has no ownerTier set (want tierSuper, tierSecurity or "+
+						"tierOwnerOnly) — the tiers do not nest, so 'may an admin bypass ownership here' has more "+
+						"than one answer", key)
 				}
 				// L3: the non-owner probe below gets its OWN untouched foreign
 				// approval — foreignID itself is DECIDED by the admin-bypass probe
@@ -1065,8 +1077,15 @@ func TestAuthzMatrix(t *testing.T) {
 				pNonOwnerForeign := buildPath(pattern, nonOwnerForeignID.String())
 
 				// Admin reaches even a FOREIGN entity — proves the bypass, not
-				// merely "admin can read its own".
-				if w := doSSO(t, srv, method, pForeign, adminSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
+				// merely "admin can read its own". tierOwnerOnly is the ONE
+				// exception: there IS no admin bypass, so admin gets the SAME
+				// 404 a non-owner gets, same as a non-owning member below.
+				if rc.ownerTier == tierOwnerOnly {
+					if w := doSSO(t, srv, method, pForeign, adminSess, body); w.Code != http.StatusNotFound {
+						t.Errorf("admin on a FOREIGN entity, tierOwnerOnly route: status = %d, want 404 "+
+							"(no admin bypass at all); body=%s", w.Code, w.Body.String())
+					}
+				} else if w := doSSO(t, srv, method, pForeign, adminSess, body); w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
 					t.Errorf("admin on a FOREIGN entity: status = %d, want none of 401/403/404; body=%s", w.Code, w.Body.String())
 				}
 				// The owner reaches their own.
@@ -1257,6 +1276,15 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 						t.Errorf("security_admin on a FOREIGN entity, tierSecurity route: status = %d, want the "+
 							"handler's own answer — inspect-or-stop is this tier's warrant; body=%s", w.Code, w.Body.String())
 					}
+				case tierOwnerOnly:
+					// No admin bypass at all — not even the super admin
+					// (TestAuthzMatrix's classOwner arm proves that half); a
+					// security_admin gets the same byte-identical 404 a
+					// non-owner gets.
+					if w.Code != http.StatusNotFound {
+						t.Errorf("security_admin on a FOREIGN entity, tierOwnerOnly route: status = %d, want 404 "+
+							"(no admin bypass at all); body=%s", w.Code, w.Body.String())
+					}
 				default:
 					t.Fatalf("classOwner route %q has no ownerTier set", key)
 				}
@@ -1273,9 +1301,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// 23 since #658 added the three 0.8 route names (attach/ticket,
 		// attach/holder, profile/synthesize) ALONGSIDE the dash/bare aliases
 		// they replace — both registrations are still classOwner, so the probe
-		// count grows by exactly the three new patterns (20 -> 23).
-		if probed != 23 {
-			t.Errorf("probed %d classOwner routes, want 23 — a route that left classOwner takes its tier "+
+		// count grows by exactly the three new patterns (20 -> 23); 24 since
+		// #1197 L2 added PATCH /runs/{id}/title.
+		if probed != 24 {
+			t.Errorf("probed %d classOwner routes, want 24 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

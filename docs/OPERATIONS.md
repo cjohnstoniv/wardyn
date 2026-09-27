@@ -2900,6 +2900,18 @@ same, already-created agent container rather than recreating it from the
 agent image an operator may since have patched. The only way onto a newer
 image is to end the run and start a new one.
 
+**Rename.** `PATCH /runs/{id}/title` (#1197) lets the run's OWNER change its
+title — a display field, not part of the lease above, so it needs no captured
+limit and is allowed in ANY run state, including a terminal or kept one. The
+gate is OWNER ONLY (`ownsRun`), stricter than every other `/runs/{id}` route:
+neither an admin nor a `security_admin` may rename someone else's run — both
+get the byte-identical 404 a non-owner gets. A rename carries no security or
+incident-response warrant the way `GET /runs/{id}`'s inspect-or-stop bypass or
+the lease PATCH's owner-or-SUPER bypass do. The console's New Run screen
+prefills the title from the task's own first line (up to 80 characters, cut
+at a word boundary) and leaves it editable; the server itself never required
+one.
+
 **Kubernetes cannot keep, revive, restart or pause a run.** The k8s runner
 substrate does not implement the optional runner capabilities the docker
 driver does (a k8s agent pins its sidecar proxy's pod IP, so there is no "same
