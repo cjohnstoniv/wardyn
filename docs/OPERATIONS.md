@@ -2124,7 +2124,7 @@ does not have. If the grant tables cannot be read, those lists come back empty
 rather than unfiltered. Admins are exempt, as at every door; a `security_admin`
 is bounded like a member.
 
-**Managing them** (the six `/permissions` rows are `securityOps` — admin or
+**Managing them** (the seven `/permissions` rows are `securityOps` — admin or
 `security_admin`; the `/access` rows are `operatorOnly`; `GET /me/capabilities`
 is member-safe):
 
@@ -2136,6 +2136,7 @@ is member-safe):
 | `PUT /permissions/enforcement` | replace the whole switch map — an omitted kind means *off* |
 | `GET /permissions/availability/{kind}/{value}` | one resource's "Available to": `restricted`, and `allowed_by`, the allow rows naming it |
 | `PUT /permissions/availability/{kind}/{value}` | `{"restricted": true}` turns on "Only…" for one resource, `false` turns it back to Everyone |
+| `GET /permissions/explain?subject_type=&subject=&kinds=` | the Explain grid (K4): for one named `user`, `group` or `user_type` subject, every kind's state — `everyone`, `this_type` (an allow, including one written for `all`), `blocked` (a deny that covers the value), `admins_only` (the widening `image` kind, off or with no allow), or `not_available` (an enforced narrowing kind with no allow, or a restricted value no allow naming it lists this subject) — at the `*` default plus every specific value a grant names or "Available to" restricts (`restricted: true`). Each cell is the resolver's own answer, switch and restriction included, for a person who is exactly that subject: only rows naming that subject or `all` are read, so a user's group and type rows are not included. The subject is folded the way a grant's subject is, and a user type that doesn't exist is refused (`400`); `kinds` defaults to every kind |
 | `GET /access` | the merged role-mapping table (chart + console rows, with collision/shadow provenance) plus the same before/after/changes posture the write guards below evaluate |
 | `POST /access/mappings` | upsert one console role mapping on its natural key (`value`) — `201` new, `200` updated; refused on a chart/operator-allowlist collision, an unmatched-outcome flip without `acknowledge_access_change`, or a write that would remove the caller's own admin access |
 | `DELETE /access/mappings/{id}` | remove one console role mapping — same flip/lockout guards as the write above |
