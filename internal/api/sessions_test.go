@@ -8,6 +8,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/google/uuid"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +66,11 @@ type sessionTokenStore struct {
 	revoked []uuid.UUID
 }
 
+func (s *sessionTokenStore) DeleteSSHKeys(context.Context, string) (int, error) { return 0, nil }
+func (s *sessionTokenStore) ListSSHKeysByPrincipal(context.Context, string) ([]types.SSHPublicKey, error) {
+	return nil, nil
+}
+
 func (s *sessionTokenStore) ListAPITokens(context.Context) ([]types.APIToken, error) {
 	return s.toks, nil
 }
@@ -110,15 +116,15 @@ func TestRevokeSessions_AlsoRevokesTokens(t *testing.T) {
 }
 
 func TestRevokeSessions_AdminRevokesSub(t *testing.T) {
-	srv, fake := sessionsTestServer(t)
+	srv, fake, _ := sessionsTestServerWithTokens(t, []types.APIToken{{Principal: "sub-alice", Email: "alice@corp.example"}})
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"alice@corp.example"}`)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusNoContent, w.Body.String())
 	}
-	if len(fake.revokedSubs) != 1 || fake.revokedSubs[0] != "alice@corp.example" {
-		t.Errorf("revokedSubs = %v, want [alice@corp.example]", fake.revokedSubs)
+	if len(fake.revokedSubs) != 2 || fake.revokedSubs[0] != "alice@corp.example" || fake.revokedSubs[1] != "sub-alice" {
+		t.Errorf("revokedSubs = %v, want [alice@corp.example sub-alice]", fake.revokedSubs)
 	}
 }
 
@@ -216,7 +222,7 @@ func TestRevokeSessions_NotMountedWithoutStore(t *testing.T) {
 
 func TestRevokeSessions_AuditEmitted(t *testing.T) {
 	h := newHarness(t)
-	cfg := baseTestConfig(h, &sessionTokenStore{})
+	cfg := baseTestConfig(h, &sessionTokenStore{toks: []types.APIToken{{Principal: "sub-alice", Email: "alice@corp.example"}}})
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.SessionRevocations = &fakeSessionRevocations{}
 	srv := New(cfg)
@@ -384,8 +390,12 @@ func TestRevokeSessions_EmailFormRevokesTheSameHuman(t *testing.T) {
 			}
 			// Half 1: the cutoff is stamped under whatever was named —
 			// IsSessionRevoked is what matches it back to the session.
-			if len(fake.revokedSubs) != 1 || fake.revokedSubs[0] != tc.target {
-				t.Errorf("revokedSubs = %v, want [%s]", fake.revokedSubs, tc.target)
+			wantCutoffs := 1
+			if tc.target != aliceSub {
+				wantCutoffs++
+			}
+			if len(fake.revokedSubs) != wantCutoffs || fake.revokedSubs[0] != tc.target || fake.revokedSubs[len(fake.revokedSubs)-1] != aliceSub {
+				t.Errorf("revokedSubs = %v, want named target plus canonical subject %s", fake.revokedSubs, aliceSub)
 			}
 			// Half 2: the tokens. This is the half that does NOT self-heal —
 			// a wdn_ bearer never consults the session cutoff and api_tokens
@@ -421,8 +431,12 @@ func TestRevokeSessions_UnmatchedTargetSweepsNobodyElse(t *testing.T) {
 	admin := ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/sessions/revoke", admin, `{"sub":"nobody@corp.example"}`)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for unresolved SSH principal after the cutoff; body=%s", w.Code, w.Body.String())
+	}
+	const wantRefusal = "no known principal matches that email address; name the subject exactly"
+	if !strings.Contains(w.Body.String(), wantRefusal) {
+		t.Errorf("body = %s, want the actionable refusal sentence %q, not the generic message", w.Body.String(), wantRefusal)
 	}
 	if len(st.revoked) != 0 {
 		t.Fatalf("revoked = %v, want none — an unmatched target must not sweep the deployment", st.revoked)

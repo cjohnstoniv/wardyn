@@ -32,6 +32,16 @@ type cutoffRevocations struct {
 	err     error
 	asked   int
 	nowFunc func() time.Time
+	// afterCheck, when set, runs AFTER the decision below is computed but
+	// BEFORE it is returned — a schedule hook for a caller that re-stamps its
+	// own "as of" time from a second, later clock read rather than the one
+	// this decision was actually made against (sshkeys_revocation_test.go's
+	// "check" phase: a revoke landing in that gap must still be caught). It
+	// gets the same (sub, email, issuedAt) the decision was made from, since
+	// one request can drive more than one call here (the OIDC session cookie
+	// itself is checked before the app-level admission check ever runs), and
+	// only one of those is the schedule's actual target.
+	afterCheck func(sub, email string, issuedAt time.Time)
 }
 
 func newCutoffRevocations() *cutoffRevocations {
@@ -40,24 +50,34 @@ func newCutoffRevocations() *cutoffRevocations {
 
 func (c *cutoffRevocations) IsSessionRevoked(_ context.Context, sub, email string, issuedAt time.Time) (bool, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.asked++
-	if c.err != nil {
-		return false, c.err
-	}
-	cutoff := c.global
-	for _, key := range []string{sub, email} {
-		if key == "" {
-			continue
+	err := c.err
+	var revoked bool
+	if err == nil {
+		cutoff := c.global
+		for _, key := range []string{sub, email} {
+			if key == "" {
+				continue
+			}
+			if at, ok := c.bySub[key]; ok && at.After(cutoff) {
+				cutoff = at
+			}
 		}
-		if at, ok := c.bySub[key]; ok && at.After(cutoff) {
-			cutoff = at
-		}
+		revoked = !cutoff.IsZero() && !issuedAt.After(cutoff)
 	}
-	if cutoff.IsZero() {
-		return false, nil
+	hook := c.afterCheck
+	c.mu.Unlock()
+	// Released before calling out: the hook's whole point is to let a
+	// concurrent revoke (RevokeSub/RevokeAll, which also takes c.mu) land
+	// while this decision sits unreturned — holding the lock here would
+	// deadlock that revoke instead.
+	if hook != nil {
+		hook(sub, email, issuedAt)
 	}
-	return !issuedAt.After(cutoff), nil
+	if err != nil {
+		return false, err
+	}
+	return revoked, nil
 }
 
 func (c *cutoffRevocations) RevokeSub(_ context.Context, sub string) error {
