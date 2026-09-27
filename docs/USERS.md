@@ -234,6 +234,40 @@ table — this is automatic, admin-configured, and nothing you do here changes
 it. It does not change where you read your own runs' audit: it is still this
 page and this endpoint.
 
+## Model providers (0.8)
+
+Where your admin has set up one or more model providers (Settings ▸ Model
+providers), your model credential is your own, whatever kind the provider is:
+an Amazon Bedrock SSO sign-in, a Claude subscription sign-in, a typed
+Anthropic or OpenAI API key, or a token for your admin's own gateway. You
+connect it yourself — nobody else's runs can use it, and you are never served
+an admin's credential in its place.
+
+- **Where you see it.** A banner on every screen names any provider you are
+  granted whose credential needs you — you have not connected it yet, or your
+  sign-in is expiring or no longer works — with a button that opens the right
+  door for it. `GET /setup/status`'s `model_providers` and `provider_access`
+  are the same answer, if you are scripting: one row per provider you may use,
+  each with its own state (`not_configured`, `expiring`, `expired_signin`, or
+  `live`).
+- **A sign-in kind** (Bedrock SSO, Claude subscription) opens a short-lived
+  login sandbox against your admin's own configuration — the access portal,
+  region, and (Bedrock) the pinned account and role — and stores what it
+  captures under your own principal, exactly as the AWS sign-in flow below
+  already does for the per-agent roster.
+- **A typed key or token** is stored write-only, under your own namespace,
+  with `PUT /api/v1/model-providers/{id}/credential` (`DELETE` to remove it) —
+  the console's own "Add your key" / "Add your token" door calls the same
+  route. Nothing ever reads a stored value back; `provider_access` reports
+  only whether one is present.
+- **Launching a run** uses the agent's default provider unless your admin's
+  policy or your workspace names another; either way the credential injected
+  is yours, proxy-side, never resident in the sandbox.
+
+This is a per-deployment choice: an install with no model-provider block
+configured still works the older way described below, under **Your model
+key**.
+
 ## Your model key
 
 Store your own key under the provider-convention name from Getting Started ▸
