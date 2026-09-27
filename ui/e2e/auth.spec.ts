@@ -616,18 +616,21 @@ test.describe("the page is checked against the re-authenticated role", () => {
     await page.goto("/admin/drives");
     await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
 
-    await page.route("**/api/v1/**", (route) =>
-      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }),
-    );
-    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+    // Same trigger as the "neg" case above (revokeEverything): the console is
+    // already authed, so this stays the in-place reauth DIALOG, not the full
+    // sign-in gate — the wrong locators here (signInToken/useTokenButton, the
+    // gate's own) made this test wait on a screen that never replaces the
+    // page, timing out even though the dialog was up the whole time.
+    await revokeEverything(page);
+    await expect(reauthDialog(page)).toBeVisible({ timeout: 15_000 });
 
     // Drops only the 401 handler: the /me splice above still answers the re-auth.
     await page.unroute("**/api/v1/**");
-    await signInToken(page).fill(GOOD_TOKEN);
-    await useTokenButton(page).click();
+    await signInInDialog(page);
 
-    await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
+    await expect(reauthDialog(page)).toHaveCount(0);
     await expect(page).toHaveURL(/\/admin\/drives$/);
+    await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
   });
 });
 
