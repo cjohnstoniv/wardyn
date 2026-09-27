@@ -1,0 +1,29 @@
+-- Copyright 2025 The Wardyn Authors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- Bounded-stale role re-check for the SSH gateway's admin override (TIER-B
+-- #5). Migration 0043 stamped ssh_public_keys.role ONCE, at registration,
+-- with no way to ever refresh it short of delete-then-re-register — Bounds
+-- documented that as "never re-checked ... until the key is deleted and
+-- re-registered". This column narrows that ceiling from "forever" to "at
+-- most WARDYN_SSH_ROLE_TTL": the OIDC callback (internal/auth/oidc's
+-- CallbackHandler, via its OnLogin hook) re-stamps BOTH role and
+-- role_checked_at for every key owned by the authenticating principal on
+-- every successful login, and sshAuth's admin-override path
+-- (internal/api/sshgateway.go) refuses an override whenever role_checked_at
+-- is older than the TTL. Still BOUNDED-STALE, never "live": SSH carries no
+-- session, so a demotion is only ever caught by the demoted human's own next
+-- login OR by the TTL elapsing on its own, whichever comes first — never by
+-- a live per-connection role read the way the web terminal's requireOperator
+-- gate works.
+--
+-- DEFAULT NULL, not now(): a pre-migration key has never been through this
+-- refresh path, and NULL is what "never refreshed" honestly means. sshAuth's
+-- freshness check treats NULL as infinitely stale (fails closed), so EVERY
+-- pre-0.6 key loses the override the instant this migration lands — the
+-- exact fail-closed posture 0043's own DEFAULT 'member' chose for the role
+-- column itself. That key's owner regains the override only by logging in
+-- again (which now refreshes the stamp for free) or by the existing
+-- delete-then-re-register path — keeping "pre-0.6 keys are member-until-
+-- refreshed keys" true rather than silently granting NULL rows a free pass.
+ALTER TABLE ssh_public_keys ADD COLUMN IF NOT EXISTS role_checked_at TIMESTAMPTZ;

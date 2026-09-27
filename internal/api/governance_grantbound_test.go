@@ -70,6 +70,12 @@ func TestGovernanceProfileGrantBound(t *testing.T) {
 			Kind:  types.GrantGitHubToken,
 			Scope: ghScopeJSON(t, []string{"octocat/Hello-World"}, map[string]string{"contents": "read"}),
 		},
+		{
+			Kind:             types.GrantGitPAT,
+			Scope:            json.RawMessage(`{"host":"dev.azure.com","secret_name":"ado-pat"}`),
+			RequiresApproval: true,
+			OwnerOnly:        true,
+		},
 	}
 
 	cases := []struct {
@@ -122,6 +128,26 @@ func TestGovernanceProfileGrantBound(t *testing.T) {
 				RequiresApproval: false,
 			}},
 			wantErr: "strips requires_approval",
+		},
+		{
+			// Without the flag a person with no row of their own is served the
+			// operator's, and the clamp against this profile would not force it.
+			name: "owner_only stripped: the deployment sets it, the profile does not",
+			profile: []types.GrantSpec{{
+				Kind:             types.GrantGitPAT,
+				Scope:            json.RawMessage(`{"host":"dev.azure.com","secret_name":"ado-pat"}`),
+				RequiresApproval: true,
+			}},
+			wantErr: "strips owner_only",
+		},
+		{
+			name: "owner_only kept: accepted",
+			profile: []types.GrantSpec{{
+				Kind:             types.GrantGitPAT,
+				Scope:            json.RawMessage(`{"host":"dev.azure.com","secret_name":"ado-pat"}`),
+				RequiresApproval: true,
+				OwnerOnly:        true,
+			}},
 		},
 		{
 			name: "TTL raised above the ceiling's",

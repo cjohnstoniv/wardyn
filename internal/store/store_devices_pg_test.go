@@ -166,6 +166,66 @@ func TestPG_Devices_CreateGetRevoke(t *testing.T) {
 	}
 }
 
+// A raw enrolment token or device credential is a 256-bit random value, so a
+// collision means the caller reused one rather than minting/enrolling fresh —
+// ErrConflict on both tables' unique hash columns (token_sha256,
+// credential_sha256), the same reading CreateAPIToken's own collision gets.
+// Two devices sharing a display Name is not a collision at all: names carry no
+// uniqueness constraint, so both enrolments succeed as distinct rows.
+func TestPG_Devices_DuplicateCredentialsAreConflicts(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	now := time.Now().UTC()
+
+	rawToken := uuid.NewString()
+	if _, err := st.MintEnrolmentToken(ctx, rawToken, types.DeviceEnrolmentToken{
+		ID: uuid.New(), DeviceName: "fays-laptop", ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("mint first token: %v", err)
+	}
+	if _, err := st.MintEnrolmentToken(ctx, rawToken, types.DeviceEnrolmentToken{
+		ID: uuid.New(), DeviceName: "fays-laptop-again", ExpiresAt: now.Add(time.Hour),
+	}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("mint with a reused raw token: err = %v, want ErrConflict", err)
+	}
+
+	rawCred := uuid.NewString()
+	if _, err := st.CreateDevice(ctx, types.Device{ID: uuid.New(), Name: "shared-name"}, rawCred); err != nil {
+		t.Fatalf("create first device: %v", err)
+	}
+	if _, err := st.CreateDevice(ctx, types.Device{ID: uuid.New(), Name: "shared-name-2"}, rawCred); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("create device with a reused raw credential: err = %v, want ErrConflict", err)
+	}
+
+	// Equal display names are NOT a collision: distinct credentials, distinct
+	// IDs, same Name — both persist as separate devices.
+	d1, err := st.CreateDevice(ctx, types.Device{ID: uuid.New(), Name: "shared-name"}, uuid.NewString())
+	if err != nil {
+		t.Fatalf("create device with a duplicate display name: %v", err)
+	}
+	d2, err := st.CreateDevice(ctx, types.Device{ID: uuid.New(), Name: "shared-name"}, uuid.NewString())
+	if err != nil {
+		t.Fatalf("create second device with the same duplicate display name: %v", err)
+	}
+	if d1.ID == d2.ID {
+		t.Fatalf("two CreateDevice calls returned the same ID %s", d1.ID)
+	}
+	devices, err := st.ListDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var named int
+	for _, dv := range devices {
+		if dv.Name == "shared-name" {
+			named++
+		}
+	}
+	if named < 2 {
+		t.Fatalf("found %d devices named %q, want at least 2 (equal display names must remain valid)", named, "shared-name")
+	}
+}
+
 // testPeer is the address the organisation "saw" a test push arrive from —
 // what IngestDeviceAudit records in source_ip in place of the device's claim.
 const testPeer = "203.0.113.7:45000"

@@ -14,6 +14,9 @@ env:
   WARDYN_OIDC_EMAIL_DOMAINS: "wardyn.local"
   WARDYN_OIDC_OPERATOR_EMAILS: "admin@wardyn.local,operator@wardyn.local"
   WARDYN_OIDC_ROLE_MAP: "admin@wardyn.local=admin,member@wardyn.local=user,member2@wardyn.local=user,secadmin@wardyn.local=security_admin"
+  # Dex static passwords carry no group or App Role claim, so the live role
+  # walk's People-step case can only map an email.
+  WARDYN_OIDC_ALLOW_EMAIL_MAPPINGS: "true"
 extraEnv:
   - name: WARDYN_OIDC_CLIENT_SECRET
     value: "wardyn-oidc-secret"   # demo literal — must match dex.yaml staticClients

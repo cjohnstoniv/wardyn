@@ -190,7 +190,7 @@ func compilePushRules(s *types.PushRulesSpec) *pushRuleSet {
 	if s.HoldSeconds > 0 {
 		// The sidecar's last door, as configureHold is for first_use_hold_seconds:
 		// a policy stored before its bound existed reaches here unvalidated.
-		rs.hold = min(time.Duration(s.HoldSeconds)*time.Second, maxHoldTimeout)
+		rs.hold = min(time.Duration(s.HoldSeconds)*pushHoldSecond, maxHoldTimeout)
 	}
 	rs.deny = rs.compile(s.DenyPaths)
 	rs.review = rs.compile(s.RequireReviewPaths)

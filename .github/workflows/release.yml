@@ -145,8 +145,14 @@ jobs:
         include:
           - name: wardynd
             dockerfile: deploy/compose/Dockerfile.wardynd
+            # RELEASE_BUILD=true stamps version.releaseBuild (internal/version)
+            # via the Dockerfile's own -ldflags -X, so the wardynd baked into this
+            # image reports the bare release, not `<version>+<commit>` — this job
+            # only runs from a `v*` tag push or a manual dispatch (see this
+            # workflow's `on:`), never from publish-image.yml's per-commit build.
             build-args: |
               GO_BUILD_TAGS=docker,k8s
+              RELEASE_BUILD=true
           - name: wardyn-proxy
             dockerfile: deploy/compose/Dockerfile.proxy
             build-args: ""
@@ -503,7 +509,10 @@ jobs:
         run: |
           set -euo pipefail
           out="wardyn-${GOOS}-${GOARCH}"
-          go build -trimpath -o "$out" ./cmd/wardyn
+          # -X stamps releaseBuild=true so this binary's version.String() reports
+          # the bare release (no +<commit> suffix) — this job only runs from a
+          # `v*` tag push or a manual dispatch, never from a plain commit build.
+          go build -trimpath -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=true" -o "$out" ./cmd/wardyn
           # A cross-built binary that cannot report its own version is a binary
           # nobody can support. Only checkable natively.
           if [ "$GOOS" = linux ] && [ "$GOARCH" = amd64 ]; then

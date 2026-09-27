@@ -390,8 +390,7 @@ fi
 # THE SESSION MUST WIN THE NAME, so this runs BEFORE the shared prep rather than
 # after it.  Both drivers attach the instant the container runs; prep is a
 # measured 18 s when the run clones a repo.  Created after prep, the session lost
-# that race outright (reproduced at a 1 s prep,
-# local/v075/evidence/w0-spike/raw/race-slowprep1.log): `new-session` failed as
+# that race outright (reproduced at a 1 s prep): `new-session` failed as
 # `duplicate session: wardyn`, the seed never started, and the only record was a
 # warning on the container's stderr where nobody is looking — the operator's task
 # text silently dropped.  Belt for the race we still cannot win — an attach that

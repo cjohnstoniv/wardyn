@@ -1,0 +1,31 @@
+-- Copyright 2025 The Wardyn Authors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- When an operator last REPLACED one of a workspace's two egress lists through
+-- PUT /workspaces/{id}/approved-egress or .../denied-egress -- the documented
+-- undo for an `always`-scoped approval decision.
+--
+-- The boot heal (ReconcileWorkspaceEgressDecisions) re-applies every decided
+-- `always` egress approval so a dropped post-Decide write-back is recreated.
+-- An approval row, however, reads APPROVED/always FOREVER: an operator who
+-- promoted a host and later removed it through the PUT got it back on the
+-- allowlist at the next restart, with no audit event -- a durable, fail-OPEN
+-- re-widening of a list they had explicitly narrowed. The heal has no way to
+-- tell "this decision was never applied" from "this decision was applied and
+-- then undone" without a mark saying the operator has spoken more recently
+-- than the verdict; this column is that mark, and the heal skips any decision
+-- decided before it.
+--
+-- NULLABLE with no DEFAULT, deliberately. NULL means "the lists have only ever
+-- been written by decisions", which is every existing row: an upgrade must not
+-- assert an edit nobody made, because a now() default would suppress the heal
+-- for every decision made before the upgrade -- exactly the D28 loss the heal
+-- exists to repair. It is stamped ONLY by those two scoped setters:
+-- AddWorkspaceEgressDecision must not stamp it (a decision is not an override
+-- of itself, and stamping there would make the heal self-suppressing), and
+-- neither must UpdateWorkspace, whose full-column write restates every column
+-- on an unrelated composition edit.
+--
+-- Same three-valued honesty as workspaces.active_run_id and approvals.decided_at:
+-- it scans into a *time.Time, so "never" stays distinguishable from "at epoch".
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS egress_edited_at TIMESTAMPTZ;

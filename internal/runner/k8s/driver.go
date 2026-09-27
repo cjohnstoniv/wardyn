@@ -64,6 +64,13 @@ type Config struct {
 	// ImagePullSecret optionally names a pre-existing Secret (imagePullSecrets)
 	// threaded onto every pod this substrate creates (agent, proxy, canary).
 	ImagePullSecret string
+	// Record mirrors the docker driver's Config.Record: when true, Exec wraps
+	// the agent argv with wardyn-rec (see exec.go's recordCmd) delivering via
+	// the masked brokered proxy upload. When false, Exec runs argv unwrapped,
+	// so no upload is attempted and no brokered:recording decision is logged.
+	// The image contract is unchanged either way — images still ship
+	// wardyn-rec; this only gates whether Exec invokes it.
+	Record bool
 	// ConfinementRuntimes maps a Confinement Class to the RuntimeClass NAME
 	// (a k8s object name, operator-chosen) that enforces it — WARDYN_CONFINEMENT_MAP's
 	// k8s form. Unlike docker (whose runtime family names are a stable,
@@ -281,12 +288,15 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// time NetworkPolicy is true (the two verdicts are mutually exclusive
 		// outcomes of the same boot-time canary).
 		NetworkPolicyAcknowledged: d.netPolAcked,
-		// Exec (see exec.go's recordCmd) wraps every ephemeral-container argv
+		// Exec (see exec.go's recordCmd) wraps the ephemeral-container argv
 		// with wardyn-rec, delivering via the masked brokered proxy upload —
 		// the only path this substrate supports (mounts, and so any
 		// shared-volume delivery, are impossible on k8s; see SandboxSpec's
-		// Recording doc).
-		SessionRecording: true,
+		// Recording doc) — but only when Config.Record is on. Mirrors
+		// docker's hardening.go: advertising recording a Record=false
+		// substrate never performs would make the site-config probe warn
+		// about a cast that was never going to be uploaded.
+		SessionRecording: d.cfg.Record,
 		// D4: this substrate binds a member's drive — ensureDrivePVC creates or
 		// adopts the claim and applyDriveToPod attaches it (drives.go,
 		// sandbox.go). The control plane reads this to admit a drive-carrying

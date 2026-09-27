@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestSessionCommentsMatchTheCodec is the CODE half of F032. Three shipped
+// TestSessionCommentsMatchTheCodec is the CODE half of the fix. Three shipped
 // documents said a pre-upgrade session cookie stays valid across the upgrade
 // with no forced re-login; docs-ops corrected the documents, but all three were
 // written FROM a comment in this package, which said the same thing beside code

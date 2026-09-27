@@ -42,15 +42,19 @@ func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Req
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
+		s.auditOwnerRefusal(r, "credential.erase", "", "blank_principal")
 		writeError(w, http.StatusBadRequest, "name the person whose credentials to erase")
 		return
 	}
 	owner, known, refusal := s.resolveSecretOwner(r.Context(), raw)
 	if refusal != "" {
+		s.auditOwnerRefusal(r, "credential.erase", raw, ownerRefusalReason(refusal))
 		writeError(w, http.StatusUnprocessableEntity, refusal)
 		return
 	}
 	rep, err := secretstore.EraseOwner(r.Context(), s.cfg.Secrets, owner)
+	// Even on a partial erase, which may have removed the sign-in.
+	s.adoEntraTokens.forget(owner)
 	data := map[string]any{"count": rep.Count}
 	if rep.Store != "" {
 		data["store"], data["purged"] = rep.Store, rep.Purged
@@ -110,12 +114,35 @@ func (s *Server) SweepExpiredCredentials(ctx context.Context) int {
 	}
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: deleting expired credentials left some behind; the next sweep retries them", slog.Any("err", err))
+		s.auditSweepFailure(ctx, err)
 	}
 	for _, e := range gone {
+		s.adoEntraTokens.forget(e.Owner)
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", e.Name, "success",
 			withSecretOwner(map[string]any{"reason": "expired", "expires_at": e.ExpiresAt.UTC().Format(time.RFC3339)}, e.Owner, true)))
 	}
 	return len(gone)
+}
+
+// auditSweepFailure records what a sweep could not do: a failure row for each
+// row it kept (secretstore.ExpiredKept), so a row the store refuses every day
+// is on the record every day, and one row with no target for a sweep that
+// failed as a whole (its scan).
+func (s *Server) auditSweepFailure(ctx context.Context, err error) {
+	errs := []error{err}
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		errs = j.Unwrap()
+	}
+	for _, e := range errs {
+		var kept *secretstore.ExpiredKept
+		if !errors.As(e, &kept) {
+			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", "", "failure",
+				mustJSON(map[string]any{"reason": "expired", "error": e.Error()})))
+			continue
+		}
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", kept.Name, "failure",
+			withSecretOwner(map[string]any{"reason": "expired", "error": kept.Err.Error()}, kept.Owner, true)))
+	}
 }
 
 // deleteDeadCredential deletes a stored sign-in the authority has refused for
@@ -130,6 +157,7 @@ func (s *Server) deleteDeadCredential(ctx context.Context, st secretstore.Store,
 		slog.WarnContext(ctx, "wardynd: deleting a sign-in the authority refused failed", slog.String("provider", provider), slog.Any("err", err))
 		outcome, data["error"] = "failure", err.Error()
 	}
+	s.adoEntraTokens.forget(owner)
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "credential.expired.delete", name, outcome,
 		withSecretOwner(data, owner, true)))
 }

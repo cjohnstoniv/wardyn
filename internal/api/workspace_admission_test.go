@@ -159,11 +159,12 @@ func admitRunDoor(name string, memberReachable bool, body func(repo string) stri
 				ID: uuid.New(), Name: "app", OwnedBy: govMemberSub,
 				Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: repo}},
 			}}
-			session := govSession(t, govMemberSub, []string{"eng"}, false)
+			// The operator launches with the admin token: an SSO session in the
+			// Admin view cannot launch at all (refuseAdminViewLaunch).
 			if operator {
-				session = admitAdminSession(t)
+				return srv, do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body(repo))
 			}
-			return srv, doSSO(t, srv, http.MethodPost, "/api/v1/runs", session, body(repo))
+			return srv, doSSO(t, srv, http.MethodPost, "/api/v1/runs", govSession(t, govMemberSub, []string{"eng"}, false), body(repo))
 		},
 	}
 }
@@ -426,13 +427,13 @@ func TestAdmissionAtTheRecordLauncher(t *testing.T) {
 	ws := types.Workspace{ID: uuid.New(),
 		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeRepo, Source: admitOffRow}}}
 
-	err := srv.recordLaunchRefusals(context.Background(), ws, stepRunAgent)
+	err := srv.recordLaunchRefusals(context.Background(), "alice@example.com", ws, stepRunAgent)
 	if !errors.Is(err, errRepoNotAdmitted) {
 		t.Fatalf("err = %v, want errRepoNotAdmitted", err)
 	}
 
 	ws.Sources[0].Source = admitOnRow
-	if err := srv.recordLaunchRefusals(context.Background(), ws, stepRunAgent); err != nil {
+	if err := srv.recordLaunchRefusals(context.Background(), "alice@example.com", ws, stepRunAgent); err != nil {
 		t.Fatalf("a repository on the row must record: %v", err)
 	}
 }

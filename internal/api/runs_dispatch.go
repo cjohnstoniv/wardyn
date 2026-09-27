@@ -166,7 +166,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 					"refusing to launch rather than running with no profile enforcement",
 			})))
 		s.failAndRevoke(context.WithoutCancel(ctx), run.ID, types.RunPending,
-			"this run was not launched: its dispatch lane did not resolve the acting principal's governance ceiling")
+			"This run was not launched: its dispatch lane did not resolve the acting principal's governance ceiling")
 		return
 	}
 	// Only the values a phase below REBINDS get a local alias; everything else is
@@ -288,7 +288,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": apErr.Error()})))
 		s.failAndRevoke(ctx, run.ID, types.RunStarting, fmt.Sprintf(
-			"this run was not launched: its runner's capabilities could not be confirmed, "+
+			"This run was not launched: its runner's capabilities could not be confirmed, "+
 				"so whether it can deliver this run's managed settings (%s) is unknown",
 			agentPolicyBasis(run.AutonomyLevel, p.holdLane())))
 		return

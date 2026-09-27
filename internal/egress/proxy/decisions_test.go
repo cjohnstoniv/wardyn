@@ -234,7 +234,7 @@ func TestDroppedSummary_FailedPostDoesNotBurnDelta(t *testing.T) {
 	}
 }
 
-// F125: both decision-log call sites hand maskDecisionBytes JSON, so the mask
+// both decision-log call sites hand maskDecisionBytes JSON, so the mask
 // must know the JSON-escaped rendering of a secret, not just its raw bytes.
 //
 // json.Marshal escapes \n, \" and \\ inside any string and HTML-escapes & < >
@@ -279,7 +279,7 @@ func TestMaskDecisionBytesMasksJSONEscapedSecrets(t *testing.T) {
 	}
 }
 
-// TestDecisionSinkCountsARefusedPostAsDropped pins the F075 fix-up's fifth
+// TestDecisionSinkCountsARefusedPostAsDropped pins the fix-up's fifth
 // item: `_ = s.post(log)` discarded the error, so a decision the control plane
 // REFUSED simply vanished — s.dropped never advanced and reportDropped never
 // summarized it.

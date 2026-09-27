@@ -87,7 +87,7 @@ func seedRotateStore(t *testing.T, pool *pgxpool.Pool, id *age.X25519Identity) {
 	if err != nil {
 		t.Fatalf("boot the store to seed it: %v", err)
 	}
-	if _, err := loadOrCreateSigningKey(ctx, booted); err != nil {
+	if _, err := loadOrCreateSigningKey(ctx, unlocked(booted)); err != nil {
 		t.Fatalf("seed the boot signing key: %v", err)
 	}
 	st, err := secretstorepg.New(pool, id)

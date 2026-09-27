@@ -95,7 +95,7 @@ comes from your SSO role assignment. Everyone is an admin only when neither a ro
 operator allowlist is set."), formerly `people-access-copy.ts`'s `SIGNIN` export under §7.7 of
 docs/design/people-access-prompt.md. Removed everywhere per state 3 above, not conditionally on
 `sso_only` as before — deleted from every cell, `sign-in.tsx`, and its tests
-(`sign-in.test.tsx`, `e2e/auth.spec.ts`, `e2e/live/sso-roles.spec.ts`).
+(`sign-in.test.tsx`, `e2e/auth.spec.ts`, `e2e/walk/sso-roles.spec.ts`).
 
 **`email_unverified`** (`auth_error=email_unverified`) is unchanged and out of scope this round —
 it names no env var and no "operator" today, so it needed no rewording: "Your identity provider

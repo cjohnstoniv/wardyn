@@ -567,6 +567,20 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 			if rerr != nil {
 				if errors.Is(rerr, io.EOF) {
 					reasonCh <- "shell exited"
+					// A real close handshake BEFORE cancelling ctx (#1112): the
+					// client->server goroutine below is blocked in c.Read(ctx) on
+					// the SAME ctx this func cancels just below, and coder/websocket
+					// arms that Read call to forcibly tear down the raw connection
+					// (c.close(), no close frame) the instant ctx is Done —
+					// cancelling first would race that teardown and the client
+					// would see a bare EOF ("failed to read frame header: EOF")
+					// instead of a clean detach. c.Close writes the close frame,
+					// then blocks briefly for the peer's echo before tearing the
+					// connection down itself, so a normal shell exit reaches the
+					// client as an actual StatusNormalClosure. Best-effort: if the
+					// peer is already gone, this is a no-op and cancel() below
+					// still reaps the goroutines.
+					_ = c.Close(websocket.StatusNormalClosure, "shell exited")
 				} else {
 					reasonCh <- "session read error"
 				}

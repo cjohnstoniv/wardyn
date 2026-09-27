@@ -3,12 +3,12 @@
 
 package main
 
-// THE TWO-CLOCKS HARNESS (B8-F3 + B8-F2). One file, because the two findings are
+// THE TWO-CLOCKS HARNESS. One file, because the two findings are
 // one class: a value wardynd stamped from its OWN clock, compared against a
 // value POSTGRES stamped, with the skew between them landing inside the
 // inequality. Each half has its own fail-open direction and its own victim:
 //
-//   - B8-F3, the boot heal. approvals.decided_at came from wardynd and
+//   - The boot heal. approvals.decided_at came from wardynd and
 //     workspaces.egress_edited_at from Postgres, and
 //     ReconcileWorkspaceEgressDecisions' ONLY newer-action guard is
 //     `decided_at < egress_edited_at`. With wardynd running ahead, an operator
@@ -17,7 +17,7 @@ package main
 //     allowlist, durably and fail-OPEN, which is the loss migration 0055 exists
 //     to prevent.
 //
-//   - B8-F2, the idle reaper. agent_runs.updated_at is stamped by Postgres
+//   - The idle reaper. agent_runs.updated_at is stamped by Postgres
 //     (TouchRun, and every scoped writer) while the reaper measured
 //     `wardynd_now - updated_at`. TouchDebounce's 30 seconds is the whole
 //     margin, so a few minutes of skew ahead STOPS an actively-attached run and
@@ -86,7 +86,7 @@ func skewedRun(t *testing.T, pg store.PG, autoStopSec int) types.AgentRun {
 	return run
 }
 
-// B8-F3: the boot heal
+// the boot heal
 
 // TestPG_AFastClockCannotResurrectAnUndoneAlwaysApproval drives the whole
 // documented sequence — decide `always`, undo it through the PUT, restart — with
@@ -206,7 +206,7 @@ func TestPG_AFastClockCannotResurrectAnUndoneAlwaysApproval(t *testing.T) {
 	}
 }
 
-// B8-F2: the idle reaper
+// the idle reaper
 
 // recordingStopper is lifecycle.Stopper, remembering which runs it was asked to
 // stop. It reports the stop as APPLIED so a spurious stop is loud rather than

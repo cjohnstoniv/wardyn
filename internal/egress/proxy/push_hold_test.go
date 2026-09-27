@@ -106,6 +106,22 @@ func (c *pushCP) wire(t *testing.T, p *Proxy) {
 }
 
 // reviewSpec is a run policy with review rules (and optionally deny rules).
+// shortPushHolds makes one hold_seconds last 50ms for the rest of a test, for
+// a case that waits for a hold to run out rather than timing it.
+func shortPushHolds(t *testing.T) {
+	t.Helper()
+	prev := pushHoldSecond
+	pushHoldSecond = 50 * time.Millisecond
+	t.Cleanup(func() { pushHoldSecond = prev })
+}
+
+// TestPushHoldSecond_ProductionValueUnchanged pins what shortPushHolds shrinks.
+func TestPushHoldSecond_ProductionValueUnchanged(t *testing.T) {
+	if pushHoldSecond != time.Second {
+		t.Fatalf("pushHoldSecond = %v, want the production 1s", pushHoldSecond)
+	}
+}
+
 func reviewSpec(holdSeconds int, review []string, deny ...string) types.RunPolicySpec {
 	return types.RunPolicySpec{PushRules: &types.PushRulesSpec{
 		DenyPaths: deny, RequireReviewPaths: review, HoldSeconds: holdSeconds,
@@ -427,6 +443,7 @@ func TestPushHoldOnTheTokenLane(t *testing.T) {
 				}
 			})
 			t.Run("timeout refuses", func(t *testing.T) {
+				shortPushHolds(t)
 				p, _, up, _, _ := lane(t, review, types.ApprovalPending)
 				rec := post(p, recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush))
 				if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "nobody decided") || up.gitHits != 0 {
@@ -494,6 +511,7 @@ func recordedPushArgs(t *testing.T, ref string, files map[string]string, pushArg
 // branch, or to another repository the run can reach, are a new question —
 // raised as their own row and held, never forwarded on the first approval.
 func TestPushHoldApprovalDoesNotTravel(t *testing.T) {
+	shortPushHolds(t)
 	t.Run("another branch on the App lane", func(t *testing.T) {
 		p, _, up, cp, _ := newAppLaneHold(t, reviewSpec(1, []string{".github/workflows/**"}), types.ApprovalApproved)
 		work := recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush)

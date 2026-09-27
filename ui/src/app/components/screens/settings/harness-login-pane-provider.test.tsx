@@ -92,6 +92,22 @@ describe("a provider door's pane", () => {
   });
 });
 
+describe("a provider AWS sign-in's capture, proven by the row's source_run_id (#993)", () => {
+  it("completes provider sign-in when capture audit is spooled", async () => {
+    // The upload's audit row is best-effort and a spooled one is invisible to
+    // /audit; the stored credential's own stamp is what proves this run.
+    vi.mocked(auditApi.listAudit).mockResolvedValue([]);
+    vi.mocked(setupApi.getSetupStatus).mockResolvedValue(
+      providerStatus([{ provider: MODEL_PROVIDERS.bedrock, state: "live", sourceRunId: RUN }]),
+    );
+    const onDone = vi.fn();
+    render(<HarnessLoginPane provider="aws" modelProvider="bedrock-prod" startURLManaged onDone={onDone} onCancel={vi.fn()} />);
+    await screen.findByTestId("fake-terminal");
+    await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+  });
+});
+
 describe("serverConfirmsProviderCapture — this run's audit row, and the provider's own state", () => {
   const status = (state: string) => providerStatus([{ provider: MODEL_PROVIDERS.bedrock, state }]);
 

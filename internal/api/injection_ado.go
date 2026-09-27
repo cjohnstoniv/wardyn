@@ -26,6 +26,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -39,6 +40,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/subscription"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -48,19 +50,19 @@ import (
 //
 // DRAFT (M2 canon pending)
 const (
-	adoResolveScopeChangedRefusal = "this run's Azure DevOps credential is no longer the one it was dispatched with — " +
+	adoResolveScopeChangedRefusal = "This run's Azure DevOps credential is no longer the one it was dispatched with — " +
 		"the provider row changed while the run was working, and Wardyn will not resolve a different credential for a " +
 		"run already in flight. Relaunch the run."
-	adoResolveHostPinRefusal    = "the Azure DevOps access token may only be injected to this run's own organisation's hosts"
-	adoResolveUnconfigured      = "this deployment offers no Azure DevOps sign-in, so no Azure DevOps credential can be resolved"
-	adoResolveRosterUnreadable  = "could not read this deployment's Azure DevOps provider configuration"
-	adoResolveNotCaptured       = "the person who launched this run has not connected Azure DevOps — sign in to Azure DevOps from the console, then relaunch"
-	adoResolveDeadCredential    = "the Azure DevOps sign-in behind this run can no longer be renewed — sign in to Azure DevOps again, then relaunch"
+	adoResolveHostPinRefusal    = "The Azure DevOps access token may only be injected to this run's own organisation's hosts"
+	adoResolveUnconfigured      = "This deployment offers no Azure DevOps sign-in, so no Azure DevOps credential can be resolved"
+	adoResolveRosterUnreadable  = "Could not read this deployment's Azure DevOps provider configuration"
+	adoResolveNotCaptured       = "The person who launched this run has not connected Azure DevOps — sign in to Azure DevOps from the console, then relaunch"
+	adoResolveDeadCredential    = "The Azure DevOps sign-in behind this run can no longer be renewed — sign in to Azure DevOps again, then relaunch"
 	adoResolveConsentRequired   = "Azure DevOps has not been consented for the access this run was granted — an administrator or the person must grant consent, then relaunch"
 	adoResolveInteractionNeeded = "Azure DevOps requires the person to sign in interactively (a Conditional Access policy) — sign in to Azure DevOps again, then relaunch"
-	adoResolveUnavailable       = "renewing the Azure DevOps sign-in behind this run did not complete; nothing about the credential is known to be wrong"
-	adoResolveStoreRefused      = "the secret store refused the Azure DevOps sign-in behind this run (it was moved or changed at the store, or Wardyn's access to it was revoked) — sign in to Azure DevOps again, or ask an administrator to check the store"
-	adoResolveTokenModeRefusal  = "this run's Azure DevOps token mode cannot be issued by Wardyn"
+	adoResolveUnavailable       = "Renewing the Azure DevOps sign-in behind this run did not complete; nothing about the credential is known to be wrong"
+	adoResolveStoreRefused      = "The secret store refused the Azure DevOps sign-in behind this run (it was moved or changed at the store, or Wardyn's access to it was revoked) — sign in to Azure DevOps again, or ask an administrator to check the store"
+	adoResolveTokenModeRefusal  = "This run's Azure DevOps token mode cannot be issued by Wardyn"
 )
 
 // adoEntraAccessReuseMargin is how long before expiry a minted access token
@@ -108,6 +110,19 @@ func (c *adoEntraAccessCache) put(key string, a ADOEntraAccess) {
 		c.m = map[string]ADOEntraAccess{}
 	}
 	c.m[key] = a
+}
+
+// forget drops everything held for owner, tokens and consent refusals alike,
+// so the next resolve reads the store again. Every key starts with the owner
+// and a NUL (adoEntraAccessFor, adoConsentKey). Called wherever a person's
+// stored sign-in is deleted: a token cached from it would otherwise outlive it
+// by up to its own lifetime.
+func (c *adoEntraAccessCache) forget(owner string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prefix := owner + "\x00"
+	maps.DeleteFunc(c.m, func(k string, _ ADOEntraAccess) bool { return strings.HasPrefix(k, prefix) })
+	maps.DeleteFunc(c.refused, func(k string, _ time.Time) bool { return strings.HasPrefix(k, prefix) })
 }
 
 // adoEntraAccessFor returns a live access token for owner, redeeming only when
@@ -296,12 +311,14 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	}
 	s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"secret.read", types.ADOEntraAccessTokenSecret, "success", mustJSON(data)))
+	// ExpiresAt is the token's own expiry or the stored-key lease, whichever is
+	// sooner: a deleted sign-in stops being injected within storedKeyTTL (§2.8).
 	writeJSON(w, http.StatusOK, injectionResponse{
 		Host:      minted.Injection.Host,
 		Header:    adoEntraInjectHeader,
 		Value:     value,
 		JTI:       minted.JTI,
-		ExpiresAt: access.ExpiresAt.UnixMilli(),
+		ExpiresAt: s.subscriptionLease(minted, subscription.Token{ExpiresAt: access.ExpiresAt}),
 		// Informational only: the proxy's gate pins the organisation from the
 		// dispatch-time ADOGrant in its own configuration, not from this.
 		Organisation: snapshot.Organisation,

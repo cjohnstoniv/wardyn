@@ -1,0 +1,25 @@
+-- Copyright 2025 The Wardyn Authors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- STORE-3: attach_tickets.token stored a raw 256-bit bearer credential in
+-- plaintext — the one unprotected credential in a schema whose `secrets`
+-- table is age-encrypted. Anyone with SELECT on this table (a read-only
+-- reporting role, a hot standby, a pg_dump sitting in a backup bucket, a DBA
+-- session) could read a usable ticket and, inside its 30s TTL, open an
+-- interactive attach WebSocket into the agent sandbox — attributed to the
+-- human who minted it (attach_ticket.go's ticketActorCtxKey stamps the
+-- MINTING principal into the session.attach audit), so the intrusion is
+-- attributed to its victim.
+--
+-- Renamed to token_sha256 and the column now holds hex(sha256(raw token)),
+-- never the raw value — MintAttachTicket hashes before INSERT and
+-- ConsumeAttachTicket hashes before the DELETE ... RETURNING
+-- (store_ephemeral.go), so every consume-once/expiry property is unchanged
+-- (the hash is exactly as unique and unguessable as the token it derives
+-- from) while a live-DB reader can no longer mint a usable ticket from a row.
+--
+-- The rename alone is the whole migration: attach tickets are a 30s TTL
+-- handoff (0026's own doc — "a handful of rows"), so any row already in the
+-- table when this runs is long expired by the time an operator deploys it;
+-- there is nothing to backfill.
+ALTER TABLE attach_tickets RENAME COLUMN token TO token_sha256;

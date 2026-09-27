@@ -92,8 +92,75 @@ describe("hasLlmPath — via the integrations adapter", () => {
     ).toBe(true);
   });
 
-  it("a stored Azure key is never an LLM path — the kind no longer derives a row at all", () => {
-    expect(hasLlmPath(status({ secrets: { present: ["azure-openai-key"], github_app: false } }))).toBe(false);
+  // #1155 review F1: an ADMIN's status is never redacted (checks_redacted is
+  // unset here, same as every fixture above), so the fallback must not
+  // engage even though the server's own llm_ready is (buggy-)true for this
+  // secret name — llmProvenance's substring match fires on "openai" inside
+  // "azure-openai-key" too. Exercised with llm_ready explicitly true so this
+  // stays the real regression guard the review asked for, not an accident of
+  // the fixture never setting the field.
+  it("a stored Azure key is never an LLM path for an admin, even when the server's llm_ready misfires on it", () => {
+    expect(hasLlmPath(status({ secrets: { present: ["azure-openai-key"], github_app: false }, llm_ready: true }))).toBe(
+      false,
+    );
+  });
+
+  // Same admin-view guard, a second secret-name shape llmProvenance's bare
+  // "api" substring misfires on (a GitHub token, nothing to do with an LLM).
+  it("a stored github-api-token is never an LLM path for an admin, even when the server's llm_ready misfires on it", () => {
+    expect(
+      hasLlmPath(status({ secrets: { present: ["github-api-token"], github_app: false }, llm_ready: true })),
+    ).toBe(false);
+  });
+
+  // #850: a member's redacted SetupStatus carries empty providers/secrets no
+  // matter what the admin actually configured, so the rows above can never
+  // see an API key or a host CLI login for them. The server's own llm_ready
+  // verdict is computed from the unredacted facts and survives redaction —
+  // this must be honored as a fallback ONLY for that redacted view (#1155
+  // review F1), never overridden by the empty rows.
+  it("honors the server's llm_ready for a member's redacted view (checks_redacted, providers/secrets both empty)", () => {
+    expect(hasLlmPath(status({ checks_redacted: true, llm_ready: true }))).toBe(true);
+  });
+
+  it("does NOT honor llm_ready for an admin's (non-redacted) view — agentRows already answered for them", () => {
+    expect(hasLlmPath(status({ llm_ready: true }))).toBe(false);
+  });
+
+  it("llm_ready:false with nothing else configured still reads no LLM path", () => {
+    expect(hasLlmPath(status({ checks_redacted: true, llm_ready: false }))).toBe(false);
+  });
+
+  // #1155 review F2: a per_user model-access row that is NOT signed in must
+  // never be papered over by the deployment-wide llm_ready, mirroring
+  // member-getting-started.tsx's own `llmReady && !isPerUserModelAccess`.
+  it("a member's redacted view with a per-user row that is not signed in stays false, even with llm_ready true", () => {
+    expect(
+      hasLlmPath(status({ checks_redacted: true, llm_ready: true, model_access: { state: "not_configured" } })),
+    ).toBe(false);
+    expect(
+      hasLlmPath(status({ checks_redacted: true, llm_ready: true, model_access: { state: "expired_signin" } })),
+    ).toBe(false);
+    // A shared-row member whose credential is dead reads shared_expired, and a
+    // state this client does not know yet must fail closed too.
+    for (const state of ["shared_expired", "revoked"]) {
+      expect(
+        hasLlmPath(status({ checks_redacted: true, llm_ready: true, model_access: { state } as never })),
+      ).toBe(false);
+    }
+  });
+
+  // The positive counterpart: a per-user row that IS signed in is real
+  // access, honored through model_access directly — true even if llm_ready
+  // itself were false (a lapsed OPERATOR secret elsewhere must not hide the
+  // caller's own live credential).
+  it("a member's redacted view with a per-user row that is signed in reads true via model_access, llm_ready aside", () => {
+    expect(hasLlmPath(status({ checks_redacted: true, llm_ready: false, model_access: { state: "live" } }))).toBe(
+      true,
+    );
+    expect(hasLlmPath(status({ checks_redacted: true, llm_ready: false, model_access: { state: "expiring" } }))).toBe(
+      true,
+    );
   });
 });
 
@@ -139,11 +206,50 @@ describe("deriveReadiness — must not overclaim a connected model", () => {
   // satisfying llmReady — it powered Wardyn's own features and no agent tool.
   // Those features (the AI Run Composer) are deleted, so the kind is gone and
   // its stored secret is inert: readiness must not resurrect it as anything.
-  it("a stored Azure key is inert — neither an agent path nor a Wardyn-features path", () => {
-    const r = deriveReadiness(status({ secrets: { present: ["azure-openai-key"], github_app: false } }));
+  // #1155 review F1, exercised with llm_ready explicitly true (the server's
+  // real, if imprecise, verdict for this secret name) — the existing
+  // invariant from before #850 touched this file must still hold for an
+  // admin's (non-redacted) view: llmProvenance's misfire must not leak
+  // through the fallback that #850 added.
+  it("a stored Azure key is inert — neither an agent path nor a Wardyn-features path (admin view, llm_ready true)", () => {
+    const r = deriveReadiness(status({ secrets: { present: ["azure-openai-key"], github_app: false }, llm_ready: true }));
     expect(r.llmReady).toBe(false);
     expect(r.llmLabel).toBe("");
     expect(r.composerReady).toBe(false);
+  });
+
+  // #850: same fallback as hasLlmPath, for the demo-gating consumer
+  // (setup/steps.ts's walkableDemos/stepOrder) — a member with real model
+  // access the redacted rows cannot show must still read llmReady true, with
+  // no label to offer (nothing here names WHICH row, by construction). Only
+  // for the redacted view (#1155 review F1) — checks_redacted is what makes
+  // this a member's status, not an admin's.
+  it("a member's redacted view (no rows) still reads llmReady via the server's llm_ready", () => {
+    const r = deriveReadiness(status({ checks_redacted: true, llm_ready: true }));
+    expect(r.llmReady).toBe(true);
+    expect(r.llmLabel).toBe("");
+  });
+
+  it("an admin's (non-redacted) view with no rows never borrows llm_ready — agentRows already answered for them", () => {
+    const r = deriveReadiness(status({ llm_ready: true }));
+    expect(r.llmReady).toBe(false);
+  });
+
+  // #1155 review F2: the demo-gating consumer must gate a per-user row that
+  // is not signed in exactly like hasLlmPath does — a member must not see
+  // `agent-in-the-box` (or any other needsModel demo) unlocked by a
+  // deployment-wide bit while their OWN AWS sign-in is what the demo would
+  // actually run on.
+  it("a member's redacted view with a per-user row not signed in keeps llmReady false, even with llm_ready true", () => {
+    const r = deriveReadiness(
+      status({ checks_redacted: true, llm_ready: true, model_access: { state: "not_configured" } }),
+    );
+    expect(r.llmReady).toBe(false);
+  });
+
+  it("a member's redacted view with a per-user row signed in reads llmReady true via model_access", () => {
+    const r = deriveReadiness(status({ checks_redacted: true, llm_ready: false, model_access: { state: "live" } }));
+    expect(r.llmReady).toBe(true);
   });
 });
 

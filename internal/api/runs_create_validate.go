@@ -67,7 +67,7 @@ const (
 func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Request) (createRunRequest, governanceCeiling, types.ConfinementClass, string, bool) {
 	var req createRunRequest
 	var noCeiling governanceCeiling
-	if !decodeStrict(w, r, &req) {
+	if !s.decodeRunRequest(w, r, &req) {
 		return req, noCeiling, "", "", false
 	}
 	canonicalizeRunRepos(&req, s.adoHostsLoader(r.Context()))

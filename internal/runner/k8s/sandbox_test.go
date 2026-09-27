@@ -268,7 +268,7 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 		t.Errorf("pod create order = %v, want [%s, %s]", podNames, proxyPodName(spec.RunID), agentPodName(spec.RunID))
 	}
 
-	// B9-F7: enableServiceLinks defaults to TRUE, which makes the kubelet inject
+	// enableServiceLinks defaults to TRUE, which makes the kubelet inject
 	// a pair of docker-link-era env vars (<SVC>_PORT, <SVC>_SERVICE_HOST, ...)
 	// for every Service in the namespace into every container. The agent is
 	// untrusted code and the namespace is the operator's — that is a free
@@ -1408,8 +1408,12 @@ func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get proxy pod: %v", err)
 	}
-	if n := len(proxyPod.Spec.Containers[0].Env); n != 3 {
-		t.Errorf("proxy pod carries %d env vars, want the 3 it always has: %+v",
+	// Two, not three: WARDYN_RUN_ID and WARDYN_CONTROL_PLANE_URL. The config
+	// itself is no longer an env var at all (T-28, issue #688) — it reaches
+	// the container as a file via the init-container staging step, mounted
+	// read-only off the shared emptyDir tested in netpol_invariant_probe_test.go.
+	if n := len(proxyPod.Spec.Containers[0].Env); n != 2 {
+		t.Errorf("proxy pod carries %d env vars, want the 2 it always has: %+v",
 			n, proxyPod.Spec.Containers[0].Env)
 	}
 }

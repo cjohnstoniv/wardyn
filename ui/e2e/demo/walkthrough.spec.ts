@@ -494,8 +494,7 @@ test("act 5 — a real run", async () => {
   // DIALOG-STALE(old UI): "Allow ${MODEL_HOST} and nothing else — without it
   // the agent has no model at all." narrated clicking the deleted model-host
   // toggle chip when it started OFF — Minimal's allowed_domains always
-  // includes api.anthropic.com now, so this branch can never fire. See
-  // local/light-episodes-dialog-flags.md.
+  // includes api.anthropic.com now, so this branch can never fire.
 
   // The unlisted-host rules (network-dialog.tsx's radios) are DELETED —
   // "Hold it for approval" is now the first_use_approval: "wait_for_review"
