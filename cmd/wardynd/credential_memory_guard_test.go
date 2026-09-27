@@ -12,7 +12,9 @@ package main
 //     call to any of those primitives anywhere else in cmd/ or internal/ is a
 //     new place plaintext appears, and this guard makes it a reviewed change
 //     instead of an accident. It does not pin who calls Store.Get: that is the
-//     audit guard's question (every Get audited once, CS-13).
+//     audit guard's question (every Get audited once, CS-13). Test files are
+//     not scanned, nor are the exact testSupportFiles, which hold only while
+//     nothing but test files imports them.
 //   - Core dumps. Every binary that holds credentials calls nodump.Disable as
 //     the first statement of its entry point.
 
@@ -22,6 +24,8 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -84,7 +88,8 @@ func classifyDecryptCall(call *ast.CallExpr, sc fileScope) string {
 	return ""
 }
 
-// scanDecryptSites walks every non-test .go file under cmd/ and internal/.
+// scanDecryptSites walks every non-test .go file under cmd/ and internal/
+// except the testSupportFiles.
 func scanDecryptSites(t *testing.T, root string) (sites []decryptSite, scanned int) {
 	t.Helper()
 	for _, top := range []string{"cmd", "internal"} {
@@ -101,14 +106,17 @@ func scanDecryptSites(t *testing.T, root string) (sites []decryptSite, scanned i
 			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
+			rel, _ := filepath.Rel(root, path)
+			rel = filepath.ToSlash(rel)
+			if _, ok := testSupportFiles[rel]; ok {
+				return nil
+			}
 			fset := token.NewFileSet()
 			f, perr := parser.ParseFile(fset, path, nil, 0)
 			if perr != nil {
 				return perr
 			}
 			scanned++
-			rel, _ := filepath.Rel(root, path)
-			rel = filepath.ToSlash(rel)
 			sc := scopeOf(f)
 			for _, decl := range f.Decls {
 				fd, ok := decl.(*ast.FuncDecl)
@@ -163,8 +171,78 @@ var decryptSites = map[string]string{
 	"internal/secretstore/vaultkv/transit.go|Transit.selfTest|KEK.Unwrap": "the Transit boot self-test unwraps a random probe data key it just wrapped, never a stored one",
 }
 
+// testSupportFiles are the files the scan skips: test support that calls a
+// decrypt primitive only on data keys it wrapped itself from random bytes.
+// Each entry is one exact file, never a package or a directory, and it holds
+// only while no non-test Go file in the module imports its package — the point
+// at which its calls would link into a binary.
+var testSupportFiles = map[string]string{
+	"internal/secretstore/kek/kektest/kektest.go": "the key-encryption-key conformance suite (credential-storage design §2.2, §2.3)",
+}
+
+// testSupportProblems returns why a testSupportFiles entry no longer holds: its
+// file is gone, or a non-test file imports its package.
+func testSupportProblems(t *testing.T, root string) []string {
+	t.Helper()
+	imports := nonTestImports(t, root)
+	var problems []string
+	for rel := range testSupportFiles {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			problems = append(problems, fmt.Sprintf("testSupportFiles exempts %s, which does not exist — drop the stale entry", rel))
+		}
+		pkg := guardModPath + "/" + path.Dir(rel)
+		for _, imp := range imports[pkg] {
+			problems = append(problems, fmt.Sprintf("%s imports %s, whose %s the decrypt-site scan skips as test support: "+
+				"import it from _test.go files only, or pin its calls in decryptSites", imp, pkg, rel))
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// nonTestImports maps each import path to the non-test Go files in the module
+// that import it. It skips the directories the go tool does (testdata, and
+// names starting with . or _) and node_modules.
+func nonTestImports(t *testing.T, root string) map[string][]string {
+	t.Helper()
+	imports := map[string][]string{}
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			n := d.Name()
+			if p != root && (n == "testdata" || n == "node_modules" || strings.HasPrefix(n, ".") || strings.HasPrefix(n, "_")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		f, perr := parser.ParseFile(token.NewFileSet(), p, nil, parser.ImportsOnly)
+		if perr != nil {
+			return perr
+		}
+		rel, _ := filepath.Rel(root, p)
+		for _, im := range f.Imports {
+			ip := strings.Trim(im.Path.Value, `"`)
+			imports[ip] = append(imports[ip], filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan imports: %v", err)
+	}
+	return imports
+}
+
 func TestDecryptSitesArePinned(t *testing.T) {
-	sites, scanned := scanDecryptSites(t, repoRoot(t))
+	root := repoRoot(t)
+	for _, p := range testSupportProblems(t, root) {
+		t.Error(p)
+	}
+	sites, scanned := scanDecryptSites(t, root)
 	if scanned == 0 || len(sites) == 0 {
 		t.Fatalf("scanned %d files and matched %d decrypt sites — the root or the matcher is broken", scanned, len(sites))
 	}
@@ -187,6 +265,45 @@ func TestDecryptSitesArePinned(t *testing.T) {
 	sort.Strings(stale)
 	for _, key := range stale {
 		t.Errorf("decryptSites pins %s, but no such call exists — drop the stale entry", key)
+	}
+}
+
+// The test-support exemption is the exact file alone: a decrypt call in any
+// other file, one of the helper's own package included, is still a site, and a
+// non-test import of the helper fails the guard.
+func TestDecryptTestSupportExemptionIsExact(t *testing.T) {
+	root := t.TempDir()
+	const (
+		kekImport = `"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"`
+		helper    = `"github.com/cjohnstoniv/wardyn/internal/secretstore/kek/kektest"`
+		unwrap    = "func f(k kek.KEK) { k.Unwrap(nil, nil, nil) }\n"
+	)
+	for rel, src := range map[string]string{
+		"internal/secretstore/kek/kektest/kektest.go": "package kektest\nimport " + kekImport + "\n" + unwrap,
+		"internal/secretstore/kek/kektest/more.go":    "package kektest\nimport " + kekImport + "\n" + unwrap,
+		"cmd/x/main.go":      "package main\nimport (\n" + kekImport + "\n_ " + helper + "\n)\n" + unwrap,
+		"cmd/x/main_test.go": "package main\nimport _ " + helper + "\n",
+	} {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sites, _ := scanDecryptSites(t, root)
+	var got []string
+	for _, s := range sites {
+		got = append(got, s.relFile)
+	}
+	sort.Strings(got)
+	if want := []string{"cmd/x/main.go", "internal/secretstore/kek/kektest/more.go"}; !slices.Equal(got, want) {
+		t.Errorf("decrypt sites in %v, want %v: only the exempt file itself is skipped", got, want)
+	}
+	problems := testSupportProblems(t, root)
+	if len(problems) != 1 || !strings.HasPrefix(problems[0], "cmd/x/main.go imports ") {
+		t.Errorf("testSupportProblems = %q, want exactly the non-test import from cmd/x/main.go", problems)
 	}
 }
 
