@@ -33,6 +33,7 @@ function railTree(props: AlertProps) {
         startup="It starts."
         showHoldNote={false}
         toolRules={null}
+        unattended={false}
         launch={{
           onLaunch: () => {},
           disabled: false,

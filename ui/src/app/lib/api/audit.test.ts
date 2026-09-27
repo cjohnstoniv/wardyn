@@ -84,7 +84,7 @@ describe("egressFromAudit", () => {
     expect(out.map((d) => d.id)).toEqual(["wire"]);
   });
 
-  // Negative control (ui/src/app/lib/types/audit.ts's ruleSourceLabel, the
+  // Negative control (wardyn/audit-decision.tsx's ruleSourceLabel, the
   // console's rule_source chip): a mixed feed of tool-rule AND real
   // rule_source-carrying egress rows must project identically — egressFromAudit
   // keys on toolRuleDecision alone, never on ruleSourceLabel, so a non-tool
