@@ -287,8 +287,12 @@ their own inline policy.
 `GET /secrets` shows names only, `mine` included — never a value, not even
 your own; nothing you or your admin ever store is read back through the API.
 Rotating a value (setting it again under the same name) or removing it
-(`DELETE /secrets/<name>`) takes effect for the next run that resolves it — a
-run already going keeps what it already cached for the rest of its life. Your
+(`DELETE /secrets/<name>`) takes effect within minutes for a run already
+going, not just the next one: the proxy re-resolves an injected stored key
+from the store every ten to fifteen minutes and drops it at once on a
+definitive refusal (a short grace covers a transient store outage only). The
+one exception is an approval-gated grant, which is minted once and stays
+static for that run's whole life. Your
 admin can erase every credential in your namespace in one step; once that
 runs you keep nothing recoverable through Wardyn, though a database backup
 your organisation took beforehand is a separate question its own retention

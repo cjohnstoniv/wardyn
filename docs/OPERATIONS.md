@@ -1202,7 +1202,7 @@ migration `0050`)** are the second and third owned nouns after runs.
   way `-rotate-age-key` does for the local key. In store mode (Vault, Azure Key
   Vault) the value itself never reaches your Postgres backup at all — the
   store's own deletion/retention is what governs it, as in "Removing a
-  credential, and the erasure horizon" above for Key Vault, or your Vault KV
+  credential, and the erasure horizon" below for Key Vault, or your Vault KV
   engine's own versioning and delete-version policy.
 - **Dead sign-ins are not kept.** A captured AWS or Azure DevOps sign-in whose
   refresh token the provider refuses for good (`invalid_grant`) is deleted at

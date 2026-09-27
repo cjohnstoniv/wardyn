@@ -2086,8 +2086,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     rotated, or refused at the store — up to the injection TTL plus a
     transient-failure grace, never indefinitely.** A stored API key the proxy
     injects is re-resolved from the injection sink at most every ten minutes
-    (an approval-gated grant is the exception: minted once, static for the
-    run) rather than held for the run's whole life, so a key removed,
+    (`storedKeyTTL` in `internal/api/injection.go`) — a MODEL-PROVIDER stored
+    key instead re-resolves every fifteen minutes (`providerKeyRecheck` in
+    `internal/api/injection_provider_key.go`) — an approval-gated grant is the
+    exception in either case: minted once, static for the
+    run — rather than held for the run's whole life, so a key removed,
     replaced or refused there stops being injected within that window — this
     is the "revocation" half of CS-4's memory/revocation/failure hygiene, not
     literal in-process zeroing (nothing in the secret store or the broker
@@ -2099,9 +2102,10 @@ hiding them would repeat the failure mode we are designed to avoid.
     TRANSIENT failure (the store did not answer) keeps serving the
     last-known-good header for a further fifteen minutes before it, too, is
     dropped — so the worst case between a revocation and the proxy actually
-    stopping is the TTL plus that grace, not the ten minutes alone, and a
-    store outage that outlasts the grace fails CLOSED (no header) rather than
-    open.
+    stopping is the TTL plus that grace: about twenty-five minutes for most
+    stored keys, about thirty for a model-provider key's fifteen-minute TTL —
+    not the ten minutes alone, and a store outage that outlasts the grace
+    fails CLOSED (no header) rather than open.
 
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
