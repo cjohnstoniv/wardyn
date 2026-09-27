@@ -33,6 +33,22 @@ document is that process, written down.
   a pull request never runs it: read the latest nightly, or run it on the
   branch you tag with `gh workflow run nightly.yml --ref release/X.Y`. It is
   the only build of the arm64 half before `release.yml` publishes it.
+- `release.yml`'s own `preflight-green` job (T-06, #666) checks the two bullets
+  above again, automatically, on the tag commit itself, the moment step 5
+  pushes the tag: every required status check green on that exact SHA, plus
+  the latest COMPLETED `nightly.yml` run for that SHA having concluded
+  `success`. It is belt-and-suspenders, not a replacement for reading CI
+  yourself first — a red preflight fails every downstream release job, so
+  catching it before pushing the tag is still cheaper than a failed release
+  run.
+- **Nightly coverage is not a reliable signal until it has run green for 7
+  consecutive nights.** `preflight-green` only proves the latest nightly on
+  the tag commit was green, not that the lane it ran is stable — a lane that
+  just started passing after weeks red (see `docs/CI.md`'s nightly section)
+  can still be one flake away from red again. Until a lane has 7 consecutive
+  green nightlies, a 0.8 issue whose DONE WHEN cites "nightly coverage" for
+  that lane needs its own separately-run proof too, not just a green
+  `preflight-green`.
 
 Run the local gate first:
 

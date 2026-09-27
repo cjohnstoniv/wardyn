@@ -617,11 +617,15 @@ jobs:
   # red nightly blocked nothing and told nobody.
   #
   # SCOPED TO EVERY LANE WITH NO CHARACTERISED NOISE — which is every job in this
-  # workflow except `e2e-live`. The flagship `e2e-live` job carries pre-existing
-  # failures that have never been re-characterised; wiring a notification to it
-  # would fire every night, and an alert that always fires is one everybody
-  # filters by week two — the same end state as no alert, reached expensively.
-  # Add e2e-live once it is green or its failures are characterised.
+  # workflow except `e2e-live`. The flagship `e2e-live` job's failure is now
+  # CHARACTERISED (T-06, #666): step (i) fails because no model credential
+  # resolves for "claude-code" in the nightly estate, so the run never exits
+  # and its recording is never delivered — tracked as a known-fail in #965,
+  # which is Done When step (i) passes, or fails for a different, fixed
+  # reason. Wiring a notification to it before then would fire every night,
+  # and an alert that always fires is one everybody filters by week two — the
+  # same end state as no alert, reached expensively. Add e2e-live to
+  # notify-new-lanes' needs: once #965 closes.
   #
   # It was scoped to two lanes for the same reason and never widened as lanes
   # were added, so six of eight failed SILENTLY — `test-drive` included, the only

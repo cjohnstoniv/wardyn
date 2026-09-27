@@ -123,9 +123,70 @@ on:
         default: true
 
 jobs:
+  # T-06 (#666): nothing before this job ever asked "is the commit this tag
+  # points at actually green" — a tag can be pushed on any commit, including
+  # one CI never ran on or one whose nightly has never gone green. Reads
+  # branch protection's LIVE required_status_checks.contexts (the one list
+  # RELEASING.md's own PATCH configures — never a second, hand-typed copy that
+  # could drift from it) and the check-runs GitHub recorded for the tagged
+  # commit, plus the most recent COMPLETED nightly run for that same commit.
+  # A dry run (workflow_dispatch) is a rehearsal on whatever commit the
+  # dispatcher chose — there is no release contract to preflight — so its
+  # steps below are skipped and the job succeeds unconditionally, rather than
+  # gating the whole rehearsal on a real tag's preconditions.
+  preflight-green:
+    name: Preflight — required contexts + latest nightly green on the tag commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+    steps:
+      - name: Required status checks must all be green on this commit
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          sha="${{ github.sha }}"
+          contexts="$(gh api "repos/${repo}/branches/main/protection" --jq '.required_status_checks.contexts[]')"
+          [ -n "${contexts}" ] || { echo "::error::branch protection reported no required_status_checks.contexts — nothing to preflight against"; exit 1; }
+          checks="$(gh api "repos/${repo}/commits/${sha}/check-runs" --paginate --jq '.check_runs[] | "\(.name)\t\(.conclusion)"')"
+          failed=0
+          while IFS= read -r ctx; do
+            [ -n "${ctx}" ] || continue
+            status="$(printf '%s\n' "${checks}" | awk -F'\t' -v c="${ctx}" '$1==c{print $2; exit}')"
+            if [ "${status}" != "success" ]; then
+              echo "::error::required context '${ctx}' is not green on ${sha} (saw: '${status:-not reported}')"
+              failed=1
+            fi
+          done <<<"${contexts}"
+          [ "${failed}" -eq 0 ] || exit 1
+      - name: The latest completed nightly on this commit must be green
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          sha="${{ github.sha }}"
+          conclusion="$(gh run list --repo "${repo}" --workflow nightly.yml --commit "${sha}" --status completed --limit 1 --json conclusion --jq '.[0].conclusion // empty')"
+          if [ -z "${conclusion}" ]; then
+            echo "::error::no completed nightly.yml run was found for ${sha} — dispatch one (workflow_dispatch) and re-tag, or wait for the schedule to reach it"
+            exit 1
+          fi
+          [ "${conclusion}" = "success" ] || { echo "::error::the latest completed nightly on ${sha} concluded '${conclusion}', not success"; exit 1; }
+      - name: Rehearsal — dry_run skips the preflight (no real release contract to check)
+        if: github.event_name != 'push'
+        run: |
+          echo "workflow_dispatch rehearsal: preflight-green's checks apply only to a real vX.Y.Z tag push."
+
   images:
     name: build, push, sign (${{ matrix.name }})
     runs-on: ubuntu-latest
+    needs: preflight-green
     # 60, not 30: the three agent rows run their apt-get/npm/installer steps
     # twice, one of those passes under arm64 emulation. A timeout kill here
     # would read as a build break — the one failure a release must not fake.
@@ -479,6 +540,7 @@ jobs:
   binaries:
     name: CLI binaries
     runs-on: ubuntu-latest
+    needs: preflight-green
     timeout-minutes: 15
     permissions:
       contents: read
@@ -525,6 +587,7 @@ jobs:
   chart:
     name: Publish the Helm chart (OCI)
     runs-on: ubuntu-latest
+    needs: preflight-green
     timeout-minutes: 10
     permissions:
       contents: read

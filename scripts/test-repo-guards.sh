@@ -49,9 +49,9 @@ bad() { echo "FAIL: $*" >&2; fail=1; }
 ok()  { echo "ok: $*"; }
 
 # ── 1. nightly notification coverage ─────────────────────────────────────────
-# e2e-live is the ONE deliberate exemption (pre-existing, uncharacterised
-# failures — see nightly.yml's own comment). notify-new-lanes cannot need
-# itself. migration-merge-check is exempt too: it is red from its first run
+# e2e-live is the ONE deliberate exemption (known-fail, tracked in #965 — see
+# nightly.yml's own comment). notify-new-lanes cannot need itself.
+# migration-merge-check is exempt too: it is red from its first run
 # and will stay red for as long as the lead renumbers migrations at merge
 # time (a live dry run found 0069 claimed by several open PRs) — its own red
 # X and step summary are its signal, not a "Still failing" comment on the
