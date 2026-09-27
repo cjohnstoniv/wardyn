@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { ThemeProvider } from "../wardyn/theme-provider";
-import { SIGNIN_HELP_LINK_LABEL } from "../../lib/people-access-copy";
+import { SIGNIN_HELP_LINK_LABEL } from "../../lib/sign-in-copy";
 
 const healthMock = vi.fn();
 vi.mock("../../lib/api/health", () => ({

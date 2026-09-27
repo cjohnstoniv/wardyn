@@ -29,7 +29,7 @@ import {
 } from "../../lib/api/core";
 import { health } from "../../lib/api/health";
 import { SIGNIN } from "../../lib/sign-in-copy";
-import { SIGNIN_HELP_REFUSALS } from "../../lib/people-access-copy";
+import { SIGNIN_HELP_REFUSALS } from "../../lib/sign-in-copy";
 import { SignInHelp } from "../wardyn/sign-in-help";
 import { usePoll } from "../../lib/use-poll";
 import { appURL } from "../../lib/base-path";

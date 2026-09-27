@@ -14,6 +14,9 @@
 // arms, formerly a SIGNIN export here under §7.7) moved to
 // ui/src/app/lib/sign-in-copy.ts in #457 (docs/design/
 // signin-first-contact-canon.md) — one screen's strings, one home.
+// SIGNIN_HELP_LINK_LABEL and SIGNIN_HELP_REFUSALS (#484) followed the same
+// move for the same reason (bundle-split.test.ts's budget: this module is
+// lazy, reached only through the People step, and must stay that way).
 //
 // Pure TS — no React, no fetch, no DOM. Same discipline as permissions-copy.ts
 // (permissions.tsx:11-13): the component that consumes this adds NO copy of
@@ -85,6 +88,9 @@ export const PEOPLE = {
   VALUE_HINT:
     "An Entra App Role or groups-claim value exactly as your identity provider sends it in the token, or an email address. Matched case-insensitively.",
   FIELD_ROLE: "Role",
+  // 0.8 (user-types design, UT-7a): offered only at role "user", and only
+  // once there's more than Standard user to pick from.
+  FIELD_USER_TYPE: "User type",
   DELETE: "Delete",
   DELETE_CONFIRM: (value: string) =>
     `Delete the mapping for "${value}"? At their next sign-in, they fall through to whatever the rest of your map resolves to.`,
@@ -186,19 +192,3 @@ export const ACCESS_STATE = {
     "Something went wrong reaching the server. Your chart's mappings still apply even though this list can't confirm them right now.",
   FETCH_FAILED_RETRY: "Retry",
 } as const;
-
-// #484 — the two pieces of the admin-written request-access help the SIGN-IN
-// page needs (the People-step card's own strings live in access-posture-copy.ts:
-// this module is in the entry chunk through sign-in.tsx, and the card is not).
-// The link's one fixed label (Q457-7), frozen in docs/design/admin-access-canon.md.
-export const SIGNIN_HELP_LINK_LABEL = "Request access";
-
-// Q457-6: the four auth_error codes (internal/auth/oidc's authError* consts)
-// that carry the admin's help — the refusals a person cannot clear alone.
-// Every other refusal (a timeout, a config error, the generic arm) gets none.
-export const SIGNIN_HELP_REFUSALS: ReadonlySet<string> = new Set([
-  "no_role",
-  "email_domain",
-  "claims_overage",
-  "email_verified_absent",
-]);

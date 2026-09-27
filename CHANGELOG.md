@@ -960,6 +960,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   token whose role the person's sign-in would change is revoked rather than re-stamped. Migration
   `0090_people_and_token_minted_by` adds the `people` table and `api_tokens.minted_by`. See
   [Tokens for a person who never signs in](docs/OPERATIONS.md#tokens-for-a-person-who-never-signs-in).
+
+- **User types screen: list, editor, and "What this type gets" (#618).** A new admin screen at
+  `/admin/user-types` lists every org-defined user type and edits its name, description and sign-in
+  priority. Each type's editor shows the ceiling and run limits (read-only) of the governance
+  profile assigned to it, and a "What this type gets" grid answering every resource family for that
+  type (everyone / this type / blocked / admins only / not available), backed by
+  `GET /permissions/explain`. A restricted resource the type isn't listed for names who it is for, a
+  block carries the wall note, and a row written for the type can be removed from the grid. Each
+  family carries an Add button that opens Permissions' own "Add a grant" dialog with Who and
+  Capability fixed, and `GET /permissions/explain` rows now carry a non-secret display `label` for a
+  git provider or model provider value (its kind and organisation or host, or its own name), so a
+  security admin reads the same words an operator does instead of an id. The
+  Permissions, Governance and Drive-allocation "Who" pickers now offer "User type" alongside
+  User/Group/Everyone, with a closed picker of the org's types rather than free text, and an
+  existing row names the type by its name; adding a deny for a user type asks to confirm first,
+  since no person or group allow overrides it. The People step's add-mapping form offers a type
+  picker once more than the built-in Standard user exists. `/me`'s `user_type` now carries a
+  `description`; the user's own Getting started page reads "You're set up as {type}" with the type's
+  description. `GET /runs/{id}` carries `user_type_name`, so a run's Identity panel shows "Ran as
+  {type}" to its owner as well as to admins.
+
 - **Console e2e suite hardening (#728).** Every spec built on `fixtures.ts`'s shared `test` now
   fails if its page throws an uncaught JS error or trips the Content-Security-Policy, not only
   when a spec happened to assert on one — a per-spec allowlist covers the rare case where that
