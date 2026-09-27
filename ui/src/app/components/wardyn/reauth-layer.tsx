@@ -224,7 +224,7 @@ export function ReauthLayer({ onResumed }: { onResumed: (me: Me) => void }) {
     if (narrowed) onResumed(narrowed);
     reauth.clearWriteDropped();
     reauth.setPhase("none");
-    navigate("/runs", { replace: true });
+    void navigate("/runs", { replace: true });
   };
 
   const copyButton = unsavedSnapshot() !== null && (
