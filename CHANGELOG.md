@@ -941,6 +941,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Added
 
+- **Admin-minted API tokens and people set up before their first sign-in (#1157).** An admin or
+  `security_admin` can create a person keyed by their identity provider's `sub` (`POST /people`),
+  mint them a `wdn_` token (`POST /people/{principal}/tokens`) and list their tokens
+  (`GET /people/{principal}/tokens`). The token carries the role and user type the person's sign-in
+  would derive from their email, with their groups marked unknown. Its requests are that person's:
+  their runs, their secrets, their drive. `minted_by` on the token row and the
+  `person.token.create` audit row name both parties. A person's first sign-in attaches by subject
+  alone, never by email. Only an admin may mint for an admin or `security_admin`. An admin-minted
+  token whose role the person's sign-in would change is revoked rather than re-stamped. Migration
+  `0090_people_and_token_minted_by` adds the `people` table and `api_tokens.minted_by`. See
+  [Tokens for a person who never signs in](docs/OPERATIONS.md#tokens-for-a-person-who-never-signs-in).
 - **Console e2e suite hardening (#728).** Every spec built on `fixtures.ts`'s shared `test` now
   fails if its page throws an uncaught JS error or trips the Content-Security-Policy, not only
   when a spec happened to assert on one — a per-spec allowlist covers the rare case where that
