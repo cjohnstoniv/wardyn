@@ -721,6 +721,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -q "name: wardyn-oidc" || { echo "extraEnv did not render (secret-bearing env has no secretKeyRef path)"; exit 1; }; \
 	echo "$$out" | grep -q "secretProviderClass: wardyn-boot" || { echo "extraVolumes did not render (a CSI-mounted WARDYN_*_FILE has no volume)"; exit 1; }; \
 	echo "$$out" | grep -q "mountPath: /mnt/secrets-store" || { echo "extraVolumeMounts did not render (a CSI-mounted WARDYN_*_FILE path would name nothing)"; exit 1; }; \
+	echo "$$out" | grep -q "secretName: wardyn-daemon-proxy" || { echo "all-on's daemonProxySecret.existingSecret did not render a Secret-sourced volume"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/etc/wardyn/daemon-proxy-secret/proxy-url"' || { echo "all-on's daemonProxySecret.existingSecret did not wire WARDYN_DAEMON_PROXY_SECRET"; exit 1; }; \
 	echo "$$out" | grep -q "name: regcred" || { echo "image.pullSecrets did not render"; exit 1; }; \
 	echo "$$out" | grep -q "storageClassName: fast" || { echo "persistence.storageClass did not render"; exit 1; }; \
 	echo "$$out" | grep -q "kubernetes.io/metadata.name: ingress-nginx" || { echo "networkPolicy.ingress.from did not render"; exit 1; }; \
@@ -754,6 +756,42 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_TOKEN_FILE" | grep -q '/vault/secrets/token' || { echo "secretStore.vault.auth=token-file did not render WARDYN_VAULT_TOKEN_FILE"; exit 1; }; \
 	echo "$$out" | grep -A1 "name: WARDYN_VAULT_KV_PREFIX" | grep -q 'wardyn-ci' || { echo "secretStore.vault.kvPrefix did not render"; exit 1; }; \
 	echo "$$out" | grep -q "wardyn-vault-token" && { echo "token-file auth still projected the Kubernetes Vault token"; exit 1; } || true
+	@# WARDYN_DAEMON_PROXY_SECRET from an operator Secret (#719): daemonProxySecret.existingSecret
+	@# mounts it read-only and wires WARDYN_DAEMON_PROXY_SECRET at the mounted path; a default
+	@# render (no daemonProxySecret set) touches none of it, and an env.WARDYN_DAEMON_PROXY_SECRET
+	@# override wins over the mount.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	[ "$$(echo "$$out" | grep -c 'daemon-proxy-secret\|WARDYN_DAEMON_PROXY_SECRET')" = "0" ] || { echo "default render (no daemonProxySecret set) rendered part of the daemon-proxy-secret surface"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy); \
+	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/etc/wardyn/daemon-proxy-secret/proxy-url"' || { echo "daemonProxySecret.existingSecret did not wire WARDYN_DAEMON_PROXY_SECRET at the mounted path"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /etc/wardyn/daemon-proxy-secret" || { echo "daemonProxySecret.existingSecret rendered no volumeMount"; exit 1; }; \
+	echo "$$out" | grep -A3 '^        - name: daemon-proxy-secret$$' | grep -q "secretName: wardyn-daemon-proxy" || { echo "the daemon-proxy-secret volume does not source the named Secret"; exit 1; }; \
+	echo "$$out" | grep -A3 '^        - name: daemon-proxy-secret$$' | grep -q "defaultMode: 288" || { echo "daemonProxySecret defaultMode did not render 0440 (288 decimal)"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy --set daemonProxySecret.defaultMode=0400); \
+	echo "$$out" | grep -A3 '^        - name: daemon-proxy-secret$$' | grep -q "defaultMode: 0400" || { echo "daemonProxySecret.defaultMode=0400 did not render"; exit 1; }
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set daemonProxySecret.existingSecret=wardyn-daemon-proxy --set env.WARDYN_DAEMON_PROXY_SECRET=/mnt/csi/proxy-url); \
+	echo "$$out" | grep -A1 "name: WARDYN_DAEMON_PROXY_SECRET" | grep -q 'value: "/mnt/csi/proxy-url"' || { echo "env.WARDYN_DAEMON_PROXY_SECRET did not override the Secret-backed mount path"; exit 1; }
+	@# T-60/#720's third DSN mode (secret.yaml doc comment "your own file"): a
+	@# Vault-Agent/CSI shape entirely OUTSIDE the chart's own Secrets — postgres.dsn
+	@# left external-empty, WARDYN_PG_DSN_FILE + WARDYN_AGE_KEY_FILE named in env,
+	@# and extraVolumes/extraVolumeMounts the only thing that actually mounts them.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth \
+		--set postgres.dsn.secretRef.name="" \
+		--set env.WARDYN_PG_DSN_FILE=/mnt/secrets-store/pg-dsn \
+		--set env.WARDYN_AGE_KEY_FILE=/mnt/secrets-store/age-key \
+		--set extraVolumes[0].name=boot-secrets-csi \
+		--set extraVolumes[0].csi.driver=secrets-store.csi.k8s.io \
+		--set extraVolumes[0].csi.readOnly=true \
+		--set extraVolumes[0].csi.volumeAttributes.secretProviderClass=wardyn-boot \
+		--set extraVolumeMounts[0].name=boot-secrets-csi \
+		--set extraVolumeMounts[0].mountPath=/mnt/secrets-store \
+		--set extraVolumeMounts[0].readOnly=true) || { echo "the Vault-Agent/CSI DSN+age-key shape no longer renders"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_PG_DSN_FILE" | grep -q 'value: "/mnt/secrets-store/pg-dsn"' || { echo "env.WARDYN_PG_DSN_FILE did not render"; exit 1; }; \
+	echo "$$out" | grep -A1 "name: WARDYN_AGE_KEY_FILE" | grep -q 'value: "/mnt/secrets-store/age-key"' || { echo "env.WARDYN_AGE_KEY_FILE did not render"; exit 1; }; \
+	echo "$$out" | grep -qE '^            - name: WARDYN_PG_DSN$$' && { echo "postgres.dsn.secretRef.name=\"\" still rendered a WARDYN_PG_DSN secretKeyRef — the file mode above would be racing a value the daemon reads first"; exit 1; } || true; \
+	echo "$$out" | grep -qE '^            - name: WARDYN_AGE_KEY$$' && { echo "no age source was named (chart-created or secretRef) yet WARDYN_AGE_KEY still rendered"; exit 1; } || true; \
+	echo "$$out" | grep -q "secretProviderClass: wardyn-boot" || { echo "extraVolumes did not render the CSI volume"; exit 1; }; \
+	echo "$$out" | grep -q "mountPath: /mnt/secrets-store" || { echo "extraVolumeMounts did not render"; exit 1; }
 	@# The control-plane -> proxy hop (#561): proxies dial https on the internal
 	@# TLS listener, pinned to wardynd's own internal CA. There is deliberately no
 	@# CA Secret to assert: the CA lives in wardynd's secret store (Postgres,
@@ -796,6 +834,18 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	echo "$$dep" | grep -qE 'name: WARDYN_(PG_DSN|PG_MIGRATE_DSN|ADMIN_TOKEN|AGE_KEY|OIDC_CLIENT_SECRET|DIRECTORY_CLIENT_SECRET|AUDIT_SINKS|ORG_ENROLMENT_TOKEN|VAULT_TOKEN)$$' && { echo "store mode with secretFiles.enabled renders a secret-carrying var as a value"; exit 1; }; \
 	echo "$$dep" | grep -q "name: WARDYN_AGE_KEY" && { echo "store mode wired an age key (value or _FILE) — it needs none"; exit 1; }; \
 	for v in PG_DSN ADMIN_TOKEN; do echo "$$dep" | grep -A1 "name: WARDYN_$${v}_FILE" | grep -q 'value: "/etc/wardyn/secrets/' || { echo "store mode with secretFiles.enabled did not point WARDYN_$${v}_FILE into the boot-secrets mount"; exit 1; }; done
+	@# B3 (T-60, #720): flipping secretFiles.enabled on an EXISTING pg-mode install
+	@# (external DSN Secret, secrets.ageKeyFromSecret — the shape a real 0.7.11
+	@# install upgrading to file mode has) must keep the SAME age-key Secret and
+	@# key: only the delivery (secretKeyRef vs a projected file) may change, never
+	@# which row is read, or the upgrade decrypts nothing the old boot wrote.
+	@offOut=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
+	onOut=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set secretFiles.enabled=true); \
+	offSecret=$$(echo "$$offOut" | grep -A4 "name: WARDYN_AGE_KEY$$" | grep "name:" | tail -1 | awk '{print $$2}'); \
+	offKey=$$(echo "$$offOut" | grep -A4 "name: WARDYN_AGE_KEY$$" | grep "key:" | awk '{print $$2}'); \
+	[ -n "$$offSecret" ] && [ "$$offKey" = "age-key" ] || { echo "secretFiles.enabled=false render did not wire WARDYN_AGE_KEY from a secretKeyRef with key age-key — the B3 comparison below would be vacuous"; exit 1; }; \
+	echo "$$onOut" | grep -q "name: $$offSecret$$" || { echo "B3: secretFiles.enabled=true no longer sources its boot-secrets volume from the SAME Secret ($$offSecret) the env-mode age key uses — an upgrade would read a different row"; exit 1; }; \
+	echo "$$onOut" | grep -A20 "^        - name: boot-secrets$$" | grep -A3 "name: $$offSecret$$" | grep -q "path: age-key" || { echo "B3: secretFiles.enabled=true no longer projects that Secret's age-key entry — an upgrade would find no age identity at the _FILE path"; exit 1; }
 	@# Two Vault roles (#646): rolePlatform renders WARDYN_VAULT_ROLE_PLATFORM, and a second role that separates nothing is a render refusal.
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn-credentials --set secretStore.vault.rolePlatform=wardyn-platform | grep -A1 "name: WARDYN_VAULT_ROLE_PLATFORM" | grep -q 'value: "wardyn-platform"' || { echo "secretStore.vault.rolePlatform did not render WARDYN_VAULT_ROLE_PLATFORM"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secretStore.backend=vaultkv --set secretStore.vault.addr=https://vault.example:8200 --set secretStore.vault.role=wardyn --set secretStore.vault.rolePlatform=wardyn 2>&1 | grep -q "needs secretStore.vault.auth=kubernetes and a role other than" || { echo "chart no longer refuses a platform role equal to the credentials role"; exit 1; }
@@ -1074,6 +1124,16 @@ HELM_TEST_NAMESPACE  ?= wardyn-test
 HELM_TEST_RELEASE    ?= wardyn-test
 HELM_TEST_IMAGE_REPO ?= wardyn/wardynd
 HELM_TEST_IMAGE_TAG  ?= kind-test
+# HELM_TEST_SET: extra `--set` flags appended to both the real install and its
+# dry-run twin below, for a second matrix entry over the SAME loaded image and
+# Postgres (T-60, #720) — e.g. `--set secretFiles.enabled=true`, the _FILE
+# delivery this variable exists to prove boots exactly like secretKeyRef mode.
+# HELM_TEST_ASSERT_NO_SECRETKEYREF=1 additionally asserts the installed
+# Deployment carries NO secretKeyRef env at all — the secretFiles entry's own
+# reason for existing (env mode renders at least one; #596/#604's whole point
+# is that file mode renders none).
+HELM_TEST_SET ?=
+HELM_TEST_ASSERT_NO_SECRETKEYREF ?=
 
 helm-install-test: ## kind: postgres + helm install the loaded image + prove /healthz (needs a kind cluster up, see ci.yml)
 	@echo "==> Postgres ($(HELM_TEST_NAMESPACE))"
@@ -1092,13 +1152,23 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 		--set image.repository=$(HELM_TEST_IMAGE_REPO) \
 		--set image.tag=$(HELM_TEST_IMAGE_TAG) \
 		--set secrets.ageKeyFromSecret=true \
-		--set auth.adminToken.value="$$(openssl rand -hex 20)"
+		--set auth.adminToken.value="$$(openssl rand -hex 20)" \
+		$(HELM_TEST_SET)
 	kubectl -n $(HELM_TEST_NAMESPACE) rollout status deployment/$(HELM_TEST_RELEASE) --timeout=180s || { \
 		echo "FAIL: wardynd rollout never converged — pod state + logs follow"; \
 		kubectl -n $(HELM_TEST_NAMESPACE) describe pod -l app.kubernetes.io/name=wardyn; \
 		kubectl -n $(HELM_TEST_NAMESPACE) logs -l app.kubernetes.io/name=wardyn --tail=100 --all-containers || true; \
 		exit 1; \
 	}
+	@if [ "$(HELM_TEST_ASSERT_NO_SECRETKEYREF)" = "1" ]; then \
+		echo "==> asserting the installed Deployment carries no secretKeyRef env"; \
+		n=$$(kubectl -n $(HELM_TEST_NAMESPACE) get deployment/$(HELM_TEST_RELEASE) -o yaml | grep -c secretKeyRef); \
+		if [ "$$n" != "0" ]; then \
+			echo "FAIL: installed Deployment still carries $$n secretKeyRef entr(y/ies) — HELM_TEST_SET=$(HELM_TEST_SET) was supposed to deliver every secret as a file"; \
+			exit 1; \
+		fi; \
+		echo "0 secretKeyRef entries, as expected"; \
+	fi
 	@echo "==> asserting /healthz through the Service (kubectl port-forward + curl)"
 	@set -eu; \
 	kubectl -n $(HELM_TEST_NAMESPACE) port-forward svc/$(HELM_TEST_RELEASE) 18080:8080 >/tmp/wardyn-kind-test-portforward.log 2>&1 & \
@@ -1125,6 +1195,7 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 		--set auth.adminToken.value=dry-run-only \
 		--set ingress.enabled=true --set 'ingress.hosts[0].host=wardyn.example.test' \
 		--set-file defaultPolicy=examples/policies/demo.json \
+		$(HELM_TEST_SET) \
 		| kubectl -n $(HELM_TEST_NAMESPACE) apply --dry-run=server -f - >/dev/null
 	@echo "==> teardown"
 	helm uninstall $(HELM_TEST_RELEASE) --namespace $(HELM_TEST_NAMESPACE)

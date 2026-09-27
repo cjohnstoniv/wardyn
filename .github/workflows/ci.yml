@@ -633,6 +633,19 @@ jobs:
       - name: helm install + boot proof (make target — postgres, install, rollout wait, /healthz)
         if: needs.changes.outputs.backend != 'false'
         run: make helm-install-test
+      # Second matrix entry (T-60, #720): the SAME loaded image and cluster,
+      # secretFiles.enabled=true instead of secretKeyRef env — proves the
+      # _FILE delivery boots identically and renders no secretKeyRef at all.
+      # A separate namespace/release so this and the default entry above
+      # never collide even though they share the runner.
+      - name: helm install + boot proof, secretFiles.enabled=true (T-60, #720)
+        if: needs.changes.outputs.backend != 'false'
+        run: |
+          make helm-install-test \
+            HELM_TEST_NAMESPACE=wardyn-test-secretfiles \
+            HELM_TEST_RELEASE=wardyn-test-secretfiles \
+            HELM_TEST_SET="--set secretFiles.enabled=true" \
+            HELM_TEST_ASSERT_NO_SECRETKEYREF=1
       - name: Lay down a CI-local managed envelope at /etc/wardyn
         run: |
           set -euo pipefail

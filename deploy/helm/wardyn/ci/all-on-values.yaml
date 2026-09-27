@@ -246,3 +246,10 @@ extraVolumeMounts:
   - name: boot-secrets-csi
     mountPath: /mnt/secrets-store
     readOnly: true
+
+# The credentialed daemon egress proxy (#719), the "other side" of its
+# off-by-default switch (empty existingSecret => no volume, no env). The name
+# is rendered only — helm template never checks that a Secret by this name
+# actually exists in a cluster.
+daemonProxySecret:
+  existingSecret: wardyn-daemon-proxy

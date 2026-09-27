@@ -54,15 +54,36 @@ func TestSecretFile_ReadsAndTrimsOneTrailingNewline(t *testing.T) {
 		{testSecretValue + "\n", testSecretValue},
 		{testSecretValue + "\r\n", testSecretValue},
 		{testSecretValue, testSecretValue},
-		// Only ONE line ending goes; a second is part of the value (a PEM or
-		// JSON body keeps its shape), as it would be in the env var.
-		{testSecretValue + "\n\n", testSecretValue + "\n"},
+		// An INTERNAL blank line is part of the value (a PEM or JSON body
+		// keeps its shape) — only the TRAILING run of line endings is
+		// checked, and here there is exactly one.
+		{"line1\n\nline3\n", "line1\n\nline3"},
 		{" " + testSecretValue + " \n", " " + testSecretValue + " "},
 	} {
 		v, err := resolveOne(t, "", writeSecret(t, tc.content, 0o440))
 		if err != nil || v != tc.want {
 			t.Fatalf("content %q: got (%q, %v), want %q", tc.content, v, err, tc.want)
 		}
+	}
+}
+
+// A SECOND trailing line ending refuses naming the var and the path, never
+// the content: a value that still ends in "\n" after one trim is a hidden
+// extra byte a writer appended by mistake (T-60, #720), not part of the
+// secret's own shape.
+func TestSecretFile_TwoTrailingNewlinesRefuses(t *testing.T) {
+	for _, content := range []string{
+		testSecretValue + "\n\n",
+		testSecretValue + "\r\n\r\n",
+		testSecretValue + "\n\n\n",
+		"line1\n\nline3\n\n",
+	} {
+		p := writeSecret(t, content, 0o440)
+		_, err := resolveOne(t, "", p)
+		if err == nil || !strings.Contains(err.Error(), "WARDYN_TEST_STR_FILE") || !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "trailing line ending") {
+			t.Fatalf("content %q: want a refusal naming the var, the path and \"trailing line ending\", got %v", content, err)
+		}
+		assertNoValue(t, err)
 	}
 }
 
