@@ -44,7 +44,7 @@ func (h *hopTLS) caCertPEM() string {
 // mints the internal CA through the boot-key pattern (loadOrCreateSecret) and
 // signs this boot's serving certificate for the URL's host. A stored CA inside
 // its rotation window is replaced (hoptls.CA.Fresh).
-func loadHopTLS(ctx context.Context, secrets secretKeyStore, controlURL string) (*hopTLS, error) {
+func loadHopTLS(ctx context.Context, secrets bootKeyStore, controlURL string) (*hopTLS, error) {
 	if err := hoptls.CheckURL(controlURL); err != nil {
 		return nil, fmt.Errorf("refusing to start: %w", err)
 	}
