@@ -4,10 +4,20 @@
 
 # T-40 (#700): the COMPOSE leg only — `docker kill` wardynd while its stored
 # AWS SSO credential is SPENT (wardynd's own refresh check says so), restart
-# it, and confirm that spent state survived the restart — then resolve with a
-# fresh sign-in and confirm dispatch works again. The kind leg, the
-# Docker-DAEMON-restart case and the >1h-outage case are explicitly out of
-# this script's scope (see #700's own comments).
+# it, and confirm — by reading Postgres directly, not by asking the fake
+# again — that the spent state survived the restart. Then resolve with a
+# fresh sign-in and confirm dispatch works again.
+#
+# #700 ALSO ASKS FOR, AND THIS SCRIPT DOES NOT COVER:
+#   - watcher re-adoption of a run, with the hold resolving and the run
+#     finishing (the in-flight-request shape; see below for why this leg
+#     cannot build it in plain compose);
+#   - a Docker DAEMON restart under a live run -> lost(reboot), Revive
+#     restoring files + the current ceiling, run.revive audited;
+#   - an outage over an hour -> lost(outage);
+#   - the kind leg;
+#   - the hop CA staying stable across boots.
+# Those remain open against #700.
 #
 # WHAT THIS DOES NOT PROVE, AND WHY: it does not hold a LIVE, in-flight
 # sandbox Bedrock request the way the kind SSO walk already does (that walk's
@@ -21,11 +31,13 @@
 # project can ever give a fake the sandbox can reach. What THIS script proves
 # instead is real and useful on its own: wardynd's OWN direct
 # credential-freshness check (the same refreshAWSSSOBlob call the live path
-# would also have used) correctly detects a spent credential, that fact
-# SURVIVES a docker-kill/restart of wardynd (not just held in memory), and a
-# fresh sign-in clears it again — using the same fake sso-oidc/portal stub
-# the kind SSO walk trusts (test/awsssofake, run here as
-# test/awsssofake/cmd's standalone binary rather than a k8s pod).
+# would also have used) correctly detects a spent credential, that the
+# credential's DELETION and the spent-token mark are both actually written
+# to Postgres (read back directly, not inferred from a dispatch refusal
+# alone) and survive a docker-kill/restart of wardynd, and a fresh sign-in
+# clears it again — using the same fake sso-oidc/portal stub the kind SSO
+# walk trusts (test/awsssofake, run here as test/awsssofake/cmd's standalone
+# binary rather than a k8s pod).
 #
 # THE PRECONDITIONS:
 #  1. wardynd, Postgres and (once built) the agent images, on a dedicated
@@ -49,10 +61,10 @@
 # reached the sandbox correctly), but the PROXY's own SSRF guard
 # (internal/egress/proxy/egress_target.go's onOwnSubnetOrControlPlane)
 # unconditionally refuses to lift ANY address inside its own attached
-# networks' subnets — and host.docker.internal resolves, on this box, to an
-# address inside the proxy's own control-plane network. That refusal is a
-# deliberate invariant ("never lift your own subnet"), not a bug: kind's walk
-# reaches its fake over a Kubernetes Service ClusterIP, a genuinely separate,
+# networks' subnets — and host.docker.internal resolves to an address inside
+# the proxy's own control-plane network. That refusal is a deliberate
+# invariant ("never lift your own subnet"), not a bug: kind's walk reaches
+# its fake over a Kubernetes Service ClusterIP, a genuinely separate,
 # non-locally-attached address space with no compose equivalent, so the same
 # recipe cannot be ported verbatim.
 #
@@ -78,12 +90,12 @@
 # to hang indefinitely ("Client.Timeout exceeded while awaiting headers")
 # while the identical request succeeded instantly addressed by container
 # name on an ordinary bridge network — a Docker Desktop/WSL2 host-gateway
-# reliability issue (confirmed independently: a plain container-to-host
-# curl through the same path hung the same way; the same call
-# container-to-container did not), not anything this repo's code controls.
-# Since wardynd's refresh call is the ONLY thing that ever needed to reach
-# the fake over the network (the capture upload above never does), giving
-# the fake a normal container identity on wardynd's own network removes the
+# reliability issue (confirmed independently: a plain container-to-host curl
+# through the same path hung the same way; the same call container-to-
+# container did not), not anything this repo's code controls. Since
+# wardynd's refresh call is the ONLY thing that ever needed to reach the
+# fake over the network (the capture upload above never does), giving the
+# fake a normal container identity on wardynd's own network removes the
 # unreliable hop entirely.
 #
 # GUARD: like every other dedicated-stack e2e script, self-skips unless
@@ -114,13 +126,16 @@ step() { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 pass() { printf '  \033[1;32m[pass]\033[0m %s\n' "$*"; }
 fail() { printf '  \033[1;31m[FAIL]\033[0m %s\n' "$*"; FAILED=1; }
 FAILED=0
+CURL_MAX_TIME="${WARDYN_SURVIVAL_CURL_MAX_TIME:-10}"
 
 for bin in docker curl jq go; do
   command -v "${bin}" >/dev/null 2>&1 || die "${bin} not found on PATH"
 done
 
 # ── dedicated stack identity — never the operator's/another job's stack ─────
-PROJECT="cl-700-survival"
+# Settable so two copies of this walk (e.g. a real run and a mutant-proof run
+# in a separate worktree) can run without colliding.
+PROJECT="${WARDYN_SURVIVAL_PROJECT:-cl-700-survival}"
 COMPOSE_FILE="${ROOT}/deploy/compose/docker-compose.yaml"
 OVERRIDE_FILE="${ROOT}/deploy/compose/docker-compose.survival-walk.yaml"
 API_PORT="${WARDYN_SURVIVAL_API_PORT:-18180}"
@@ -141,7 +156,8 @@ AGENT_IMAGE="${PROJECT}/agent-claude-code:pinned"
 AWSSSO_AGENT_IMAGE="${PROJECT}/agent-aws-sso:pinned"
 
 # The pinned pair the fake's entitlement fixture advertises, and the model ARN
-# naming that same account (internal/api/awssso_pin.go's model-account check).
+# naming that same account (internal/api/awssso_pin.go's model-account check;
+# the same fixture ARN scripts/kind-sso-walk.sh already uses).
 PIN_ACCOUNT="222222222222"
 PIN_ROLE="WardynSurvival"
 SSO_REGION="us-east-1"
@@ -149,6 +165,8 @@ BEDROCK_MODEL="arn:aws:bedrock:${SSO_REGION}:${PIN_ACCOUNT}:inference-profile/us
 SSO_START_URL="https://wardyn-survival.awsapps.com/start"
 FAKE_CONTAINER="${PROJECT}-awsssofake"
 FAKE_URL="http://${FAKE_CONTAINER}:8090" # container DNS on the project's own control-plane network — see this file's header
+PG_CONTAINER="${PROJECT}-postgres"
+SECRET_NAME="wardyn-harness-aws-oauth" # internal/api/harnesscred.go's harnessCredSecretName(awsSSOProvider), shared scope
 
 EVIDENCE_DIR="${WARDYN_SURVIVAL_EVIDENCE:-${ROOT}/local/evidence/survival-walk}"
 mkdir -p "${EVIDENCE_DIR}"
@@ -180,30 +198,48 @@ compose() {
 api() {
   local method="$1" path="$2" body="${3:-}"
   if [[ -n "${body}" ]]; then
-    curl -sS -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
+    curl -sS --max-time "${CURL_MAX_TIME}" -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
       -H "Authorization: Bearer ${ADMIN_TOKEN}" -H "Content-Type: application/json" -d "${body}"
   else
-    curl -sS -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
+    curl -sS --max-time "${CURL_MAX_TIME}" -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
       -H "Authorization: Bearer ${ADMIN_TOKEN}"
   fi
 }
 
+# psql1 SQL -> runs one query against this project's own postgres (psql -tAc,
+# so the result is the bare value, no header/padding), on stdout.
+psql1() {
+  docker exec "${PG_CONTAINER}" psql -U wardyn -d wardyn -tAc "$1" 2>&1
+}
+
+# DISPATCHED_RUN_IDS collects every run this script's own try_dispatch
+# created (all of them throwaway probes, killed immediately) so teardown can
+# sweep any whose own kill call failed, rather than trusting a swallowed
+# failure to mean nothing was left running.
+DISPATCHED_RUN_IDS=()
+LOGIN_RUN_ID=""
+
 teardown() {
-  if [[ -n "${RUN_ID:-}" ]]; then
-    curl -sS -X POST "${BASE}/api/v1/runs/${RUN_ID}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
-    sleep 2
-  fi
+  local rid
+  for rid in "${DISPATCHED_RUN_IDS[@]:-}" "${LOGIN_RUN_ID}"; do
+    [[ -n "${rid}" ]] || continue
+    curl -sS --max-time "${CURL_MAX_TIME}" -X POST "${BASE}/api/v1/runs/${rid}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
+  done
+  # The fake is attached to ${PROJECT}-internal, so it must be removed BEFORE
+  # `compose down` — otherwise compose cannot remove that network ("Resource
+  # is still in use") and `|| true` on the down call hides the leak (found
+  # live: the network survived every prior version of this teardown).
+  docker rm -f "${FAKE_CONTAINER}" >/dev/null 2>&1 || true
   echo "tearing down ${PROJECT} (compose down --volumes; this project only)"
   compose down --volumes >/dev/null 2>&1 || true
-  docker rm -f "${FAKE_CONTAINER}" >/dev/null 2>&1 || true
   rm -rf "${TMPDIR}"
 }
 trap teardown EXIT
 
 # Clean any stragglers from a prior aborted run of THIS script — never touches
-# a differently-named project.
-compose down --volumes >/dev/null 2>&1 || true
+# a differently-named project. Same ordering as teardown (fake removed first).
 docker rm -f "${FAKE_CONTAINER}" >/dev/null 2>&1 || true
+compose down --volumes >/dev/null 2>&1 || true
 
 # ── build + bring up the dedicated stack ────────────────────────────────────
 step "building wardynd/proxy/agent images (project-unique tags)"
@@ -223,7 +259,10 @@ docker image inspect "${AWSSSO_AGENT_IMAGE}" >/dev/null 2>&1 || \
 # back at all: the captured AWS SSO blob is a stored secret, sealed under the
 # FIRST boot's ephemeral key, unreadable to the second boot's new one
 # ("refusing to start: WARDYN_AGE_KEY is unset, but N stored secrets are
-# sealed..." — hit live on this script's first end-to-end attempt).
+# sealed..." — hit live on this script's first end-to-end attempt). An
+# operator whose install holds secrets must set a persistent WARDYN_AGE_KEY
+# for the same reason: an ephemeral key refuses the restart, full stop,
+# whether or not anything in this walk is involved.
 step "minting a persistent age key (WARDYN_AGE_KEY) so a restart can still read what was captured"
 export WARDYN_AGE_KEY="$(docker run --rm "${WARDYND_IMAGE}" -gen-age-key 2>"${EVIDENCE_DIR}/gen-age-key.log")"
 [[ "${WARDYN_AGE_KEY}" == AGE-SECRET-KEY-* ]] || { cat "${EVIDENCE_DIR}/gen-age-key.log" >&2; die "-gen-age-key did not print an AGE-SECRET-KEY-...; needs ${WARDYND_IMAGE} built first"; }
@@ -240,21 +279,16 @@ compose up -d postgres || die "compose up (postgres) failed for ${PROJECT}"
 #
 # STARTS WITH REAUTH DISABLED (AWSSSOFAKE_REAUTH_AFTER=0): every refresh
 # succeeds until this walk explicitly arms it (POST /_control/reauth?after=N,
-# once the run is confirmed RUNNING, below). A fixed AWSSSOFAKE_REAUTH_AFTER=1
-# from container start was tried first and reds a dispatch-time refusal
-# instead of a mid-run hold — CREATE RUN itself checks the credential's
-# freshness, and with the container network fix above that check is now fast
-# and reliable enough to reach the fake and get a real invalid_grant back
-# before the run ever starts, spending the session before dispatch rather
-# than during it.
+# below). A fixed AWSSSOFAKE_REAUTH_AFTER=1 from container start was tried
+# first and reds a dispatch-time refusal before this walk was ready for one.
 #
 # TOKEN_TTL is short (well under injectRefreshMargin) and left short even
 # with reauth disabled: with it disabled, an early refresh just succeeds
 # transparently (a harmless token rotation, exercised elsewhere already), so
 # a short TTL costs nothing and means the credential is already past its
-# margin from the moment it is captured — wardynd's OWN dispatch-time
+# margin from the moment it is captured — wardynd's OWN CREATE-RUN-time
 # refreshAWSSSOBlob call (this walk's actual trigger; see "WHAT THIS WALK
-# PROVES" below) attempts a real refresh on the very first CREATE RUN after
+# PROVES" below) attempts a real refresh on the very first dispatch after
 # arming, rather than depending on a wall-clock window. ROLE_CRED_TTL is not
 # load-bearing for this walk's own mechanism (no sandbox ever calls
 # GetRoleCredentials here) — left short anyway since it costs nothing.
@@ -268,13 +302,13 @@ docker run -d --name "${FAKE_CONTAINER}" --network "${PROJECT}-internal" \
   -e "AWSSSOFAKE_TOKEN_TTL=${WARDYN_SURVIVAL_TOKEN_TTL:-60s}" \
   -e "AWSSSOFAKE_ROLE_CRED_TTL=${WARDYN_SURVIVAL_ROLE_CRED_TTL:-20s}" \
   -e "AWSSSOFAKE_REAUTH_AFTER=0" \
-  alpine /awsssofake >"${EVIDENCE_DIR}/awsssofake-container.log" 2>&1 \
+  alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc /awsssofake >"${EVIDENCE_DIR}/awsssofake-container.log" 2>&1 \
   || { cat "${EVIDENCE_DIR}/awsssofake-container.log" >&2; die "starting ${FAKE_CONTAINER} failed"; }
 for _ in $(seq 1 30); do
-  curl -sf "http://127.0.0.1:${FAKE_PORT}/_seen" >/dev/null 2>&1 && break
+  curl -sf --max-time "${CURL_MAX_TIME}" "http://127.0.0.1:${FAKE_PORT}/_seen" >/dev/null 2>&1 && break
   sleep 1
 done
-curl -sf "http://127.0.0.1:${FAKE_PORT}/_seen" >/dev/null 2>&1 \
+curl -sf --max-time "${CURL_MAX_TIME}" "http://127.0.0.1:${FAKE_PORT}/_seen" >/dev/null 2>&1 \
   || { docker logs "${FAKE_CONTAINER}" >&2; die "the fake never answered on 127.0.0.1:${FAKE_PORT}"; }
 pass "fake AWS SSO/Bedrock endpoint up (${FAKE_CONTAINER}, on ${PROJECT}-internal)"
 
@@ -282,7 +316,7 @@ step "bringing up wardynd (api :${API_PORT})"
 compose up -d wardynd || die "compose up (wardynd) failed for ${PROJECT}"
 healthy=""
 for _ in $(seq 1 60); do
-  curl -sf "${BASE}/healthz" >/dev/null 2>&1 && { healthy=1; break; }
+  curl -sf --max-time "${CURL_MAX_TIME}" "${BASE}/healthz" >/dev/null 2>&1 && { healthy=1; break; }
   sleep 2
 done
 [[ -n "${healthy}" ]] || { compose logs wardynd | tail -80; die "wardynd did not become healthy"; }
@@ -298,27 +332,30 @@ pass "agent standard declared"
 # internal/api/harnesscred.go's struct) on stdout, from a REAL RegisterClient +
 # StartDeviceAuthorization + CreateToken(device_code) round trip against the
 # fake, run directly from the host (see this file's header for why the
-# sandbox never does this dance itself).
+# sandbox never does this dance itself). Also sets LAST_REFRESH_TOKEN, so the
+# caller can compute the SAME fingerprint wardynd's own spent-token table is
+# keyed by (awsSSOTokenFingerprint, awssso_refresh.go) and read it back
+# directly after the restart, rather than trusting a dispatch refusal alone.
 fake_device_login() {
-  local reg cid csec da dc tok access refresh expires now
-  reg="$(curl -sS -X POST "http://127.0.0.1:${FAKE_PORT}/client/register" \
+  local reg cid csec da dc tok access expires now
+  reg="$(curl -sS --max-time "${CURL_MAX_TIME}" -X POST "http://127.0.0.1:${FAKE_PORT}/client/register" \
     -H 'Content-Type: application/json' -d '{"clientName":"survival-walk","clientType":"public"}')"
   cid="$(jq -r '.clientId' <<<"${reg}")"; csec="$(jq -r '.clientSecret' <<<"${reg}")"
   [[ -n "${cid}" && "${cid}" != "null" ]] || { echo "fake_device_login: RegisterClient failed: ${reg}" >&2; return 1; }
-  da="$(curl -sS -X POST "http://127.0.0.1:${FAKE_PORT}/device_authorization" \
+  da="$(curl -sS --max-time "${CURL_MAX_TIME}" -X POST "http://127.0.0.1:${FAKE_PORT}/device_authorization" \
     -H 'Content-Type: application/json' \
     -d "$(jq -nc --arg c "${cid}" --arg s "${csec}" --arg u "${SSO_START_URL}" '{clientId:$c,clientSecret:$s,startUrl:$u}')")"
   dc="$(jq -r '.deviceCode' <<<"${da}")"
   [[ -n "${dc}" && "${dc}" != "null" ]] || { echo "fake_device_login: StartDeviceAuthorization failed: ${da}" >&2; return 1; }
-  tok="$(curl -sS -X POST "http://127.0.0.1:${FAKE_PORT}/token" \
+  tok="$(curl -sS --max-time "${CURL_MAX_TIME}" -X POST "http://127.0.0.1:${FAKE_PORT}/token" \
     -H 'Content-Type: application/json' \
     -d "$(jq -nc --arg c "${cid}" --arg s "${csec}" --arg d "${dc}" \
       '{clientId:$c,clientSecret:$s,grantType:"urn:ietf:params:oauth:grant-type:device_code",deviceCode:$d}')")"
-  access="$(jq -r '.accessToken' <<<"${tok}")"; refresh="$(jq -r '.refreshToken' <<<"${tok}")"
+  access="$(jq -r '.accessToken' <<<"${tok}")"; LAST_REFRESH_TOKEN="$(jq -r '.refreshToken' <<<"${tok}")"
   [[ -n "${access}" && "${access}" != "null" ]] || { echo "fake_device_login: CreateToken(device_code) failed: ${tok}" >&2; return 1; }
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   expires="$(date -u -d "+$(jq -r '.expiresIn' <<<"${tok}") seconds" +%Y-%m-%dT%H:%M:%SZ)"
-  jq -nc --arg at "${access}" --arg rt "${refresh}" --arg cid "${cid}" --arg cs "${csec}" \
+  jq -nc --arg at "${access}" --arg rt "${LAST_REFRESH_TOKEN}" --arg cid "${cid}" --arg cs "${csec}" \
     --arg u "${SSO_START_URL}" --arg r "${SSO_REGION}" --arg a "${PIN_ACCOUNT}" --arg role "${PIN_ROLE}" \
     --arg exp "${expires}" --arg now "${now}" \
     '{access_token:$at,refresh_token:$rt,client_id:$cid,client_secret:$cs,start_url:$u,region:$r,
@@ -330,7 +367,9 @@ fake_device_login() {
 # sandbox via the same brokered route cmd/wardyn-aws-sso uses
 # (PUT ${WARDYN_PROXY_URL}/wardyn/v1/sso-token/${WARDYN_RUN_ID}, read out of
 # the container's own env — never a bearer token this script holds). Sets
-# LOGIN_RUN_ID. RESOLVE (below) calls this again once a hold is open.
+# LOGIN_RUN_ID (teardown's own safety net) and, via fake_device_login,
+# LAST_REFRESH_TOKEN. Called again by the resolve step once the credential is
+# spent.
 capture_aws_credential() {
   code=$(api POST /api/v1/setup/harness-login "$(jq -nc --arg u "${SSO_START_URL}" '{provider:"aws",sso_start_url:$u}')")
   [[ "${code}" == "200" || "${code}" == "201" ]] || { cat "${TMPDIR}/resp.json" >&2; die "POST /setup/harness-login answered ${code}"; }
@@ -344,7 +383,7 @@ capture_aws_credential() {
   [[ -n "${up}" ]] || die "login sandbox ${sandbox} never started"
   local blob; blob="$(fake_device_login)" || die "fake_device_login failed (see ${EVIDENCE_DIR}/awsssofake.log)"
   local http_code
-  http_code="$(docker exec "${sandbox}" sh -c "curl -sS -o /dev/null -w '%{http_code}' -X PUT \"\${WARDYN_PROXY_URL}/wardyn/v1/sso-token/\${WARDYN_RUN_ID}\" -H 'Content-Type: application/json' -d '${blob}'" 2>&1)"
+  http_code="$(docker exec "${sandbox}" sh -c "curl -sS --max-time ${CURL_MAX_TIME} -o /dev/null -w '%{http_code}' -X PUT \"\${WARDYN_PROXY_URL}/wardyn/v1/sso-token/\${WARDYN_RUN_ID}\" -H 'Content-Type: application/json' -d '${blob}'" 2>&1)"
   [[ "${http_code}" == "204" ]] || die "sso-token upload into ${sandbox} answered ${http_code}"
   local live=""
   for _ in $(seq 1 30); do
@@ -363,7 +402,9 @@ capture_aws_credential() {
   # log once this walk moved the fake off host.docker.internal, easily
   # misread as a product-side mTLS/CA problem. Kill it now that the capture
   # it existed for is done.
-  curl -sS -X POST "${BASE}/api/v1/runs/${LOGIN_RUN_ID}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
+  curl -sS --max-time "${CURL_MAX_TIME}" -X POST "${BASE}/api/v1/runs/${LOGIN_RUN_ID}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1
+  local kill_rc=$?
+  [[ "${kill_rc}" -eq 0 ]] || echo "note: killing login run ${LOGIN_RUN_ID} failed (rc=${kill_rc}); teardown will retry it" >&2
   [[ -n "${live}" ]]
 }
 
@@ -403,18 +444,40 @@ pass "initial capture landed (model_access.state=live, via login run ${LOGIN_RUN
 # untestable here without either patching wardynd's runner or letting the
 # sandbox dial a REAL AWS hostname (which this walk must never do).
 #
-# What it proves INSTEAD: the SAME refresh call
-# (internal/api/awssso_refresh.go's refreshAWSSSOBlob) that the live path
-# would have used is also called, with refresh=true, at CREATE RUN time
-# (internal/api/runs_dispatch_provider.go's providerLaneForRun, itself calling
-# providerBedrockRefusal) — wardynd's OWN direct outbound call, never
-# proxy/sandbox-gated, and reliable on this box (container-to-container to
-# the fake). This walk arms the fake, watches THAT check correctly refuse a
-# NEW dispatch once the credential is spent, kills and restarts wardynd
-# WHILE it is spent, and confirms the spent state survived in Postgres (a
-# fresh dispatch attempt refuses the SAME way after the restart as before
-# it) — then resolves with a fresh capture and confirms dispatch succeeds
-# again. This is a real, live daemon-restart survival proof of wardynd's own
+# What it proves INSTEAD: this walk declares `agent_providers` (never
+# `model_providers`), so the credential check CREATE RUN actually runs is
+# internal/api/runs.go:264's `s.enforceCreateLLMMechanism(ctx, w, req, spec,
+# bedrockRef, ssoSubject, &modelCred, true)` — the trailing `true` is
+# `refresh`, meaning this call may redeem and rotate the captured SSO session,
+# not merely read its cached state (runs_dispatch_llm_mechanism.go's own doc
+# comment on resolveRunLLMLanes). That function calls resolveRunLLMLanes
+# (runs_dispatch_llm_mechanism.go:439), which calls resolveBedrockAuth
+# (runs_bedrock.go), which — when a captured SSO credential is on file — calls
+# refreshAWSSSOBlob (internal/api/awssso_refresh.go) with refresh=true. This
+# is wardynd's OWN direct outbound call, never proxy/sandbox-gated, and
+# reliable here (container-to-container to the fake).
+#
+# On a refresh failure the SAME code path does two things worth reading back
+# directly rather than inferring from a dispatch refusal alone
+# (harnesscred.go:417 deleteSpentAWSSSOBlob, awssso_refresh.go:399
+# markAWSSSOTokenSpent):
+#   - the stored credential (Postgres `secrets` row named
+#     "wardyn-harness-aws-oauth" for this shared-scope walk) is DELETED —
+#     from then on every dispatch refuses as "no credential", not literally
+#     "spent"; and
+#   - the refresh token's fingerprint (8 bytes of its SHA-256, hex — the SAME
+#     one-way truncated fingerprint this script computes below) is written to
+#     the `aws_sso_spent_tokens` table (migration 0068), so a refresh token
+#     AWS already retired is never treated as renewable again even after a
+#     restart wipes wardynd's in-memory state.
+#
+# This walk arms the fake, watches CREATE RUN's own refresh attempt correctly
+# refuse a new dispatch once the credential is spent, DISARMS THE FAKE (so
+# only Postgres, not a still-armed fake, can explain what happens next),
+# kills and restarts wardynd, and reads BOTH rows back directly from Postgres
+# to confirm the delete and the spent-token mark actually persisted — then
+# resolves with a fresh capture and confirms dispatch succeeds again. This is
+# a real, live daemon-restart survival proof of wardynd's own
 # credential-freshness state machine; it is just not the in-flight-request
 # shape the kind walk already covers.
 RUN_BODY='{"agent":"claude-code","repo":"local:survival","interactive":true,
@@ -422,17 +485,19 @@ RUN_BODY='{"agent":"claude-code","repo":"local:survival","interactive":true,
   "min_confinement_class":"CC1","auto_stop_after_sec":-1}}'
 
 # try_dispatch -> sets DISPATCH_OUTCOME to "live" (credential accepted; a real
-# run was created, killed immediately — this walk never needs it to do
-# anything) or "dead" (create-run refused, reason=model_credential — wardynd's
-# OWN dispatch-time refreshAWSSSOBlob call found the credential spent).
-# Anything else (a different refusal, a different reason) is treated as a
-# hard failure: this walk must not read an unrelated error as proof of
-# anything.
+# run was created, appended to DISPATCHED_RUN_IDS and killed immediately —
+# this walk never needs it to do anything) or "dead" (create-run refused,
+# reason=model_credential — wardynd's OWN CREATE-RUN-time refreshAWSSSOBlob
+# call found the credential spent, or absent). Anything else (a different
+# refusal, a different reason) is treated as a hard failure: this walk must
+# not read an unrelated error as proof of anything.
 try_dispatch() {
   code=$(api POST /api/v1/runs "${RUN_BODY}")
   if [[ "${code}" == "200" || "${code}" == "201" ]]; then
     local rid; rid="$(jq -r '.id' "${TMPDIR}/resp.json")"
-    curl -sS -X POST "${BASE}/api/v1/runs/${rid}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1 || true
+    DISPATCHED_RUN_IDS+=("${rid}")
+    curl -sS --max-time "${CURL_MAX_TIME}" -X POST "${BASE}/api/v1/runs/${rid}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}" >/dev/null 2>&1
+    [[ $? -eq 0 ]] || echo "note: killing probe run ${rid} failed; teardown will retry it" >&2
     DISPATCH_OUTCOME="live"
     return 0
   fi
@@ -451,13 +516,13 @@ try_dispatch
 pass "credential accepted; a normal dispatch works"
 
 step "arming the fake (POST /_control/reauth?after=1) — the NEXT refresh now answers invalid_grant"
-arm_code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${FAKE_PORT}/_control/reauth?after=1")"
+arm_code="$(curl -sS --max-time "${CURL_MAX_TIME}" -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${FAKE_PORT}/_control/reauth?after=1")"
 [[ "${arm_code}" == "200" ]] || die "POST /_control/reauth answered ${arm_code}"
 pass "armed"
 
 # wait_dispatch_dead MAX_TRIES -> 0 once try_dispatch reports "dead", else 1.
-# wardynd's own dispatch-time check calls refreshAWSSSOBlob every time, so no
-# forced sandbox action is needed here — only a poll for the moment the
+# wardynd's own CREATE-RUN-time check calls refreshAWSSSOBlob every time, so
+# no forced sandbox action is needed here — only a poll for the moment the
 # credential (already armed) actually needs a refresh and gets invalid_grant.
 wait_dispatch_dead() {
   local tries="$1"
@@ -477,6 +542,31 @@ wait_dispatch_dead 150 || {
 }
 pass "wardynd's own refresh check now refuses new dispatches — the credential is spent"
 
+# THE FINGERPRINT wardynd's own aws_sso_spent_tokens row is keyed by
+# (awsSSOTokenFingerprint, awssso_refresh.go: 8 bytes of the refresh token's
+# SHA-256, hex) — computed here from the SAME refresh_token this walk's own
+# capture minted, so the Postgres read below checks the EXACT row this
+# credential's spend would have written, not merely "a row exists".
+SPENT_FINGERPRINT="$(printf '%s' "${LAST_REFRESH_TOKEN}" | sha256sum | cut -c1-16)"
+
+# DISARM BEFORE THE KILL, not after the restart check: left armed, a
+# restarted wardynd that forgot everything (never persisted the delete or
+# the spent mark) would simply ask the fake again and be refused again —
+# the post-restart check would pass for the WRONG reason, proving nothing
+# about persistence. Disarming here means only Postgres, never the fake,
+# can explain a refusal after the restart.
+step "disarming the fake (POST /_control/reauth?after=0) so only Postgres can explain what happens after the restart"
+disarm_code="$(curl -sS --max-time "${CURL_MAX_TIME}" -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${FAKE_PORT}/_control/reauth?after=0")"
+[[ "${disarm_code}" == "200" ]] || die "POST /_control/reauth?after=0 answered ${disarm_code}"
+pass "disarmed"
+
+step "confirming Postgres actually holds the spent state before the kill (not just wardynd's memory)"
+secret_count="$(psql1 "SELECT count(*) FROM secrets WHERE name = '${SECRET_NAME}'")"
+spent_count="$(psql1 "SELECT count(*) FROM aws_sso_spent_tokens WHERE fingerprint = '${SPENT_FINGERPRINT}'")"
+[[ "${secret_count}" == "0" ]] || die "expected the spent credential's secret row to be deleted; count=${secret_count}"
+[[ "${spent_count}" == "1" ]] || die "expected exactly one aws_sso_spent_tokens row for fingerprint ${SPENT_FINGERPRINT}; count=${spent_count}"
+pass "Postgres shows the secret deleted (count=0) and the spent-token row present (count=1) — before the kill"
+
 # ── THE WALK: kill wardynd while the credential is spent, restart, verify ───
 step "docker kill ${PROJECT}-api (wardynd) while the credential is spent"
 docker kill "${PROJECT}-api" >/dev/null || die "docker kill ${PROJECT}-api failed"
@@ -489,68 +579,38 @@ step "restarting wardynd (compose up -d wardynd)"
 compose up -d wardynd || die "compose up -d wardynd (restart) failed"
 healthy=""
 for _ in $(seq 1 60); do
-  curl -sf "${BASE}/healthz" >/dev/null 2>&1 && { healthy=1; break; }
+  curl -sf --max-time "${CURL_MAX_TIME}" "${BASE}/healthz" >/dev/null 2>&1 && { healthy=1; break; }
   sleep 2
 done
 [[ -n "${healthy}" ]] || { compose logs wardynd | tail -80; die "wardynd did not come back healthy after restart"; }
 pass "wardynd back up"
 
-step "confirming the spent state survived the restart (a fresh dispatch still refuses)"
+step "confirming the spent state survived the restart — read directly from Postgres, the fake is disarmed"
+secret_count="$(psql1 "SELECT count(*) FROM secrets WHERE name = '${SECRET_NAME}'")"
+spent_count="$(psql1 "SELECT count(*) FROM aws_sso_spent_tokens WHERE fingerprint = '${SPENT_FINGERPRINT}'")"
+[[ "${secret_count}" == "0" ]] || die "after restart, the deleted secret is BACK (count=${secret_count}) — the delete did not persist"
+[[ "${spent_count}" == "1" ]] || die "after restart, the spent-token row is GONE (count=${spent_count}) — the mark did not persist"
+pass "still deleted/spent after restart in Postgres itself — this is the persisted fact, not the fake's own memory"
+
+step "confirming dispatch still refuses too (corroborating, with the fake disarmed)"
 try_dispatch
-[[ "${DISPATCH_OUTCOME}" == "dead" ]] || die "after restart, dispatch unexpectedly succeeded — the spent state did not survive (or never really applied)"
-pass "still spent after restart — the state persisted across the kill/restart, not just in wardynd's memory"
+[[ "${DISPATCH_OUTCOME}" == "dead" ]] || die "after restart, dispatch unexpectedly succeeded even though Postgres still shows the credential gone"
+pass "dispatch still refuses, consistent with what Postgres holds"
 
-# resolve_and_check: the fresh capture that clears the spent state, then
-# confirms dispatch succeeds again. When WARDYN_SURVIVAL_MUTATE_SKIP_RESOLVE=1
-# the fresh capture is SKIPPED — the mutation this walk's own DONE WHEN
-# requires: dispatch must KEEP refusing, and this function must report
-# FAILURE if it doesn't, proving the checks above are not vacuously green.
-resolve_and_check() {
-  if [[ "${WARDYN_SURVIVAL_MUTATE_SKIP_RESOLVE:-}" != "1" ]]; then
-    step "disarming the fake (POST /_control/reauth?after=0) — a fresh sign-in must not immediately die again"
-    # reauthAfter is a counter threshold on the FAKE, global to the process,
-    # never per-credential: left armed, the brand-new credential's OWN first
-    # refresh (its TOKEN_TTL is short too) would immediately hit the same
-    # armed threshold and get marked spent right back — proving nothing about
-    # resolve. A real re-sign-in is not cursed this way; disarming here is
-    # what makes this fake match that.
-    disarm_code="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${FAKE_PORT}/_control/reauth?after=0")"
-    [[ "${disarm_code}" == "200" ]] || die "POST /_control/reauth?after=0 answered ${disarm_code}"
-    step "signing in again (fresh capture) to clear the spent state"
-    capture_aws_credential || die "the post-restart capture never reached model_access.state=live"
-    pass "fresh capture landed"
-  else
-    step "MUTATION: skipping the fresh sign-in (and leaving the fake armed) — dispatch must keep refusing"
-  fi
+step "signing in again (fresh capture) to clear the spent state"
+capture_aws_credential || die "the post-restart capture never reached model_access.state=live"
+pass "fresh capture landed"
 
-  step "confirming dispatch's outcome after the (attempted) resolve"
-  try_dispatch
-  if [[ "${WARDYN_SURVIVAL_MUTATE_SKIP_RESOLVE:-}" != "1" ]]; then
-    if [[ "${DISPATCH_OUTCOME}" == "live" ]]; then
-      pass "credential resolved — a fresh dispatch succeeds again"
-      return 0
-    fi
-    fail "expected dispatch to succeed again after the fresh capture; still ${DISPATCH_OUTCOME}"
-    return 1
-  else
-    if [[ "${DISPATCH_OUTCOME}" == "dead" ]]; then
-      pass "MUTATION correctly turned red: dispatch is still refused (no fresh sign-in was offered)"
-      return 0
-    fi
-    fail "MUTATION did not turn red — dispatch succeeded even with no fresh sign-in offered, which means the checks above are vacuous"
-    return 1
-  fi
-}
-
-resolve_and_check
-REAL_RC=$?
+step "confirming dispatch succeeds again after the resolve"
+try_dispatch
+if [[ "${DISPATCH_OUTCOME}" == "live" ]]; then
+  pass "credential resolved — a fresh dispatch succeeds again"
+else
+  fail "expected dispatch to succeed again after the fresh capture; still ${DISPATCH_OUTCOME}"
+fi
 
 step "logs saved to ${EVIDENCE_DIR}"
 compose logs wardynd >"${EVIDENCE_DIR}/wardynd.log" 2>&1 || true
-
-if [[ "${REAL_RC}" -ne 0 ]]; then
-  FAILED=1
-fi
 
 if [[ "${FAILED}" -ne 0 ]]; then
   echo "survival-walk: FAILED — see ${EVIDENCE_DIR}" >&2
