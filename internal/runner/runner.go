@@ -665,8 +665,12 @@ var ErrEndUnsupported = errors.New("runner: this substrate cannot keep an ended 
 // proxy is kept, not removed: its rendered config is what ProxyReviver reads
 // back, and teardown removes it with the rest of the sandbox. Idempotent on
 // a missing or already-stopped proxy; an unresolvable ref is an error, never a
-// success that left the proxy up. A router in front of a substrate without it
-// returns ErrEndUnsupported.
+// success that left the proxy up. A graceful stop that fails escalates to a
+// kill; a proxy that survives both is an error, with the agent stopped too
+// (kept, never removed) so no work runs while its egress is unconfirmed. An
+// error means containment is unconfirmed, not that the sandbox may go: the
+// control plane keeps the run and retries (#1060). A router in front of a
+// substrate without it returns ErrEndUnsupported.
 type ProxyStopper interface {
 	StopProxy(ctx context.Context, ref string) error
 }

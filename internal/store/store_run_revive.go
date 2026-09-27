@@ -22,8 +22,9 @@ import (
 type RunReviver interface {
 	// MarkRunRevived claims run id for a new proxy: while it is RUNNING and
 	// still as the revive read it, live (from "") or lost to an outage or a
-	// reboot (from that reason), it clears the lost mark, stamps the token as
-	// just renewed (the revive mints a fresh one, and the lapsed-token sweep
+	// reboot (from that reason), it clears the lost mark (and any unresolved
+	// containment error: the old proxy it was about is replaced), stamps the
+	// token as just renewed (the revive mints a fresh one, and the lapsed-token sweep
 	// must not read the old stamp) and refreshes the watcher lease (a stopped
 	// agent is started only after the new proxy, and the watcher sweep must
 	// not probe it before then). A run kept by its own end (from LostEnded) is
@@ -64,7 +65,8 @@ func (s PG) MarkRunRevived(ctx context.Context, id uuid.UUID, from types.LostRea
 	}
 	lostAt, keptAfter, now := endedArgs(ended)
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE agent_runs SET lost_at=NULL, lost_reason='', token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
+		UPDATE agent_runs SET lost_at=NULL, lost_reason='', containment_error=NULL, containment_error_at=NULL,
+			token_renewed_at=now(), watcher_heartbeat=now(), updated_at=now()
 		WHERE id=$1 AND state=$2 AND (lost_at IS NOT NULL) = ($3 <> '') AND lost_reason=$3
 		  AND ($3 <> $4 OR (lost_at = $5 AND lost_at > $6::timestamptz AND (ends_at IS NULL OR ends_at > $7::timestamptz)))`,
 		id, string(types.RunRunning), string(from), string(types.LostEnded), lostAt, keptAfter, now)

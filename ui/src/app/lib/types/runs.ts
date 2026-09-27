@@ -190,6 +190,11 @@ export interface AgentRun {
   // meanwhile.
   lost_at?: string;
   lost_reason?: "ended" | "reboot" | "outage";
+  // Set while a kept run's stop could not be confirmed (migration 0086,
+  // #1060): the latest stop error and when containment first failed. The
+  // lease sweep retries every pass and clears both once the stop lands.
+  containment_error?: string;
+  containment_error_at?: string;
   // internal/types/types.go's AgentRun.ModelProviderID (migration 0076, #527) —
   // the id of the model provider chooseModelProvider (#526) resolved this run
   // to at create time. The KIND is not here (it can change later on the
