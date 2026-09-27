@@ -184,12 +184,12 @@ describe("ConnectSSHCard — content", () => {
     await screen.findByText("Add your SSH key first");
     expect(screen.getByText(`ssh ${baseRun.id}@wardyn.corp.example -p 2222`)).toBeInTheDocument();
     // Two "Manage SSH keys" affordances render in this state (the lead-in's
-    // own CTA + the card's standing footer link) — both must point at the
-    // keys screen.
+    // own CTA + the card's standing footer link) — both must point at Your
+    // account (M-5, #636: /ssh-keys is gone, no alias).
     const links = screen.getAllByRole("link", { name: /manage ssh keys/i });
     expect(links.length).toBeGreaterThanOrEqual(1);
     for (const link of links) {
-      expect(link).toHaveAttribute("href", "/ssh-keys");
+      expect(link).toHaveAttribute("href", "/account");
     }
   });
 

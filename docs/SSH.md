@@ -26,12 +26,20 @@ surface: the daemon does not even generate a host key.
 
 ## 1. Register a public key
 
-**SSO deployment (OIDC configured):** Account menu → **SSH keys** → **Add
-key** — paste your public key (the console never asks for a private key; the
-paste field's own helper line says so, and pasting one is refused
-server-side with a specific error). A key registered against your SSO
-session lands under your OIDC `sub` — the only principal the gateway's
-owner check (below) will ever match against a run you created.
+**SSO deployment (OIDC configured):** User view sidebar → **Your account**
+(`/account`) → **Add key** — paste your public key (the console never asks
+for a private key; the paste field's own helper line says so, and pasting
+one is refused server-side with a specific error). A key registered against
+your SSO session lands under your OIDC `sub` — the only principal the
+gateway's owner check (below) will ever match against a run you created. A
+key added here is capped: it never carries the admin override, even for a
+super admin — see [Bounds](#bounds).
+
+**Registering an override key that reaches other people's runs (break-glass)
+is a separate, admin-view-only door:** Admin view → Settings → **Admin SSH
+keys** — super admins only. It reuses the same Add-key dialog; the server
+stamps the key `admin` because the Admin view session isn't clamped to user
+rights, exactly as [Bounds](#bounds) describes.
 
 **Admin-token / no-SSO / CI deployment only** — the bearer-token curl below
 registers the key against the shared, non-human `admin-token` principal, not
@@ -109,7 +117,7 @@ For incident response or offboarding:
    as one path segment. The route resolves a known subject or email and
    returns `200` with `{"count": N}`. An unresolved email or ambiguous name is `422`;
    a lookup or deletion failure is `500`. Owners can still remove individual
-   keys through **Account → SSH keys**, `wardyn ssh-key delete <fingerprint>`,
+   keys through **Your account** (`/account`), `wardyn ssh-key delete <fingerprint>`,
    or `DELETE /api/v1/me/ssh-keys/{fingerprint}`.
 4. End existing access with `wardyn run kill <run-id>` and verify teardown
    succeeded. Include foreign runs reached through an admin override. Key
@@ -299,7 +307,7 @@ Idempotent, so a script can run it on every launch with no "already done"
 branch to write — a second call neither regenerates the key nor re-registers
 it. `--path` picks a different keypair; the default is deliberately **not**
 `~/.ssh/id_ed25519` — a key an external tool dials sandboxes with should be
-revocable from Settings → SSH keys without touching your everyday identity.
+revocable from Your account (`/account`) without touching your everyday identity.
 
 **`wardyn run wait-ready <run-id>`** (`cmd/wardyn/run_wait_ready.go`) blocks
 past what `run --wait` waits for. `--wait` waits for a TERMINAL state (and is
@@ -447,7 +455,9 @@ refuses the override for a capped key before it reads the role. The refusal is
 audited as `ssh.authenticate`, `outcome=failure`, reason "capped key (registered in the
 user view): no admin override". The key still reaches its owner's own runs. A
 break-glass key that reaches other people's runs is registered outside the
-user view. The `ssh_key.add` audit row marks a capped key with `capped: true`.
+user view, from the Admin SSH keys card (Admin view → Settings, super admins
+only — [§1](#1-register-a-public-key)). The `ssh_key.add` audit row marks a
+capped key with `capped: true`.
 
 **Upgrading from 0.5 (or from pre-`0046`): your existing key is a `user`
 key, and even an `admin`-stamped key loses the override until it is
@@ -464,8 +474,8 @@ log in again** (the ordinary path now — `oidc.Config.OnLogin` re-stamps both
 re-registration needed) **or `DELETE`/`POST` the key again** (still supported,
 still immediate, useful when you want the refresh before your next login
 rather than after). Which of your own keys carries the `admin` stamp is
-visible without reading the database: Settings → SSH keys badges the row
-**Admin override**. That badge reflects the STORED `role` only — it does not
+visible without reading the database: Your account (`/account`) badges the
+row **Admin override**. That badge reflects the STORED `role` only — it does not
 currently show whether `role_checked_at` has aged past `WARDYN_SSH_ROLE_TTL`,
 so a badged key can still be refused by the gateway once its stamp goes stale;
 the audit log (`ssh.authenticate`, `outcome=failure`, reason "admin override stale")
