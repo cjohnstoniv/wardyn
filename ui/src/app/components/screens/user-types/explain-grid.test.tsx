@@ -8,12 +8,13 @@
 // any kind, image included), the audience after "only", the wall note, Remove
 // on this type's own rows, value names, and a refused read.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const explainMock = vi.fn();
 const getPermissionsMock = vi.fn();
 const deleteGrantMock = vi.fn();
+const upsertGrantMock = vi.fn();
 vi.mock("../../../lib/api/permissions", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/permissions")>("../../../lib/api/permissions");
   return {
@@ -22,6 +23,7 @@ vi.mock("../../../lib/api/permissions", async () => {
       explainCapabilities: (...a: unknown[]) => explainMock(...a),
       getPermissions: () => getPermissionsMock(),
       deleteGrant: (id: string) => deleteGrantMock(id),
+      upsertGrant: (...a: unknown[]) => upsertGrantMock(...a),
     },
   };
 });
@@ -45,7 +47,7 @@ vi.mock("../../../lib/api/model-providers", () => ({
 
 import { HttpError } from "../../../lib/api/core";
 import type { ExplainRow } from "../../../lib/api/permissions";
-import { PERM } from "../../../lib/permissions-copy";
+import { KIND, PERM } from "../../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../../lib/types";
 import { EXPLAIN, USER_TYPES as UT } from "../../../lib/user-types-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -87,6 +89,7 @@ beforeEach(() => {
   explainMock.mockReset();
   getPermissionsMock.mockReset();
   deleteGrantMock.mockReset();
+  upsertGrantMock.mockReset();
   listWorkspacesMock.mockReset().mockResolvedValue([{ id: "ws-1", name: "Portfolio tools" }]);
   getModelProvidersMock
     .mockReset()
@@ -288,5 +291,142 @@ describe("ExplainGrid — values by name", () => {
     renderGrid(false);
     expect(within(await row("model_provider", "mp-1")).getByText("mp-1")).toBeInTheDocument();
     expect(getModelProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("a server label (G-4) wins over a client-side name, on any kind", async () => {
+    answer([
+      { kind: "workspace_provider", value: "ado-1", state: "this_type", label: "Azure DevOps · example-org" },
+      // A security admin can't read the model provider roster, but the
+      // server's own label still names the row.
+      { kind: "model_provider", value: "mp-1", state: "this_type", label: "Corp gateway" },
+    ]);
+    renderGrid(false);
+    expect(within(await row("workspace_provider", "ado-1")).getByText("Azure DevOps · example-org")).toBeInTheDocument();
+    expect(within(await row("model_provider", "mp-1")).getByText("Corp gateway")).toBeInTheDocument();
+    expect(getModelProvidersMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ExplainGrid — families (G-1, G-3)", () => {
+  it("names the default row 'All {family}' on every kind packet A didn't", async () => {
+    answer(
+      ["egress_host", "secret", "agent", "workspace_provider", "model_provider", "policy"].map((kind) => ({
+        kind,
+        value: "*",
+        state: "everyone",
+      })),
+    );
+    renderGrid();
+    expect(within(await row("egress_host", "*")).getByText(EXPLAIN.ALL_EGRESS_HOSTS)).toBeInTheDocument();
+    expect(within(await row("secret", "*")).getByText(EXPLAIN.ALL_SECRETS)).toBeInTheDocument();
+    expect(within(await row("agent", "*")).getByText(EXPLAIN.ALL_AGENTS)).toBeInTheDocument();
+    expect(within(await row("workspace_provider", "*")).getByText(EXPLAIN.ALL_GIT_PROVIDERS)).toBeInTheDocument();
+    expect(within(await row("model_provider", "*")).getByText(EXPLAIN.ALL_MODEL_PROVIDERS)).toBeInTheDocument();
+    expect(within(await row("policy", "*")).getByText(EXPLAIN.ALL_POLICIES)).toBeInTheDocument();
+  });
+
+  it("hides Model integrations while its only row is the default, and shows it once a grant gives it a second", async () => {
+    answer([{ kind: "integration", value: "*", state: "everyone" }]);
+    renderGrid();
+    await screen.findByTestId("explain-grid");
+    expect(screen.queryByText(KIND.integration.label)).not.toBeInTheDocument();
+    cleanup();
+
+    answer([
+      { kind: "integration", value: "*", state: "everyone" },
+      { kind: "integration", value: "int-1", state: "this_type" },
+    ]);
+    renderGrid();
+    expect(await screen.findByText(KIND.integration.label)).toBeInTheDocument();
+    expect(within(await row("integration", "*")).getByText(EXPLAIN.ALL_INTEGRATIONS)).toBeInTheDocument();
+  });
+});
+
+describe("ExplainGrid — several audiences (G-5)", () => {
+  function audienceGrants(names: string[]) {
+    return names.map((n, i) => grant({ id: `a${i}`, subject: n, capability: "workspace", value: "ws-2", effect: "allow" }));
+  }
+
+  it("two audiences read 'A and B', three read 'A, B and C'", async () => {
+    answer(
+      [{ kind: "workspace", value: "ws-2", state: "not_available", restricted: true }],
+      audienceGrants(["ann", "bo"]),
+    );
+    renderGrid();
+    expect(within(await row("workspace", "ws-2")).getByText(EXPLAIN.ONLY("ann and bo"))).toBeInTheDocument();
+    cleanup();
+
+    answer(
+      [{ kind: "workspace", value: "ws-2", state: "not_available", restricted: true }],
+      audienceGrants(["ann", "bo", "cy"]),
+    );
+    renderGrid();
+    expect(within(await row("workspace", "ws-2")).getByText(EXPLAIN.ONLY("ann, bo and cy"))).toBeInTheDocument();
+  });
+
+  it("four or more names the first two and counts the rest, with the full list a hover and an accessible name away", async () => {
+    const names = ["ann", "bo", "cy", "dee"];
+    answer([{ kind: "workspace", value: "ws-2", state: "not_available", restricted: true }], audienceGrants(names));
+    renderGrid();
+    const visible = await within(await row("workspace", "ws-2")).findByText(EXPLAIN.ONLY("ann, bo and 2 more"));
+    expect(visible).toHaveAttribute("title", names.join(", "));
+    expect(visible).toHaveAttribute("aria-label", EXPLAIN.ONLY(names.join(", ")));
+  });
+});
+
+describe("ExplainGrid — legend and footer (G-6)", () => {
+  it("shows the one true legend and packet A's own second footer", async () => {
+    answer([{ kind: "agent", value: "*", state: "everyone" }]);
+    renderGrid();
+    await row("agent", "*");
+    expect(screen.getByText(EXPLAIN.LEGEND)).toBeInTheDocument();
+    expect(screen.getByText(EXPLAIN.FOOTER_OTHER_SIDE)).toBeInTheDocument();
+  });
+});
+
+describe("ExplainGrid — Add (G-7)", () => {
+  it("opens Permissions' own Add a grant dialog, Who and Capability fixed, writes the grant and reloads", async () => {
+    answer([{ kind: "agent", value: "*", state: "everyone" }]);
+    renderGrid();
+    await row("agent", "*");
+
+    // Only "agent" answered any rows, so it is the grid's one family.
+    await userEvent.click(screen.getByRole("button", { name: EXPLAIN.ADD }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(PERM.ADD_TITLE)).toBeInTheDocument();
+    // Who and Capability are fixed, not picked.
+    expect(within(dialog).getByText("Portfolio manager")).toBeInTheDocument();
+    expect(within(dialog).getByText(KIND.agent.label)).toBeInTheDocument();
+    expect(within(dialog).queryByRole("combobox", { name: PERM.FIELD_CAPABILITY })).not.toBeInTheDocument();
+
+    upsertGrantMock.mockResolvedValue({ updated: false });
+    explainMock.mockClear();
+    await userEvent.type(within(dialog).getByLabelText(KIND.agent.valueLabel), "claude-code");
+    await userEvent.click(within(dialog).getByRole("button", { name: PERM.ADD_CTA }));
+
+    expect(upsertGrantMock).toHaveBeenCalledWith({
+      subject_type: "user_type",
+      subject: PM,
+      capability: "agent",
+      value: "claude-code",
+      effect: "allow",
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(explainMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a deny for a user type warns with Permissions' own wall sentence before writing it", async () => {
+    answer([{ kind: "agent", value: "*", state: "everyone" }]);
+    renderGrid();
+    await row("agent", "*");
+    await userEvent.click(screen.getByRole("button", { name: EXPLAIN.ADD }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByLabelText(KIND.agent.valueLabel), "codex");
+    await userEvent.click(within(dialog).getByRole("button", { name: PERM.EFFECT_DENY }));
+    await userEvent.click(within(dialog).getByRole("button", { name: PERM.ADD_CTA }));
+
+    expect(await screen.findByText(PERM.TYPE_DENY_TITLE)).toBeInTheDocument();
+    expect(screen.getByText(PERM.TYPE_DENY_BODY)).toBeInTheDocument();
+    expect(upsertGrantMock).not.toHaveBeenCalled();
   });
 });

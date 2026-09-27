@@ -31,6 +31,11 @@ export interface ExplainRow {
   // The value is "Available to: Only these" — omitted when it isn't. A
   // restricted value gets a row even when no grant names it.
   restricted?: boolean;
+  // G-4: a non-secret display name the server can attach — a git provider's
+  // kind and organisation or host, or a model provider's own name — never an
+  // id or a secret. Omitted where the server can't name the row; the caller
+  // then falls back to a client-side name or the raw value.
+  label?: string;
 }
 
 export interface ExplainResponse {

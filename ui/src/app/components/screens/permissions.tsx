@@ -597,12 +597,37 @@ function ConfirmEnforcement({
   );
 }
 
+// UT-7a (G-7): what the user types grid's per-family Add button fixes —
+// Who (this type) and Capability (the family), both read-only in the form.
+export interface FixedGrantSubject {
+  subjectType: PickableSubjectType;
+  subject: string;
+  /** The chip's trailing text (the type's name, not its id). */
+  subjectLabel: string;
+  kind: CapabilityKind;
+}
+
 // The add form. Wildcards are typed into Value, not a separate control — the
-// value field's label and hint are what change per kind.
-function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () => void }) {
-  const [subjectType, setSubjectType] = React.useState<PickableSubjectType>("user");
-  const [subject, setSubject] = React.useState("");
-  const [kind, setKind] = React.useState<CapabilityKind>("egress_host");
+// value field's label and hint are what change per kind. Exported for the user
+// types grid (G-7): `fixed` locks Who and Capability to the row that opened
+// it — Add writes the SAME grant row Permissions would, with the SAME
+// strings, including the type-deny wall warning below. `hideTitle` drops the
+// section's own heading and card chrome for a caller that supplies its own
+// (the grid's dialog title).
+export function AddGrantForm({
+  disabled,
+  onAdded,
+  fixed,
+  hideTitle,
+}: {
+  disabled: boolean;
+  onAdded: () => void;
+  fixed?: FixedGrantSubject;
+  hideTitle?: boolean;
+}) {
+  const [subjectType, setSubjectType] = React.useState<PickableSubjectType>(fixed?.subjectType ?? "user");
+  const [subject, setSubject] = React.useState(fixed?.subject ?? "");
+  const [kind, setKind] = React.useState<CapabilityKind>(fixed?.kind ?? "egress_host");
   const [value, setValue] = React.useState("");
   const [effect, setEffect] = React.useState<CapabilityEffect>("allow");
   const [saving, setSaving] = React.useState(false);
@@ -636,53 +661,65 @@ function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () =>
     }
   };
 
-  return (
-    <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
-      <h2 className="text-sm font-medium text-foreground">{PERM.ADD_TITLE}</h2>
+  const body = (
+    <>
       <div className="mt-4 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Field label={PERM.FIELD_WHO} hint={whoHint}>
-          <div className="space-y-2">
-            <Segmented
-              value={subjectType}
-              onChange={(v) => {
-                // Typed text is no type id, and a type id is no typed text:
-                // carried across, it would post a subject nobody can see.
-                if ((v === "user_type") !== (subjectType === "user_type")) setSubject("");
-                setSubjectType(v);
-              }}
-              disabled={disabled}
-              options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
-            />
-            {subjectType === "user_type" ? (
-              <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled} />
-            ) : (
-              subjectType !== "all" && (
-                <Input
-                  aria-label={PERM.FIELD_WHO}
-                  value={subject}
-                  onChange={(e) => setSubject(e.target.value)}
-                  disabled={disabled}
-                  className="font-mono"
-                  autoComplete="off"
-                />
-              )
-            )}
-          </div>
+        <Field label={PERM.FIELD_WHO} hint={fixed ? undefined : whoHint}>
+          {fixed ? (
+            <div className="flex h-9 items-center gap-2 rounded-md border border-input bg-input-background px-3 text-body">
+              <Chip tone="neutral">{SUBJECTS.find((s) => s.value === fixed.subjectType)?.label}</Chip>
+              <span>{fixed.subjectLabel}</span>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Segmented
+                value={subjectType}
+                onChange={(v) => {
+                  // Typed text is no type id, and a type id is no typed text:
+                  // carried across, it would post a subject nobody can see.
+                  if ((v === "user_type") !== (subjectType === "user_type")) setSubject("");
+                  setSubjectType(v);
+                }}
+                disabled={disabled}
+                options={SUBJECTS.map((s) => ({ value: s.value, label: s.label }))}
+              />
+              {subjectType === "user_type" ? (
+                <UserTypeSubjectSelect value={subject} onChange={setSubject} disabled={disabled} />
+              ) : (
+                subjectType !== "all" && (
+                  <Input
+                    aria-label={PERM.FIELD_WHO}
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    disabled={disabled}
+                    className="font-mono"
+                    autoComplete="off"
+                  />
+                )
+              )}
+            </div>
+          )}
         </Field>
 
         <Field label={PERM.FIELD_CAPABILITY} htmlFor="grant-capability">
-          <Select value={kind} onValueChange={(v) => setKind(v as CapabilityKind)} disabled={disabled}>
-            <SelectTrigger id="grant-capability">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CAPABILITY_KINDS.map((k) => (
-                <SelectItem key={k} value={k}>
-                  {KIND[k].label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {fixed ? (
+            <div className="flex h-9 items-center rounded-md border border-input bg-input-background px-3 text-body">
+              {KIND[fixed.kind].label}
+            </div>
+          ) : (
+            <Select value={kind} onValueChange={(v) => setKind(v as CapabilityKind)} disabled={disabled}>
+              <SelectTrigger id="grant-capability">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CAPABILITY_KINDS.map((k) => (
+                  <SelectItem key={k} value={k}>
+                    {KIND[k].label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </Field>
 
         <Field label={copy.valueLabel} htmlFor="grant-value" hint={copy.valueHint} required>
@@ -742,6 +779,14 @@ function AddGrantForm({ disabled, onAdded }: { disabled: boolean; onAdded: () =>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </>
+  );
+
+  if (hideTitle) return body;
+  return (
+    <section className="mt-6 rounded-xl border border-border bg-card px-6 py-5">
+      <h2 className="text-sm font-medium text-foreground">{PERM.ADD_TITLE}</h2>
+      {body}
     </section>
   );
 }

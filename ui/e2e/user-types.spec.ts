@@ -8,9 +8,14 @@
 // /permissions/explain (#739) — a type deny as Blocked with the wall note, a
 // restricted image this type isn't listed for as Not available with who it is
 // for, and Remove deleting this type's own row (read back from the wire).
-// Every expected string comes from the copy modules, never retyped.
+// Packet UT-G (2026-09-27) adds two more pins: G-7's Add opens Permissions'
+// own "Add a grant" dialog with Who and Capability fixed and writes a real
+// grant the grid then shows, and G-5's truncation of four or more audiences
+// after "only" to two names and a count, with the full list on hover and the
+// row's accessible name. Every expected string comes from the copy modules,
+// never retyped.
 import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
-import { PERM } from "../src/app/lib/permissions-copy";
+import { KIND, PERM } from "../src/app/lib/permissions-copy";
 import { EXPLAIN, USER_TYPES as UT } from "../src/app/lib/user-types-copy";
 import type { APIRequestContext, Page } from "@playwright/test";
 
@@ -106,5 +111,71 @@ test.describe("User types — the list and what each type gets", () => {
     await expect(image.getByText(EXPLAIN.STATE.not_available, { exact: true })).toBeVisible();
     await expect(image.getByRole("button")).toHaveCount(0);
     expect(await grantsFor(request, DEVELOPER.id)).toEqual([]);
+  });
+
+  test("G-7: Add opens Permissions' own dialog, Who and Capability fixed, and writes the same grant row", async ({
+    page,
+    request,
+  }) => {
+    await openType(page, ANALYST.name);
+    // Egress hosts is CAPABILITY_KINDS' first family and never hidden (G-1
+    // only ever hides Model integrations), so its own Add is the first on
+    // the page.
+    await page.getByRole("button", { name: EXPLAIN.ADD }).first().click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByText(PERM.ADD_TITLE)).toBeVisible();
+    // Who and Capability are fixed to this type and family, not picked.
+    await expect(dialog.getByText(ANALYST.name)).toBeVisible();
+    await expect(dialog.getByText(KIND.egress_host.label)).toBeVisible();
+    await expect(dialog.getByRole("combobox", { name: PERM.FIELD_CAPABILITY })).toHaveCount(0);
+
+    await dialog.getByLabel(KIND.egress_host.valueLabel).fill("e2e-added.example.com");
+    await dialog.getByRole("button", { name: PERM.ADD_CTA }).click();
+    await expect(dialog).toBeHidden();
+
+    // The grid reloaded: the new row is This type's own, with Remove.
+    const added = cell(page, "egress_host", "e2e-added.example.com");
+    await expect(added.getByText(EXPLAIN.STATE.this_type, { exact: true })).toBeVisible();
+    await expect(added.getByRole("button", { name: `${EXPLAIN.REMOVE} e2e-added.example.com` })).toBeVisible();
+
+    const grants = await grantsFor(request, ANALYST.id);
+    expect(grants.some((g) => g.capability === "egress_host" && g.value === "e2e-added.example.com")).toBe(true);
+  });
+
+  test("G-5: four or more audiences after 'only' truncate to two names and a count, full list on hover and the accessible name", async ({
+    page,
+    request,
+  }) => {
+    const GROUP = "e2e-usertypes-group";
+    const ALICE = "alice@e2e-usertypes.test";
+    const BOB = "bob@e2e-usertypes.test";
+    for (const g of [
+      { subject_type: "user_type", subject: DEVELOPER.id },
+      { subject_type: "group", subject: GROUP },
+      { subject_type: "user", subject: ALICE },
+      { subject_type: "user", subject: BOB },
+    ]) {
+      await post(request, "/permissions/grants", { ...g, capability: "agent", value: "shared-tool", effect: "allow" });
+    }
+    const res = await request.put("/api/v1/permissions/availability/agent/shared-tool", {
+      headers: auth,
+      data: { restricted: true },
+    });
+    expect(res.status(), await res.text()).toBe(200);
+
+    // ANALYST is not one of the four audiences above.
+    await openType(page, ANALYST.name);
+    const row = cell(page, "agent", "shared-tool");
+    await expect(row.getByText(EXPLAIN.STATE.not_available, { exact: true })).toBeVisible();
+
+    const only = row.locator("span[title]");
+    await expect(only).toContainText("more");
+    const title = await only.getAttribute("title");
+    const ariaLabel = await only.getAttribute("aria-label");
+    for (const name of [DEVELOPER.name, `${GROUP} (group)`, ALICE, BOB]) {
+      expect(title ?? "").toContain(name);
+      expect(ariaLabel ?? "").toContain(name);
+    }
   });
 });

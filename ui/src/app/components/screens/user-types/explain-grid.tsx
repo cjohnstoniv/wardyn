@@ -30,10 +30,12 @@ import {
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
 import { Button } from "../../ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { cn } from "../../ui/utils";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { Note } from "../governance/display";
+import { AddGrantForm } from "../permissions";
 import { useValueNames } from "./explain-names";
 
 // Packet A: green for this type's own, red for a block, grey otherwise.
@@ -47,6 +49,22 @@ const STATE_TONE: Record<ExplainState, "neutral" | "success" | "danger"> = {
 
 const same = (a: string, b: string) => a.trim() === b.trim();
 
+// G-1: Model integrations is retiring (KIND.integration says so) — its default
+// row alone would be noise on every type, so the family renders only once a
+// grant or restriction gives it a row beyond "*".
+const HIDE_WHEN_DEFAULT_ONLY: CapabilityKind = "integration";
+
+// G-5: "only A and B" (two), "only A, B and C" (three); four or more names the
+// first two and counts the rest. `full` is every audience, comma-joined and
+// unelided — the hover title and, via aria-label, what a keyboard user reads.
+function onlyPhrase(who: string[]): { visible: string; full: string } {
+  const full = who.join(", ");
+  if (who.length === 1) return { visible: EXPLAIN.ONLY(who[0]), full };
+  if (who.length === 2) return { visible: EXPLAIN.ONLY(EXPLAIN.WHO_LIST(who[0], who[1], "")), full };
+  if (who.length === 3) return { visible: EXPLAIN.ONLY(EXPLAIN.WHO_LIST(who[0], who[1], who[2])), full };
+  return { visible: EXPLAIN.ONLY(EXPLAIN.WHO_MORE(who[0], who[1], String(who.length - 2))), full };
+}
+
 export function ExplainGrid({ subject, name, disabled }: { subject: string; name: string; disabled: boolean }) {
   const [rows, setRows] = React.useState<ExplainRow[] | null>(null);
   const [grants, setGrants] = React.useState<CapabilityGrant[]>([]);
@@ -54,6 +72,8 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [removeError, setRemoveError] = React.useState<string | null>(null);
+  // G-7: which family's Add dialog is open, fixed to this subject and kind.
+  const [addKind, setAddKind] = React.useState<CapabilityKind | null>(null);
   const typeName = useUserTypeName();
   const valueName = useValueNames();
 
@@ -138,13 +158,26 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
       {CAPABILITY_KINDS.map((kind) => {
         const list = rows.filter((r) => r.kind === kind);
         if (list.length === 0) return null;
+        // G-1: Model integrations is retiring — hide it while its only row is
+        // the default, and let it reappear the moment a grant or restriction
+        // gives it a second one.
+        if (kind === HIDE_WHEN_DEFAULT_ONLY && list.length === 1 && list[0].value === "*") return null;
         return (
           <div key={kind} className="border-t border-border py-2.5 first:border-t-0 first:pt-0">
-            <h5 className="text-body font-medium text-foreground">{KIND[kind as CapabilityKind].label}</h5>
+            <div className="flex items-center justify-between gap-2">
+              <h5 className="text-body font-medium text-foreground">{KIND[kind as CapabilityKind].label}</h5>
+              <Button variant="ghost" size="sm" disabled={disabled} onClick={() => setAddKind(kind as CapabilityKind)}>
+                {EXPLAIN.ADD}
+              </Button>
+            </div>
             {list.map((r) => {
               const own = ownGrant(r);
-              const named = valueName(r.kind, r.value);
+              // G-4: the server's own non-secret label (a git provider's kind
+              // and organisation, a model provider's name) wins over a
+              // client-side lookup, which wins over the raw value in mono.
+              const named = r.label || valueName(r.kind, r.value);
               const only = r.restricted && r.state === "not_available" ? onlyFor(r) : [];
+              const phrase = only.length > 0 ? onlyPhrase(only) : null;
               return (
                 <div
                   key={r.value}
@@ -157,10 +190,19 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
                   <Chip tone={STATE_TONE[r.state]}>{EXPLAIN.STATE[r.state]}</Chip>
                   <span>
                     {named ?? <Mono>{r.value}</Mono>}
-                    {only.length > 0 && (
+                    {phrase && (
                       <>
                         {" · "}
-                        <span className="text-xs text-muted-foreground">{EXPLAIN.ONLY(only.join(", "))}</span>
+                        {/* G-5: the full audience list is a hover (title) and
+                            an accessible name (aria-label) away, unelided,
+                            even when the visible text counts the rest. */}
+                        <span
+                          className="text-xs text-muted-foreground"
+                          title={phrase.full}
+                          aria-label={EXPLAIN.ONLY(phrase.full)}
+                        >
+                          {phrase.visible}
+                        </span>
                       </>
                     )}
                   </span>
@@ -188,11 +230,36 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
           </div>
         );
       })}
+      {/* G-6: one true legend line; packet A's own second footer is true only
+          now that G-7 gives the grid an add. */}
+      <p className="mt-3 text-body text-muted-foreground">{EXPLAIN.LEGEND}</p>
+      <p className="text-body text-muted-foreground">{EXPLAIN.FOOTER_OTHER_SIDE}</p>
       {removeError && (
         <Note tone="red" role="alert">
           {removeError}
         </Note>
       )}
+
+      {/* G-7: Permissions' own "Add a grant" dialog, Who and Capability fixed
+          to this type and family. */}
+      <Dialog open={addKind !== null} onOpenChange={(o) => !o && setAddKind(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{PERM.ADD_TITLE}</DialogTitle>
+          </DialogHeader>
+          {addKind && (
+            <AddGrantForm
+              disabled={disabled}
+              hideTitle
+              fixed={{ subjectType: "user_type", subject, subjectLabel: name, kind: addKind }}
+              onAdded={() => {
+                setAddKind(null);
+                load();
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* The Permissions screen's own confirmation, for the same grant row. */}
       <AlertDialog open={!!toRemove} onOpenChange={(o) => !o && setToRemove(null)}>
