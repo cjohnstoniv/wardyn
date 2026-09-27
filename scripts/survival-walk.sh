@@ -220,6 +220,13 @@ DISPATCHED_RUN_IDS=()
 LOGIN_RUN_ID=""
 
 teardown() {
+  # Saved FIRST, before anything below can remove the container: a run that
+  # dies partway through (die() calls exit, which runs this trap) previously
+  # lost its wardynd log entirely, because the old save was a step near the
+  # END of the successful path only — exactly the run a failure needs the
+  # log from. compose logs a container that's still present (running or
+  # already exited) either way.
+  compose logs wardynd >"${EVIDENCE_DIR}/wardynd.log" 2>&1 || true
   local rid
   for rid in "${DISPATCHED_RUN_IDS[@]:-}" "${LOGIN_RUN_ID}"; do
     [[ -n "${rid}" ]] || continue
@@ -334,14 +341,11 @@ pass "agent standard declared"
 # fake, run directly from the host (see this file's header for why the
 # sandbox never does this dance itself). Every caller invokes this via a
 # command substitution (`blob="$(fake_device_login)"`), which forks a
-# subshell — so a plain assignment made IN HERE never reaches the caller,
-# only what this function prints to stdout does. The refresh token is
-# therefore only ever carried out through the printed JSON's own
-# `refresh_token` field; a caller that needs it back (to compute the SAME
-# fingerprint wardynd's own spent-token table is keyed by —
-# awsSSOTokenFingerprint, awssso_refresh.go) reads it back out of that JSON
-# itself, in its OWN (non-subshell) scope, rather than trusting a variable
-# this function might set.
+# subshell — so a plain assignment made IN HERE would never reach the
+# caller, only what this function prints to stdout does (caught live: an
+# earlier version tried exactly that, for a client-side refresh-token
+# fingerprint this walk no longer needs — see the Postgres assertions below
+# for why a plain existence count replaced it).
 fake_device_login() {
   local reg cid csec da dc tok access refresh expires now
   reg="$(curl -sS --max-time "${CURL_MAX_TIME}" -X POST "http://127.0.0.1:${FAKE_PORT}/client/register" \
@@ -373,10 +377,8 @@ fake_device_login() {
 # sandbox via the same brokered route cmd/wardyn-aws-sso uses
 # (PUT ${WARDYN_PROXY_URL}/wardyn/v1/sso-token/${WARDYN_RUN_ID}, read out of
 # the container's own env — never a bearer token this script holds). Sets
-# LOGIN_RUN_ID (teardown's own safety net) and LAST_REFRESH_TOKEN (read back
-# out of the blob's own refresh_token field — see fake_device_login's
-# comment for why it must be extracted HERE, not inside that function).
-# Called again by the resolve step once the credential is spent.
+# LOGIN_RUN_ID (teardown's own safety net). Called again by the resolve step
+# once the credential is spent.
 capture_aws_credential() {
   code=$(api POST /api/v1/setup/harness-login "$(jq -nc --arg u "${SSO_START_URL}" '{provider:"aws",sso_start_url:$u}')")
   [[ "${code}" == "200" || "${code}" == "201" ]] || { cat "${TMPDIR}/resp.json" >&2; die "POST /setup/harness-login answered ${code}"; }
@@ -389,12 +391,6 @@ capture_aws_credential() {
   done
   [[ -n "${up}" ]] || die "login sandbox ${sandbox} never started"
   local blob; blob="$(fake_device_login)" || die "fake_device_login failed (see ${EVIDENCE_DIR}/awsssofake.log)"
-  # fake_device_login runs inside THIS command substitution's own subshell, so
-  # any plain (non-local) assignment it makes (its own LAST_REFRESH_TOKEN
-  # attempt) never reaches this shell — only its stdout does. Extract the
-  # refresh token back out of the blob it printed, here, in the caller's own
-  # (non-subshell) execution context, so the global actually sticks.
-  LAST_REFRESH_TOKEN="$(jq -r '.refresh_token' <<<"${blob}")"
   local http_code
   http_code="$(docker exec "${sandbox}" sh -c "curl -sS --max-time ${CURL_MAX_TIME} -o /dev/null -w '%{http_code}' -X PUT \"\${WARDYN_PROXY_URL}/wardyn/v1/sso-token/\${WARDYN_RUN_ID}\" -H 'Content-Type: application/json' -d '${blob}'" 2>&1)"
   [[ "${http_code}" == "204" ]] || die "sso-token upload into ${sandbox} answered ${http_code}"
@@ -555,12 +551,25 @@ wait_dispatch_dead 150 || {
 }
 pass "wardynd's own refresh check now refuses new dispatches — the credential is spent"
 
-# THE FINGERPRINT wardynd's own aws_sso_spent_tokens row is keyed by
-# (awsSSOTokenFingerprint, awssso_refresh.go: 8 bytes of the refresh token's
-# SHA-256, hex) — computed here from the SAME refresh_token this walk's own
-# capture minted, so the Postgres read below checks the EXACT row this
-# credential's spend would have written, not merely "a row exists".
-SPENT_FINGERPRINT="$(printf '%s' "${LAST_REFRESH_TOKEN}" | sha256sum | cut -c1-16)"
+# NOT keying the Postgres read below on a client-computed fingerprint,
+# DELIBERATELY: wardynd's own aws_sso_spent_tokens row is keyed by
+# awsSSOTokenFingerprint(refreshToken) (awssso_refresh.go — 8 bytes of the
+# refresh token's SHA-256, hex), but the ACTUAL refresh token spent is not
+# necessarily this walk's own captured one. With TOKEN_TTL this short and
+# reauth disabled at container start (see the fake-startup comment above),
+# an EARLIER dispatch (this script's own "confirm the credential is
+# accepted" probe, before arming) can already have triggered a real,
+# transparent refresh — a harmless rotation the fake still answers
+# successfully — silently swapping in a NEW refresh token before the fake
+# was ever armed. A fingerprint computed from the ORIGINAL captured token
+# then no longer matches whichever token actually got marked spent, and a
+# real GREEN run was seen to die here for exactly that reason (evidence:
+# EVIDENCE_DIR's wardynd.log, moved into the EXIT trap below so a run that
+# dies keeps it). Since every run uses a FRESH, dedicated Postgres volume
+# (this walk's own project, --volumes torn down and recreated each time),
+# ANY row in aws_sso_spent_tokens can only be the one this walk's own spend
+# wrote — a plain existence count is exact here without needing to predict
+# which token generation it belongs to.
 
 # DISARM BEFORE THE KILL, not after the restart check: left armed, a
 # restarted wardynd that forgot everything (never persisted the delete or
@@ -575,9 +584,9 @@ pass "disarmed"
 
 step "confirming Postgres actually holds the spent state before the kill (not just wardynd's memory)"
 secret_count="$(psql1 "SELECT count(*) FROM secrets WHERE name = '${SECRET_NAME}'")"
-spent_count="$(psql1 "SELECT count(*) FROM aws_sso_spent_tokens WHERE fingerprint = '${SPENT_FINGERPRINT}'")"
+spent_count="$(psql1 "SELECT count(*) FROM aws_sso_spent_tokens")"
 [[ "${secret_count}" == "0" ]] || die "expected the spent credential's secret row to be deleted; count=${secret_count}"
-[[ "${spent_count}" == "1" ]] || die "expected exactly one aws_sso_spent_tokens row for fingerprint ${SPENT_FINGERPRINT}; count=${spent_count}"
+[[ "${spent_count}" == "1" ]] || die "expected exactly one aws_sso_spent_tokens row (this project's own fresh volume); count=${spent_count}"
 pass "Postgres shows the secret deleted (count=0) and the spent-token row present (count=1) — before the kill"
 
 # ── THE WALK: kill wardynd while the credential is spent, restart, verify ───
@@ -600,7 +609,7 @@ pass "wardynd back up"
 
 step "confirming the spent state survived the restart — read directly from Postgres, the fake is disarmed"
 secret_count="$(psql1 "SELECT count(*) FROM secrets WHERE name = '${SECRET_NAME}'")"
-spent_count="$(psql1 "SELECT count(*) FROM aws_sso_spent_tokens WHERE fingerprint = '${SPENT_FINGERPRINT}'")"
+spent_count="$(psql1 "SELECT count(*) FROM aws_sso_spent_tokens")"
 [[ "${secret_count}" == "0" ]] || die "after restart, the deleted secret is BACK (count=${secret_count}) — the delete did not persist"
 [[ "${spent_count}" == "1" ]] || die "after restart, the spent-token row is GONE (count=${spent_count}) — the mark did not persist"
 pass "still deleted/spent after restart in Postgres itself — this is the persisted fact, not the fake's own memory"
@@ -622,8 +631,7 @@ else
   fail "expected dispatch to succeed again after the fresh capture; still ${DISPATCH_OUTCOME}"
 fi
 
-step "logs saved to ${EVIDENCE_DIR}"
-compose logs wardynd >"${EVIDENCE_DIR}/wardynd.log" 2>&1 || true
+step "evidence (including wardynd.log, saved by teardown on every exit path) is in ${EVIDENCE_DIR}"
 
 if [[ "${FAILED}" -ne 0 ]]; then
   echo "survival-walk: FAILED — see ${EVIDENCE_DIR}" >&2
