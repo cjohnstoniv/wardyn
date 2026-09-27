@@ -10,6 +10,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **The UI-sandbox gateway's enter hand-off gains a `POST` form, beside the existing `GET` (#1220).**
+  `POST <ui-origin>/__wardyn/enter` takes `run`/`app`/`ticket` as an
+  `application/x-www-form-urlencoded` body instead of a query string, runs the exact same
+  consume-then-re-check path as `GET` (owner-or-admin, `RUNNING`, kept-run `409`, the declared app),
+  sets the same `wardyn_ui_sess` cookie, and answers `303` to the relay path (`GET` still answers
+  `302`, unchanged). A ticket in the query string on a `POST` is refused outright — no mixed mode.
+  `/healthz`'s `ui_sandbox` block gains `enter_post_url` (the enter URL with no query string at all)
+  beside the existing `enter_url_template`. The console's run-detail **Open** button now submits a
+  hidden auto-submitted form built from `enter_post_url` instead of `window.open`-ing a URL, so the
+  single-use ticket never lands in a URL, browser history, or a reverse-proxy access log. `GET`
+  stays for compatibility.
+
 - **`GET /runs` gains opt-in server-side scoping and filtering (#1197).** New optional query
   params — `view` (`user`/`admin`), `owner` (`me`/`all`), repeatable `status`
   (`active`/`ended`/`failed`/`killed`), `ended_within` (`24h`/`7d`/`30d`/`all`), `include_killed=1`,

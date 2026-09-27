@@ -322,59 +322,60 @@ describe("ConnectSSHCard — UI apps lane", () => {
     expect(screen.getByText(UI_APPS_LANE.noRecording)).toBeInTheDocument();
   });
 
-  it("mints a ticket and opens the app on the UI-sandbox origin, substituting run/app/ticket", async () => {
-    healthMock.mockResolvedValue({ status: "ok", ui_sandbox: { enabled: true, enter_url_template: "http://ui.local/__wardyn/enter?run={run}&app={app}&ticket={ticket}" } });
+  // #1220: the Open button POSTs the ticket via a hidden auto-submitted form
+  // instead of putting it in a window.open URL — the whole point being that
+  // the ticket never lands in a URL, browser history, or an access log.
+  it("mints a ticket and POSTs it via a hidden form, never a URL", async () => {
+    healthMock.mockResolvedValue({
+      status: "ok",
+      ui_sandbox: { enabled: true, enter_post_url: "http://ui.local/__wardyn/enter" },
+    });
     listKeysMock.mockResolvedValue([]);
     attachTicketMock.mockResolvedValue("tkt_abc123");
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const openSpy = vi.spyOn(window, "open");
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
     renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
 
     screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
     await waitFor(() => expect(attachTicketMock).toHaveBeenCalledWith(baseRun.id));
-    await waitFor(() =>
-      expect(openSpy).toHaveBeenCalledWith(
-        `http://ui.local/__wardyn/enter?run=${baseRun.id}&app=vscode&ticket=tkt_abc123`,
-        "_blank",
-        "noopener",
-      ),
-    );
-    // "noopener" makes window.open return null even when the tab DID open, so
-    // a truthy check on the return value would show a popup-blocked error on
-    // every success.
+    await waitFor(() => expect(submitSpy).toHaveBeenCalled());
+
+    const form = submitSpy.mock.instances[0] as HTMLFormElement;
+    expect(form.method).toBe("post");
+    expect(form.action).toBe("http://ui.local/__wardyn/enter");
+    expect(form.target).toBe("_blank");
+    const values = Object.fromEntries(new FormData(form).entries());
+    expect(values).toEqual({ run: baseRun.id, app: "vscode", ticket: "tkt_abc123" });
+    // The form is submitted, not window.open'd — no URL ever carries the
+    // ticket for this lane.
+    expect(openSpy).not.toHaveBeenCalled();
+
     await screen.findByRole("button", { name: UI_APPS_LANE.cta("vscode") });
     expect(screen.queryByText(UI_APPS_LANE.errorTitle("vscode"))).toBeNull();
+    submitSpy.mockRestore();
     openSpy.mockRestore();
   });
 
-  it("substitutes EVERY placeholder, including the {run} host-mode templates carry twice", async () => {
+  it("substitutes {run} in the POST action for a host-mode template, and still never puts it in a URL", async () => {
     healthMock.mockResolvedValue({
       status: "ok",
-      ui_sandbox: {
-        enabled: true,
-        // WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE (host mode) — {run} in the host AND
-        // the query. A single String.replace fills only the host, leaving
-        // `?run={run}` literal for uuid.Parse to reject on the server.
-        enter_url_template:
-          "https://run-{run}.ui.example.com/__wardyn/enter?run={run}&app={app}&ticket={ticket}",
-      },
+      // WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE (host mode) puts {run} in the HOST;
+      // enter_post_url carries no query string at all.
+      ui_sandbox: { enabled: true, enter_post_url: "https://run-{run}.ui.example.com/__wardyn/enter" },
     });
     listKeysMock.mockResolvedValue([]);
     attachTicketMock.mockResolvedValue("tkt_abc123");
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const submitSpy = vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(() => {});
     renderCard({ ui_apps: [{ name: "vscode", port: 8080 }] });
     await waitFor(() => expect(healthMock).toHaveBeenCalled());
 
     screen.getByRole("button", { name: UI_APPS_LANE.cta("vscode") }).click();
-    await waitFor(() =>
-      expect(openSpy).toHaveBeenCalledWith(
-        `https://run-${baseRun.id}.ui.example.com/__wardyn/enter?run=${baseRun.id}&app=vscode&ticket=tkt_abc123`,
-        "_blank",
-        "noopener",
-      ),
-    );
-    expect(openSpy.mock.calls[0][0]).not.toContain("{run}");
-    openSpy.mockRestore();
+    await waitFor(() => expect(submitSpy).toHaveBeenCalled());
+    const form = submitSpy.mock.instances[0] as HTMLFormElement;
+    expect(form.action).toBe(`https://run-${baseRun.id}.ui.example.com/__wardyn/enter`);
+    expect(form.action).not.toContain("{run}");
+    submitSpy.mockRestore();
   });
 
   it("renders lane.error.launcher above the server's verbatim body when the ticket mint fails with that message, and leaves the other app untouched", async () => {

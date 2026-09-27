@@ -3956,8 +3956,9 @@ To put Wardyn behind a reverse proxy at a sub-path next to another application
 - **UI sandboxes.** The shared-origin gateway (no
   `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`) serves its enter and relay routes under
   the same prefix on its own listener, and `/healthz`'s
-  `ui_sandbox.enter_url_template` includes it — proxy that origin with the prefix
-  too. Per-run origins (host mode) are separate hosts and are unchanged.
+  `ui_sandbox.enter_url_template` and `ui_sandbox.enter_post_url` both include it
+  — proxy that origin with the prefix too. Per-run origins (host mode) are
+  separate hosts and are unchanged.
 - **Not detected.** A proxy that strips the prefix is not refused at boot —
   nothing in a request says it was stripped; it shows up as 404s on every page.
 

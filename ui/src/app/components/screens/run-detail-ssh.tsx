@@ -65,6 +65,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const [uiSandbox, setUISandbox] = React.useState<{
     enabled?: boolean;
     enter_url_template?: string;
+    enter_post_url?: string;
   } | null>(null);
   // Did /healthz actually ANSWER? `ssh`/`uiSandbox` being null conflates two
   // facts — "not loaded yet" and "loaded, and the deployment has it off" — and
@@ -145,26 +146,21 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // the new tab itself — unobservable here across origins, so "the new tab is
   // the feedback" for that case, exactly as the mock's step 4 says.
   //
-  // window.open's return is deliberately NOT checked: with "noopener" the spec
-  // requires it to return null even when the tab opened fine, so a `!win`
-  // branch showed a popup-blocked error on EVERY successful Open. A blocked
-  // popup is undetectable from here, and the mock lists no such state.
+  // #1220: this is a POST, not a GET-with-query-string — the whole point is
+  // that the ticket leaves the URL, so it must not be re-encoded back into
+  // one here. submitEnterForm below builds and submits a hidden form instead
+  // of calling window.open on a composed URL.
   async function openApp(app: UIApp) {
     setAppError(null);
     setOpeningApp(app.name);
     try {
       const ticket = await runsApi.attachTicket(run.id);
-      // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) puts {run} in the HOST
-      // *and* the query — "https://run-{run}.ui.example.com/__wardyn/enter?run=
-      // {run}&app={app}&ticket={ticket}" — so a single String.replace fills the
-      // host and leaves `?run={run}` literal, which uuid.Parse rejects on every
-      // Open. split/join replaces every occurrence (replaceAll is ES2021; this
-      // tsconfig's lib is ES2020).
-      const url = Object.entries({ run: run.id, app: app.name, ticket }).reduce(
-        (tpl, [key, value]) => tpl.split(`{${key}}`).join(encodeURIComponent(value)),
-        uiSandbox?.enter_url_template ?? "",
-      );
-      window.open(url, "_blank", "noopener");
+      // Host mode (WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE) still puts {run} in the
+      // HOST half of enter_post_url ("https://run-{run}.ui.example.com/
+      // __wardyn/enter", no query) — split/join replaces every occurrence
+      // (replaceAll is ES2021; this tsconfig's lib is ES2020).
+      const action = (uiSandbox?.enter_post_url ?? "").split("{run}").join(encodeURIComponent(run.id));
+      submitEnterForm(action, { run: run.id, app: app.name, ticket });
     } catch (err) {
       setAppError({ app: app.name, message: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -377,6 +373,30 @@ function monoTokens(text: string, ...tokens: string[]): (string | React.ReactEle
     );
   }
   return parts;
+}
+
+// submitEnterForm drives the #1220 POST hand-off: a hidden form, submitted
+// with target="_blank" so it opens the same new tab window.open(url, "_blank")
+// used to, but as a real POST whose fields never touch the URL, browser
+// history, or a reverse-proxy access log. rel="noopener" is form.submit()'s
+// equivalent of window.open's "noopener" flag above — no window.opener back
+// to the console from the new tab.
+function submitEnterForm(action: string, fields: Record<string, string>) {
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = action;
+  form.target = "_blank";
+  form.rel = "noopener";
+  for (const [name, value] of Object.entries(fields)) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
 }
 
 // splitHostPort divides an advertise_addr "host:port" (WARDYN_SSH_ADVERTISE)
