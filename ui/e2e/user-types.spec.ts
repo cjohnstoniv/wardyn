@@ -169,13 +169,19 @@ test.describe("User types — the list and what each type gets", () => {
     const row = cell(page, "agent", "shared-tool");
     await expect(row.getByText(EXPLAIN.STATE.not_available, { exact: true })).toBeVisible();
 
-    const only = row.locator("span[title]");
-    await expect(only).toContainText("more");
-    const title = await only.getAttribute("title");
-    const ariaLabel = await only.getAttribute("aria-label");
-    for (const name of [DEVELOPER.name, `${GROUP} (group)`, ALICE, BOB]) {
-      expect(title ?? "").toContain(name);
-      expect(ariaLabel ?? "").toContain(name);
-    }
+    // The truncated text: a mouse-only hover (title), aria-hidden — it names
+    // no more than two audiences and a count, and carries no accessible name
+    // of its own (F1: an aria-label here couldn't reach a keyboard or screen
+    // reader user, since the span is plain and non-focusable).
+    const visible = row.locator("span[title]");
+    await expect(visible).toContainText("more");
+    await expect(visible).toHaveAttribute("aria-hidden", "true");
+    const title = (await visible.getAttribute("title")) ?? "";
+    for (const name of [DEVELOPER.name, `${GROUP} (group)`, ALICE, BOB]) expect(title).toContain(name);
+
+    // The full, untruncated list: real sr-only text content, reached the same
+    // way a screen reader's text query would find it — never only an
+    // attribute.
+    await expect(row.getByText(EXPLAIN.ONLY(title))).toHaveCount(1);
   });
 });
