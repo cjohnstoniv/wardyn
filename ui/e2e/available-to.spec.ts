@@ -13,7 +13,7 @@ import { test, expect, ADMIN_TOKEN, TOKEN_KEY, gotoConsole, navTo, navToRoute, s
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { AVAILABILITY, IMAGES } from "../src/app/lib/availability-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR } from "../src/app/lib/model-providers-copy";
-import type { Page } from "@playwright/test";
+import type { Page, Request } from "@playwright/test";
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 const LISTED = "ghcr.io/acme/e2e-toolbox:1.0";
@@ -308,11 +308,30 @@ test.describe("Available to — the person's New Run picker (G7)", () => {
   });
 
   // The New Run agent picker's options, as the holder of token sees them.
+  //
+  // Until the screen's own GET /setup/status lands, the picker shows its
+  // built-in fallback list, which names Codex CLI whatever the server says. So
+  // the options are read only once every /setup/status request made since the
+  // screen opened has finished: the list under test is then the server's.
   async function agentOptions(page: Page, token: string): Promise<string[]> {
     await page.addInitScript(([key, tok]) => localStorage.setItem(key, tok), [TOKEN_KEY, token]);
     await gotoConsole(page);
+    const inflight = new Set<Request>();
+    let finished = 0;
+    const isStatus = (r: Request) => r.method() === "GET" && new URL(r.url()).pathname === "/api/v1/setup/status";
+    const done = (r: Request) => {
+      if (inflight.delete(r)) finished++;
+    };
+    page.on("request", (r) => {
+      if (isStatus(r)) inflight.add(r);
+    });
+    page.on("requestfinished", done);
+    page.on("requestfailed", done);
     await navToRoute(page, "/runs/new");
-    await page.getByRole("combobox", { name: "Agent" }).click();
+    const picker = page.getByRole("combobox", { name: "Agent" });
+    await expect(picker).toBeVisible();
+    await expect.poll(() => finished > 0 && inflight.size === 0).toBe(true);
+    await picker.click();
     const options = page.getByRole("option");
     await expect(options.first()).toBeVisible();
     const names = await options.allInnerTexts();
