@@ -263,6 +263,15 @@ describe("PushContentCard — member watching, decides nothing", () => {
 // this way, so a review-matched "café.yml" reaches the console as
 // `"caf\303\251.yml"` — display it unquoted, but never touch the stored,
 // exported or approved (digest) form.
+//
+// SECURITY (coordinator finding, 2026-09-27): this card is an APPROVAL
+// surface, so decoding must never let a path spoof what it shows the
+// approver. \a\b\t\n\v\f\r are never decoded (the raw form stays on
+// screen), and the fully decoded string is refused — falling back to raw —
+// if it holds any control (Cc) or Unicode format/bidi (Cf) character, since
+// an octal escape alone can assemble one of those with no shorthand at all
+// (a bare control byte, or U+202E RIGHT-TO-LEFT OVERRIDE turning
+// "evil<RLO>txt.sh" into something that reads as "evilhs.txt").
 describe("unquoteGitPath", () => {
   it("passes an unquoted ASCII path through unchanged — quotePath itself never wraps one", () => {
     expect(unquoteGitPath("dir/file.txt")).toBe("dir/file.txt");
@@ -275,11 +284,29 @@ describe("unquoteGitPath", () => {
     expect(unquoteGitPath('"caf\\303\\251.yml"')).toBe("café.yml");
   });
 
-  it("decodes \\\" and \\\\ and the abtnvfr control-byte escapes", () => {
+  it("decodes \\\" and \\\\, the only two shorthand escapes left", () => {
     expect(unquoteGitPath('"a\\"b"')).toBe('a"b');
     expect(unquoteGitPath('"a\\\\b"')).toBe("a\\b");
-    expect(unquoteGitPath('"a\\tb"')).toBe("a\tb");
-    expect(unquoteGitPath('"a\\nb"')).toBe("a\nb");
+  });
+
+  it("SECURITY: never decodes the abtnvfr control-byte shorthand — the raw form stays on screen", () => {
+    expect(unquoteGitPath('"a\\tb"')).toBe('"a\\tb"');
+    expect(unquoteGitPath('"a\\nb"')).toBe('"a\\nb"');
+    expect(unquoteGitPath('"a\\rb"')).toBe('"a\\rb"');
+  });
+
+  it("SECURITY: a raw octal control byte (ESC, \\033) refuses the whole decode", () => {
+    expect(unquoteGitPath('"a\\033b"')).toBe('"a\\033b"');
+  });
+
+  it("SECURITY: a Unicode bidi-override (RLO, U+202E) refuses the whole decode — never renders the character that could spoof the name", () => {
+    // U+202E = UTF-8 0xE2 0x80 0xAE = octal 342 200 256.
+    expect(unquoteGitPath('"evil\\342\\200\\256txt.sh"')).toBe('"evil\\342\\200\\256txt.sh"');
+  });
+
+  it("SECURITY: a zero-width space (U+200B) refuses the whole decode", () => {
+    // U+200B = UTF-8 0xE2 0x80 0x8B = octal 342 200 213.
+    expect(unquoteGitPath('"\\342\\200\\213"')).toBe('"\\342\\200\\213"');
   });
 
   it("falls back to the raw string on a malformed escape, an unterminated quote, or invalid UTF-8 bytes", () => {

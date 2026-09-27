@@ -93,12 +93,20 @@ same fields this card's own header carries.
 
 Since #1066/#1087, every path on the wire is quoted the way git's own
 `core.quotePath=true` quotes an unusual name (octal-escaped UTF-8 bytes,
-`\"`/`\\`/`\t`/`\n`, wrapped in `"..."`) — a review-matched `café.yml` arrives
-as `"caf\303\251.yml"`. `unquoteGitPath` (`push-content-card.tsx`) decodes this
+`\"`/`\\`, wrapped in `"..."`) — a review-matched `café.yml` arrives as
+`"caf\303\251.yml"`. `unquoteGitPath` (`push-content-card.tsx`) decodes this
 back to the real name for DISPLAY ONLY, wherever the card renders a path; a
 string it cannot parse falls back to the raw wire form rather than guessing.
-The stored list, the audit export and the dedup digest all keep the quoted
-form exactly as the sidecar sent it — nothing about what is stored, exported
+SECURITY (an approval surface): the control-byte shorthand escapes
+(`\a\b\t\n\v\f\r`) are never decoded at all, and the fully decoded string is
+refused — falling back to the raw quoted form — if it contains any control
+character or Unicode format/bidi character (category Cc/Cf: zero-width
+characters, the RLO/LRO override family, BOM). Undecoded, a review-matched
+path cannot rewrite what it names to the approver — a raw octal `\342\200\256`
+(U+202E RIGHT-TO-LEFT OVERRIDE) stays exactly that on screen, never the
+character itself. The stored list, the audit export and the dedup digest all
+keep the quoted form exactly as the sidecar sent it — nothing about what is
+stored, exported
 or approved changes.
 
 - **held** — PENDING and within the proxy's own bounded hold window

@@ -57,10 +57,25 @@ import { ApprovalKindChip, ApprovalStateBadge, Chip } from "./primitives";
 // quote_c_style string — an unterminated quote, an unrecognized escape, a
 // byte sequence that isn't valid UTF-8 once decoded — falls back to the RAW
 // input rather than guess at a name.
+//
+// SECURITY (this is an APPROVAL surface): decoding must never let a path
+// spoof what it names to the approver. Two ways it could:
+//  - a control-byte escape (\a\b\t\n\v\f\r, or a raw octal like \033) puts an
+//    actual control character on screen — a bare \n or ESC can rewrite what a
+//    terminal-backed viewer, or a careless CSS rule, shows;
+//  - an octal escape can assemble a Unicode FORMAT/bidi character no escape
+//    shorthand names at all — U+202E RIGHT-TO-LEFT OVERRIDE turns
+//    "evil<RLO>txt.sh" into something that reads as "evilhs.txt".
+// So \a\b\t\n\v\f\r are not decoded at all — those bytes fall back to the
+// raw wire form via the "unrecognized escape" branch below, same as any
+// other malformed escape — and the fully decoded string is refused (falling
+// back to the raw quoted form) if it contains any C0/C1 control character
+// (Cc) or Unicode format/bidi character (Cf: U+200B-200F, U+202A-202E,
+// U+2060-2064, U+2066-2069, U+FEFF among others). Only printable text
+// (accented letters, CJK, and so on) is ever decoded for display.
 export function unquoteGitPath(raw: string): string {
   if (raw.length < 2 || raw[0] !== '"' || raw[raw.length - 1] !== '"') return raw;
   const inner = raw.slice(1, -1);
-  const simpleEscapes: Record<string, number> = { a: 0x07, b: 0x08, t: 0x09, n: 0x0a, v: 0x0b, f: 0x0c, r: 0x0d };
   const bytes: number[] = [];
   for (let i = 0; i < inner.length; i++) {
     const c = inner[i];
@@ -69,10 +84,10 @@ export function unquoteGitPath(raw: string): string {
       if (next === '"' || next === "\\") {
         bytes.push(next.charCodeAt(0));
         i += 1;
-      } else if (next !== undefined && next in simpleEscapes) {
-        bytes.push(simpleEscapes[next]);
-        i += 1;
       } else {
+        // No \a\b\t\n\v\f\r shorthand decode (see SECURITY doc above) — only
+        // octal survives past this point, and only if the post-decode
+        // control/format check below lets the result through.
         const octal = inner.slice(i + 1, i + 4);
         if (!/^[0-7]{3}$/.test(octal)) return raw; // unrecognized escape — malformed
         bytes.push(parseInt(octal, 8));
@@ -87,13 +102,19 @@ export function unquoteGitPath(raw: string): string {
       bytes.push(code);
     }
   }
+  let decoded: string;
   try {
     // fatal: true refuses to substitute U+FFFD for invalid UTF-8 — past a
     // single malformed escape the rest of the byte string may not decode.
-    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
   } catch {
     return raw;
   }
+  // Cc (control) + Cf (format/bidi, the RLO/ZWSP/BOM family included) — the
+  // check that makes decoding safe on an approval surface. Any hit refuses
+  // the WHOLE decode, not just the offending character.
+  if (/\p{Cc}|\p{Cf}/u.test(decoded)) return raw;
+  return decoded;
 }
 
 // The run this card needs to know about — only whether it has ENDED (the
