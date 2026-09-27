@@ -34,13 +34,14 @@ type RunLeaser interface {
 	// the run's end is no longer endsAt.
 	MarkRunEndingSoon(ctx context.Context, id uuid.UUID, endsAt time.Time, thresholdSec int) (bool, error)
 	// SetRunEndAndWait moves run id's end and wait from (fromEnd, fromWait) to
-	// (toEnd, toWait), but only while the run still has those values, is not
-	// terminal and is not kept by its OWN end (LostEnded). A run lost to a
-	// reboot or a control-plane outage may still move its end (F1, long-holds
-	// design rev 4 §2.3): extending it is how it becomes revivable again.
+	// (toEnd, toWait), but only while the run still has those values and is not
+	// terminal. A run lost to a reboot or a control-plane outage may still move
+	// its end (F1, long-holds design rev 4 §2.3): extending it is how it becomes
+	// revivable again. A run kept by its OWN end (LostEnded) moves only with
+	// ended set, and only as EndedKept describes; with ended nil it never does.
 	// false means the run changed since the caller read it; nil ends are "no
 	// end".
-	SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int) (bool, error)
+	SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int, ended *EndedKept) (bool, error)
 	// StopKeptRunIf makes a kept run (RUNNING with a lost/end mark) terminal, but
 	// only while the row still carries the EXACT kept mark the caller read:
 	// lostAt, lostReason and endsAt, compared atomically with the state guard in
@@ -53,6 +54,25 @@ type RunLeaser interface {
 	// means the mark or the state changed since the read; the caller's re-assert
 	// on the next sweep pass is what makes that safe to just drop.
 	StopKeptRunIf(ctx context.Context, id uuid.UUID, to types.RunState, lostAt *time.Time, lostReason types.LostReason, endsAt *time.Time) (bool, error)
+}
+
+// EndedKept is the condition a write on a run kept by its OWN end (LostEnded)
+// lands under during its files grace (#1061): the row must still carry the
+// exact ended mark the caller decided on (LostAt), and that mark must be after
+// KeptAfter, the caller's Now less the ended-run grace on the application
+// clock. A grace that runs out between the caller's check and the write
+// refuses the write; nothing here moves the mark, so no write renews the
+// grace. A revive also needs the run's end to be after Now.
+type EndedKept struct {
+	LostAt, KeptAfter, Now time.Time
+}
+
+// endedArgs is ended's mark and cutoff as nullable query arguments.
+func endedArgs(ended *EndedKept) (lostAt, keptAfter, now *time.Time) {
+	if ended == nil {
+		return nil, nil, nil
+	}
+	return &ended.LostAt, &ended.KeptAfter, &ended.Now
 }
 
 var _ RunLeaser = PG{}
@@ -95,16 +115,18 @@ func (s PG) MarkRunEndingSoon(ctx context.Context, id uuid.UUID, endsAt time.Tim
 // SetRunEndAndWait — see RunLeaser. The compare on the values the caller read
 // is what makes the caller's clamp and gate decision the one that lands: a
 // concurrent change, or the lease sweep ending the run, turns this into a no-op.
-func (s PG) SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int) (bool, error) {
+func (s PG) SetRunEndAndWait(ctx context.Context, id uuid.UUID, fromEnd *time.Time, fromWait int, toEnd *time.Time, toWait int, ended *EndedKept) (bool, error) {
 	states := make([]string, 0, len(types.NonTerminalRunStates))
 	for _, st := range types.NonTerminalRunStates {
 		states = append(states, string(st))
 	}
+	lostAt, keptAfter, _ := endedArgs(ended)
 	tag, err := s.Pool.Exec(ctx, `
 		UPDATE agent_runs SET ends_at=$4, wait_budget_sec=$5
-		WHERE id=$1 AND ends_at IS NOT DISTINCT FROM $2 AND wait_budget_sec=$3
-		  AND (lost_at IS NULL OR lost_reason <> $7) AND state = ANY($6)`,
-		id, fromEnd, fromWait, toEnd, toWait, states, string(types.LostEnded))
+		WHERE id=$1 AND ends_at IS NOT DISTINCT FROM $2 AND wait_budget_sec=$3 AND state = ANY($6)
+		  AND CASE WHEN $8::timestamptz IS NULL THEN lost_at IS NULL OR lost_reason <> $7
+		           ELSE lost_reason = $7 AND lost_at = $8 AND lost_at > $9::timestamptz END`,
+		id, fromEnd, fromWait, toEnd, toWait, states, string(types.LostEnded), lostAt, keptAfter)
 	if err != nil {
 		return false, fmt.Errorf("store: set run end and wait: %w", err)
 	}

@@ -10,6 +10,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **An ended run can be extended and revived while its files are kept (#1061).** A run whose
+  end passed is stopped and kept for `WARDYN_ENDED_RUN_GRACE`, and the design promised Extend +
+  Revive during that grace, but extending it answered 409 and revive refused it. Its owner (or a
+  super admin, with the owner's authority re-checked) can now move its end into the future within
+  the run's captured limits, then revive it: a new proxy under the owner's current denies, then its
+  agent started behind it. The grace stays counted from when the run ended, so extending never keeps
+  files longer; both writes are conditional on the exact ended mark and a live grace, and the claim
+  re-checks the grace and the new end, so an expiry or a kill that lands first wins. The bulk
+  restart still refuses it, and a task run's revive is refused.
 - **The nightly notifier can now list, comment on and create its issue (#511).** `notify-new-lanes`
   never checks out the repo, and `gh` needs `GH_REPO` (or a git remote) to know which repository
   to talk to; without it every `gh issue` call failed with "fatal: not a git repository", so a
