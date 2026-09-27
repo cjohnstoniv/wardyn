@@ -794,3 +794,21 @@ func TestStoreMode_DeleteRacesPutWithoutOrphan(t *testing.T) {
 		})
 	}
 }
+
+// drift is what -reconcile finds wrong: values no row points to, and rows
+// whose value is gone.
+func drift(t *testing.T, s *secretstorepg.Store) int {
+	t.Helper()
+	rep, err := s.Reconcile(t.Context())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	return len(rep.Orphans) + len(rep.Dangling)
+}
+
+// T-18: rule 8's purge by provider UID and CS-5's erase by owner remove the
+// value from Key Vault, not just the row.
+func TestAzureKV_PurgeConformance(t *testing.T) {
+	s := storeMode(t, throwawayDB(t), newFakeStore(t, newFakeKV(t)), nil)
+	secretstoretest.RunPurgeConformance(t, func(*testing.T) secretstore.Store { return s }, func(t *testing.T) int { return drift(t, s) })
+}
