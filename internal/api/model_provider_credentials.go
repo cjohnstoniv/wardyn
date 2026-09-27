@@ -210,7 +210,10 @@ func (s *Server) handlePutProviderCredential(w http.ResponseWriter, r *http.Requ
 	}
 	if err := s.cfg.Secrets.For(owner).Put(r.Context(), providerSecretName(p.UID, providerKeyPart), []byte(value)); err != nil {
 		if errors.Is(err, secretstore.ErrUnavailable) {
-			writeError(w, http.StatusServiceUnavailable, keyDoorSaveUnavailable)
+			// loggedMsg keeps the daemon's own record of a sealed/unreachable
+			// store on save (review finding F7) — writeServerError's log line,
+			// minus its generic 500, since this is its own named 503.
+			writeError(w, http.StatusServiceUnavailable, loggedMsg(r.Context(), keyDoorSaveUnavailable, err))
 			return
 		}
 		writeServerError(w, r, "store model provider credential", err)

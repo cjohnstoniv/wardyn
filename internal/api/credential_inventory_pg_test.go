@@ -136,6 +136,7 @@ type inventoryFixture struct {
 
 const (
 	invAlice, invBob, invCarol = "sub-alice", "sub-bob", "sub-carol"
+	invAliceEmail              = "alice-directory@corp.example"
 )
 
 func newInventoryFixture(t *testing.T) inventoryFixture {
@@ -147,6 +148,18 @@ func newInventoryFixture(t *testing.T) inventoryFixture {
 	site := types.SiteConfig{ModelProviders: providerBlock(key, sub, sso, unused),
 		AgentProviders: agentBlock(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismAnthropicAPIKey})}
 	srv := modelProvidersStatusSrv(t, site, &capStore{})
+	// review finding F9: a real directory entry for alice (an api_tokens
+	// pairing) and one for bob (workspaces.owned_by, no email — the shape
+	// resolveSecretOwner's own directory takes), so TestPG_CredentialInventory
+	// proves email population end to end (the real knownPrincipals/
+	// emailsByPrincipal wiring, not a fixed map) AND that a principal the
+	// directory knows with NO paired email (bob) gets none invented from the
+	// bare subject. Carol is in neither list, so her row proves the same for
+	// a principal the directory doesn't know at all.
+	if is, ok := srv.cfg.Store.(*integStore); ok {
+		is.apiTokens = []types.APIToken{{Principal: invAlice, Email: invAliceEmail}}
+		is.workspaces = []types.Workspace{{OwnedBy: invBob}}
+	}
 	sec, pool := auditedPGSecrets(t)
 	srv.cfg.Secrets = sec
 	ctx := context.Background()
@@ -224,6 +237,19 @@ func TestPG_CredentialInventory(t *testing.T) {
 	}
 	if r := got[key{invCarol, "bedrock", credStateExpired}]; r.ExpiresAt == nil {
 		t.Errorf("carol's expired sign-in carries no expires_at: %+v", r)
+	}
+	// design F-2, review finding F9: email comes from the REAL directory
+	// (knownPrincipals), end to end — not a client-visible field the handler
+	// could fake. Alice is seeded into it above; bob and carol are not, so
+	// they must get no email invented from their bare subject.
+	if r := got[key{invAlice, "anthropic", credStateStored}]; r.Email != invAliceEmail {
+		t.Errorf("alice's row email = %q, want %q from the directory", r.Email, invAliceEmail)
+	}
+	if r := got[key{invBob, "anthropic", credStateStored}]; r.Email != "" {
+		t.Errorf("bob's row invented an email (%q) with no directory pairing", r.Email)
+	}
+	if r := got[key{invCarol, "bedrock", credStateExpired}]; r.Email != "" {
+		t.Errorf("carol's row invented an email (%q) with no directory pairing", r.Email)
 	}
 	wantCounts := credentialInventoryCounts{People: 3, Credentials: 4,
 		ByProvider: map[string]int{"anthropic": 2, "claude-sub": 1, "bedrock": 1, "openai": 0}}

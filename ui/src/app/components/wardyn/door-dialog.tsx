@@ -44,8 +44,11 @@ const DOOR_ID = "model-access-door";
 
 const providerName = (p: SetupModelProvider) => p.name || p.id;
 
-function doorTitle(t: DoorTarget): string {
+function doorTitle(t: DoorTarget, confirmingRemove: boolean): string {
   if (t.kind === "key") {
+    // The remove confirm gets its OWN title (packet F §3 review finding F4) —
+    // not the Add/Replace title behind it, which the confirm has replaced.
+    if (confirmingRemove) return REMOVE_CONFIRM.TITLE(t.token, providerName(t.provider));
     // A Replace open (a credential is already stored) gets its own title
     // (packet F §1) — the Add title would claim there is nothing there yet.
     const title = t.stored ? KEY_DOOR.TITLE_REPLACE : KEY_DOOR.TITLE;
@@ -110,6 +113,8 @@ function SignInHeader({ target }: { target: DoorTarget & { kind: "legacy" | "sig
 function KeyDoor({
   target,
   credentialStorage,
+  confirmingRemove,
+  setConfirmingRemove,
   onCancel,
   onSaved,
   onRemoved,
@@ -118,6 +123,10 @@ function KeyDoor({
   /** /setup/status's credential_storage (design F-3) — which store-mode line
    *  the notice's second line shows (F-4). */
   credentialStorage: SetupStatus["credential_storage"];
+  /** Lifted to DoorDialog (review finding F4): the confirm needs its OWN
+   *  DialogTitle, which only the parent can set. */
+  confirmingRemove: boolean;
+  setConfirmingRemove: (v: boolean) => void;
   onCancel: () => void;
   onSaved: () => void;
   /** Fires with the toast the confirm earns (packet F §3). */
@@ -126,9 +135,6 @@ function KeyDoor({
   const [value, setValue] = React.useState("");
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-  // CONSOLE-RULES §6: Remove now opens a confirm rather than deleting on the
-  // first click (packet F §3).
-  const [confirmingRemove, setConfirmingRemove] = React.useState(false);
   const id = target.provider.id;
   const run = async (write: () => Promise<void>, after: () => void) => {
     setBusy(true);
@@ -143,13 +149,18 @@ function KeyDoor({
       setBusy(false);
     }
   };
+  // Default focus: Cancel (packet F §3, review finding F4) — the confirm's
+  // OWN title now carries REMOVE_CONFIRM.TITLE (doorTitle, DoorDialog).
+  // Unconditional (Rules of Hooks): KeyDoor returns two different subtrees
+  // below, so a hook cannot live inside either branch.
+  const cancelRef = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    if (confirmingRemove) cancelRef.current?.focus();
+  }, [confirmingRemove]);
 
   if (confirmingRemove) {
     return (
       <div className="space-y-3">
-        <p className="text-body font-medium text-foreground">
-          {REMOVE_CONFIRM.TITLE(target.token, providerName(target.provider))}
-        </p>
         <p className="text-body text-muted-foreground">{removeConfirmBody(credentialStorage)}</p>
         <p className="text-body text-muted-foreground">{REMOVE_CONFIRM.UPSTREAM(target.provider.host)}</p>
         {error && (
@@ -159,7 +170,7 @@ function KeyDoor({
           </p>
         )}
         <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => setConfirmingRemove(false)}>
+          <Button ref={cancelRef} type="button" variant="ghost" size="sm" disabled={busy} onClick={() => setConfirmingRemove(false)}>
             {REMOVE_CONFIRM.CANCEL}
           </Button>
           <Button
@@ -313,6 +324,14 @@ export function DoorDialog({
   if (target) shown.current = target;
   const t = target ?? shown.current;
 
+  // Lifted out of KeyDoor (review finding F4): the confirm needs its OWN
+  // DialogTitle, which only THIS component can set (KeyDoor sits below it).
+  const [confirmingRemove, setConfirmingRemove] = React.useState(false);
+  const keyDoorId = t?.kind === "key" ? t.provider.id : null;
+  React.useEffect(() => {
+    setConfirmingRemove(false);
+  }, [keyDoorId]);
+
   // A second entrance while the door is open: no second door, the open one
   // takes focus (context openDoor).
   React.useEffect(() => {
@@ -343,12 +362,14 @@ export function DoorDialog({
             : undefined
         }
       >
-        {t && <DialogTitle>{doorTitle(t)}</DialogTitle>}
+        {t && <DialogTitle>{doorTitle(t, confirmingRemove)}</DialogTitle>}
         {t?.kind === "key" && target && (
           <KeyDoor
             key={t.provider.id}
             target={t}
             credentialStorage={credentialStorage}
+            confirmingRemove={confirmingRemove}
+            setConfirmingRemove={setConfirmingRemove}
             onCancel={onCancel}
             onSaved={() => onDone(doorToast(t))}
             onRemoved={onRemoved}

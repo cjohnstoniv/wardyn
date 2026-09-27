@@ -44,6 +44,11 @@ type govEscapeStore struct {
 	token      *types.APIToken
 	tokenRaw   string
 	workspaces []types.Workspace
+	// apiTokens is the ListAPITokens directory (review finding F9): distinct
+	// from the single `token`/`tokenRaw` pair above, which is GetAPITokenByRaw's
+	// own fixture for a different door. A test opts in by setting this slice;
+	// the zero value keeps every other caller's "no token fixture" behaviour.
+	apiTokens []types.APIToken
 	// siteConfig is what GetSiteConfig answers. The zero value is the
 	// deployment every pre-0.7.2 test in this file assumed — no provider rows,
 	// no agent roster — so setting it is opt-in.
@@ -71,12 +76,15 @@ func newGovEscapeStore(cs *capStore) *govEscapeStore {
 
 func (s *govEscapeStore) ListRuns(context.Context) ([]types.AgentRun, error) { return nil, nil }
 
-// ListAPITokens: no token fixture in this double — an empty answer, same as
-// integStore's ListRoleMappings stub above it, keeps a test that reaches
-// knownPrincipals (CS-8's credential inventory, via emailsByPrincipal) from
-// panicking on an unimplemented promoted method rather than claiming a
-// directory this double never modeled.
-func (s *govEscapeStore) ListAPITokens(context.Context) ([]types.APIToken, error) { return nil, nil }
+// ListAPITokens answers apiTokens, empty by default — same as integStore's
+// ListRoleMappings stub above it, that keeps a test reaching knownPrincipals
+// (CS-8's credential inventory, via emailsByPrincipal) from panicking on an
+// unimplemented promoted method. A test that seeds apiTokens gets a REAL
+// directory read, not a stub (review finding F9: TestPG_CredentialInventory
+// seeds it to prove email population end to end).
+func (s *govEscapeStore) ListAPITokens(context.Context) ([]types.APIToken, error) {
+	return s.apiTokens, nil
+}
 
 func (s *govEscapeStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
 	s.mu.Lock()

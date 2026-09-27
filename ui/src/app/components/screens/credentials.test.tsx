@@ -104,6 +104,40 @@ describe("the inventory", () => {
     await userEvent.click(retry);
     expect(await screen.findByText("alice@corp.example")).toBeInTheDocument();
   });
+
+  it("groups a person's rows: one Erase per person, not per credential (review finding F2)", async () => {
+    const second = { ...aliceRow, provider: "bedrock-prod", provider_name: "Bedrock (prod)" };
+    listInventoryMock.mockResolvedValue(inventory([aliceRow, second], { "corp-gw": 1, "bedrock-prod": 1 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    // Both providers show, but the person's identity and the Erase action
+    // appear exactly once — the table is grouped by person because erase
+    // works per person (packet F §4 a colfoot), never per credential.
+    expect(screen.getAllByText("alice@corp.example")).toHaveLength(1);
+    expect(screen.getByText("Corp gateway")).toBeInTheDocument();
+    expect(screen.getByText("Bedrock (prod)")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: INVENTORY.ERASE_ROW })).toHaveLength(1);
+  });
+
+  it("a zero-credential provider chip falls back to the raw id when no row named it (review finding F10)", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1, "unnamed-prov": 0 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    expect(screen.getByRole("button", { name: "unnamed-prov · 0" })).toBeInTheDocument();
+  });
+
+  it("the footer names the store and links to Audit, even when rows mix more than one store (review finding F5)", async () => {
+    const vaultRow = { ...aliceRow, person: "sub-bob", email: "bob@corp.example", store: "azurekv" as const };
+    listInventoryMock.mockResolvedValue(inventory([aliceRow, vaultRow], { "corp-gw": 2 }));
+    renderScreen();
+    await screen.findByText("alice@corp.example");
+    // Mixed stores (pg + azurekv here): the "Stored in" column carries the
+    // per-row distinction, but the footer still names ONE store's own audit
+    // trail — Key Vault's, since it's the external one — never null.
+    expect(screen.getByRole("columnheader", { name: INVENTORY.COL_STORE })).toBeInTheDocument();
+    expect(screen.getByText(/Stored in Key Vault\. Every use is in the Audit log/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: INVENTORY.OPEN_AUDIT })).toHaveAttribute("href", "/admin/audit");
+  });
 });
 
 describe("erasing a listed person (design F-5)", () => {
@@ -148,6 +182,33 @@ describe("erasing a listed person (design F-5)", () => {
     renderScreen({ status: { credential_storage: "key_vault" } as SetupStatus });
     await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
     expect(screen.getByText(ERASE.RETENTION_KEY_VAULT)).toBeInTheDocument();
+  });
+
+  it("§5 (d)'s order: the recoverable-days line comes before the audit line (review finding F6)", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    eraseMock.mockResolvedValue({ count: 2, store: "azurekv", purged: false, recoverable_days: 90 });
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
+    await screen.findByText(ERASE.KEY_VAULT_RECOVERABLE(90));
+    const dialog = screen.getByRole("dialog");
+    const order = Array.from(dialog.querySelectorAll("p")).map((el) => el.textContent);
+    const recoverableIdx = order.indexOf(ERASE.KEY_VAULT_RECOVERABLE(90));
+    const auditIdx = order.indexOf(ERASE.DONE_AUDIT);
+    expect(recoverableIdx).toBeGreaterThanOrEqual(0);
+    expect(auditIdx).toBeGreaterThan(recoverableIdx);
+  });
+
+  it("a >=500 erase failure shows ERASE.FAILED, never the server's bare 500 text (review finding F1)", async () => {
+    listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
+    eraseMock.mockRejectedValue(new HttpError(500, "erase credentials"));
+    renderScreen();
+    await userEvent.click(await screen.findByRole("button", { name: INVENTORY.ERASE_ROW }));
+    await userEvent.type(screen.getByLabelText(ERASE.CONFIRM_LABEL("alice@corp.example")), "alice@corp.example");
+    await userEvent.click(screen.getByRole("button", { name: ERASE.CONFIRM }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(ERASE.FAILED("alice@corp.example"));
+    expect(screen.queryByText("erase credentials")).toBeNull();
   });
 });
 

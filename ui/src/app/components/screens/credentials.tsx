@@ -14,6 +14,7 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, KeyRound, Loader2 } from "lucide-react";
 import { credentials as credentialsApi, type CredentialInventory, type CredentialRow } from "../../lib/api/credentials";
+import { HttpError } from "../../lib/api/core";
 import { getErrorMessage, relativeTime, absoluteTime } from "../../lib/format";
 import { useOperator } from "../wardyn/operator-context";
 import { useShellSetupStatus } from "../wardyn/model-access-context";
@@ -36,6 +37,30 @@ const NO_META_ERROR =
 
 function storeLabel(store: string): string {
   return INVENTORY.STORE[store] ?? store;
+}
+
+// A person's contiguous run of rows, in the order the inventory listed them —
+// erase works per PERSON, not per credential (review finding F2, packet F
+// §4 a colfoot: "The table is grouped by person because erase works per
+// person"). The Person and Erase cells render once per group, with a rowSpan.
+interface PersonGroup {
+  person: string;
+  email?: string;
+  rows: CredentialRow[];
+}
+function groupByPerson(rows: CredentialRow[]): PersonGroup[] {
+  const order: string[] = [];
+  const groups = new Map<string, PersonGroup>();
+  for (const r of rows) {
+    let g = groups.get(r.person);
+    if (!g) {
+      g = { person: r.person, email: r.email, rows: [] };
+      groups.set(r.person, g);
+      order.push(r.person);
+    }
+    g.rows.push(r);
+  }
+  return order.map((p) => groups.get(p)!);
 }
 
 // eraseRetentionLine is the erase confirm's retention sentence (design F-6),
@@ -90,8 +115,15 @@ export function CredentialsScreen() {
   const filtered = filter ? rows.filter((r) => r.provider === filter) : rows;
   const stores = new Set(rows.map((r) => r.store));
   const mixedStores = stores.size > 1;
-
-  const eraseLabelFor = (r: CredentialRow) => r.email || r.person;
+  const groups = React.useMemo(() => groupByPerson(filtered), [filtered]);
+  // The footer's own store name (review F5): the EXTERNAL store present, if
+  // any — the "Stored in" column (mixedStores) is the per-row distinction;
+  // the footer's job is only to say where that store's OWN audit trail lives.
+  const footerStore: "local" | "vault" | "key_vault" = stores.has("azurekv")
+    ? "key_vault"
+    : stores.has("vaultkv")
+      ? "vault"
+      : "local";
 
   return (
     <div className="mx-auto max-w-[1200px] px-6 py-6">
@@ -171,54 +203,57 @@ export function CredentialsScreen() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filtered.map((r) => (
-                      <TableRow key={`${r.person}-${r.provider}`}>
-                        <TableCell className="whitespace-nowrap font-medium">
-                          {r.email || r.person}
-                          {r.email && <span className="ml-1.5 text-xs text-muted-foreground">{r.person}</span>}
-                        </TableCell>
-                        <TableCell>{providerNames[r.provider] ?? r.provider}</TableCell>
-                        <TableCell>
-                          <Chip
-                            tone={r.state === "expired" ? "warning" : "neutral"}
-                            title={r.state === "expired" ? INVENTORY.EXPIRED_HINT : undefined}
+                    {groups.flatMap((g) =>
+                      g.rows.map((r, i) => (
+                        <TableRow key={`${r.person}-${r.provider}`}>
+                          {i === 0 && (
+                            <TableCell rowSpan={g.rows.length} className="whitespace-nowrap align-top font-medium">
+                              {g.email || g.person}
+                              {g.email && <span className="ml-1.5 text-xs text-muted-foreground">{g.person}</span>}
+                            </TableCell>
+                          )}
+                          <TableCell>{providerNames[r.provider] ?? r.provider}</TableCell>
+                          <TableCell>
+                            <Chip
+                              tone={r.state === "expired" ? "warning" : "neutral"}
+                              title={r.state === "expired" ? INVENTORY.EXPIRED_HINT : undefined}
+                            >
+                              {r.state === "expired" ? INVENTORY.STATE_EXPIRED : INVENTORY.STATE_STORED}
+                            </Chip>
+                          </TableCell>
+                          {mixedStores && <TableCell className="text-muted-foreground">{storeLabel(r.store)}</TableCell>}
+                          <TableCell className="text-muted-foreground" title={absoluteTime(r.added_at)}>
+                            {relativeTime(r.added_at)}
+                          </TableCell>
+                          <TableCell
+                            className="text-muted-foreground"
+                            title={r.last_used_at ? absoluteTime(r.last_used_at) : undefined}
                           >
-                            {r.state === "expired" ? INVENTORY.STATE_EXPIRED : INVENTORY.STATE_STORED}
-                          </Chip>
-                        </TableCell>
-                        {mixedStores && <TableCell className="text-muted-foreground">{storeLabel(r.store)}</TableCell>}
-                        <TableCell className="text-muted-foreground" title={absoluteTime(r.added_at)}>
-                          {relativeTime(r.added_at)}
-                        </TableCell>
-                        <TableCell
-                          className="text-muted-foreground"
-                          title={r.last_used_at ? absoluteTime(r.last_used_at) : undefined}
-                        >
-                          {r.last_used_at ? relativeTime(r.last_used_at) : INVENTORY.NEVER_USED}
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setEraseTarget({ principal: r.person, label: eraseLabelFor(r) })}
-                          >
-                            {INVENTORY.ERASE_ROW}
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                            {r.last_used_at ? relativeTime(r.last_used_at) : INVENTORY.NEVER_USED}
+                          </TableCell>
+                          {i === 0 && (
+                            <TableCell rowSpan={g.rows.length} className="align-top">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setEraseTarget({ principal: g.person, label: g.email || g.person })}
+                              >
+                                {INVENTORY.ERASE_ROW}
+                              </Button>
+                            </TableCell>
+                          )}
+                        </TableRow>
+                      )),
+                    )}
                   </TableBody>
                 </Table>
               </div>
 
               <p className="mt-3 text-xs text-muted-foreground">
-                {mixedStores
-                  ? null
-                  : stores.has("azurekv")
-                    ? INVENTORY.FOOTER("key_vault")
-                    : stores.has("vaultkv")
-                      ? INVENTORY.FOOTER("vault")
-                      : INVENTORY.FOOTER_LOCAL}
+                {footerStore === "local" ? INVENTORY.FOOTER_LOCAL : INVENTORY.FOOTER(footerStore)}{" "}
+                <Link to="/admin/audit" className="text-info hover:underline">
+                  {INVENTORY.OPEN_AUDIT}
+                </Link>
               </p>
             </div>
           )}
@@ -279,7 +314,11 @@ function EraseDialog({
       setResult(res);
       setErasedLabel(label);
     } catch (e) {
-      setError(getErrorMessage(e));
+      // §5 (f): a >=500 never finished, so it gets its OWN sentence — the
+      // erase may have partly landed, unlike a 4xx refusal, whose server
+      // sentence (route-neutral 422, or the operator-namespace 400) is shown
+      // as sent (review finding F1).
+      setError(e instanceof HttpError && e.status >= 500 ? ERASE.FAILED(label) : getErrorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -302,10 +341,12 @@ function EraseDialog({
             <p className="text-body text-foreground">
               {result.count === 0 ? ERASE.DONE_NONE(erasedLabel) : ERASE.DONE(result.count, erasedLabel)}
             </p>
-            {result.count > 0 && <p className="text-body text-muted-foreground">{ERASE.DONE_AUDIT}</p>}
+            {/* §5 (d)'s order: the count, then Key Vault's recoverable-days
+                line (when it applies), then the audit line last (review F6). */}
             {result.count > 0 && result.store && !result.purged && !!result.recoverable_days && (
               <p className="text-body text-muted-foreground">{ERASE.KEY_VAULT_RECOVERABLE(result.recoverable_days)}</p>
             )}
+            {result.count > 0 && <p className="text-body text-muted-foreground">{ERASE.DONE_AUDIT}</p>}
             <DialogFooter>
               <Button onClick={() => close(true)}>{ERASE.CLOSE}</Button>
             </DialogFooter>
