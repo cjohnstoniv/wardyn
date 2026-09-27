@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,6 +36,9 @@ type capControlPlane struct {
 	asks []url.Values
 	// refuse, when set, answers every first ask 403 with this sentence.
 	refuse string
+	// refuseReason is the machine class sent beside refuse, as the control
+	// plane's errorBody does.
+	refuseReason string
 	// sameID answers every first ask with ONE approval id (the server's dedup).
 	sameID uuid.UUID
 	// raised is every approval id a first ask answered with.
@@ -69,7 +73,10 @@ func newCapControlPlane(t *testing.T) *capControlPlane {
 			}
 			if cp.refuse != "" {
 				w.WriteHeader(http.StatusForbidden)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": cp.refuse})
+				_ = json.NewEncoder(w).Encode(struct {
+					Error  string `json:"error"`
+					Reason string `json:"reason,omitempty"`
+				}{cp.refuse, cp.refuseReason})
 				return
 			}
 			id := cp.sameID
@@ -214,6 +221,19 @@ func TestADOHold_ControlPlaneRefusalIsRelayedWithoutAHold(t *testing.T) {
 	if reader.count() != 0 || h.p.inject.reauth.capCounted != 0 {
 		t.Errorf("a refusal was held: reads=%d workflows=%d", reader.count(), h.p.inject.reauth.capCounted)
 	}
+}
+
+// The longest real refusal (a raised build_admin review, with its approval id)
+// plus its reason still reaches the sandbox whole — not cut mid-JSON into the
+// generic fallback.
+func TestADOHold_LongestControlPlaneRefusalSurvivesItsReason(t *testing.T) {
+	id := uuid.New()
+	sentence := fmt.Sprintf("Wardyn refused this Azure DevOps request and asked a person to approve %q (approval %s). Retry once it is approved.",
+		adoscope.Label(adoscope.CapBuildAdmin), id)
+	cp := newCapControlPlane(t)
+	cp.refuse, cp.refuseReason = sentence, "capability_review"
+	h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
+	h.mustRefuse(t, h.patchWorkItem(t), id.String()+"). Retry once it is approved.")
 }
 
 // The proxy's own budget: once spent, no further hold is opened — and it is a

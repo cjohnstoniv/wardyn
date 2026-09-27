@@ -32,9 +32,11 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -70,7 +72,7 @@ const trustDomain = "wardyn.local"
 // re-declares the value here (kept in lockstep with internal/api/server.go).
 const internalAudience = "wardyn-internal"
 
-// ─── in-process secret store ──────────────────────────────────────────────────
+// in-process secret store
 
 // memSecrets is a minimal secretstore.Store backed by an in-memory map. It
 // mirrors the fake in internal/api/injection_test.go so api_key injection-
@@ -134,6 +136,23 @@ func (s *memSecrets) List(_ context.Context) ([]string, error) {
 	return out, nil
 }
 
+func (s *memSecrets) DeleteEverywhere(_ context.Context, names []string) (int, error) {
+	n := 0
+	for _, rows := range append([]map[string][]byte{s.m}, slices.Collect(maps.Values(s.owned))...) {
+		for _, name := range names {
+			if _, ok := rows[name]; ok {
+				delete(rows, name)
+				n++
+			}
+		}
+	}
+	return n, nil
+}
+
+func (s *memSecrets) Holders(context.Context, []string) (map[string][]string, error) {
+	return nil, nil
+}
+
 // For returns an owner-scoped view sharing the same backing maps as s — see
 // secretstore.Store.For's doc comment for the fallback/isolation contract
 // this mirrors.
@@ -144,7 +163,7 @@ func (s *memSecrets) For(owner string) secretstore.Store {
 	return &memSecrets{owner: owner, m: s.m, owned: s.owned}
 }
 
-// ─── approval service adapter (copied from cmd/wardynd/adapters.go) ─────────────
+// approval service adapter (copied from cmd/wardynd/adapters.go)
 //
 // cmd/wardynd is package `main`, so its approvalService adapter cannot be
 // imported. It is copied here verbatim (the ~20-line adapter the lane brief
@@ -197,14 +216,17 @@ func (s *approvalService) Get(ctx context.Context, id uuid.UUID) (types.Approval
 func (s *approvalService) List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
 	return store.NewPG(s.pool).ListApprovals(ctx, state)
 }
-func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
+func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (map[string]int, error) {
 	return approval.CancelForRun(ctx, s.st(), runID, reason)
+}
+func (s *approvalService) ExpireOne(ctx context.Context, id uuid.UUID, actor, reason string) error {
+	return approval.ExpireOne(ctx, s.st(), id, actor, reason)
 }
 func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
 	return store.NewPG(s.pool).CountApprovalsForRun(ctx, runID)
 }
 
-// ─── fake runner ──────────────────────────────────────────────────────────────
+// fake runner
 
 // fakeRunner is an in-package runner.Runner that lets the e2e tests drive the
 // run lifecycle deterministically. It mirrors the shape of the fake in
@@ -313,8 +335,6 @@ func (f *fakeRunner) KillSandbox(context.Context, string) error {
 	return nil
 }
 
-// stopCount returns the StopSandbox call count under the lock (race-clean read
-// for the test, which races the detached completion watcher).
 // specFor is the SandboxSpec dispatched for runID, if CreateSandbox saw one.
 func (f *fakeRunner) specFor(runID uuid.UUID) (runner.SandboxSpec, bool) {
 	f.mu.Lock()
@@ -327,6 +347,8 @@ func (f *fakeRunner) specFor(runID uuid.UUID) (runner.SandboxSpec, bool) {
 	return runner.SandboxSpec{}, false
 }
 
+// stopCount returns the StopSandbox call count under the lock (race-clean read
+// for the test, which races the detached completion watcher).
 func (f *fakeRunner) stopCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -335,7 +357,7 @@ func (f *fakeRunner) stopCount() int {
 
 var _ runner.Runner = (*fakeRunner)(nil)
 
-// ─── harness ──────────────────────────────────────────────────────────────────
+// harness
 
 // harness is one fully-wired, black-box-testable control plane: the real server
 // behind an httptest server, a live pool, the real broker + approval service,

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -23,21 +22,6 @@ const (
 	maxUserTypePriority       = 1000
 	maxUserTypeIDLen          = 63
 )
-
-// userTypeIDRe is the slug shape migration 0071_user_types CHECKs.
-var userTypeIDRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-
-// reservedUserTypeIDs are the words a role-map value already means: a type
-// with one of these ids would be a type a map value could never name, or a
-// tier a type could be mistaken for. "user" is the non-admin tier's wire name
-// from 0.8 on.
-var reservedUserTypeIDs = map[string]bool{
-	oidc.RoleAdmin:         true,
-	oidc.RoleSecurityAdmin: true,
-	oidc.RoleMember:        true,
-	"user":                 true,
-	accessDeniedRole:       true,
-}
 
 // mountUserTypeRoutes registers /user-types. Called with securityOps: defining
 // a type (and, later, the rows written against it) is the security tier's
@@ -103,10 +87,13 @@ func userTypeFromRequest(req userTypeRequest) (types.UserType, string) {
 			return t, "Give the type an id: its name has no letters or digits to make one from."
 		}
 	}
-	if reservedUserTypeIDs[t.ID] {
+	// The reserved words (oidc.UserTypeIDReserved) are what a role-map value
+	// already means: a type with one of these ids would be a type a map value
+	// could never name, or a tier a type could be mistaken for.
+	if oidc.UserTypeIDReserved(t.ID) {
 		return t, fmt.Sprintf("The id %q is a role, so a user type can't use it. Pick another.", t.ID)
 	}
-	if len(t.ID) > maxUserTypeIDLen || !userTypeIDRe.MatchString(t.ID) {
+	if !oidc.UserTypeIDWellFormed(t.ID) {
 		return t, fmt.Sprintf("The id must be lowercase letters and digits joined by single hyphens, at most %d characters.", maxUserTypeIDLen)
 	}
 	return t, ""
@@ -248,6 +235,10 @@ func (s *Server) handleDeleteUserType(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "count user type references", err)
 		return
 	}
+	if use.tokens, err = s.cfg.Store.UserTypeTokenStamps(r.Context(), id); err != nil {
+		writeServerError(w, r, "count user type token stamps", err)
+		return
+	}
 	if msg := use.refusal(); msg != "" {
 		writeError(w, http.StatusConflict, msg)
 		return
@@ -271,12 +262,13 @@ func (s *Server) handleDeleteUserType(w http.ResponseWriter, r *http.Request) {
 }
 
 // userTypeInUse is everything that still names a user type a DELETE would
-// remove: a WARDYN_OIDC_ROLE_MAP value, WARDYN_OIDC_DEFAULT_ROLE, and the
+// remove: a WARDYN_OIDC_ROLE_MAP value, WARDYN_OIDC_DEFAULT_ROLE, the
 // capability-grant, governance-assignment and drive-grant rows written
-// against it.
+// against it, and the unrevoked API tokens stamped with it (a token whose type
+// is gone would carry a type nothing defines).
 type userTypeInUse struct {
 	chart, defaultRole bool
-	rows               int
+	rows, tokens       int
 }
 
 // refusal is the 409 sentence naming what holds the type, or "" when nothing
@@ -304,6 +296,14 @@ func (u userTypeInUse) refusal() string {
 		}
 		clauses = append(clauses, fmt.Sprintf("%d permission, profile or drive %s it", u.rows, noun))
 		fixes = append(fixes, "remove those rows")
+	}
+	switch {
+	case u.tokens == 1:
+		clauses = append(clauses, "1 API token carries it")
+		fixes = append(fixes, "revoke the token or wait for its holder to sign in again")
+	case u.tokens > 1:
+		clauses = append(clauses, fmt.Sprintf("%d API tokens carry it", u.tokens))
+		fixes = append(fixes, "revoke the tokens or wait for their holders to sign in again")
 	}
 	if len(clauses) == 0 {
 		return ""

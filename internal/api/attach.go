@@ -187,7 +187,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// upgrade with 404/409, or an authz.denied row, instead of the refusal.
 	if s.attachOriginRefused(r) {
 		// Audited like the REST guard's two arms (http.go), on the same
-		// auth.failed action, reason and actor — a control that refuses
+		// auth.fail action, reason and actor — a control that refuses
 		// silently cannot answer either question an operator has at 3am
 		// (csrf.go), and that argument started applying to this socket the
 		// moment the decision moved out of the library and into our code.
@@ -234,6 +234,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// error rather than a WebSocket that opens and immediately dies.
 	if run.State != types.RunRunning {
 		writeError(w, http.StatusConflict, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
+		return
+	}
+	// A kept run is RUNNING with its agent stopped: nothing to attach to.
+	if runIsKept(run) {
+		writeError(w, http.StatusConflict, "run has ended; cannot attach")
 		return
 	}
 	if run.SandboxRef == "" {
@@ -377,7 +382,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// memory for the session's lifetime and written once at close, which is fine
 	// for human-length interactive sessions but is not a streaming sink — past
 	// maxSessionCastBytes the recording keeps its head and drops the rest, and
-	// says so in the session.recording audit.
+	// says so in the session.recording.write audit.
 	sessionID := uuid.New().String()
 	castTee, finishRecording := s.newSessionRecorder(run, sessionID, opts)
 
@@ -424,7 +429,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// observer so is a write to a FOREIGN socket — never on this goroutine.
 	releaseAttach(releaseHolder)
 
-	// Persist the recording (best-effort) and emit session.recording when one was
+	// Persist the recording (best-effort) and emit session.recording.write when one was
 	// actually written. finishRecording is a no-op when recording is disabled.
 	// Use the daemon-lifetime BaseCtx (not the request ctx, which is typically
 	// cancelled the instant the WebSocket closes) so the provenance write + audit
@@ -631,7 +636,7 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 // credential verbatim into a replayable artifact that long outlives the run —
 // and no masking can prevent it (the token is unknown to wardynd until the
 // operator pastes it back, by which point the cast already holds it). Dropping
-// the cast costs no provenance: harness.login.started and session.attach still
+// the cast costs no provenance: harness.login.start and session.attach still
 // record who attached, when, and why.
 func runIsUnrecordable(run types.AgentRun) bool {
 	return run.Task == harnessLoginTask
@@ -647,7 +652,7 @@ func runIsUnrecordable(run types.AgentRun) bool {
 //     works unchanged in headless/no-store mode.
 //   - finish flushes the masker tail and persists the buffered asciicast to the
 //     RecordingStore under a per-run+session key (so it never clobbers the batch
-//     run's cast or a concurrent attach), then emits a session.recording audit
+//     run's cast or a concurrent attach), then emits a session.recording.write audit
 //     event. It is best-effort: a persist failure is audited as a failure but
 //     never fails the detach.
 //
@@ -676,7 +681,7 @@ func runIsUnrecordable(run types.AgentRun) bool {
 //
 // ponytail: past the cap the recording keeps its HEAD and drops the rest —
 // smallest thing that keeps a valid, replayable artifact plus an honest
-// truncated:true in the session.recording audit. A ring buffer that keeps the
+// truncated:true in the session.recording.write audit. A ring buffer that keeps the
 // TAIL instead is the upgrade path if operators ask for the end of long
 // sessions; a streaming sink is the one after that.
 const maxSessionCastBytes = 8 << 20
@@ -756,7 +761,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 			outcome = "failure"
 			data["error"] = err.Error()
 		}
-		s.recordAudit(ctx, s.auditEvent(&runID, principalType, principal, "session.recording",
+		s.recordAudit(ctx, s.auditEvent(&runID, principalType, principal, "session.recording.write",
 			key, outcome, mustJSON(data)))
 	}
 

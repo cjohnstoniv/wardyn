@@ -52,8 +52,9 @@ func TestRequestDTOs_ZeroValueOmitOptionals(t *testing.T) {
 		// "no narrowing", and posting `"read_only":null` would be a value the
 		// server has to special-case instead of an absence it can ignore.
 		{"DriveSelection", client.DriveSelection{}, []string{"enabled"}},
-		// PushRulesSpec (RunPolicySpec.PushRules) has no required field: both
-		// deny_paths and max_inspect_pack_mib must be omitempty, so a nil
+		// PushRulesSpec (RunPolicySpec.PushRules) has no required field: every
+		// one — deny_paths, max_inspect_pack_mib, require_review_paths,
+		// hold_seconds — must be omitempty, so a nil
 		// *PushRulesSpec's pointee never posts as an empty-but-present
 		// `"push_rules":{}` that would read as "rules set, none of them" —
 		// distinct from the nil pointer itself, which never marshals at all.

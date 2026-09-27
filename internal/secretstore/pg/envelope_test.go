@@ -5,6 +5,7 @@ package pg
 
 import (
 	"context"
+	"crypto/fips140"
 	"encoding/hex"
 	"errors"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/secretstoretest"
 )
 
 // TestSecretAAD_GoldenVector pins AAD_secret byte for byte, member and operator
@@ -56,7 +58,7 @@ func TestOpen_RefusesEveryMismatch(t *testing.T) {
 	v0 := good("alice", "k")
 	v0.version = 0
 	newer := good("alice", "k")
-	newer.version = 2
+	newer.version = 3
 	otherKEK := good("alice", "k")
 	otherKEK.kekID = "transit:secret/wardyn"
 
@@ -68,7 +70,7 @@ func TestOpen_RefusesEveryMismatch(t *testing.T) {
 		"moved to the operator":                       {moved(good("alice", "k"), "", "k"), "refused"},
 		"moved to another name":                       {moved(good("alice", "k"), "alice", "k2"), "refused"},
 		"forged under a foreign key but labeled ours": {forgedWrap, "refused"},
-		"a newer enc_version":                         {newer, "has enc_version 2 which this wardynd does not understand; upgrade wardynd"},
+		"a newer enc_version":                         {newer, "has enc_version 3 which this wardynd does not understand; upgrade wardynd"},
 		"a v0 row":                                    {v0, "an older wardynd is still writing"},
 		"an unconfigured KEK":                         {otherKEK, `"transit:secret/wardyn"`},
 		"value swapped, wrap intact":                  {func() envelope { e := good("alice", "k"); e.ct = good("alice", "k").ct; return e }(), "integrity"},
@@ -88,6 +90,44 @@ func TestOpen_RefusesEveryMismatch(t *testing.T) {
 		}
 		if errors.Is(err, secretstore.ErrNotFound) || errors.Is(err, pgx.ErrNoRows) {
 			t.Errorf("%s: a refusal surfaced as not-found (rule 9)", label)
+		}
+	}
+}
+
+// TestEnvelope_RoundTripUnderFIPSOnly: the envelope — DEK draw, AES-256-GCM
+// under a module-drawn nonce, HKDF-SHA256 local wrap — seals, opens and still
+// refuses a moved row under GODEBUG=fips140=only. Only the age identity is
+// made outside enforcement: its X25519 recipient is the one step the local key
+// cannot take in that mode (NewLocal refuses it there).
+func TestEnvelope_RoundTripUnderFIPSOnly(t *testing.T) {
+	if !secretstoretest.UnderFIPSOnly(t) {
+		return
+	}
+	ctx := context.Background()
+	var s *Store
+	fips140.WithoutEnforcement(func() {
+		id, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s, err = New(nil, id); err != nil {
+			t.Fatal(err)
+		}
+	})
+	const value = "sk-value-under-fips-only"
+	for _, owner := range []string{"", "alice@corp.example"} {
+		w, ct, err := seal(ctx, s.kek, owner, "k", []byte(value))
+		if err != nil {
+			t.Fatalf("seal for owner %q: %v", owner, err)
+		}
+		e := envelope{ownedBy: owner, name: "k", version: encVersion, kekID: s.kek.ID(), wrapped: w, ct: ct}
+		got, err := s.open(ctx, e)
+		if err != nil || string(got) != value {
+			t.Fatalf("open for owner %q = (%q, %v)", owner, got, err)
+		}
+		e.ownedBy = "bob"
+		if _, err := s.open(ctx, e); err == nil || !strings.Contains(err.Error(), "refused") {
+			t.Fatalf("a row moved from %q to bob opened under fips140=only: %v", owner, err)
 		}
 	}
 }

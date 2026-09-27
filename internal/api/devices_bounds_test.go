@@ -69,10 +69,10 @@ func TestDevices_OperatorPredicatesRefuseADeviceContext(t *testing.T) {
 	}
 }
 
-// The anonymous enrol route's failure rows are coalesced like auth.failed's.
+// The anonymous enrol route's failure rows are coalesced like auth.fail's.
 // Ten rotating peers stay under the per-peer limiter; without the fold they
 // would write one row per second forever — 86,400 a day into the append-only
-// chain from an unauthenticated caller — and spend auth.failed's budget too.
+// chain from an unauthenticated caller — and spend auth.fail's budget too.
 func TestDevices_EnrolFailureDripIsCoalesced(t *testing.T) {
 	ast := newAuthzStore()
 	rec := &safeRecorder{}
@@ -97,16 +97,16 @@ func TestDevices_EnrolFailureDripIsCoalesced(t *testing.T) {
 		}
 	}
 	enrol := auditRows(rec, "device.enrol", "failure")
-	authFailed := auditRows(rec, "auth.failed", "failure")
-	t.Logf("%d simulated seconds: device.enrol failure rows = %d, auth.failed rows (coalesced) = %d", seconds, len(enrol), len(authFailed))
+	authFailed := auditRows(rec, "auth.fail", "failure")
+	t.Logf("%d simulated seconds: device.enrol failure rows = %d, auth.fail rows (coalesced) = %d", seconds, len(enrol), len(authFailed))
 	if len(enrol) > len(authFailed)+2 {
-		t.Errorf("device.enrol failure rows = %d over %d s; auth.failed on the same drip = %d — the anonymous enrol drip is not coalesced", len(enrol), seconds, len(authFailed))
+		t.Errorf("device.enrol failure rows = %d over %d s; auth.fail on the same drip = %d — the anonymous enrol drip is not coalesced", len(enrol), seconds, len(authFailed))
 	}
 }
 
 // device.audit.ingest failure rows are bounded per device: a laptop sending
 // refused pushes as fast as it likes writes a handful of rows, not one per
-// request. auth.failed on the same server caps at its burst.
+// request. auth.fail on the same server caps at its burst.
 func TestDevices_IngestFailureRowsAreBoundedPerDevice(t *testing.T) {
 	srv, _, rec := newDeviceTestServer(t, false)
 	id, tok := enrolTestDevice(t, srv, "laptop")
@@ -119,8 +119,8 @@ func TestDevices_IngestFailureRowsAreBoundedPerDevice(t *testing.T) {
 		do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", "wdd_wrong", "[]")
 	}
 	ingest := auditRows(rec, "device.audit.ingest", "failure")
-	authFailed := auditRows(rec, "auth.failed", "failure")
-	t.Logf("%d refused pushes -> device.audit.ingest failure rows = %d; %d bad tokens -> auth.failed rows = %d", n, len(ingest), n, len(authFailed))
+	authFailed := auditRows(rec, "auth.fail", "failure")
+	t.Logf("%d refused pushes -> device.audit.ingest failure rows = %d; %d bad tokens -> auth.fail rows = %d", n, len(ingest), n, len(authFailed))
 	if len(ingest) >= n {
 		t.Errorf("device.audit.ingest failure rows = %d for %d requests: unbounded per-request writes into the append-only log", len(ingest), n)
 	}
@@ -202,7 +202,7 @@ func TestDevices_SecretsNeverReachLogsOrAuditRows(t *testing.T) {
 	srv, ast, rec := newDeviceTestServer(t, false)
 	enrolTok := mintEnrolmentToken(t, srv, "laptop")
 	w := doPeer(t, srv, http.MethodPost, "/api/v1/devices/enrol", "", `{"token":"`+enrolTok+`"}`, "203.0.113.10:4000")
-	var got deviceEnrolResponse
+	var got types.DeviceEnrolResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusCreated {
 		t.Fatalf("enrol: %d %s", w.Code, w.Body.String())
 	}
@@ -368,6 +368,7 @@ func TestDevices_IngestRefusesClaimsThatCannotReCheck(t *testing.T) {
 		"array data":            func(r *types.FederatedAuditEvent) { r.Data = json.RawMessage(`[1,2]`) },
 		"scalar data":           func(r *types.FederatedAuditEvent) { r.Data = json.RawMessage(`42`) },
 		"a target over the cap": func(r *types.FederatedAuditEvent) { r.Target = strings.Repeat("t", store.MaxAuditTargetLen+1) },
+		"a claimed device_id":   func(r *types.FederatedAuditEvent) { other := uuid.New(); r.DeviceID = &other },
 	} {
 		t.Run(name, func(t *testing.T) {
 			rows := chainRows(1, 1, "")

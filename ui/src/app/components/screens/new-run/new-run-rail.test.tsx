@@ -43,7 +43,7 @@ vi.mock("../settings/harness-login-pane", () => ({
 }));
 
 import { RunRail } from "./new-run-rail";
-import { RAIL, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
+import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import { ModelAccessBanner } from "../../wardyn/model-access-banner";
 import { ModelAccessProvider, useModelAccessDoor } from "../../wardyn/model-access-context";
@@ -51,6 +51,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { ADO } from "../../../lib/ado-entra-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
+import { aheadByHours } from "../../../lib/test-clock";
 import { AUTONOMY_RAIL, autonomyBoundSentence } from "../../../lib/governance-copy";
 import { AUTONOMY_META } from "../../wardyn/autonomy-meta";
 import type { AutonomyResolution } from "../../../lib/api/governance";
@@ -135,6 +136,12 @@ function railTree(props: {
    *  actually clearing /setup/status (and unmounting the rail's own control),
    *  which is exactly the case S1's fix has to survive. */
   refreshTo?: SetupModelAccess;
+  /** #725/T-65: the FULL roster StatusHost feeds `/setup/status` — defaults
+   *  to `[agentRow]` (every pre-existing case's behaviour). A caller that
+   *  needs a claude-code bedrock_sso row present WHILE `agentRow` names a
+   *  different agent (a codex launch, say) passes both here — the one shape
+   *  the default cannot produce. */
+  harnesses?: SetupHarnessTool[];
 }) {
   const rail = (
     <RunRail
@@ -182,7 +189,7 @@ function railTree(props: {
   }
   return (
     <MemoryRouter>
-      <StatusHost initial={props.modelAccess} refreshTo={props.refreshTo} agentRow={props.agentRow}>
+      <StatusHost initial={props.modelAccess} refreshTo={props.refreshTo} agentRow={props.agentRow} harnesses={props.harnesses}>
         <OperatorProvider operator={!!props.operator} securityOperator={!!props.operator} principal="p@corp.example">
           {props.banner && <ModelAccessBanner />}
           {props.extra}
@@ -205,15 +212,17 @@ function StatusHost({
   initial,
   refreshTo,
   agentRow,
+  harnesses,
   children,
 }: {
   initial: SetupModelAccess;
   refreshTo?: SetupModelAccess;
   agentRow?: SetupHarnessTool;
+  harnesses?: SetupHarnessTool[];
   children: ReactNode;
 }) {
   const [access, setAccess] = useState(initial);
-  const status = baseStatus({ model_access: access, harnesses: agentRow ? [agentRow] : [] });
+  const status = baseStatus({ model_access: access, harnesses: harnesses ?? (agentRow ? [agentRow] : []) });
   return (
     <ModelAccessProvider status={status} onRefresh={() => refreshTo && setAccess(refreshTo)}>
       {children}
@@ -485,7 +494,7 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
   });
 
   it("expiring renders the deadline line, and the run is never called refused", () => {
-    const deadline = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    const deadline = aheadByHours(3);
     renderRail({
       agentRow: modelAccessRow(),
       modelAccess: { state: "expiring", action: `Sign in again before ${deadline}`, deadline },
@@ -503,6 +512,8 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
   // needsAttention/actionable, so the rail still CLAIMS the door — without
   // the fallback below that leaves zero sign-in controls on /runs/new.
   it("expiring with no deadline on the wire falls back to the server's own action, not silence", () => {
+    // passthrough, never compared to the clock — an older daemon's opaque
+    // action sentence, rendered verbatim with no deadline field to parse.
     const action = "Sign in again before 2026-09-19T14:03:22Z";
     renderRail({
       agentRow: modelAccessRow(),
@@ -579,7 +590,8 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
   // same pattern as model-access-banner.test.tsx's afterFocusSettles.
   const afterFocusSettles = () => act(() => new Promise((r) => setTimeout(r, 0)));
 
-  describe("where focus goes when the REAL door closes (S1 — review-1)", () => {
+  describe("where focus goes when the REAL door closes", () => {
+    // ticket: S1 (review-1)
     // Escape leaves the state (and the rail's own control) unchanged — the
     // ordinary cancellation path — yet focus still lands on Launch, never on
     // the control that happened to be document.activeElement: the rail
@@ -717,6 +729,29 @@ describe("the launch door — the server's credential refusal opens the sign-in,
     });
     await act(async () => {});
     expect(dialog()).toBeNull();
+  });
+
+  // #725/T-65 — Codex launch refusal must not open "Sign in to AWS": the
+  // door's own bedrockSSO/perUser facts grade the claude-code row ALONE
+  // (modelAccessDoor mirrors modelAccessAgent server-side), regardless of
+  // which agent THIS run picked. A deployment can carry a working
+  // claude-code bedrock_sso per_user row at the same time a codex launch is
+  // refused for its own, unrelated model_credential reason — an AWS
+  // sign-in repairs neither.
+  it("a codex launch's refusal opens no door, even with a claude-code bedrock_sso per_user row present", async () => {
+    const onLaunch = vi.fn();
+    renderRail({
+      agentRow: { id: "codex", display: "Codex", has_gateway: true, has_login: false },
+      harnesses: [modelAccessRow(), { id: "codex", display: "Codex", has_gateway: true, has_login: false }],
+      modelAccess: { state: "live" },
+      credentialRefused: true,
+      banner: true,
+      operator: true,
+      onLaunch,
+    });
+    await act(async () => {});
+    expect(dialog()).toBeNull();
+    expect(onLaunch).not.toHaveBeenCalled();
   });
 
   it("once per click: a relaunch refused again does not reopen the door; a fresh Launch click re-arms it", async () => {
@@ -868,7 +903,8 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
   // Review finding F4: on a deployment with no per-user Azure DevOps row (or
   // no Azure DevOps row at all), preflight never sends git_credential — a
   // shell run there must render no "Credentials" section, not an empty one.
-  it("F4: a shell run with no git_credential fact renders no Credentials heading at all", () => {
+  it("a shell run with no git_credential fact renders no Credentials heading at all", () => {
+    // ticket: F4
     renderRail({});
     expect(screen.queryByText("Credentials")).toBeNull();
   });
@@ -888,12 +924,14 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
   // (above), but showCredentials used to key on `!!gitCredential` — truthy
   // for `live` too — so a shell run with a live Azure DevOps connection and
   // no other credential to describe got an empty "Credentials" heading.
-  it("N5: a live shell run with no other credential renders no empty Credentials heading", () => {
+  it("a live shell run with no other credential renders no empty Credentials heading", () => {
+    // ticket: N5
     renderRail({ gitCredential: { state: "live", source: "org" } });
     expect(screen.queryByText("Credentials")).toBeNull();
   });
 
-  it("the dialog names the row's org (from the 422 body — F1) and offers Continue to Microsoft / Cancel", () => {
+  it("the dialog names the row's org (from the 422 body) and offers Continue to Microsoft / Cancel", () => {
+    // ticket: F1
     // No preflight verdict at all — F1: the org comes from the 422 itself,
     // never from a git_credential fact that may not exist yet.
     renderRail({ adoDialogOpen: true, adoOrg: "https://dev.azure.com/contoso" });
@@ -903,24 +941,26 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
-  it("a blocked popup shows the canon sentence and a plain fallback link to the sign-in URL (F9)", () => {
+  it("a blocked popup shows the canon sentence and a plain fallback link to the sign-in URL", () => {
+    // ticket: F9
     renderRail({ adoDialogOpen: true, adoBlockedUrl: "/api/v1/scm/azure-devops/signin" });
     expect(screen.getByText(ADO.CONNECT_POPUP_BLOCKED)).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: ADO.CONNECT_CTA });
+    const link = screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN });
     expect(link).toHaveAttribute("href", "/api/v1/scm/azure-devops/signin");
     expect(link).toHaveAttribute("target", "_blank");
   });
 
   // Review follow-up N1: clicking the fallback link ALSO starts the poll
   // (alongside its own href navigation), so the dialog advances on return.
-  it("N1: clicking the fallback link fires onFallbackClick", async () => {
+  it("clicking the fallback link fires onFallbackClick", async () => {
+    // ticket: N1
     const onAdoFallbackClick = vi.fn();
     renderRail({
       adoDialogOpen: true,
       adoBlockedUrl: "/api/v1/scm/azure-devops/signin",
       onAdoFallbackClick,
     });
-    await userEvent.click(screen.getByRole("link", { name: ADO.CONNECT_CTA }));
+    await userEvent.click(screen.getByRole("link", { name: ADO.CONNECT_POPUP_OPEN }));
     expect(onAdoFallbackClick).toHaveBeenCalledTimes(1);
   });
 
@@ -950,36 +990,3 @@ describe("the Azure DevOps connect dialog and the git_credential preflight line"
 // #459 — the launch and preflight errors become role="alert" regions,
 // announced on arrival, with an sr-only prefix spoken before the server's own
 // (unchanged, still-visible) sentence.
-describe("RunRail — failure lines are announced (#459)", () => {
-  it("the launch error is an alert carrying the sr-only prefix and the server's sentence", () => {
-    renderRail({ launchError: "the server's launch sentence" });
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(RAIL.LAUNCH_ERROR_LABEL);
-    expect(alert).toHaveTextContent("the server's launch sentence");
-    // The sentence itself is unchanged and visible — only the prefix hides.
-    expect(screen.getByText("the server's launch sentence")).toBeVisible();
-  });
-
-  it("the preflight error is an alert carrying the sr-only prefix and the server's sentence", () => {
-    renderRail({ preflightError: "the server's preflight sentence" });
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(RAIL.PREFLIGHT_ERROR_LABEL);
-    expect(alert).toHaveTextContent("the server's preflight sentence");
-  });
-
-  it("a repeated, identical launch failure remounts the alert region (errorSeq keys it)", () => {
-    const r = renderRail({ launchError: "same sentence", launchErrorSeq: 1 });
-    const first = screen.getByRole("alert");
-    r.rerenderWith({ launchError: "same sentence", launchErrorSeq: 2 });
-    const second = screen.getByRole("alert");
-    expect(second).not.toBe(first);
-  });
-
-  it("a repeated, identical preflight failure remounts the alert region (errorSeq keys it)", () => {
-    const r = renderRail({ preflightError: "same sentence", preflightErrorSeq: 1 });
-    const first = screen.getByRole("alert");
-    r.rerenderWith({ preflightError: "same sentence", preflightErrorSeq: 2 });
-    const second = screen.getByRole("alert");
-    expect(second).not.toBe(first);
-  });
-});

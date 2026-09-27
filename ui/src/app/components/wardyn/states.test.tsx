@@ -44,7 +44,8 @@ describe("ErrorState — action", () => {
 // caller sitting under a real h1+h2; several don't (an EmptyState/ErrorState
 // that IS the whole visible content of a section), which skipped a heading
 // level (WCAG 1.3.1/2.4.6). `as` defaults to h2, the safer floor.
-describe("EmptyState / ErrorState — heading level (F7-F10)", () => {
+describe("EmptyState / ErrorState — heading level", () => {
+  // ticket: F7-F10
   it("EmptyState's title is an h2 by default", () => {
     render(<EmptyState icon={() => null} title="Nothing here yet" />);
     expect(screen.getByRole("heading", { name: "Nothing here yet", level: 2 })).toBeInTheDocument();

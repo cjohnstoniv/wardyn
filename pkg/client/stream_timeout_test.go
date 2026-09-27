@@ -48,8 +48,9 @@ func TestGetRecording_SlowBodyIsNotCutOffByTheRequestTimeout(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	// 100ms is well under the ~240ms the body takes: on the old code the copy
-	// dies partway with "context deadline exceeded (Client.Timeout ...)".
+	// 100ms is well under the ~240ms the body takes: a client-wide timeout
+	// would kill the copy partway with "context deadline exceeded
+	// (Client.Timeout ...)".
 	c := &client.Client{BaseURL: srv.URL, Token: testToken, HTTPClient: &http.Client{Timeout: 100 * time.Millisecond}}
 	rc, err := c.GetRecording(context.Background(), runID)
 	if err != nil {

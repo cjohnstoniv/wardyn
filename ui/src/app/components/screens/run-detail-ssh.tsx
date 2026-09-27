@@ -91,7 +91,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   React.useEffect(() => {
     if (!mayAttach || !running) return; // nothing to show either way — skip the fetch
     let alive = true;
-    healthApi.health().then((h) => {
+    void healthApi.health().then((h) => {
       if (!alive) return;
       setSSH(h.ssh ?? null);
       setUISandbox(h.ui_sandbox ?? null);

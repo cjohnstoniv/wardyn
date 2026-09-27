@@ -29,12 +29,12 @@ describe("viewAccess — who may be in which view", () => {
   it("an SSO admin tier holds its view in the session", () => {
     expect(viewAccess(me)).toBe("session-admin");
     expect(viewAccess({ ...me, role: "security_admin" })).toBe("session-admin");
-    // The clamp reports role member; the flag is what says it is an admin.
-    expect(viewAccess({ ...me, role: "member", memberMode: true })).toBe("session-user");
+    // The clamp reports role user; the flag is what says it is an admin.
+    expect(viewAccess({ ...me, role: "user", memberMode: true })).toBe("session-user");
   });
   it("a user has only the User view, however they signed in", () => {
-    expect(viewAccess({ ...me, role: "member" })).toBe("user-only");
-    expect(viewAccess({ ...me, method: "token", role: "member" })).toBe("user-only");
+    expect(viewAccess({ ...me, role: "user" })).toBe("user-only");
+    expect(viewAccess({ ...me, method: "token", role: "user" })).toBe("user-only");
   });
   it("the admin token is not a person on an SSO install, and is both views without one", () => {
     expect(viewAccess({ ...me, method: "token" })).toBe("admin-only");
@@ -156,7 +156,7 @@ describe("ViewGate", () => {
     expect(screen.getByRole("heading", { name: VIEW_TO_ADMIN.TITLE })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: VIEW_TO_ADMIN.GO }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/admin/audit?x=1"));
-    expect(setMode).toHaveBeenCalledWith(false);
+    expect(setMode).toHaveBeenCalledWith(false, false);
   });
 
   it("a failed switch says so and stays put", async () => {

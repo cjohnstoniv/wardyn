@@ -20,7 +20,7 @@ import (
 	"testing"
 )
 
-// ─── fixtures built by real git ─────────────────────────────────────────────
+// fixtures built by real git
 //
 // Every non-hostile fixture in this file is a receive-pack request body that a
 // real `git push` produced. The trick is --receive-pack: git speaks the same
@@ -134,7 +134,7 @@ func (r *repo) push(refspec string, extra ...string) []byte {
 	return body
 }
 
-// ─── assertions ─────────────────────────────────────────────────────────────
+// assertions
 
 // paths renders a change set as one "path mode size" line per change, in the
 // order Inspect returned it.
@@ -153,7 +153,7 @@ func wantChanges(t *testing.T, got []Change, want ...string) {
 	}
 }
 
-// ─── the change set ─────────────────────────────────────────────────────────
+// the change set
 
 // TestPackInspect_SelfContainedPackReportsChangedPaths pins the whole answer for
 // an ordinary second push, INCLUDING both documented over-reports:
@@ -276,7 +276,7 @@ func TestPackInspect_ResolvesAnOffsetDeltaAgainstItsBase(t *testing.T) {
 	)
 }
 
-// ─── the refusals ───────────────────────────────────────────────────────────
+// the refusals
 
 // TestPackInspect_ThinPackIsUninspectable is the first-class refusal: --thin
 // deltas against a base that lives only on the receiving side, and chasing it
@@ -482,7 +482,7 @@ func TestPackInspect_DirectoryModeIsMaskedLikeGit(t *testing.T) {
 	}
 }
 
-// ─── the wire ───────────────────────────────────────────────────────────────
+// the wire
 
 // TestPackInspect_SkipsThePushOptionsSection: `git push -o` puts a second
 // pkt-line section between the commands and the pack. Reading it as pack bytes
@@ -537,7 +537,7 @@ func TestPackInspect_UnknownObjectFormatIsRefused(t *testing.T) {
 	}
 }
 
-// ─── the delta applier ──────────────────────────────────────────────────────
+// the delta applier
 //
 // The dangerous failure is an applier that quietly produces a short or over-long
 // buffer: the object then hashes to nothing the tree names, the path is still
@@ -633,7 +633,7 @@ func TestPackInspect_LyingDeltaFailsClosed(t *testing.T) {
 	}
 }
 
-// ─── the tree diff ──────────────────────────────────────────────────────────
+// the tree diff
 
 // TestPackTree_DiffReportsOnlyWhatChanged pins the diff directly. It is not
 // observable through Inspect: the oldest new commit in any pack has no
@@ -834,7 +834,7 @@ func TestPackChange_UnknownSizeIsNeverWithinALimit(t *testing.T) {
 	}
 }
 
-// ─── the walk's ceilings ────────────────────────────────────────────────────
+// the walk's ceilings
 //
 // Real git cannot build these: every one is a tree object naming another tree
 // object that was never written to describe a directory.
@@ -901,8 +901,8 @@ func TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes(t *testing.T) {
 
 			w := newWalker(idx)
 			err := w.walk("", root, 0)
-			if !errors.Is(err, ErrUninspectable) {
-				t.Fatalf("walk = %v, want ErrUninspectable", err)
+			if !errors.Is(err, ErrTooLarge) {
+				t.Fatalf("walk = %v, want ErrTooLarge", err)
 			}
 			// One charge covers a whole tree, so the count may overshoot by at
 			// most the widest tree in the pack — never by a multiple of it.
@@ -1032,7 +1032,7 @@ func TestPackTree_MaxChangesIsEnforced(t *testing.T) {
 
 	w := newWalker(idx)
 	err := w.walk("", root, 0)
-	if !errors.Is(err, ErrUninspectable) || !strings.Contains(err.Error(), "paths") {
+	if !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "paths") {
 		t.Fatalf("walk = %v, want the maxChanges refusal", err)
 	}
 	if len(w.out) != maxChanges {
@@ -1043,7 +1043,68 @@ func TestPackTree_MaxChangesIsEnforced(t *testing.T) {
 	}
 }
 
-// ─── hand-built hostile fixtures ────────────────────────────────────────────
+// TestPackTree_MergeIsChargedOnlyForItsOwnComparisons pins the cost model
+// maxTreeNodes is set on (#254). A merge compared against one parent walks into
+// every directory the other side changed, which is the same comparison — same
+// path, same two trees — that side's own commit already made. It can report
+// nothing new, and charging it again made a long-lived branch's every merge
+// pay the width of those directories once more. So the merge here is charged
+// for its own two root comparisons and nothing else, however wide the
+// directory the other side changed.
+func TestPackTree_MergeIsChargedOnlyForItsOwnComparisons(t *testing.T) {
+	const width = 256
+	r := newRepo(t)
+	for i := range width {
+		name := filepath.Join(r.work, "wide", fmt.Sprintf("f%03d", i))
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte(fmt.Sprintf("%d\n", i)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.git("add", "wide")
+	r.write("other/x", "1\n", 0o644)
+	base := r.commit("base")
+	r.write("wide/f000", "changed\n", 0o644)
+	a := r.commit("edit wide/")
+	r.git("checkout", "-q", "-b", "side", base)
+	r.write("other/x", "2\n", 0o644)
+	b := r.commit("edit other/")
+	r.git("merge", "-q", "--no-edit", a)
+	merge := r.git("rev-parse", "HEAD")
+	res, err := Inspect(r.push("HEAD:refs/heads/main"))
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+
+	w := newWalker(res.idx)
+	introduce := func(oid string) {
+		t.Helper()
+		c, err := parseCommit(res.idx.byOID[oid].data, res.idx.format.size)
+		if err == nil {
+			err = w.introduced(c)
+		}
+		if err != nil {
+			t.Fatalf("introduce %s: %v", oid, err)
+		}
+	}
+	for _, oid := range []string{base, a, b} {
+		introduce(oid)
+	}
+	nodes, changes := w.nodes, len(w.out)
+	introduce(merge)
+	// The root holds "other" and "wide": 2+2 entries, once against each parent.
+	if got, want := w.nodes-nodes, 2*(2+2); got != want {
+		t.Errorf("the merge was charged %d entries, want %d — its root comparisons alone", got, want)
+	}
+	if len(w.out) != changes || len(res.Changes) != changes {
+		t.Errorf("changes: %d before the merge, %d after it, %d from Inspect; want all equal",
+			changes, len(w.out), len(res.Changes))
+	}
+}
+
+// hand-built hostile fixtures
 //
 // Only the fixtures a real git will never produce are assembled here.
 

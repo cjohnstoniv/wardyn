@@ -190,9 +190,9 @@ func bedrockReservedSecretNames(t *testing.T) []string {
 // cause. The targets are derived from the emit sites, so the next cause that
 // lands undocumented fails here.
 func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
-	targets := denyMemberFieldTargets(t, "governance_profile")
+	targets := refusalTargets(t, "ReasonGovernanceProfile")
 	if len(targets) < 5 {
-		t.Fatalf("found %d denyMemberField targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
+		t.Fatalf("found %d authz.Deny targets for governance_profile (%v) — the matcher needs updating, it is checking almost nothing", len(targets), targets)
 	}
 	row := opsTableRow(t, readDoc(t, "docs/OPERATIONS.md"), "governance_profile")
 	for _, target := range targets {
@@ -202,16 +202,17 @@ func TestAuthzDeniedGovernanceProfileRowNamesEveryTarget(t *testing.T) {
 	}
 }
 
-// denyMemberFieldTargets returns every `target` internal/api denies with the
-// given authz.denied reason, read off the emit sites.
-func denyMemberFieldTargets(t *testing.T, reason string) []string {
+// refusalTargets returns every `target` internal/api denies with the given
+// authz.denied reason (its internal/authz constant name), read off the emit
+// sites.
+func refusalTargets(t *testing.T, reasonConst string) []string {
 	t.Helper()
 	dir := filepath.Join(repoRoot(t), "internal", "api")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read internal/api: %v", err)
 	}
-	re := regexp.MustCompile(`denyMemberField\(w, r, "([a-z_.]+)", "` + regexp.QuoteMeta(reason) + `"`)
+	re := regexp.MustCompile(`authz\.Deny\(authz\.` + regexp.QuoteMeta(reasonConst) + `,\s*"([a-z_.]+)"`)
 	var out []string
 	for _, e := range entries {
 		name := e.Name()
@@ -345,7 +346,7 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 // TestMembersDocStatesTheThreeKeyDriveContract (F169) pins the member-facing
 // doc to the shape GET /me actually returns.
 //
-// MEMBERS.md calls /me "the ground truth" and described the two-state contract
+// USERS.md calls /me "the ground truth" and described the two-state contract
 // the 0.7 fix superseded: user_drive null == nothing allocated. The fix exists
 // because null meant four different things, so the doc taught an external
 // consumer the exact wrong inference the fix was written to prevent — read
@@ -364,22 +365,22 @@ func TestMembersDocStatesTheThreeKeyDriveContract(t *testing.T) {
 	me := methodBody(t, readSrc(t, "internal", "api", "me.go"), "handleMe")
 	for _, key := range []string{`body["user_drive"]`, `body["user_drive_denied_by_profile"]`, `body["user_drive_unavailable"]`} {
 		if !strings.Contains(me, key) {
-			t.Errorf("GET /me no longer writes %s — MEMBERS.md documents a three-key contract", key)
+			t.Errorf("GET /me no longer writes %s — USERS.md documents a three-key contract", key)
 		}
 	}
 
-	doc := readDoc(t, "docs/MEMBERS.md")
-	mustNotSay(t, doc, "docs/MEMBERS.md",
+	doc := readDoc(t, "docs/USERS.md")
+	mustNotSay(t, doc, "docs/USERS.md",
 		"`GET /me` carries `user_drive` (`null` when none is allocated to you) and is the ground truth for what you have.",
 	)
-	mustSay(t, doc, "docs/MEMBERS.md",
+	mustSay(t, doc, "docs/USERS.md",
 		"`user_drive_denied_by_profile`",
 		"`user_drive_unavailable`",
 		"no longer means",
 	)
 	for _, tok := range tokens {
 		if !strings.Contains(doc, "`"+tok+"`") {
-			t.Errorf("docs/MEMBERS.md never names the `user_drive_unavailable` value %q, so a member or an external consumer cannot tell that state from 'you have no allocation'", tok)
+			t.Errorf("docs/USERS.md never names the `user_drive_unavailable` value %q, so a member or an external consumer cannot tell that state from 'you have no allocation'", tok)
 		}
 	}
 }
@@ -441,9 +442,8 @@ var ruleSourceConst = regexp.MustCompile(`(?m)^\truleSource[A-Za-z]*\s+= "([a-z0
 
 // inlineRuleSourceLiteral finds evaluate()'s OWN decisionLog(...) call sites
 // in internal/egress/proxy/proxy.go whose rule_source argument is an inline
-// string literal rather than a named ruleSource* constant — the second,
-// previously-undocumented family F093's B1 blocking item added (the
-// "evaluator's own inline sources" table).
+// string literal rather than a named ruleSource* constant — the second
+// family the doc tables (the "evaluator's own inline sources" table).
 var inlineRuleSourceLiteral = regexp.MustCompile(`decisionLog\([^,]+,\s*egress\.[A-Za-z]+,\s*"([a-z:-]+)"\)`)
 
 // TestAuditActionsDocEnumeratesEveryRuleSource (F093) pins the new
@@ -592,31 +592,29 @@ func TestTestGapsDocReflectsCoverpkgCoverage(t *testing.T) {
 }
 
 // TestAuditActionsDocNamesTheDroppedDecisionSummary (F067) pins the
-// egress.* row to the synthetic egress.decisions.dropped marker
+// egress.* row to the synthetic egress:dropped-decisions-<n> marker
 // droppedSummaryLog posts on buffer overflow — a Deny with an empty target
 // that lands as an ordinary egress.deny row.
 func TestAuditActionsDocNamesTheDroppedDecisionSummary(t *testing.T) {
 	src := readSrc(t, "internal", "egress", "proxy", "decisions.go")
-	if !strings.Contains(src, `RuleSource: fmt.Sprintf("egress.decisions.dropped:%d", n)`) {
-		t.Fatal("droppedSummaryLog no longer emits the egress.decisions.dropped:<n> marker — re-derive the doc row before trusting this guard")
+	if !strings.Contains(src, `RuleSource: fmt.Sprintf("egress:dropped-decisions-%d", n)`) {
+		t.Fatal("droppedSummaryLog no longer emits the egress:dropped-decisions-<n> marker — re-derive the doc row before trusting this guard")
 	}
 	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
 	mustSay(t, doc, "docs/AUDIT-ACTIONS.md",
-		"egress.decisions.dropped:<n>",
+		"egress:dropped-decisions-<n>",
 		"droppedSummaryLog",
 		"not a policy denial of an actual request",
 	)
 }
 
-// TestLiteralIPRedirectDocsNameThePortScope (F053, re-derived for F106) pins
-// OPERATIONS.md and THREAT-MODEL.md's "scoped to that address" claim to what
-// substituteArtifactEgress now actually writes: a PORT-QUALIFIED entry, so the
-// trust it grants is to `to:port` and not to that address on any port.
+// TestLiteralIPRedirectDocsNameThePortScope pins OPERATIONS.md and
+// THREAT-MODEL.md's "scoped to that address" claim to what
+// substituteArtifactEgress writes: a port-qualified entry, so the trust it
+// grants is to `to:port` and not to that address on any port.
 //
-// The claim it originally pinned was the opposite one — the port was STRIPPED,
-// and the docs had to say so. F106 fixed the code; the guard is re-derived
-// against the merged tree rather than skipped, so the docs can never drift back
-// to describing either shape while the other one ships.
+// The guard is derived against the tree, so the docs can never describe a
+// port-stripped entry while a port-qualified one ships, or the reverse.
 func TestLiteralIPRedirectDocsNameThePortScope(t *testing.T) {
 	src := readSrc(t, "internal", "api", "workspace_egress.go")
 	if !strings.Contains(src, "entry := net.JoinHostPort(to, strconv.Itoa(redirectPort(r.To)))") {
@@ -711,9 +709,9 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 			t.Fatalf("revokeNote no longer says %q — re-derive the doc row before trusting this guard", want)
 		}
 	}
-	// B11a-F1 gave the mint a discard door that DOES call GitHub's endpoint, so
-	// the blanket "wardyn does not call it" this row and this note used to carry
-	// became false. Neither may say it again while discardMinted exists.
+	// The mint has a discard door that does call GitHub's endpoint, so a blanket
+	// "wardyn does not call it" is false. Neither this row nor this note may say
+	// it while discardMinted exists.
 	if strings.Contains(note, "wardyn does not call") {
 		t.Fatal(`revokeNote carries the blanket "wardyn does not call" claim again — discardMinted and VerifyRefRuleset both make that call, so it must stay scoped to RevokeRun`)
 	}
@@ -777,12 +775,12 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 // unparsed body.
 func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 	body := funcBody(t, readSrc(t, "internal", "egress", "proxy", "llm_routes.go"), "scanSummaryFrom")
-	if !strings.Contains(body, `s.Action = "error"`) {
-		t.Fatalf(`scanSummaryFrom no longer assigns s.Action = "error" — re-derive AUDIT-ACTIONS.md's suffix list before trusting this guard`)
+	if !strings.Contains(body, `s.Action = "fail"`) {
+		t.Fatalf(`scanSummaryFrom no longer assigns s.Action = "fail" — re-derive AUDIT-ACTIONS.md's suffix list before trusting this guard`)
 	}
 
 	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
-	mustSay(t, doc, "docs/AUDIT-ACTIONS.md", "`llm.scan.error`")
+	mustSay(t, doc, "docs/AUDIT-ACTIONS.md", "`llm.scan.fail`")
 
 	comment := readSrc(t, "internal", "egress", "egress.go")
 	if i := strings.Index(comment, `Action     string        `+"`json:\"action\"`"); i < 0 {
@@ -792,8 +790,8 @@ func TestAuditActionsDocNamesTheErrorScanAction(t *testing.T) {
 		if end := strings.Index(line, "\n"); end >= 0 {
 			line = line[:end]
 		}
-		if !strings.Contains(line, `"error"`) {
-			t.Errorf("egress.ScanSummary.Action's enumeration comment omits \"error\": %q", line)
+		if !strings.Contains(line, `"fail"`) {
+			t.Errorf("egress.ScanSummary.Action's enumeration comment omits \"fail\": %q", line)
 		}
 	}
 }
@@ -1076,17 +1074,16 @@ func TestDataFlowAuditSinkRowCarriesTheOutageQualifier(t *testing.T) {
 // backtick span as a CITATION only when the span carries a path, so the
 // "same file, second line" shorthand these rows used — a `proxy.go` line
 // number followed by a bare `:N` sibling — is read as a bare ANCHOR and never
-// resolved against anything. Both were wrong: the step-0 private-IP guard moved out of
-// proxy.go entirely (literal_ip_guard.go), and `builtin:dial-failed` is emitted
-// from four places, none of them the duplicated line. A citation nobody checks
-// is how the doc came to name a file the guard no longer lives in.
+// resolved against anything. The step-0 private-IP guard lives in literal_ip_guard.go,
+// not proxy.go, and `builtin:dial-failed` is emitted from four places; a citation
+// nobody checks can name a file the code does not live in, or one site of several.
 //
 // So the rule here is the one the live-citation guard can then enforce: in
 // these rows every site is spelled out in full, and no bare `:N` shorthand is
 // left for a reader (or a guard) to resolve by guesswork. What "in full" means
-// is now a SYMBOL — `path/file.go#Symbol`, resolved with go/parser — because
-// the line-anchored form these rows used to carry made every insertion above a
-// cited line a failure of the required build check. The COUNT is what this
+// is a symbol — `path/file.go#Symbol`, resolved with go/parser — because a
+// line-anchored form makes every insertion above a cited line a failure of the
+// required build check. The count is what this
 // guard adds over its neighbour: a row that names one of several emitters
 // still tells an operator the others do not exist.
 func TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite(t *testing.T) {

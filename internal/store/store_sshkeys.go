@@ -41,7 +41,7 @@ func (s PG) AddSSHKey(ctx context.Context, k types.SSHPublicKey) (types.SSHPubli
 func (s PG) ListSSHKeysByPrincipal(ctx context.Context, principal string) ([]types.SSHPublicKey, error) {
 	const q = `
 		SELECT ` + sshKeyCols + `
-		FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC`
+		FROM ssh_public_keys WHERE principal = $1 ORDER BY created_at DESC, fingerprint`
 	return collect(ctx, s.Pool, "list", "ssh keys", q, []any{principal}, scanSSHKey)
 }
 
@@ -69,7 +69,7 @@ func (s PG) GetSSHKeyByFingerprint(ctx context.Context, fingerprint string) (typ
 // delete-then-re-register needed. A principal with no registered keys is a
 // normal, silent no-op (RowsAffected 0) — logging in has nothing to refresh.
 //
-// A CAPPED key (migration 0070, registered in the user view) keeps its member
+// A CAPPED key (migration 0070, registered in the user view) keeps its user
 // role: the login refreshes only its timestamp, never promotes it.
 func (s PG) RefreshSSHKeyRoles(ctx context.Context, principal, role string, checkedAt time.Time) error {
 	_, err := s.Pool.Exec(ctx,

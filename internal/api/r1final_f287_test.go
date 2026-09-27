@@ -33,15 +33,16 @@ import (
 func f287Sessions(t *testing.T) map[string]*http.Cookie {
 	t.Helper()
 	return map[string]*http.Cookie{
-		"plain member":   ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember),
+		"plain member":   ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser),
 		"security admin": ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin),
 	}
 }
 
-// TestF287_EveryReadableRouteProjectsTheAuthoredBaseImage is the consumer-set
+// TestEveryReadableRouteProjectsTheAuthoredBaseImage is the consumer-set
 // sweep: NO route fed by getWorkspaceReadable may hand a non-full reader the
 // operator's authored base image.
-func TestF287_EveryReadableRouteProjectsTheAuthoredBaseImage(t *testing.T) {
+func TestEveryReadableRouteProjectsTheAuthoredBaseImage(t *testing.T) {
+	// ticket: F287
 	for name, session := range f287Sessions(t) {
 		t.Run(name, func(t *testing.T) {
 			srv, st := newTopologyWorkspaceServer(t, "")
@@ -83,16 +84,17 @@ func TestF287_EveryReadableRouteProjectsTheAuthoredBaseImage(t *testing.T) {
 	}
 }
 
-// TestF287_BuildKeepsWhatTheMemberNeeds is the counterfactual: the projection
+// TestBuildKeepsWhatTheMemberNeeds is the counterfactual: the projection
 // must not be satisfied by emptying the response. The BUILT image is the one the
 // member's own run executes and stays, exactly as image_ref stays on
 // GET /workspaces/{id}.
-func TestF287_BuildKeepsWhatTheMemberNeeds(t *testing.T) {
+func TestBuildKeepsWhatTheMemberNeeds(t *testing.T) {
+	// ticket: F287
 	const built = "ghcr.io/acme/ws-payments:built"
 	srv, st := newTopologyWorkspaceServer(t, "")
 	st.ws.ImageRef = built
 	st.ws.BuiltProfileHash = "" // force the honest "none" arm, which names the AUTHORED image
-	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleMember)
+	member := ssoSession(t, "sub-plain-member", "m@corp.example", oidc.RoleUser)
 
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/workspaces/"+st.ws.ID.String()+"/build", member, "")
 	if w.Code != http.StatusOK {
@@ -109,15 +111,16 @@ func TestF287_BuildKeepsWhatTheMemberNeeds(t *testing.T) {
 	}
 }
 
-// TestF287_OwnerAndSuperStillSeeEverything: the projection is a READER rule.
-func TestF287_OwnerAndSuperStillSeeEverything(t *testing.T) {
+// TestOwnerAndSuperStillSeeEverything: the projection is a READER rule.
+func TestOwnerAndSuperStillSeeEverything(t *testing.T) {
+	// ticket: F287
 	const owner = "sub-ws-owner"
 	for _, tc := range []struct {
 		name    string
 		ownedBy string
 		session *http.Cookie
 	}{
-		{"the workspace's owner", owner, ssoSession(t, owner, "owner@corp.example", oidc.RoleMember)},
+		{"the workspace's owner", owner, ssoSession(t, owner, "owner@corp.example", oidc.RoleUser)},
 		{"a super admin", "", ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

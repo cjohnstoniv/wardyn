@@ -38,6 +38,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -58,6 +59,7 @@ const (
 	adoResolveConsentRequired   = "Azure DevOps has not been consented for the access this run was granted — an administrator or the person must grant consent, then relaunch"
 	adoResolveInteractionNeeded = "Azure DevOps requires the person to sign in interactively (a Conditional Access policy) — sign in to Azure DevOps again, then relaunch"
 	adoResolveUnavailable       = "renewing the Azure DevOps sign-in behind this run did not complete; nothing about the credential is known to be wrong"
+	adoResolveStoreRefused      = "the secret store refused the Azure DevOps sign-in behind this run (it was moved or changed at the store, or Wardyn's access to it was revoked) — sign in to Azure DevOps again, or ask an administrator to check the store"
 	adoResolveTokenModeRefusal  = "this run's Azure DevOps token mode cannot be issued by Wardyn"
 )
 
@@ -138,12 +140,7 @@ func (s *Server) adoRequestScopes(ctx context.Context, cfg ADOEntraConfig, owner
 	if err != nil || !found {
 		return cfg.Scopes
 	}
-	var out []string
-	for _, sc := range cfg.Scopes {
-		if slices.Contains(blob.Scopes, sc) {
-			out = append(out, sc)
-		}
-	}
+	out := intersect(cfg.Scopes, blob.Scopes)
 	if len(out) == 0 {
 		return cfg.Scopes
 	}
@@ -172,7 +169,10 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	if minted.Injection == nil || minted.Injection.SecretName != types.ADOEntraAccessTokenSecret {
 		return false
 	}
-	ctx := r.Context()
+	// The stored sign-in is read here to redeem the access token this resolve
+	// injects; those reads are recorded as such, and the injection below as the
+	// sentinel's own secret.read.
+	ctx := secretstore.WithPurpose(r.Context(), secretstore.PurposeADORefresh)
 	fail := func(status int, reason, body string, extra map[string]any) bool {
 		data := map[string]any{"reason": reason, "grant_id": grantID}
 		for k, v := range extra {
@@ -180,7 +180,10 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		}
 		s.recordAudit(ctx, s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 			"secret.read", types.ADOEntraAccessTokenSecret, "failure", mustJSON(data)))
-		writeError(w, status, body)
+		// reason reaches the wire now (#204): the same machine class already
+		// recorded on the audit row, so the proxy can branch on it instead of
+		// string-matching the human sentence in body.
+		writeErrorReason(w, status, reason, body)
 		return true
 	}
 
@@ -188,24 +191,24 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	if !ok {
 		// A grant naming this sentinel with no snapshot was hand-authored (a
 		// policy, an inline grant). The snapshot IS the authorization.
-		return fail(http.StatusForbidden, "missing_scope_snapshot", adoResolveScopeChangedRefusal, nil)
+		return fail(http.StatusForbidden, reasonMissingScopeSnapshot, adoResolveScopeChangedRefusal, nil)
 	}
 	if snapshot.OwnerSubject != claims.Sub {
-		return fail(http.StatusForbidden, "owner_not_caller", adoResolveScopeChangedRefusal,
+		return fail(http.StatusForbidden, reasonOwnerNotCaller, adoResolveScopeChangedRefusal,
 			map[string]any{"owner": snapshot.OwnerSubject})
 	}
 	siteCfg, scErr := s.cfg.Store.GetSiteConfig(ctx)
 	if scErr != nil {
 		// Never resolve against a read that failed: the zero SiteConfig is "no
 		// rows", and a decision made from it is a decision about nothing.
-		return fail(http.StatusServiceUnavailable, "roster_unreadable", adoResolveRosterUnreadable, nil)
+		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, adoResolveRosterUnreadable, nil)
 	}
 	if drift := snapshot.driftFrom(siteCfg); drift != "" {
-		return fail(http.StatusForbidden, "scope_changed", adoResolveScopeChangedRefusal,
+		return fail(http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal,
 			map[string]any{"drift": drift, "owner": snapshot.OwnerSubject})
 	}
 	if !slices.ContainsFunc(adoEntraHosts(snapshot.Organisation), func(h string) bool { return hostEqual(h, minted.Injection.Host) }) {
-		return fail(http.StatusForbidden, "host-not-organisation", adoResolveHostPinRefusal,
+		return fail(http.StatusForbidden, reasonHostNotOrganisation, adoResolveHostPinRefusal,
 			map[string]any{"host": minted.Injection.Host})
 	}
 	cfg, status, reason, body := s.adoEntraConfigFor(ctx, snapshot)
@@ -213,7 +216,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		return fail(status, reason, body, nil)
 	}
 	if _, serr := adoscope.ScopesFor(snapshot.Capabilities); serr != nil {
-		return fail(http.StatusForbidden, "capability_not_grantable", adoResolveScopeChangedRefusal, nil)
+		return fail(http.StatusForbidden, reasonCapabilityNotGrantable, adoResolveScopeChangedRefusal, nil)
 	}
 
 	// THE CAPABILITY ARM (injection_ado_capability.go): the proxy asking for
@@ -248,7 +251,7 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 	}
 	scopes := s.adoRequestScopes(ctx, cfg, snapshot.OwnerSubject)
 	access, err := s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, scopes, false)
-	if err == nil && capAsk.capability != "" && !adoScopesWithin(need, access.Scopes) {
+	if err == nil && capAsk.capability != "" && !subsetOf(need, access.Scopes) {
 		access, err = s.adoEntraAccessFor(ctx, cfg, snapshot.OwnerSubject, scopes, true)
 	}
 	if err != nil {
@@ -300,9 +303,9 @@ func (s *Server) resolveADOInjection(w http.ResponseWriter, r *http.Request,
 		JTI:       minted.JTI,
 		ExpiresAt: access.ExpiresAt.UnixMilli(),
 		// Informational only: the proxy's gate pins the organisation from the
-		// dispatch-time ADOGrants in its own configuration, not from this.
+		// dispatch-time ADOGrant in its own configuration, not from this.
 		Organisation: snapshot.Organisation,
-		// Not the gate's input either (dispatch-time ADOGrants are); the hold
+		// Not the gate's input either (dispatch-time ADOGrant are); the hold
 		// reads it only to confirm a capability ask came back granted.
 		Capabilities: adoCapabilityStrings(responseCaps),
 	})
@@ -323,6 +326,8 @@ func adoResolveFailureAnswer(class ADOEntraFailure) (int, string) {
 		return http.StatusForbidden, adoResolveConsentRequired
 	case ADOEntraFailureInteractionRequired:
 		return http.StatusForbidden, adoResolveInteractionNeeded
+	case ADOEntraFailureStoreRefused:
+		return http.StatusForbidden, adoResolveStoreRefused
 	default:
 		return http.StatusServiceUnavailable, adoResolveUnavailable
 	}
@@ -333,20 +338,20 @@ func adoResolveFailureAnswer(class ADOEntraFailure) (int, string) {
 // strings are the refusal.
 func (s *Server) adoEntraConfigFor(ctx context.Context, sn adoEntraScopeSnapshot) (ADOEntraConfig, int, string, string) {
 	if types.ADOTokenMode(sn.TokenMode) != types.ADOTokenModeBearer {
-		return ADOEntraConfig{}, http.StatusForbidden, "token_mode", adoResolveTokenModeRefusal
+		return ADOEntraConfig{}, http.StatusForbidden, reasonTokenMode, adoResolveTokenModeRefusal
 	}
 	if s.cfg.ADOEntra == nil {
-		return ADOEntraConfig{}, http.StatusForbidden, "signin_unconfigured", adoResolveUnconfigured
+		return ADOEntraConfig{}, http.StatusForbidden, reasonSigninUnconfigured, adoResolveUnconfigured
 	}
 	cfg, found, err := s.cfg.ADOEntra(ctx)
 	switch {
 	case err != nil:
-		return ADOEntraConfig{}, http.StatusServiceUnavailable, "signin_unreadable", adoResolveRosterUnreadable
+		return ADOEntraConfig{}, http.StatusServiceUnavailable, reasonSigninUnreadable, adoResolveRosterUnreadable
 	case !found:
-		return ADOEntraConfig{}, http.StatusForbidden, "signin_unconfigured", adoResolveUnconfigured
+		return ADOEntraConfig{}, http.StatusForbidden, reasonSigninUnconfigured, adoResolveUnconfigured
 	case cfg.RowID != sn.ProviderRowID || !strings.EqualFold(cfg.TenantID, sn.TenantID) ||
 		!strings.EqualFold(cfg.ClientID, sn.ClientID):
-		return ADOEntraConfig{}, http.StatusForbidden, "scope_changed", adoResolveScopeChangedRefusal
+		return ADOEntraConfig{}, http.StatusForbidden, reasonScopeChanged, adoResolveScopeChangedRefusal
 	}
 	return cfg, 0, "", ""
 }
@@ -394,10 +399,14 @@ func (sn adoEntraScopeSnapshot) driftFrom(sc types.SiteConfig) string {
 	case row.Entra.ClientID != sn.ClientID:
 		return "client_id"
 	case string(cmpTokenMode(row.Entra.TokenMode)) != sn.TokenMode:
+		// A field-drift label for the audit row's "drift" key, not the wire
+		// reason enum — reasonTokenMode is a different concept that happens
+		// to share this exact spelling; driftFrom names WHICH field drifted,
+		// never why the resolve was refused.
 		return "token_mode"
 	case !rowServesOrganisation(row, sn.Organisation):
 		return "organisation"
-	case !adoCapabilitiesWithin(sn.Capabilities, row.Entra.CapabilityCeiling):
+	case !subsetOf(sn.Capabilities, row.Entra.CapabilityCeiling):
 		return "capability_ceiling"
 	}
 	return ""

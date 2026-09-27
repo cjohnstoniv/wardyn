@@ -3,27 +3,15 @@
 
 // The admin doors' half of the share bound.
 //
-// The member doors have run their filesystem questions through driveShareProbe:
-// a 5-second bound, a strand memory so a read never queues behind a
-// syscall that is already overdue, and one WARN per strand. The ADMIN doors —
-// GET /drives, the host_root ceiling on a drive write, and the nesting gate's
-// symlink resolution — ran the SAME uncancellable EvalSymlinks/stat calls
-// unbounded, on a server that deliberately sets no WriteTimeout. A hard-mounted
-// NAS that stops answering therefore hung every /drives read and every drive
-// write for as long as the mount took, leaking one kernel thread per
-// attempt.
-//
-// Split out of user_drive_roots.go rather than added to it because user_drives.go
-// is at the file-size ceiling and this is new logic, not an edit of the ceiling's
-// own rules: the three dead-root shapes still live in exactly one place
-// (runner.UserDriveHostRootCheck) and everything here only decides HOW LONG to
-// wait for the filesystem to answer about them.
-//
-// The key is "root:"+root, which is the key the member path already uses for the
-// same subject (driveShareBindFailure). That is deliberate: one hung share is one
-// strand, whoever asks about it, so an admin's GET /drives and a member's run
-// launch short-circuit on each other's outstanding probe instead of each
-// starting their own thread.
+// The ADMIN doors — GET /drives, the host_root ceiling on a drive write, and the
+// nesting gate's symlink resolution — run uncancellable EvalSymlinks/stat calls
+// on a server that deliberately sets no WriteTimeout, so a hung hard-mounted NAS
+// would hang them and leak a kernel thread per attempt. They share the member
+// doors' driveShareProbe bound and strand memory. The dead-root rules still live
+// only in runner.UserDriveHostRootCheck; this file decides only HOW LONG to wait.
+// The key is "root:"+root, the member path's key for the same subject
+// (driveShareBindFailure), deliberately: one hung share is one strand, whoever
+// asks, so admin and member callers short-circuit on each other's probe.
 package api
 
 import (
@@ -71,31 +59,17 @@ func (s *Server) userDriveHostRootCheckBounded(ctx context.Context) types.UserDr
 }
 
 // userDriveHostRootsUsableWithin reports whether ANY configured root could
-// actually hold a host_path drive — the honest form of "is host_path available
-// here", which is what GET /drives' host_roots_configured publishes — asked
-// under the same bound.
+// actually hold a host_path drive — what GET /drives' host_roots_configured
+// publishes — asked under the same bound. It asks UserDriveHostRootCheck once per
+// root rather than re-deriving what makes a root dead, so the rules cannot drift.
+// Empty roots answer false.
 //
-// It asks the write boundary's own check, once per configured root, rather than
-// re-deriving what makes a root dead. That is the whole point: the three dead
-// shapes (a root of "/", a root under a denied bind prefix, a root that does not
-// resolve on this host) are UserDriveHostRootCheck's rules, and a second copy
-// here would be a second place for them to drift. A root is usable exactly when
-// the deployment would accept a drive rooted AT it, which is the ordinary shape
-// (the ceiling names the share's mount point and so does the drive).
-//
-// Empty roots answer false, unchanged: the loop does not run.
-//
-// A root that did not answer is not usable, which is the fail-closed direction
-// and the honest one: the console enables the host_path option on this bit, and
-// offering a backend whose write door is currently answering 503 is the
-// offer-and-refuse the field exists to prevent. It is also self-correcting — the
-// strand entry disappears when the mount comes back, so the next read says yes.
-// One bound for the whole loop, not one per root. driveShareProbe bounds each
-// probe at driveShareProbeTimeout, so N distinct dead roots would cost N × that
-// on the FIRST request after a mount hangs — the strand marks only short-circuit
-// the SECOND request. A deadline on the loop's own context makes every probe
-// after the first strand return at once (driveShareProbe selects on ctx.Done),
-// so the request's cost is the bound this file's header promises.
+// A root that did not answer is not usable (fail-closed: the console enables the
+// host_path option on this bit, and offering a backend whose write door answers
+// 503 is the offer-and-refuse the field prevents); the strand clears when the
+// mount returns. One bound for the whole loop, not one per root: N dead roots
+// would otherwise cost N × driveShareProbeTimeout on the first request, and the
+// loop's deadline makes every later probe return at once (ctx.Done).
 func (s *Server) userDriveHostRootsUsableWithin(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, driveShareProbeTimeout)
 	defer cancel()
@@ -141,19 +115,13 @@ func driveRootCeilingRefusal(root string, err error) (int, string) {
 	return http.StatusUnprocessableEntity, "invalid drive: " + err.Error()
 }
 
-// driveWriteAuditData is the `drive.write` payload: the WHOLE ROW, minus nothing
-// (a drive carries no secret — a share credential is the operator's, held
-// host-side — and host_root is the single most audit-worthy field on it, since
-// it is the host tree this row authorized binding into other people's
-// sandboxes), plus what the re-home guard decided.
-//
-// The re-home detail is omitted when there is none. `rehomed:true` says
-// a move happened; the refusal the admin overrode to get here said WHICH
-// identity fields moved and HOW MANY allocations went with them, and the row
-// discarded both — so the log could not answer "which objects were orphaned",
-// which is the only question a re-home raises afterwards. Present exactly when
-// `rehomed` is true, so an auditor can filter on the key rather than on a zero
-// that also means "nothing moved".
+// driveWriteAuditData is the `drive.write` payload: the WHOLE ROW (a drive
+// carries no secret, and host_root is its most audit-worthy field: the host tree
+// this row authorized binding into other people's sandboxes), plus what the
+// re-home guard decided. The re-home detail — which identity fields moved and how
+// many allocations went with them, the only way to answer "which objects were
+// orphaned" — is present exactly when `rehomed` is true, so an auditor can filter
+// on the key rather than on a zero that also means "nothing moved".
 //
 // It lives here rather than in user_drives.go for that file's size ceiling.
 func driveWriteAuditData(saved types.UserDrive, rehome driveRehome) map[string]any {
@@ -182,17 +150,12 @@ func driveWriteAuditData(saved types.UserDrive, rehome driveRehome) map[string]a
 // driveNameMovesTheObject reports whether renaming a drive from before to after
 // changes the object its members bind — i.e. whether the two names fold to
 // different slugs. It asks types.DriveObjectName rather than re-implementing the
-// fold, over one fixed backend and one fixed home, so the ONLY thing that can
-// differ is the name's own contribution; a naming change in types is then a
-// change this gate inherits instead of one it drifts away from.
+// fold, over one fixed backend and one fixed home, so a naming change in types is
+// inherited instead of drifted from.
 //
-// scheme is the row's STORED object_scheme (before.ObjectScheme at the one call
-// site, in user_drives.go's driveIdentityFields — never the request's, which
-// driveObjectSchemeMoves polices separately and which the store ignores either
-// way): on DriveObjectSchemeID the minted name is `wardyn-drive-<id>-<home>`
-// and the drive's NAME plays no part in it at all, so a rename on an id-scheme
-// drive must probe as unchanged rather than reporting the slug it no longer
-// mints.
+// scheme is the row's STORED object_scheme, never the request's: on
+// DriveObjectSchemeID the minted name is `wardyn-drive-<id>-<home>` and the name
+// plays no part, so an id-scheme rename must probe as unchanged.
 //
 // Lives here rather than beside driveIdentityFields for user_drives.go's own
 // file-size ceiling, the same reason driveWriteAuditData does.
@@ -207,18 +170,11 @@ func driveNameMovesTheObject(before, after string, scheme types.DriveObjectSchem
 // driveObjectSchemeMoves reports whether a PUT's object_scheme differs from the
 // stored drive's — but ONLY when the request actually STATES one.
 //
-// The field is not client-authored (types.DriveObjectScheme's own doc: the
-// store derives it unconditionally — 'id' on every INSERT, the stored value
-// carried through on every UPDATE — and never reads this one off the request),
-// so an ordinary client that omits it, which is every console and API caller
-// that predates this field, must not trip the confirmation gate on every edit
-// of every allocated drive; comparing raw would make ?confirm=rehome mandatory
-// for a plain size change the moment any field went missing from a request.
-// What this catches instead is a request that actively CLAIMS a different
-// scheme from the one stored: the write could never perform it (the store
-// ignores the value either way, in both directions), but a forged claim is
-// refused with the same 409 every other identity field answers with, rather
-// than being silently swallowed by a write that was always going to ignore it.
+// The field is not client-authored (the store derives it and never reads the
+// request's; see types.DriveObjectScheme), so a client that omits it must not
+// trip the ?confirm=rehome gate on every edit of an allocated drive. A request
+// that CLAIMS a different scheme is refused with the same 409 as every other
+// identity field, rather than silently swallowed by a write that ignores it.
 func driveObjectSchemeMoves(before, after types.DriveObjectScheme) bool {
 	return after != "" && after != before
 }

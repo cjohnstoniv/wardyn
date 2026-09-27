@@ -30,7 +30,7 @@ import (
 // is governance_nonescape_test.go's. What is here is everything decided about
 // the request SHAPE, which is the half no policy clamp can reach.
 
-// ─── fixtures ─────────────────────────────────────────────────────────────────
+// fixtures
 
 // holdProfile is an assigned profile whose tool_rules demand supervision, with
 // NO limits set — the limits and the derivation are independent mechanisms and a
@@ -71,7 +71,7 @@ func refusalBody(t *testing.T, w *httptest.ResponseRecorder) string {
 	return got.Error
 }
 
-// ─── the derivation ───────────────────────────────────────────────────────────
+// the derivation
 
 // TestEffectiveToolApprovals is the autonomy derivation and its three scopings.
 //
@@ -248,14 +248,14 @@ func TestGovernanceToolApprovalsOnCreate(t *testing.T) {
 	})
 }
 
-// ─── the limits ───────────────────────────────────────────────────────────────
+// the limits
 
 // TestGovernanceLimits covers the two GovernanceLimits booleans, and the
 // interactive one is why this test exists.
 //
 // req.Interactive is COERCED from the request shape — a task-less request
 // becomes interactive at runs_create_validate.go's coercion, which runs AFTER
-// denyMemberRequest — so a gate reading the raw field is evaded by simply
+// denyUserRequest — so a gate reading the raw field is evaded by simply
 // omitting the task, which is exactly the request a deny_interactive profile
 // most needs to refuse.
 func TestGovernanceLimits(t *testing.T) {
@@ -331,7 +331,7 @@ func TestGovernanceLimits(t *testing.T) {
 	})
 
 	t.Run("an OPERATOR short-circuits before the limits are ever read", func(t *testing.T) {
-		// denyMemberRequest's first line. An admin under an `all` assignment must
+		// denyUserRequest's first line. An admin under an `all` assignment must
 		// not be bound by a row a security admin can write — and the exemption has
 		// to be the FIRST thing, not a check after the resolve.
 		srv, _, _ := govEscapeFixture(t, assignedStore(limitsProfile("everyone",
@@ -344,7 +344,7 @@ func TestGovernanceLimits(t *testing.T) {
 	})
 }
 
-// ─── G3: the seeded-image capImage bypass (PF-34) ─────────────────────────────
+// G3: the seeded-image capImage bypass (PF-34)
 
 // seedImageStore is govEscapeStore plus the one read the workspace_id door
 // needs: GetWorkspace.
@@ -395,7 +395,7 @@ func baseImageWorkspace(owner, image string) types.Workspace {
 // TestSeededImageCapabilityBypass is G3 (PF-34), live since 0.6.0: a member
 // creates a workspace whose base_image is any ref they like, launches against
 // it, and seedRequestWorkspace copies that ref into req.Image AFTER
-// denyMemberRequest has already run — reaching the product's one WIDENING
+// denyUserRequest has already run — reaching the product's one WIDENING
 // capability with no grant for it. The follow-up re-validation only re-checks
 // the XOR and the builder, never capGranted.
 //
@@ -414,17 +414,17 @@ func TestSeededImageCapabilityBypass(t *testing.T) {
 			`{"agent":"claude-code","task":"t","workspace_id":"`+ws.ID.String()+`"}`)
 	}
 
-	t.Run("enforced + no grant: 403 byoi_member (the bug)", func(t *testing.T) {
-		// RED on today's tree: before the fix this is a 201 and the member is
-		// running an arbitrary image they hold no grant for.
+	t.Run("enforced + no grant: 403 byoi_user (the bug)", func(t *testing.T) {
+		// Without the gate this is a 201 and the member is running an
+		// arbitrary image they hold no grant for.
 		ws := baseImageWorkspace(memberSub, ref)
 		srv, _ := seedImageFixture(t, &capStore{enf: map[string]bool{capImage: true}}, ws)
 		w := launch(t, srv, ws)
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("create = %d, want 403 — a member's own workspace base_image reached req.Image ungated: %s", w.Code, w.Body.String())
 		}
-		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "byoi_member") {
-			t.Errorf("authz.denied reasons = %v, want byoi_member — the SAME answer the explicit --image door gives", r)
+		if r := auditReasons(t, srv, "authz.denied"); !slices.Contains(r, "byoi_user") {
+			t.Errorf("authz.denied reasons = %v, want byoi_user — the SAME answer the explicit --image door gives", r)
 		}
 		if !strings.Contains(w.Body.String(), ref) {
 			t.Errorf("body = %s, want the refused image ref named", w.Body.String())
@@ -468,7 +468,7 @@ func TestSeededImageCapabilityBypass(t *testing.T) {
 	})
 }
 
-// ─── the create path → dispatch hand-off ──────────────────────────────────────
+// the create path → dispatch hand-off
 
 // TestCreatePathWiresCeilingToDispatch is the create half of the dispatch-time
 // deny re-assertion, and it exists because NEITHER lane's own tests can see it:
@@ -531,7 +531,7 @@ func TestCreatePathWiresCeilingToDispatch(t *testing.T) {
 	})
 }
 
-// ─── the create-time workspace-egress warning ─────────────────────────────────
+// the create-time workspace-egress warning
 
 // TestCeilingDeniedWorkspaceEgressWarning: an operator APPROVED a host for a
 // workspace and the caller's profile DENIES it. Both decisions stand — the union
@@ -594,7 +594,7 @@ func TestCeilingDeniedWorkspaceEgressWarning(t *testing.T) {
 	}
 }
 
-// ─── G4: member-authored llm_cred at workspace create (PF-35) ─────────────────
+// G4: member-authored llm_cred at workspace create (PF-35)
 
 // TestMemberWorkspaceLLMCredRefused is G4 (PF-35). handleCreateWorkspace
 // assigned LLMCred with no gate at all, and the binding folds through
@@ -605,11 +605,11 @@ func TestCeilingDeniedWorkspaceEgressWarning(t *testing.T) {
 // REFUSED, never silently dropped: a member who sees a 201 believes the
 // workspace is bound to the integration they named.
 func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
-	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
 	const body = `{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
-		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember), body)
+		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser), body)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("member create with llm_cred = %d, want 403: %s", w.Code, w.Body.String())
 	}
@@ -642,13 +642,35 @@ func TestMemberWorkspaceLLMCredRefused(t *testing.T) {
 	// A member creating a workspace WITHOUT the field is unaffected — the gate
 	// names one field, not the member.
 	w = doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
-		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember), `{"name":"plain"}`)
+		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser), `{"name":"plain"}`)
 	if w.Code != http.StatusCreated {
 		t.Errorf("member create without llm_cred = %d, want 201: %s", w.Code, w.Body.String())
 	}
 }
 
-// ─── §K: the two 0.7 capability kinds (PF-32, PF-33) ──────────────────────────
+// TestMemberWorkspaceProviderRefRefused is G4's gate over the model-provider
+// pin: a provider_ref alone is as much an operator binding as an
+// integration_ref, and a member's create carrying one is refused, not stored.
+func TestMemberWorkspaceProviderRefRefused(t *testing.T) {
+	srv, st, _ := ownerHarness(t, runner.UserMountPolicy{})
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
+		ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleUser),
+		`{"name":"mine","llm_cred":{"provider_ref":"corp-gateway"}}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("member create with llm_cred.provider_ref = %d, want 403: %s", w.Code, w.Body.String())
+	}
+	if all, _ := st.ListWorkspaces(context.Background()); len(all) != 0 {
+		t.Errorf("workspaces = %+v, want none — the refusal must precede the write", all)
+	}
+	w = doSSO(t, srv, http.MethodPost, "/api/v1/workspaces",
+		ssoSession(t, "sub-owner-admin", "admin@corp.example", oidc.RoleAdmin),
+		`{"name":"bad","llm_cred":{"provider_ref":"Corp Gateway"}}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "llm_cred.provider_ref") {
+		t.Errorf("operator create with an unreadable provider_ref = %d %s, want a 400 naming the field", w.Code, w.Body.String())
+	}
+}
+
+// §K: the two 0.7 capability kinds (PF-32, PF-33)
 
 // govMemberSub is the member every §K test below launches as — the same
 // sub/group pair govSession stamps and capabilitySubjects resolves a `user`
@@ -664,7 +686,7 @@ func capKindLaunch(t *testing.T, cs *capStore, body string) (*Server, *httptest.
 }
 
 // TestCapabilityAgentKind is PF-32: `agent` is a NARROWING kind, gated on
-// req.Agent at denyMemberRequest.
+// req.Agent at denyUserRequest.
 //
 // The FIRST leg is why the kind narrows rather than widens. capGranted refuses
 // on !enforced, so a widening `agent` would 403 every member run on every
@@ -732,7 +754,7 @@ func TestCapabilityAgentKind(t *testing.T) {
 	})
 }
 
-// ─── the integration kind, and the doctrine pin ───────────────────────────────
+// the integration kind, and the doctrine pin
 
 // integStore is govEscapeStore plus the one read the integration tiers need:
 // the site config that holds the deployment's integration rows.
@@ -768,20 +790,20 @@ func integFixture(t *testing.T, cs *capStore, rows []types.Integration, wss []ty
 	return New(cfg), audit
 }
 
-// foldedIntegrationRef reads the run.workspace.creds audit event — the durable
+// foldedIntegrationRef reads the run.workspace_cred.resolve audit event — the durable
 // record that a model-access binding actually folded into the run — and returns
 // the integration it named, or "" when nothing bound.
 func foldedIntegrationRef(t *testing.T, audit *recRecorder) string {
 	t.Helper()
 	for _, ev := range audit.snapshot() {
-		if ev.Action != "run.workspace.creds" {
+		if ev.Action != "run.workspace_cred.resolve" {
 			continue
 		}
 		var d struct {
 			IntegrationRef string `json:"integration_ref"`
 		}
 		if err := json.Unmarshal(ev.Data, &d); err != nil {
-			t.Fatalf("unmarshal run.workspace.creds data: %v", err)
+			t.Fatalf("unmarshal run.workspace_cred.resolve data: %v", err)
 		}
 		return d.IntegrationRef
 	}
@@ -904,7 +926,7 @@ func TestCapabilityIntegrationKind(t *testing.T) {
 	})
 }
 
-// ─── G5: the concurrent-run quota (PF-36) ─────────────────────────────────────
+// G5: the concurrent-run quota (PF-36)
 
 // quotaStore is govEscapeStore plus CountActiveRunsBy, counting the runs this
 // fixture ACTUALLY created rather than returning a canned number — so the cap is

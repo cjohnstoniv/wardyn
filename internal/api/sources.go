@@ -28,38 +28,15 @@ import (
 // mountLibraryRoutes registers the tier-1 source library and tier-2 base-image
 // catalog endpoints: a repo/dir configured once (its own contract + scan,
 // attached to many workspaces) and the shared registry/custom/byo images
-// ("recommended" is derived per workspace, never a row). Reads humanOrAdmin,
-// writes operatorOnly — the workspaces block's exact posture.
+// ("recommended" is derived per workspace, never a row).
 //
-// DEADCODE-1: there is no PUT /sources/{id} or GET /base-images/{id} — a
-// source's own contract is authored through POST /sources instead:
-// re-POSTing an existing identity with a new requirements body now APPLIES
-// it (WSPIPE-8), so a contract edit lands on the SAME endpoint console/CLI/
-// SDK already call to create a source, rather than a second route no
-// console button, CLI flag or SDK method ever reached (the SDK's
-// client.SourceRequest already carries Requirements; a CLI flag to drive it
-// is the remaining gap, tracked separately). The write-once,
-// discard-on-conflict handler that route used to be (handleUpdateSource) and
-// its base-image GET-by-id twin (handleGetBaseImage, whose only caller was
-// its own now-removed route) are gone, not stubbed.
-// The reads are operatorOnly too, matching their writes. They were the member
-// group's, and the split was made by VERB rather than by what the document
-// carries: a Source row carries Locator — the host filesystem path of a
-// local_dir source — and Requirements keyed `secret:<name>` / `egress:<host>`,
-// so a plain member GET returned the operator's on-disk layout and the NAMES of
-// the secrets and internal hosts every library entry needs. A BaseImageEntry
-// carries Image and Steps: the internal registry host and the bootstrap URLs
-// fetched to build it. No secret VALUES (those are write-only), so this is
-// topology and credential-REF disclosure, which is a target list rather than a
-// key.
-//
-// Reclassified rather than projected, and the question was asked before it was
-// answered: NOTHING member-facing consumes either route. The console has no
-// client method for /sources or /base-images at all (ui/src/app/lib/api), and
-// the CLI's only callers are `wardyn source list` and `wardyn site-config get`,
-// both under operator management verbs whose siblings are already operatorOnly.
-// A projection would have been three response types' worth of new code to serve
-// no caller. The cheapest redaction is a field nobody asked for.
+// DEADCODE-1: no PUT /sources/{id} or GET /base-images/{id} (gone, not stubbed):
+// a source's contract is authored by re-POSTing its identity to POST /sources,
+// which APPLIES the new requirements body.
+// Reads AND writes are operatorOnly: a Source carries Locator (a local_dir's host
+// path) and `secret:<name>` / `egress:<host>` requirement NAMES, and a
+// BaseImageEntry the internal registry host and bootstrap URLs — topology and
+// credential-REF disclosure. Nothing member-facing consumes either route.
 func (s *Server) mountLibraryRoutes(r chi.Router, operatorOnly chi.Router) {
 	operatorOnly.Get("/sources", s.handleListSources)
 	operatorOnly.Post("/sources", s.handleCreateSource)
@@ -90,22 +67,17 @@ func canonicalSourceIdentity(kind types.SourceKind, locator, ref string) (string
 }
 
 // canonicalRepoLocator lowercases ONLY the scheme+host of a repo locator,
-// leaving the path verbatim: a case-sensitive forge (self-hosted GitLab/
-// Gitea/Bitbucket, or any case-sensitive path segment) needs the operator's
-// clone path preserved exactly as authored, while scheme/host is
-// case-insensitive by definition — so "https://Git.Corp.Example/MyGroup/
-// MyRepo.git" dedupes with the lowercase spelling but hydrate always serves
-// "MyGroup/MyRepo.git" back, not "mygroup/myrepo.git". A bare "<org>/<name>"
-// GitHub slug has no host component in the string itself and passes through
-// unchanged.
+// leaving the path verbatim: a case-sensitive forge needs the operator's clone
+// path preserved exactly as authored, while scheme/host is case-insensitive —
+// so "https://Git.Corp.Example/MyGroup/MyRepo.git" dedupes with the lowercase
+// spelling but hydrate serves "MyGroup/MyRepo.git" back. A bare "<org>/<name>"
+// GitHub slug has no host and passes through unchanged.
 //
-// It is STRING SURGERY, not a url.Parse/String round trip. The round trip
-// keeps a path whose escapes are valid exactly as written — "(", "'", "@",
-// "~", "&" and "!" included — but a path holding a raw non-ASCII character is
-// re-escaped wholesale by Go's rules ("é" becomes %C3%A9, and then "(" %28 and
-// "'" %27 too): a second spelling of the same repository, and for an Azure
-// DevOps name one repoLocatorPathSafe then refused outright. The path's one
-// spelling is canonicalRepoAddress's, which the doors apply before this.
+// It is STRING SURGERY, not a url.Parse/String round trip: the round trip
+// re-escapes a path holding a raw non-ASCII character wholesale ("é" to %C3%A9,
+// then "(" to %28 too), a second spelling of the same repository that
+// repoLocatorPathSafe refuses for an Azure DevOps name. The path's one spelling
+// is canonicalRepoAddress's, which the doors apply before this.
 func canonicalRepoLocator(locator string) string {
 	if i := strings.Index(locator, "://"); i >= 0 {
 		end := len(locator)
@@ -241,7 +213,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	ado := s.adoHostsLoader(r.Context()).forAddresses(req.Locator)
+	ado, adoErr := s.adoHostsLoader(r.Context()).forAddresses(req.Locator)
 	if req.Kind == types.SourceRepo {
 		req.Locator = canonicalRepoAddress(strings.TrimSpace(req.Locator), ado)
 	}
@@ -261,7 +233,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: s.cfg.Now().UTC(), UpdatedAt: s.cfg.Now().UTC(),
 	}
 	if msg := validateSourceWrite(src, ado); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
+		writeError(w, http.StatusBadRequest, storeNamedLocatorRefusal(msg, "locator", src.Locator, adoErr))
 		return
 	}
 	// Provider admission on the LIBRARY door, not only the workspace one. This is
@@ -352,14 +324,11 @@ type deleteSourceResponse struct {
 // handleDeleteSource removes a library source — LOUDLY refusing while
 // workspaces attach it: in-use is a 409 naming every attaching workspace;
 // ?force=1 is the explicit detach-everywhere escape. Forcing does NOT make a
-// workspace's next run fail loudly (the mount gate has no check for
-// a source that used to be there): it un-mounts the source and the workspace's
-// remaining sources mount as normal, so DetachedFrom above is the only signal
-// the operator gets that anything changed. The in-use gate and the delete are
-// ONE atomic statement in the store (DeleteSource): WorkspacesAttaching here
-// only names who's attached for the 409/200 body, it does not decide the
-// outcome, so a workspace attaching between this call and the delete can
-// never slip through.
+// workspace's next run fail (the mount gate has no check for a vanished
+// source), so DetachedFrom is the only signal the operator gets. The in-use
+// gate and the delete are ONE atomic statement in the store (DeleteSource);
+// WorkspacesAttaching only names who's attached for the body, so a concurrent
+// attach can never slip through.
 //
 //	DELETE /api/v1/sources/{id}[?force=1]
 func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
@@ -442,15 +411,10 @@ func overridesBySourceID(existing []types.WorkspaceAttachment) map[uuid.UUID]map
 // A registry/custom/byo base image upserts into the catalog; "recommended"/nil
 // yields a nil id — NULL is the derived-build marker.
 //
-// existing is the workspace's CURRENT attachments before this edit (nil for a
-// brand-new workspace) — its per-source Overrides carry forward by SourceID
-// (WSPIPE-7) onto a source the request doesn't explicitly set Overrides for.
-//
-// r (not a bare ctx) so a genuinely NEW library row can be audited under the
-// request's own actor (WSPIPE-4): a plain "sources": <count> on
-// workspace.create/update names no host path, so an incident review asking
-// which directory was exposed, and whether read-write, had no answer in the
-// trail besides the mutable workspace row itself.
+// existing is the workspace's CURRENT attachments (nil for a new workspace); its
+// per-source Overrides carry forward by SourceID where the request sets none.
+// Takes r, not a bare ctx, so a NEW library row is audited under the request's
+// own actor: the workspace audit row names no host path.
 func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, baseImage *types.WorkspaceBaseImage, existing []types.WorkspaceAttachment) ([]types.WorkspaceAttachment, *uuid.UUID, error) {
 	ctx := r.Context()
 	now := s.cfg.Now().UTC()
@@ -473,9 +437,12 @@ func (s *Server) upsertAndAttach(r *http.Request, srcs []types.WorkspaceSource, 
 		}
 		locator, ref := canonicalSourceIdentity(kind, locator, src.Ref)
 		newID := uuid.New()
+		// Only the default display name: decodeWorkspaceRequest already refused an
+		// address the read error left undecided.
+		hosts, _ := ado.forAddresses(locator)
 		row, err := s.cfg.Store.UpsertSource(ctx, types.Source{
 			ID: newID, Kind: kind, Locator: locator, Ref: ref,
-			Name: lastPathSegment(locator, ado.forAddresses(locator)), Status: types.WorkspacePendingScan,
+			Name: lastPathSegment(locator, hosts), Status: types.WorkspacePendingScan,
 			CreatedAt: now, UpdatedAt: now,
 		})
 		if err != nil {

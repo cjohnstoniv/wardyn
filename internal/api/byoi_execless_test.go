@@ -45,13 +45,12 @@ func (r *execLessCapsRunner) Wait(context.Context, string) (int, error) { return
 
 var _ runner.Runner = (*execLessCapsRunner)(nil)
 
-// TestStartAgentOrIdle_BYOIOnExecLessRuntime_RefusedWithoutWastingTheSlot is
-// the W15-W15f-exec-lane-runtime-4 regression: on base 763beb5, byoiSelftest
-// runs unconditionally for a BYOI image — on an exec-less (krun/CC3) runtime
-// that consumes the sandbox's ONE process, so the immediately-following task
-// Exec is guaranteed to fail against an already-exited container (Exec is
-// called TWICE: once for the selftest, once for the task). The fix refuses the
-// combination up front: Exec must never be called at all, the run must land
+// TestStartAgentOrIdle_BYOIOnExecLessRuntime_RefusedWithoutWastingTheSlot: on
+// an exec-less (krun/CC3) runtime, running byoiSelftest for a BYOI image
+// consumes the sandbox's one process, so the immediately-following task Exec
+// is guaranteed to fail against an already-exited container (Exec would be
+// called twice: once for the selftest, once for the task). The combination is
+// refused up front: Exec must never be called at all, the run must land
 // FAILED, and the sandbox must be torn down exactly once.
 func TestStartAgentOrIdle_BYOIOnExecLessRuntime_RefusedWithoutWastingTheSlot(t *testing.T) {
 	h := newHarness(t)

@@ -57,7 +57,7 @@ func kvExecSession(stdout string) *runner.ExecSession {
 // A run with no sandbox is a 409, and writes NO audit row.
 //
 // It used to hand an empty ref straight to ExecStream, which errored into the
-// failure branch: a 500 plus a run.resources failure row EVERY 4 SECONDS per
+// failure branch: a 500 plus a run.resources.fail failure row EVERY 4 SECONDS per
 // open tab, for a PENDING/STARTING run that simply is not up yet — against a
 // handler whose own comment says failures are "the rare, interesting case".
 // It also disagreed with the Files widget beside it in the same rail, which
@@ -131,8 +131,8 @@ func TestRunResources_FullKeySet(t *testing.T) {
 	// Success is not audited — the console polls this endpoint; see the
 	// audit-on-failure-only test below for the contrast case.
 	for _, ev := range h.audit.events {
-		if ev.Action == "run.resources" {
-			t.Errorf("unexpected run.resources audit event on a SUCCESSFUL read: %+v", ev)
+		if ev.Action == "run.resources.fail" {
+			t.Errorf("unexpected run.resources.fail audit event on a SUCCESSFUL read: %+v", ev)
 		}
 	}
 }
@@ -225,9 +225,9 @@ func TestRunResources_ExecStreamUnsupported_Returns501(t *testing.T) {
 	}
 
 	// FAILURE is audited (unlike the success path above).
-	ev := lastAuditEvent(t, h.audit.events, "run.resources")
+	ev := lastAuditEvent(t, h.audit.events, "run.resources.fail")
 	if ev.Outcome != "failure" {
-		t.Errorf("run.resources audit outcome = %q, want failure", ev.Outcome)
+		t.Errorf("run.resources.fail audit outcome = %q, want failure", ev.Outcome)
 	}
 }
 
@@ -243,13 +243,13 @@ func TestRunResources_ForeignRun404(t *testing.T) {
 	})
 	id := seedResourcesRun(ast, "owner-sub")
 
-	mallory := ssoSession(t, "mallory-sub", "mallory@corp.example", oidc.RoleMember)
+	mallory := ssoSession(t, "mallory-sub", "mallory@corp.example", oidc.RoleUser)
 	w := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", mallory, "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("non-owning member: code = %d, want 404; body=%s", w.Code, w.Body.String())
 	}
 
-	owner := ssoSession(t, "owner-sub", "owner@corp.example", oidc.RoleMember)
+	owner := ssoSession(t, "owner-sub", "owner@corp.example", oidc.RoleUser)
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+id.String()+"/resources", owner, ""); w.Code != http.StatusOK {
 		t.Fatalf("owning member: code = %d, want 200 (contrast case — the run itself is reachable); body=%s", w.Code, w.Body.String())
 	}

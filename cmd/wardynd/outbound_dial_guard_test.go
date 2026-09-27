@@ -6,9 +6,8 @@ package main
 // The operator-reported MITM/upstream-proxy defect (0.7.8) was the THIRD time a
 // new forward-egress code path failed to inherit SiteConfig.UpstreamProxyURL:
 // the git broker and the brokered LLM route each once called their own
-// resolve+dial instead of routing through egressTarget/dialThroughUpstream
-// (W23-S1-4 / W19-W19d-3), and the MITM lane went unpinned for a third
-// instance of the same shape. Each was found by READING the code, never by a
+// resolve+dial instead of routing through egressTarget/dialThroughUpstream,
+// and the MITM lane went unpinned for a third instance of the same shape. Each was found by reading the code, never by a
 // test — there was no checklist item asking "does this path honour
 // upstream_proxy_url?" of a NEW net.Dial/tls.Dial/http.Transport/http.Client.
 //
