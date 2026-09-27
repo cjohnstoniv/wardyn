@@ -43,11 +43,19 @@ const (
 // account and role appear is the pin-mismatch action, which names both pairs
 // to the caller — members included — because they must pick the pinned pair
 // when they sign in again (the same sentence model_access already sends).
+//
+// SourceRunID is the sign-in run whose capture the caller's stored credential
+// for this provider is (#993): stamped server-side from that run's own token
+// when the capture lands (ssotoken.go, provider_signin.go), read from the
+// caller's own provider-scoped store, so the console confirms THIS sign-in
+// from the credential itself rather than from its best-effort audit row.
+// Absent for a kind with no sign-in (a typed key) and for no capture.
 type SetupProviderAccess struct {
-	Provider string `json:"provider"`
-	State    string `json:"state"`
-	Action   string `json:"action,omitempty"`
-	Deadline string `json:"deadline,omitempty"`
+	Provider    string `json:"provider"`
+	State       string `json:"state"`
+	Action      string `json:"action,omitempty"`
+	Deadline    string `json:"deadline,omitempty"`
+	SourceRunID string `json:"source_run_id,omitempty"`
 }
 
 // setupModelProviderState is handleSetupStatus's one call site for
@@ -246,6 +254,7 @@ func (s *Server) gradeProviderSubscription(ctx context.Context, row *SetupProvid
 	raw, found, err := s.ownSecret(ctx, owner, providerSecretName(p.UID, providerOAuthPart))
 	var blob managedCredBlob
 	if err == nil && found && json.Unmarshal(raw, &blob) == nil && blob.Token != "" {
+		row.SourceRunID = blob.SourceRunID
 		if s.cfg.Now().UTC().Sub(blob.CapturedAt) > harnessTokenAging {
 			row.State = modelAccessExpiring
 			row.Action = providerAccessClaudeAgingAction
@@ -274,6 +283,9 @@ func (s *Server) gradeProviderBedrockSSO(ctx context.Context, row *SetupProvider
 		row.State = modelAccessNotConfigured
 		row.Action = modelAccessSignInAction
 		return
+	}
+	if found {
+		row.SourceRunID = blob.SourceRunID
 	}
 	now := s.cfg.Now().UTC()
 	spent := s.awsSSOTokenSpentFor(blob)

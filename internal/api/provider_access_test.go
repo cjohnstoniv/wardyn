@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -408,4 +409,104 @@ func marshalManagedCredBlob(t *testing.T, tok string, capturedAt time.Time) ([]b
 		t.Fatalf("marshal managedCredBlob: %v", err)
 	}
 	return b, capturedAt
+}
+
+// TestSetupProviderAccess_SourceRunIDIsProviderAndOwnerScoped is #993: the
+// provider_access row names the sign-in run of the caller's OWN stored
+// capture for THAT provider — never another provider's, never another
+// person's — and a typed key, which has no sign-in, names none.
+func TestSetupProviderAccess_SourceRunIDIsProviderAndOwnerScoped(t *testing.T) {
+	h, sec := newSecretsHarness(t)
+	now := awsSSOTestFixedNow
+	h.srv.cfg.Now = func() time.Time { return now }
+	ssoA, ssoB := paSSOProvider("bedrock-prod"), paSSOProvider("bedrock-dev")
+	sub := paKeyProvider("claude-sub", types.ModelProviderAnthropicSubscription)
+	key := paKeyProvider("anthropic", types.ModelProviderAnthropicAPIKey)
+	aliceSSO, bobSSO, aliceSub := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	put := func(owner, name string, raw []byte) {
+		if err := sec.For(owner).Put(context.Background(), name, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ssoBlob := func(runID string) []byte {
+		var b awsSSOBlob
+		if err := json.Unmarshal(brBlob("sso-tok", "123456789012", "BedrockUser", now.Add(48*time.Hour)), &b); err != nil {
+			t.Fatal(err)
+		}
+		b.SourceRunID = runID
+		raw, _ := json.Marshal(b)
+		return raw
+	}
+	put(paOwner, providerSecretName(ssoA.UID, providerSSOPart), ssoBlob(aliceSSO))
+	put("bob@example.com", providerSecretName(ssoA.UID, providerSSOPart), ssoBlob(bobSSO))
+	subRaw, _ := json.Marshal(managedCredBlob{Token: "sk-ant-oat-alice", CapturedAt: now.Add(-time.Hour), SourceRunID: aliceSub})
+	put(paOwner, providerSecretName(sub.UID, providerOAuthPart), subRaw)
+	put(paOwner, providerSecretName(key.UID, providerKeyPart), []byte("a-real-key-value-0123456789"))
+
+	for _, tc := range []struct {
+		name     string
+		p        types.ModelProvider
+		owner    string
+		wantRun  string
+		wantLive bool
+	}{
+		{"alice's own AWS sign-in", ssoA, paOwner, aliceSSO, true},
+		{"bob's own AWS sign-in for the same provider", ssoA, "bob@example.com", bobSSO, true},
+		{"another provider alice never signed in to", ssoB, paOwner, "", false},
+		{"alice's own Claude sign-in", sub, paOwner, aliceSub, true},
+		{"a typed key has no sign-in run", key, paOwner, "", true},
+		{"someone with nothing stored", ssoA, "carol@example.com", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := h.srv.providerAccessFor(context.Background(), tc.p, tc.owner)
+			if got.SourceRunID != tc.wantRun || (got.State == modelAccessLive) != tc.wantLive {
+				t.Errorf("provider_access = %+v; want source_run_id %q, live %v", got, tc.wantRun, tc.wantLive)
+			}
+		})
+	}
+}
+
+// failingAudit refuses every row, as a sink that can only spool would.
+type failingAudit struct{}
+
+func (failingAudit) Record(context.Context, types.AuditEvent) error { return errors.New("audit sink down") }
+
+// TestSetupProviderAccess_SourceRunIDSurvivesAuditFailure is #993's reason:
+// the capture's harness.credential.capture row is best-effort, and a row that
+// never reached the sink is invisible to /audit. The stored credential's own
+// stamp still names the run on the caller's /setup/status.
+func TestSetupProviderAccess_SourceRunIDSurvivesAuditFailure(t *testing.T) {
+	site := credentialSite(subProvider("claude"))
+	p := site.ModelProviders.Providers[0]
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+	srv, _, audit, _ := signInFixture(t, nil, site)
+	code, body := signIn(t, srv, member, p.ID)
+	if code != http.StatusOK {
+		t.Fatalf("sign-in = %d %s", code, body)
+	}
+	runID := signInRunID(t, body)
+	srv.cfg.Audit = failingAudit{}
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/model-providers/"+p.ID+"/sign-in", member,
+		fmt.Sprintf(`{"run_id":%q,"token":"sk-ant-oat01-member-own-claude-sign-in"}`, runID))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("capture = %d %s, want 204", w.Code, w.Body.String())
+	}
+	if rows := audit.find("harness.credential.capture"); len(rows) != 0 {
+		t.Fatalf("the capture row reached the sink (%d rows); the case needs it lost", len(rows))
+	}
+
+	w = doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, "")
+	var st SetupStatus
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &st) != nil {
+		t.Fatalf("GET /setup/status = %d %s", w.Code, w.Body.String())
+	}
+	var row *SetupProviderAccess
+	for i := range st.ProviderAccess {
+		if st.ProviderAccess[i].Provider == p.ID {
+			row = &st.ProviderAccess[i]
+		}
+	}
+	if row == nil || row.State != modelAccessLive || row.SourceRunID != runID.String() {
+		t.Fatalf("provider_access for %s = %+v; want live, naming the sign-in run %s", p.ID, row, runID)
+	}
 }

@@ -366,6 +366,10 @@ export interface SetupProviderAccess {
   // RFC3339 UTC, only on a state `action` names an instant for. Same reading
   // rule as SetupModelAccess.deadline.
   deadline?: string;
+  // The sign-in run the caller's stored credential for this provider was
+  // captured by, stamped by the server from that run's own token (#993).
+  // Absent for a typed key and when nothing is captured.
+  source_run_id?: string;
 }
 
 export interface SetupStatus {

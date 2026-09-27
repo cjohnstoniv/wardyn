@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   extractSignedIn,
   serverConfirmsCapture,
+  serverConfirmsProviderCapture,
   watchForCapture,
   CAPTURE_POST_RUN_GRACE_MS,
   CAPTURE_WATCH_MAX_MS,
@@ -92,6 +93,35 @@ describe("serverConfirmsCapture — strict (Codex #9)", () => {
   // every S-13 pin in the sibling test file — is unchanged by the new option.
   it("non-strict (the default) keeps the presence fallbacks", () => {
     expect(serverConfirmsCapture(status({ model_access: { state: "live" } }), "aws", "run-123")).toBe(true);
+  });
+});
+
+// #993: the provider row's own source_run_id — the server's stamp from the
+// capturing run's token — proves THIS sign-in without the best-effort audit row.
+describe("serverConfirmsProviderCapture — source_run_id (#993)", () => {
+  const row = (state: string, source_run_id?: string) =>
+    status({ provider_access: [{ provider: "bedrock-prod", state, source_run_id }] });
+
+  it("confirms a matching capture with no audit row (spooled)", () => {
+    expect(serverConfirmsProviderCapture(row("live", "run-123"), "bedrock-prod", false, "run-123")).toBe(true);
+    expect(serverConfirmsProviderCapture(row("expiring", "run-123"), "bedrock-prod", false, "run-123")).toBe(true);
+  });
+
+  it("refuses another run's capture even when this run's audit row is there", () => {
+    expect(serverConfirmsProviderCapture(row("live", "run-000-earlier"), "bedrock-prod", true, "run-123")).toBe(false);
+    expect(serverConfirmsProviderCapture(row("live", "run-123"), "bedrock-prod", true, null)).toBe(false);
+  });
+
+  it("refuses a row with no source_run_id unless this run's audit row is there", () => {
+    expect(serverConfirmsProviderCapture(row("live"), "bedrock-prod", false, "run-123")).toBe(false);
+    expect(serverConfirmsProviderCapture(row("live"), "bedrock-prod", true, "run-123")).toBe(true);
+  });
+
+  it("refuses a matching capture the provider cannot use", () => {
+    for (const state of ["expired_signin", "not_configured", "not_applicable"]) {
+      expect(serverConfirmsProviderCapture(row(state, "run-123"), "bedrock-prod", true, "run-123")).toBe(false);
+    }
+    expect(serverConfirmsProviderCapture(row("live", "run-123"), "other", true, "run-123")).toBe(false);
   });
 });
 

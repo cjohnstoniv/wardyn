@@ -122,15 +122,27 @@ export function serverConfirmsCapture(
 }
 
 // serverConfirmsProviderCapture is serverConfirmsCapture for a sign-in through
-// a model provider's door (#544). Its capture lands under the provider's own
-// name, which /setup/status's harness rows never carry, so no source_run_id
-// can prove THIS run. The proof is the audit row the upload writes for this
-// run after its store write (`audited`, harness.credential.capture) — a row
-// the sandbox cannot write — and the provider's own row must agree the
-// credential is there. Strict by construction: no presence-only fallback.
-export function serverConfirmsProviderCapture(status: SetupStatus, modelProvider: string, audited: boolean): boolean {
-  const state = status.provider_access?.find((a) => a.provider === modelProvider)?.state;
-  return audited && (state === "live" || state === "expiring");
+// a model provider's door (#544). The provider's own row must agree the
+// credential is there and usable, and something the sandbox cannot write must
+// prove it is THIS run's. That proof is the row's `source_run_id` (#993),
+// stamped by the server from the capturing run's own token and read from the
+// caller's own stored credential: a row naming another run is an earlier
+// sign-in and refuses, whatever the audit trail says. Only a row carrying no
+// source_run_id at all (a daemon too old to send it) falls back to the audit
+// row the upload writes for this run after its store write (`audited`,
+// harness.credential.capture), which is best-effort: a spooled row is
+// invisible to /audit, so it never refuses a capture the row itself proves.
+// Strict by construction: no presence-only fallback.
+export function serverConfirmsProviderCapture(
+  status: SetupStatus,
+  modelProvider: string,
+  audited: boolean,
+  runId?: string | null,
+): boolean {
+  const row = status.provider_access?.find((a) => a.provider === modelProvider);
+  if (!row || !(row.state === "live" || row.state === "expiring")) return false;
+  if (row.source_run_id) return !!runId && row.source_run_id === runId;
+  return audited;
 }
 
 // confirmCaptureWithServer is the round trip itself: read /setup/status, give a
@@ -151,7 +163,7 @@ export async function confirmCaptureWithServer(
 ): Promise<{ confirmed: boolean; unreachable: boolean }> {
   let audited = false;
   const confirms = (s: SetupStatus) =>
-    modelProvider ? serverConfirmsProviderCapture(s, modelProvider, audited) : serverConfirmsCapture(s, provider, runId);
+    modelProvider ? serverConfirmsProviderCapture(s, modelProvider, audited, runId) : serverConfirmsCapture(s, provider, runId);
   // A THROW stays fail-closed and is never retried: a propagated 401 is an
   // answer, not a blip, and retrying it would only delay the refusal.
   const read = async (): Promise<SetupStatus | null> => {
@@ -325,7 +337,7 @@ export async function watchForCapture({
       try {
         const status = await setupApi.getSetupStatus();
         const confirmed = modelProvider
-          ? serverConfirmsProviderCapture(status, modelProvider, hinted)
+          ? serverConfirmsProviderCapture(status, modelProvider, hinted, runId)
           : serverConfirmsCapture(status, provider, runId, { strict: true });
         if (!status.unreachable && confirmed) return true;
       } catch {
