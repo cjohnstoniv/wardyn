@@ -331,7 +331,9 @@ func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.Netw
 		return netip.Prefix{}, err
 	}
 	insp, ierr := d.cli.NetworkInspect(ctx, res.ID, client.NetworkInspectOptions{})
-	if _, err := d.cli.NetworkRemove(ctx, res.ID, client.NetworkRemoveOptions{}); err != nil {
+	// Background, like CreateSandbox's rollback: a cancelled dispatch must not
+	// strand the probe network holding a pool subnet.
+	if _, err := d.cli.NetworkRemove(context.Background(), res.ID, client.NetworkRemoveOptions{}); err != nil {
 		return netip.Prefix{}, fmt.Errorf("remove the subnet probe: %w", err)
 	}
 	if ierr != nil {
