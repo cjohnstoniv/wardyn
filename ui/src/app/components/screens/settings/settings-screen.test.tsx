@@ -16,7 +16,7 @@
 //      .test.tsx; this pins that Settings actually hands it a real provider
 //      instead of coasting on the context's fail-open default.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -297,36 +297,35 @@ describe("SettingsScreen — a redacted checks list is not an Off image builder"
   });
 });
 
-// The Host card mounts the SAME picker (EnvironmentStep) Getting Started
-// does. This pins a read-only statement of the server's own default, gated
-// on installed availability exactly like every other selector — the card
-// owns no private per-mount override state of its own (no localStorage).
-// DONE WHEN: a test fails if an unavailable class becomes selectable again.
+// #1200 — the Host card mounts the shared TierPicker in display mode:
+// installed tiers only (T-10), no radiogroup at all (nobody picks a default
+// here — this is a read-only statement of what every run inherits). A tier
+// this host hasn't installed is DROPPED, never shown disabled.
+// DONE WHEN: a test fails if a not-installed tier renders at all.
 describe("SettingsScreen — the Host card's barrier picker offers only what's installed", () => {
-  it("checks the strongest installed tier and disables the rest, read-only", async () => {
-    // baseStatus: CC1+CC2 installed, CC3 not — Wall is the strongest.
+  it("lists only the installed tiers, read-only — Vault is dropped entirely, not disabled", async () => {
+    // baseStatus: CC1+CC2 installed, CC3 not.
     renderScreen();
-    expect(
-      await screen.findByRole("radio", { name: /Wall/, checked: true }),
-    ).toBeInTheDocument();
-    const vault = screen.getByRole("radio", { name: /Vault/ });
-    expect(vault).toBeDisabled();
-    // A click changes nothing: the card is a read-only statement of the
-    // server's own default, never a second place that picks one.
-    await userEvent.click(vault);
-    expect(screen.getByRole("radio", { name: /Wall/, checked: true })).toBeInTheDocument();
-    expect(vault).toHaveAttribute("aria-checked", "false");
+    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const hostCard = within(heading.closest("section")!);
+    expect(hostCard.queryByRole("radiogroup")).toBeNull();
+    expect(hostCard.getAllByRole("status").map((el) => el.textContent)).toEqual([
+      expect.stringContaining("Fence"),
+      expect.stringContaining("Wall"),
+    ]);
+    expect(hostCard.queryByText("Vault")).toBeNull();
   });
 
-  it("disables Wall and Vault on a CC1-only host, and checks Fence", async () => {
+  it("a CC1-only host lists Fence alone", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"] } }),
     );
     renderScreen();
-    expect(
-      await screen.findByRole("radio", { name: /Fence/, checked: true }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Wall/ })).toBeDisabled();
-    expect(screen.getByRole("radio", { name: /Vault/ })).toBeDisabled();
+    const heading = await screen.findByRole("heading", { name: "Host", level: 3 });
+    const hostCard = within(heading.closest("section")!);
+    expect(hostCard.getAllByRole("status")).toHaveLength(1);
+    expect(hostCard.getByText("Fence")).toBeInTheDocument();
+    expect(hostCard.queryByText("Wall")).toBeNull();
+    expect(hostCard.queryByText("Vault")).toBeNull();
   });
 });

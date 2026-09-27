@@ -29,11 +29,12 @@ import { ChevronRight } from "lucide-react";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { health } from "../../../lib/api/health";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
+import { CC_ORDER } from "../../../lib/types";
 import { PageHeader } from "../../wardyn/page-header";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 import { Mono } from "../../wardyn/code-block";
 import { strongestAvailable } from "../../wardyn/default-confinement";
-import { EnvironmentStep } from "../setup/environment-step";
+import { TierPicker } from "../../wardyn/tier-picker";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { isProxyConfigured } from "../setup/corp-network-proxy";
 import { SshKeysPane } from "../ssh-keys";
@@ -74,6 +75,7 @@ function HostCard({
   // straight (no override state left to own here: there is nothing left to
   // persist, and this card is a read-only statement of "what every run
   // inherits by default", never a second place to pick it).
+  const installed = CC_ORDER.filter((cc) => (status.runner.confinement_classes ?? []).includes(cc));
   const selected = strongestAvailable(status.runner.confinement_classes ?? []) ?? "CC1";
 
   const envBuilder = status.checks.find((c) => c.id === "env_builder");
@@ -109,10 +111,13 @@ function HostCard({
       </p>
 
       <div className="mt-3">
-        {/* Read-only here (see `selected` above): a click has nothing left to
-            change, so onSelect is a no-op rather than a second place that
-            picks a default a run could then inherit from. */}
-        <EnvironmentStep status={status} selected={selected} onSelect={() => {}} />
+        {/* #1200 — the compact TierPicker, display mode: installed tiers
+            ONLY (T-10), never the governance floor (that ceiling is stated
+            in Governance, where it's set, and in the person's own picker,
+            where it binds — a third place would be a third to keep in
+            sync). Read-only: nobody picks a default here, this card states
+            what every run inherits by default. */}
+        <TierPicker tiers={installed} mode="display" recommended={selected} />
       </div>
 
       <div className="mt-4 divide-y divide-border border-t border-border pt-1">

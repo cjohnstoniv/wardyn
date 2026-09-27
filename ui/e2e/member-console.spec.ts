@@ -192,11 +192,15 @@ test.describe("member console — a redacted body is not a deployment fact", () 
     await navToRoute(page, "/account");
 
     await expect(page.getByRole("heading", { name: "Host", level: 3 })).toBeVisible();
-    // The barrier picker is the member's own choice and stays live — the card
-    // and its `-runner docker` fix are for a host that genuinely has none.
+    // #1200 — the Host card is the shared TierPicker's DISPLAY mode now: a
+    // read-only statement of what this host has installed, never a
+    // radiogroup (nobody picks a default here). The card and its
+    // `-runner docker` fix are for a host that genuinely has none.
     await expect(page.getByText("No sandbox runner")).toHaveCount(0);
     await expect(page.getByText("-runner docker")).toHaveCount(0);
-    await expect(page.getByRole("radio", { name: /Wall/ })).toBeEnabled();
+    await expect(page.getByRole("radiogroup", { name: "Barrier tier" })).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: /Wall/ })).toHaveCount(0);
+    await expect(page.getByText("Wall", { exact: true })).toBeVisible();
     // The row itself is gone, not merely its Off sentence — the deployment's
     // builder posture was never told to this caller.
     await expect(page.getByText("Image builder")).toHaveCount(0);
