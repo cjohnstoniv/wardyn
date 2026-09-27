@@ -141,6 +141,13 @@ describe("hasLlmPath — via the integrations adapter", () => {
     expect(
       hasLlmPath(status({ checks_redacted: true, llm_ready: true, model_access: { state: "expired_signin" } })),
     ).toBe(false);
+    // A shared-row member whose credential is dead reads shared_expired, and a
+    // state this client does not know yet must fail closed too.
+    for (const state of ["shared_expired", "revoked"]) {
+      expect(
+        hasLlmPath(status({ checks_redacted: true, llm_ready: true, model_access: { state } as never })),
+      ).toBe(false);
+    }
   });
 
   // The positive counterpart: a per-user row that IS signed in is real

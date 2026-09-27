@@ -87,7 +87,9 @@ function serverModelPathFallback(status: SetupStatus): boolean {
   if (status.checks_redacted !== true) return false;
   const state = status.model_access?.state;
   if (state === "live" || state === "expiring") return true;
-  if (state === "not_configured" || state === "expired_signin") return false;
+  // Any other per-principal state (not_configured, expired_signin, shared_expired, or a
+  // state this client does not know yet) is not access: fail closed.
+  if (state && state !== "not_applicable") return false;
   return status.llm_ready === true;
 }
 
