@@ -474,8 +474,7 @@ pass "initial capture landed (model_access.state=live, via login run ${LOGIN_RUN
 #     "wardyn-harness-aws-oauth" for this shared-scope walk) is DELETED —
 #     from then on every dispatch refuses as "no credential", not literally
 #     "spent"; and
-#   - the refresh token's fingerprint (8 bytes of its SHA-256, hex — the SAME
-#     one-way truncated fingerprint this script computes below) is written to
+#   - the refresh token's fingerprint (8 bytes of its SHA-256, hex) is written to
 #     the `aws_sso_spent_tokens` table (migration 0068), so a refresh token
 #     AWS already retired is never treated as renewable again even after a
 #     restart wipes wardynd's in-memory state.
@@ -524,6 +523,10 @@ try_dispatch
 [[ "${DISPATCH_OUTCOME}" == "live" ]] || die "dispatch was refused before the fake was ever armed — something upstream is already wrong"
 pass "credential accepted; a normal dispatch works"
 
+# The volume is fresh, so nothing is spent yet; a leftover row would let a
+# regression still read count 1 after the restart.
+pre_spent="$(psql1 "SELECT count(*) FROM aws_sso_spent_tokens")"
+[[ "${pre_spent}" == "0" ]] || die "expected no aws_sso_spent_tokens rows before arming; count=${pre_spent}"
 step "arming the fake (POST /_control/reauth?after=1) — the NEXT refresh now answers invalid_grant"
 arm_code="$(curl -sS --max-time "${CURL_MAX_TIME}" -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:${FAKE_PORT}/_control/reauth?after=1")"
 [[ "${arm_code}" == "200" ]] || die "POST /_control/reauth answered ${arm_code}"
