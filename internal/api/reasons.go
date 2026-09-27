@@ -64,4 +64,10 @@ const (
 	// shape.
 	reasonSigninClosed         = "signin_closed"
 	reasonSigninHoldsExhausted = "signin_holds_exhausted"
+
+	// POST /runs with a launch preset (presets.go, #1143).
+	reasonPresetUnknown       = "preset_unknown"                // no such preset, or not open to the caller's user type
+	reasonPresetField         = "preset_field_not_per_launch"   // a field other than title/task set beside preset
+	reasonPresetVersionMoved  = "preset_version_changed"        // the pinned preset_version is not the current one
+	reasonPresetVersionNoName = "preset_version_without_preset" // preset_version with no preset
 )

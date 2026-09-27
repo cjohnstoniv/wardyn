@@ -300,6 +300,11 @@ type AgentRun struct {
 	// one otherwise. Empty for a run with no human creator (admin token, local
 	// mode) or created before migration 0080.
 	UserType string `json:"user_type,omitempty"`
+	// Preset and PresetVersion name the launch preset (and the version of it)
+	// this run was expanded from. Empty / 0 for a run sent as an explicit spec
+	// and for every run created before migration 0086.
+	Preset        string `json:"preset,omitempty"`
+	PresetVersion int    `json:"preset_version,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
@@ -971,29 +976,4 @@ type CapabilityGrant struct {
 	Effect      CapabilityEffect      `json:"effect"`
 	CreatedAt   time.Time             `json:"created_at"`
 	CreatedBy   string                `json:"created_by,omitempty"`
-}
-
-// RoleMapping is one console-managed (Getting Started -> People) row of
-// migration 0051's role_mappings table: "value maps to role". This is the
-// STORE'S wire type, carrying id/timestamps/provenance — distinct on purpose
-// from internal/auth/oidc's own RoleMapping (just Value/Role), which stays
-// dependency-free of this package (see that type's doc comment) the same way
-// oidc.SessionRevocations keeps oidc dependency-free of store; the API layer
-// converts between the two, mirroring however SessionRevocations bridges
-// store -> oidc today.
-//
-// Value is expected already canonical (trimmed, lowercased, ASCII) by the API
-// write boundary that owns writes to this table — see the migration comment.
-//
-// UserType is the row's user type when Role is the user tier (migration
-// 0070_user_tier_rename's column, a foreign key to user_types); "" on a tier
-// row, and on a user row written before types existed, which reads as the
-// built-in "standard".
-type RoleMapping struct {
-	ID        uuid.UUID `json:"id"`
-	Value     string    `json:"value"`
-	Role      string    `json:"role"`
-	UserType  string    `json:"user_type,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	CreatedBy string    `json:"created_by,omitempty"`
 }

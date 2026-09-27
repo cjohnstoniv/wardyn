@@ -947,7 +947,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 
 | Surface | Gate |
 |---|---|
-| managed harness credential — the token PASTE and DISCONNECT (`PUT`/`DELETE /setup/harness-credential/{provider}`), which write the ONE credential every run inherits; the container LOGIN launch moved to the member row below in 0.7.2; policy create/update/delete; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
+| managed harness credential — the token PASTE and DISCONNECT (`PUT`/`DELETE /setup/harness-credential/{provider}`), which write the ONE credential every run inherits; the container LOGIN launch moved to the member row below in 0.7.2; policy create/update/delete; launch preset writes (`PUT`/`DELETE /presets/{name}`), selectable content like a stored policy; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
 | the operator-topology READS — `GET /site-config`, `GET /sources`, `GET /sources/{id}`, `GET /base-images`: they carry the upstream-proxy secret ref, a `local_dir` source Locator and internal registry refs, so reading them is reading the deployment's own topology | ⛔ admin only |
 | the `/workspaces` routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST — `llm-cred`, `requirements`, `env-as-code/write` — plus `reassign` (user administration) | ⛔ admin only |
 | the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
@@ -2969,6 +2969,54 @@ regardless, so a **public client** registration (a SPA/native-app client type
 with no secret — some IdPs refuse to issue one for a confidential client) works
 the same as a confidential one. Leave it unset for that shape; nothing else in
 the OIDC config changes.
+
+## Launch presets
+
+A launch preset is a named, versioned bundle of existing `POST /runs` fields
+(image, repo, workspace, drive, a stored `policy_id` or an `inline_policy` with
+its `ui_apps` and ports, and so on). A launcher that is not the console, such
+as a portal button or a CI dispatcher, sends the name and the per-launch fields
+instead of the whole spec:
+
+```sh
+curl -fsS -X POST "$WARDYN_URL/api/v1/runs" -H "Authorization: Bearer $TOKEN" \
+  -d '{"preset":"nightly-tests","title":"nightly","task":"run the test suite"}'
+```
+
+The server replaces the request with the preset's stored one, keeps the
+caller's `title` and `task`, and runs the unchanged create path. A preset
+grants nothing: the caller's governance ceiling, capability grants,
+owner-scoped secrets and drive apply exactly as they would to the same request
+sent explicitly, so a preset that exceeds a member's ceiling is refused the way
+the explicit request is. Alongside `preset`, a request may set only `title`,
+`task` and `preset_version`; any other field is refused `400`
+(`preset_field_not_per_launch`). An unknown preset, or one not open to the
+caller's user type, is `422` (`preset_unknown`). `preset_version` pins the
+version the caller expects; a preset changed since is refused `409`
+(`preset_version_changed`). The run records `preset` and `preset_version`.
+`POST /runs/preflight` expands a preset the same way.
+
+| Route | Who |
+| --- | --- |
+| `GET /presets`, `GET /presets/{name}` | any signed-in person; a non-admin sees only the presets open to their user type (`user_types`, empty is every type) |
+| `PUT /presets/{name}` | admin only. Creates the preset at version 1, or replaces it and moves the version by one; an identical body changes nothing, not even the version |
+| `DELETE /presets/{name}` | admin only. Runs launched from it keep their stamp |
+
+Every write that lands is audited (`preset.create`, `preset.update`,
+`preset.delete`, see [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)); the create and
+update rows carry the stored request, which is the only record of what an
+older version contained. A write checks the name, the user types it names and
+that the request is a well-formed create body with no per-launch field;
+everything else is checked at launch, under the launching caller. `ui_apps` in
+an `inline_policy` reach a member only where their ceiling admits them; to
+hand members an app, point the preset at a stored policy they are granted.
+
+Presets round-trip declaratively, like drives:
+
+```sh
+wardyn preset get > presets.json
+wardyn preset apply presets.json   # upserts by name; get then apply is a no-op
+```
 
 ## Workspaces: three tiers
 
@@ -6043,6 +6091,8 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.
+`0086` adds `agent_runs.preset` and `agent_runs.preset_version` beside its new
+`launch_presets` table.
 `scripts/test-claims-match-code.sh` derives that list from the migration bodies,
 so a new `ALTER TABLE` landing undocumented fails there rather than here. The
 failure is loud and the boot is refused — but **it is not a rollback, and it does

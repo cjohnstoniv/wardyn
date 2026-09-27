@@ -203,6 +203,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/policies":        {class: classAdmin},
 	"PUT /api/v1/policies/{id}":    {class: classAdmin},
 	"DELETE /api/v1/policies/{id}": {class: classAdmin},
+	// Launch presets bundle selectable content the same way, so their writes
+	// are SUPER too; the reads are classMember, narrowed by user type.
+	"PUT /api/v1/presets/{name}":    {class: classAdmin},
+	"DELETE /api/v1/presets/{name}": {class: classAdmin},
 	// Library sources + base images: supply-chain admission, SUPER.
 	"POST /api/v1/sources":            {class: classAdmin},
 	"POST /api/v1/sources/{id}/scan":  {class: classAdmin},
@@ -494,6 +498,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/policies":         {class: classMember},
 	"GET /api/v1/policies/default": {class: classMember},
 	"GET /api/v1/policies/{id}":    {class: classMember},
+	"GET /api/v1/presets":          {class: classMember},
+	"GET /api/v1/presets/{name}":   {class: classMember},
 	"GET /api/v1/runs":             {class: classMember},
 	// PUT/DELETE moved here from classAdmin in 0.7 (migration `0050`,
 	// per-principal secrets): self-service, scoped to the caller's OWN row at
@@ -1273,11 +1279,12 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// /admin/runs/restart), born SUPER because a restart replaces proxies on runs
 	// the caller does not own (= 43 SUPER). #166 then added POST
 	// /drives/{id}/reclaim, the drive DESTROY verb, born SUPER beside the
-	// family it belongs to (= 44 SUPER). A route silently reclassified in the
+	// family it belongs to (= 44 SUPER). #1143's launch preset writes (PUT/DELETE
+	// /presets/{name}) are SUPER for the stored-policy reason (= 46 SUPER). A route silently reclassified in the
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 37 || super != 44 {
-		t.Errorf("tier split = %d security / %d admin, want 37 / 44 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	if sec != 37 || super != 46 {
+		t.Errorf("tier split = %d security / %d admin, want 37 / 46 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 
@@ -1863,6 +1870,20 @@ func (s *authzStore) UpdateUserType(context.Context, types.UserType) (types.User
 func (s *authzStore) UserTypeReferences(context.Context, string) (int, error)  { return 0, nil }
 func (s *authzStore) UserTypeTokenStamps(context.Context, string) (int, error) { return 0, nil }
 func (s *authzStore) DeleteUserType(context.Context, string) error             { return store.ErrNotFound }
+
+// launch presets (migration 0086): the same honest empty state.
+func (s *authzStore) ListLaunchPresets(context.Context) ([]types.LaunchPreset, error) {
+	return nil, nil
+}
+func (s *authzStore) GetLaunchPreset(context.Context, string) (types.LaunchPreset, error) {
+	return types.LaunchPreset{}, store.ErrNotFound
+}
+func (s *authzStore) PutLaunchPreset(_ context.Context, p types.LaunchPreset) (types.LaunchPreset, store.PresetWrite, error) {
+	return p, store.PresetCreated, nil
+}
+func (s *authzStore) DeleteLaunchPreset(context.Context, string) (types.LaunchPreset, error) {
+	return types.LaunchPreset{}, store.ErrNotFound
+}
 
 // governance profiles (migration 0052)
 //

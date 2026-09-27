@@ -27,6 +27,7 @@
 //     ListSecretsScopedPage, SetSecret, DeleteSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives
+//   - presets (/api/v1/presets):         ListPresets, GetPreset, PutPreset, DeletePreset, ApplyPresets
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
 //   - identity (/api/v1/me):             Me — and, on the same prefix, ListSSHKeys/
 //     ListSSHKeysPage/AddSSHKey/DeleteSSHKey (/api/v1/me/ssh-keys). The rest of
@@ -322,6 +323,15 @@ type CreateRunRequest struct {
 	// their own identity, so this flag can only ever ask for the storage the
 	// caller was already granted.
 	Drive *DriveSelection `json:"drive,omitempty"`
+	// Preset launches the named launch preset (see Preset): the server
+	// expands it into the equivalent explicit request and runs the unchanged
+	// create path under the caller's own ceiling. Alongside it only Title,
+	// Task and PresetVersion may be set; any other field is refused.
+	Preset string `json:"preset,omitempty"`
+	// PresetVersion, with Preset, pins the version the caller expects: a
+	// preset changed since is refused (409) rather than launched. 0 launches
+	// the current version. The created run records the version it used.
+	PresetVersion int `json:"preset_version,omitempty"`
 }
 
 // DriveSelection is the per-run user-drive option set. See

@@ -331,6 +331,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		// mpChoice.provider.ID is "" when mpChoice.chosen is false.
 		ModelProviderID: mpChoice.provider.ID,
 		UserType:        runCreatorUserType(ctx),
+		Preset:          req.Preset,
+		PresetVersion:   req.PresetVersion,
 	}
 	s.captureRunLimits(&run, ceiling)
 	created, err := s.createRun(ctx, run)
@@ -627,6 +629,12 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
 		"confinement_class": enforced, "confinement_source": confinementSource, "jti": jti,
 		"inline_policy": req.InlinePolicy != nil,
+	}
+	if req.Preset != "" {
+		// The preset stamp is also on the run row, but the chained audit row
+		// outlives it: this ties the run to the preset version it came from.
+		data["preset"] = req.Preset
+		data["preset_version"] = req.PresetVersion
 	}
 	if req.TaskMode == "exec" {
 		// The run row doesn't store task_mode (request-scoped), so the audit
