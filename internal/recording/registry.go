@@ -12,12 +12,11 @@ import (
 // Deps are the platform primitives a recording.Store constructor may use. New
 // seams keep their own typed Deps so heterogeneous construction stays type-safe.
 type Deps struct {
-	// Dir is the base directory for filesystem-backed stores. Empty => recording
-	// disabled (the fs constructor returns a nil Store). fs-specific; pg ignores it.
+	// Dir is the base directory for filesystem-backed stores. Empty => disabled
+	// (fs-specific; pg ignores it).
 	Dir string
-	// Pool is the shared pgxpool the pg-backed store persists through — the SAME
-	// pool the rest of the control plane uses, so a cast is visible to every
-	// replica instead of living on one pod's local disk.
+	// Pool is the shared pgxpool the pg-backed store persists through, so
+	// recordings are visible to every replica instead of one pod's local disk.
 	Pool *pgxpool.Pool
 }
 
@@ -44,13 +43,9 @@ func New(name string, d Deps) (Store, error) {
 }
 
 func init() {
-	// "off" — recording disabled, spelled out. It exists because 0.7's
-	// FlagEnv keeps a compiled default when an env value is EMPTY:
-	// WARDYN_LISTEN="" must not become 0.0.0.0:80. That made the Helm
-	// chart's old off recipe — WARDYN_RECORDING_STORE=fs plus an empty
-	// WARDYN_RECORDING_DIR — unreachable: the empty dir kept ./data/recordings,
-	// NewFSStore's MkdirAll hit the read-only root FS, and a stock install
-	// crash-looped (ci.yml helm-install-test, red since the 0.7.0 release).
+	// "off" is spelled out because FlagEnv keeps a compiled default when an
+	// env value is EMPTY, so an empty WARDYN_RECORDING_DIR alone can't disable
+	// recording without hitting NewFSStore's MkdirAll on a read-only root FS.
 	Register("off", func(Deps) (Store, error) { return nil, nil })
 	Register("fs", func(d Deps) (Store, error) {
 		if d.Dir == "" {

@@ -1,11 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Posture-gated autonomy, arithmetic half (0.8 #97). The api half — the gate
-// that refuses a request shape and derives a hold — is
-// internal/api/runs_autonomy.go; everything here is PURE, so launch and the
-// Review dry run fold the same inputs to the same answer by construction
-// rather than by two call sites agreeing to.
+// Posture-gated autonomy, arithmetic half. The api half — the gate that refuses
+// a request shape and derives a hold — is internal/api/runs_autonomy.go;
+// everything here is PURE, so launch and the Review dry run fold the same
+// inputs to the same answer by construction.
 package composer
 
 import (
@@ -13,16 +12,10 @@ import (
 )
 
 // AutonomyPostureOf grades a run's three-axis posture from its RESOLVED spec
-// and the confinement class the run will actually enforce.
-//
-// The inputs are deliberately the same ones Grade and RequiredConfinementFloor
-// already key on (grantIsWriteCapable, apiKeyToNonBaselineHost, beyondBaseline,
-// safeBaselineDomains): a posture that disagreed with the risk grade about
-// what "powerful" or "beyond baseline" means would put two different answers
-// on the same Review screen.
-//
-// PURELY a function of the spec — never of anything a model claimed about it,
-// for the reason Grade's own doc comment states.
+// and the confinement class the run will actually enforce. It keys on the same
+// inputs as Grade and RequiredConfinementFloor, so posture and risk grade never
+// disagree about what "powerful" or "beyond baseline" means on the same Review
+// screen. Purely a function of the spec, never of anything a model claimed.
 func AutonomyPostureOf(spec types.RunPolicySpec, enforced types.ConfinementClass) types.AutonomyPosture {
 	return types.AutonomyPosture{
 		Egress:      autonomyEgress(spec),
@@ -33,14 +26,9 @@ func AutonomyPostureOf(spec types.RunPolicySpec, enforced types.ConfinementClass
 
 // autonomyEgress: OPEN with allow-all or any allowlisted host beyond the safe
 // coding-agent baseline, REVIEWED when first-use approval escalates an unknown
-// host to a human, SEALED otherwise.
-//
-// Open beats reviewed, and the order is load-bearing rather than tidy:
-// first_use_approval only governs hosts that are NOT on the allowlist, so a
-// run already allowlisted to a custom host has that reach whatever the
-// unknown-host posture is. Grade draws the same line (its first_use_approval
-// item is scored only under a non-trivial allowlist, and is inert under
-// allow-all).
+// host to a human, SEALED otherwise. Open beats reviewed: first_use_approval
+// only governs hosts NOT on the allowlist, so an already-allowlisted custom
+// host has that reach regardless of the unknown-host posture.
 func autonomyEgress(spec types.RunPolicySpec) types.AutonomyEgressPosture {
 	if spec.AllowAllEgress || len(beyondBaseline(spec.AllowedDomains)) > 0 {
 		return types.AutonomyEgressOpen
@@ -53,16 +41,10 @@ func autonomyEgress(spec types.RunPolicySpec) types.AutonomyEgressPosture {
 
 // autonomySecrets: POWERFUL with any write-capable grant, an api_key to a
 // non-baseline host, or a git_pat/ssh_key/env_secret; BASELINE with any grant;
-// NONE with no grant at all.
-//
-// The three kinds listed by name are exactly the ones grantIsWriteCapable
-// deliberately answers false for while gradeGrant scores them HIGH: their
-// scope carries no read/write flag, so flooring confinement on them would
-// block every SCM clone on a KVM-less host (see grantIsWriteCapable). That
-// argument is about the CC3 floor and does not transfer here — an
-// agent-readable SSH private key or a whole-run env secret is unambiguously a
-// credential this run could spend unattended, which is the only question this
-// axis asks.
+// NONE with no grant at all. The three named kinds are ones grantIsWriteCapable
+// deliberately treats as not write-capable (to avoid flooring confinement and
+// blocking SCM clones), but each is still a credential this run could spend
+// unattended, which is the only question this axis asks.
 func autonomySecrets(spec types.RunPolicySpec) types.AutonomySecretsPosture {
 	if len(spec.EligibleGrants) == 0 {
 		return types.AutonomySecretsNone
@@ -79,10 +61,9 @@ func autonomySecrets(spec types.RunPolicySpec) types.AutonomySecretsPosture {
 	return types.AutonomySecretsBaseline
 }
 
-// autonomyConfinement reads an empty enforced class as CC1, which is what
-// AutonomyRubric's own field docs promise. Failing CLOSED on the unknown: CC1
-// is the weakest tier, so it selects the rubric's most restrictive confinement
-// cap rather than leaving the axis unbound.
+// autonomyConfinement reads an empty enforced class as CC1 (fails closed): the
+// weakest tier selects the rubric's most restrictive cap rather than leaving
+// the axis unbound.
 func autonomyConfinement(enforced types.ConfinementClass) types.ConfinementClass {
 	if enforced == "" {
 		return types.CC1
@@ -91,25 +72,13 @@ func autonomyConfinement(enforced types.ConfinementClass) types.ConfinementClass
 }
 
 // FoldAutonomy folds a rubric against a posture: the level is the MINIMUM over
-// the three fields the posture selects, and boundBy names EVERY field that
-// landed on it (each the rubric's own wire name, so provenance reads back as
-// something an admin can edit).
-//
-// ALL of the tied fields, not the first one. A min() over three axes ties
-// routinely, and the list is what makes the answer actionable: told only
-// "egress_sealed", an admin raises that row and watches the level not move,
-// because secrets_none and confinement_cc2 capped it at the same rung. See
-// types.AutonomyResolution.BoundBy — this is the wire shape, not a rendering
-// choice.
-//
-// An unset field caps nothing and is skipped, so a rubric that leaves every
-// applicable posture unset returns ("", nil) — indistinguishable from no
-// rubric at all, which is the "empty means unrestricted" rule every
-// GovernanceLimits field follows.
-//
-// The order is applicableAutonomyCaps's fixed field order, never the order the
-// caps happened to tie in: the audit row and the Review response must agree
-// byte for byte.
+// the three fields the posture selects, and boundBy names EVERY field tied at
+// that minimum (its rubric wire name), not just the first — so an admin who
+// raises one capping row can see the level not move because another field tied
+// it. An unset field caps nothing and is skipped, so an all-unset rubric
+// returns ("", nil), matching the "empty means unrestricted" rule every
+// GovernanceLimits field follows. Order is applicableAutonomyCaps's fixed field
+// order, so the audit row and the Review response agree byte for byte.
 func FoldAutonomy(rubric types.AutonomyRubric, posture types.AutonomyPosture) (types.AutonomyLevel, []string) {
 	var level types.AutonomyLevel
 	var boundBy []string
@@ -132,12 +101,9 @@ type autonomyCap struct {
 }
 
 // applicableAutonomyCaps returns the three caps this posture selects, in the
-// fixed order FoldAutonomy lists tied causes in.
-//
-// A posture axis whose value is not one of its three defined states selects NO
-// cap — the zero AutonomyPosture (what resolveRunAutonomy returns for a run
-// under no profile) must not silently select the sealed/none/CC1 row and cap a
-// run nothing was meant to cap.
+// fixed order FoldAutonomy lists tied causes in. A posture axis whose value is
+// not one of its three defined states selects no cap, so the zero
+// AutonomyPosture (a run under no profile) caps nothing.
 func applicableAutonomyCaps(rubric types.AutonomyRubric, posture types.AutonomyPosture) []autonomyCap {
 	var caps []autonomyCap
 	switch posture.Egress {

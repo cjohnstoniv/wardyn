@@ -4,22 +4,20 @@
 // User drives (migration 0054): the wire + store types for an admin-registered
 // per-user storage allocation and the row that grants one to a subject.
 //
-// Named `drive` throughout, and the noun/verb split is deliberate: a DRIVE is
-// what an admin registers and allocates, MOUNT is what a run does with one. The
-// member's run request carries only `{enabled, read_only}` and NEVER a path —
-// the server derives the home name from the authenticated identity, so a member
-// cannot name someone else's directory by typing it.
+// Named `drive` throughout: a DRIVE is what an admin registers and allocates,
+// MOUNT is what a run does with one. The member's run request carries only
+// `{enabled, read_only}` and NEVER a path — the server derives the home name
+// from the authenticated identity.
 //
 // Two kinds fall out of the backend rather than being stored beside it:
 //   - MANAGED — Wardyn allocates the object (a per-user Docker named volume, a
 //     per-user dynamic PVC).
-//   - SHARE — the platform already has the tree (a host path the operator
-//     mounted from NFS/SMB, an admin-precreated PVC) and Wardyn binds one
+//   - SHARE — the platform already has the tree and Wardyn binds one
 //     per-user subdirectory of it.
 //
-// Everything here is a CLOSED enum validated at the write boundary, which is
-// what lets migration 0054 carry three CHECKs pinned against these constants by
-// internal/db's TestClosedEnumChecksMatchConstants.
+// Everything here is a CLOSED enum validated at the write boundary, pinned by
+// migration 0054's three CHECKs against internal/db's
+// TestClosedEnumChecksMatchConstants.
 package types
 
 import (
@@ -46,16 +44,15 @@ const (
 	// Wardyn on first use. Managed. Docker only.
 	DriveBackendDockerVolume DriveBackend = "docker_volume"
 	// DriveBackendHostPath binds <host_root>/<home> from a tree the OPERATOR
-	// mounted host-side (fstab/systemd cifs or nfs). Wardyn never performs the
-	// share mount itself and therefore never holds a share credential. Share.
-	// Docker only.
+	// mounted host-side. Wardyn never performs the share mount itself and
+	// therefore never holds a share credential. Share. Docker only.
 	DriveBackendHostPath DriveBackend = "host_path"
 	// DriveBackendK8sPVC is a per-user dynamically-provisioned PVC. Managed.
 	// Kubernetes only.
 	DriveBackendK8sPVC DriveBackend = "k8s_pvc"
-	// DriveBackendK8sPVCStatic is an admin-precreated PVC (typically an NFS/SMB
-	// CSI volume). Wardyn only ever READS it: a missing claim is a refusal, not
-	// a create. Share. Kubernetes only.
+	// DriveBackendK8sPVCStatic is an admin-precreated PVC. Wardyn only ever
+	// READS it: a missing claim is a refusal, not a create. Share. Kubernetes
+	// only.
 	DriveBackendK8sPVCStatic DriveBackend = "k8s_pvc_static"
 )
 
@@ -66,8 +63,7 @@ var DriveBackends = []DriveBackend{
 }
 
 // Valid reports whether b is one of the four backends, mirroring
-// CapabilitySubjectType.Valid — the API write boundary uses it in place of a
-// second opinion about the CHECK.
+// CapabilitySubjectType.Valid.
 func (b DriveBackend) Valid() bool {
 	switch b {
 	case DriveBackendDockerVolume, DriveBackendHostPath, DriveBackendK8sPVC, DriveBackendK8sPVCStatic:
@@ -91,9 +87,8 @@ const (
 )
 
 // Kind derives the managed/share split from the backend. An unknown backend
-// reads as a SHARE — the conservative half, since a share is never created and
-// never deleted by Wardyn, so a bad row cannot make the control plane
-// provision storage.
+// reads as a SHARE — the conservative half, since Wardyn never creates or
+// deletes a share.
 func (b DriveBackend) Kind() DriveKind {
 	switch b {
 	case DriveBackendDockerVolume, DriveBackendK8sPVC:
@@ -104,9 +99,9 @@ func (b DriveBackend) Kind() DriveKind {
 }
 
 // RunnerTarget is the ONE Config.RunnerTarget value that can mount this
-// backend, or "" for an unknown backend. It exists so the write boundary can
-// refuse a k8s drive on a Docker deployment (a 400) rather than storing a row
-// whose every resolution ends in a runtime refusal.
+// backend, or "" for an unknown backend — lets the write boundary refuse a
+// k8s drive on a Docker deployment (400) rather than store a row that can
+// never resolve.
 func (b DriveBackend) RunnerTarget() string {
 	switch b {
 	case DriveBackendDockerVolume, DriveBackendHostPath:
@@ -124,34 +119,28 @@ type HomeTemplate string
 
 const (
 	// HomeTemplateHash is `d-` + a truncated sha256 over the drive id and the
-	// subject: deterministic, DNS-1123-safe for a PVC name, and it leaks no
-	// identity into an object name an operator will read in `docker volume ls`.
-	// The default, and the ONLY template a MANAGED backend may use — where
-	// Wardyn is naming an object nothing else has an opinion about, a name
-	// derived from a claim buys nothing and can collide (see the two claim
-	// templates below); ValidateUserDrive refuses the others there.
+	// subject: deterministic, DNS-1123-safe, and leaks no identity into an
+	// object name an operator reads. The default, and the ONLY template a
+	// MANAGED backend may use (a derived name buys nothing there and can
+	// collide — see the claim templates below); ValidateUserDrive refuses the
+	// others on managed.
 	HomeTemplateHash HomeTemplate = "hash"
 	// HomeTemplateSub uses the sign-in subject claim verbatim, lowercased.
-	// SHARE backends only: it is not folded with the drive id, so one member's
-	// two drives would be one object, and the lowercasing makes two subjects
-	// differing only in case one home.
+	// SHARE backends only: not folded with the drive id, so one member's two
+	// drives would be one object, and two subjects differing only in case
+	// collapse to one home.
 	HomeTemplateSub HomeTemplate = "sub"
-	// HomeTemplateEmailLocal uses the part of the email claim before the "@" —
-	// the usual shape of a corporate home directory (alice@corp -> alice).
-	// SHARE backends only: the domain is dropped, so alice@corp.example and
-	// alice@partner.example name ONE directory. On a share that directory was
-	// minted by somebody else and the answer is a home_override on the
-	// colliding person's allocation; on a managed backend Wardyn would be
-	// minting the collision itself, so ValidateUserDrive refuses it there.
+	// HomeTemplateEmailLocal uses the part of the email claim before the "@"
+	// (alice@corp -> alice). SHARE backends only: the domain is dropped, so
+	// alice@corp.example and alice@partner.example name ONE directory — the
+	// answer is a home_override on the colliding person's allocation; a
+	// managed backend would mint the collision itself, so it's refused there.
 	//
-	// THERE IS DELIBERATELY NO WHOLE-EMAIL TEMPLATE. An address carries an "@",
-	// which driveHomeSegmentRe excludes and a DNS-1123 label could not hold
-	// either, so such a template could only ever RESOLVE for a claim that was
-	// not an address — a value that validates and then refuses every real
-	// caller is a dead enum member, not an option. The corporate case it looked
-	// like it served (a home directory named by the person's username) is
-	// exactly this template; a home named anything else is a per-user
-	// home_override on that person's grant.
+	// THERE IS DELIBERATELY NO WHOLE-EMAIL TEMPLATE: an address carries an
+	// "@", which driveHomeSegmentRe excludes and a DNS-1123 label cannot
+	// hold, so it could only ever resolve for a claim that was not an
+	// address. The corporate case it looked like it served is exactly this
+	// template; anything else is a per-user home_override.
 	HomeTemplateEmailLocal HomeTemplate = "email_local"
 )
 
@@ -169,47 +158,36 @@ func (t HomeTemplate) Valid() bool {
 }
 
 // DriveObjectScheme names which half of DriveObjectName's minted form carries
-// the drive — the variable-width slug (migration 0054, `wardyn-drive-<drive-slug>-<home>`)
-// or the drive's own fixed-width id (migration 0067, `wardyn-drive-<drive-id-hex>-<home>`).
-// Closed; pinned against user_drives.object_scheme's CHECK.
+// the drive — the variable-width slug (migration 0054,
+// `wardyn-drive-<drive-slug>-<home>`) or the drive's own fixed-width id
+// (migration 0067, `wardyn-drive-<drive-id-hex>-<home>`). Closed; pinned
+// against user_drives.object_scheme's CHECK.
 //
-// IT IS NOT CLIENT-AUTHORED. store.UpsertUserDrive derives it entirely — 'id'
-// on every INSERT, the row's own stored value carried through unchanged on
-// every UPDATE — and never reads this field off the request. A row therefore
-// keeps whatever scheme it was created under for as long as it exists: neither
-// substrate can rename a storage object (there is no `docker volume rename` and
-// a PVC name is immutable), so moving a drive from one scheme to the other
-// would either orphan every allocated member's object or require wardynd to
-// copy bytes between two objects — exactly the capability this package refuses
-// everywhere else a rename is possible (see UpsertUserDrive's own doc on
-// renaming). It exists on the wire (json:"object_scheme") purely so a GET and
-// the PUT that echoes it back agree, and so a client that tries to CLAIM a
-// different scheme in a PUT body is caught: driveIdentityFields compares it
-// like every other identity field, so a forged flip answers 409 rather than
-// being silently ignored by the write it could never actually perform.
+// IT IS NOT CLIENT-AUTHORED. store.UpsertUserDrive derives it entirely ('id'
+// on every INSERT, carried through unchanged on every UPDATE) and never reads
+// this field off the request — neither substrate can rename a storage object,
+// so a row keeps whatever scheme it was created under for as long as it
+// exists. It rides the wire (json:"object_scheme") only so a GET and its
+// round-tripped PUT agree; driveIdentityFields compares it like any other
+// identity field, so a forged flip answers 409 rather than being silently
+// dropped.
 type DriveObjectScheme string
 
 const (
-	// DriveObjectSchemeSlug is the original form: the drive's name, folded to a
-	// DNS-1123 fragment (DriveSlug), at a variable offset before <home>. The
-	// column's own DEFAULT, so every row that predates 0067 reads as this
-	// without a backfill — and stays this permanently, because DriveSlug is not
-	// injective (0061's own doctrine) and only a rewrite of the object itself
-	// could change what a stored row's members already bind.
+	// DriveObjectSchemeSlug is the original form: DriveSlug at a variable
+	// offset before <home>. The column's DEFAULT, so every pre-0067 row reads
+	// as this and stays this permanently (DriveSlug is not injective, so only
+	// rewriting the object itself could change what a stored row binds).
 	DriveObjectSchemeSlug DriveObjectScheme = "slug"
-	// DriveObjectSchemeID is the drive's own UUID, dashless (DriveObjectID), at
-	// a FIXED offset before <home>: driveObjectPrefix is constant-width and the
-	// id is always 32 hex characters, so nothing about the drive's own name can
-	// shift the boundary a home starts at. Every row created from 0067 onward
-	// gets this, unconditionally — the one write UpsertUserDrive's INSERT arm
-	// performs regardless of what a create request carries.
+	// DriveObjectSchemeID is the drive's own UUID, dashless (DriveObjectID),
+	// at a FIXED offset before <home> — nothing about the drive's name can
+	// shift the boundary. Every row created from 0067 onward gets this
+	// unconditionally.
 	DriveObjectSchemeID DriveObjectScheme = "id"
 )
 
 // DriveObjectSchemes is the closed set, in the order a row can only ever move
-// through (a legacy row stays slug forever; a new row is always id) — not an
-// admin-surface order, because there is no admin surface that authors this
-// field.
+// through (a legacy row stays slug forever; a new row is always id).
 var DriveObjectSchemes = []DriveObjectScheme{DriveObjectSchemeSlug, DriveObjectSchemeID}
 
 // Valid reports whether s is one of the two schemes.
@@ -218,18 +196,17 @@ func (s DriveObjectScheme) Valid() bool {
 }
 
 // DriveReclaim is the DECLARED INTENT for a drive's objects when a grant goes
-// away. v1 executes it by documented operator command, not by code: nothing in
-// the control plane deletes a volume or a PVC, and the RBAC the k8s runner asks
-// for deliberately carries no `delete` verb.
+// away. v1 executes it by documented operator command, not by code: nothing
+// in the control plane deletes a volume or a PVC, and the k8s runner's RBAC
+// deliberately carries no `delete` verb.
 type DriveReclaim string
 
 const (
 	// DriveReclaimRetain keeps the object after the grant is removed — the
-	// default, because the alternative default is data loss on an admin's
-	// routine unassign.
+	// default, since the alternative default is data loss on a routine unassign.
 	DriveReclaimRetain DriveReclaim = "retain"
-	// DriveReclaimDelete records that the object SHOULD be reclaimed. It is a
-	// note to the offboarding runbook, not an action.
+	// DriveReclaimDelete records that the object SHOULD be reclaimed — a note
+	// to the offboarding runbook, not an action.
 	DriveReclaimDelete DriveReclaim = "delete"
 )
 
@@ -241,58 +218,44 @@ func (r DriveReclaim) Valid() bool {
 	return r == DriveReclaimRetain || r == DriveReclaimDelete
 }
 
-// StorageEnforcement names WHAT ACTUALLY BINDS BYTES for a drive, and it exists
-// because a size that nothing enforces must not be rendered as a limit.
+// StorageEnforcement names WHAT ACTUALLY BINDS BYTES for a drive, so a size
+// nothing enforces is never rendered as a limit.
 //
 // The honesty sentence this vocabulary carries, verbatim, wherever a size is
 // shown: "Wardyn never enforces a drive's size itself. On Kubernetes the size
-// is the volume request and the storage class decides whether it binds — block
-// disks do, network-share provisioners do not. On Docker a managed drive has no
-// byte cap, the same gap disk_mib has. A share is bounded by its own quota. The
-// size you see is the allocation, not a guarantee."
+// is the volume request and the storage class decides whether it binds. On
+// Docker a managed drive has no byte cap. A share is bounded by its own
+// quota. The size you see is the allocation, not a guarantee."
 //
-// It is introduced ONCE here and it is now also the vocabulary the two DiskMiB
-// warn sites were consolidated ONTO (0.7.2): the k8s sandbox's warning is gone —
-// that substrate SETS the agent container's resources.limits[ephemeral-storage]
-// and reports `eviction` — and the docker driver's storage-opt warning stays,
-// reporting `filesystem` when the daemon can enforce a per-container size quota
-// and `none` when it cannot. The word is SURFACED, not just logged:
-// runner.Capabilities.EphemeralDiskEnforcement carries it to the admin setup
-// status, so a size no substrate will hold is visible as such rather than
-// discoverable only in a log line.
+// Surfaced, not just logged: runner.Capabilities.EphemeralDiskEnforcement
+// carries it to the admin setup status.
 type StorageEnforcement string
 
 const (
 	// StorageEnforcementFilesystem: the filesystem itself refuses the write
-	// (XFS project quota). NOTHING in v1 reports this — it is the value the
-	// documented operator recipe earns, and naming it here is what keeps a
-	// future quota lane from inventing a fifth word.
+	// (XFS project quota). NOTHING in v1 reports this yet — naming it here
+	// keeps a future quota lane from inventing a fifth word.
 	StorageEnforcementFilesystem StorageEnforcement = "filesystem"
-	// StorageEnforcementEviction: the kubelet enforces it, and it is MEASURED
-	// PERIODICALLY — over the limit the POD IS KILLED, not the write. This is
-	// what a Kubernetes run's ephemeral disk cap (the agent container's
-	// resources.limits[ephemeral-storage]) actually is: the agent never sees
-	// ENOSPC, it sees its pod evicted, and in-flight work is lost. Never
-	// `filesystem` — nothing on this path refuses a byte. A burst between two
-	// housekeeping ticks can also overshoot the limit before the kubelet looks.
+	// StorageEnforcementEviction: the kubelet enforces it, MEASURED
+	// PERIODICALLY — over the limit the POD IS KILLED, not the write. The
+	// agent never sees ENOSPC; in-flight work is lost. A burst between two
+	// housekeeping ticks can overshoot before the kubelet looks.
 	StorageEnforcementEviction StorageEnforcement = "eviction"
-	// StorageEnforcementRequest: the size is a scheduling REQUEST (a PVC's
-	// resources.requests.storage). A block storage class binds it; an NFS/EFS
-	// provisioner accepts it and enforces nothing.
+	// StorageEnforcementRequest: the size is a scheduling REQUEST. A block
+	// storage class binds it; an NFS/EFS provisioner accepts it and enforces
+	// nothing.
 	StorageEnforcementRequest StorageEnforcement = "request"
-	// StorageEnforcementExternal: something outside Wardyn binds it — the NAS's
-	// own quota. Wardyn displays the allocation and claims nothing.
+	// StorageEnforcementExternal: something outside Wardyn binds it (the
+	// NAS's own quota). Wardyn displays the allocation and claims nothing.
 	StorageEnforcementExternal StorageEnforcement = "external"
-	// StorageEnforcementNone: nothing binds it. A Docker named volume has no
-	// cap at all (--storage-opt size caps only the writable layer, never a
-	// volume, and project quota needs a capability the control plane must not
-	// gain).
+	// StorageEnforcementNone: nothing binds it (a Docker named volume has no
+	// cap at all).
 	StorageEnforcementNone StorageEnforcement = "none"
 )
 
 // EnforcementFor maps a backend to what actually binds its bytes. An unknown
-// backend reads as `none`: claiming enforcement for a row this binary does not
-// understand is the one answer that could mislead an admin into trusting a cap.
+// backend reads as `none` — the one answer that cannot mislead an admin into
+// trusting a cap.
 func EnforcementFor(b DriveBackend) StorageEnforcement {
 	switch b {
 	case DriveBackendK8sPVC:
@@ -308,38 +271,33 @@ func EnforcementFor(b DriveBackend) StorageEnforcement {
 
 // UserDrive is one admin-registered drive (migration 0054's user_drives row).
 //
-// Name is the UNIQUE human handle: what an admin allocates by, what the console
-// lists, the source of a PVC's slug, and the last tie-break in the resolver's
-// ORDER BY — so LIMIT 1 stays deterministic when priority ties, exactly as
-// GovernanceProfile.Name does for a ceiling.
+// Name is the UNIQUE human handle: what an admin allocates by, what the
+// console lists, the source of a PVC's slug, and the last tie-break in the
+// resolver's ORDER BY.
 //
-// Writable is the drive's DEFAULT posture and it defaults to FALSE. A grant may
+// Writable is the drive's DEFAULT posture and defaults to FALSE. A grant may
 // narrow it and a run may narrow it again; neither may widen it.
 type UserDrive struct {
 	ID      uuid.UUID    `json:"id"`
 	Name    string       `json:"name"`
 	Backend DriveBackend `json:"backend"`
 	// HostRoot is the operator-mounted tree a host_path drive binds a
-	// subdirectory of. Absolute and cleaned, empty for every other backend. It
-	// is authored in the DB by an admin and bound into OTHER PEOPLE's
-	// sandboxes, so the security ceiling over it is the env allowlist
-	// (UserDriveHostRootCheck), never this column alone.
+	// subdirectory of. Absolute and cleaned, empty for every other backend.
+	// Authored by an admin and bound into OTHER PEOPLE's sandboxes, so the
+	// security ceiling is the env allowlist (UserDriveHostRootCheck), never
+	// this column alone.
 	HostRoot string `json:"host_root,omitempty"`
 	// StorageClass is the k8s_pvc provisioner to request; "" means the
-	// cluster default. Meaningless for every other backend (a static PVC was
-	// provisioned by someone else, and Docker has no such concept).
+	// cluster default. Meaningless for every other backend.
 	StorageClass string       `json:"storage_class,omitempty"`
 	HomeTemplate HomeTemplate `json:"home_template"`
-	// ObjectScheme names which half of a minted object name carries the drive —
-	// see DriveObjectScheme. NOT client-authored: the store derives it (see
-	// that type's doc) and this field exists on the wire only so a GET and a
-	// round-tripped PUT agree, and so a PUT that tries to claim a different
-	// value is caught as an identity change rather than silently dropped.
+	// ObjectScheme names which half of a minted object name carries the drive
+	// — see DriveObjectScheme. NOT client-authored: exists on the wire only
+	// so a GET and a round-tripped PUT agree.
 	ObjectScheme DriveObjectScheme `json:"object_scheme,omitempty"`
 	// SizeMiB is the ALLOCATION, not a guarantee — see StorageEnforcement. 0
-	// means "no allocation shown" on every backend but k8s_pvc, where the value
-	// IS the PVC's resources.requests.storage and 0 is therefore refused at the
-	// write boundary rather than stored as a claim no cluster would bind.
+	// means "no allocation shown" except on k8s_pvc, where it IS the PVC's
+	// requests.storage and is refused at the write boundary.
 	SizeMiB   int          `json:"size_mib,omitempty"`
 	Writable  bool         `json:"writable,omitempty"`
 	Reclaim   DriveReclaim `json:"reclaim"`
@@ -351,42 +309,35 @@ type UserDrive struct {
 // UserDriveGrant allocates one drive to one subject (migration 0054's
 // user_drive_grants row).
 //
-// SubjectType REUSES CapabilitySubjectType — the same user/group/all vocabulary
-// capability_grants and governance_assignments are written against, and the
-// same one capabilitySubjects resolves a caller into. A second enum meaning the
-// same three things is the dual-matcher drift this tree refuses everywhere: two
-// definitions of "who" that disagree by one case is how a deny stops biting.
+// SubjectType REUSES CapabilitySubjectType, the same vocabulary
+// capability_grants and governance_assignments use — a second enum meaning
+// the same thing is the dual-matcher drift this tree refuses everywhere.
 //
 // Every override is a column on the BINDING row rather than a second table,
-// because an override is a property of "this subject on this drive" and has no
-// meaning apart from the pair.
+// since an override has no meaning apart from the (subject, drive) pair.
 type UserDriveGrant struct {
 	ID          uuid.UUID             `json:"id"`
 	SubjectType CapabilitySubjectType `json:"subject_type"`
 	Subject     string                `json:"subject"`
 	DriveID     uuid.UUID             `json:"drive_id"`
 	// Priority breaks ties WITHIN a tier (higher wins) — the group tier's
-	// working lever, since a member is typically in several groups at once. It
-	// does NOT cross tiers.
+	// working lever. Does NOT cross tiers.
 	Priority int `json:"priority"`
-	// SizeMiBOverride replaces the drive's allocation for this subject. 0 means
-	// "use the drive's".
+	// SizeMiBOverride replaces the drive's allocation for this subject. 0
+	// means "use the drive's".
 	SizeMiBOverride int `json:"size_mib_override,omitempty"`
 	// WritableOverride is TRI-STATE on purpose: nil is "use the drive's
-	// posture", and an explicit false is an admin saying "this subject reads
-	// only" even on a writable drive. A plain bool could not tell the two
-	// apart, so an unset override would silently mean read-only.
+	// posture", explicit false is "read only even on a writable drive" — a
+	// plain bool could not tell the two apart.
 	WritableOverride *bool `json:"writable_override,omitempty"`
-	// HomeOverride names this subject's directory verbatim (Bob's NAS home is
-	// `bsmith`, whatever the template would derive). USER TIER ONLY: on a group
-	// or all row it would give every member of the group ONE home, which is the
-	// opposite of the isolation binding a per-user subdirectory buys.
+	// HomeOverride names this subject's directory verbatim. USER TIER ONLY:
+	// on a group/all row it would give every member ONE home, the opposite of
+	// per-user isolation.
 	HomeOverride string `json:"home_override,omitempty"`
-	// Enabled is the admin's off switch that keeps the row (and its overrides)
-	// intact. A disabled row is IN the resolver's query and can win its tier:
-	// the winner's bit is what folds to ResolvedDrive.Paused, so an admin
-	// turning one off tells that member "your allocation is paused" instead of
-	// silently dropping them through to the wider row beneath it.
+	// Enabled is the admin's off switch that keeps the row (and overrides)
+	// intact. A disabled row still wins its tier: the winner's bit folds to
+	// ResolvedDrive.Paused, so the member sees "paused" rather than silently
+	// falling through to the wider row beneath it.
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 	CreatedBy string    `json:"created_by,omitempty"`
@@ -395,29 +346,24 @@ type UserDriveGrant struct {
 // UserDriveListItem is one row of the admin Drives table: the drive plus how
 // many grants bind it.
 //
-// The count is a READ-SIDE derivation and lives here rather than on UserDrive
-// so the write type stays exactly the row: a client that GETs a list and PUTs
-// an item back cannot resurrect a stale count as data. It is what makes the
-// delete affordance honest — a drive with grants answers 409 (ON DELETE
-// RESTRICT), and an admin should see why before clicking.
+// The count is a READ-SIDE derivation kept off UserDrive so a client that GETs
+// a list and PUTs an item back cannot resurrect a stale count. It's what makes
+// the delete affordance honest — a drive with grants answers 409.
 type UserDriveListItem struct {
 	UserDrive
 	GrantCount int `json:"grant_count"`
 }
 
 // ResolvedDrive is THE answer for one principal: the winning drive, the grant
-// that won, the tier it won at, and everything derived from the pair that a
-// runner or a preview needs. Built once, by the API resolver, so no consumer
-// re-derives a home name or an override.
+// that won, the tier it won at, and everything derived from the pair. Built
+// once by the API resolver so no consumer re-derives a home name or override.
 //
 // Writable is already folded (grant override over drive default) but NOT yet
-// narrowed by the run request — a request may only narrow, and that fold
-// belongs to the run-create seam that has the request in hand.
+// narrowed by the run request — that fold belongs to the run-create seam.
 //
 // NO json tags: this type crosses no wire. The preview and /me each compose
-// their own response struct from it, deliberately — Grant is a whole admin
-// grant row, and a struct that looks marshal-ready is a struct somebody
-// marshals.
+// their own response struct from it — Grant is a whole admin grant row, and a
+// struct that looks marshal-ready is a struct somebody marshals.
 type ResolvedDrive struct {
 	Drive UserDrive
 	Grant UserDriveGrant
@@ -426,11 +372,10 @@ type ResolvedDrive struct {
 	// suffix of a managed object's name.
 	HomeName string
 	// SubjectHash fingerprints the principal HomeName was derived FROM
-	// (DriveSubjectHash), which the home itself cannot answer for: a managed
-	// object's name carries the home and nothing else, so two principals whose
-	// template collapses onto one home produce one object name and no way to
-	// tell them apart. Carried here so the runner can stamp it on the object it
-	// allocates and refuse one stamped for somebody else.
+	// (DriveSubjectHash) — the home itself can't answer for this, since two
+	// principals whose template collapses onto one home produce one object
+	// name. Carried so the runner can stamp it and refuse one stamped for
+	// somebody else.
 	SubjectHash string `json:"subject_hash,omitempty"`
 	// ObjectName is what the runner asks the substrate for — a volume name, a
 	// PVC name, or an absolute host path.
@@ -438,90 +383,68 @@ type ResolvedDrive struct {
 	SizeMiB     int
 	Writable    bool
 	Enforcement StorageEnforcement
-	// Paused is set when the grant that WON is disabled: Drive and Grant are
-	// that row, the size and mode folds still ran, nothing is derived (no
-	// HomeName, no ObjectName) and nothing may be mounted. A paused row wins
-	// its tier rather than falling through to the wider row beneath it
-	// (DESIGN §2.2), so an admin turning one off cannot silently hand that
-	// member the everyone drive instead.
+	// Paused is set when the grant that WON is disabled: nothing is derived
+	// (no HomeName, no ObjectName) and nothing may be mounted. A paused row
+	// still wins its tier (DESIGN §2.2) rather than falling through to the
+	// wider row beneath it.
 	Paused bool
 }
 
-// DriveMount is the RESOLVED answer the runner acts on: one principal's drive,
-// folded with their grant's overrides and narrowed by their run request, in the
-// shape a substrate can execute without re-reading a row or re-deriving a name.
+// DriveMount is the RESOLVED answer the runner acts on: one principal's
+// drive, folded with grant overrides and narrowed by their run request, in
+// the shape a substrate can execute without re-reading a row.
 //
-// It is a SEPARATE type from ResolvedDrive on purpose. ResolvedDrive is the
-// admin-facing answer ("who gets what, and why") and carries the whole drive
-// and grant rows; this is the run-facing one and carries only what a mount
-// needs. Handing the runner the grant row would put an admin's authoring
-// fields — priority, subject, the override tri-state — inside the sandbox
-// wiring, where nothing may branch on them and a later field could.
+// A SEPARATE type from ResolvedDrive on purpose: that one is admin-facing and
+// carries the whole drive/grant rows; this is run-facing and carries only
+// what a mount needs — an admin's authoring fields have no business inside
+// the sandbox wiring.
 //
-// ReadOnly rather than Writable, and the inversion is deliberate: every mount
-// type the substrates already speak (runner.Mount, a k8s VolumeMount, a Docker
-// mount) says ReadOnly, and a field that flips sense at the boundary is how a
-// narrowing becomes a widening in a refactor.
+// ReadOnly rather than Writable, deliberately: every mount type the
+// substrates already speak says ReadOnly, and a field that flips sense at the
+// boundary is how a narrowing becomes a widening in a refactor.
 //
-// It does NOT ride RunPolicySpec.WorkspaceMounts. A drive is per-PRINCIPAL and
-// a workspace mount is per-ROW; keeping them apart is what keeps composer.Clamp,
-// validateWorkspaceSources, primaryWorkspacePath and the k8s blanket host-bind
-// refusal from each needing a drive exemption.
+// Does NOT ride RunPolicySpec.WorkspaceMounts: a drive is per-PRINCIPAL and a
+// workspace mount is per-ROW, which keeps composer.Clamp and the k8s blanket
+// host-bind refusal from needing a drive exemption.
 type DriveMount struct {
 	// DriveID is the user_drives row this mount came from. Labels and reclaim
-	// sweeps group by it: an object name is per-PRINCIPAL, so it cannot answer
-	// "every object this drive allocated" — the question an offboarding sweep
-	// and a `kubectl get pvc -l` both ask.
+	// sweeps group by it, since an object name is per-PRINCIPAL and cannot
+	// answer "every object this drive allocated".
 	DriveID uuid.UUID    `json:"drive_id"`
 	Backend DriveBackend `json:"backend"`
-	// ObjectName is what the substrate is asked for: a Docker volume name, a
-	// PVC name, or the absolute host path of this principal's subdirectory.
-	// Derived once by the resolver (DriveObjectName) so no runner re-computes a
-	// hash.
+	// ObjectName is what the substrate is asked for — a Docker volume name, a
+	// PVC name, or the absolute host path. Derived once by the resolver.
 	ObjectName string `json:"object_name"`
-	// HostRoot is THIS drive's own share root (UserDrive.HostRoot), carried on a
-	// host_path mount so the driver can assert the bind stays inside the tree
-	// this drive was authored against. Empty on every other backend, which has
-	// no host tree at all.
-	//
-	// It does not replace the deployment's WARDYN_USER_DRIVE_HOST_ROOTS ceiling
-	// and is not redundant with it. The ceiling is the OPERATOR's outer bound
-	// over every drive at once, so on a deployment with two share drives it
-	// cannot tell one drive's tree from the other's: a home replaced host-side
-	// by a link to the same-named home under the OTHER drive's root is inside
-	// the ceiling, is not a root, and still carries this principal's name. Only
-	// the drive's own root refuses that — and only the ceiling stops an
-	// admin-authored row from naming a tree the operator never allowed. The
-	// driver asserts BOTH (runner.UserDriveHomeWithinItsRoot).
+	// HostRoot is THIS drive's own share root, carried on a host_path mount
+	// so the driver can assert the bind stays inside it. Does NOT replace the
+	// deployment's WARDYN_USER_DRIVE_HOST_ROOTS ceiling: the ceiling is the
+	// operator's outer bound over EVERY drive at once and cannot tell one
+	// drive's tree from another's, while only the drive's own root refuses a
+	// home replaced host-side by a link into a different drive's tree. The
+	// driver asserts BOTH.
 	HostRoot string `json:"host_root,omitempty"`
-	// DriveName is the drive object's human name (UserDrive.Name), carried for
-	// the AUDIT row alone: run.drive.mount's Target is "<drive>/<home>" on a
-	// share, so the member reading their own run's rows learns which drive and
-	// which directory without being handed the operator's absolute host path —
-	// which stays in the payload's `object`, where an operator reads it.
+	// DriveName is the drive's human name, carried for the AUDIT row alone
+	// (run.drive.mount's Target is "<drive>/<home>" on a share) so a member
+	// learns which drive without being handed the operator's absolute host
+	// path.
 	DriveName string `json:"drive_name,omitempty"`
-	// StorageClass is the provisioner a managed k8s_pvc claim asks for; "" means
-	// the cluster default, and it is meaningless on every other backend. Carried
-	// here because a substrate never reads the database — the resolver hands it
-	// everything a mount needs (UserDrive.StorageClass).
+	// StorageClass is the provisioner a managed k8s_pvc claim asks for; ""
+	// means the cluster default. Carried here because a substrate never reads
+	// the database.
 	StorageClass string `json:"storage_class,omitempty"`
 	// HomeName is the per-user segment ObjectName was built from, carried for
-	// labels and for the audit row an operator reads when reclaiming.
+	// labels and the audit row.
 	HomeName string `json:"home_name"`
 	// SubjectHash is the non-PII fingerprint of the principal this mount was
-	// resolved for (types.DriveSubjectHash). It is DEFENCE IN DEPTH over the
-	// managed-backend collision the write boundary already refuses: an object
-	// name is per-HOME, so a stored row that predates that refusal can still
-	// resolve two principals onto one volume, and the driver stamps this on the
-	// object it creates so the second one is refused instead of adopted.
-	//
-	// A digest, never the claim: a Docker label is echoed by `docker volume
-	// inspect` to anybody who can reach the daemon, so the subject itself must
-	// not be written there.
+	// resolved for. DEFENCE IN DEPTH over the managed-backend collision the
+	// write boundary already refuses: a stored row that predates that refusal
+	// can still resolve two principals onto one volume, so the driver stamps
+	// this and refuses the second instead of adopting it. A digest, never the
+	// claim — a Docker label is echoed by `docker volume inspect` to anybody
+	// who can reach the daemon.
 	SubjectHash string
 	// Target is the reserved in-container path (runner.DriveTarget). Carried
-	// rather than assumed so a runner never hard-codes the string, and so the
-	// reserved-target refusal and the mount agree by construction.
+	// rather than assumed so a runner never hard-codes the string.
 	Target      string             `json:"target"`
 	ReadOnly    bool               `json:"read_only,omitempty"`
 	SizeMiB     int                `json:"size_mib,omitempty"`
@@ -529,68 +452,53 @@ type DriveMount struct {
 }
 
 // UserDriveHostRootCheck is the signature of the deployment's ENV CEILING over
-// admin-authored host_path drives (WARDYN_USER_DRIVE_HOST_ROOTS), returning nil
-// when hostRoot is inside an allowed root.
+// admin-authored host_path drives (WARDYN_USER_DRIVE_HOST_ROOTS), returning
+// nil when hostRoot is inside an allowed root.
 //
-// It is a hook rather than a rule inside ValidateUserDrive because this package
-// cannot read the environment and must not: the ceiling is operator/MDM-set,
-// exactly like the member-mount roots, and site config (a full-replace row one
-// bad PUT can blank) is the wrong home for a security ceiling. The API write
-// boundary composes the two — shape here, ceiling there — and an UNSET env
-// means no host_path drive may be authored at all, the same fail-closed posture
-// WARDYN_USER_WORKSPACE_ROOTS takes.
+// A hook rather than a rule inside ValidateUserDrive: this package cannot
+// read the environment, and site config (a full-replace row one bad PUT can
+// blank) is the wrong home for a security ceiling. The API write boundary
+// composes the two — shape here, ceiling there. An UNSET env means no
+// host_path drive may be authored at all.
 type UserDriveHostRootCheck func(hostRoot string) error
 
 // ─── derivation ───────────────────────────────────────────────────────────────
 
 // driveHomeHashLen is how many hex characters of the sha256 a `hash` home
-// carries. 20 hex = 80 bits, which is collision-free for any plausible member
-// count and leaves the whole name (d- + 20) at 22 characters — short enough
-// that `wardyn-drive-<drive-slug>-<home>` stays well inside a PVC's
-// 253-character name limit.
+// carries. 20 hex = 80 bits, collision-free for any plausible member count,
+// leaving the whole name (d- + 20) well inside a PVC's 253-character limit.
 const driveHomeHashLen = 20
 
 // DriveHomeName derives the per-user home segment for one principal.
 //
-// PRECEDENCE, and the first rule is the whole point of the override existing:
+// PRECEDENCE:
 //
-//  1. override (a user-tier grant's home_override) WINS. An admin who has
-//     written down "Bob's directory on the NAS is bsmith" is stating a fact
-//     about a filesystem Wardyn does not own, and no template may out-vote it.
+//  1. override (a user-tier grant's home_override) WINS — an admin's stated
+//     fact about a filesystem Wardyn does not own, which no template may
+//     out-vote.
 //  2. hash — `d-` + the first 20 hex of sha256(drive id + "\n" + subject). The
-//     drive id is in the digest so one member's two drives never collide, and
-//     the "\n" separator keeps a concatenation from being ambiguous.
-//  3. sub / email_local — the CLAIM, lowercased, and email_local truncated at
-//     the first "@".
+//     drive id is in the digest so one member's two drives never collide.
+//  3. sub / email_local — the CLAIM, lowercased, email_local truncated at the
+//     first "@".
 //
-// EVERY non-hash path is then checked against driveHomeSegmentRe and an
-// unusable claim is an ERROR, NEVER A GUESS. Guessing here is not a cosmetic
-// failure: a fabricated segment either collides with another member's home (two
-// people sharing a directory neither was granted) or escapes it. The remedy the
-// error points at is a home_override on that member's grant.
+// EVERY non-hash path is checked against driveHomeSegmentRe; an unusable claim
+// is an ERROR, NEVER A GUESS — a fabricated segment either collides with
+// another member's home or escapes it. The remedy is a home_override.
 //
-// `subject` is the identity the home is derived FROM, and the caller selects it
-// because only the caller holds the labelled claims: the caller's stable
-// primary subject for `hash` and `sub`, the email claim for `email_local`. It
-// is never the GRANT's subject — a group grant's subject would give an entire
-// group one home, and re-pointing a grant would move a member's data.
+// `subject` is the identity the home is derived FROM and the caller selects
+// it (the caller's stable primary subject for `hash`/`sub`, the email claim
+// for `email_local`) — never the GRANT's subject, since a group grant's
+// subject would give an entire group one home.
 func DriveHomeName(d UserDrive, subject, override string) (string, error) {
-	// THE OVERRIDE IS NOT SUBJECT TO THE MANAGED HASH-ONLY RULE, deliberately.
-	// That rule (ValidateUserDrive) refuses a TEMPLATE on a managed backend
-	// because a template derives the home from the sign-in subject AUTOMATICALLY
-	// — every allocation publishes its principal into an object name as a
-	// mechanical consequence, with nobody deciding per person. An override is the
-	// opposite: one literal an admin typed for one named allocation, the same
-	// decision they make naming a directory on a share. Asked and answered here
-	// so the next audit does not have to re-derive it: automatic derivation from
-	// the subject is refused; an operator's explicit choice remains theirs.
+	// THE OVERRIDE IS NOT SUBJECT TO THE MANAGED HASH-ONLY RULE, deliberately:
+	// that rule refuses a TEMPLATE deriving the home from the sign-in subject
+	// automatically; an override is one literal an admin typed for one named
+	// allocation, the same decision as naming a directory on a share.
 	if seg := strings.ToLower(strings.TrimSpace(override)); seg != "" {
 		// Re-checked against THIS drive's backend rule, not just the write
-		// boundary's: ValidateUserDriveGrant holds only the grant row and
-		// cannot see which substrate the drive it points at lands on, so an
-		// override legal for Docker can be stored against a k8s drive. An
-		// admin's fact about a filesystem still cannot out-vote what the
-		// apiserver will accept.
+		// boundary's: ValidateUserDriveGrant can't see which substrate the
+		// drive lands on, so an override legal for Docker could be stored
+		// against a k8s drive.
 		if !driveHomeSegmentOK(d.Backend, seg) {
 			return "", fmt.Errorf("home_override %q is not a valid home name (%s)", override, driveHomeSegmentRule(d.Backend))
 		}
@@ -600,10 +508,8 @@ func DriveHomeName(d UserDrive, subject, override string) (string, error) {
 	if subject == "" {
 		return "", fmt.Errorf("no subject to derive a home name from")
 	}
-	// `d-` + hex satisfies BOTH backend rules by construction — no `_`, no dot,
-	// no trailing `-`, 22 characters — which is why it is checked against
-	// neither and why it is the only template a MANAGED backend MAY use
-	// (ValidateUserDrive refuses the claim templates on one).
+	// `d-` + hex satisfies BOTH backend rules by construction, which is why
+	// it's the only template a MANAGED backend MAY use.
 	if d.HomeTemplate == HomeTemplateHash || d.HomeTemplate == "" {
 		sum := sha256.Sum256([]byte(d.ID.String() + "\n" + subject))
 		return "d-" + hex.EncodeToString(sum[:])[:driveHomeHashLen], nil
@@ -626,27 +532,21 @@ func DriveHomeName(d UserDrive, subject, override string) (string, error) {
 	return seg, nil
 }
 
-// DriveSubjectHash fingerprints the principal a drive object was allocated to,
-// in the one shape a substrate LABEL may carry it: the first 20 hex of
+// DriveSubjectHash fingerprints the principal a drive object was allocated
+// to, in the one shape a substrate LABEL may carry it: the first 20 hex of
 // sha256(subject), lowercased and trimmed exactly as DriveHomeName folds it.
 //
-// NON-PII IS THE WHOLE REQUIREMENT. A label is echoed verbatim by `docker volume
-// inspect` and `kubectl describe` to anybody who can reach the daemon or the
-// namespace, so the sign-in subject itself — or an address — must not be written
-// there. A digest answers the only question the driver asks ("is the object I
-// found the object THIS principal was allocated?") and answers no other.
+// NON-PII IS THE WHOLE REQUIREMENT: a label is echoed verbatim by `docker
+// volume inspect`/`kubectl describe` to anybody who can reach the daemon or
+// namespace, so the sign-in subject itself must not be written there.
 //
-// It reuses driveHomeHashLen deliberately: the same 80 bits, collision-free for
-// any plausible member count, and one number to reason about rather than two.
-// The drive id is NOT in this digest, unlike DriveHomeName's — the label lives
-// beside `wardyn.drive`, which already carries the id, and folding it in would
-// make one principal's fingerprint differ per drive for no reader's benefit.
+// Reuses driveHomeHashLen deliberately. The drive id is NOT in this digest,
+// unlike DriveHomeName's — the label lives beside `wardyn.drive`, which
+// already carries the id.
 //
 // An EMPTY subject returns "" rather than the digest of "": the caller then
-// writes no label at all, which is the label-less state the restore path
-// already tolerates. Hashing the empty string would mint a fingerprint every
-// identity-less caller shares — the one value that could make two principals
-// look like one.
+// writes no label, avoiding a fingerprint every identity-less caller would
+// share.
 func DriveSubjectHash(subject string) string {
 	subject = strings.ToLower(strings.TrimSpace(subject))
 	if subject == "" {
@@ -657,37 +557,28 @@ func DriveSubjectHash(subject string) string {
 }
 
 // driveObjectPrefix is shared by every minted object name so an operator can
-// find every Wardyn-created volume or claim with one glob, and so nothing
-// Wardyn did not create can be mistaken for a drive.
+// find every Wardyn-created volume or claim with one glob.
 const driveObjectPrefix = "wardyn-drive-"
 
 // driveSlugMaxLen bounds the drive-name half of a minted object name. A PVC
-// name is capped at 253 characters (a Docker volume name at 255) and the home
-// segment can be 63, so 40 leaves room for both plus the prefix with no
-// arithmetic anywhere else.
+// name is capped at 253 characters (Docker volume at 255) and the home
+// segment can be 63, so 40 leaves room for both plus the prefix.
 const driveSlugMaxLen = 40
 
 // driveSlugUnsafeRe matches every run of characters a DNS-1123 name may not
-// carry. Collapsed to a single "-" so "Corp NAS (eng)" and "corp-nas-eng"
-// cannot produce two different objects for one drive.
+// carry, collapsed to a single "-" so cosmetic variants fold to one object.
 var driveSlugUnsafeRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 // DriveSlug folds a drive's human name into the DNS-1123 fragment a PVC name
-// carries. ValidateUserDrive refuses a name that folds to nothing, so this
-// never returns "" for a stored drive.
+// carries. ValidateUserDrive refuses a name that folds to nothing.
 //
-// EXPORTED BECAUSE THE FOLD IS NOT INJECTIVE AND SOMETHING HAS TO ENFORCE THAT.
-// It is a fold on purpose — "Corp NAS" and "  Corp   NAS! " are one slug, so a
-// cosmetic rename does not re-home anybody (driveIdentityFields compares through
-// it for exactly that reason). Across two ROWS the same property is a collision:
-// UNIQUE(name) admits "Corp NAS" and "corp nas" as different names, and both
-// mint wardyn-drive-corp-nas-bsmith for one home, so two drives hand one object to
-// two sets of members with different sizes, writability and reclaim policy —
-// caught today only at mount time, as a run failure, by the runners' wardyn.drive
-// label check. The store writes this value into user_drives.name_slug and
-// migration 0061 makes it UNIQUE for every backend whose object name Wardyn
-// mints, which is the namespace the collision is actually in. The Go definition
-// is the one that decides: the column holds what this function returned.
+// EXPORTED BECAUSE THE FOLD IS NOT INJECTIVE AND SOMETHING HAS TO ENFORCE
+// THAT: "Corp NAS" and "corp nas" fold to one slug, so UNIQUE(name) alone
+// would let two different-looking drive names mint the SAME object for one
+// home — caught today only at mount time by the runners' wardyn.drive label
+// check. Migration 0061 makes the slug column UNIQUE for every backend Wardyn
+// names, the namespace the collision is actually in; this function is what
+// decides what that column holds.
 func DriveSlug(name string) string {
 	s := driveSlugUnsafeRe.ReplaceAllString(strings.ToLower(strings.TrimSpace(name)), "-")
 	s = strings.Trim(s, "-")
@@ -704,40 +595,24 @@ func DriveSlug(name string) string {
 //   - k8s_pvc[_static] -> wardyn-drive-<drive-slug>-<home>
 //   - host_path        -> <host_root>/<home>, cleaned
 //
-// EVERY name Wardyn MINTS carries the DRIVE's slug, because the home alone does
-// not identify a drive. It reads as though it did — a `hash` home folds the
-// drive id, so one member's two drives are already two homes — but a
-// home_override does not: the admin writes "Bob's directory is bsmith" on the
-// GRANT, and the grant is the row that gets re-pointed from one drive to
-// another (user_drive_grants is UNIQUE on (subject_type, subject), so
-// re-pointing IS how a member moves between drives). With no slug both sides of
-// that re-point named one volume, so Bob mounted the old drive's contents under
-// the new drive's name, size and writable posture, and an offboarding command
-// naming `wardyn-drive-bsmith` could not say which drive it was reclaiming.
+// EVERY name Wardyn MINTS carries the DRIVE's slug, because the home alone
+// does not identify a drive: a home_override is a literal an admin typed on
+// the GRANT, and the grant is the row that gets re-pointed between drives
+// (user_drive_grants is UNIQUE on (subject_type, subject)) — without the
+// slug, a re-point would leave two drives naming one volume.
 //
-// The volume arm carried no slug on the reasoning that Docker volume names are
-// global to a daemon holding one drive's worth of state — an assumption nothing
-// enforces: user_drives has no cardinality constraint and a deployment may
-// register any number of docker_volume drives. The slug costs a longer name and
-// buys the same (drive, home) scoping the PVC arm always had, which is also
-// what lets an operator reading `docker volume ls` tell two drives apart, as
-// `kubectl get pvc` already could.
+// The volume arm carries the slug too even though nothing enforces one
+// docker_volume drive per daemon, buying the same (drive, home) scoping the
+// PVC arm always had.
 //
-// A SHARE keeps its own shape: <host_root> already scopes it, and the directory
-// under it was named by whoever owns the tree, not by Wardyn — a slug there
-// would name a directory that does not exist.
+// A SHARE keeps its own shape: <host_root> already scopes it, and the
+// directory under it was named by whoever owns the tree.
 //
 // THE DRIVE HALF IS d.ObjectScheme, beside DriveSlug rather than replacing it
-// (migration 0061's unique index still keys on the slug, and DriveSlug stays
-// what UpsertUserDrive writes into name_slug for every row regardless of
-// scheme). DriveObjectSchemeID puts DriveObjectID(d.ID) there instead —
-// 32 hex characters, always, so <home> starts at a FIXED offset and no
-// crafted drive name or home_override can shift the boundary the way a
-// variable-width slug could (issue #163: a fabricated home reading as though
-// it carried the next field's start). The empty scheme (a struct built by a
-// caller that never set it, e.g. every fixture that predates 0067) reads as
-// slug, matching the column's own DEFAULT — so a legacy row and a zero-value
-// UserDrive derive identically, and this function never has a third case.
+// (migration 0061's unique index still keys on the slug). DriveObjectSchemeID
+// puts DriveObjectID(d.ID) there instead — 32 hex characters, always, so
+// <home> starts at a FIXED offset no crafted name can shift (issue #163). The
+// empty scheme reads as slug, matching the column's own DEFAULT.
 func DriveObjectName(d UserDrive, home string) string {
 	if !DriveObjectNamedByWardyn(d.Backend) {
 		return filepath.Join(filepath.Clean(d.HostRoot), home)
@@ -749,58 +624,47 @@ func DriveObjectName(d UserDrive, home string) string {
 }
 
 // DriveObjectID is the drive's own id, dashless — the fixed-width fragment
-// DriveObjectSchemeID puts where DriveSlug would otherwise go. 32 lowercase hex
-// characters always: uuid.UUID.String() is fixed-format (8-4-4-4-12 hex,
-// lowercase), so stripping its four hyphens leaves a length and character
-// class that can never vary with what an admin typed into the drive's name or
-// a member's home_override — the whole point, since DriveSlug's length and
-// content both depend on caller input.
+// DriveObjectSchemeID puts where DriveSlug would otherwise go: always 32
+// lowercase hex characters, unlike DriveSlug whose length and content depend
+// on caller input.
 func DriveObjectID(id uuid.UUID) string {
 	return strings.ReplaceAll(id.String(), "-", "")
 }
 
-// DriveObjectNamedByWardyn reports whether WARDYN MINTS this backend's storage
-// object name — the `wardyn-drive-<drive-slug>-<home>` arm of DriveObjectName —
-// rather than joining a path somebody else already created.
+// DriveObjectNamedByWardyn reports whether WARDYN MINTS this backend's
+// storage object name rather than joining a path somebody else already
+// created.
 //
-// IT IS NOT THE MANAGED/SHARE SPLIT, and conflating the two is what the
-// home-template rules got wrong. DriveKind answers "does Wardyn CREATE the
-// object?"; this answers "does Wardyn NAME it?". k8s_pvc_static is a SHARE by
-// the first question — an admin provisions the claim and wardynd only ever Gets
-// it — and a Wardyn-named object by the second, because a claim is addressed by
-// name in a namespace and the name Wardyn asks for is the one it mints. Only
-// host_path is on the other side: its object is `<host_root>/<home>`, a
-// directory the share owner made and named.
+// IT IS NOT THE MANAGED/SHARE SPLIT: DriveKind answers "does Wardyn CREATE
+// the object?"; this answers "does Wardyn NAME it?". k8s_pvc_static is a
+// SHARE by the first question and a Wardyn-named object by the second (a
+// claim is addressed by the name Wardyn asks for). Only host_path is on the
+// other side.
 //
-// It is the SAME expression DriveObjectName branches on, called rather than
-// restated, so the rules keyed on it cannot drift from the name they are about.
+// The SAME expression DriveObjectName branches on, called rather than
+// restated.
 func DriveObjectNamedByWardyn(b DriveBackend) bool {
 	return b != DriveBackendHostPath
 }
 
 // ManagedBackendRejectsTemplate is THE managed-backend home-template rule: a
-// managed object's name ENDS in the home segment (DriveObjectName ->
-// `wardyn-drive-<drive-slug>-<home>`), and it is printed by `docker volume ls`
-// and `kubectl get pvc` without the inspect or describe a label needs — so on a
-// managed backend only `hash`, which is unique and reveals nothing, may name
-// one. A share backend keeps every template.
+// managed object's name ENDS in the home segment and is printed by `docker
+// volume ls`/`kubectl get pvc` with no inspect/describe needed — so on a
+// managed backend only `hash`, unique and revealing nothing, may name one. A
+// share backend keeps every template.
 //
-// It is a function, and exported, because the rule has TWO enforcement points
-// and they had drifted apart. The write boundary (Validate, above) was widened
-// from `email_local` to every non-hash template; the RUN-TIME resolver
-// (newResolvedDrive) was not, so a legacy or hand-written `sub` row was refused
-// at authoring and still mounted — putting the sign-in subject in the object
-// name, which is the exposure the widening exists to prevent. One predicate, so
-// a third site cannot diverge again.
+// A function, and exported, because the rule has TWO enforcement points that
+// had drifted apart: the write boundary was widened from `email_local` to
+// every non-hash template, but the run-time resolver was not, so a legacy
+// `sub` row was refused at authoring and still mounted — putting the sign-in
+// subject in the object name. One predicate, so a third site cannot diverge
+// again.
 func ManagedBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
 	if tmpl == "" || tmpl == HomeTemplateHash {
 		return false
 	}
-	// THE AXIS IS WHO NAMES THE OBJECT, not who creates it. Everything this rule
-	// is about — a claim-derived segment concatenated into a name that
-	// `docker volume ls` and `kubectl get pvc` print without inspecting
-	// anything, and `email_local` folding two principals onto one name — is true
-	// of every object WARDYN NAMES. It was keyed on DriveKind instead, which put
+	// THE AXIS IS WHO NAMES THE OBJECT, not who creates it — true of every
+	// object WARDYN NAMES, which is why keying on DriveKind put
 	// k8s_pvc_static on the wrong side of both halves of the rule.
 	if !DriveObjectNamedByWardyn(backend) {
 		return false
@@ -808,47 +672,34 @@ func ManagedBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool
 	if backend.Kind() == DriveKindManaged {
 		return true
 	}
-	// k8s_pvc_static: Wardyn names the claim but does NOT create it, and that
-	// difference decides how much of the rule applies. The EXPOSURE half cannot
-	// be enforced by refusing `sub` here, because an admin has to pre-provision
-	// claims under the names this deployment will ask for and must be able to
-	// recognise them — `hash` is now available (and is the default) for the
-	// admin who would rather read the preview endpoint than the roster, which is
-	// the recommended posture. The COLLISION half is not negotiable in the same
-	// way: `email_local` folds alice@corp.example and alice@acquired.example onto
-	// ONE claim name, and the static arm of the driver's identity check has no
-	// per-drive labels to tell them apart, so the two would silently share one
-	// pre-created volume.
+	// k8s_pvc_static: Wardyn names the claim but does NOT create it. The
+	// EXPOSURE half can't refuse `sub` here — an admin must pre-provision
+	// claims under names it can recognise, and `hash` (now the default) is
+	// available for one who'd rather use the preview endpoint. The COLLISION
+	// half stays non-negotiable: `email_local` folds two addresses onto ONE
+	// claim name, and the static driver's identity check has no per-drive
+	// labels to tell them apart.
 	return tmpl == HomeTemplateEmailLocal
 }
 
-// ShareBackendRejectsTemplate is the MIRROR rule, and it is exported for the
-// same reason its twin above is: it had exactly one enforcement point.
+// ShareBackendRejectsTemplate is the MIRROR rule, exported for the same
+// reason: it had exactly one enforcement point.
 //
 // A SHARE's directories are named by whoever owns the share, and Wardyn never
-// mkdir's on one — so a `hash` home names a directory that does not exist and
-// nothing will create it. The write boundary refused that row; the resolver did
-// not, so a row written before the rule (or by hand) resolved cleanly and the
-// member met the MISSING-HOME refusal instead — "directory
-// d-00e23f375d35be941331 does not exist on the share — ask an admin to create
-// it", which names a directory nobody could ever have made and asks the admin
-// to create a digest. The remedy the member was handed was the wrong one for
-// the row they actually had.
+// mkdir's on one — so a `hash` home names a directory that will never exist.
+// The write boundary refused that row; the resolver did not, so a legacy row
+// resolved cleanly and the member met a MISSING-HOME refusal naming a digest
+// nobody could have created — the wrong remedy for the row they had.
 //
-// The empty template is excluded on both sides because ValidateUserDrive
-// defaults it before this is asked, and a resolver looking at a legacy row with
-// no template must fall through to the derivation rather than refuse a shape
-// this rule has no opinion about.
+// The empty template is excluded on both sides: ValidateUserDrive defaults it
+// before this is asked, and a resolver looking at a legacy row with no
+// template must fall through to derivation.
 func ShareBackendRejectsTemplate(backend DriveBackend, tmpl HomeTemplate) bool {
-	// KEYED ON WHO NAMES THE OBJECT, not on DriveKind. The reason a `hash` is
-	// refused is that it names a directory nobody made and Wardyn will not make
-	// — which is true of host_path, whose object is a path under a tree the share
-	// owner created, and NOT true of k8s_pvc_static, whose object name Wardyn
-	// mints exactly as it does for a managed claim. Reading it off the
-	// managed/share split refused `hash` on a static PVC, leaving `sub` and
-	// `email_local` as the only authorable templates and so FORCING every static
-	// allocation to publish the member's sign-in subject or address in a name
-	// Wardyn itself minted — the exposure the managed half of this rule exists to
-	// refuse.
+	// KEYED ON WHO NAMES THE OBJECT, not DriveKind — true of host_path (whose
+	// object is a path under a share-owner's tree) and NOT true of
+	// k8s_pvc_static (whose name Wardyn mints exactly as for a managed
+	// claim). Reading it off the managed/share split would have forced every
+	// static allocation to publish the member's subject or address in a name
+	// Wardyn itself minted.
 	return !DriveObjectNamedByWardyn(backend) && tmpl == HomeTemplateHash
 }

@@ -16,12 +16,9 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -34,13 +31,7 @@ import (
 // answers success with a credential left behind, and it never erases the
 // operator namespace, which holds the platform keys.
 func (s *Server) handleErasePersonCredentials(w http.ResponseWriter, r *http.Request) {
-	raw := chi.URLParam(r, "principal")
-	if r.URL.RawPath != "" {
-		if u, err := url.PathUnescape(raw); err == nil {
-			raw = u
-		}
-	}
-	raw = strings.TrimSpace(raw)
+	raw := strings.TrimSpace(principalParam(r))
 	if raw == "" {
 		s.auditOwnerRefusal(r, "credential.erase", "", "blank_principal")
 		writeError(w, http.StatusBadRequest, "name the person whose credentials to erase")

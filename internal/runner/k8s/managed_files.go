@@ -44,23 +44,18 @@ func managedFileSecretData(files []runner.ManagedFile) map[string][]byte {
 // items — never the whole Secret, which also holds the proxy config and every
 // credential-bearing env value.
 //
-// WHY A DIRECTORY MOUNT AND NOT subPath. A subPath would drop one file into an
-// existing directory and leave its siblings alone, which reads like the
-// tidier answer. It is unusable here: the apiserver forbids subPath on an
+// A directory mount, not subPath: the apiserver forbids subPath on an
 // EPHEMERAL container, and Exec copies the main container's VolumeMounts
-// verbatim onto the ephemeral container the agent actually runs in — so a
-// subPath here would make UpdateEphemeralContainers fail for every run that
-// carries a managed file, while a fake-clientset test went on passing. That is
-// the same constraint ephemeralScratchVolumes records, and
-// TestCreateSandbox_NoMountCarriesASubPath is the shared pin.
+// verbatim onto it, so subPath here would fail UpdateEphemeralContainers for
+// every run with a managed file (TestCreateSandbox_NoMountCarriesASubPath
+// pins this, same constraint as ephemeralScratchVolumes).
 //
-// WHAT MAKES THE FILE IMMUTABLE. A Secret volume is a kubelet-managed tmpfs:
-// its files are root-owned at the mode the item names, and ReadOnly on the
-// mount makes the whole tree refuse a write with EROFS whatever the mode says.
-// The DIRECTORY is a mount point, so the agent cannot rename it away and put
-// its own there instead — which is the half a root-owned file alone does not
-// give you. runner.ValidateManagedFiles confines that mount point to
-// runner.ManagedFileDir, so it never hides a directory the image needs.
+// Immutability: the Secret volume is a kubelet-managed tmpfs (root-owned,
+// ReadOnly makes writes EROFS regardless of mode), and mounting the
+// DIRECTORY (not just the file) stops the agent renaming it away and
+// substituting its own. runner.ValidateManagedFiles confines the mount
+// point to runner.ManagedFileDir so it never hides a directory the image
+// needs.
 func managedFileVolumes(runID uuid.UUID, files []runner.ManagedFile) ([]corev1.Volume, []corev1.VolumeMount) {
 	if len(files) == 0 {
 		return nil, nil

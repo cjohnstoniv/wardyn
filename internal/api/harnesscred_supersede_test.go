@@ -1167,3 +1167,29 @@ func TestServer_WaitBackground_RespectsItsBudget(t *testing.T) {
 		t.Errorf("WaitBackground took %s with a 50ms budget and a goroutine that never finishes — it did not respect its bound", elapsed)
 	}
 }
+
+// TestSupersedeOfStartingLoginRunCancelsItsCreate is the supersede twin of
+// TestKillOfStartingRunCancelsItsCreate (#1182): a second sign-in supersedes a
+// first one still STARTING, and that first run's in-flight CreateSandbox must
+// stop with it. Otherwise both runs' pods compete for the node and the NEW
+// sign-in's agent pod sits Unschedulable until the old create times out.
+//
+// Red on the unfixed tree: the superseded run's create runs on after its KILLED
+// CAS.
+func TestSupersedeOfStartingLoginRunCancelsItsCreate(t *testing.T) {
+	rn := newCtxBlockingCreateRunner(t)
+	f := newSupersedeFixture(t, nil, rn)
+	srv, st := f.srv, f.store
+	sess := memberLoginSession(t)
+
+	first := launchLoginRun(t, srv, sess)
+	rn.waitEntered(t)
+	waitRunState(t, st, first, types.RunStarting)
+
+	second := launchLoginRun(t, srv, sess)
+	rn.waitCancelled(t)
+	if got := st.stateOf(t, first); got != types.RunKilled {
+		t.Fatalf("the superseded sign-in is %s, want KILLED", got)
+	}
+	waitRunState(t, st, second, types.RunRunning)
+}

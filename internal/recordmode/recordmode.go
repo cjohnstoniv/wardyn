@@ -6,31 +6,21 @@
 // purely from already-captured audit events — and SYNTHESIZES a tightened,
 // least-privilege RunPolicySpec the operator can review and promote.
 //
-// PURITY. Like internal/composer/risk.go's Grade, the two entry points here are
-// pure functions of their inputs. They take SLICES (audit events, grants, the
-// run) and return values; they touch NO database, NO network, NO clock, and NO
-// global state. This makes them trivially unit-testable and makes the synthesis
-// a function of the captured evidence, not of anything an in-sandbox (possibly
-// prompt-injected) agent can influence after the fact.
+// PURITY: the two entry points are pure functions of their inputs (audit
+// events, grants, the run in; values out) — no database, network, clock, or
+// global state, so synthesis is a function of captured evidence, not of
+// anything an in-sandbox agent can influence after the fact.
 //
-// DETERMINISM. Both functions are deterministic and input-order INDEPENDENT:
-//   - every set (domains, methods, argv[0]s, file writes, connects, grant ids,
-//     anomalies) is de-duplicated and then SORTED, so the same evidence yields
-//     byte-identical output regardless of the order events were recorded in;
-//   - egress decision COUNTS are sums (order-independent by construction);
-//   - Synthesize iterates already-sorted Observations fields (never a Go map),
-//     so its returned spec and warnings are stable across runs.
+// DETERMINISM: every set is de-duplicated and SORTED, egress decision counts
+// are sums, and Synthesize iterates already-sorted fields, so equal evidence
+// always yields byte-identical output.
 //
-// HONESTY. Recording Mode tightens egress and credential surface from evidence,
-// but it deliberately does NOT auto-author everything:
-//   - it NEVER auto-wildcards a domain (exact hosts only) — wildcards widen, and
-//     a recording cannot prove a wildcard is needed;
-//   - it FORCES allow_all_egress=false and first_use_approval=true, so the
-//     tightened policy fails toward human escalation rather than silent denial
-//     of a host the (necessarily incomplete) recording happened not to exercise;
-//   - it does NOT synthesize WorkspaceMounts (operator-authored, admin-gated)
-//     and the policy model has no exec/connect/file allowlist, so kernel
-//     ground-truth is surfaced as warnings/Observations, never as silent policy.
+// HONESTY: Recording Mode tightens from evidence but deliberately does NOT
+// auto-author everything — it never auto-wildcards a domain, it forces
+// allow_all_egress=false and first_use_approval=true so the tightened policy
+// fails toward human escalation rather than silent denial, and it does not
+// synthesize WorkspaceMounts or an exec/connect/file allowlist, surfacing
+// kernel ground-truth as warnings/Observations instead.
 package recordmode
 
 import (
@@ -66,11 +56,10 @@ const (
 )
 
 // mountTargetPrefixes are the in-container paths a host WorkspaceMount may be
-// mounted under (see types.WorkspaceMount / validatePolicySpec: /home/agent,
-// /work, /workspace). A captured sensitive write under one of these is the only
-// signal available to a pure function that the recording MAY have used a mount —
-// the audit streams do not carry mount configuration, so this is a heuristic
-// that triggers an operator warning, never an auto-authored mount.
+// mounted under. A captured sensitive write under one is the only signal a
+// pure function has that the recording MAY have used a mount — the audit
+// streams carry no mount config — so this is a heuristic that triggers an
+// operator warning, never an auto-authored mount.
 var mountTargetPrefixes = []string{"/home/agent", "/work", "/workspace"}
 
 // DomainObservation is one egress host the run actually reached, with the HTTP
@@ -88,12 +77,10 @@ type DomainObservation struct {
 	AllowCount   int `json:"allow_count"`
 	DenyCount    int `json:"deny_count"`
 	PendingCount int `json:"pending_count"`
-	// ApprovalCount is the subset of AllowCount that was RELEASED by a live
-	// first-use approval (rule_source "approval:<id>" — the exact prefix the
-	// allow path of evaluate writes in internal/egress/proxy/proxy.go) rather
-	// than the standing policy. A confined replay's CleanReplay verdict treats any
-	// of these as caught: approving mid-replay must not earn a green the
-	// standing policy didn't — the honest loop is approve, then replay again.
+	// ApprovalCount is the subset of AllowCount RELEASED by a live first-use
+	// approval rather than the standing policy. CleanReplay treats any of
+	// these as caught: approving mid-replay must not earn a green the
+	// standing policy didn't.
 	ApprovalCount int `json:"approval_count"`
 }
 
@@ -117,24 +104,18 @@ type Observations struct {
 	// sensor observed the run connect to.
 	Connects []string `json:"connects,omitempty"`
 	// Anomalies is the deduped, sorted set of human-readable signals a
-	// least-privilege synthesis must NOT silently bless. It captures exactly:
-	// an egress.deny during the open recording, an exec of a dynamic linker
-	// (the ld-linux/mmap execve-hook bypass surface), a failed/escape kernel
-	// connect, and the sensor dropping events as unmapped while this capture
-	// ran (KernelWindow).
+	// least-privilege synthesis must NOT silently bless: an egress.deny during
+	// open recording, a dynamic-linker exec, a failed/escape kernel connect,
+	// and the sensor dropping events as unmapped while this capture ran.
 	Anomalies []string `json:"anomalies,omitempty"`
 }
 
 // ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
 
 // sensorCorrelatedNothingAnomaly is the one anomaly sourced from the sensor's
-// own counters rather than from this run's events. A reviewer reads it on the
-// capture and, through Synthesize, on the promote surface.
-//
-// It says what the counters PROVE and no more (SR-1). The count is cumulative
-// since the sensor started, so the sentence does not claim it happened during
-// this capture; what the capture's window buys is only that the sensor was in
-// this state while the capture ran.
+// own counters rather than from this run's events. It says what the counters
+// PROVE and no more: the count is cumulative since the sensor started, so the
+// sentence does not claim it happened during this capture.
 //
 // DRAFT (M2 canon pending)
 const sensorCorrelatedNothingAnomaly = "the kernel sensor was alive during this capture and correlated none " +
@@ -143,16 +124,11 @@ const sensorCorrelatedNothingAnomaly = "the kernel sensor was alive during this 
 	"kernel corroboration either way"
 
 // KernelWindow is what the host's eBPF sensor said about ITSELF while this
-// capture was running. It is the one fact a capture's own audit events cannot
-// carry, and it has to be scoped to the capture's window: the sensor is
-// host-wide and its heartbeat is global, so the newest one read at review time
-// describes the host NOW, not the run. A count from a beat days later is not
-// evidence about this capture, and must never become its anomaly (B11b-F4 +
-// B11b-F7).
-//
-// The zero value — no heartbeat inside the window — says nothing, which is the
-// honest answer for a host with no sensor and for a capture the sensor never
-// beat during.
+// capture was running — the one fact a capture's own audit events cannot
+// carry. Must be scoped to the capture's window: the sensor is host-wide and
+// its heartbeat global, so a beat from days later is not evidence about this
+// capture. The zero value (no heartbeat inside the window) says nothing,
+// which is the honest answer for a host with no sensor.
 type KernelWindow struct {
 	// Beat is true when a sensor heartbeat landed inside the capture window.
 	Beat bool
@@ -187,22 +163,17 @@ type mintData struct {
 }
 
 // Capture aggregates one run's already-captured audit events into a deduped,
-// sorted Observations. It is pure and input-order independent: it reads only the
-// egress.*, credential.mint, and kernel.* (eBPF ground-truth) streams and
-// silently ignores any other action, so it is robust to new audit verbs.
+// sorted Observations. Pure and input-order independent: reads only the
+// egress.*, credential.mint, and kernel.* streams, ignoring any other action.
 //
 // confined distinguishes an OPEN (learning) recording, where a deny is a real
-// anomaly a least-privilege synthesis must not silently bless, from a
-// CONFINED replay, where a deny is the advertised containment proof working
-// as designed — the off-policy host it denied is exactly what confinement
-// exists to block (W19-W19b-4). A confined deny is still captured on the
-// per-host DomainObservation (nothing is hidden), it just does not also land
-// in Anomalies, and its message never claims "during open recording" for a
-// session that was never open.
+// anomaly, from a CONFINED replay, where a deny is the containment proof
+// working as designed — still captured on the per-host DomainObservation, but
+// not landed in Anomalies.
 //
 // kernel carries the one anomaly this run's OWN events cannot show: the
-// sensor's unmapped-drop count, and whether it was reported while the capture
-// was running. See KernelWindow.
+// sensor's unmapped-drop count while the capture was running. See
+// KernelWindow.
 func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Observations {
 	domains := map[string]*domainAgg{}
 	minted := map[uuid.UUID]bool{}
@@ -229,21 +200,17 @@ func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Obse
 		}
 	}
 
-	// The ONE anomaly this run's own events can never carry. An
-	// unmapped kernel event is precisely one that correlated to NO run: the
-	// sidecar's gate drops it, and what survives arrives with a nil run_id,
-	// which the caller's own WHERE run_id = $1 then excludes. The captureConnect
-	// branch would therefore be dead code here, claiming a detection nothing
-	// could trigger.
+	// The ONE anomaly this run's own events can never carry: an unmapped
+	// kernel event correlated to NO run, so it never reaches this function's
+	// own event loop.
 	//
-	// The condition is drops AND NOTHING CORRELATED, not drops alone (SR-1).
-	// DroppedUnmapped is cumulative over the sensor's whole process lifetime and
-	// counts every kernel event on the HOST that bound to no Wardyn run — the
-	// daemon, sshd, cron — so it is non-zero within seconds on any box that does
-	// anything, and firing on it alone stamped a proxy-bypass anomaly on every
-	// clean capture. Paired with ObservedTotal == 0 it means the one thing the
-	// counters can actually prove, and the one /healthz already names by it: the
-	// sensor saw kernel events and bound NONE of them to any run.
+	// The condition is drops AND NOTHING CORRELATED, not drops alone:
+	// DroppedUnmapped is cumulative over the sensor's whole process lifetime
+	// and counts every kernel event on the HOST that bound to no Wardyn run
+	// (the daemon, sshd, cron), so it is non-zero within seconds on any box
+	// that does anything. Paired with ObservedTotal == 0 it means the one
+	// thing the counters can prove: the sensor saw kernel events and bound
+	// NONE of them to any run.
 	if kernel.Beat && kernel.DroppedUnmapped > 0 && kernel.ObservedTotal == 0 {
 		anomalies[fmt.Sprintf(sensorCorrelatedNothingAnomaly, kernel.DroppedUnmapped)] = true
 	}
@@ -261,7 +228,7 @@ func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Obse
 // captureEgress folds one egress.* decision into the per-host aggregate and,
 // for an OPEN recording only, records an anomaly for a deny — a deny during a
 // CONFINED replay is the containment proof working as intended, not an
-// anomaly (W19-W19b-4).
+// anomaly.
 func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies map[string]bool, confined bool) {
 	var d egressData
 	_ = json.Unmarshal(ev.Data, &d) // best-effort: a malformed body still has Target
@@ -286,11 +253,9 @@ func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies
 	switch ev.Action {
 	case actionEgressAllow:
 		agg.allow++
-		// Defensively scoped to exactly this (allow) branch: "approval:denied"
-		// and "approval:pending" (evaluate's deny/hold arms in
-		// internal/egress/proxy/proxy.go) share the "approval:" prefix but
-		// land on the deny/pending actions above/below, never here, so this
-		// can never miscount a hold or a live deny as a released approval.
+		// Scoped to exactly this (allow) branch: "approval:denied" and
+		// "approval:pending" share the "approval:" prefix but land on the
+		// deny/pending actions, never here.
 		if strings.HasPrefix(strings.TrimSpace(d.RuleSource), "approval:") {
 			agg.approval++
 		}
@@ -305,9 +270,8 @@ func captureEgress(ev types.AuditEvent, domains map[string]*domainAgg, anomalies
 			}
 			anomalies[fmt.Sprintf("egress.deny to %s during open recording (rule_source=%s)", host, rs)] = true
 		}
-		// confined: the deny is captured on the per-host DomainObservation
-		// above (agg.deny) — a plain containment observation, not an
-		// anomaly a synthesis must second-guess.
+		// confined: still captured on the per-host DomainObservation (agg.deny)
+		// — a plain containment observation, not an anomaly.
 	}
 }
 
@@ -334,8 +298,9 @@ func captureExec(ev types.AuditEvent, execs, anomalies map[string]bool) {
 	if argv0 != "" {
 		execs[argv0] = true
 	}
-	// Trust the sensor's loader flag, but also re-derive it (defense in depth:
-	// the ld-linux/mmap execve-hook bypass is surfaced, never assumed absent).
+	// Trust the sensor's loader flag, but also re-derive it (defense in
+	// depth): the ld-linux/mmap execve-hook bypass is surfaced, never assumed
+	// absent.
 	if d.Loader || groundtruth.IsDynamicLinker(argv0) {
 		anomalies[fmt.Sprintf("dynamic-linker exec (loader) argv=[%s] — ld-linux/mmap execve-hook bypass surface", strings.Join(d.Argv, " "))] = true
 	}
@@ -343,13 +308,11 @@ func captureExec(ev types.AuditEvent, execs, anomalies map[string]bool) {
 
 // captureConnect records a connect destination and flags a FAILED connect (a
 // reach to the cloud metadata IP — the only destination the mapper stamps
-// outcome=failure post-FIX #17).
+// outcome=failure).
 //
-// It does NOT look for correlation=unmapped: an unmapped event is by
-// definition one that bound to no run, so it is either dropped by the
-// sidecar's gate or stored with a nil run_id, and this function only ever sees
-// events already scoped to one run. That branch could not fire (B11b-F4); the
-// signal it was reaching for is the sensor's dropped_unmapped counter, which
+// It does NOT look for correlation=unmapped: an unmapped event bound to no
+// run never reaches this function's events, which are already scoped to one
+// run. That signal is instead the sensor's dropped_unmapped counter, which
 // Capture reads from KernelWindow.
 func captureConnect(ev types.AuditEvent, connects, anomalies map[string]bool) {
 	var d groundtruth.EventData

@@ -339,6 +339,13 @@ var routeMatrix = map[string]classifiedRoute{
 	// subtracts, and names no value back — the same shape as the revokes above.
 	"DELETE /api/v1/people/{principal}/credentials": {class: classSecurity},
 	"DELETE /api/v1/people/{principal}/ssh-keys":    {class: classSecurity},
+	// #1157: a person set up before their first sign-in, and the tokens an
+	// admin mints for them. The mint is on the security tier; the guard against
+	// a security admin minting an admin's credential is in the handler, since
+	// it depends on who the token is for.
+	"POST /api/v1/people":                    {class: classSecurity},
+	"POST /api/v1/people/{principal}/tokens": {class: classSecurity},
+	"GET /api/v1/people/{principal}/tokens":  {class: classSecurity},
 	// Its companion (CS-6, design K5-A): who holds a credential for which model
 	// provider, added and last used. Metadata only, never a value.
 	"GET /api/v1/model-providers/credentials": {class: classSecurity},
@@ -1305,13 +1312,14 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// the caller does not own (= 43 SUPER). #166 then added POST
 	// /drives/{id}/reclaim, the drive DESTROY verb, born SUPER beside the
 	// family it belongs to (= 44 SUPER). #1143's launch preset writes (PUT/DELETE
-	// /presets/{name}) are SUPER for the stored-policy reason (= 46 SUPER).
-	// #1125's branding writes (PUT/DELETE /branding/settings) are SUPER, the
-	// site-config PUT's tier (= 48 SUPER). A route silently reclassified in the
+	// /presets/{name}) are SUPER for the stored-policy reason (= 46 SUPER). #1157 added
+	// POST /people and the per-person token mint and list on the security tier
+	// (= 41 SEC). #1125's branding writes (PUT/DELETE /branding/settings) are
+	// SUPER, the site-config PUT's tier (= 48 SUPER). A route silently reclassified in the
 	// table above would still pass every probe — it would just be enforcing the
 	// WRONG tier, exactly the drift the per-route loop cannot see.
-	if sec != 38 || super != 48 {
-		t.Errorf("tier split = %d security / %d admin, want 38 / 48 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
+	if sec != 41 || super != 48 {
+		t.Errorf("tier split = %d security / %d admin, want 41 / 48 (§B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes, MINUS record, PLUS #168's 3 moved /drives routes; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes)", sec, super)
 	}
 }
 

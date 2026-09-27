@@ -20,17 +20,15 @@ import (
 )
 
 // ProbeDrive implements runner.DriveProber (#165): a short-lived container,
-// run AS THE AGENT'S OWN UID rather than the daemon's own root process, tests
-// whether a host_path drive's resolved directory is actually readable. This is
-// the one fact an inline daemon-side os.Stat can never establish — the daemon
-// runs as root, and root can read a directory the agent's uid 1000 cannot —
-// so a share readable only by root passed create, preflight and /me and only
-// failed once the run was already inside the sandbox.
+// run AS THE AGENT'S OWN UID rather than the daemon's root, tests whether a
+// host_path drive's resolved directory is actually readable. An inline
+// daemon-side os.Stat can't establish this — the daemon runs as root, which
+// can read a directory the agent's uid 1000 cannot.
 //
-// Scoped to host_path: a docker_volume is Docker's own managed object,
-// created (never chowned away from the default) by ensureDriveVolume, so
-// there is nothing on this host worth spinning a container to inspect —
-// DriveProbeUnknown is the honest answer, not a guessed pass.
+// Scoped to host_path: a docker_volume is Docker's own managed object
+// (never chowned away from default by ensureDriveVolume), so there's
+// nothing worth inspecting — DriveProbeUnknown is the honest answer here,
+// not a guessed pass.
 func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner.DriveProbe, error) {
 	if drive.Backend != types.DriveBackendHostPath {
 		return runner.DriveProbe{Result: runner.DriveProbeUnknown,
@@ -41,12 +39,9 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 	}
 
 	image := d.driveProbeImage()
-	// A presence check, never a pull: this runs on the request path inside
-	// driveShareProbe's bounded budget (internal/api/user_drives_run.go), and
-	// a cold registry pull there would burn that whole budget on the FIRST
-	// request rather than PrewarmImages' background one. An absent image is a
-	// genuine failure to run the probe (caller falls back to "cannot tell"),
-	// not a refusal.
+	// A presence check, never a pull: this runs inside driveShareProbe's
+	// bounded budget, and a cold registry pull would burn it on the first
+	// request instead of PrewarmImages' background one.
 	present, err := d.imagePresent(ctx, image)
 	if err != nil {
 		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: %w", err)
@@ -59,15 +54,11 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 		Name: "wardyn-drive-probe-" + uuid.New().String(),
 		Config: &container.Config{
 			Image: image,
-			// The agent image's own contract (uid 1000) — see
-			// driver.go's "1000 per the image contract" note. NOT the
-			// daemon's own root, which is exactly the gap #165 closes.
+			// The agent image's own contract (uid 1000), not the daemon's root.
 			User: driveProbeUser,
-			// -r AND -x: a directory must be both readable and searchable
-			// (enterable) to be usable, and either missing is the same
-			// refusal the agent would hit inside the real sandbox. $1
-			// rather than an interpolated literal so a future caller can
-			// never turn this into a shell-injection seam.
+			// -r AND -x: a directory must be both readable and searchable to
+			// be usable. $1, not an interpolated literal, closes off a
+			// shell-injection seam.
 			Cmd: []string{"sh", "-c", `test -r "$1" && test -x "$1"`, "sh", driveProbeTarget},
 		},
 		HostConfig: &container.HostConfig{
@@ -77,7 +68,7 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 			CapDrop:        []string{"ALL"},
 			SecurityOpt:    []string{"no-new-privileges"},
 			ReadonlyRootfs: true,
-			AutoRemove:     false, // this driver removes it itself, below — see prepareRecordingDirs's own one-shot execs for the same posture
+			AutoRemove:     false, // removed explicitly below
 			Resources:      proxyResources(),
 			Mounts: []mount.Mount{{
 				Type:     mount.TypeBind,
@@ -91,10 +82,9 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 		return runner.DriveProbe{}, fmt.Errorf("docker: probe drive: create: %w", err)
 	}
 	defer func() {
-		// Background, not ctx: the caller's bound (driveShareProbe's 5s) may
-		// already be exhausted by the time the probe itself answers, and
-		// leaking a throwaway container is worse than a cleanup outliving the
-		// request that asked for it.
+		// Background, not ctx: the caller's bound may already be exhausted
+		// by the time the probe answers, and a leak is worse than cleanup
+		// outliving the request.
 		_, _ = d.cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	}()
 
@@ -120,26 +110,19 @@ func (d *Driver) ProbeDrive(ctx context.Context, drive types.DriveMount) (runner
 	}
 }
 
-// driveProbeUser is the fixed uid:gid every wardyn agent image runs its agent
-// process as (see driver.go's recording-dirs note) — never the daemon's own
-// root. driveProbeTarget is the throwaway probe container's own bind target,
-// entirely internal to this file (never the reserved runner.DriveTarget the
-// real agent mounts at).
+// driveProbeUser is the fixed uid:gid every wardyn agent image runs as,
+// never the daemon's root. driveProbeTarget is the throwaway probe
+// container's own bind target, internal to this file (never the reserved
+// runner.DriveTarget the real agent mounts at).
 const (
 	driveProbeUser   = "1000:1000"
 	driveProbeTarget = "/wardyn-probe"
-	// defaultDriveProbeImage is the busybox-class placeholder ProbeDrive execs
-	// `sh`/`test` in when Config.DriveProbeImage is unset — the same image the
-	// conformance suite already leans on elsewhere in this package for a
-	// minimal image with no daemon of its own.
-	//
-	// Pinned by digest (SF-14), not `:latest`: this image is pulled on the
-	// create/preflight request path (ensureImage, above), with a host
-	// directory bind-mounted into the container it runs — a floating tag
-	// resolved at request time is one registry push (or MITM) away from
-	// running something other than busybox against that mount. Refresh by
-	// re-pulling `busybox:latest` and updating the digest, same as any other
-	// pinned base image in this repo.
+	// defaultDriveProbeImage is the busybox-class placeholder ProbeDrive runs
+	// `sh`/`test` in when Config.DriveProbeImage is unset. Pinned by digest
+	// (SF-14), not `:latest`: it's bind-mounted with a host directory on the
+	// request path, so a floating tag would be one registry push (or MITM)
+	// away from running something other than busybox against that mount.
+	// Refresh by re-pulling `busybox:latest` and updating the digest.
 	defaultDriveProbeImage = "busybox@sha256:cac8f90bbee42dc962a6b38bb1a235948d070385bb9d996bba15a6db8d364008"
 )
 

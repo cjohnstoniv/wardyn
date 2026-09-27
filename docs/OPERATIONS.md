@@ -978,6 +978,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/credentials` — erasing every credential one person has stored (offboarding, 0.8): it only removes reach and returns a count, never a value | ⛔ admin or `security_admin` |
 | `DELETE /people/{principal}/ssh-keys` — removing every registered SSH key for a resolved subject or email; returns the removed-key count | ⛔ admin or `security_admin` |
+| `POST /people`, `POST /people/{principal}/tokens` and `GET /people/{principal}/tokens` — setting up a person before their first sign-in, and minting or listing API tokens for them (0.8, [Tokens for a person who never signs in](#tokens-for-a-person-who-never-signs-in)). The mint is refused for an admin or security-admin target unless the caller is an admin | ⛔ admin or `security_admin` |
 | `GET /model-providers/credentials` — the credential inventory (0.8): for each model provider, every person who holds a credential of their own for it, with its state (`stored`, or `expired` past its sign-in's expiry), where it is stored (`pg`, `vaultkv`, `azurekv`), when it was added and when a run last used it (to the minute: a sink stamps a row at most once a minute), plus counts. The erase's companion; read from the rows' metadata, never a value | ⛔ admin or `security_admin` |
 | `GET /admin/devices/enrolment-tokens` and `DELETE /admin/devices/enrolment-tokens/{id}` — the enrolment tokens still redeemable and cancelling one before a laptop redeems it: the same pair for tokens, returning neither a token nor its hash | ⛔ admin or `security_admin` |
 | `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach/ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
@@ -2357,6 +2358,67 @@ or departed human who never signs in again is not caught by the login-time
 re-stamp, and the row outlives their access to your IdP either way. It is
 published as a residual (`threatmodel/THREAT-MODEL.md` §5, "A per-user API
 token's role AND group snapshot are bounded-stale, not frozen").
+
+### Tokens for a person who never signs in
+
+For people who never open the console, an admin or `security_admin` can set the
+person up and mint their token. This is the interim path until delegation lands.
+
+| Call | What |
+|---|---|
+| `POST /api/v1/people` `{"principal":"<sub>","email":"<email>"}` | create the person, or confirm the one already there (`201` / `200`) |
+| `POST /api/v1/people/{principal}/tokens` `{"name":"ci"}` | mint a `wdn_` token owned by that person; the plaintext is in this response only |
+| `GET /api/v1/people/{principal}/tokens` | that person's tokens, revoked ones included; revoke one with `DELETE /api/v1/tokens/{id}` |
+
+**Keying rule: a person is their identity provider's `sub`.** A sign-in resolves
+to exactly the id_token's `sub`, case-sensitive, and nothing else. So `principal`
+must be that string exactly. A person's first sign-in attaches to the row by
+subject equality alone and stamps `first_signed_in_at`. The email is your
+assertion. Before a first sign-in it is the only input role derivation has
+(an email-keyed role mapping, else the default role), and it **never attaches
+anyone**. Someone else who signs in with the same email has a different subject,
+lands on a different principal and reaches none of this person's runs, tokens,
+secrets or drive. The real person signing in under a subject you mistyped also
+attaches to nothing: revoke the orphaned tokens and create the person again.
+
+On an identity provider whose `sub` is an opaque per-application id (Entra ID),
+you cannot know the subject before the person's first sign-in. There, create
+the person from a subject you have already seen, for example the `principal` on
+one of their existing tokens or runs. Setting up an Entra person by email alone
+is not supported.
+
+`POST /people` answers `409` rather than create an ambiguous identity. That
+happens when the email already names another known subject, when the subject is
+already known under a different email, when the subject differs from a known
+one only by case, or when the subject is another person's email. It answers
+`422` for the reserved subjects `admin-token`, the local-mode operator, and
+`device:…`.
+
+**What the minted token carries.** It gets the role and user type the person's
+sign-in would derive from their email. Their groups are unknown until they sign
+in, so the group snapshot is stamped as partial, and every group-tier ceiling,
+drive allocation or deny grant fails closed for the token, as it does for a
+truncated session. Give such a person a user-tier drive grant. Every request the
+token makes is the person: runs are owned and audited as them and read their
+own secrets. `minted_by` on the token row names the admin who minted it, and
+the `person.token.create` audit row names both of you.
+
+**Guard rails.**
+
+- The caller must be a signed-in admin or `security_admin`. The admin token,
+  local mode and an API token cannot mint.
+- Only an admin may mint for a person whose derived role is admin or
+  `security_admin`.
+- A person whose elevated role would come only from `WARDYN_OIDC_DEFAULT_ROLE` must
+  sign in once first, because their groups might narrow it.
+- The token never carries more than that derivation gives.
+
+At the person's sign-in the usual login re-stamp applies, with one difference.
+If their real role differs from the token's stamp, a token an admin minted for
+them is **revoked** instead of re-stamped. Otherwise a `security_admin` who kept
+the plaintext would hold an admin's credential once an admin person signed in.
+Revocation is immediate either way: `DELETE /api/v1/tokens/{id}`, or the person's
+own `DELETE /api/v1/me/tokens/{id}`.
 
 ### Three roles, and who sets the walls
 
@@ -6252,7 +6314,8 @@ arm. That WARN is the *only* run-time signal a stored policy row produces —
 no HTTP error, nothing the member sees — and `buildRunMounts`' drop means
 dispatch never reaches the driver-level `docker: denied workspace mount
 "<source>" -> "<target>": target /home/agent/drive is reserved for the user
-drive` refusal (`internal/runner/docker/driver_mounts.go:120-123`) for this
+drive` refusal (the `ValidateAuthoredTarget` check in `Driver.agentMounts`,
+`internal/runner/docker/driver_mounts.go`) for this
 case at all; that check now guards only a path a stored policy row can no
 longer take. Find both shapes before the upgrade window rather than in
 somebody's run or wardynd's log:
@@ -6368,6 +6431,7 @@ CHECK (`0001`'s table) with `push_content`, and `0076`, which adds `agent_runs.m
 `0083` adds `token_renewed_at` and `0084` adds `proxy_release`, and `0088`
 (`0088_agent_runs_containment_error`) adds `containment_error` and `containment_error_at`.
 `0089` adds `agent_runs.operator_owned`.
+`0090` adds `api_tokens.minted_by` beside its new `people` table.
 `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
 but it is not an instance of the hazard: it creates that function and the
 `push_content_paths` table in the same file, so the migrator owns both from the start.

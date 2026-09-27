@@ -144,6 +144,8 @@ jobs:
         run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
       - name: Build agent-claude-code image (local only — the boot under measurement)
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
+      - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
+        run: make build-conformance-agent-image
       - name: Docker conformance at CC2 (runsc)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -304,6 +306,8 @@ jobs:
         run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
       - name: Build agent-claude-code image (local only — the boot under measurement)
         run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
+      - name: Build conformance agent image (busybox + wardyn-rec — the recorded sandbox)
+        run: make build-conformance-agent-image
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
@@ -628,10 +632,11 @@ jobs:
           expect_per_spec_summaries "$evidence/walk.log" 2
           expect_summary "$evidence/roles-sso.log" 1
           expect_summary "$evidence/roles-sso-only.log" 1
-          if ! grep -q '^kind-sso-walk: PASS' "$log"; then
-            echo "::error::the walk never reached its own closing PASS line — see the uploaded log"
-            exit 1
-          fi
+          # Shared with kind-sso-ado-walk below (scripts/test-kind-sso-walk-log.sh
+          # proves it profile-aware, red on self-skip, green on PASS) — the
+          # per-spec counts above are this job's own extra rigor (T-08/G9),
+          # unrelated to the profile drift this script exists to close (#695).
+          ./scripts/check-kind-sso-walk-log.sh default "$log"
       - name: Upload walk evidence (log + manifest + per-spec results)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -696,20 +701,12 @@ jobs:
         run: |
           mkdir -p test/reports/e2e
           ./scripts/kind-sso-walk.sh 2>&1 | tee test/reports/e2e/kind-sso-ado-walk.log
-      # THE LOAD-BEARING CHECK — see kind-sso-walk's own comment above.
+      # THE LOAD-BEARING CHECK — shared with kind-sso-walk above via
+      # scripts/check-kind-sso-walk-log.sh (profile-aware: default and ado
+      # close on different PASS lines — see that script's own header).
       - name: Assert the walk actually ran (not a self-skip)
         shell: bash
-        run: |
-          set -euo pipefail
-          log=test/reports/e2e/kind-sso-ado-walk.log
-          if grep -q 'set WARDYN_TEST_K8S=1 to run the cluster-dependent AWS SSO walk (skipping)' "$log"; then
-            echo "::error::kind-sso-walk.sh self-skipped — WARDYN_TEST_K8S did not reach the walk step"
-            exit 1
-          fi
-          if ! grep -q '^kind-sso-walk (ado): PASS' "$log"; then
-            echo "::error::the ado walk never reached its own closing PASS line — see the uploaded log"
-            exit 1
-          fi
+        run: ./scripts/check-kind-sso-walk-log.sh ado test/reports/e2e/kind-sso-ado-walk.log
       - name: Upload walk evidence (log + per-step evidence)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -832,11 +829,17 @@ jobs:
   # red nightly blocked nothing and told nobody.
   #
   # SCOPED TO EVERY LANE WITH NO CHARACTERISED NOISE — which is every job in this
-  # workflow except `e2e-live`. The flagship `e2e-live` job carries pre-existing
-  # failures that have never been re-characterised; wiring a notification to it
+  # workflow except `e2e-live`. The flagship `e2e-live` job's failure is now
+  # CHARACTERISED (T-06, #666) as TWO known-fails, not one: step (i) fails
+  # because no model credential resolves for "claude-code" in the nightly
+  # estate, so the run never exits and its recording is never delivered
+  # (#965); step (g), the OIDC login flow, separately fails behind a curl
+  # blank-argument error in its own helper script, unrelated to the model
+  # credential (#1181). Wiring a notification to e2e-live before both close
   # would fire every night, and an alert that always fires is one everybody
-  # filters by week two — the same end state as no alert, reached expensively.
-  # Add e2e-live once it is green or its failures are characterised.
+  # filters by week two — the same end state as no alert, reached
+  # expensively. Add e2e-live to notify-new-lanes' needs: once #965 and
+  # #1181 both close.
   #
   # It was scoped to two lanes for the same reason and never widened as lanes
   # were added, so six of eight failed SILENTLY — `test-drive` included, the only
